@@ -1132,6 +1132,13 @@ CREATE TABLE IF NOT EXISTS person_mentions (
 );
 CREATE INDEX IF NOT EXISTS person_mentions_by_person ON person_mentions (person_id, hangout_id);
 
+-- N13: actual answer time, without changing the original check_ins table.
+CREATE TABLE IF NOT EXISTS check_in_answers (
+    check_in_id TEXT PRIMARY KEY REFERENCES check_ins(id) ON DELETE CASCADE,
+    answered_at INTEGER NOT NULL
+);
+
+
 
 "#;
 
@@ -4633,6 +4640,35 @@ impl Db {
         rows.collect()
     }
 
+    /// N13: retain handling time independently from when the question was asked.
+    pub fn handled_check_ins(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        since: i64,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(CheckIn, Option<i64>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {CHECK_IN_COLS}, CASE
+                WHEN status = 'waiting' AND expires_at <= ?3 THEN expires_at
+                ELSE (SELECT answered_at FROM check_in_answers WHERE check_in_id = check_ins.id)
+             END AS handled_at
+             FROM check_ins
+             WHERE hangout_id = ?1 AND (
+                 handled_at >= ?2
+                 OR (status = 'waiting' AND expires_at > ?3 AND asked_by = ?4)
+                 OR (status != 'waiting' AND answered_by_bot = 1 AND asked_by != ?4
+                     AND (to_person IS NULL OR to_person = ?4))
+                 OR (status != 'waiting' AND handled_at IS NULL AND created_at >= ?2))
+             ORDER BY COALESCE(handled_at, created_at) DESC, id LIMIT 50"
+        ))?;
+        let rows = stmt.query_map(params![hangout_id, since, now, person_id], |row| {
+            Ok((check_in_from_row(row, now)?, row.get(14)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn answer_check_in(
         &self,
         id: &str,
@@ -4640,12 +4676,20 @@ impl Db {
         answered_by: &str,
         by_bot: bool,
         note: &str,
+        now: i64,
     ) -> rusqlite::Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE check_ins SET status = ?, answered_by = ?, answered_by_bot = ?, note = ? WHERE id = ?",
             params![status, answered_by, by_bot, note, id],
         )?;
-        Ok(())
+        tx.execute(
+            "INSERT INTO check_in_answers (check_in_id, answered_at) VALUES (?1, ?2)
+             ON CONFLICT(check_in_id) DO UPDATE SET answered_at = excluded.answered_at",
+            params![id, now],
+        )?;
+        tx.commit()
     }
 
     // Questions for a bot's owner. `open_since` is the oldest a question can be and still be open.
@@ -4893,6 +4937,7 @@ impl Db {
              FROM person_mentions pm
              JOIN messages m ON m.id = pm.message_id
              JOIN hangouts h ON h.id = pm.hangout_id
+             JOIN members mb ON mb.hangout_id = pm.hangout_id AND mb.person_id = pm.person_id
              WHERE pm.person_id = ?1 AND pm.at > ?2
              ORDER BY pm.at DESC, pm.id DESC LIMIT 50",
         )?;
@@ -5329,6 +5374,7 @@ impl Db {
              UNION ALL
              SELECT a.id, a.name, a.owner_id, d.x, d.y, 0, pr.space_id FROM projects pr
              JOIN room_agents ra ON ra.hangout_id = pr.space_id
+             JOIN floors f ON f.hangout_id = pr.space_id AND f.access = 'public'
              JOIN agents a ON a.id = ra.agent_id
              JOIN spaces s ON s.id = pr.space_id
              {DOOR}
@@ -7028,6 +7074,15 @@ impl Db {
             params![agent_id, message_id, now],
         )?;
         Ok(rung > 0)
+    }
+
+    /// I83: whether a message @mentioned this bot.
+    pub fn mentions_bot(&self, message_id: i64, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM mentions WHERE message_id = ? AND agent_id = ?",
+            params![message_id, agent_id],
+        )
     }
 
     pub fn unread_mentions(&self, agent_id: &str) -> rusqlite::Result<Vec<Mention>> {
@@ -10523,6 +10578,30 @@ impl Db {
             "SELECT 1 FROM rsvps r JOIN events e ON e.id = r.event_id
              WHERE r.person_id = ? AND r.response != 'no' AND e.status = 'confirmed' LIMIT 1",
             [person_id],
+        )
+    }
+
+    /// G6: whether this person has a GitHub or Discord account linked to sign in with.
+    pub fn has_sign_in_link(&self, person_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM sign_in_links WHERE person_id = ?)",
+            [person_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// G6: whether this person, or one of their bots, has said something in a town square.
+    pub fn spoke_in_square(&self, person_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (
+                 SELECT 1 FROM messages m
+                 JOIN floors f ON f.hangout_id = m.hangout_id
+                 JOIN town_square_rooms t ON t.space_id = f.space_id
+                 WHERE m.kind = 'chat'
+                   AND (m.person_id = ?1 AND m.agent_id IS NULL
+                        OR m.agent_id IN (SELECT id FROM agents WHERE owner_id = ?1)))",
+            [person_id],
+            |row| row.get(0),
         )
     }
 

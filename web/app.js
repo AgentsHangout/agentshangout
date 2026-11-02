@@ -6470,18 +6470,19 @@ function needsYouPanel(panels) {
   function sceneItem(scene) {
     const error = formError();
     return item(
-      h('p', {}, 'Run the scene ', h('strong', {}, scene.scene_name), '?'),
+      h('p', {}, h('strong', {}, scene.asked_by), ' asks to run ', h('strong', {}, scene.scene_name),
+        ' at ', h('strong', {}, scene.house_name || scene.house_id)),
+      h('p', { class: 'muted' }, 'Approving lets the house AI run this scene.'),
+      h('small', { class: 'muted' }, `Answer before ${whenText(scene.expires_at)}`),
       yesNo(error, `/api/scene-requests/${encodeURIComponent(scene.id)}/answer`),
       error);
   }
 
   function passItem(pass) {
-    const error = formError();
-    return item(
-      h('p', {}, h('strong', {}, pass.agent_name), ' has a pass waiting for you to accept'),
-      h('div', { class: 'event-actions' },
-        h('button', { type: 'button', class: 'primary', onclick: act(error, done(() => api(`/api/passes/${encodeURIComponent(pass.id)}/accept`, { method: 'POST' }))) }, 'Accept')),
-      error);
+    return passOffer(pass, {
+      houseName: pass.house_name || pass.house_id,
+      done: () => refresh(true),
+    });
   }
 
   // N12: opening the room clears it, and so does Clear.
@@ -6511,10 +6512,18 @@ function needsYouPanel(panels) {
     const how = checkIn.status === 'waiting' ? 'Waiting for someone on another side to answer'
       : checkIn.status === 'expired' ? 'Expired with no answer: treated as no'
         : `${checkIn.answered_by} ${CHECK_IN_ENDS[checkIn.status] || checkIn.status}`;
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/check-ins/${encodeURIComponent(checkIn.id)}/answer`, { method: 'POST', body: { response } })));
     return h('article', { class: `check-in ${checkIn.status}` },
       h('p', {}, h('strong', {}, checkIn.asker), ' asked before acting, in ', roomLink(checkIn.room)),
       h('p', {}, checkIn.about),
-      h('small', { class: 'check-in-status' }, how));
+      h('small', { class: 'check-in-status' }, how),
+      checkIn.handled_at ? h('small', { class: 'muted' }, whenText(checkIn.handled_at)) : null,
+      checkIn.can_answer ? h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('go') }, 'Go'),
+        h('button', { type: 'button', onclick: answer('hold') }, 'Hold')) : null,
+      error);
   }
 
   let tab = 'waiting';
@@ -6572,7 +6581,10 @@ function needsYouPanel(panels) {
     const list = await api('/api/needs-you').catch(() => null);
     if (!list) return;
     const key = JSON.stringify(list);
-    if (key === shownKey) return;
+    if (key === shownKey) {
+      if (tab === 'answered') await loadAnswered();
+      return;
+    }
     shownKey = key;
     render(list);
   }
@@ -7013,6 +7025,10 @@ async function worldView(id, { home = false } = {}) {
     look: () => panels.open('look'),
     rooms: () => panels.open('rooms'),
     needs: () => panels.open('needs'),
+    // S69, S70: the town square's door, and making a bot from the map.
+    square: toSquare,
+    bring: makeBot,
+    bots: () => panels.open('bots'),
   });
   // G1: nothing can be done in a frozen world, so there's nothing to teach there.
   const guide = frozen ? null : tutorial({ h, api, go, say, panels, page: 'map', signedIn: Boolean(me), shows: tutorialShows, compact, toggleClass: 'mid' });

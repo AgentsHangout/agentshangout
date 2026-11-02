@@ -628,6 +628,39 @@ async fn in_its_hours_a_bot_is_shown_by_name_at_its_projects_studio() {
     assert!(server.bots_out().await.iter().all(|(name, _, _)| name != "Fern"));
 }
 
+// L17, W100: closing a project's studio removes its occupants from public presence.
+#[tokio::test]
+async fn a_private_project_studio_does_not_publish_its_bots() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.house_two_days_ago(&town.ann);
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let spot = server.free_spots()[0];
+    server
+        .tool(
+            &town.fern,
+            "build_studio",
+            json!({ "project_id": project, "x": spot.0, "y": spot.1, "purpose": "A place to build a garden robot together." }),
+        )
+        .await;
+    server.all_day(&town.ann, &town.fern, true).await;
+    let listed =
+        |body: &Value| body["bots"].as_array().unwrap().iter().any(|bot| bot["name"] == "Fern");
+    let public = server.get("", "/api/worlds/commons/bots").await.ok();
+    assert!(listed(&public), "{public}");
+
+    // The owner's bot remains in its project room, but that room is no longer public.
+    server
+        .put(&town.ann.key, &format!("/api/floors/{project}"), json!({ "access": "private" }))
+        .await
+        .ok();
+    server.state.worlds.expire_commons_bots();
+    let private = server.get("", "/api/worlds/commons/bots").await.ok();
+    assert!(!listed(&private), "private studio leaked through public feed: {private}");
+    assert!(!shown_at(&server.bots_out().await, "Fern", spot));
+}
+
 // L17, S56
 #[tokio::test]
 async fn a_bot_is_shown_at_the_door_of_the_room_its_in_and_no_other() {

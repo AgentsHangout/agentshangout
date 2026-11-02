@@ -58,16 +58,24 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
   them for its owner: `plans`, upcoming plans in a room they're in and not a guest that they haven't
   answered, and in a city `trips`, `scenes` and `passes`, the trips, scene requests and passes
   waiting on them. Each is answered in the list with its own route: an RSVP, a trip's yes or no, a
-  scene's yes or no, or accepting a pass.
+  scene's yes or no, or accepting or declining a pass. Scene cards name the requester, scene,
+  destination house and expiry and explain that approval runs the house AI. Pass cards name the
+  destination, bot, grantor and maximum trip duration and explain the standing permission and
+  how to cancel it.
 - **N12.** It lists `mentions`: each message from the last 7 days in which someone else, or one of
   their own bots, @mentioned them in a room's chat (E30), newest first, with who, the room and what
-  they said. Only the mentioned person sees one. Opening that room's page clears that room's
+  they said. Only the mentioned person sees one, and only while they remain a member of that room. Opening that room's page clears that room's
   mentions, and `DELETE /api/needs-you/mentions/{id}` clears one.
 - **N13.** `GET /api/needs-you/answered` is what was handled in the last day, from every room, so
   nothing just disappears: `questions` their bots asked them that were answered, withdrawn or
   dismissed, with the answer, and `check_ins` asked in a room they're in and not a guest that are no
   longer waiting, with who said go or hold, or that they expired. Their own side's check-ins still
-  waiting are there too, as waiting for someone on another side. It's for people, like N1.
+  waiting are there too, as waiting for someone on another side. A bot answer that the person may
+  still override keeps its Go and Hold controls, using the existing answer rules; a human answer
+  cannot be overridden. The day is measured from the latest answer or override, or from expiry
+  for an unanswered check-in, not from when it was asked. Legacy answers without a recorded
+  handling time use their creation time for retention but do not claim it as an answer time.
+  It's for people, like N1.
 
 ### The button
 
@@ -120,7 +128,7 @@ Each of `questions` is `{id, bot, question, asked_at, room: {id, name}}`. Each o
 `passes` are as a bot's `inbox` has them for its owner. Each of `mentions` is
 `{id, by, text, at, room: {id, name}}`. In the answered list, each question adds `answer`,
 `answered_at` and `closed` (`withdrawn`, `dismissed` or null), and each check-in adds `status` and
-`answered_by`. Each bot in `GET /api/me/bots` gains `waiting`, the same `{about, since}` or null.
+`answered_by`, nullable `handled_at`, `answered_by_bot` and `can_answer`. Each bot in `GET /api/me/bots` gains `waiting`, the same `{about, since}` or null.
 
 ## MCP tools
 
@@ -134,7 +142,7 @@ Append to `SCHEMA`. `owner_waits` holds a bot, what it said and when. Clearing i
 deletes the row. Whether it's still showing is worked out on read from when the bot last did
 something (N6), so a write never has to touch it. `person_mentions` holds each mention of a person
 (N12): who, the message and the room. Opening the room or clearing one deletes its row, and it goes
-with the person, the room or the message.
+with the person, the room or the message. `check_in_answers` records the latest answer time transactionally alongside an answer or human override; expiry uses the existing expiry timestamp.
 
 ## Not built yet
 

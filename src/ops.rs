@@ -1202,7 +1202,7 @@ pub fn answer_check_in(
         _ => return Err(ApiError::conflict("that check-in was already answered")),
     }
     note_agent_write(state, caller)?;
-    state.db.answer_check_in(check_in_id, response, &caller.name, caller.is_agent(), &note)?;
+    state.db.answer_check_in(check_in_id, response, &caller.name, caller.is_agent(), &note, now)?;
     let word = if response == "go" { "go" } else { "hold" };
     let text = format!("{} said {word} to {}: {}", caller.name, check_in.asker, check_in.about);
     announce_in_house_only(state, &check_in.hangout_id, &text)?;

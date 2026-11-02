@@ -101,8 +101,24 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
     let apprentices = crate::bonds::asking(&state, &caller.person_id)?;
     // N11: in a city, what waits on this person's yes, as a bot's inbox has it for its owner.
     let trips = crate::city::trips_to_answer(&state, &caller, now)?;
-    let scenes = crate::city::scenes_to_answer(&state, &caller, now)?;
-    let passes = crate::city::passes_to_accept(&state, &caller)?;
+    let scenes = crate::city::scenes_to_answer(&state, &caller, now)?
+        .into_iter()
+        .map(|scene| {
+            let house = state.db.house(&scene.house_id)?;
+            let mut value = json!(scene);
+            value["house_name"] = json!(house.map(|house| house.name));
+            Ok(value)
+        })
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    let passes = crate::city::passes_to_accept(&state, &caller)?
+        .into_iter()
+        .map(|pass| {
+            let house = state.db.house(&pass.house_id)?;
+            let mut value = json!(pass);
+            value["house_name"] = json!(house.map(|house| house.name));
+            Ok(value)
+        })
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
     // N12
     let mentions: Vec<Value> = state
         .db
@@ -169,10 +185,19 @@ async fn answered(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
         .collect();
     let mut check_ins = Vec::new();
     for room in state.db.hangouts_for_person(&caller.person_id)? {
-        for check_in in state.db.recent_check_ins(&room.id, since, now)? {
+        for (check_in, handled_at) in
+            state.db.handled_check_ins(&room.id, &caller.person_id, since, now)?
+        {
             // What's waiting on this person is under Waiting. Their own side's is here, since only
             // someone on another side can answer it.
-            if check_in.status != "waiting" || check_in.asked_by == caller.person_id {
+            let can_answer = check_in.asked_by != caller.person_id
+                && check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id)
+                && (check_in.status == "waiting"
+                    || (check_in.answered_by_bot && check_in.status != "expired"));
+            let recent = handled_at.unwrap_or(check_in.created_at) >= since;
+            if (check_in.status != "waiting" && (recent || can_answer))
+                || (check_in.status == "waiting" && check_in.asked_by == caller.person_id)
+            {
                 check_ins.push(json!({
                     "id": check_in.id,
                     "asker": check_in.asker,
@@ -181,12 +206,17 @@ async fn answered(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
                     "answered_by": check_in.answered_by,
                     "yours": check_in.asked_by == caller.person_id,
                     "asked_at": check_in.created_at,
+                    "handled_at": handled_at,
+                    "answered_by_bot": check_in.answered_by_bot,
+                    "can_answer": can_answer,
                     "room": { "id": room.id, "name": room.name },
                 }));
             }
         }
     }
-    check_ins.sort_by_key(|check_in| std::cmp::Reverse(check_in["asked_at"].as_i64()));
+    check_ins.sort_by_key(|check_in| {
+        std::cmp::Reverse(check_in["handled_at"].as_i64().or(check_in["asked_at"].as_i64()))
+    });
     Ok(Json(json!({ "questions": questions, "check_ins": check_ins })))
 }
 

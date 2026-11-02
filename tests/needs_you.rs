@@ -666,3 +666,245 @@ async fn what_was_answered_stays_for_a_day() {
     server.get(&town.fern, "/api/needs-you/answered").await.status(StatusCode::FORBIDDEN);
     server.get("", "/api/needs-you/answered").await.status(StatusCode::UNAUTHORIZED);
 }
+
+// N12: stored notifications cannot retain access after room membership is revoked.
+#[tokio::test]
+async fn revoked_room_mentions_are_not_visible_in_needs_you() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server
+        .post(
+            &town.ann.key,
+            &format!("/api/hangouts/{}/messages", town.room),
+            json!({"text": "@Bo confidential room message"}),
+        )
+        .await
+        .ok();
+    assert_eq!(count(&server.needs(&town.bo).await, "mentions"), 1);
+    server.state.db.remove_member(&town.room, &town.bo.id).unwrap();
+    let list = server.needs(&town.bo).await;
+    assert_eq!(count(&list, "mentions"), 0);
+    assert!(!list.to_string().contains("confidential room message"));
+    assert!(!list.to_string().contains(&town.room));
+}
+
+// N13: handling time, not creation time, controls the Answered window.
+#[tokio::test]
+async fn old_check_ins_handled_today_stay_visible() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let now = agenthangout::now();
+    for (id, expires) in
+        [("answered-old", now + 60), ("expired-old", now - 10), ("expired-yesterday", now - 90_000)]
+    {
+        server
+            .state
+            .db
+            .insert_check_in(&agenthangout::db::NewCheckIn {
+                id,
+                hangout_id: &town.room,
+                asked_by: &town.ann.id,
+                asker: "Fern",
+                agent_id: Some(&town.fern_id),
+                about: id,
+                to_person: None,
+                needs_human: false,
+                expires_at: expires,
+                now: now - 172_800,
+            })
+            .unwrap();
+    }
+    server
+        .post(&town.bo.key, "/api/check-ins/answered-old/answer", json!({"response":"go"}))
+        .await
+        .ok();
+    let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+    let ids: Vec<_> =
+        list["check_ins"].as_array().unwrap().iter().map(|c| text(&c["id"])).collect();
+    assert!(ids.contains(&"answered-old".to_string()), "{list}");
+    assert!(ids.contains(&"expired-old".to_string()), "{list}");
+    assert!(!ids.contains(&"expired-yesterday".to_string()), "{list}");
+    let answered =
+        list["check_ins"].as_array().unwrap().iter().find(|c| c["id"] == "answered-old").unwrap();
+    assert!(answered["handled_at"].as_i64().unwrap() >= now);
+}
+
+// N3: moving cards must preserve a person's ability to override a bot's answer.
+#[tokio::test]
+async fn answered_bot_check_ins_keep_the_human_override() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let (_, bo_bot) = server.bot(&town.bo, &town.room, "Spruce").await;
+    for (first, override_to) in [("go", "hold"), ("hold", "go")] {
+        let check_in = server
+            .tool(&town.fern, "check_in", json!({"hangout_id":town.room,"about":"Choose"}))
+            .await;
+        let path = format!("/api/check-ins/{}/answer", text(&check_in["id"]));
+        server.post(&bo_bot, &path, json!({"response":first})).await.ok();
+        let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+        let card = list["check_ins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == check_in["id"])
+            .unwrap();
+        assert_eq!(card["can_answer"], true);
+        let own = server.get(&town.ann.key, "/api/needs-you/answered").await.ok();
+        let own_card = own["check_ins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == check_in["id"])
+            .unwrap();
+        assert_eq!(own_card["can_answer"], false);
+        server.post(&town.bo.key, &path, json!({"response":override_to})).await.ok();
+        let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+        let card = list["check_ins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == check_in["id"])
+            .unwrap();
+        assert_eq!(card["can_answer"], false);
+    }
+}
+
+// N11: consent cards carry the exact destination and the limits of what is being accepted.
+#[tokio::test]
+async fn scene_and_pass_cards_include_destination_and_consent_context() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let made = server
+        .post(&town.ann.key, "/api/cities", json!({"name":"Elm", "create_code":CODE}))
+        .await
+        .ok();
+    let city = text(&made["city"]["id"]);
+    let built = server
+        .post(&town.ann.key, &format!("/api/cities/{city}/houses"), json!({"name":"Ann House"}))
+        .await
+        .ok();
+    let house = text(&built["house"]["id"]);
+    let now = agenthangout::now();
+    server.state.db.insert_scene("movie", &house, "Movie Night", now).unwrap();
+    server
+        .state
+        .db
+        .insert_scene_request(&agenthangout::db::NewSceneRequest {
+            id: "scene-request",
+            scene_id: "movie",
+            house_id: &house,
+            asked_by: "Bo",
+            status: "waiting",
+            answered_by: None,
+            expires_at: now + 600,
+            now,
+        })
+        .unwrap();
+    server
+        .state
+        .db
+        .insert_pass(&agenthangout::db::NewPass {
+            id: "pass-offer",
+            house_id: &house,
+            agent_id: &town.fern_id,
+            max_minutes: 45,
+            granted_by: "Ann",
+            now,
+        })
+        .unwrap();
+    let list = server.needs(&town.ann).await;
+    let scene = &list["scenes"][0];
+    assert_eq!(scene["house_id"], house);
+    assert_eq!(scene["house_name"], "Ann House");
+    assert_eq!(scene["asked_by"], "Bo");
+    assert_eq!(scene["expires_at"], now + 600);
+    let pass = &list["passes"][0];
+    assert_eq!(pass["house_id"], house);
+    assert_eq!(pass["house_name"], "Ann House");
+    assert_eq!(pass["granted_by"], "Ann");
+    assert_eq!(pass["max_minutes"], 45);
+}
+
+#[tokio::test]
+async fn other_sides_waiting_items_cannot_hide_handled_check_ins() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let now = agenthangout::now();
+    for n in 0..60 {
+        let id = format!("waiting-{n}");
+        server
+            .state
+            .db
+            .insert_check_in(&agenthangout::db::NewCheckIn {
+                id: &id,
+                hangout_id: &town.room,
+                asked_by: &town.ann.id,
+                asker: "Fern",
+                agent_id: Some(&town.fern_id),
+                about: "Waiting",
+                to_person: None,
+                needs_human: false,
+                expires_at: now + 600,
+                now,
+            })
+            .unwrap();
+    }
+    server
+        .state
+        .db
+        .insert_check_in(&agenthangout::db::NewCheckIn {
+            id: "handled",
+            hangout_id: &town.room,
+            asked_by: &town.ann.id,
+            asker: "Fern",
+            agent_id: Some(&town.fern_id),
+            about: "Handled",
+            to_person: None,
+            needs_human: false,
+            expires_at: now + 600,
+            now: now - 100,
+        })
+        .unwrap();
+    server.state.db.answer_check_in("handled", "go", "Bo", false, "", now - 10).unwrap();
+    let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(count(&list, "check_ins"), 1, "{list}");
+    assert_eq!(list["check_ins"][0]["id"], "handled");
+}
+
+#[tokio::test]
+async fn old_bot_answers_remain_overridable_but_old_human_answers_age_out() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let now = agenthangout::now();
+    for (id, by_bot) in [("old-human", false), ("old-bot", true)] {
+        server
+            .state
+            .db
+            .insert_check_in(&agenthangout::db::NewCheckIn {
+                id,
+                hangout_id: &town.room,
+                asked_by: &town.ann.id,
+                asker: "Fern",
+                agent_id: Some(&town.fern_id),
+                about: id,
+                to_person: None,
+                needs_human: false,
+                expires_at: now - 100,
+                now: now - 180_000,
+            })
+            .unwrap();
+        server.state.db.answer_check_in(id, "go", "Bo side", by_bot, "", now - 90_000).unwrap();
+    }
+    let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(count(&list, "check_ins"), 1, "{list}");
+    assert_eq!(list["check_ins"][0]["id"], "old-bot");
+    assert_eq!(list["check_ins"][0]["can_answer"], true);
+    server
+        .post(&town.bo.key, "/api/check-ins/old-bot/answer", json!({"response":"hold"}))
+        .await
+        .ok();
+    let list = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(list["check_ins"][0]["status"], "hold");
+    assert_eq!(list["check_ins"][0]["can_answer"], false);
+    assert!(list["check_ins"][0]["handled_at"].as_i64().unwrap() >= now);
+}
