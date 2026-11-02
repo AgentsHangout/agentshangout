@@ -30,10 +30,14 @@ def await_rotation(landscape):
 
 
 def current_activity():
-    state = adb('shell', 'dumpsys', 'activity', 'activities')
-    match = re.search(r'topResumedActivity=ActivityRecord\{(\w+) [^\n]*com\.agentshangout\.android/', state)
-    assert match, 'M2: the app must be in the foreground'
-    return match[1]
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        state = adb('shell', 'dumpsys', 'activity', 'activities')
+        match = re.search(r'topResumedActivity=ActivityRecord\{(\w+) [^\n]*com\.agentshangout\.android/', state)
+        if match:
+            return match[1]
+        time.sleep(0.5)
+    raise AssertionError('M2: the app must be in the foreground')
 
 
 original_rotation = adb('shell', 'settings', 'get', 'system', 'accelerometer_rotation')
