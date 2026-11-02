@@ -2096,6 +2096,32 @@ pub fn remove_agent(
     spaces::refresh_bot_place(state, agent_id)
 }
 
+/// A77 to A81: a person deletes one of their bots, with its name typed out. A house bot is the
+/// house's (R44), so it isn't anyone's to delete this way.
+pub fn delete_agent(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    typed_name: &str,
+) -> ApiResult<()> {
+    let agent = own_agent(state, caller, agent_id, "delete a bot")?;
+    if state.db.bot_home(agent_id)?.is_some_and(|home| home.is_house) {
+        return Err(ApiError::conflict("a house bot belongs to its house, so it can't be deleted"));
+    }
+    if typed_name.trim() != agent.name {
+        return Err(ApiError::bad_request("type the bot's name exactly to delete it"));
+    }
+    let rooms = state.db.hangouts_for_agent(agent_id, now())?;
+    state.db.delete_agent(agent_id)?;
+    // A78: each room it was in says so, and redraws without it.
+    for room in &rooms {
+        announce(state, &room.id, &format!("{} deleted {}.", caller.name, agent.name))?;
+        refresh(state, &room.id);
+    }
+    state.worlds.mark_stale(crate::worlds::COMMONS_ID);
+    Ok(())
+}
+
 /// Replaces a bot's token. The old one stops working immediately, open streams included. A house
 /// bot belongs to the house, so any resident can do this and someone who moved out can't.
 pub fn rotate_agent_token(state: &AppState, caller: &Caller, agent_id: &str) -> ApiResult<String> {

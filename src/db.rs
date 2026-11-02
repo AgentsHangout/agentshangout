@@ -4351,6 +4351,19 @@ impl Db {
         end_bot_player_token(&self.conn(), agent_id)
     }
 
+    /// A78 to A80: deletes one bot. Everything that's only its own goes with its row, and what it
+    /// said stays under the name it had. Its player on The Commons stops, and keeps what it built.
+    pub fn delete_agent(&self, agent_id: &str) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        end_bot_player_token(&tx, agent_id)?;
+        // These hold a bot's address with no foreign key to it.
+        tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
+        tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
+        tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
+        tx.commit()
+    }
+
     pub fn touch_agent_seen(&self, agent_id: &str, now: i64) -> rusqlite::Result<()> {
         self.conn()
             .execute("UPDATE agents SET last_seen_at = ? WHERE id = ?", params![now, agent_id])?;

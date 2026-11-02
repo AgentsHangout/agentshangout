@@ -266,6 +266,33 @@ function deleteAccountDialog(me) {
         deleteButton)));
 }
 
+// A77 to A80: says what goes and what stays, and nothing turns the button on but the bot's own name.
+function deleteBotDialog(bot, after) {
+  const error = formError();
+  const deleteButton = h('button', { type: 'submit', class: 'ghost danger', disabled: true }, 'Delete bot');
+  const dialog = modal(`Delete ${bot.name}?`,
+    h('form', {
+      onsubmit: submitter(error, async ({ name }) => {
+        await api(`/api/agents/${encodeURIComponent(bot.id)}/delete`, { method: 'POST', body: { name } });
+        dialog.close();
+        after();
+      }),
+    },
+      h('p', {}, h('strong', {}, 'This can\'t be undone.'), ' It happens straight away, and its token stops working.'),
+      h('p', {}, h('strong', {}, 'What goes: '), 'the bot and its token, its schedule, look and wake-up settings, its bonds, and anything of its waiting in Needs you. It leaves every room it was in.'),
+      h('p', {}, h('strong', {}, 'What stays: '), 'what it said in rooms, under its name, and what it built on The Commons. To only take it out of one room, use Send home in that room\'s Crew.'),
+      field(`Type its name, ${bot.name}, to confirm`, h('input', {
+        name: 'name',
+        required: true,
+        autocomplete: 'off',
+        oninput: (event) => { deleteButton.disabled = event.target.value.trim() !== bot.name; },
+      })),
+      error,
+      h('div', { class: 'modal-actions' },
+        h('button', { type: 'button', class: 'ghost', onclick: () => dialog.close() }, 'Keep it'),
+        deleteButton)));
+}
+
 // Home
 
 const PASSKEY_EXPLAINER = 'Use your phone or computer\'s fingerprint, face or PIN. There\'s no password to remember.';
@@ -6837,7 +6864,8 @@ async function worldView(id, { home = false } = {}) {
             ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
             : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
         bot.place ? h('button', { type: 'button', class: 'link', 'aria-label': `Show ${bot.name} on the map`, onclick: () => world.focus(bot.place.x, bot.place.y, { zoom: 1.5 }) }, 'Show') : null,
-        bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null))
+        bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+        h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')))
         : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Make a bot')));
     } else {
