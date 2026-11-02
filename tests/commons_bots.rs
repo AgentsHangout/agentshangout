@@ -128,6 +128,29 @@ fn header<'a>(reply: &'a Reply, name: &'a str) -> Option<&'a str> {
     reply.headers.get(name).and_then(|value| value.to_str().ok())
 }
 
+/// A SQLite file under the temp dir. Drop removes it and its WAL sidecars, including if a test panics.
+struct TempDb {
+    path: String,
+}
+
+impl TempDb {
+    fn create() -> Self {
+        let path = std::env::temp_dir()
+            .join(format!("commons-bots-{}-{}.db", std::process::id(), auth::new_id()))
+            .to_string_lossy()
+            .into_owned();
+        Self { path }
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", self.path));
+        }
+    }
+}
+
 /// The limits count by the clock's minute, so a test that counts what one of them lets through
 /// starts with plenty of it left.
 async fn start_early_in(period: i64, room: i64) {
@@ -143,12 +166,10 @@ impl Server {
     }
 
     /// A file database, so a test can rewrite a place's kind the way a later deploy would.
-    async fn start_file() -> (Self, String) {
-        let path = std::env::temp_dir()
-            .join(format!("commons-bots-{}-{}.db", std::process::id(), auth::new_id()))
-            .to_string_lossy()
-            .into_owned();
-        (Self::boot(Db::open(&path).unwrap()).await, path)
+    /// The file is deleted when the returned guard is dropped, including if the test panics.
+    async fn start_file() -> (Self, TempDb) {
+        let db = TempDb::create();
+        (Self::boot(Db::open(&db.path).unwrap()).await, db)
     }
 
     async fn boot(db: Db) -> Self {
@@ -601,7 +622,7 @@ fn assert_not_listed(body: &Value, hidden: &[&str]) {
 // W100
 #[tokio::test]
 async fn hidden_location_kinds_never_appear() {
-    let (server, db_path) = Server::start_file().await;
+    let (server, db) = Server::start_file().await;
 
     let (bo_home, bo) = server.someone("Bo").await;
     let (_, rover) = server.bot(&bo, &bo_home, "Rover").await;
@@ -653,7 +674,7 @@ async fn hidden_location_kinds_never_appear() {
     assert_eq!(pin(&before, "Newt"), Some(library), "{before}");
     assert_not_listed(&before, &hidden);
 
-    disguise_place(&db_path, library);
+    disguise_place(&db.path, library);
     server.state.worlds.expire_commons_bots();
 
     let after = server.bots().await;
