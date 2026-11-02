@@ -1928,18 +1928,30 @@ pub async fn handle(
             return ApiError::forbidden("origin not allowed").into_response();
         }
     }
+    let is_oauth = caller.is_err();
+    let caller = caller.or_else(|original| {
+        let Some(token) = crate::auth::bearer_token(&headers) else { return Err(original) };
+        crate::oauth::authenticate_mcp(&state, &crate::auth::hash_secret(token))?.ok_or(original)
+    });
     let caller = match caller {
         Ok(caller) if caller.is_agent() => caller,
         Ok(_) => return ApiError::forbidden("use a bot token, not an owner key").into_response(),
         Err(error) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                [(header::WWW_AUTHENTICATE, "Bearer")],
+                [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:bot\"", state.config.public_url))],
                 Json(json!({ "error": error.message })),
             )
                 .into_response();
         }
     };
+    if is_oauth {
+        if let Some(agent_id) = &caller.agent_id {
+            if let Err(error) = state.db.touch_agent_seen(agent_id, now()) {
+                return ApiError::from(error).into_response();
+            }
+        }
+    }
     let Ok(request) = serde_json::from_slice::<Value>(&body) else {
         return Json(rpc_error(Value::Null, -32700, "parse error")).into_response();
     };
@@ -1951,6 +1963,14 @@ pub async fn handle(
         return StatusCode::ACCEPTED.into_response();
     };
     let params = request.get("params").cloned().unwrap_or(Value::Null);
+    if is_oauth && matches!(method, "events/subscribe" | "events/unsubscribe") {
+        return Json(rpc_error(
+            id,
+            -32026,
+            "OAuth connections support polling and streaming, not durable webhook subscriptions",
+        ))
+        .into_response();
+    }
     // These wait, so they can't go through the synchronous dispatch.
     if method == "events/stream" {
         return events::stream_response(&state, &caller, &id, &params).await;
@@ -1997,7 +2017,20 @@ pub async fn handle(
         };
         return Json(rpc_result(id, result)).into_response();
     }
-    Json(dispatch(&state, &headers, &caller, id, method, &params)).into_response()
+    let mut result = dispatch(&state, &headers, &caller, id, method, &params);
+    if is_oauth && method == "events/list" {
+        if let Some(events) = result["result"]["events"].as_array_mut() {
+            for event in events {
+                event["delivery"] = json!(["poll", "push"]);
+            }
+        }
+    }
+    if is_oauth && method == "initialize" {
+        if let Some(instructions) = result["result"]["instructions"].as_str() {
+            result["result"]["instructions"] = json!(format!("{instructions} This OAuth connection supports event polling and streams only; durable webhook subscriptions are unavailable."));
+        }
+    }
+    Json(result).into_response()
 }
 
 #[cfg(test)]

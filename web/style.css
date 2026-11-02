@@ -2743,3 +2743,11 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 /* Announcement content stays readable on narrow phones and preserves the keeper's line breaks. */
 .push-review { overflow-wrap: anywhere; }
 .push-message { white-space: pre-wrap; }
+
+/* A66: a compact, readable consent page, including narrow screens. */
+.oauth-page { max-width: 44rem; margin: 3rem auto; padding: 1.5rem; overflow-wrap: anywhere; }
+.oauth-page p { margin: 0.8rem 0; }
+.oauth-page form { margin: 1rem 0; }
+.oauth-page select { margin: 0.5rem 0; }
+.oauth-page button { margin: 0.4rem 0.4rem 0.4rem 0; }
+@media (max-width: 48rem) { .oauth-page { margin: 0; padding: 1rem; } }

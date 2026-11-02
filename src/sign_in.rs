@@ -199,7 +199,7 @@ fn base64url(bytes: &[u8]) -> String {
     out
 }
 
-fn challenge_for(verifier: &str) -> String {
+pub(crate) fn challenge_for(verifier: &str) -> String {
     base64url(&Sha256::digest(verifier.as_bytes()))
 }
 

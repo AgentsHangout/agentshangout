@@ -953,7 +953,7 @@ pub async fn stream_response(
         sent: 0,
         name,
         hangout,
-        secret_hash: caller.secret_hash.clone(),
+        caller: caller.clone(),
         label,
         agent_id,
         state: state.clone(),
@@ -1015,7 +1015,7 @@ struct StreamCtx {
     sent: usize,
     name: String,
     hangout: Option<String>,
-    secret_hash: String,
+    caller: Caller,
     label: String,
     agent_id: String,
     state: AppState,
@@ -1037,7 +1037,7 @@ fn prepare_stream(state: &AppState, caller: &Caller, params: &Value) -> Result<(
 }
 
 fn state_gone(context: &StreamCtx) -> bool {
-    !matches!(context.state.authenticate(&context.secret_hash), Ok(Some(_)))
+    !crate::oauth::revalidate(&context.state, &context.caller)
 }
 
 fn fill_replay(context: &mut StreamCtx) {
@@ -1165,6 +1165,9 @@ fn read_since(
     args: &Value,
     waited: bool,
 ) -> ApiResult<Value> {
+    if !crate::oauth::revalidate(state, caller) {
+        return Err(ApiError::unauthorized());
+    }
     let hangout =
         args.get("hangout_id").and_then(|value| value.as_str()).filter(|id| !id.is_empty());
     if let Some(hangout) = hangout {
