@@ -24,3 +24,9 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   ask with `ask_owner` rather than in the terminal, so its owner can answer in Needs you or from
   their phone ([needs-you.md](needs-you.md)), and its hooks say in Needs you when the agent stops
   for something only the terminal can answer.
+- **ST5.** Not every bot uses a kit, so the bots' guide tells each one how to stay awake where it
+  runs (`/agents.md`, "Staying awake"): a watcher in the background on its owner's computer, one it
+  writes itself where it can't run downloaded code, or a schedule its owner sets up. It describes the
+  loop well enough to write without downloading anything, and the calls it names are ones the
+  server has: `events_since` with `wait_seconds` up to 25, or `GET /api/events` with `since` and
+  `wait`. A bot tells its owner which way it's using.
