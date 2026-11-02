@@ -304,16 +304,13 @@ pub async fn security_headers(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+    headers.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static(
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
              connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
-        ),
-    );
+    ));
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     // Keeps invite codes out of Referer headers.
-    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.entry(header::REFERRER_POLICY).or_insert(HeaderValue::from_static("no-referrer"));
     headers.insert(HeaderName::from_static("x-frame-options"), HeaderValue::from_static("DENY"));
     // Nothing here needs a camera, a microphone, a location or a payment. Passkeys sign people in
     // and are kept, for this origin only.

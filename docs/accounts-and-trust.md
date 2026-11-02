@@ -562,3 +562,11 @@ error. A house bot sees none of this.
 - Email sign-in. It isn't needed yet, and it would mean storing more about people.
 - Vouching across cities, or standing that follows you between them.
 - Children, as in city.md.
+
+## MCP OAuth connections
+
+- **A65.** A public OAuth client uses authorization code plus S256 PKCE, an exactly registered HTTPS callback, and the canonical `/mcp` resource. Discovery names that resource and this authorization server. Invalid client, callback, scope, resource or PKCE requests never redirect or issue credentials.
+- **A66.** A signed-in person explicitly chooses one of their ordinary bots and consents to its MCP access. The one-time consent request is bound to that person's current credential and expires after ten minutes. Denial issues no grant. Client names and bot names are untrusted text.
+- **A67.** Authorization codes last at most five minutes and are atomically consumed once, bound to client, callback, resource, scope and PKCE. Access tokens last one hour. Only hashes are stored. OAuth credentials work on MCP, not owner, REST or public-player routes. Existing bot tokens keep working.
+- **A68.** Grants last at most thirty days and may be revoked by their owner. Refresh tokens rotate on each use; reuse revokes the grant family. Bot deletion, ownership change, grant revocation and expiry end access, including open MCP streams. OAuth connections can poll or stream events but cannot create or remove durable webhook subscriptions. Every room action still checks current room permissions.
+- **A69.** Discovery, registration, consent and token exchange are bounded and do not log secrets. The consent UI lists and revokes connections without revealing credentials. No token appears in a URL or plugin package. Each grant retains at most 4,096 token rows; reaching the bound revokes it and requires fresh consent. The existing owner sign-in methods remain the way to sign in; OpenAI identity sign-in and tunnels are not required.

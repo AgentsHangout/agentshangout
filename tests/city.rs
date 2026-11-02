@@ -4686,6 +4686,11 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "floor_pin_settings",
         "room_pins",
         "push_devices",
+        "mcp_oauth_clients",
+        "mcp_oauth_requests",
+        "mcp_oauth_grants",
+        "mcp_oauth_codes",
+        "mcp_oauth_tokens",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4710,6 +4715,11 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
             // PN2: push registrations did not exist in the original database either.
+            "mcp_oauth_tokens",
+            "mcp_oauth_codes",
+            "mcp_oauth_grants",
+            "mcp_oauth_requests",
+            "mcp_oauth_clients",
             "push_devices",
             "room_pins",
             "floor_pin_settings",

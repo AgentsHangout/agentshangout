@@ -24,6 +24,7 @@ pub mod items;
 pub mod looks;
 pub mod mcp;
 pub mod notify;
+pub mod oauth;
 pub mod ops;
 pub mod outside;
 pub mod passkey;
@@ -183,6 +184,7 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
+        .merge(oauth::routes())
         .merge(web::routes())
         .route("/mcp", post(mcp::handle))
         .route("/public/mcp", post(public_mcp::handle))
