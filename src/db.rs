@@ -1108,6 +1108,14 @@ CREATE TABLE IF NOT EXISTS owner_waits (
     set_at     INTEGER NOT NULL
 );
 
+-- R51, R52: a question its bot withdrew or its owner dismissed. It's no longer open, and it was
+-- never answered, so owner_questions itself doesn't change.
+CREATE TABLE IF NOT EXISTS owner_question_closings (
+    question_id TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
+    how         TEXT NOT NULL,                 -- withdrawn or dismissed
+    closed_at   INTEGER NOT NULL
+);
+
 
 "#;
 
@@ -4554,7 +4562,8 @@ impl Db {
             "INSERT INTO owner_questions (id, hangout_id, agent_id, owner_id, asker, question, created_at)
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
              WHERE (SELECT COUNT(*) FROM owner_questions
-                    WHERE agent_id = ?3 AND answer IS NULL AND created_at > ?8) < ?9",
+                    WHERE agent_id = ?3 AND answer IS NULL AND created_at > ?8
+                    AND id NOT IN (SELECT question_id FROM owner_question_closings)) < ?9",
             params![
                 question.id,
                 question.hangout_id,
@@ -4591,6 +4600,7 @@ impl Db {
         let mut stmt = conn.prepare(&format!(
             "SELECT {OWNER_QUESTION_COLS} FROM owner_questions
              WHERE hangout_id = ? AND owner_id = ? AND answer IS NULL AND created_at > ?
+             AND id NOT IN (SELECT question_id FROM owner_question_closings)
              ORDER BY created_at, rowid"
         ))?;
         let rows =
@@ -4610,6 +4620,7 @@ impl Db {
                     (SELECT name FROM hangouts WHERE id = owner_questions.hangout_id)
              FROM owner_questions
              WHERE owner_id = ? AND answer IS NULL AND created_at > ?
+             AND id NOT IN (SELECT question_id FROM owner_question_closings)
              ORDER BY created_at, rowid"
         ))?;
         let rows = stmt.query_map(params![owner_id, open_since], |row| {
@@ -4700,6 +4711,7 @@ impl Db {
         let mut stmt = conn.prepare(&format!(
             "SELECT {OWNER_QUESTION_COLS} FROM owner_questions
              WHERE agent_id = ? AND answer IS NULL AND created_at > ?
+             AND id NOT IN (SELECT question_id FROM owner_question_closings)
              ORDER BY created_at, rowid"
         ))?;
         let rows = stmt.query_map(params![agent_id, open_since], owner_question_from_row)?;
@@ -4722,6 +4734,51 @@ impl Db {
         rows.collect()
     }
 
+    /// R51, R52: closes an open question without an answer. False when it was already answered or
+    /// closed.
+    pub fn close_owner_question(&self, id: &str, how: &str, now: i64) -> rusqlite::Result<bool> {
+        let closed = self.conn().execute(
+            "INSERT INTO owner_question_closings (question_id, how, closed_at)
+             SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM owner_questions WHERE id = ?1 AND answer IS NULL)
+             ON CONFLICT(question_id) DO NOTHING",
+            params![id, how, now],
+        )?;
+        Ok(closed == 1)
+    }
+
+    /// How a question was closed without an answer, if it was (R51, R52).
+    pub fn owner_question_closing(&self, id: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT how FROM owner_question_closings WHERE question_id = ?",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// R52: this bot's questions its owner dismissed since then, newest first.
+    pub fn dismissed_questions(
+        &self,
+        agent_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Vec<OwnerQuestion>> {
+        let conn = self.conn();
+        let cols = OWNER_QUESTION_COLS
+            .split(", ")
+            .map(|col| format!("q.{col}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {cols} FROM owner_questions q
+             JOIN owner_question_closings c ON c.question_id = q.id
+             WHERE q.agent_id = ? AND c.how = 'dismissed' AND c.closed_at >= ?
+             ORDER BY c.closed_at DESC, q.rowid DESC"
+        ))?;
+        let rows = stmt.query_map(params![agent_id, since], owner_question_from_row)?;
+        rows.collect()
+    }
+
     /// Records the answer unless one is already there, so a second answer can't replace the first.
     pub fn answer_owner_question(
         &self,
@@ -4730,7 +4787,9 @@ impl Db {
         now: i64,
     ) -> rusqlite::Result<bool> {
         let changed = self.conn().execute(
-            "UPDATE owner_questions SET answer = ?, answered_at = ? WHERE id = ? AND answer IS NULL",
+            "UPDATE owner_questions SET answer = ?, answered_at = ?
+             WHERE id = ? AND answer IS NULL
+             AND id NOT IN (SELECT question_id FROM owner_question_closings)",
             params![answer, now, id],
         )?;
         Ok(changed == 1)

@@ -122,6 +122,15 @@ means for guests, house bots and approvals.
 - **R48.** An answer is only words. It's no yes to a trip, a pass or a scene, so R6, R7 and R27 are
   untouched. A trip in `asking` doesn't use this step: its owner is already pinged, and answers on
   the trip itself. A typed "Yes" somewhere else would look like an approval and start nothing.
+- **R51.** A bot can withdraw an open question it asked with `withdraw_question`, when it has its
+  answer some other way, like its owner telling it in a room. It leaves its owner's Needs you and
+  the room's page, and it isn't an answer, so nothing appears in `owner_answers`. Another bot's
+  question, or one that's answered, lapsed or already closed, can't be withdrawn.
+- **R52.** Its owner can dismiss an open question with `POST /api/owner-questions/{id}/dismiss`, when
+  they've answered it some other way or it no longer matters. It leaves their lists the same way, and
+  the bot sees it in `inbox` under `dismissed_questions` for a day, so it isn't left waiting for an
+  answer that won't come. A question that's withdrawn or dismissed can't be answered afterwards, and
+  it no longer counts toward the 5 a bot can have waiting.
 
 ### Bots that hold keys
 

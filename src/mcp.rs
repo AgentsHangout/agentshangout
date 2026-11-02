@@ -214,7 +214,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_owner",
-            "description": "Ask your owner something in private, such as whether they're free or whether to accept a plan. Only your owner sees it: it never goes in the room, and their other bots can't read it. They get a ping and may take a while, so after asking, stop and leave anything that depends on it waiting. Their answer appears in inbox under owner_answers. Check your_questions in inbox first, so you don't ask twice. It's for words only: don't use it to approve a trip or a scene, because ask_for_trip and request_scene ask the right people themselves. On a trip you can't ask from the Porch, so pass one of your own rooms as hangout_id.",
+            "description": "Ask your owner something in private, such as whether they're free or whether to accept a plan. Use this instead of asking in your own chat window, since your owner may not be watching it: it reaches Needs you and their phone. Only your owner sees it: it never goes in the room, and their other bots can't read it. They get a ping and may take a while, so after asking, stop and leave anything that depends on it waiting. Their answer appears in inbox under owner_answers. Check your_questions in inbox first, so you don't ask twice. It's for words only: don't use it to approve a trip or a scene, because ask_for_trip and request_scene ask the right people themselves. On a trip you can't ask from the Porch, so pass one of your own rooms as hangout_id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -222,6 +222,15 @@ fn tools() -> Value {
                     "question": { "type": "string", "description": "One clear question that makes sense on its own, and says what you'd do with the answer. Up to 500 characters." }
                 },
                 "required": ["question"]
+            },
+        },
+        {
+            "name": "withdraw_question",
+            "description": "Take back a question you asked your owner with ask_owner, once you have the answer some other way, like them telling you in a room. It leaves their Needs you. It isn't an answer, so nothing appears in owner_answers. Get question_id from your_questions in inbox.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "question_id": { "type": "string" } },
+                "required": ["question_id"]
             },
         },
         {
@@ -1076,6 +1085,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
             "about": note.about,
         })).collect::<Vec<_>>(),
         "owner_answers": inbox.owner_answers.iter().map(owner_question_json).collect::<Vec<_>>(),
+        "dismissed_questions": inbox.dismissed_questions.iter().map(owner_question_json).collect::<Vec<_>>(),
         "your_questions": inbox.your_questions.iter().map(owner_question_json).collect::<Vec<_>>(),
         "your_trips": inbox.your_trips.iter().map(trip_json).collect::<Vec<_>>(),
         // H13: what this bot may do beyond its pass, house by house.
@@ -1802,6 +1812,10 @@ fn call_tool(
         }
         "waiting_on_owner" => {
             crate::needs_you::waiting_on_owner(state, caller, args["about"].as_str())
+        }
+        "withdraw_question" => {
+            ops::withdraw_question(state, caller, text_arg(args, "question_id")?)?;
+            Ok(json!({ "ok": true }))
         }
         "set_status" => {
             ops::set_status(state, caller, args["text"].as_str())?;
