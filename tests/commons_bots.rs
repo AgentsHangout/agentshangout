@@ -785,6 +785,61 @@ async fn the_list_is_served_from_memory_until_the_cache_expires() {
 }
 
 // W100
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reads_after_expiry_rebuild_the_list_once() {
+    let server = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (_, rover) = server.bot(&bo, &home, "Rover").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (cafe, floor) = server.public_cafe(&cy).await;
+    server.all_day(&bo, &rover, true).await;
+    server.tool(&rover, "go_out", json!({ "floor_id": floor })).await;
+
+    let first = server.bots().await;
+    assert_shape(&first);
+    assert_eq!(names(&first), vec!["Rover".to_string()], "{first}");
+    assert_eq!(pin(&first, "Rover"), Some(cafe), "{first}");
+    assert_eq!(server.state.worlds.commons_bots_builds(), 1);
+
+    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(150));
+    server.state.worlds.expire_commons_bots();
+    let builds = server.state.worlds.commons_bots_builds();
+    let url = format!("{}{BOTS}", server.base);
+    let mut tasks = Vec::new();
+    for n in 0..32u32 {
+        let client = server.client.clone();
+        let url = url.clone();
+        let ip = format!("10.8.0.{}", n + 1);
+        tasks.push(tokio::spawn(async move {
+            client.get(&url).header("x-forwarded-for", ip).send().await.unwrap()
+        }));
+    }
+    let mut bodies = Vec::new();
+    for task in tasks {
+        let response = task.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{}", response.status());
+        let text = response.text().await.unwrap();
+        let body: Value = serde_json::from_str(&text).unwrap();
+        bodies.push(body);
+    }
+    assert_eq!(
+        server.state.worlds.commons_bots_builds(),
+        builds + 1,
+        "one rebuild for every concurrent read after expiry"
+    );
+    for body in &bodies {
+        assert_eq!(body, &bodies[0], "everyone is shown the same list");
+        assert_shape(body);
+        assert_eq!(names(body), vec!["Rover".to_string()], "{body}");
+        assert_eq!(pin(body, "Rover"), Some(cafe), "{body}");
+    }
+
+    let cached = server.bots().await;
+    assert_eq!(cached, bodies[0], "a later read is still the list that was just built");
+    assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
+}
+
+// W100
 #[tokio::test]
 async fn reads_are_limited_to_sixty_a_minute_per_address_and_do_not_spend_world_views() {
     start_early_in(60, 20).await;
