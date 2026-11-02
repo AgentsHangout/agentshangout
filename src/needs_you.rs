@@ -1,6 +1,6 @@
-//! Needs you: everything a person's bots are waiting on them for, from every room, in one list
-//! (docs/needs-you.md). It reads what's already there, questions and check-ins, and adds one thing
-//! of its own: a bot saying it's stopped somewhere else, such as a prompt on its owner's computer.
+//! Needs you: everything a person has to handle, from every room, in one list, and what was handled
+//! in the last day (docs/needs-you.md). It reads what's already there, and adds two things of its
+//! own: a bot saying it's stopped somewhere else, and the messages that mentioned the person.
 
 use axum::{
     extract::{Path, State},
@@ -19,11 +19,17 @@ use crate::{
 pub const MAX_ABOUT_CHARS: usize = 200;
 /// N6: a wait nobody cleared stops showing after a day.
 pub const SHOWN_SECS: i64 = 86_400;
+/// N12: how long a mention waits to be seen.
+pub const MENTION_SECS: i64 = 7 * 86_400;
+/// N12: how much of a mentioning message the list shows. The room has the rest.
+const MENTION_CHARS: usize = 300;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/needs-you", get(needs_you))
+        .route("/api/needs-you/answered", get(answered))
         .route("/api/needs-you/waiting/{agent_id}", delete(dismiss))
+        .route("/api/needs-you/mentions/{id}", delete(clear_mention))
 }
 
 // N1, N2
@@ -45,12 +51,21 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         })
         .collect();
     let mut check_ins = Vec::new();
+    let mut plans = Vec::new();
     for room in state.db.hangouts_for_person(&caller.person_id)? {
         // Only waiting ones come back for a moment as old as now.
         for check_in in state.db.recent_check_ins(&room.id, now + 1, now)? {
             let addressed = check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id);
             if check_in.status == "waiting" && check_in.asked_by != caller.person_id && addressed {
                 check_ins.push((check_in, room.name.clone()));
+            }
+        }
+        // N11: the plans a bot's inbox would call its owner's to answer.
+        for event in state.db.upcoming_events(&room.id, now)? {
+            if !event.rsvps.iter().any(|rsvp| rsvp.person_id == caller.person_id) {
+                let mut plan = json!(event);
+                plan["room"] = json!({ "id": room.id, "name": room.name });
+                plans.push(plan);
             }
         }
     }
@@ -84,12 +99,36 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
     let requests = crate::spaces::requests_for(&state, &caller.person_id)?;
     let invites = crate::friends::invited(&state, &caller.person_id)?;
     let apprentices = crate::bonds::asking(&state, &caller.person_id)?;
+    // N11: in a city, what waits on this person's yes, as a bot's inbox has it for its owner.
+    let trips = crate::city::trips_to_answer(&state, &caller, now)?;
+    let scenes = crate::city::scenes_to_answer(&state, &caller, now)?;
+    let passes = crate::city::passes_to_accept(&state, &caller)?;
+    // N12
+    let mentions: Vec<Value> = state
+        .db
+        .person_mentions(&caller.person_id, now - MENTION_SECS)?
+        .into_iter()
+        .map(|mention| {
+            json!({
+                "id": mention.id,
+                "by": mention.by,
+                "text": mention.text.chars().take(MENTION_CHARS).collect::<String>(),
+                "at": mention.at,
+                "room": { "id": mention.hangout_id, "name": mention.room },
+            })
+        })
+        .collect();
     let count = questions.len()
         + check_ins.len()
         + waiting.len()
         + requests.len()
         + invites.len()
-        + apprentices.len();
+        + apprentices.len()
+        + plans.len()
+        + trips.len()
+        + scenes.len()
+        + passes.len()
+        + mentions.len();
     Ok(Json(json!({
         "questions": questions,
         "check_ins": check_ins,
@@ -97,8 +136,71 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         "requests": requests,
         "invites": invites,
         "apprentices": apprentices,
+        "plans": plans,
+        "trips": trips,
+        "scenes": scenes,
+        "passes": passes,
+        "mentions": mentions,
         "count": count,
     })))
+}
+
+// N13: what was handled in the last day, so nothing just disappears from the list.
+async fn answered(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "see what was answered")?;
+    let now = now();
+    let since = now - SHOWN_SECS;
+    let questions: Vec<Value> = state
+        .db
+        .handled_owner_questions(&caller.person_id, since)?
+        .into_iter()
+        .map(|(question, room, closed)| {
+            json!({
+                "id": question.id,
+                "bot": question.asker,
+                "question": question.question,
+                "asked_at": question.created_at,
+                "answer": question.answer,
+                "answered_at": question.answered_at,
+                "closed": closed,
+                "room": { "id": question.hangout_id, "name": room },
+            })
+        })
+        .collect();
+    let mut check_ins = Vec::new();
+    for room in state.db.hangouts_for_person(&caller.person_id)? {
+        for check_in in state.db.recent_check_ins(&room.id, since, now)? {
+            // What's waiting on this person is under Waiting. Their own side's is here, since only
+            // someone on another side can answer it.
+            if check_in.status != "waiting" || check_in.asked_by == caller.person_id {
+                check_ins.push(json!({
+                    "id": check_in.id,
+                    "asker": check_in.asker,
+                    "about": check_in.about,
+                    "status": check_in.status,
+                    "answered_by": check_in.answered_by,
+                    "yours": check_in.asked_by == caller.person_id,
+                    "asked_at": check_in.created_at,
+                    "room": { "id": room.id, "name": room.name },
+                }));
+            }
+        }
+    }
+    check_ins.sort_by_key(|check_in| std::cmp::Reverse(check_in["asked_at"].as_i64()));
+    Ok(Json(json!({ "questions": questions, "check_ins": check_ins })))
+}
+
+// N12: one mention cleared, only by the person it mentions.
+async fn clear_mention(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "clear a mention")?;
+    if !state.db.delete_person_mention(id, &caller.person_id)? {
+        return Err(ApiError::not_found());
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 // N6: only the bot's owner can dismiss it, and anyone else's bot is as good as not there.

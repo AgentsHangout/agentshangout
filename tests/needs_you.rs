@@ -452,12 +452,15 @@ async fn a_check_in_nobody_here_could_answer_is_refused() {
         .await;
 }
 
-// N9: the room page says who a waiting check-in is waiting for, and why a Go or Hold was refused.
+// N9: a check-in its own side is waiting on says who it's waiting for, and a refused Go or Hold
+// says why.
 #[test]
-fn the_room_page_says_why_a_check_in_cant_be_answered() {
-    let app = include_str!("../web/app.js");
-    assert!(app.contains("Waiting for someone on another side to answer"));
-    let card = app.split_once("function checkInCard(checkIn) {").unwrap().1;
+fn a_check_in_says_who_its_waiting_for_and_why_an_answer_was_refused() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let answered = app.split_once("  function answeredCheckIn(checkIn) {").unwrap().1;
+    let answered = answered.split_once("\n  }").unwrap().0;
+    assert!(answered.contains("'Waiting for someone on another side to answer'"));
+    let card = app.split_once("  function checkInItem(checkIn) {").unwrap().1;
     let card = card.split_once("\n  }").unwrap().0;
     assert!(card.contains("const error = formError();"), "a refused answer says nothing");
     assert!(card.contains("act(error, "), "a refused answer says nothing");
@@ -500,7 +503,7 @@ async fn invites_requests_and_apprentices_are_listed_too() {
 // N4: the button is on the map and in every room, at every width, just before Account.
 #[test]
 fn needs_you_is_in_both_bars_just_before_account() {
-    let app = include_str!("../web/app.js");
+    let app = &include_str!("../web/app.js").replace("\r\n", "\n");
     for view in ["worldView", "roomView"] {
         let view = app.split_once(&format!("async function {view}(")).unwrap().1;
         let bar = view.split_once("frame.actions.append(").unwrap().1.split_once("));").unwrap().0;
@@ -509,10 +512,15 @@ fn needs_you_is_in_both_bars_just_before_account() {
         assert!(needs < account, "Needs you isn't before Account in {bar}");
         let between = &bar[needs + "needs.toggle".len()..account];
         assert!(!between.contains(".toggle"), "something is between them in {bar}");
-        // A room's own buttons for these have gone, and its check-ins are a row in More.
+        // A room's own buttons for these have gone.
         assert!(!bar.contains("questionsToggle"), "Questions is still in {bar}");
         assert!(!bar.contains("checkInsToggle"), "Check-ins is still in {bar}");
     }
+    // And so have its own panels for them: Needs you is the one place, Answered the way back.
+    for gone in ["panels.add('checkins'", "panels.add('questions'", "moreButton('checkins'"] {
+        assert!(!app.contains(gone), "{gone} is still on the page");
+    }
+    assert!(app.contains("if (snapshot.owner_questions.length) panels.open('needs');"));
     let needs = app.split_once("function needsYouPanel(").unwrap().1;
     let needs = needs.split_once("\n}\n").unwrap().0;
     assert!(needs.contains("panels.toggle('needs', 'Needs you'"), "it isn't called Needs you");
@@ -520,5 +528,141 @@ fn needs_you_is_in_both_bars_just_before_account() {
     assert!(needs.contains("Nothing needs you right now."));
     assert!(needs.contains("api('/api/needs-you')"));
     assert!(needs.contains("30000"), "it doesn't ask again every 30 seconds");
-    assert!(app.contains("moreButton('checkins', 'Check-ins', ''),"), "no Check-ins row in More");
+    assert!(needs.contains("[['waiting', 'Waiting'], ['answered', 'Answered']]"), "no tabs");
+    assert!(needs.contains("api('/api/needs-you/answered')"), "Answered doesn't ask");
+    // H3: answering here can still keep the answer for the person's bots.
+    assert!(needs.contains("'Remember this for my bots'"));
+    assert!(needs.contains("from_question_id: question.id"));
+}
+
+// N11: a plan waits in the list of everyone in its room who hasn't answered it, and the city's
+// trips, scenes and passes come from where a bot's inbox has them for its owner.
+#[tokio::test]
+async fn a_plan_to_answer_is_listed_until_its_answered() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let starts = agenthangout::ops::iso(agenthangout::now() + 86_400);
+    let plan = server
+        .post(
+            &town.ann.key,
+            &format!("/api/hangouts/{}/events", town.room),
+            json!({ "title": "Tacos", "starts_at": starts }),
+        )
+        .await
+        .ok();
+    let bo = server.needs(&town.bo).await;
+    assert_eq!(count(&bo, "plans"), 1, "{bo}");
+    assert_eq!(bo["plans"][0]["id"], plan["id"]);
+    assert_eq!(bo["plans"][0]["title"], "Tacos");
+    assert_eq!(bo["plans"][0]["room"]["name"], "Ann's room");
+    assert_eq!(bo["count"], 1);
+    // Proposing it was Ann's yes, so it isn't waiting on her.
+    assert_eq!(count(&server.needs(&town.ann).await, "plans"), 0);
+    let rsvp = format!("/api/events/{}/rsvp", text(&plan["id"]));
+    server.post(&town.bo.key, &rsvp, json!({ "response": "maybe" })).await.ok();
+    assert_eq!(count(&server.needs(&town.bo).await, "plans"), 0);
+
+    for field in ["trips", "scenes", "passes"] {
+        assert_eq!(count(&bo, field), 0, "{field}: {bo}");
+    }
+    let code = include_str!("../src/needs_you.rs");
+    assert!(code.contains("crate::city::trips_to_answer(&state, &caller, now)?"));
+    assert!(code.contains("crate::city::scenes_to_answer(&state, &caller, now)?"));
+    assert!(code.contains("crate::city::passes_to_accept(&state, &caller)?"));
+}
+
+// N12: a mention waits in the list of the person mentioned, and only theirs, until they open the
+// room or clear it.
+#[tokio::test]
+async fn a_mention_waits_until_the_room_is_opened_or_its_cleared() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let room = format!("/api/hangouts/{}/messages", town.room);
+    server.post(&town.ann.key, &room, json!({ "text": "@Bo are you in for Friday?" })).await.ok();
+    let bo = server.needs(&town.bo).await;
+    assert_eq!(count(&bo, "mentions"), 1, "{bo}");
+    let mention = &bo["mentions"][0];
+    assert_eq!(mention["by"], "Ann");
+    assert_eq!(mention["text"], "@Bo are you in for Friday?");
+    assert_eq!(mention["room"]["id"], json!(town.room));
+    assert_eq!(bo["count"], 1);
+    // Nobody else has it, and a person's own words don't mention them.
+    assert_eq!(count(&server.needs(&town.ann).await, "mentions"), 0);
+    server.post(&town.bo.key, &room, json!({ "text": "@Bo note to self" })).await.ok();
+    assert_eq!(count(&server.needs(&town.bo).await, "mentions"), 1);
+
+    // Opening the room is seeing it.
+    server.get(&town.bo.key, &format!("/api/hangouts/{}", town.room)).await.ok();
+    assert_eq!(count(&server.needs(&town.bo).await, "mentions"), 0);
+
+    // A bot naming its owner mentions them too, and one can be cleared by hand, by them only.
+    server.tool(&town.fern, "say", json!({ "hangout_id": town.room, "text": "@Ann done" })).await;
+    let ann = server.needs(&town.ann).await;
+    assert_eq!(count(&ann, "mentions"), 1, "{ann}");
+    assert_eq!(ann["mentions"][0]["by"], "Fern");
+    let path = format!("/api/needs-you/mentions/{}", ann["mentions"][0]["id"]);
+    server.delete(&town.bo.key, &path).await.status(StatusCode::NOT_FOUND);
+    server.delete(&town.fern, &path).await.status(StatusCode::FORBIDDEN);
+    server.delete(&town.ann.key, &path).await.ok();
+    assert_eq!(count(&server.needs(&town.ann).await, "mentions"), 0);
+}
+
+// N13: what was handled in the last day stays where it can be found, for each person what's theirs.
+#[tokio::test]
+async fn what_was_answered_stays_for_a_day() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let find = |list: &Value, field: &str, id: &Value| -> Value {
+        list[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == *id)
+            .unwrap_or_else(|| panic!("{id} isn't in {field}: {list}"))
+            .clone()
+    };
+    let question = server
+        .tool(&town.fern, "ask_owner", json!({ "hangout_id": town.room, "question": "Tacos?" }))
+        .await;
+    let path = format!("/api/owner-questions/{}/answer", text(&question["id"]));
+    server.post(&town.ann.key, &path, json!({ "answer": "Yes please" })).await.ok();
+    let check_in = server
+        .tool(&town.fern, "check_in", json!({ "hangout_id": town.room, "about": "Book it" }))
+        .await;
+    let path = format!("/api/check-ins/{}/answer", text(&check_in["id"]));
+    server.post(&town.bo.key, &path, json!({ "response": "go" })).await.ok();
+    let waiting = server
+        .tool(&town.fern, "check_in", json!({ "hangout_id": town.room, "about": "Pay for it" }))
+        .await;
+
+    let ann = server.get(&town.ann.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(count(&ann, "questions"), 1, "{ann}");
+    assert_eq!(ann["questions"][0]["answer"], "Yes please");
+    assert_eq!(ann["questions"][0]["closed"], Value::Null);
+    // Her side's check-ins: the one Bo said go to, and the one still waiting on another side.
+    assert_eq!(count(&ann, "check_ins"), 2, "{ann}");
+    let went = find(&ann, "check_ins", &check_in["id"]);
+    assert_eq!(went["status"], "go");
+    assert_eq!(went["answered_by"], "Bo");
+    assert_eq!(went["yours"], true);
+    assert_eq!(find(&ann, "check_ins", &waiting["id"])["status"], "waiting");
+
+    // Bo sees the one he answered, and none of Ann's questions. The waiting one is under Waiting.
+    let bo = server.get(&town.bo.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(count(&bo, "questions"), 0, "{bo}");
+    assert_eq!(count(&bo, "check_ins"), 1, "{bo}");
+    assert_eq!(bo["check_ins"][0]["id"], check_in["id"]);
+    assert_eq!(count(&server.needs(&town.bo).await, "check_ins"), 1);
+
+    // A dismissed question is there too, saying so.
+    let asked = server
+        .tool(&town.fern, "ask_owner", json!({ "hangout_id": town.room, "question": "Movie?" }))
+        .await;
+    let dismiss = format!("/api/owner-questions/{}/dismiss", text(&asked["id"]));
+    server.post(&town.ann.key, &dismiss, json!({})).await.ok();
+    let ann = server.get(&town.ann.key, "/api/needs-you/answered").await.ok();
+    assert_eq!(find(&ann, "questions", &asked["id"])["closed"], "dismissed");
+
+    server.get(&town.fern, "/api/needs-you/answered").await.status(StatusCode::FORBIDDEN);
+    server.get("", "/api/needs-you/answered").await.status(StatusCode::UNAUTHORIZED);
 }

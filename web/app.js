@@ -2608,15 +2608,12 @@ async function roomView(id) {
   frame.status.append(legendEl);
 
   const chatLog = h('div', { class: 'chat-log', 'aria-live': 'polite' });
-  const checkInsEl = h('div', { class: 'list' });
   const calendarEl = h('div', { class: 'list' });
   const crewEl = h('div', { class: 'list' });
   const crewLegendEl = h('div', { class: 'legend' });
   const notesEl = h('div', { class: 'list' });
   const heldEl = h('div', { class: 'stack', hidden: true });
-  const questionsEl = h('div', { class: 'list', 'aria-live': 'polite' });
   // Cards stay put across reloads, or the one every 30 seconds would wipe a reply being typed.
-  const questionCards = new Map();
   // H1: notes for this person's own bots. Only they and their bots ever see these.
   const ownerNotesEl = h('ul', { class: 'rows' });
   const ownerNotesError = formError();
@@ -2994,67 +2991,6 @@ async function roomView(id) {
       && (checkIn.status === 'waiting' || (checkIn.answered_by_bot && checkIn.status !== 'expired'));
   }
 
-  function checkInCard(checkIn) {
-    const target = checkIn.to_person ? person(checkIn.to_person)?.name : 'the room';
-    // N9: a refused answer says why, beside it.
-    const error = formError();
-    const answer = (response) => act(error, async () => {
-      await api(`/api/check-ins/${encodeURIComponent(checkIn.id)}/answer`, { method: 'POST', body: { response } });
-      await reload();
-    });
-    const ours = checkIn.asked_by === snapshot.you.person_id;
-    const label = {
-      waiting: `${ours ? 'Waiting for someone on another side to answer, until' : 'Waiting until'} ${timeFormat.format(fromUnix(checkIn.expires_at))}`,
-      go: `Go from ${checkIn.answered_by}`,
-      hold: `Hold from ${checkIn.answered_by}`,
-      expired: 'Expired with no answer: treated as no',
-    }[checkIn.status];
-    return h('article', { class: `check-in ${checkIn.status}` },
-      h('p', {}, h('strong', {}, checkIn.asker), ` asks ${target}`, checkIn.needs_human ? ' (a person must answer)' : ''),
-      h('p', {}, checkIn.about),
-      checkIn.note ? h('p', { class: 'muted' }, checkIn.note) : null,
-      h('small', { class: 'check-in-status' }, label),
-      canAnswer(checkIn) ? h('div', { class: 'event-actions' },
-        h('button', { type: 'button', class: 'primary', onclick: answer('go') }, 'Go'),
-        h('button', { type: 'button', onclick: answer('hold') }, 'Hold')) : null,
-      error);
-  }
-
-  function renderCheckIns() {
-    checkInsEl.replaceChildren(...(snapshot.check_ins.length
-      ? snapshot.check_ins.map(checkInCard)
-      : [h('p', { class: 'muted' }, 'When a bot asks before it acts, the question shows up here.')]));
-    const waiting = snapshot.check_ins.filter((checkIn) => checkIn.status === 'waiting');
-    checkInsToggle.set(waiting.length, waiting.some(canAnswer));
-  }
-
-  function questionCard(question) {
-    const error = formError();
-    // H3: keeps the answer as a note, so the bot doesn't have to ask again next week.
-    const remember = h('input', { type: 'checkbox' });
-    const send = async (answer) => {
-      await api(`/api/owner-questions/${question.id}/answer`, { method: 'POST', body: { answer } });
-      if (remember.checked) {
-        const text = `${question.question} ${answer}`.slice(0, 500);
-        await api('/api/owner-notes', { method: 'POST', body: { kind: 'fact', text, from_question_id: question.id } });
-        await loadOwnerNotes();
-      }
-      await reload();
-    };
-    return h('article', { class: 'ask' },
-      h('p', {}, h('strong', {}, `${question.asker} asks:`)),
-      h('p', {}, question.question),
-      h('small', { class: 'muted' }, `Only you can see this · ${whenText(question.created_at)}`),
-      error,
-      h('div', { class: 'event-actions' },
-        h('button', { type: 'button', class: 'primary', onclick: act(error, () => send('Yes')) }, 'Yes'),
-        h('button', { type: 'button', onclick: act(error, () => send('No')) }, 'No')),
-      h('form', { class: 'chat-form', onsubmit: submitter(error, ({ answer }) => send(answer)) },
-        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Or type a reply', autocomplete: 'off', 'aria-label': `Reply to ${question.asker}` }),
-        h('button', { type: 'submit' }, 'Send')),
-      h('label', { class: 'check' }, remember, 'Remember this for my bots'));
-  }
-
   const NOTE_KINDS = {
     fact: 'Fact',
     may_share: 'They can share',
@@ -3135,25 +3071,6 @@ async function roomView(id) {
       field('Note', h('textarea', { name: 'text', required: true, maxLength: 500, rows: 3, placeholder: 'Like: I\'m vegetarian' })),
       error,
       h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
-  }
-
-  function renderQuestions() {
-    const open = new Set(snapshot.owner_questions.map((question) => question.id));
-    for (const [questionId, card] of questionCards) {
-      if (open.has(questionId)) continue;
-      card.remove();
-      questionCards.delete(questionId);
-    }
-    for (const question of snapshot.owner_questions) {
-      if (questionCards.has(question.id)) continue;
-      const card = questionCard(question);
-      questionCards.set(question.id, card);
-      questionsEl.append(card);
-    }
-    questionsToggle.set(open.size, true);
-    questionsToggle.button.hidden = !open.size;
-    // That was the last one, so there's nothing left for the panel to show.
-    if (!open.size && panels.current === 'questions') panels.close(false);
   }
 
   function doorbellBadge({ doorbell }) {
@@ -3421,8 +3338,6 @@ async function roomView(id) {
     renderPins();
     renderLegend();
     renderStats();
-    renderQuestions();
-    renderCheckIns();
     renderCalendar();
     renderCrew();
     renderNotes();
@@ -3435,7 +3350,7 @@ async function roomView(id) {
     snapshot.messages.forEach(addMessage);
     // A question or a check-in behind a shut panel, or arriving while one is open, has to be noticed.
     const waiting = snapshot.owner_questions.length + snapshot.check_ins.filter((c) => c.status === 'waiting' && canAnswer(c)).length;
-    if (waiting > waitingBefore) say('A bot is waiting on your answer. Look for the lit button along the top.');
+    if (waiting > waitingBefore) say('A bot is waiting on your answer. It’s in Needs you, at the top.');
     waitingBefore = waiting;
   }
 
@@ -3976,8 +3891,6 @@ async function roomView(id) {
 
   // The title bar, and what opens from it.
   const chatToggle = counted('room', 'The room', { short: 'Chat' });
-  const checkInsToggle = counted('checkins', 'Check-ins', { short: 'Check', className: 'mid' });
-  const questionsToggle = counted('questions', 'Questions', { short: 'Asks', aria: 'Questions for you' });
   const calendarToggle = panels.toggle('calendar', 'Calendar', { short: 'Plans', className: 'mid' });
   const boardsMore = moreButton('boards', 'Boards', '');
 
@@ -4005,7 +3918,7 @@ async function roomView(id) {
       plans: () => panels.open('calendar'),
       calendar: calendarDialog,
       notes: () => panels.open('yours'),
-      checkins: () => panels.open('checkins'),
+      needs: () => panels.open('needs'),
       notify: notifyDialog,
       build: snapshot.floor ? () => panels.open('build') : undefined,
     }),
@@ -4033,8 +3946,6 @@ async function roomView(id) {
       chatLog.scrollTop = chatLog.scrollHeight;
     },
   }, chatLog, chatError, chatForm);
-  panels.add('questions', 'Questions for you', {}, questionsEl);
-  panels.add('checkins', 'Check-ins', {}, checkInsEl);
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
@@ -4053,7 +3964,6 @@ async function roomView(id) {
     aboutMore,
     h('div', { class: 'game-more' }, ...[
       moreButton('tutorial', 'Get started', 'sec'),
-      moreButton('checkins', 'Check-ins', ''),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
@@ -4093,7 +4003,7 @@ async function roomView(id) {
   loadOwnerNotes();
   loadMarks();
   if (beside.matches) panels.open('room');
-  if (snapshot.owner_questions.length) panels.open('questions');
+  if (snapshot.owner_questions.length) panels.open('needs');
   setTimeout(guide.arrive);
   // The window isn't on the page yet, so the log can't be scrolled until the next frame.
   requestAnimationFrame(() => {
@@ -6440,18 +6350,27 @@ function needsYouPanel(panels) {
 
   function questionItem(question) {
     const error = formError();
+    // H3: keeps the answer as a note, so the bot doesn't have to ask again next week.
+    const remember = h('input', { type: 'checkbox' });
+    const send = async (answer) => {
+      await api(`/api/owner-questions/${encodeURIComponent(question.id)}/answer`, { method: 'POST', body: { answer } });
+      if (remember.checked) {
+        const text = `${question.question} ${answer}`.slice(0, 500);
+        await api('/api/owner-notes', { method: 'POST', body: { kind: 'fact', text, from_question_id: question.id } });
+      }
+      await refresh(true);
+    };
     return item(
       h('p', {}, h('strong', {}, question.bot), ' asks you, in ', roomLink(question.room)),
       h('p', {}, question.question),
-      h('form', {
-        class: 'chat-form',
-        onsubmit: submitter(error, async ({ answer }) => {
-          await api(`/api/owner-questions/${encodeURIComponent(question.id)}/answer`, { method: 'POST', body: { answer } });
-          await refresh(true);
-        }),
-      },
-        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Your answer', autocomplete: 'off', 'aria-label': `Answer ${question.bot}` }),
-        h('button', { type: 'submit', class: 'primary' }, 'Answer')),
+      h('small', { class: 'muted' }, `Only you can see this · ${whenText(question.asked_at)}`),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: act(error, () => send('Yes')) }, 'Yes'),
+        h('button', { type: 'button', onclick: act(error, () => send('No')) }, 'No')),
+      h('form', { class: 'chat-form', onsubmit: submitter(error, ({ answer }) => send(answer)) },
+        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Or type a reply', autocomplete: 'off', 'aria-label': `Reply to ${question.bot}` }),
+        h('button', { type: 'submit' }, 'Send')),
+      h('label', { class: 'check' }, remember, 'Remember this for my bots'),
       // R52: answered some other way, or it no longer matters. The bot is told, and stops waiting.
       h('div', { class: 'event-actions' },
         h('button', {
@@ -6516,16 +6435,130 @@ function needsYouPanel(panels) {
       h('div', { class: 'event-actions' }, link('/#rooms', 'Answer in Places', { class: 'link' })));
   }
 
+  // N11: a plan is answered here as on a room's calendar.
+  function planItem(plan) {
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/events/${encodeURIComponent(plan.id)}/rsvp`, { method: 'POST', body: { response } })));
+    return item(
+      h('p', {}, h('strong', {}, plan.proposer), ' proposed a plan, in ', roomLink(plan.room)),
+      h('p', {}, h('strong', {}, plan.title), ` · ${whenText(plan.starts_at)}`, plan.location ? ` · ${plan.location}` : ''),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Yes'),
+        h('button', { type: 'button', onclick: answer('maybe') }, 'Maybe'),
+        h('button', { type: 'button', onclick: answer('no') }, 'No')),
+      error);
+  }
+
+  // N11: what a city asks of this person, each with its own yes.
+  function yesNo(error, path) {
+    const answer = (response) => act(error, done(() => api(path, { method: 'POST', body: { response } })));
+    return h('div', { class: 'event-actions' },
+      h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Yes'),
+      h('button', { type: 'button', onclick: answer('no') }, 'No'));
+  }
+
+  function tripItem(trip) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, trip.agent_name), ` asks for a ${trip.kind} at `, h('strong', {}, trip.house_name)),
+      trip.goal ? h('p', {}, trip.goal) : null,
+      yesNo(error, `/api/trips/${encodeURIComponent(trip.id)}/answer`),
+      error);
+  }
+
+  function sceneItem(scene) {
+    const error = formError();
+    return item(
+      h('p', {}, 'Run the scene ', h('strong', {}, scene.scene_name), '?'),
+      yesNo(error, `/api/scene-requests/${encodeURIComponent(scene.id)}/answer`),
+      error);
+  }
+
+  function passItem(pass) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, pass.agent_name), ' has a pass waiting for you to accept'),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: act(error, done(() => api(`/api/passes/${encodeURIComponent(pass.id)}/accept`, { method: 'POST' }))) }, 'Accept')),
+      error);
+  }
+
+  // N12: opening the room clears it, and so does Clear.
+  function mentionItem(mention) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, mention.by), ' mentioned you, in ', roomLink(mention.room), ` · ${agoText(mention.at)}`),
+      h('p', {}, mention.text),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'link', onclick: act(error, done(() => api(`/api/needs-you/mentions/${encodeURIComponent(mention.id)}`, { method: 'DELETE' }))) }, 'Clear')),
+      error);
+  }
+
+  // N13: what was handled in the last day, from every room.
+  const CHECK_IN_ENDS = { go: 'said go', hold: 'said hold' };
+  function answeredQuestion(question) {
+    const how = question.closed === 'withdrawn' ? 'Withdrawn by the bot'
+      : question.closed === 'dismissed' ? 'You dismissed it'
+        : `You answered: ${question.answer}`;
+    return h('article', { class: 'check-in' },
+      h('p', {}, h('strong', {}, question.bot), ' asked you, in ', roomLink(question.room)),
+      h('p', {}, question.question),
+      h('small', { class: 'check-in-status' }, how));
+  }
+
+  function answeredCheckIn(checkIn) {
+    const how = checkIn.status === 'waiting' ? 'Waiting for someone on another side to answer'
+      : checkIn.status === 'expired' ? 'Expired with no answer: treated as no'
+        : `${checkIn.answered_by} ${CHECK_IN_ENDS[checkIn.status] || checkIn.status}`;
+    return h('article', { class: `check-in ${checkIn.status}` },
+      h('p', {}, h('strong', {}, checkIn.asker), ' asked before acting, in ', roomLink(checkIn.room)),
+      h('p', {}, checkIn.about),
+      h('small', { class: 'check-in-status' }, how));
+  }
+
+  let tab = 'waiting';
+  const waitingList = h('div', { class: 'list' });
+  const answeredList = h('div', { class: 'list', hidden: true });
+  const tabs = h('div', { class: 'row-actions', role: 'tablist' },
+    ...[['waiting', 'Waiting'], ['answered', 'Answered']].map(([name, label]) =>
+      h('button', { type: 'button', role: 'tab', 'data-tab': name, onclick: () => show(name) }, label)));
+  body.append(tabs, waitingList, answeredList);
+  function show(name) {
+    tab = name;
+    for (const button of tabs.children) {
+      const on = button.dataset.tab === name;
+      button.classList.toggle('primary', on);
+      button.setAttribute('aria-selected', String(on));
+    }
+    waitingList.hidden = name !== 'waiting';
+    answeredList.hidden = name !== 'answered';
+    if (name === 'answered') loadAnswered();
+  }
+  async function loadAnswered() {
+    const handled = await api('/api/needs-you/answered').catch(() => null);
+    if (!handled) return;
+    const parts = [...handled.questions.map(answeredQuestion), ...handled.check_ins.map(answeredCheckIn)];
+    answeredList.replaceChildren(...(parts.length ? parts : [h('p', { class: 'muted' }, 'Nothing was answered in the last day.')]));
+  }
+  show('waiting');
+
   function render(list) {
     const parts = [
       ...list.waiting.map(waitingItem),
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),
+      ...list.plans.map(planItem),
       ...list.requests.map(requestItem),
+      ...list.trips.map(tripItem),
+      ...list.scenes.map(sceneItem),
+      ...list.passes.map(passItem),
       ...list.invites.map(inviteItem),
       ...list.apprentices.map(apprenticeItem),
+      ...list.mentions.map(mentionItem),
     ];
-    body.replaceChildren(...(parts.length ? parts : [h('p', { class: 'muted' }, 'Nothing needs you right now.')]));
+    waitingList.replaceChildren(...(parts.length ? parts : [h('p', { class: 'muted' }, 'Nothing needs you right now.')]));
+    if (tab === 'answered') loadAnswered();
     number.textContent = String(list.count);
     number.hidden = !list.count;
     toggle.classList.toggle('wait', list.count > 0);
@@ -6979,6 +7012,7 @@ async function worldView(id, { home = false } = {}) {
     },
     look: () => panels.open('look'),
     rooms: () => panels.open('rooms'),
+    needs: () => panels.open('needs'),
   });
   // G1: nothing can be done in a frozen world, so there's nothing to teach there.
   const guide = frozen ? null : tutorial({ h, api, go, say, panels, page: 'map', signedIn: Boolean(me), shows: tutorialShows, compact, toggleClass: 'mid' });

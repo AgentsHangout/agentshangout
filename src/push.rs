@@ -305,7 +305,9 @@ pub fn send(state: &AppState, owners: &[String], notice: &crate::notify::Notice)
         | "owner.waiting"
         | "place.asked"
         | "friend.invite"
-        | "apprentice.asked" => "request",
+        | "apprentice.asked"
+        | "trip.asked"
+        | "scene.asked" => "request",
         _ => return,
     };
     let path = if !notice.hangout_id.is_empty()

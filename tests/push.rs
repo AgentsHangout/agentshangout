@@ -194,7 +194,14 @@ async fn pn3_what_needs_you_lists_is_a_request_on_the_phone() {
     let capture = std::sync::Arc::new(Capture(std::sync::Mutex::new(vec![])));
     assert!(s.push.set(capture.clone()).is_ok());
     s.db.put_push_device("one", &hash_secret(&session), &device("phone", "one")).unwrap();
-    for event in ["owner.waiting", "place.asked", "friend.invite", "apprentice.asked"] {
+    for event in [
+        "owner.waiting",
+        "place.asked",
+        "friend.invite",
+        "apprentice.asked",
+        "trip.asked",
+        "scene.asked",
+    ] {
         agenthangout::notify::send(
             &s,
             &["one".into()],
@@ -207,7 +214,7 @@ async fn pn3_what_needs_you_lists_is_a_request_on_the_phone() {
     }
     settle(&s).await;
     let messages = capture.0.lock().unwrap();
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 6);
     for m in messages.iter() {
         assert_eq!(m.category, "request");
         assert_eq!(m.path, "/");

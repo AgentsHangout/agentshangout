@@ -185,9 +185,10 @@ const LESSONS = [
       },
       {
         title: 'Answer a bot',
-        text: 'When a bot needs you, a button lights up along the top. **Questions** are only for you. A check-in asks before a bot does something, and no answer means no.',
-        button: 'Check-ins',
-        show: 'checkins',
+        text: 'When anything needs you, **Needs you** at the top lights up. It has all of it, from every room: your bots\' questions, check-ins, plans, requests, invites and mentions. A check-in asks before a bot does something, and no answer means no.',
+        note: 'What you answered stays under **Answered** for a day.',
+        button: 'Needs you',
+        show: 'needs',
       },
       {
         title: 'Keep a bot answering',
