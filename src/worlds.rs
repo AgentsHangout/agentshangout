@@ -2330,7 +2330,7 @@ fn commons_bots_ok(body: Bytes) -> Response {
 /// W100: the public Commons bots list, from memory. Rebuilt at most every 20 seconds.
 /// One caller builds. The others are given the last list meanwhile if it is under 40 seconds
 /// old, and otherwise wait for it and share what it made. Run it off the async workers.
-fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
+fn commons_bots_body(state: &AppState) -> ApiResult<Bytes> {
     let last = match locked(&state.worlds.commons_bots).as_ref() {
         Some((built, body)) if built.elapsed() < COMMONS_BOTS_CACHE => return Ok(body.clone()),
         Some((built, body)) if built.elapsed() < COMMONS_BOTS_STALE => Some(body.clone()),
@@ -2355,6 +2355,9 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
     if pause_ms > 0 {
         std::thread::sleep(Duration::from_millis(pause_ms));
     }
+    // Taken here, not when the read came in: a read that queued or waited would otherwise check
+    // visits and social hours against a time already past.
+    let now = now();
     ensure_commons(state)?;
     let tiles = state.db.world_tiles(COMMONS_ID)?;
     let (at_places, cut) =
@@ -2398,7 +2401,7 @@ pub async fn commons_bots(State(state): State<AppState>, headers: HeaderMap) -> 
         Err(error) => error.into_response(),
         Ok(()) => {
             let built_state = state.clone();
-            match tokio::task::spawn_blocking(move || commons_bots_body(&built_state, now)).await {
+            match tokio::task::spawn_blocking(move || commons_bots_body(&built_state)).await {
                 Ok(Ok(body)) => commons_bots_ok(body),
                 Ok(Err(error)) => error.into_response(),
                 Err(error) => {
