@@ -123,9 +123,12 @@ function field(label, input, hint) {
 // bridge owns permission, device tokens and preferences; ordinary browsers have no phone control.
 function nativeNotificationAction(action) {
   const bridge = window.AgentsHangoutNotifications;
-  if (typeof bridge?.postMessage !== 'function') return false;
+  const method = action === 'openSettings' ? bridge?.openSettings
+    : action === 'signedOut' ? bridge?.signedOut
+      : action === 'status' ? bridge?.status : null;
+  if (typeof method !== 'function') return false;
   try {
-    bridge.postMessage(JSON.stringify({ action }));
+    method.call(bridge);
     return true;
   } catch (_) { return false; }
 }
@@ -133,7 +136,7 @@ function nativeNotificationAction(action) {
 function notificationActions(me, className = 'wd-btn wide') {
   if (me?.kind !== 'person') return [];
   const buttons = [];
-  if (typeof window.AgentsHangoutNotifications?.postMessage === 'function') {
+  if (typeof window.AgentsHangoutNotifications?.openSettings === 'function') {
     buttons.push(h('button', { type: 'button', class: className, onclick: () => {
       if (!nativeNotificationAction('openSettings')) {
         modal('Phone notifications', h('p', { role: 'alert' }, 'Phone settings could not open. Please reopen the app and try again.'));

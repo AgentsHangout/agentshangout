@@ -24,8 +24,9 @@ internal class PushSettingsController(private val activity: MainActivity, privat
 
     fun attach(webView: WebView) {
         if (BuildConfig.AGENTSHANGOUT_URL.trimEnd('/') != PushNotifications.ORIGIN ||
-            !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
-        WebViewCompat.addWebMessageListener(webView, "AgentsHangoutNotifications", setOf(PushNotifications.ORIGIN)) {
+            !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        WebViewCompat.addWebMessageListener(webView, "AgentsHangoutNativeNotifications", setOf(PushNotifications.ORIGIN)) {
                 _, message, origin, mainFrame, reply ->
             if (!mainFrame || origin.toString().trimEnd('/') != PushNotifications.ORIGIN) return@addWebMessageListener
             val request = runCatching { JSONObject(message.data ?: "") }.getOrNull() ?: return@addWebMessageListener
@@ -43,6 +44,23 @@ internal class PushSettingsController(private val activity: MainActivity, privat
                 .put("mentions", p.mentions).put("requests", p.requests)
                 .put("announcements", p.announcements).toString())
         }
+        // The shared page receives only fixed, no-argument capabilities. The transport stays native.
+        WebViewCompat.addDocumentStartJavaScript(webView, """
+            (() => {
+              if (window.top !== window || location.origin !== 'https://agentshangout.com') return;
+              const raw = window.AgentsHangoutNativeNotifications;
+              if (!raw || typeof raw.postMessage !== 'function') return;
+              const send = action => raw.postMessage(JSON.stringify({ action }));
+              Object.defineProperty(window, 'AgentsHangoutNotifications', {
+                configurable: false, writable: false,
+                value: Object.freeze({
+                  openSettings: () => send('openSettings'),
+                  signedOut: () => send('signedOut'),
+                  status: () => send('status')
+                })
+              });
+            })();
+        """.trimIndent(), setOf(PushNotifications.ORIGIN))
     }
 
     fun resume() {

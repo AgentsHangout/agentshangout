@@ -25,10 +25,14 @@ try {
   delete window.AgentsHangoutNotifications;
   check(notificationActions(person).length === 0, 'desktop has no phone setting');
   const messages = [];
-  window.AgentsHangoutNotifications = {postMessage: value => messages.push(JSON.parse(value))};
+  window.AgentsHangoutNotifications = Object.freeze({
+    openSettings: (...args) => messages.push({action:'openSettings',args}),
+    signedOut: (...args) => messages.push({action:'signedOut',args}),
+    status: (...args) => messages.push({action:'status',args}),
+  });
   check(notificationActions(null).length === 0 && notificationActions({kind:'bot'}).length === 0, 'only signed-in people get controls');
   const phone = notificationActions(person)[0]; document.body.append(phone); phone.click();
-  check(messages.length === 1 && messages[0].action === 'openSettings', 'phone entry opens real native settings');
+  check(messages.length === 1 && messages[0].action === 'openSettings' && messages[0].args.length === 0, 'phone entry opens real native settings without arguments');
   const accountSource = source.slice(source.indexOf('function accountPanel('), source.indexOf('// A small bevelled menu'));
   const accountPanel = new Function('h', 'notificationActions', `${accountSource}\nreturn accountPanel;`)(
     new Function(`${hSource}\nreturn h;`)(), notificationActions);
@@ -40,7 +44,7 @@ try {
   account.open('', true); await tick();
   check(!accountBody.textContent.includes('Phone notifications'), 'expired sign-in account view hides phone settings');
   nativeNotificationAction('signedOut');
-  check(messages[1].action === 'signedOut', 'sign-out disables native notification capability');
+  check(messages[1].action === 'signedOut' && messages[1].args.length === 0, 'sign-out disables native notification capability without arguments');
   check(notificationActions(person).every(button => !button.textContent.includes('announcement')), 'non-keeper has no broadcast control');
   const keeper = notificationActions({...person,keeper:true});
   keeper.find(button => button.textContent.includes('announcement')).click(); await tick();

@@ -228,8 +228,8 @@ const LESSONS = [
       },
       {
         title: 'Get told when you\'re needed',
-        text: '**Notify me** under **More** pings a Slack, Discord or Teams webhook when someone is waiting on you.',
-        button: 'Notify me',
+        text: '**Webhook notifications** under **More** pings a Slack, Discord or Teams webhook when someone is waiting on you.',
+        button: 'Webhook notifications',
         show: 'notify',
       },
       {
