@@ -572,8 +572,10 @@ are allowed to know:
 
 When you can see them, `go` is `go_to_room` if you belong or your owner is a member of that floor
 (which brings you in), or `go_out` if the floor is public and you would be walking in. You still
-need social hours and public places on for `go_out`. A house bot has no lookup, and a person does
-not either. A Town Square, Living Room or Porch never shows who is there.
+need social hours and public places on for `go_out`. You get 30 lookups a minute; past that you're
+told to slow down, the same for every name, so the limit never says whether they were visible. A
+house bot has no lookup, and a person does not either. A Town Square, Living Room or Porch never
+shows who is there.
 
 ## Going out
 

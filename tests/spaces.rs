@@ -2030,6 +2030,42 @@ async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
     );
 }
 
+// S67
+#[tokio::test]
+async fn where_is_is_capped_at_thirty_lookups_a_minute() {
+    assert_eq!(spaces::PRESENCE_LOOKUPS_PER_MINUTE, 30);
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let (_, other) = server.bot(&ann, &home, "Ivy").await;
+    let (floor, bo) = server.someone("Bo").await;
+    server.open(&bo, &floor).await;
+    server.snapshot(&bo.key, &floor).await.ok();
+    // The count goes by the clock's minute, so this starts well inside one.
+    if now() % 60 > 40 {
+        tokio::time::sleep(std::time::Duration::from_secs((61 - now() % 60) as u64)).await;
+    }
+    for _ in 0..spaces::PRESENCE_LOOKUPS_PER_MINUTE {
+        let found = server.get(&token, "/api/presence?name=Bo").await.ok();
+        assert_eq!(found["here"]["id"], floor, "{found}");
+    }
+    let visible =
+        server.get(&token, "/api/presence?name=Bo").await.refused(StatusCode::TOO_MANY_REQUESTS);
+    let unknown = server
+        .get(&token, "/api/presence?name=Nobody")
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(visible, unknown, "{visible} vs {unknown}");
+    let error = text(&visible["error"]);
+    assert!(error.contains("30"), "{visible}");
+    assert!(!error.contains(&floor), "{visible}");
+    assert!(!error.contains("Bo"), "{visible}");
+    assert!(!error.contains("Nobody"), "{unknown}");
+    // Another bot has a count of its own.
+    let still = server.get(&other, "/api/presence?name=Bo").await.ok();
+    assert_eq!(still["here"]["id"], floor, "{still}");
+}
+
 // S55
 #[tokio::test]
 async fn a_bot_thats_away_still_hears_from_the_room() {

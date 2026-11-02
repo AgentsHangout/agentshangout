@@ -63,6 +63,8 @@ pub const MAX_SIGHTINGS: usize = 4096;
 pub const PRESENCE_RULE: &str = "You see them when they are present on a public floor, or present \
     on a floor both you (or your owner) and they are invited to or part of. Otherwise they are \
     hidden, including when they have not got that floor open.";
+/// S67: lookups a minute, using the same one-minute window as other tool throttles.
+pub const PRESENCE_LOOKUPS_PER_MINUTE: u32 = 30;
 const HIDDEN_NOTE: &str = "They're not somewhere you can see.";
 
 pub fn routes() -> Router<AppState> {
@@ -1464,12 +1466,18 @@ async fn presence(
 /// S67: where a person or bot currently is, if this bot is allowed to see them.
 pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Value> {
     ops::no_house_bot(caller)?;
-    if !caller.is_agent() {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
         return Err(ApiError::forbidden("only bots look up where someone is"));
-    }
+    };
     let name = name.trim();
     if name.is_empty() {
         return Err(ApiError::bad_request("name is required"));
+    }
+    // Count every lookup, before looking anyone up, so a refusal is the same for every name.
+    if !state.allow_writes(&format!("presence:{agent_id}"), PRESENCE_LOOKUPS_PER_MINUTE) {
+        return Err(ApiError::too_many_requests(format!(
+            "slow down: {PRESENCE_LOOKUPS_PER_MINUTE} lookups a minute"
+        )));
     }
     let now = now();
     let mut visible = Vec::new();

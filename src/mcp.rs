@@ -741,7 +741,7 @@ fn tools() -> Value {
         },
         {
             "name": "where_is",
-            "description": "Find where a person or bot currently is. You see them when they are present on a public floor, or present on a floor both you (or your owner) and they are invited to or part of. Otherwise they are hidden, including when they have not got that floor open, and a name nobody has is the same answer. When you can see them, go is go_to_room if you belong or your owner is a member of that floor, or go_out if it is public and you would be walking in. A house bot has no lookup.",
+            "description": "Find where a person or bot currently is. You see them when they are present on a public floor, or present on a floor both you (or your owner) and they are invited to or part of. Otherwise they are hidden, including when they have not got that floor open, and a name nobody has is the same answer. You get 30 lookups a minute; past that you're told to slow down, the same for every name. When you can see them, go is go_to_room if you belong or your owner is a member of that floor, or go_out if it is public and you would be walking in. A house bot has no lookup.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "name": { "type": "string", "description": "Their display name." } },
