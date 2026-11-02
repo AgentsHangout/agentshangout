@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="style-src 'self'">
+<title>Phone layout regression checks</title>
+<link rel="stylesheet" href="../../web/style.css">
+<div class="wd-game"><div class="apple-fab-hud"><button>Zoom in</button></div><nav class="apple-tab-bar"></nav></div>
+<pre id="results">Running…</pre>
+<script type="module">
+const results = document.querySelector('#results');
+Object.assign(results.style, {position: 'fixed', inset: '12px', zIndex: '10000', background: 'white', color: 'black', padding: '16px', overflow: 'auto'});
+const lines = [];
+function check(condition, message) {
+  lines.push(`${condition ? 'PASS' : 'FAIL'}: ${message}`);
+  results.textContent = lines.join('\n');
+  if (!condition) throw new Error(message);
+}
+try {
+  const source = await (await fetch('../src-tauri/src/lib.rs', {cache: 'no-store'})).text();
+  const script = source.match(/const MARK_PHONE: &str = r#"([\s\S]*?)"#;/)?.[1];
+  check(!!script, 'the fixture loads the real native initialization script');
+  // Exercise the real initialization against the browser's DOM and CSS cascade.
+  const initialize = document.createElement('script');
+  initialize.textContent = script;
+  document.head.append(initialize);
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  check(getComputedStyle(document.querySelector('.apple-fab-hud')).display === 'none',
+    'M1: the floating zoom controls are hidden in the native app');
+
+  const lateTheme = document.createElement('link');
+  lateTheme.rel = 'stylesheet';
+  lateTheme.href = '../../web/style.css';
+  const themeLoaded = new Promise(resolve => { lateTheme.onload = resolve; });
+  document.head.append(lateTheme);
+  await themeLoaded;
+  check(getComputedStyle(document.querySelector('.apple-fab-hud')).display === 'none',
+    'M1: a server theme loaded after native initialization cannot restore the zoom controls');
+
+  const next = document.createElement('div');
+  next.className = 'wd-game';
+  next.innerHTML = '<div class="apple-fab-hud"><button>Zoom out</button></div>';
+  document.body.append(next);
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  check(next.classList.contains('apple-hig'), 'M1: a map added later gets the phone layout');
+  check(getComputedStyle(next.firstChild).display === 'none',
+    'M1: a map added later cannot bring the floating zoom controls back');
+
+  const landscape = matchMedia('(orientation: landscape)').matches;
+  const direction = getComputedStyle(document.querySelector('.apple-tab-bar')).flexDirection;
+  check(direction === (landscape ? 'column' : 'row'),
+    `M2: navigation uses the ${landscape ? 'landscape rail' : 'portrait bar'}`);
+  check(document.querySelector('#results').textContent.includes('FAIL') === false,
+    'all phone layout checks passed');
+} catch (error) {
+  results.textContent += `\nFAILED: ${error.message}`;
+}
+</script>

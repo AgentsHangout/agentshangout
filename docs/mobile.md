@@ -9,7 +9,7 @@ Agents Hangout is defined by its isometric pixel art world, dynamic rooms, furni
 - The shell loads and executes the server's own web UI (`web/`) inside a hardware-accelerated WebView (Android WebView and iOS WKWebView).
 - 100% of the game canvas, sprite sheets, room layouts, chat logic, and character looks are shared directly.
 - Bug fixes or features landed on the web immediately take effect without requiring separate client engine rewrites.
-- The phone chrome (zoom buttons, the World / Build / Rooms bar, the Room / Chat / Guests bar) belongs to a touch screen and to this app. A desktop browser keeps the window it already had, including when that window is short or narrow. The desktop build of this shell does not turn the phone chrome on.
+- The phone chrome (the World / Build / Rooms bar and the Room / Chat / Guests bar) belongs to a touch screen and to this app. A desktop browser keeps the window it already had, including when that window is short or narrow. The desktop build of this shell does not turn the phone chrome on.
 - Turning the phone sideways moves that bar to the left edge so the map keeps the height. The pictures and the sign-in still come from the site: the session cookie lives on `agentshangout.com`, so a second copy of the game inside the app would be a second sign-in.
 
 ### Storage & Identity
@@ -48,12 +48,11 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 - Selecting a tool smoothly dismisses the sheet and displays a sleek top **Placement Banner** (`Placing [Item] • Tap any tile • Cancel`).
 - The player retains an unobstructed view of the entire map for accurate panning and tile placement.
 
-### 5. Floating Action HUD Capsule
-- Portrait: pinned on the bottom right, above the tab bar. Landscape: centered on the right edge.
-  - `+` Zoom In (44×44pt)
-  - `−` Zoom Out (44×44pt)
-  - `⌖` Recenter Town (44×44pt)
-- Interactive tactile spring scaling (`:active { transform: scale(0.92); }`) and haptic vibration.
+### 5. Gestures and rotation
+- **M1.** The native phone app has no floating zoom/recenter capsule. Pan with one finger and zoom with two. This also applies to a map added after the page first loads, and after the site's stylesheet loads. The shell hides this phone control under the server's existing `style-src 'self'` policy without copying its stylesheet or changing the desktop client.
+- **M2.** Android follows the device's orientation sensor in portrait and landscape, even when the system's auto-rotate preference is off. Turning the phone preserves the current activity and session; landscape keeps the navigation bar on the left. The app does not change the system's rotation preference.
+
+`mobile_rust/tests/phone-layout.html` checks M1 and the landscape navigation in a real browser. Serve the repository locally, open the page in portrait and landscape, and require every check to pass. `python mobile_rust/tests/android_rotation.py --serial emulator-5554` checks M2 against an installed APK by moving the emulator's sensor while system auto-rotate is off; it restores the sensor and preference afterwards.
 
 ### 6. Modal Bottom Sheets for Panels
 - Tutorial, account, chat, and room panels slide up as genuine iOS modal bottom sheets:
