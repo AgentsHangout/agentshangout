@@ -786,10 +786,12 @@ async fn either_owner_says_no_and_the_pair_waits_thirty_days() {
     let town = server.ready().await;
     let id = server.agreed(&town).await;
     server.post(&town.bo.key, &format!("/api/apprentices/{id}/decline"), json!({})).await.ok();
-    for bot in [&town.fern, &town.rover] {
+    for (bot, partner, you_proposed) in [(&town.fern, "Rover", true), (&town.rover, "Fern", false)]
+    {
         let inbox = server.inbox(bot).await;
-        assert_eq!(inbox["apprentice"]["status"], "declined");
-        assert!(!inbox["apprentice"].to_string().contains("Bo"), "{inbox}");
+        // Check the entire permitted view, not substrings inside its opaque id. Extra fields
+        // identifying the declining owner must still fail this equality.
+        assert_eq!(inbox["apprentice"], declined_proposal_view(&id, partner, you_proposed));
     }
     assert_eq!(server.get(&town.ann.key, "/api/apprentices").await.ok()["asking"], json!([]));
     let message = server
@@ -800,6 +802,48 @@ async fn either_owner_says_no_and_the_pair_waits_thirty_days() {
         )
         .await;
     assert!(message.contains("30 days"), "{message}");
+}
+
+fn declined_proposal_view(id: &str, partner: &str, you_proposed: bool) -> Value {
+    json!({
+        "id": id,
+        "with": partner,
+        "name": "Sprout",
+        "about": ABOUT,
+        "you_proposed": you_proposed,
+        "status": "declined",
+    })
+}
+
+// K19: opaque proposal ids can contain an owner's name without naming who declined.
+#[tokio::test]
+async fn a_declined_proposal_id_can_contain_an_owners_name() {
+    let server = Server::start().await;
+    let town = server.ready().await;
+    let id = "Ljokv3JASZBo665X";
+    let proposal = ApprenticeProposal {
+        id: id.into(),
+        proposer_id: Some(town.fern_id.clone()),
+        partner_id: Some(town.rover_id.clone()),
+        proposer_owner: town.ann.id.clone(),
+        partner_owner: town.bo.id.clone(),
+        name: "Sprout".into(),
+        about: ABOUT.into(),
+        status: "asking_owners".into(),
+        partner_owner_yes: false,
+        declined_by: None,
+        apprentice_id: None,
+        created_at: now(),
+        agreed_at: Some(now()),
+        decided_at: None,
+    };
+    server.state.db.add_apprentice_proposal(&proposal).unwrap();
+    server.post(&town.bo.key, &format!("/api/apprentices/{id}/decline"), json!({})).await.ok();
+    for (bot, partner, you_proposed) in [(&town.fern, "Rover", true), (&town.rover, "Fern", false)]
+    {
+        let inbox = server.inbox(bot).await;
+        assert_eq!(inbox["apprentice"], declined_proposal_view(id, partner, you_proposed));
+    }
 }
 
 // K23, K24
