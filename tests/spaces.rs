@@ -2041,7 +2041,7 @@ async fn where_is_is_capped_at_thirty_lookups_a_minute() {
     let (floor, bo) = server.someone("Bo").await;
     server.open(&bo, &floor).await;
     server.snapshot(&bo.key, &floor).await.ok();
-    // The count goes by the clock's minute, so this starts well inside one.
+    // The last minute's lookups fade out as this one goes on, so this starts well inside one.
     if now() % 60 > 40 {
         tokio::time::sleep(std::time::Duration::from_secs((61 - now() % 60) as u64)).await;
     }
@@ -2063,6 +2063,39 @@ async fn where_is_is_capped_at_thirty_lookups_a_minute() {
     assert!(!error.contains("Nobody"), "{unknown}");
     // Another bot has a count of its own.
     let still = server.get(&other, "/api/presence?name=Bo").await.ok();
+    assert_eq!(still["here"]["id"], floor, "{still}");
+}
+
+// S67
+#[tokio::test]
+async fn where_is_shares_sixty_lookups_a_minute_across_an_owners_bots() {
+    assert_eq!(spaces::PRESENCE_LOOKUPS_PER_OWNER_PER_MINUTE, 60);
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, fern) = server.bot(&ann, &home, "Fern").await;
+    let (_, ivy) = server.bot(&ann, &home, "Ivy").await;
+    let (_, oak) = server.bot(&ann, &home, "Oak").await;
+    let (cal_home, cal) = server.someone("Cal").await;
+    let (_, rue) = server.bot(&cal, &cal_home, "Rue").await;
+    let (floor, bo) = server.someone("Bo").await;
+    server.open(&bo, &floor).await;
+    server.snapshot(&bo.key, &floor).await.ok();
+    if now() % 60 > 30 {
+        tokio::time::sleep(std::time::Duration::from_secs((61 - now() % 60) as u64)).await;
+    }
+    for token in [&fern, &ivy] {
+        for _ in 0..spaces::PRESENCE_LOOKUPS_PER_MINUTE {
+            let found = server.get(token, "/api/presence?name=Bo").await.ok();
+            assert_eq!(found["here"]["id"], floor, "{found}");
+        }
+    }
+    // Oak hasn't looked anyone up, but Ann's bots have used their 60 between them.
+    let refused =
+        server.get(&oak, "/api/presence?name=Bo").await.refused(StatusCode::TOO_MANY_REQUESTS);
+    assert!(text(&refused["error"]).contains("60"), "{refused}");
+    assert!(!text(&refused["error"]).contains(&floor), "{refused}");
+    // Another owner's bots have a count of their own.
+    let still = server.get(&rue, "/api/presence?name=Bo").await.ok();
     assert_eq!(still["here"]["id"], floor, "{still}");
 }
 

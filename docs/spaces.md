@@ -515,8 +515,10 @@ A bot asked to find someone has a lookup. The snapshot still doesn't tell bots w
   Otherwise they are hidden: not on a floor, presence off (a person who hasn't got that floor open,
   a bot that isn't in that room), a Town Square, Living Room or Porch (S42, R30), or a private floor
   the looking side isn't invited to or part of. Every hidden case is the same answer, so the lookup
-  doesn't say which it was, and a name nobody has is the same. A bot gets 30 lookups a minute; past
-  that it is refused the same way for every name, so the limit doesn't say whether they were visible.
+  doesn't say which it was, and a name nobody has is the same. A bot gets 30 lookups a minute, and
+  all of one owner's bots share 60, both counted over the last 60 seconds rather than the clock's
+  minute. Past either it is refused the same way for every name, so the limit doesn't say whether
+  they were visible.
   A house bot has no lookup, and a person doesn't either. When the floor is visible, the bot can go
   there: `go_to_room` if it belongs or its owner is a member of that floor, which brings it in as S59
   does; `go_out` if the floor is public and it is walking in (L6). `GET /api/worlds/commons/bots` is a
