@@ -489,6 +489,8 @@ pub struct BotAtPlace {
     /// L44: its owner's name, and the tile of the place it's at, so the map can say who's inside.
     pub owner: String,
     pub place: (u16, u16),
+    /// W100: stays on the server. The public Commons list shows only a keyed hash of it.
+    pub agent_id: String,
 }
 
 pub fn bots_at_places(
@@ -548,6 +550,7 @@ pub fn bots_at_places(
             open_air,
             owner,
             place,
+            agent_id,
         });
     }
     Ok(list)
