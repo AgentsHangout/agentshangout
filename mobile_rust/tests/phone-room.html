@@ -5,12 +5,21 @@
 <pre id="results">Running…</pre>
 <script type="module">
 if (!location.search) {
-  const frame = document.createElement('iframe');
-  frame.src = '?frame';
-  frame.title = '393 × 852 phone room';
-  document.body.append(frame);
+  const reports = new Map();
+  const frames = ['portrait', 'landscape'].map(orientation => {
+    const frame = document.createElement('iframe');
+    frame.src = `?frame=${orientation}`;
+    frame.title = `${orientation} phone room`;
+    frame.style.width = orientation === 'portrait' ? '393px' : '852px';
+    frame.style.height = orientation === 'portrait' ? '852px' : '393px';
+    document.body.append(frame);
+    return frame;
+  });
   addEventListener('message', event => {
-    if (event.source === frame.contentWindow) document.querySelector('#results').textContent = event.data;
+    const frame = frames.find(frame => event.source === frame.contentWindow);
+    if (!frame) return;
+    reports.set(frame.title, event.data);
+    document.querySelector('#results').textContent = [...reports].map(([name, report]) => `${name}\n${report}`).join('\n\n');
   });
 } else {
   const css = document.createElement('link');
@@ -23,23 +32,34 @@ if (!location.search) {
   const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('\n// What goes in the panels'));
   const dragSource = source.includes('function installSheetDrag(')
     ? source.slice(source.indexOf('function installSheetDrag('), source.indexOf('\nfunction createPanels(')) : '';
-  const {h, createPanels, installSheetDrag} = new Function(`${hSource}\n${dragSource}\n${panelSource}\nreturn {h,createPanels,installSheetDrag: typeof installSheetDrag === 'function' ? installSheetDrag : null};`)();
-  const root = h('div', {class: 'wd wd-game wd-room apple-hig'});
-  const host = h('div', {class: 'wd-well room-host'}, h('section', {class: 'stage'}));
-  const status = h('footer', {class: 'wd-status'},
+  const cameraSource = source.includes('function installRoomCamera(')
+    ? source.slice(source.indexOf('function installRoomCamera('), source.indexOf('\nfunction installAppleHigRoom(')) : '';
+  const {h, createPanels, installSheetDrag, installRoomCamera} = new Function(`${hSource}\n${dragSource}\n${panelSource}\n${cameraSource}\nreturn {h,createPanels,installSheetDrag: typeof installSheetDrag === 'function' ? installSheetDrag : null, installRoomCamera: typeof installRoomCamera === 'function' ? installRoomCamera : null};`)();
+  // Use the actual production frame: .room-host is INSIDE .wd-well. Combining those
+  // classes concealed the double navigation inset that only appeared on real phones.
+  const {windowFrame} = await import('../../web/city.js');
+  const frame = windowFrame({label:'Demo room', stats:[], heading:'h1'});
+  const root = frame.root;
+  root.classList.add('wd-game', 'wd-room', 'apple-hig');
+  const host = frame.host;
+  host.classList.add('room-host');
+  host.append(h('section', {class:'stage'}));
+  const status = frame.status;
+  status.replaceChildren(
     h('nav', {class: 'wd-seg floors'}, 'Repeated floor information'),
     h('span', {class: 'room-note'}, 'The buttons along the top…'),
     h('span', {class: 'room-quiet', hidden: true}, 'Quiet sign up'),
     h('span', {class: 'room-guest', hidden: true}, 'Guest access'));
   const nav = h('nav', {class:'apple-tab-bar'},
     ...['Room', 'Chat', 'Guests', 'More'].map(label => h('button', {class:'apple-tab-item', onclick:()=>label === 'Chat' ? panels.open('room') : panels.close(false)}, label)));
-  root.append(host, status, nav);
+  root.append(nav);
   document.body.append(root);
   const {Room} = await import('../../web/room.js');
   const room = new Room(host.querySelector('.stage'));
   room.setBots([{id:'fixture-bot', name:'Demo bot',color:'#3ddc97',state:'active'}]);
   room.setPeople([{id:'fixture-person', name:'Demo guest',color:'#ffb454'}]);
-  host.scrollLeft = (host.scrollWidth - host.clientWidth) / 2;
+  const cameraStage = host.querySelector('.stage');
+  const stopCamera = installRoomCamera?.(host, cameraStage);
   const panels = createPanels(root);
   panels.add('room', 'Chat', {}, h('div', {class:'chat-log'}, 'A real message'), h('form', {class:'chat-form'}, h('input', {placeholder:'Message'})));
   panels.open('room');
@@ -70,8 +90,52 @@ if (!location.search) {
   check(visible(status) && visible(status.querySelector('.room-quiet')), 'M4: quiet-room warning remains visible');
   check(!visible(status.querySelector('.floors')), 'M4: warnings do not restore redundant floor readouts');
   const stage = host.querySelector('.stage').getBoundingClientRect();
-  check(stage.height >= innerHeight - 65, 'M4: room scene fills available phone height');
+  const hostRect = host.getBoundingClientRect();
+  const wellRect = root.querySelector('.wd-well').getBoundingClientRect();
+  check(stage.left >= hostRect.left - 1 && stage.right <= hostRect.right + 1
+    && stage.top >= hostRect.top - 1 && stage.bottom <= hostRect.bottom + 1,
+    'M4: the whole room fits inside its camera by default');
+  check(Math.abs(hostRect.left - wellRect.left) < 1 && Math.abs(hostRect.right - wellRect.right) < 1,
+    'M4: the room camera has no second landscape navigation inset');
+  check(host.scrollWidth <= host.clientWidth + 1,
+    'M4: default room camera has no horizontal crop or scroll gutter');
   check(Math.abs(stage.width / stage.height - 480 / 252) < .02, 'M4: pixel room keeps its original aspect ratio');
+  check(!!installRoomCamera, 'M4: room camera uses the production gesture helper');
+  if (installRoomCamera) {
+    let clicks = 0;
+    const button = h('button', {onclick: () => clicks++}, 'Camera tap probe');
+    cameraStage.append(button);
+    const cx = hostRect.left + hostRect.width / 2;
+    const cy = hostRect.top + hostRect.height / 2;
+    const cameraPointer = (type, id, x, y, target = cameraStage) => target.dispatchEvent(new PointerEvent(type, {
+      bubbles:true, cancelable:true, pointerId:id, pointerType:'touch', clientX:x, clientY:y, button:0, isPrimary:id===1,
+    }));
+    cameraPointer('pointerdown',1,cx,cy,button); cameraPointer('pointerup',1,cx,cy,button);
+    button.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1}));
+    check(clicks === 1, 'M4: an ordinary tap still reaches room controls');
+    cameraPointer('pointerdown',1,cx-40,cy); cameraPointer('pointerdown',2,cx+40,cy);
+    cameraPointer('pointermove',1,cx-80,cy); cameraPointer('pointermove',2,cx+80,cy);
+    cameraPointer('pointerup',1,cx-80,cy); cameraPointer('pointerup',2,cx+80,cy);
+    const enlarged = cameraStage.getBoundingClientRect();
+    check(Math.abs(enlarged.width / stage.width - 2) < .02, 'M4: a deliberate pinch enlarges the room');
+    cameraPointer('pointerdown',1,cx,cy); cameraPointer('pointermove',1,cx+40,cy);
+    cameraPointer('pointerup',1,cx+40,cy);
+    const moved = cameraStage.getBoundingClientRect();
+    check(moved.left > enlarged.left + 5, 'M4: one finger pans the deliberately enlarged room');
+    button.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1}));
+    check(clicks === 1, 'M4: panning does not accidentally activate room controls');
+    cameraPointer('pointerdown',1,cx,cy); cameraPointer('pointercancel',1,cx,cy);
+    cameraStage.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true}));
+    const reset = cameraStage.getBoundingClientRect();
+    check(Math.abs(reset.width - stage.width) < 1, 'M4: double tapping the scene restores the complete room');
+    cameraStage.classList.add('building');
+    cameraPointer('pointerdown',1,cx-40,cy); cameraPointer('pointerdown',2,cx+40,cy);
+    cameraPointer('pointermove',1,cx-80,cy); cameraPointer('pointermove',2,cx+80,cy);
+    cameraPointer('pointerup',1,cx-80,cy); cameraPointer('pointerup',2,cx+80,cy);
+    check(Math.abs(cameraStage.getBoundingClientRect().width - stage.width) < 1, 'M4: room building gestures are not intercepted by the camera');
+    cameraStage.classList.remove('building');
+    button.remove();
+  }
   if (installSheetDrag) {
     const buildHandle = h('button', {class:'sheet-grabber'});
     const build = h('div', {class:'apple-build-sheet open'}, buildHandle);
@@ -86,6 +150,7 @@ if (!location.search) {
   root.classList.remove('apple-hig');
   check(!visible(grabber), 'M3: desktop has no phone drag handle');
   check(visible(status.querySelector('.floors')), 'M4: desktop keeps floor navigation in its status bar');
+  check(!cameraStage.style.transform, 'M4: desktop never receives a phone camera transform');
   root.classList.add('apple-hig');
   status.querySelector('.room-quiet').hidden = true;
   parent.postMessage(lines.join('\n'), location.origin);
