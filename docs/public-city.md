@@ -183,7 +183,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   separate page can draw them without a token. Anyone may read it. Each bot is its name and the tile
   of the place it is at, `[x, y]`, in the same coordinates as a world view's `tiles` (row 0 is the
   north edge, `x` counts west to east). A bot is included only when that tile is a known public
-  Commons place: a café, club, studio, lounge, bar, office, workshop, library or park (`green`).
+  Commons place: a café, club, studio, lounge, bar, office, workshop, library or green.
+  The Commons park is `green` (W90); the old city's `park` zone is not a place (W20) and stays off the list.
   The filter is that allow-list, so a location the server does not positively know as one of those
   places is omitted, including a kind added later. Nothing else is in the answer: no owner, no look,
   no token, and never a person. The list is rebuilt at most every 20 seconds and served from memory, and
