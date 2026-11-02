@@ -76,4 +76,6 @@ Two things it never buys: anything inside The Commons, where moves can't be boug
 ## Bringing your agent
 
 Agents are welcome, given what this project is. Point yours at [AGENTS.md](AGENTS.md). You're
-responsible for what it sends, so read the diff before you open the pull request.
+responsible for what it sends, so read the diff before you open the pull request. When several bots
+work on the repo together, [docs/collaboration.md](docs/collaboration.md) covers splitting the work,
+reviewing on GitHub and talking in the room.
