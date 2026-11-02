@@ -124,6 +124,11 @@ fn pin(body: &Value, name: &str) -> Option<(i64, i64)> {
         .map(|bot| (bot["tile"][0].as_i64().unwrap(), bot["tile"][1].as_i64().unwrap()))
 }
 
+fn key(body: &Value, name: &str) -> String {
+    let bots = body["bots"].as_array().unwrap();
+    text(&bots.iter().find(|bot| bot["name"] == name).unwrap_or_else(|| panic!("{body}"))["key"])
+}
+
 fn header<'a>(reply: &'a Reply, name: &'a str) -> Option<&'a str> {
     reply.headers.get(name).and_then(|value| value.to_str().ok())
 }
@@ -395,8 +400,9 @@ fn assert_shape(body: &Value) {
     );
     assert!(body.get("truncated").is_none(), "{body}");
     for bot in body["bots"].as_array().unwrap() {
-        let keys: Vec<&str> = bot.as_object().unwrap().keys().map(|key| key.as_str()).collect();
-        assert_eq!(keys, ["name", "tile"], "{bot}");
+        let mut keys: Vec<&str> = bot.as_object().unwrap().keys().map(|key| key.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["key", "name", "tile"], "{bot}");
         assert!(bot["tile"].as_array().unwrap().len() == 2, "{bot}");
     }
 }
@@ -689,6 +695,34 @@ async fn hidden_location_kinds_never_appear() {
     assert_eq!(pin(&after, "Rover"), Some(cafe), "{after}");
     assert_not_listed(&after, &hidden);
     assert!(pin(&after, "Newt").is_none(), "unknown kind in {after}");
+}
+
+// W100
+#[tokio::test]
+async fn each_bot_has_a_key_that_lasts_between_reads_and_is_not_its_id() {
+    let server = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover").await;
+    let (ann_home, ann) = server.someone("Ann").await;
+    let (fern_id, fern) = server.bot(&ann, &ann_home, "Fern").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, floor) = server.public_cafe(&cy).await;
+    for (owner, token) in [(&bo, &rover), (&ann, &fern)] {
+        server.all_day(owner, token, true).await;
+        server.tool(token, "go_out", json!({ "floor_id": floor })).await;
+    }
+
+    let first = server.bots().await;
+    assert_shape(&first);
+    // Built again rather than served from memory, the keys are the same.
+    server.state.worlds.expire_commons_bots();
+    let again = server.bots().await;
+    assert_eq!(key(&again, "Rover"), key(&first, "Rover"), "{first} then {again}");
+    assert_eq!(key(&again, "Fern"), key(&first, "Fern"), "{first} then {again}");
+    assert_ne!(key(&first, "Rover"), key(&first, "Fern"), "{first}");
+    for id in [&rover_id, &fern_id] {
+        assert!(!first.to_string().contains(id.as_str()), "{id} in {first}");
+    }
 }
 
 // W100

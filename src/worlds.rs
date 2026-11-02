@@ -555,6 +555,18 @@ impl Runtime {
             Sha256::new().chain_update(self.salt).chain_update(address.as_bytes()).finalize();
         u64::from_be_bytes(digest[..8].try_into().unwrap_or([0; 8]))
     }
+
+    /// W100: a bot's key in the public Commons list. The same all through a UTC day, different
+    /// the next day and after a restart, and it can't be turned back into the bot's id.
+    fn bot_key(&self, agent_id: &str, now: i64) -> String {
+        let digest = Sha256::new()
+            .chain_update(self.salt)
+            .chain_update(b"commons-bot:")
+            .chain_update(today(now).to_be_bytes())
+            .chain_update(agent_id.as_bytes())
+            .finalize();
+        digest[..8].iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 }
 
 /// Takes a kind's waiting sightings if it is time to write them.
@@ -2203,11 +2215,17 @@ fn public_commons_tile(kind: Kind) -> bool {
 #[derive(Serialize)]
 struct CommonsBotPin {
     name: String,
+    key: String,
     tile: [u16; 2],
 }
 
 impl CommonsBotPin {
-    fn from_bot(bot: &crate::routines::BotAtPlace, tiles: &Tiles) -> Option<Self> {
+    fn from_bot(
+        bot: &crate::routines::BotAtPlace,
+        tiles: &Tiles,
+        worlds: &Runtime,
+        now: i64,
+    ) -> Option<Self> {
         if bot.name.is_empty() {
             return None;
         }
@@ -2215,7 +2233,11 @@ impl CommonsBotPin {
         if !public_commons_tile(tile.kind) {
             return None;
         }
-        Some(Self { name: bot.name.clone(), tile: [bot.place.0, bot.place.1] })
+        Some(Self {
+            name: bot.name.clone(),
+            key: worlds.bot_key(&bot.agent_id, now),
+            tile: [bot.place.0, bot.place.1],
+        })
     }
 }
 
@@ -2269,8 +2291,10 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
     ensure_commons(state)?;
     let tiles = state.db.world_tiles(COMMONS_ID)?;
     let at_places = crate::routines::bots_at_places(state, &tiles, &HashMap::new(), now)?;
-    let mut bots: Vec<CommonsBotPin> =
-        at_places.iter().filter_map(|bot| CommonsBotPin::from_bot(bot, &tiles)).collect();
+    let mut bots: Vec<CommonsBotPin> = at_places
+        .iter()
+        .filter_map(|bot| CommonsBotPin::from_bot(bot, &tiles, &state.worlds, now))
+        .collect();
     bots.sort_by(|a, b| {
         a.tile[1].cmp(&b.tile[1]).then(a.tile[0].cmp(&b.tile[0])).then(a.name.cmp(&b.name))
     });
@@ -3033,6 +3057,21 @@ mod tests {
 
     // W100
     #[test]
+    fn a_bots_key_lasts_the_day_and_changes_with_it() {
+        let runtime = Runtime::new();
+        let noon = 20_000 * 86_400 + 43_200;
+        let key = runtime.bot_key("agent-1", noon);
+        assert_eq!(key.len(), 16);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()), "{key}");
+        assert_eq!(runtime.bot_key("agent-1", noon + 3_600), key);
+        assert_ne!(runtime.bot_key("agent-1", noon + 86_400), key);
+        assert_ne!(runtime.bot_key("agent-2", noon), key);
+        // Another start has another salt, so the id and the date alone don't give the key.
+        assert_ne!(Runtime::new().bot_key("agent-1", noon), key);
+    }
+
+    // W100
+    #[test]
     fn public_commons_pins_are_an_allow_list_of_known_places() {
         for kind in PUBLIC_COMMONS_PLACE_KINDS {
             assert!(public_commons_tile(kind), "{kind:?}");
@@ -3055,7 +3094,11 @@ mod tests {
         }
         assert_eq!(format!("public, max-age={COMMONS_BOTS_CACHE_SECS}"), "public, max-age=20");
         let mut pins: Vec<CommonsBotPin> = (0..COMMONS_BOTS_MAX + 5)
-            .map(|i| CommonsBotPin { name: format!("n{i:03}"), tile: [0, i as u16] })
+            .map(|i| CommonsBotPin {
+                name: format!("n{i:03}"),
+                key: String::new(),
+                tile: [0, i as u16],
+            })
             .collect();
         let truncated = pins.len() > COMMONS_BOTS_MAX;
         pins.truncate(COMMONS_BOTS_MAX);
