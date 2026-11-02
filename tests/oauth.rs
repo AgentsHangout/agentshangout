@@ -8,6 +8,84 @@ struct Server {
     client: Client,
     state: AppState,
 }
+
+// RL1/RW4: OAuth grants stay valid after GitHub I/O, just like legacy bot tokens.
+#[tokio::test]
+async fn oauth_research_tools_revalidate_the_grant_after_github_requests() {
+    use agenthangout::{auth, now, sign_in::GitHubApp, Apps};
+    use axum::{routing::get, Json, Router};
+    let github = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let github_url = format!("http://{}", github.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(github,Router::new()
+        .route("/repos/org/repo",get(||async {Json(json!({"private":false,"full_name":"org/repo"}))}))
+        .route("/repos/org/repo/issues",get(||async {Json(json!([{"number":7,"title":"Research","state":"closed","pull_request":{}}]))}))
+        .route("/repos/org/repo/pulls/7",get(||async {Json(json!({"user":{"id":42},"body":"Agents Hangout bot: research-bot","merged":true}))})))
+        .await.unwrap()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let db = Db::open(":memory:").unwrap();
+    db.create_person(
+        "research-owner",
+        "Research owner",
+        &auth::hash_secret("owner-test-key"),
+        "feed",
+        now(),
+    )
+    .unwrap();
+    db.create_agent(
+        "research-bot",
+        "research-owner",
+        "Research bot",
+        &auth::hash_secret("bot-test-key"),
+        now(),
+    )
+    .unwrap();
+    db.set_sign_in_link("research-owner", "github", "42", "research-owner", now()).unwrap();
+    db.set_god_mode("research-owner", true, now()).unwrap();
+    let mut github_app =
+        GitHubApp::from_settings(Some("test".into()), Some("test".into())).unwrap();
+    github_app.api_url = github_url;
+    let state = AppState::with_apps(
+        db,
+        Config {
+            public_url: base.clone(),
+            create_code: None,
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: vec!["research-owner".into()],
+        },
+        Apps { github: Some(github_app), discord: None },
+    );
+    let session = state.start_session("research-owner").unwrap();
+    let served = state.clone();
+    tokio::spawn(async move { axum::serve(listener, app(served)).await.unwrap() });
+    let s = Server {
+        base,
+        client: Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap(),
+        state,
+    };
+    let client = s.register().await;
+    let code = s.code(&session, &client, "research-bot").await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap();
+    let created=s.event_rpc(access,"tools/call",json!({"name":"create_research_lab","arguments":{"name":"Research lab","purpose":"Study useful open research together in this lab.","github":"org/repo"}})).await;
+    assert!(created["result"]["isError"].is_null(), "{created}");
+    let id = created["result"]["structuredContent"]["id"].as_str().unwrap();
+    let read = s
+        .event_rpc(
+            access,
+            "tools/call",
+            json!({"name":"read_research_work","arguments":{"lab_id":id}}),
+        )
+        .await;
+    assert!(read["result"]["isError"].is_null(), "{read}");
+    assert_eq!(read["result"]["structuredContent"]["items"][0]["number"], 7);
+    let recorded=s.event_rpc(access,"tools/call",json!({"name":"record_research_contribution","arguments":{"lab_id":id,"url":"https://github.com/org/repo/pull/7"}})).await;
+    assert!(recorded["result"]["isError"].is_null(), "{recorded}");
+    assert_eq!(recorded["result"]["structuredContent"]["verified_merged"], true);
+}
 impl Server {
     async fn event_rpc(&self, token: &str, method: &str, params: Value) -> Value {
         self.client

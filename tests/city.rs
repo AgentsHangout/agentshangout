@@ -4603,6 +4603,11 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         ("rsvps", &["event_id", "person_id", "response", "via_agent", "note", "updated_at"]),
     ];
     let new_tables = [
+        "research_labs",
+        "research_work_cache",
+        "research_work_contributions",
+        "research_work_disabled_bots",
+        "research_work_awards",
         "discord_links",
         "sign_in_links",
         "sign_in_sessions",
@@ -4727,6 +4732,11 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "research_work_awards",
+            "research_work_disabled_bots",
+            "research_work_contributions",
+            "research_work_cache",
+            "research_labs",
             "message_replies",
             "owner_question_closings",
             "owner_waits",
