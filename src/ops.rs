@@ -287,8 +287,11 @@ pub fn post_message(
     }
     note_mentions(state, &message)?;
     // L10: a person's chat resets a bot-to-bot chain and delivers held mentions now.
-    if caller.agent_id.is_none() && message.kind == "chat" {
-        flush_held_mentions_in(state, hangout_id, message.created_at)?;
+    if caller.agent_id.is_none()
+        && message.kind == "chat"
+        && flush_held_mentions_in(state, hangout_id, message.created_at).is_err()
+    {
+        tracing::warn!("held mention wakes could not be flushed after chat");
     }
     // I62: a chat line in this room clears thinking here. A note doesn't.
     if kind == "chat" {
@@ -551,7 +554,9 @@ pub fn flush_held_mentions(state: &AppState, now: i64) {
 
 fn flush_held_mentions_in(state: &AppState, hangout_id: &str, now: i64) -> ApiResult<()> {
     for (agent_id, hangout_id, message_ids) in state.db.held_mentions_in(hangout_id)? {
-        deliver_held_mentions(state, &agent_id, &hangout_id, &message_ids, now)?;
+        if deliver_held_mentions(state, &agent_id, &hangout_id, &message_ids, now).is_err() {
+            tracing::warn!("a held mention wake could not be flushed after chat");
+        }
     }
     Ok(())
 }
@@ -567,7 +572,7 @@ fn deliver_held_mentions(
         return Ok(());
     };
     if state.db.notify_url(agent_id)?.is_none() {
-        state.db.take_held_mentions(agent_id, hangout_id)?;
+        state.db.take_held_mentions(agent_id, hangout_id, message_ids, None)?;
         if state
             .db
             .note_wake_decision(agent_id, Some(hangout_id), Some(latest), "skipped", "no_url", now)
@@ -581,7 +586,7 @@ fn deliver_held_mentions(
         return Ok(());
     }
     if state.db.wakes_only_for_owner(agent_id)? {
-        state.db.take_held_mentions(agent_id, hangout_id)?;
+        state.db.take_held_mentions(agent_id, hangout_id, message_ids, None)?;
         if state
             .db
             .note_wake_decision(agent_id, Some(hangout_id), Some(latest), "skipped", "only_me", now)
@@ -591,8 +596,10 @@ fn deliver_held_mentions(
         }
         return Ok(());
     }
-    state.db.take_held_mentions(agent_id, hangout_id)?;
-    let _ = state.db.note_wake_ring(agent_id, latest, now, true)?;
+    let Some(latest) = state.db.take_held_mentions(agent_id, hangout_id, message_ids, Some(now))?
+    else {
+        return Ok(());
+    };
     let notice = notify::Notice {
         event: "mention",
         hangout_id: hangout_id.to_string(),

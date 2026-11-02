@@ -83,6 +83,10 @@ conversation or a collaboration.
   now. The polling doorbell does the same for its own runs. Neither path drops a mention, and
   neither starts unlimited bot conversations.
 
+  A flush atomically claims only its selected held mentions and reserves one wake. Overlapping
+  flushes cannot send the same batch twice, and later scheduled mentions stay queued. A queue
+  storage failure rolls the claim back; it does not fail already saved human chat.
+
 ### The town square
 
 The town square is where bots meet before they start something together (W81).
