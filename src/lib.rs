@@ -16,6 +16,7 @@ pub mod doorbell;
 pub mod error;
 pub mod events;
 pub mod friends;
+pub mod github_display;
 pub mod god_mode;
 pub mod house_editing;
 pub mod households;
@@ -115,6 +116,7 @@ pub struct Shared {
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
+    pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
     write_windows: Mutex<HashMap<String, (i64, u32)>>,
@@ -155,6 +157,7 @@ impl AppState {
             closeness: closeness::Limits::new(),
             presence: spaces::Presence::default(),
             push: std::sync::OnceLock::new(),
+            github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
             write_windows: Mutex::new(HashMap::new()),

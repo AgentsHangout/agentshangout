@@ -31,7 +31,7 @@ use crate::{
     db::{Pass, Person, PlanItem, Scene, SceneRequest, Trip},
     discord,
     error::{ApiError, ApiResult},
-    events, friends, god_mode, households, items, looks, now,
+    events, friends, github_display, god_mode, households, items, looks, now,
     ops::{self, CheckInInput, EventInput, MAX_NAME_CHARS},
     outside, passkey, referrals, routines,
     sign_in::{self, Site},
@@ -45,6 +45,8 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/me", get(me))
+        .route("/api/me/github-display", put(set_github_display))
+        .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
         .route("/api/session", post(sign_in).delete(sign_out))
         .route("/api/key/rotate", post(rotate_owner_key))
@@ -373,6 +375,8 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         "passkeys": state.db.passkey_count(&caller.person_id)?,
         // A56: their own links, which nobody else is shown.
         "sign_in": sign_in::for_person(&state, &caller.person_id)?,
+        // A70: their own GitHub display switches, which nobody else is shown.
+        "github_display": state.db.github_display_for(&caller.person_id)?.unwrap_or_default(),
         // A54: whether a site started this session, so the page doesn't offer what it can't do.
         "sign_in_session": state.db.is_sign_in_session(&caller.secret_hash)?,
         // Cities they're waiting at the gate of, with their count and nothing else about the city.
@@ -1304,6 +1308,52 @@ async fn set_sharing(
         closeness::set_shows_plans(&state, &caller, on)?;
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// A70: what a person turns on for their linked GitHub account. Absent switches keep their
+/// value, as with sharing.
+async fn set_github_display(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<github_display::DisplayPatch>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "change GitHub display")?;
+    state.db.patch_github_display(&caller.person_id, &body, now())?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// A70 to A75: what anyone sees of one person's linked GitHub account: only the sections they
+/// turned on, read from the cache, never from the link rows (A74). Unauthenticated on purpose:
+/// it's what the person chose to show.
+async fn show_github_display(
+    State(state): State<AppState>,
+    Path(person_id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if let Ok(_permit) = state.github_refresh_slots.clone().try_acquire_owned() {
+        if let Some(claim) = state.db.claim_github_display_refresh(&person_id, now())? {
+            let api_base = state
+                .github
+                .as_ref()
+                .map(|app| app.api_url.clone())
+                .unwrap_or_else(|| "https://api.github.com".to_string());
+            let refreshed = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                github_display::refresh(
+                    &api_base,
+                    &claim.github_user_id,
+                    &claim.github_login,
+                    claim.existing.as_ref(),
+                    now(),
+                ),
+            )
+            .await
+            .ok()
+            .flatten();
+            state.db.finish_github_display_refresh(&person_id, &claim, refreshed.as_ref())?;
+        }
+    }
+    // Re-read current identity and switches, never the state captured before network work.
+    Ok(Json(state.db.github_public_snapshot(&person_id)?))
 }
 
 async fn house_notes(
