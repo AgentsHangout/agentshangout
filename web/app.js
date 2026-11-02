@@ -2455,6 +2455,7 @@ async function roomView(id) {
   // I17: a rule nobody can see isn't fair on anyone, so this stays up at every width.
   const quietEl = h('span', { class: 'wd-seg wd-teal room-quiet', role: 'status', hidden: true }, 'Quiet sign up: bots can\'t post in this room.');
   const floorsEl = h('nav', { class: 'wd-seg floors', 'aria-label': 'Floors', hidden: true });
+  const floorsMore = h('nav', { class: 'phone-room-floors', 'aria-label': 'Room details', hidden: true });
   const aboutEl = h('span', { class: 'wd-seg room-about', hidden: true });
   const legendEl = h('div', { class: 'wd-seg legend room-legend' });
   frame.status.prepend(guestEl, quietEl, floorsEl, aboutEl);
@@ -3204,10 +3205,11 @@ async function roomView(id) {
     aboutMore.textContent = about;
     aboutMore.hidden = !about;
     floorsEl.hidden = !place;
+    floorsMore.hidden = !place;
     if (!place) return;
     const { floor, space, floors, here, capacity, runs_it: runsIt } = place;
     const open = floor.access === 'public';
-    floorsEl.replaceChildren(
+    const floorParts = () => [
       h('strong', {}, space.name),
       ...floors.map((each) => (each.id === id
         ? h('span', { class: 'wd-tbtn floor-chip here', 'aria-current': 'page' }, each.name)
@@ -3222,7 +3224,9 @@ async function roomView(id) {
           await api(`/api/floors/${id}/walk-out`, { method: 'POST' });
           go('/');
         },
-      }, 'Walk out')] : []));
+      }, 'Walk out')] : [])];
+    floorsEl.replaceChildren(...floorParts());
+    floorsMore.replaceChildren(...floorParts());
   }
 
   function render() {
@@ -3891,6 +3895,7 @@ async function roomView(id) {
     ownerNotesEl,
     ownerNotesError);
   panels.add('more', 'More', {},
+    floorsMore,
     aboutMore,
     h('div', { class: 'game-more' }, ...[
       moreButton('tutorial', 'Tutorial', 'sec'),
@@ -3909,7 +3914,9 @@ async function roomView(id) {
   // one that took its place brings the chat back, and closing the chat itself leaves it shut.
   let showing = null;
   let chatBehind = false;
+  const syncRoomTabs = panels.onChange;
   panels.onChange = () => {
+    syncRoomTabs();
     const was = showing;
     showing = panels.current;
     frame.root.classList.toggle('has-panel', Boolean(showing));
@@ -5818,7 +5825,7 @@ const COMPACT = '(max-width: 759px)';
 // short or narrow. Turning the phone sideways is a media-query change, so this listens for that too.
 function watchPhoneChrome(root) {
   const phone = matchMedia('(pointer: coarse)');
-  const sync = () => root.classList.toggle('apple-hig', phone.matches);
+  const sync = () => root.classList.toggle('apple-hig', phone.matches || document.documentElement.classList.contains('in-app'));
   phone.addEventListener('change', sync);
   window.addEventListener('resize', sync);
   window.addEventListener('orientationchange', sync);
@@ -5855,7 +5862,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
 
   // 2. Build Sheet
   const buildSheet = h('div', { class: 'apple-build-sheet', 'aria-label': 'Build Sheet' });
-  const grabber = h('div', { class: 'sheet-grabber', 'aria-hidden': 'true' });
+  const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': 'Dismiss building tools', onclick: () => closeBuildSheet() });
   const sheetHead = h('div', { class: 'apple-build-sheet-head' },
     h('h3', {}, 'Build on The Commons'),
     h('span', { class: 'apple-moves-pill' }, `Moves: ${movesCount() ?? '-'}`)
@@ -5864,19 +5871,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
   buildSheet.append(grabber, sheetHead, toolsGrid);
   frame.root.append(buildSheet);
 
-  let startY = 0;
-  grabber.addEventListener('touchstart', (e) => { startY = e.touches[0].clientY; }, { passive: true });
-  grabber.addEventListener('touchmove', (e) => {
-    const diff = Math.max(0, e.touches[0].clientY - startY);
-    if (diff > 0) buildSheet.style.transform = `translateY(${diff}px)`;
-  }, { passive: true });
-  grabber.addEventListener('touchend', (e) => {
-    if (e.changedTouches[0].clientY - startY > 50) {
-      closeBuildSheet();
-    } else {
-      buildSheet.style.transform = '';
-    }
-  });
+  installSheetDrag(grabber, buildSheet, () => closeBuildSheet());
 
   const openBuildSheet = () => {
     panels.close(false);
@@ -5980,6 +5975,27 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
 function installAppleHigRoom({ frame, panels }) {
   watchPhoneChrome(frame.root);
 
+  // Keep the room's pixel proportions while using the phone's height. Portrait is a camera
+  // window onto the room: a horizontal swipe reaches either side, rather than stretching art.
+  // Preserve the camera fraction through rotation; a newly opened room starts in the middle.
+  let camera = 0.5;
+  let roomWidth = 0;
+  const host = frame.host;
+  host.addEventListener('scroll', () => {
+    const range = host.scrollWidth - host.clientWidth;
+    if (range > 0) camera = host.scrollLeft / range;
+  }, { passive: true });
+  const resizeRoom = new ResizeObserver(() => {
+    if (!frame.root.isConnected) { resizeRoom.disconnect(); return; }
+    if (!frame.root.classList.contains('apple-hig')) return;
+    const range = host.scrollWidth - host.clientWidth;
+    if (range !== roomWidth) {
+      roomWidth = range;
+      host.scrollLeft = Math.max(0, range) * camera;
+    }
+  });
+  resizeRoom.observe(host);
+
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [
     { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
@@ -6022,6 +6038,67 @@ function installAppleHigRoom({ frame, panels }) {
   };
 }
 
+// One gesture implementation for both kinds of sheet. Pointer events support touch, pen and
+// mouse; capture keeps the gesture alive after the finger leaves the handle. Cancelling a
+// gesture must never dismiss it or leave the panel translated off screen.
+function installSheetDrag(handle, sheet, dismiss) {
+  let pointer = null;
+  let startX = 0;
+  let startY = 0;
+  let distance = 0;
+  let suppressClick = false;
+  const reset = () => {
+    pointer = null;
+    distance = 0;
+    sheet.classList.remove('sheet-dragging');
+    sheet.style.removeProperty('transform');
+  };
+  handle.addEventListener('pointerdown', event => {
+    if (pointer !== null || !event.isPrimary || event.button !== 0 || !sheet.closest('.apple-hig')) return;
+    pointer = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    distance = 0;
+    suppressClick = false;
+    sheet.getAnimations().forEach(animation => animation.finish());
+    sheet.classList.add('sheet-dragging');
+    // Synthetic events in the regression fixture have no active pointer to capture.
+    if (event.isTrusted) handle.setPointerCapture(pointer);
+    event.preventDefault();
+  });
+  handle.addEventListener('pointermove', event => {
+    if (event.pointerId !== pointer) return;
+    if (Math.hypot(event.clientX - startX, event.clientY - startY) > 5) suppressClick = true;
+    distance = Math.max(0, event.clientY - startY);
+    sheet.style.setProperty('transform', `translateY(${distance}px)`, 'important');
+    event.preventDefault();
+  });
+  handle.addEventListener('pointerup', event => {
+    if (event.pointerId !== pointer) return;
+    if (Math.hypot(event.clientX - startX, event.clientY - startY) > 5) suppressClick = true;
+    const close = Math.max(distance, event.clientY - startY) >= 56;
+    const captured = pointer;
+    reset();
+    if (handle.hasPointerCapture(captured)) handle.releasePointerCapture(captured);
+    if (close) dismiss();
+  });
+  for (const type of ['pointercancel', 'lostpointercapture']) {
+    handle.addEventListener(type, event => {
+      if (event.pointerId !== pointer) return;
+      suppressClick = true;
+      reset();
+    });
+  }
+  // Browsers may synthesize a click after pointerup, even for a short drag. Only a deliberate
+  // tap or keyboard activation should use the handle's button action.
+  handle.addEventListener('click', event => {
+    if (!suppressClick || event.detail === 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    suppressClick = false;
+  }, true);
+}
+
 function createPanels(root) {
   const panels = new Map();
   const toggles = new Map();
@@ -6050,7 +6127,7 @@ function createPanels(root) {
     // `options.onOpen` runs each time the panel opens, and `options.onClose` each time it's closed,
     // but not when another panel takes its place.
     add(name, title, options, ...content) {
-      const grabber = h('div', { class: 'sheet-grabber', 'aria-hidden': 'true' });
+      const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: () => set.close() });
       const body = h('div', { class: 'game-panel-body' }, ...content);
       const el = h('aside', { class: `game-panel game-panel-${name}`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true },
         grabber,
@@ -6058,24 +6135,7 @@ function createPanels(root) {
           h('h2', {}, title),
           h('button', { type: 'button', class: 'wd-tbtn sheet-close', 'aria-label': `Close ${title}`, onclick: () => set.close() }, '✕')),
         body);
-      let startY = 0;
-      let dragY = 0;
-      grabber.addEventListener('touchstart', (e) => {
-        startY = e.touches[0].clientY;
-        dragY = 0;
-      }, { passive: true });
-      grabber.addEventListener('touchmove', (e) => {
-        dragY = Math.max(0, e.touches[0].clientY - startY);
-        if (dragY > 0) el.style.transform = `translateY(${dragY}px)`;
-      }, { passive: true });
-      grabber.addEventListener('touchend', () => {
-        if (dragY > 55) {
-          el.style.transform = '';
-          set.close();
-        } else {
-          el.style.transform = '';
-        }
-      });
+      installSheetDrag(grabber, el, () => set.close());
       root.append(el);
       panels.set(name, { el, body, onOpen: options?.onOpen, onClose: options?.onClose });
       return body;
@@ -7417,6 +7477,7 @@ async function route() {
     }
     else view = await homeView();
     app.replaceChildren(view);
+    if (view instanceof Node) document.documentElement.dataset.clientReady = 'true';
     // These pages need someone signed in, so only they save the clock.
     if (roomMatch || cityMatch || houseMatch) saveClock();
   } catch (error) {
@@ -7424,6 +7485,7 @@ async function route() {
       history.replaceState({}, '', '/');
       try {
         app.replaceChildren(await homeView());
+        document.documentElement.dataset.clientReady = 'true';
         return;
       } catch (again) {
         error = again;

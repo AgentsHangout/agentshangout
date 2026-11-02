@@ -2161,6 +2161,40 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   touch-action: none !important;
 }
 
+/* The phone room uses a full-height camera, not a framed postcard on a brown desk.
+   Keep the original pixel proportions and let a horizontal swipe reveal either side. */
+.phone-room-floors { display: none; }
+.apple-hig.wd-room .room-host {
+  display: block !important;
+  inset: 0 0 calc(52px + env(safe-area-inset-bottom)) !important;
+  height: auto !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  scrollbar-width: none;
+}
+.apple-hig.wd-room .room-host::-webkit-scrollbar { display: none; }
+.apple-hig.wd-room .stage {
+  width: max(100cqw, calc(100cqh * 480 / 252));
+  max-width: none;
+  min-height: 100cqh;
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+  animation: none;
+}
+.apple-hig.wd-room .room-host canvas { touch-action: pan-x !important; }
+.apple-hig.wd-room.has-dock .room-host,
+.apple-hig.wd-room .stage.building canvas { touch-action: none !important; }
+.apple-hig .phone-room-floors:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.apple-hig .phone-room-floors > strong { flex: 1 0 100%; }
+
 /* Navigation Bar & Header: hidden on mobile for completely unobstructed edge-to-edge view */
 .apple-hig .wd-title {
   display: none !important;
@@ -2272,6 +2306,25 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   text-align: center !important;
 }
 
+/* Room facts and floor navigation live in More. Only access/rule warnings remain over the
+   scene; the desktop's name, clock, usage hint and crew legend add no phone navigation. */
+.apple-hig.wd-room > .wd-status { display: none !important; }
+.apple-hig.wd-room > .wd-status:has(.room-guest:not([hidden]), .room-quiet:not([hidden])) {
+  display: flex !important;
+  background: #f5eede !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  pointer-events: auto !important;
+}
+.apple-hig.wd-room > .wd-status > :not(.room-guest):not(.room-quiet) { display: none !important; }
+.apple-hig.wd-room .wd-status .room-guest,
+.apple-hig.wd-room .wd-status .room-quiet {
+  white-space: normal;
+  background: none;
+  box-shadow: none;
+}
+.apple-hig.wd-room .wd-status [hidden] { display: none !important; }
+
 /* Apple HIG Bottom Tab Bar */
 .apple-hig .apple-tab-bar {
   display: flex !important;
@@ -2317,6 +2370,14 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .apple-tab-item.active {
   color: var(--apple-accent) !important;
   font-weight: 700 !important;
+}
+
+.apple-hig .apple-tab-item {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  text-shadow: none;
 }
 
 .apple-tab-icon {
@@ -2480,8 +2541,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   inset: 0 !important;
   z-index: 18 !important;
   background: rgba(0, 0, 0, 0.35) !important;
-  -webkit-backdrop-filter: blur(4px) !important;
-  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
   opacity: 0 !important;
   pointer-events: none !important;
   transition: opacity 0.25s ease !important;
@@ -2493,13 +2554,32 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 }
 
 .apple-hig .sheet-grabber {
-  display: block !important;
-  width: 36px !important;
-  height: 5px !important;
-  border-radius: 2.5px !important;
-  background: rgba(60, 40, 10, 0.25) !important;
-  margin: 4px auto 10px !important;
+  display: grid !important;
+  place-items: center;
+  flex: none;
+  width: 100% !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
   cursor: grab !important;
+  touch-action: none;
+  user-select: none;
+}
+.apple-hig .sheet-grabber::before {
+  content: '';
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(60, 40, 10, .3);
+}
+.apple-hig .sheet-grabber:focus-visible { outline: 2px solid var(--apple-accent); outline-offset: -4px; }
+.apple-hig .sheet-dragging {
+  transition: none !important;
 }
 
 .apple-hig > .game-panel {
@@ -2511,9 +2591,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   max-width: 100% !important;
   margin: 0 !important;
   border-radius: 24px 24px 0 0 !important;
-  background: var(--apple-sheet-bg) !important;
-  -webkit-backdrop-filter: var(--apple-blur) !important;
-  backdrop-filter: var(--apple-blur) !important;
+  background: #eee2c8 !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
   border: none !important;
   border-top: 0.5px solid var(--apple-border) !important;
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.25) !important;
@@ -2521,7 +2601,54 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   z-index: 20 !important;
   transform: translateY(0);
   animation: apple-sheet-slide-up 0.32s cubic-bezier(0.32, 0.72, 0, 1) !important;
-  padding: 6px 16px calc(24px + env(safe-area-inset-bottom)) !important;
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom)) !important;
+  color: var(--apple-text);
+  font-family: system-ui, sans-serif;
+}
+.apple-hig .game-panel-head {
+  min-height: 48px;
+  padding: 0 0 10px;
+  background: none;
+  box-shadow: none;
+  text-shadow: none;
+  color: var(--apple-text);
+}
+.apple-hig .game-panel-head h2 { font: 700 18px/1.3 system-ui, sans-serif; }
+.apple-hig .game-panel-body {
+  padding: 8px 0 0;
+  background: none;
+  box-shadow: none;
+  overscroll-behavior-y: contain;
+}
+.apple-hig .chat-form input {
+  min-height: 44px;
+  border: 1px solid var(--apple-border);
+  border-radius: 12px;
+  box-shadow: none;
+  font: 400 16px/1.3 system-ui, sans-serif;
+}
+.apple-hig .chat-form button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: none;
+  background: var(--apple-accent);
+  color: #fff;
+  text-shadow: none;
+}
+.apple-hig .apple-tab-bar,
+.apple-hig .apple-build-sheet {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.apple-hig .apple-build-sheet { background: #eee2c8 !important; }
+.apple-hig .apple-tab-bar { background: #dccaa2 !important; }
+.apple-hig > .game-panel-room {
+  height: 78dvh;
+  max-height: calc(100dvh - max(12px, env(safe-area-inset-top))) !important;
+}
+.apple-hig > .game-panel-room:has(input:focus) {
+  height: calc(100dvh - max(12px, env(safe-area-inset-top)));
 }
 
 @keyframes apple-sheet-slide-up {
@@ -2531,10 +2658,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 .apple-hig .sheet-close,
 .apple-hig .game-panel-head .wd-tbtn {
-  width: 30px !important;
-  height: 30px !important;
-  min-width: 30px !important;
-  min-height: 30px !important;
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
   border-radius: 50% !important;
   background: rgba(60, 40, 10, 0.12) !important;
   border: none !important;
@@ -2574,6 +2701,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
     left: calc(76px + env(safe-area-inset-left)) !important;
     right: 0 !important;
     width: auto !important;
+  }
+  .apple-hig.wd-room .room-host {
+    inset: 0 0 0 calc(76px + env(safe-area-inset-left)) !important;
   }
   .apple-hig .wd-title {
     left: calc(50% + 38px) !important;

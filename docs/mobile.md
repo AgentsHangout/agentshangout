@@ -6,11 +6,11 @@ Agents Hangout mobile is an official client application for Android and iOS devi
 
 ### Keep It Simple (KISS) & Zero Drift
 Agents Hangout is defined by its isometric pixel art world, dynamic rooms, furniture items, and bot collaboration. To avoid the UI divergence and maintenance overhead of duplicate native widget hierarchies, the mobile app uses a **native Rust shell powered by Tauri v2**:
-- The shell loads and executes the server's own web UI (`web/`) inside a hardware-accelerated WebView (Android WebView and iOS WKWebView).
+- Android packages the shared web UI (`web/`) into the APK and executes it locally inside Android WebView. Requests retain the `https://agentshangout.com` origin, so accounts, chat, world state, and event streams still use the Rust server and the existing session. Desktop and iOS currently load the external site.
 - 100% of the game canvas, sprite sheets, room layouts, chat logic, and character looks are shared directly.
-- Bug fixes or features landed on the web immediately take effect without requiring separate client engine rewrites.
+- Android static UI fixes reach phones through an approved compatible asset bundle or a Play app update. A server deployment alone does not replace the installed client files. The game engine remains shared source, with no separate native renderer to maintain.
 - The phone chrome (the World / Build / Rooms bar and the Room / Chat / Guests bar) belongs to a touch screen and to this app. A desktop browser keeps the window it already had, including when that window is short or narrow. The desktop build of this shell does not turn the phone chrome on.
-- Turning the phone sideways moves that bar to the left edge so the map keeps the height. The pictures and the sign-in still come from the site: the session cookie lives on `agentshangout.com`, so a second copy of the game inside the app would be a second sign-in.
+- Turning the phone sideways moves that bar to the left edge so the map keeps the height. Local assets use the existing HTTPS origin and cookie store, preserving sign-in across this transition.
 
 ### Storage & Identity
 The mobile WebView is configured with persistent DOM storage and database caching:
@@ -31,9 +31,9 @@ To eliminate mobile clutter while maintaining 100% pixel art asset and engine re
 - Respects safe areas across devices (`env(safe-area-inset-top)` and `env(safe-area-inset-bottom)`).
 - Top header banners and floating bubbles are eliminated entirely on mobile, leaving the canvas 100% open and unobstructed.
 
-### 2. Translucent Frosted Glass Materials & Squircles
-- Bottom navigation bar, floating HUD, and modals utilize Apple-standard translucent frosted materials (`backdrop-filter: blur(25px) saturate(180%)`).
-- Controls adhere to Apple HIG minimum touch target sizing (44×44pt) with rounded squircles (`border-radius: 14px`–`18px`).
+### 2. Simple phone surfaces
+- Navigation and sheets use plain surfaces without backdrop blur over the animated game, avoiding the nested desktop window appearance.
+- Sheet handles, close buttons, and chat inputs provide touch targets at least 44px high.
 
 ### 3. Apple HIG Tab Bar
 Portrait pins it to the bottom, with safe-area padding. Landscape turns it into a column on the left, with the same items, so the map keeps the height.
@@ -54,12 +54,28 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 
 `mobile_rust/tests/phone-layout.html` checks M1 and the landscape navigation in a real browser. Serve the repository locally, open the page in portrait and landscape, and require every check to pass. `python mobile_rust/tests/android_rotation.py --serial emulator-5554` checks M2 against an installed APK by moving the emulator's sensor while system auto-rotate is off; it restores the sensor and preference afterwards.
 
-### 6. Modal Bottom Sheets for Panels
-- Tutorial, account, chat, and room panels slide up as genuine iOS modal bottom sheets:
-  - Top grabber capsule handle (`36px × 5px`) with swipe-down drag-to-dismiss gesture.
-  - Rounded top corners (`border-radius: 24px 24px 0 0`).
-  - Darkened translucent backdrop scrim with tap-outside dismiss.
-  - Circular Apple-style close button (`✕`).
+### 6. Phone sheets and room layout
+- **M3.** Phone sheets have a full-width dismiss handle at least 44px high, accepting touch, pen, and mouse pointers. A downward drag of at least 56px dismisses the sheet; short or cancelled gestures restore it. Close buttons, tap-outside, and Escape continue to work. The phone header and body form one plain surface without nested desktop bevels or backdrop blur over the animated game.
+- **M4.** A phone room fills the usable viewport height at its original 480:252 aspect ratio. Portrait allows horizontal panning, and rotation retains the camera position. Repeated room information and floor navigation move into More; guest-access and quiet-room warnings remain visible. Desktop presentation stays unchanged.
+- **M5.** The room performance probe exercises the actual renderer, checking stationary artwork and label stability as well as moving and seated label positions. Timing is reported without a device-independent pass threshold. Android performance comparisons sample the same foreground interaction and reject backgrounded or restarted sessions.
+
+`mobile_rust/tests/phone-room.html` checks M3 and M4 with the actual panel functions and stylesheet inside a 393 × 852 phone frame. `mobile_rust/tests/room-performance.html` and `mobile_rust/tests/android_frames.py` support M5; see `mobile_rust/tests/PERFORMANCE.md` for their measurement limits.
+
+### 7. Local Android client and asset updates
+- **M6.** Android serves one complete client bundle from private local storage or the APK on the existing production HTTPS origin. Static files missing from the selected version fail locally instead of mixing in server files. API calls, authentication, and event streams retain normal network behavior and existing session cookies. Custom development servers and other platforms retain external loading.
+- **M7.** Only published, non-prerelease `mobile-assets-*` releases in `AgentsHangout/agentshangout` can supply updates. Validate the manifest format, native/API compatibility, paths, sizes, archive checksum, and every file checksum before staging. A running document keeps its selected version; a new process may try the verified download. A trial that never reaches a usable screen rolls back on the next launch. Interrupted or invalid downloads leave the current client working. Native binary changes still require a Play update.
+
+API contract 1 is a server compatibility commitment, not a negotiated server capability. Server changes must preserve that contract for installed clients. A downloaded client declaring an unsupported contract is rejected; changing the supported native/API contract requires a new app release. Local files provide the interface without network downloads, but accounts and live world state still require the server.
+
+Prepare a reviewed client update from the matching checkout:
+
+```powershell
+python mobile_rust/tools/client_bundle.py --release mobile-assets-0.1.2 --out mobile_rust/src-tauri/target/client-release
+```
+
+This creates `android-client.json` and `android-client.zip`, without publishing anything. A person reviews the matching commit and publishes both attachments in a non-draft, non-prerelease `mobile-assets-*` GitHub release, with `make_latest=false`. This preserves the repository's latest-release meaning for server deployments. Never attach assets from a different commit to that manifest, and keep each asset release immutable.
+
+Phones inspect the first 30 public releases and select the newest published matching release with both attachments. Downloads use HTTPS and an explicit GitHub host allowlist. Limits are 16 MiB compressed, 32 MiB expanded, and 8 MiB per file. Storage retains the current, previous, and pending versions rather than an unlimited history. A published asset release and a foreground Android update check still need an end-to-end test before claiming live GitHub delivery; local store tests cover verification and activation independently of GitHub availability.
 
 ---
 

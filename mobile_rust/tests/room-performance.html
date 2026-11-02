@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Room rendering regression checks</title>
+<link rel="stylesheet" href="../../web/style.css">
+<pre id="results">Running…</pre>
+<div class="stage" id="stage"></div>
+<script type="module">
+import { Room } from '../../web/room.js';
+
+const output = document.querySelector('#results');
+const lines = [];
+function check(ok, message) {
+  lines.push(`${ok ? 'PASS' : 'FAIL'}: ${message}`);
+  output.textContent = lines.join('\n');
+  if (!ok) throw new Error(message);
+}
+
+// Drive real Room frames at a fixed time, so animated paint and wandering cannot
+// obscure whether stationary avatar labels cause unnecessary DOM work.
+const originalRaf = window.requestAnimationFrame;
+window.requestAnimationFrame = () => 0;
+let room;
+try {
+  room = new Room(document.querySelector('#stage'));
+  room.calm = true;
+  room.setBots(Array.from({length: 8}, (_, id) => ({
+    id: `bot-${id}`, name: `Bot ${id}`, color: '#3ddc97', state: 'active',
+  })));
+  room.setPeople(Array.from({length: 4}, (_, id) => ({
+    id: `person-${id}`, name: `Person ${id}`, color: '#ffb454',
+  })));
+  const time = room.last;
+  room.frame(time);
+  const image = room.canvas.toDataURL();
+  const observer = new MutationObserver(() => {});
+  observer.observe(room.overlay, {attributes: true, subtree: true});
+  const start = performance.now();
+  for (let i = 0; i < 48; i++) room.frame(time);
+  const duration = performance.now() - start;
+  const writes = observer.takeRecords().length;
+  observer.disconnect();
+  lines.push(`48 real room frames: ${duration.toFixed(1)} ms; stationary label mutations: ${writes}`);
+  check(room.canvas.toDataURL() === image, 'stationary frames preserve the room artwork');
+  check(writes === 0, 'M5: stationary avatar labels do not mutate the DOM every frame');
+
+  const bot = room.bots.get('bot-0');
+  const person = room.people.get('person-0');
+  bot.x += 12;
+  person.y += 12;
+  room.frame(time);
+  check(Math.abs(parseFloat(bot.tag.style.left) - bot.x / 480 * 100) < 0.001,
+    'M5: a moving bot label tracks its position');
+  check(Math.abs(parseFloat(person.tag.style.top) - person.y / 252 * 100) < 0.001,
+    'M5: a moving person label tracks its position');
+  bot.seat = {drop: 1};
+  person.seat = {drop: 1};
+  room.frame(time);
+  check(bot.tag.classList.contains('drop') && person.chip.style.bottom.includes('1.8em'),
+    'M5: changing seats still updates label height');
+  check(true, 'all room rendering checks passed');
+} catch (error) {
+  output.textContent += `\nFAILED: ${error.message}`;
+} finally {
+  room?.destroy();
+  window.requestAnimationFrame = originalRaf;
+}
+</script>
