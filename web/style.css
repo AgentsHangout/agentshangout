@@ -354,13 +354,25 @@ input::placeholder { color: #8b7a5e; }
   color: #5a6176;
   font-size: .85em;
 }
-.pin-add, .pin-clear {
+/* The strip sits on the room's wall, so its controls take the card's paper look. Scoped to the strip
+   so it beats button.ghost (transparent, only showing on hover) and the page-wide select rule (full
+   width on the dark page color, which left one black box across the strip). */
+.pin-strip .pin-add, .pin-strip .pin-clear, .pin-strip .pin-policy {
   flex: 0 0 auto;
   align-self: center;
+  width: auto;
+  min-height: 0;
   padding: .2em .45em;
   font: inherit;
   font-size: clamp(8px, 1cqw, 12px);
+  color: #20283e;
+  background: #f4ead2;
+  border: 1px solid rgba(32, 40, 62, .28);
+  border-radius: 3px;
+  box-shadow: none;
+  text-shadow: none;
 }
+.pin-strip .pin-add:hover, .pin-strip .pin-clear:hover, .pin-strip .pin-policy:hover { background: #fbf4e2; filter: none; }
 
 .bot-tag {
   position: absolute;
