@@ -5828,12 +5828,43 @@ impl Db {
         Ok(Self::group_held_mentions(rows))
     }
 
-    pub fn take_held_mentions(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "DELETE FROM held_mention_wakes WHERE agent_id = ? AND hangout_id = ?",
-            params![agent_id, hangout_id],
-        )?;
-        Ok(())
+    /// Claim only the selected rows. Reserving the wake in the same transaction means a stale
+    /// or concurrent flusher cannot send twice, and a reservation failure leaves the queue intact.
+    /// With no reservation time, discard only this selected batch (for example, Only me).
+    pub fn take_held_mentions(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        message_ids: &[i64],
+        reserve_at: Option<i64>,
+    ) -> rusqlite::Result<Option<i64>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut latest = None;
+        for &message_id in message_ids {
+            if tx.execute(
+                "DELETE FROM held_mention_wakes
+                 WHERE agent_id = ? AND hangout_id = ? AND message_id = ?",
+                params![agent_id, hangout_id, message_id],
+            )? > 0
+            {
+                latest = Some(latest.map_or(message_id, |previous: i64| previous.max(message_id)));
+            }
+        }
+        if let (Some(message_id), Some(at)) = (latest, reserve_at) {
+            // Keep the same retention as an immediate ring, even for a continuously held chain.
+            tx.execute("DELETE FROM wake_rings WHERE rung_at < ?", [at - 24 * 60 * 60])?;
+            let reserved = tx.execute(
+                "INSERT OR IGNORE INTO wake_rings (message_id, agent_id, capped, rung_at)
+                 VALUES (?, ?, 1, ?)",
+                params![message_id, agent_id, at],
+            )?;
+            if reserved == 0 {
+                latest = None;
+            }
+        }
+        tx.commit()?;
+        Ok(latest)
     }
 
     /// E31: whether this room accepted a non-owner person's wake after `since`.

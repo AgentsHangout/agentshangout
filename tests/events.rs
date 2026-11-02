@@ -2114,3 +2114,120 @@ async fn wake_audit_failure_preserves_test_callback_result() {
         assert_eq!(hook.hits().len(), before + 1);
     }
 }
+
+// L10: a due batch must not consume a later batch for the same bot and room.
+#[tokio::test]
+async fn held_wake_flush_preserves_later_scheduled_mentions() {
+    let path = std::env::temp_dir().join(format!("held-batch-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, _, pat, pixel, _, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({"url":url})).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel first batch").await;
+    server.say(&rex, &room, "@Pixel later batch").await;
+    let ids = server.state.db.held_mentions_in(&room).unwrap()[0].2.clone();
+    assert_eq!(ids.len(), 2);
+    conn.execute(
+        "UPDATE held_mention_wakes SET due_at=? WHERE message_id=?",
+        rusqlite::params![now() - 1, ids[0]],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE held_mention_wakes SET due_at=? WHERE message_id=?",
+        rusqlite::params![now() + 600, ids[1]],
+    )
+    .unwrap();
+    agenthangout::ops::flush_held_mentions(&server.state, now());
+    wait_for(&hook, |hit| hit.body["event"] == "mention").await;
+    let remaining = server.state.db.held_mentions_in(&room).unwrap();
+    assert_eq!(remaining.len(), 1, "a future batch must keep its scheduled wake");
+    assert_eq!(remaining[0].2, vec![ids[1]]);
+}
+
+// L10: a held-queue failure cannot turn an already stored person's chat into an error.
+#[tokio::test]
+async fn held_wake_flush_failure_does_not_fail_saved_human_chat() {
+    let path = std::env::temp_dir().join(format!("held-fault-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, owner, pat, pixel, _, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({"url":url})).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel waiting").await;
+    conn.execute_batch("CREATE TRIGGER fail_held_delete BEFORE DELETE ON held_mention_wakes BEGIN SELECT RAISE(FAIL,'fixture'); END;").unwrap();
+    let posted = server
+        .post(
+            &owner,
+            &format!("/api/hangouts/{room}/messages"),
+            json!({"text":"human chat during queue fault"}),
+        )
+        .await;
+    assert_eq!(posted.status, StatusCode::OK, "{}", posted.body);
+    assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2.len(), 1);
+    assert_eq!(rings(&hook), 0);
+    conn.execute_batch("DROP TRIGGER fail_held_delete;").unwrap();
+    agenthangout::ops::flush_held_mentions(&server.state, now() + BOT_CHAIN_HOLD_SECS + 1);
+    wait_for(&hook, |hit| hit.body["event"] == "mention").await;
+    assert_eq!(rings(&hook), 1);
+}
+
+// L10: stale batch snapshots race safely, and a failed reservation rolls back row claims.
+#[tokio::test]
+async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
+    let path = std::env::temp_dir().join(format!("held-claim-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, owner, _) = server.room().await;
+    let (_, bot) = server.bot(&owner, &room, "Scout").await;
+    let old = server
+        .post(&owner, &format!("/api/hangouts/{room}/messages"), json!({"text":"old fixture line"}))
+        .await;
+    server
+        .state
+        .db
+        .note_wake_ring(&bot, old.body["id"].as_i64().unwrap(), now() - 86401, true)
+        .unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let posted = server
+            .post(&owner, &format!("/api/hangouts/{room}/messages"), json!({"text":"fixture line"}))
+            .await;
+        ids.push(posted.body["id"].as_i64().unwrap());
+    }
+    for &id in &ids {
+        server.state.db.hold_mention_wake(&bot, &room, id, now(), now()).unwrap();
+    }
+    conn.execute_batch("CREATE TRIGGER fail_ring_insert BEFORE INSERT ON wake_rings BEGIN SELECT RAISE(FAIL,'fixture'); END;").unwrap();
+    assert!(server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).is_err());
+    assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2, ids);
+    let retained: i64 = conn
+        .query_row("SELECT COUNT(*) FROM wake_rings WHERE agent_id=?", [&bot], |r| r.get(0))
+        .unwrap();
+    assert_eq!(retained, 1, "failed reservation rolls back retention cleanup too");
+    conn.execute_batch("DROP TRIGGER fail_ring_insert;").unwrap();
+    let barrier = std::sync::Barrier::new(8);
+    let claims = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).unwrap()
+                })
+            })
+            .collect();
+        threads.into_iter().map(|thread| thread.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert_eq!(claims.into_iter().flatten().collect::<Vec<_>>(), vec![ids[1]]);
+    assert_eq!(server.state.db.held_mentions_in(&room).unwrap()[0].2, vec![ids[2]]);
+    assert_eq!(
+        server.state.db.take_held_mentions(&bot, &room, &ids[..2], Some(now())).unwrap(),
+        None
+    );
+    let rings: i64 = conn
+        .query_row("SELECT COUNT(*) FROM wake_rings WHERE agent_id=?", [&bot], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rings, 1, "the successful held claim prunes the expired reservation");
+}
