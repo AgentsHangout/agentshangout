@@ -499,7 +499,22 @@ pub fn bots_at_places(
     street: &std::collections::HashMap<i64, (u16, u16)>,
     now: i64,
 ) -> ApiResult<Vec<BotAtPlace>> {
-    let rows = state.db.bots_at_places(crate::worlds::COMMONS_ID, now)?;
+    Ok(bots_at_places_and_cut(state, tiles, street, now)?.0)
+}
+
+/// The same, and whether the database had more rows than it reads at once, so some bots may be
+/// missing (W100). It reads one row past the limit to tell.
+pub fn bots_at_places_and_cut(
+    state: &AppState,
+    tiles: &std::collections::BTreeMap<(u16, u16), crate::world::Tile>,
+    street: &std::collections::HashMap<i64, (u16, u16)>,
+    now: i64,
+) -> ApiResult<(Vec<BotAtPlace>, bool)> {
+    let limit = state.worlds.place_rows();
+    let mut rows =
+        state.db.bots_at_places(crate::worlds::COMMONS_ID, now, limit.saturating_add(1))?;
+    let cut = rows.len() > limit;
+    rows.truncate(limit);
     let ids: Vec<String> = rows.iter().map(|row| row.0.clone()).collect();
     let mut looks = worn(state, Wearer::Bot, &ids)?;
     let mut shown = std::collections::HashSet::new();
@@ -553,7 +568,7 @@ pub fn bots_at_places(
             agent_id,
         });
     }
-    Ok(list)
+    Ok((list, cut))
 }
 
 /// L28: what a bot out with other bots is asked to do. Fixed, so nothing anyone wrote is in it.

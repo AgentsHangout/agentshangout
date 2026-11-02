@@ -727,6 +727,35 @@ async fn each_bot_has_a_key_that_lasts_between_reads_and_is_not_its_id() {
 
 // W100
 #[tokio::test]
+async fn a_list_cut_short_by_the_row_limit_says_truncated() {
+    let server = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (_, rover) = server.bot(&bo, &home, "Rover").await;
+    let (ann_home, ann) = server.someone("Ann").await;
+    let (_, fern) = server.bot(&ann, &ann_home, "Fern").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, floor) = server.public_cafe(&cy).await;
+    for (owner, token) in [(&bo, &rover), (&ann, &fern)] {
+        server.all_day(owner, token, true).await;
+        server.tool(token, "go_out", json!({ "floor_id": floor })).await;
+    }
+
+    // Reading one row of at least two, the database stops before every bot is looked at.
+    server.state.worlds.set_place_rows(1);
+    server.state.worlds.expire_commons_bots();
+    let cut = server.bots().await;
+    assert_eq!(cut["truncated"], true, "{cut}");
+    assert!(names(&cut).len() < 2, "{cut}");
+
+    server.state.worlds.set_place_rows(worlds::BOTS_AT_PLACES_ROWS);
+    server.state.worlds.expire_commons_bots();
+    let whole = server.bots().await;
+    assert_shape(&whole);
+    assert_eq!(names(&whole).len(), 2, "{whole}");
+}
+
+// W100
+#[tokio::test]
 async fn the_list_is_served_from_memory_until_the_cache_expires() {
     let server = Server::start().await;
     let (home, bo) = server.someone("Bo").await;

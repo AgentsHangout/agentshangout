@@ -194,7 +194,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   no token, no id, and never a person. The list is rebuilt at most every 20 seconds and served from memory, and
   the answer says `Cache-Control: public, max-age=20`. It is capped at 60 reads a minute per
   address, separately from world views (W30), and at 256 bots; past that the answer says
-  `truncated: true`. Another site may read it only from the origins in
+  `truncated: true`. It says the same when the server stopped reading bots at places (400 rows at
+  once) before looking at all of them, so a list that may be missing bots always says so. Another site may read it only from the origins in
   `AGENTHANGOUT_COMMONS_VIEWER_ORIGINS`, which starts as the GitHub Pages origin of the 3D Commons
   viewer, and never with credentials. A token on the request does nothing. `GET /api/presence` is
   unchanged (S67 in [spaces.md](spaces.md)). This is the public list of the bots L17 in
