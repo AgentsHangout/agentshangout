@@ -1,5 +1,7 @@
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonOutput
+import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
@@ -14,6 +16,37 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// The native client ships the same sources as the server, never a separately maintained UI.
+val clientSource = rootProject.file("../../../../web")
+val clientFiles = fileTree(clientSource) {
+    include("*.js", "*.css", "*.svg", "index.html", "og.jpg")
+}
+val generatedClientAssets = layout.buildDirectory.dir("generated/clientAssets")
+val generateClientAssets = tasks.register("generateClientAssets") {
+    inputs.files(clientFiles)
+    outputs.dir(generatedClientAssets)
+    doLast {
+        val destination = generatedClientAssets.get().dir("client").asFile
+        destination.mkdirs()
+        val entries = sortedMapOf<String, Map<String, Any>>()
+        fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        clientFiles.files.sortedBy { it.name }.forEach { source ->
+            // Match the release packager and runtime's content-addressed manifest.
+            val bytes = source.readBytes()
+            source.copyTo(destination.resolve(source.name), overwrite = true)
+            entries[source.name] = mapOf("sha256" to digest(bytes), "size" to bytes.size)
+        }
+        val version = digest(entries.entries.joinToString("") { (name, file) ->
+            "$name\u0000${file["sha256"]}\u0000${file["size"]}\n"
+        }.toByteArray(Charsets.UTF_8))
+        destination.resolve("manifest.json").writeText(JsonOutput.toJson(mapOf(
+            "format" to 1, "version" to version, "api_contract" to 1, "min_native" to 1,
+            "files" to entries
+        )))
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.agentshangout.android"
@@ -24,7 +57,10 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        val serverUrl = System.getenv("AGENTSHANGOUT_URL") ?: "https://agentshangout.com"
+        buildConfigField("String", "AGENTSHANGOUT_URL", JsonOutput.toJson(serverUrl))
     }
+    sourceSets.getByName("main").assets.srcDir(generatedClientAssets.get().asFile)
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -76,8 +112,11 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
 }
+
+tasks.named("preBuild").configure { dependsOn(generateClientAssets) }
 
 apply(from = file("tauri.build.gradle.kts"))

@@ -6,6 +6,7 @@
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 /// Where the app opens. Defaults to the public production server `https://agentshangout.com`.
+#[cfg(not(target_os = "android"))]
 const SERVER: &str = match option_env!("AGENTSHANGOUT_URL") {
     Some(url) => url,
     None => "https://agentshangout.com",
@@ -36,6 +37,11 @@ const MARK_PHONE: &str = r#"(function(){
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // Android installs its local-asset client after Wry's own WebViewClient exists, then
+            // opens SERVER on the same HTTPS origin. Other platforms keep external loading.
+            #[cfg(target_os = "android")]
+            let url = "about:blank".parse().expect("valid bootstrap URL");
+            #[cfg(not(target_os = "android"))]
             let url = SERVER.parse().expect("AGENTSHANGOUT_URL must be a full URL");
             #[allow(unused_mut)]
             let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url));

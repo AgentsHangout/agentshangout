@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Phone room regression checks</title>
+<style>body { margin: 12px; font: 14px system-ui; } iframe { width: 393px; height: 852px; border: 1px solid #888; } pre { white-space: pre-wrap; }</style>
+<pre id="results">Running…</pre>
+<script type="module">
+if (!location.search) {
+  const frame = document.createElement('iframe');
+  frame.src = '?frame';
+  frame.title = '393 × 852 phone room';
+  document.body.append(frame);
+  addEventListener('message', event => {
+    if (event.source === frame.contentWindow) document.querySelector('#results').textContent = event.data;
+  });
+} else {
+  const css = document.createElement('link');
+  css.rel = 'stylesheet'; css.href = `../../web/style.css?fixture=${Date.now()}`;
+  const loaded = new Promise(resolve => { css.onload = resolve; });
+  document.head.append(css); await loaded;
+  document.querySelector('#results').remove();
+  const source = await (await fetch('../../web/app.js', {cache: 'no-store'})).text();
+  const hSource = source.slice(source.indexOf('function h('), source.indexOf('\nasync function api('));
+  const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('\n// What goes in the panels'));
+  const dragSource = source.includes('function installSheetDrag(')
+    ? source.slice(source.indexOf('function installSheetDrag('), source.indexOf('\nfunction createPanels(')) : '';
+  const {h, createPanels, installSheetDrag} = new Function(`${hSource}\n${dragSource}\n${panelSource}\nreturn {h,createPanels,installSheetDrag: typeof installSheetDrag === 'function' ? installSheetDrag : null};`)();
+  const root = h('div', {class: 'wd wd-game wd-room apple-hig'});
+  const host = h('div', {class: 'wd-well room-host'}, h('section', {class: 'stage'}));
+  const status = h('footer', {class: 'wd-status'},
+    h('nav', {class: 'wd-seg floors'}, 'Repeated floor information'),
+    h('span', {class: 'room-note'}, 'The buttons along the top…'),
+    h('span', {class: 'room-quiet', hidden: true}, 'Quiet sign up'),
+    h('span', {class: 'room-guest', hidden: true}, 'Guest access'));
+  const nav = h('nav', {class:'apple-tab-bar'},
+    ...['Room', 'Chat', 'Guests', 'More'].map(label => h('button', {class:'apple-tab-item', onclick:()=>label === 'Chat' ? panels.open('room') : panels.close(false)}, label)));
+  root.append(host, status, nav);
+  document.body.append(root);
+  const {Room} = await import('../../web/room.js');
+  const room = new Room(host.querySelector('.stage'));
+  room.setBots([{id:'fixture-bot', name:'Demo bot',color:'#3ddc97',state:'active'}]);
+  room.setPeople([{id:'fixture-person', name:'Demo guest',color:'#ffb454'}]);
+  host.scrollLeft = (host.scrollWidth - host.clientWidth) / 2;
+  const panels = createPanels(root);
+  panels.add('room', 'Chat', {}, h('div', {class:'chat-log'}, 'A real message'), h('form', {class:'chat-form'}, h('input', {placeholder:'Message'})));
+  panels.open('room');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const panel = root.querySelector('.game-panel');
+  const grabber = panel.querySelector('.sheet-grabber');
+  const lines = [];
+  const check = (ok, text) => lines.push(`${ok ? 'PASS' : 'FAIL'}: ${text}`);
+  const visible = el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0;
+  check(grabber.getBoundingClientRect().height >= 44, 'M3: grabber has a 44px or larger touch target');
+  function pointer(type, y, target = grabber) {
+    target.dispatchEvent(new PointerEvent(type, {bubbles:true, pointerId:7, pointerType:'touch', clientY:y, button:0, isPrimary:true}));
+  }
+  pointer('pointerdown', 100); pointer('pointermove', 180); pointer('pointerup', 180);
+  check(panel.hidden && panels.current === null, 'M3: dragging down dismisses the sheet');
+  panels.open('room');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  pointer('pointerdown', 100); pointer('pointermove', 125); pointer('pointercancel', 125);
+  check(!panel.hidden && getComputedStyle(panel).transform === 'matrix(1, 0, 0, 1, 0, 0)', 'M3: interrupted short drag restores the open sheet');
+  pointer('pointerdown', 100); pointer('pointermove', 125); pointer('pointerup', 125);
+  grabber.dispatchEvent(new MouseEvent('click', {bubbles:true, detail:1}));
+  check(!panel.hidden, 'M3: a synthesized click after a short drag does not dismiss the sheet');
+  check(getComputedStyle(panel.querySelector('.game-panel-head')).backgroundImage === 'none', 'M3: phone header has no nested desktop title bar');
+  check(getComputedStyle(panel.querySelector('.game-panel-body')).boxShadow === 'none', 'M3: phone body has no nested bevel frame');
+  panels.close(false);
+  check(!visible(status), 'M4: desktop room readouts do not cover the phone scene');
+  status.querySelector('.room-quiet').hidden = false;
+  check(visible(status) && visible(status.querySelector('.room-quiet')), 'M4: quiet-room warning remains visible');
+  check(!visible(status.querySelector('.floors')), 'M4: warnings do not restore redundant floor readouts');
+  const stage = host.querySelector('.stage').getBoundingClientRect();
+  check(stage.height >= innerHeight - 65, 'M4: room scene fills available phone height');
+  check(Math.abs(stage.width / stage.height - 480 / 252) < .02, 'M4: pixel room keeps its original aspect ratio');
+  if (installSheetDrag) {
+    const buildHandle = h('button', {class:'sheet-grabber'});
+    const build = h('div', {class:'apple-build-sheet open'}, buildHandle);
+    root.append(build);
+    installSheetDrag(buildHandle, build, () => build.classList.remove('open'));
+    pointer('pointerdown',100,buildHandle); pointer('pointermove',180,buildHandle);
+    check(getComputedStyle(build).transform === 'matrix(1, 0, 0, 1, 0, 80)', 'M3: build sheet follows the drag despite its open transform');
+    pointer('pointerup',180,buildHandle);
+    check(!build.classList.contains('open'), 'M3: the same gesture dismisses building tools');
+    build.remove();
+  }
+  root.classList.remove('apple-hig');
+  check(!visible(grabber), 'M3: desktop has no phone drag handle');
+  check(visible(status.querySelector('.floors')), 'M4: desktop keeps floor navigation in its status bar');
+  root.classList.add('apple-hig');
+  status.querySelector('.room-quiet').hidden = true;
+  parent.postMessage(lines.join('\n'), location.origin);
+}
+</script>
