@@ -139,7 +139,19 @@ async fn start_early_in(period: i64, room: i64) {
 
 impl Server {
     async fn start() -> Self {
-        let db = Db::open(":memory:").unwrap();
+        Self::boot(Db::open(":memory:").unwrap()).await
+    }
+
+    /// A file database, so a test can rewrite a place's kind the way a later deploy would.
+    async fn start_file() -> (Self, String) {
+        let path = std::env::temp_dir()
+            .join(format!("commons-bots-{}-{}.db", std::process::id(), auth::new_id()))
+            .to_string_lossy()
+            .into_owned();
+        (Self::boot(Db::open(&path).unwrap()).await, path)
+    }
+
+    async fn boot(db: Db) -> Self {
         let key = auth::new_owner_key();
         db.create_person(GOD, "Justin", &auth::hash_secret(&key), &auth::new_feed_token(), now())
             .unwrap();
@@ -318,13 +330,18 @@ impl Server {
         )
     }
 
-    /// A public café on The Commons, after a house so the café has come (W61).
-    async fn public_cafe(&self, owner: &Who) -> ((i64, i64), String) {
+    /// A public place on The Commons, after a house so the place has come (W61).
+    async fn public_place(&self, owner: &Who, kind: &str) -> ((i64, i64), String) {
         self.place_at(owner, "house", now() - 8 * DAY);
-        let spot = self.place_at(owner, "cafe", now());
+        let spot = self.place_at(owner, kind, now());
         let floor = self.door(owner, spot).await;
         self.open(owner, &floor).await;
         (spot, floor)
+    }
+
+    /// A public café on The Commons, after a house so the café has come (W61).
+    async fn public_cafe(&self, owner: &Who) -> ((i64, i64), String) {
+        self.public_place(owner, "cafe").await
     }
 
     async fn town_square(&self) -> ((i64, i64), String) {
@@ -487,6 +504,164 @@ async fn other_place_and_keep_private(
         .ok();
     server.all_day(ann, fern, true).await;
     server.tool(fern, "go_to_room", json!({ "hangout_id": floor })).await;
+}
+
+async fn bot_on_porch(server: &Server, city_name: &str, owner_name: &str, bot_name: &str) {
+    let city = server
+        .post_json(
+            "",
+            "/api/cities",
+            json!({ "name": city_name, "your_name": owner_name, "create_code": CODE }),
+        )
+        .await
+        .ok();
+    let owner = Who { key: text(&city["owner_key"]), id: text(&city["person"]["id"]) };
+    let city_id = text(&city["city"]["id"]);
+    let built = server
+        .post_json(
+            &owner.key,
+            &format!("/api/cities/{city_id}/houses"),
+            json!({ "name": format!("{owner_name} House") }),
+        )
+        .await
+        .ok();
+    let (bot_id, token) = server.bot(&owner, &text(&built["living_room_id"]), bot_name).await;
+    let porch = text(&built["porch_id"]);
+    server
+        .put_json(&owner.key, &format!("/api/hangouts/{porch}/agents/{bot_id}"), json!({}))
+        .await
+        .ok();
+    server.all_day(&owner, &token, true).await;
+    server.tool(&token, "go_to_room", json!({ "hangout_id": porch })).await;
+}
+
+async fn bot_on_a_trip(server: &Server, bot_name: &str) {
+    let made = server
+        .post_json(
+            "",
+            "/api/cities",
+            json!({ "name": "Ash", "your_name": "Gil", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    let gil = Who { key: text(&made["owner_key"]), id: text(&made["person"]["id"]) };
+    let city = text(&made["city"]["id"]);
+    let code = text(&made["invite_url"]).rsplit('/').next().unwrap().to_string();
+    let homes = format!("/api/cities/{city}/houses");
+    let own = server.post_json(&gil.key, &homes, json!({ "name": "Gil House" })).await.ok();
+    let joined = server
+        .post_json("", &format!("/api/city-invites/{code}/join"), json!({ "your_name": "Jo" }))
+        .await
+        .ok();
+    let jo = Who { key: text(&joined["owner_key"]), id: text(&joined["person"]["id"]) };
+    let host = server.post_json(&jo.key, &homes, json!({ "name": "Jo House" })).await.ok();
+    let (bot_id, token) = server.bot(&gil, &text(&own["living_room_id"]), bot_name).await;
+    server.all_day(&gil, &token, true).await;
+    let trip = text(
+        &server
+            .post_json(
+                &gil.key,
+                "/api/trips",
+                json!({ "agent_id": bot_id, "house_id": text(&host["house"]["id"]), "kind": "call" }),
+            )
+            .await
+            .ok()["id"],
+    );
+    server
+        .post_json(&jo.key, &format!("/api/trips/{trip}/answer"), json!({ "response": "yes" }))
+        .await
+        .ok();
+    assert_eq!(
+        server.get_json(&jo.key, &format!("/api/trips/{trip}")).await.ok()["status"],
+        "here",
+        "the visitor should be on the trip"
+    );
+}
+
+/// A later kind the current binary does not know: `Kind::parse` drops it, so the tile is missing
+/// and the allow-list never sees it. Newer places have no CHECK on `kind`; buildings do.
+fn disguise_place(path: &str, (x, y): (i64, i64)) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let n = conn
+        .execute(
+            "UPDATE world_more_places SET kind = 'zzz-new' WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+            rusqlite::params![COMMONS, x, y],
+        )
+        .unwrap();
+    assert_eq!(n, 1, "the library at ({x},{y}) should be a newer place");
+}
+
+fn assert_not_listed(body: &Value, hidden: &[&str]) {
+    for name in hidden {
+        assert!(pin(body, name).is_none(), "{name} in {body}");
+    }
+}
+
+// W100
+#[tokio::test]
+async fn hidden_location_kinds_never_appear() {
+    let (server, db_path) = Server::start_file().await;
+
+    let (bo_home, bo) = server.someone("Bo").await;
+    let (_, rover) = server.bot(&bo, &bo_home, "Rover").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (cafe, cafe_floor) = server.public_cafe(&cy).await;
+    server.all_day(&bo, &rover, true).await;
+    server.tool(&rover, "go_out", json!({ "floor_id": cafe_floor })).await;
+
+    // Private floor: a café Fern belongs to, never opened.
+    let (ann_home, ann) = server.someone("Ann").await;
+    let (fern_id, fern) = server.bot(&ann, &ann_home, "Fern").await;
+    let (_, other) = server.someone("Other").await;
+    other_place_and_keep_private(&server, &other, &ann, &fern_id, &fern).await;
+
+    // Town Square is public and L17 shows a bot there; this list does not.
+    let (scout_home, scout_owner) = server.someone("Pat").await;
+    let (_, scout) = server.bot(&scout_owner, &scout_home, "Scout").await;
+    let (_, square) = server.town_square().await;
+    server.all_day(&scout_owner, &scout, true).await;
+    server.tool(&scout, "go_out", json!({ "floor_id": square })).await;
+
+    // Porch of a private-city house.
+    bot_on_porch(&server, "Elm", "Fay", "Ivy").await;
+
+    // Private room: the hangout someone() made, never gone out.
+    let (oak_room, lea) = server.someone("Lea").await;
+    let (_, oak) = server.bot(&lea, &oak_room, "Oak").await;
+    server.all_day(&lea, &oak, true).await;
+    server.tool(&oak, "go_to_room", json!({ "hangout_id": oak_room })).await;
+
+    // Trip: on the host's porch after both sides said yes.
+    bot_on_a_trip(&server, "Visitor").await;
+
+    // A known public library, then rewritten as a kind this binary does not know.
+    let (newt_home, ned) = server.someone("Ned").await;
+    let (_, newt) = server.bot(&ned, &newt_home, "Newt").await;
+    let (_, kit) = server.someone("Kit").await;
+    let (library, library_floor) = server.public_place(&kit, "library").await;
+    server.all_day(&ned, &newt, true).await;
+    server.tool(&newt, "go_out", json!({ "floor_id": library_floor })).await;
+
+    let hidden = ["Fern", "Scout", "Ivy", "Oak", "Visitor"];
+    let before = server.bots().await;
+    assert_shape(&before);
+    let mut shown = names(&before);
+    shown.sort();
+    assert_eq!(shown, vec!["Newt".to_string(), "Rover".to_string()], "{before}");
+    assert_eq!(pin(&before, "Rover"), Some(cafe), "{before}");
+    assert_eq!(pin(&before, "Newt"), Some(library), "{before}");
+    assert_not_listed(&before, &hidden);
+
+    disguise_place(&db_path, library);
+    server.state.worlds.expire_commons_bots();
+
+    let after = server.bots().await;
+    assert_shape(&after);
+    assert_eq!(names(&after), vec!["Rover".to_string()], "{after}");
+    assert_eq!(pin(&after, "Rover"), Some(cafe), "{after}");
+    assert_not_listed(&after, &hidden);
+    assert!(pin(&after, "Newt").is_none(), "unknown kind in {after}");
 }
 
 // W100
