@@ -756,8 +756,7 @@ fn it_stays_open_until_someone_closes_it_and_stays_closed_after() {
     let open = part(&panels, "    open(name) {", "    },");
     assert!(!open.contains("onClose"));
     // A question is looked at first, so the tutorial sees it there.
-    let questions =
-        app.find("if (snapshot.owner_questions.length) panels.open('questions');").unwrap();
+    let questions = app.find("if (snapshot.owner_questions.length) panels.open('needs');").unwrap();
     let arrive =
         app.find("setTimeout(guide.arrive);\n  // The window isn't on the page yet").unwrap();
     assert!(questions < arrive);

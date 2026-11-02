@@ -441,6 +441,13 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
             continue;
         }
         if crate::doorbell::mentions(&message.body, &person.name) {
+            // N12: kept for Needs you until they open the room.
+            state.db.add_person_mention(
+                &person.id,
+                &message.hangout_id,
+                message.id,
+                message.created_at,
+            )?;
             let sender = if let Some(agent_id) = &message.agent_id {
                 state
                     .db
@@ -1195,7 +1202,7 @@ pub fn answer_check_in(
         _ => return Err(ApiError::conflict("that check-in was already answered")),
     }
     note_agent_write(state, caller)?;
-    state.db.answer_check_in(check_in_id, response, &caller.name, caller.is_agent(), &note)?;
+    state.db.answer_check_in(check_in_id, response, &caller.name, caller.is_agent(), &note, now)?;
     let word = if response == "go" { "go" } else { "hold" };
     let text = format!("{} said {word} to {}: {}", caller.name, check_in.asker, check_in.about);
     announce_in_house_only(state, &check_in.hangout_id, &text)?;
@@ -1798,6 +1805,10 @@ pub struct Snapshot {
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
     let mut hangout = require_room(state, caller, hangout_id)?;
+    // N12: a person who opens the room has seen what mentioned them there.
+    if !caller.is_agent() {
+        state.db.clear_person_mentions_in(&caller.person_id, hangout_id)?;
+    }
     let now = now();
     let guest = state.guest_visit(caller, hangout_id)?;
     // Who gets into a room is a human decision, so bots never see the invite. A house's rooms
