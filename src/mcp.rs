@@ -1963,13 +1963,18 @@ pub async fn handle(
         return StatusCode::ACCEPTED.into_response();
     };
     let params = request.get("params").cloned().unwrap_or(Value::Null);
-    if is_oauth && matches!(method, "events/subscribe" | "events/unsubscribe") {
-        return Json(rpc_error(
-            id,
-            -32026,
-            "OAuth connections support polling and streaming, not durable webhook subscriptions",
-        ))
-        .into_response();
+    if is_oauth {
+        let result = match method {
+            "events/list" => Some(events::oauth::catalog(&state, &caller)),
+            "events/subscribe" => Some(events::oauth::subscribe(&state, &caller, &params).await),
+            "events/unsubscribe" => {
+                Some(events::oauth::unsubscribe(&state, &caller, &params).await)
+            }
+            _ => None,
+        };
+        if let Some(result) = result {
+            return Json(events::finish(id, result)).into_response();
+        }
     }
     // These wait, so they can't go through the synchronous dispatch.
     if method == "events/stream" {
@@ -2017,19 +2022,7 @@ pub async fn handle(
         };
         return Json(rpc_result(id, result)).into_response();
     }
-    let mut result = dispatch(&state, &headers, &caller, id, method, &params);
-    if is_oauth && method == "events/list" {
-        if let Some(events) = result["result"]["events"].as_array_mut() {
-            for event in events {
-                event["delivery"] = json!(["poll", "push"]);
-            }
-        }
-    }
-    if is_oauth && method == "initialize" {
-        if let Some(instructions) = result["result"]["instructions"].as_str() {
-            result["result"]["instructions"] = json!(format!("{instructions} This OAuth connection supports event polling and streams only; durable webhook subscriptions are unavailable."));
-        }
-    }
+    let result = dispatch(&state, &headers, &caller, id, method, &params);
     Json(result).into_response()
 }
 

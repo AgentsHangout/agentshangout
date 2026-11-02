@@ -2,7 +2,7 @@
 use super::*;
 use crate::oauth::{ClientRecord, Grant, TokenPair};
 
-fn grant(row: &Row<'_>) -> rusqlite::Result<Grant> {
+pub(super) fn grant(row: &Row<'_>) -> rusqlite::Result<Grant> {
     Ok(Grant {
         id: row.get(0)?,
         owner_id: row.get(1)?,
@@ -13,7 +13,7 @@ fn grant(row: &Row<'_>) -> rusqlite::Result<Grant> {
         expires_at: row.get(6)?,
     })
 }
-const LIVE_GRANT: &str = "SELECT g.id,g.owner_id,g.agent_id,g.client_id,g.resource,g.scope,g.expires_at FROM mcp_oauth_grants g JOIN agents a ON a.id=g.agent_id AND a.owner_id=g.owner_id WHERE g.id=?1 AND g.revoked=0 AND g.expires_at>?2 AND NOT EXISTS(SELECT 1 FROM bot_homes h WHERE h.agent_id=a.id AND h.is_house=1)";
+pub(super) const LIVE_GRANT: &str = "SELECT g.id,g.owner_id,g.agent_id,g.client_id,g.resource,g.scope,g.expires_at FROM mcp_oauth_grants g JOIN agents a ON a.id=g.agent_id AND a.owner_id=g.owner_id WHERE g.id=?1 AND g.revoked=0 AND g.expires_at>?2 AND NOT EXISTS(SELECT 1 FROM bot_homes h WHERE h.agent_id=a.id AND h.is_house=1)";
 fn cleanup(conn: &Connection, at: i64) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM mcp_oauth_requests WHERE expires_at<=?", [at])?;
     conn.execute("DELETE FROM mcp_oauth_grants WHERE expires_at<=?", [at])?;

@@ -96,6 +96,7 @@ pub struct Shared {
     pub hub: broadcast::Sender<HubEvent>,
     /// Tells a bot's open `events/stream`, or a waiting `events_since`, that its log grew.
     pub bot_events: broadcast::Sender<events::Ping>,
+    pub(crate) oauth_event_delivery: tokio::sync::Mutex<()>,
     /// Passkeys, built from `config.public_url`. `None` when that address is an IP number, which
     /// a passkey can't belong to, so the passkey routes refuse.
     pub webauthn: Option<webauthn_rs::Webauthn>,
@@ -144,6 +145,7 @@ impl AppState {
             config,
             hub,
             bot_events,
+            oauth_event_delivery: tokio::sync::Mutex::new(()),
             webauthn,
             ceremonies: passkey::Ceremonies::default(),
             discord: apps.discord,

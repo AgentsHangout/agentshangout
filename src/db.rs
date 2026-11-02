@@ -24,6 +24,7 @@ pub const LISTENING_SECS: i64 = 60;
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod oauth;
+pub(crate) mod oauth_events;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
@@ -1046,6 +1047,27 @@ CREATE INDEX IF NOT EXISTS mcp_oauth_grants_client ON mcp_oauth_grants(client_id
 CREATE INDEX IF NOT EXISTS mcp_oauth_requests_owner ON mcp_oauth_requests(owner_id);
 CREATE INDEX IF NOT EXISTS mcp_oauth_requests_expiry ON mcp_oauth_requests(expires_at);
 CREATE INDEX IF NOT EXISTS mcp_oauth_grants_expiry ON mcp_oauth_grants(expires_at);
+
+-- E32-E34: grant-owned webhook state is independent of legacy credentials.
+CREATE TABLE IF NOT EXISTS oauth_event_subscriptions (
+ id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_oauth_grants(id) ON DELETE CASCADE,
+ arguments TEXT NOT NULL, url TEXT NOT NULL, secret TEXT NOT NULL,
+ previous_secret TEXT, previous_until INTEGER, expires_at INTEGER NOT NULL,
+ verified_at INTEGER NOT NULL, cursor INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+ attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS oauth_event_subscriptions_grant ON oauth_event_subscriptions(grant_id);
+CREATE TABLE IF NOT EXISTS oauth_event_retention (
+ agent_id TEXT PRIMARY KEY, discarded_through INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS oauth_event_retention_delete BEFORE DELETE ON bot_events BEGIN
+ INSERT INTO oauth_event_retention(agent_id,discarded_through)
+ SELECT OLD.agent_id,OLD.id WHERE EXISTS(SELECT 1 FROM agents WHERE id=OLD.agent_id)
+ ON CONFLICT(agent_id) DO UPDATE SET discarded_through=MAX(discarded_through,OLD.id);
+END;
+CREATE TRIGGER IF NOT EXISTS oauth_event_retention_agent_delete AFTER DELETE ON agents BEGIN
+ DELETE FROM oauth_event_retention WHERE agent_id=OLD.id;
+END;
 
 "#;
 

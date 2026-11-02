@@ -16,6 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub(crate) const SCOPE: &str = "mcp:bot";
+pub(crate) const EVENTS_SCOPE: &str = "mcp:events";
+fn valid_scope(scope: &str) -> bool {
+    matches!(scope, "mcp:bot" | "mcp:bot mcp:events" | "mcp:events mcp:bot")
+}
+pub(crate) fn webhook_scope(scope: &str) -> bool {
+    valid_scope(scope) && scope.split(' ').any(|s| s == EVENTS_SCOPE)
+}
 pub(crate) struct ClientRecord {
     pub name: String,
     pub redirects: String,
@@ -153,11 +160,11 @@ fn same_origin(s: &AppState, h: &HeaderMap) -> bool {
     h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(s.config.public_url.as_str())
 }
 async fn resource_metadata(State(s): State<AppState>) -> Response {
-    no_store(Json(json!({"resource":resource(&s),"authorization_servers":[s.config.public_url],"scopes_supported":[SCOPE],"bearer_methods_supported":["header"],"resource_name":"Agents Hangout bot MCP"})).into_response())
+    no_store(Json(json!({"resource":resource(&s),"authorization_servers":[s.config.public_url],"scopes_supported":[SCOPE,EVENTS_SCOPE],"bearer_methods_supported":["header"],"resource_name":"Agents Hangout bot MCP"})).into_response())
 }
 async fn server_metadata(State(s): State<AppState>) -> Response {
     let b = &s.config.public_url;
-    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE],"authorization_response_iss_parameter_supported":true})).into_response())
+    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE,EVENTS_SCOPE],"authorization_response_iss_parameter_supported":true})).into_response())
 }
 fn valid_redirect(raw: &str) -> bool {
     if raw.len() > 2048 {
@@ -205,7 +212,7 @@ fn valid_request(s: &AppState, r: &Authorization) -> ApiResult<Option<ClientReco
         || r.code_challenge.len() != 43
         || !r.code_challenge.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         || r.resource != resource(s)
-        || r.scope != SCOPE
+        || !valid_scope(&r.scope)
         || r.state.len() > 1024
     {
         return Ok(None);
@@ -264,7 +271,12 @@ async fn authorize(
     }
     let callback =
         Url::parse(&r.redirect_uri).map_err(|_| ApiError::bad_request("invalid redirect"))?;
-    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. Durable webhook subscriptions are excluded. Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label><button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
+    let event_consent = if webhook_scope(&r.scope) {
+        "This includes mention webhook subscriptions that can wake a connected chat."
+    } else {
+        "Webhook subscriptions are excluded."
+    };
+    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label><button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
     // The form's only cross-origin destination is this already validated registered callback.
     let policy=format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'",callback.origin().ascii_serialization());
     response.headers_mut().insert(
@@ -345,7 +357,7 @@ async fn token(
     }
     if h.contains_key(header::AUTHORIZATION)
         || r.resource != resource(&s)
-        || r.scope.as_deref().is_some_and(|scope| scope != SCOPE)
+        || r.scope.as_deref().is_some_and(|scope| !valid_scope(scope))
         || s.db.oauth_client(&r.client_id)?.is_none()
     {
         return Ok(error("invalid_request"));
