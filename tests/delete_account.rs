@@ -1890,3 +1890,151 @@ async fn a_turn_out_that_fails_leaves_nothing_half_done() {
     let back = server.post("", &format!("/api/invites/{code}/join"), body).await;
     assert_eq!(back.status, StatusCode::NOT_FOUND, "{}", back.body);
 }
+
+// ----------------------------------------------------------------------------------------------
+// Deleting one bot
+// ----------------------------------------------------------------------------------------------
+
+fn delete_bot_path(bot: &str) -> String {
+    format!("/api/agents/{bot}/delete")
+}
+
+// A77
+#[tokio::test]
+async fn only_its_owner_deletes_a_bot_and_only_with_its_name() {
+    let server = Server::start().await;
+    let (room, zeph, code) = server.room("Crew", ZEPH).await;
+    let ann = server.join(&code, "Ann").await;
+    let (bot, token) = server.bot(&zeph, &room, QUILL).await;
+    let path = delete_bot_path(&bot);
+
+    assert_eq!(
+        server.post(&token, &path, json!({ "name": QUILL })).await.status,
+        StatusCode::FORBIDDEN,
+        "a bot deleted itself"
+    );
+    assert_eq!(
+        server.post(&ann.key, &path, json!({ "name": QUILL })).await.status,
+        StatusCode::NOT_FOUND,
+        "someone else deleted it"
+    );
+    for wrong in ["", "quillfeather", "Quill"] {
+        let reply = server.post(&zeph.key, &path, json!({ "name": wrong })).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{wrong}: {}", reply.body);
+    }
+    // Nothing changed: it still talks.
+    server.say(&token, &room, "still here").await;
+    assert_eq!(
+        server.post(&zeph.key, &path, json!({ "name": QUILL })).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        server.post(&zeph.key, &path, json!({ "name": QUILL })).await.status,
+        StatusCode::NOT_FOUND,
+        "a bot that's gone"
+    );
+
+    // A house bot is its house's.
+    let city = server.city("Elm", "Bo").await;
+    let home = server.house(&city.keeper, &city.id, "Bo House").await;
+    let made = server
+        .post(
+            &city.keeper.key,
+            &format!("/api/houses/{}/house-bot", home.id),
+            json!({ "name": "Butler" }),
+        )
+        .await
+        .ok();
+    let butler = delete_bot_path(&text(&made["agent"]["id"]));
+    let refused = server.post(&city.keeper.key, &butler, json!({ "name": "Butler" })).await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+}
+
+// A78
+#[tokio::test]
+async fn a_deleted_bot_stops_at_once_and_its_rooms_are_told() {
+    let server = Server::start().await;
+    let (room, zeph, code) = server.room("Crew", ZEPH).await;
+    let ann = server.join(&code, "Ann").await;
+    let (other, _) = server.room_of(&zeph, "Second").await;
+    let (bot, token) = server.bot(&zeph, &room, QUILL).await;
+    server.put(&zeph.key, &format!("/api/hangouts/{other}/agents/{bot}"), json!({})).await.ok();
+    let url = format!("{}/api/hangouts/{room}/stream", server.base);
+    let stream = server.client.get(url).bearer_auth(&token).send().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    server.post(&zeph.key, &delete_bot_path(&bot), json!({ "name": QUILL })).await.ok();
+
+    assert!(ends(stream).await, "its stream should end");
+    assert_eq!(server.get(&token, "/api/inbox").await.status, StatusCode::UNAUTHORIZED);
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "inbox", "arguments": {} } });
+    assert_ne!(server.post(&token, "/mcp", call).await.status, StatusCode::OK);
+    let line = format!("{ZEPH} deleted {QUILL}.");
+    for room in [&room, &other] {
+        let said = server.messages(&zeph.key, room).await;
+        assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{room}: {said:?}");
+    }
+    let snapshot = server.get(&ann.key, &format!("/api/hangouts/{room}")).await.ok();
+    assert!(
+        !snapshot["agents"].as_array().unwrap().iter().any(|a| a["id"] == json!(bot)),
+        "it's still in the room: {snapshot}"
+    );
+}
+
+// A79
+#[tokio::test]
+async fn what_was_only_the_bots_goes_with_it() {
+    let server = Server::start().await;
+    let (room, zeph, _) = server.room("Crew", ZEPH).await;
+    let (bot, token) = server.bot(&zeph, &room, QUILL).await;
+    let tool = |name: &str, arguments: Value| json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    server
+        .post(&token, "/mcp", tool("waiting_on_owner", json!({ "about": "Permission" })))
+        .await
+        .ok();
+    let question = json!({ "hangout_id": room, "question": "Tacos?" });
+    server.post(&token, "/mcp", tool("ask_owner", question)).await.ok();
+    let needs = server.get(&zeph.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["count"], 2, "{needs}");
+
+    server.post(&zeph.key, &delete_bot_path(&bot), json!({ "name": QUILL })).await.ok();
+
+    let needs = server.get(&zeph.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["count"], 0, "it left something waiting: {needs}");
+    let bots = server.get(&zeph.key, "/api/me/bots").await.ok();
+    assert_eq!(bots["bots"], json!([]), "{bots}");
+    let me = server.get(&zeph.key, "/api/me").await.ok();
+    assert!(!me.to_string().contains(QUILL), "{me}");
+    assert!(server.state.db.agent(&bot, now()).unwrap().is_none());
+}
+
+// A80
+#[tokio::test]
+async fn what_a_deleted_bot_said_stays_under_its_name() {
+    let server = Server::start().await;
+    let (room, zeph, code) = server.room("Crew", ZEPH).await;
+    let ann = server.join(&code, "Ann").await;
+    let (bot, token) = server.bot(&zeph, &room, QUILL).await;
+    server.say(&token, &room, "kept-words-4417").await;
+    server.post(&zeph.key, &delete_bot_path(&bot), json!({ "name": QUILL })).await.ok();
+    let reply = server.get(&ann.key, &format!("/api/hangouts/{room}/messages")).await.ok();
+    let said = reply["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["body"] == "kept-words-4417")
+        .unwrap_or_else(|| panic!("its words went: {reply}"));
+    assert_eq!(said["speaker"], QUILL);
+}
+
+// A81: an apprentice's parent that's gone is named as one (K24), the same whichever way it went.
+#[test]
+fn an_apprentices_deleted_parent_shows_as_gone() {
+    let schema = include_str!("../src/db.rs");
+    assert!(schema.contains("parent_a    TEXT REFERENCES agents(id) ON DELETE SET NULL"));
+    assert!(schema.contains("parent_b    TEXT REFERENCES agents(id) ON DELETE SET NULL"));
+    let bonds = include_str!("../src/bonds.rs");
+    assert!(bonds.contains("a bot that's gone"));
+    // Deleting one bot is deleting its row, as deleting its owner's account is.
+    assert!(schema.contains("tx.execute(\"DELETE FROM agents WHERE id = ?\", [agent_id])?;"));
+}

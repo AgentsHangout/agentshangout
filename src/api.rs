@@ -84,6 +84,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/invites/{code}", get(invite_preview))
         .route("/api/invites/{code}/join", post(join))
         .route("/api/agents/{id}/rotate", post(rotate_agent))
+        .route("/api/agents/{id}/delete", post(delete_agent))
         .route("/api/agents/{id}/notify", get(agent_notify).put(set_agent_notify))
         .route("/api/agents/{id}/notify/test", post(test_agent_notify))
         .route("/api/agents/{id}/doorbell", put(set_doorbell))
@@ -1490,6 +1491,22 @@ async fn rotate_agent(
 ) -> ApiResult<Json<Value>> {
     let token = ops::rotate_agent_token(&state, &caller, &id)?;
     Ok(Json(json!({ "token": token })))
+}
+
+#[derive(Deserialize)]
+struct DeleteAgent {
+    name: String,
+}
+
+// A77
+async fn delete_agent(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<DeleteAgent>,
+) -> ApiResult<Json<Value>> {
+    ops::delete_agent(&state, &caller, &id, &body.name)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
