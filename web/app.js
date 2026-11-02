@@ -2439,6 +2439,7 @@ async function roomView(id) {
 
   const stage = h('section', { class: 'stage', 'aria-label': 'The room' });
   frame.host.append(stage);
+  const stopRoomCamera = installRoomCamera(frame.host, stage);
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
   const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
@@ -4010,6 +4011,7 @@ async function roomView(id) {
     clearInterval(pollTimer);
     clearTimeout(reloadTimer);
     boardWatch.disconnect();
+    stopRoomCamera();
     room.destroy();
     builder.leave();
     document.removeEventListener('keydown', onKey, true);
@@ -5972,29 +5974,118 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
   return { updatePlacement, openBuildSheet, closeBuildSheet };
 }
 
+// A room starts with every edge in view. Pinch to inspect it, then drag the enlarged scene.
+// The camera is a transform on the existing room, so hit tests and overlay positions keep using
+// the same bounding rectangle. No second renderer, scroll gutter, or floating zoom controls.
+function installRoomCamera(host, stage) {
+  const pointers = new Map();
+  let zoom = 1;
+  let x = 0;
+  let y = 0;
+  let pinch = null;
+  let pan = null;
+  let suppressClick = false;
+  const phone = () => Boolean(host.closest('.apple-hig'));
+  const paint = () => {
+    const maxX = Math.max(0, (stage.offsetWidth * zoom - host.clientWidth) / 2);
+    const maxY = Math.max(0, (stage.offsetHeight * zoom - host.clientHeight) / 2);
+    x = Math.max(-maxX, Math.min(maxX, x));
+    y = Math.max(-maxY, Math.min(maxY, y));
+    if (zoom === 1) { x = 0; y = 0; }
+    stage.style.transform = zoom === 1 ? '' : `translate(${x}px, ${y}px) scale(${zoom})`;
+  };
+  const startPinch = () => {
+    const [a, b] = [...pointers.values()];
+    const rect = host.getBoundingClientRect();
+    pinch = {
+      distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)), zoom, x, y,
+      midX: (a.x + b.x) / 2 - rect.left - rect.width / 2,
+      midY: (a.y + b.y) / 2 - rect.top - rect.height / 2,
+    };
+    pan = null;
+    suppressClick = true;
+  };
+  const capture = event => {
+    if (event.isTrusted && !host.hasPointerCapture(event.pointerId)) host.setPointerCapture(event.pointerId);
+  };
+  const down = event => {
+    if (!phone() || stage.classList.contains('building') || event.button !== 0 || pointers.size >= 2) return;
+    pointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
+    if (pointers.size === 2) {
+      startPinch();
+      capture(event);
+      event.preventDefault();
+    } else {
+      suppressClick = false;
+      pan = {startX:event.clientX, startY:event.clientY, x, y};
+    }
+  };
+  const move = event => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, {x:event.clientX, y:event.clientY});
+    if (pinch && pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const rect = host.getBoundingClientRect();
+      zoom = Math.max(1, Math.min(4, pinch.zoom * Math.hypot(b.x - a.x, b.y - a.y) / pinch.distance));
+      const midX = (a.x + b.x) / 2 - rect.left - rect.width / 2;
+      const midY = (a.y + b.y) / 2 - rect.top - rect.height / 2;
+      x = midX - (pinch.midX - pinch.x) * zoom / pinch.zoom;
+      y = midY - (pinch.midY - pinch.y) * zoom / pinch.zoom;
+    } else if (pan && zoom > 1) {
+      const dx = event.clientX - pan.startX;
+      const dy = event.clientY - pan.startY;
+      if (Math.hypot(dx, dy) <= 5 && !suppressClick) return;
+      suppressClick = true;
+      x = pan.x + dx;
+      y = pan.y + dy;
+    } else return;
+    capture(event);
+    paint();
+    event.preventDefault();
+  };
+  const up = event => {
+    if (!pointers.delete(event.pointerId)) return;
+    pinch = null;
+    const remaining = [...pointers.values()][0];
+    pan = remaining ? {startX:remaining.x, startY:remaining.y, x, y} : null;
+    if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
+  };
+  const click = event => {
+    if (!suppressClick || event.detail === 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const reset = event => {
+    if (!phone() || stage.classList.contains('building') || event.target.closest('button, a, input')) return;
+    zoom = 1; x = 0; y = 0;
+    paint();
+    event.preventDefault();
+  };
+  host.addEventListener('pointerdown', down);
+  window.addEventListener('pointermove', move, {passive:false});
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+  host.addEventListener('click', click, true);
+  host.addEventListener('dblclick', reset);
+  const resize = new ResizeObserver(() => {
+    if (!phone()) { zoom = 1; x = 0; y = 0; }
+    pointers.clear(); pinch = null; pan = null;
+    paint();
+  });
+  resize.observe(host);
+  return () => {
+    resize.disconnect();
+    host.removeEventListener('pointerdown', down);
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    host.removeEventListener('click', click, true);
+    host.removeEventListener('dblclick', reset);
+  };
+}
+
 function installAppleHigRoom({ frame, panels }) {
   watchPhoneChrome(frame.root);
-
-  // Keep the room's pixel proportions while using the phone's height. Portrait is a camera
-  // window onto the room: a horizontal swipe reaches either side, rather than stretching art.
-  // Preserve the camera fraction through rotation; a newly opened room starts in the middle.
-  let camera = 0.5;
-  let roomWidth = 0;
-  const host = frame.host;
-  host.addEventListener('scroll', () => {
-    const range = host.scrollWidth - host.clientWidth;
-    if (range > 0) camera = host.scrollLeft / range;
-  }, { passive: true });
-  const resizeRoom = new ResizeObserver(() => {
-    if (!frame.root.isConnected) { resizeRoom.disconnect(); return; }
-    if (!frame.root.classList.contains('apple-hig')) return;
-    const range = host.scrollWidth - host.clientWidth;
-    if (range !== roomWidth) {
-      roomWidth = range;
-      host.scrollLeft = Math.max(0, range) * camera;
-    }
-  });
-  resizeRoom.observe(host);
 
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [

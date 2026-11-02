@@ -2161,30 +2161,29 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   touch-action: none !important;
 }
 
-/* The phone room uses a full-height camera, not a framed postcard on a brown desk.
-   Keep the original pixel proportions and let a horizontal swipe reveal either side. */
+/* Show the whole room first, keeping its pixel proportions. The camera fills the well;
+   unused space is a quiet backdrop, and a deliberate pinch can inspect the scene. */
 .phone-room-floors { display: none; }
 .apple-hig.wd-room .room-host {
-  display: block !important;
+  display: grid !important;
+  place-items: center !important;
   inset: 0 0 calc(52px + env(safe-area-inset-bottom)) !important;
   height: auto !important;
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
-  overscroll-behavior-x: contain;
-  touch-action: pan-x;
-  scrollbar-width: none;
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+  touch-action: none;
+  background: #202638;
 }
-.apple-hig.wd-room .room-host::-webkit-scrollbar { display: none; }
 .apple-hig.wd-room .stage {
-  width: max(100cqw, calc(100cqh * 480 / 252));
+  width: min(100cqw, calc(100cqh * 480 / 252));
   max-width: none;
-  min-height: 100cqh;
+  min-height: 0;
   margin: 0;
   border: 0;
   box-shadow: none;
   animation: none;
 }
-.apple-hig.wd-room .room-host canvas { touch-action: pan-x !important; }
+.apple-hig.wd-room .room-host canvas { touch-action: none !important; }
 .apple-hig.wd-room.has-dock .room-host,
 .apple-hig.wd-room .stage.building canvas { touch-action: none !important; }
 .apple-hig .phone-room-floors:not([hidden]) {
@@ -2703,7 +2702,7 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
     width: auto !important;
   }
   .apple-hig.wd-room .room-host {
-    inset: 0 0 0 calc(76px + env(safe-area-inset-left)) !important;
+    inset: 0 !important;
   }
   .apple-hig .wd-title {
     left: calc(50% + 38px) !important;
