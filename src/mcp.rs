@@ -1968,7 +1968,7 @@ pub async fn handle(
         Err(error) => {
             return (
                 StatusCode::UNAUTHORIZED,
-                [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:bot\"", state.config.public_url))],
+                [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:bot mcp:events\"", state.config.public_url))],
                 Json(json!({ "error": error.message })),
             )
                 .into_response();

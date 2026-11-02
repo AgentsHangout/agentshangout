@@ -70,6 +70,9 @@ struct Consent {
     #[serde(default)]
     agent_id: String,
     decision: String,
+    /// "allow" when the owner left mention webhooks ticked. Absent means tools only.
+    #[serde(default)]
+    events: String,
 }
 #[derive(Deserialize)]
 struct TokenRequest {
@@ -271,12 +274,16 @@ async fn authorize(
     }
     let callback =
         Url::parse(&r.redirect_uri).map_err(|_| ApiError::bad_request("invalid redirect"))?;
-    let event_consent = if webhook_scope(&r.scope) {
-        "This includes mention webhook subscriptions that can wake a connected chat."
+    // The owner can still leave webhooks out of a connection that asked for them.
+    let (event_consent, event_choice) = if webhook_scope(&r.scope) {
+        (
+            "This client also asks for mention webhook subscriptions that can wake a connected chat.",
+            "<label><input type=\"checkbox\" name=\"events\" value=\"allow\" checked> Allow mention webhooks, so a mention can wake the connected chat</label>",
+        )
     } else {
-        "Webhook subscriptions are excluded."
+        ("Webhook subscriptions are excluded.", "")
     };
-    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label><button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
+    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
     // The form's only cross-origin destination is this already validated registered callback.
     let policy=format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'",callback.origin().ascii_serialization());
     response.headers_mut().insert(
@@ -332,7 +339,12 @@ async fn consent(
         agent_id: c.agent_id,
         client_id: r.client_id.clone(),
         resource: r.resource.clone(),
-        scope: r.scope.clone(),
+        // Webhooks only when the client asked for them and the owner kept them ticked.
+        scope: if webhook_scope(&r.scope) && c.events == "allow" {
+            r.scope.clone()
+        } else {
+            SCOPE.to_string()
+        },
         expires_at: now() + 30 * 86400,
     };
     let code = format!("ah_code_{}", auth::new_feed_token());

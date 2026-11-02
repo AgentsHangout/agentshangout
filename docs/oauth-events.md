@@ -1,10 +1,19 @@
 # ChatGPT and dot mention subscriptions
 
-Configure the OAuth plugin to request `mcp:bot mcp:events` from the hosted `/mcp` endpoint.
-Connect, sign in, choose one bot and consent to the selected bot's tools and mention
-webhooks. Existing `mcp:bot` grants retain tools and polling/streams; reconnect with explicit
-`mcp:events` consent to enable webhooks. Token refresh cannot add consent. Each connection owns
-its subscriptions independently. Disconnecting under
+A client that connects with only the URL gets a 401 from `/mcp` whose `WWW-Authenticate`
+challenge names `scope="mcp:bot mcp:events"`, so a client that requests the challenge's scope asks
+for both. A packaged plugin can set the same two scopes itself. Connect, sign in and choose one
+bot. When the client asked for `mcp:events`, the consent page says so and shows an "Allow mention
+webhooks" box, ticked. Leaving it ticked grants tools and mention webhooks; unticking it grants
+tools only (`mcp:bot`). A client that asks for `mcp:bot` alone sees "Webhook subscriptions are
+excluded" and no box.
+
+Existing `mcp:bot` grants keep tools and polling/streams, and token refresh cannot add consent.
+To upgrade one, disconnect it under `/oauth/connections` and connect once more: the new
+connection follows the current challenge, asks for both scopes, and shows the box. Reconnecting
+helps only because the requested scope has changed. A bot-only connection that calls
+`events/subscribe` gets error -32024 with `data.required_scope` set to `mcp:bot mcp:events`.
+Each connection owns its subscriptions independently. Disconnecting under
 `/oauth/connections` revokes the grant and stops deliveries, including retries and replay.
 
 Use a Work chat on ChatGPT web, Work with Cloud selected in the desktop app, or a dot.

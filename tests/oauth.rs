@@ -71,6 +71,7 @@ async fn oauth_webhooks_require_explicit_event_scope_and_cannot_be_added_by_refr
     let client = s.register().await;
     let page = s.authorize_scope(&session, &client, "mcp:bot").await.text().await.unwrap();
     assert!(page.contains("Webhook subscriptions are excluded"));
+    assert!(!page.contains("name=\"events\""), "nothing to tick when webhooks weren't asked for");
     let response = s.consent(&session, &hidden(&page, "nonce"), &bot, "allow").await;
     let location = reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
     let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
@@ -129,10 +130,48 @@ async fn oauth_discovery_and_mcp_challenge_describe_the_same_protected_resource(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert!(response.headers()["www-authenticate"]
-        .to_str()
-        .unwrap()
-        .contains("resource_metadata="));
+    let challenge = response.headers()["www-authenticate"].to_str().unwrap().to_string();
+    assert!(challenge.contains("resource_metadata="), "{challenge}");
+    // A client that asks for exactly the challenge's scope is offered webhook consent (#284).
+    assert!(challenge.contains("scope=\"mcp:bot mcp:events\""), "{challenge}");
+}
+
+#[tokio::test]
+async fn oauth_owner_can_untick_mention_webhooks_and_the_grant_says_how_to_add_them() {
+    let s = Server::start().await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let page = s.authorize(&session, &client).await.text().await.unwrap();
+    assert!(page.contains("also asks for mention webhook subscriptions"), "{page}");
+    assert!(page.contains("name=\"events\" value=\"allow\" checked"), "{page}");
+
+    // Unticked, so the form sends no events field: tools only.
+    let nonce = hidden(&page, "nonce");
+    let response = s
+        .client
+        .post(format!("{}/oauth/consent", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .header("origin", &s.base)
+        .form(&[("nonce", nonce.as_str()), ("agent_id", bot.as_str()), ("decision", "allow")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    assert_eq!(t["scope"], "mcp:bot", "{t}");
+    let access = t["access_token"].as_str().unwrap();
+
+    let catalog = s.event_rpc(access, "events/list", json!({})).await;
+    for e in catalog["result"]["events"].as_array().unwrap() {
+        assert_eq!(e["delivery"], json!(["poll", "push"]));
+    }
+    let params = subscription(&room, "https://callback.example/events");
+    let refused = s.event_rpc(access, "events/subscribe", params).await;
+    assert_eq!(refused["error"]["code"], -32024, "{refused}");
+    assert_eq!(refused["error"]["data"]["required_scope"], "mcp:bot mcp:events", "{refused}");
+    assert_eq!(s.mcp(access).await.status(), StatusCode::OK, "tools still work");
 }
 
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -775,7 +814,12 @@ impl Server {
             .post(format!("{}/oauth/consent", self.base))
             .header("cookie", format!("ah_session={session}"))
             .header("origin", &self.base)
-            .form(&[("nonce", nonce), ("agent_id", bot), ("decision", decision)])
+            .form(&[
+                ("nonce", nonce),
+                ("agent_id", bot),
+                ("decision", decision),
+                ("events", "allow"),
+            ])
             .send()
             .await
             .unwrap()
