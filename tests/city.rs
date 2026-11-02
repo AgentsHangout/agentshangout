@@ -4682,6 +4682,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "apprentices",
         "boards",
         "board_cards",
+        "held_mention_wakes",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4705,6 +4706,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "held_mention_wakes",
             "board_cards",
             "boards",
             "apprentices",

@@ -6,7 +6,12 @@ use std::{
     time::Duration,
 };
 
-use agenthangout::{app, db::Db, now, AppState, Config};
+use agenthangout::{
+    app,
+    db::Db,
+    doorbell::{BOT_CHAIN_HOLD_SECS, MAX_BOT_RUNS_IN_A_ROW},
+    now, AppState, Config,
+};
 use axum::{
     body::Bytes,
     extract::State,
@@ -127,13 +132,12 @@ impl Server {
         reply.body["result"].clone()
     }
 
-    /// Social hours all day, every day, with public places on and a daily cap of `cap`.
-    async fn open_all_day(&self, owner: &str, bot_id: &str, cap: i64) {
+    /// Social hours all day, every day, with public places on.
+    async fn open_all_day(&self, owner: &str, bot_id: &str) {
         let body = json!({
             "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
             "starts": "00:00",
             "ends": "24:00",
-            "max_social_runs": cap,
             "public_places": true,
         });
         let saved = self.put(owner, &format!("/api/agents/{bot_id}/routine"), body).await;
@@ -331,9 +335,9 @@ async fn plain_names_reach_inbox_events_and_webhooks_from_people_and_bots() {
     assert_eq!(rings(&hook), 2, "private bot chat keeps the existing wake-up permission");
 }
 
-// E5, L30: widening the match must not widen the daily bot wake budget.
+// E5, L30: a plain name and an @mention both wake, and a later one is not dropped.
 #[tokio::test]
-async fn plain_bot_names_share_the_explicit_mentions_wake_cap() {
+async fn plain_bot_names_wake_the_same_as_explicit_mentions() {
     let server = Server::start().await;
     let (room, justin, kevin) = server.room().await;
     server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
@@ -341,17 +345,20 @@ async fn plain_bot_names_share_the_explicit_mentions_wake_cap() {
     let (ron, _) = server.bot(&kevin, &room, "ron").await;
     let (url, hook) = start_hook("echo").await;
     server.put(&justin, &format!("/api/agents/{id}/notify"), json!({ "url": url })).await;
-    server.put(&justin, &format!("/api/agents/{id}/routine"), json!({
-        "days": [], "starts": "12:00", "ends": "13:00", "max_social_runs": 1, "public_places": false
-    })).await;
     server.say(&ron, &room, "Thanks, Grokliver Tree. Ideas welcome!").await;
     wait_for(&hook, |hit| hit.body["event"] == "mention").await;
     server.tool(&tree, "read_room", json!({ "hangout_id": room })).await;
-    for text in ["Grokliver Tree, another question?", "@Grokliver Tree still here?"] {
-        server.say(&ron, &room, text).await;
+    server.say(&ron, &room, "Grokliver Tree, another question?").await;
+    for _ in 0..50 {
+        if rings(&hook) >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert_eq!(rings(&hook), 2, "a later mention still wakes");
+    server.say(&ron, &room, "@Grokliver Tree still here?").await;
     settle().await;
-    assert_eq!(rings(&hook), 1);
+    assert_eq!(rings(&hook), 2, "an unread wake coalesces the next mention");
     let inbox = server.tool(&tree, "inbox", json!({})).await;
     assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 2);
 }
@@ -1138,7 +1145,7 @@ async fn someone_who_walked_in_rings_without_social_hours_and_then_waits() {
     assert_eq!(rings(&hook), 2, "its owner isn't held to that spacing once the mention is read");
 }
 
-// E24, L10: a bot that's out is held to its hours and cap, whoever speaks, except its owner.
+// E24, L10: a bot that's out rings by default, whoever speaks, except when Only me is on.
 #[tokio::test]
 async fn a_bot_that_walked_in_rings_by_default_and_always_hears_its_owner() {
     let server = Server::start().await;
@@ -1177,25 +1184,19 @@ async fn a_bot_that_walked_in_rings_by_default_and_always_hears_its_owner() {
     assert_eq!(rings(&hook), 2, "public wakes need no social hours");
     read().await;
 
-    server.open_all_day(&pat, &pixel_id, 1).await;
     server.say(&justin, &room, "@Pixel hello again").await;
     settle().await;
     assert_eq!(rings(&hook), 2, "that person's next mention waits 3 minutes, even after a read");
 
-    let filler = server
-        .post(&justin, &format!("/api/hangouts/{room}/messages"), json!({ "text": "a line" }))
-        .await;
-    let filler_id = filler.body["id"].as_i64().unwrap();
-    assert!(server.state.db.note_wake_ring(&pixel_id, filler_id, now(), Some(1)).unwrap());
     server.state.db.set_wake_accepts_at(&pixel_id, now() - 181).unwrap();
     server.say(&justin, &room, "@Pixel after the wait").await;
     settle().await;
-    assert_eq!(rings(&hook), 3, "the daily cap does not stop a person");
+    assert_eq!(rings(&hook), 3, "after 3 minutes a person rings again");
 
     read().await;
     server.say(&pat, &room, "@Pixel me again").await;
     settle().await;
-    assert_eq!(rings(&hook), 4, "its owner isn't held by that cap");
+    assert_eq!(rings(&hook), 4, "its owner isn't held to that spacing once the mention is read");
 }
 
 // E25
@@ -1435,7 +1436,7 @@ async fn out_with_another_bot_a_bot_is_rung_to_meet_once_a_half_hour() {
         let key = made.body["owner_key"].as_str().unwrap().to_string();
         let home = made.body["hangout"]["id"].as_str().unwrap().to_string();
         let (_, id) = server.bot(&key, &home, bot).await;
-        server.open_all_day(&key, &id, 3).await;
+        server.open_all_day(&key, &id).await;
         bots.push((key, id));
     }
     let (url, hook) = start_hook("echo").await;
@@ -1453,9 +1454,9 @@ async fn out_with_another_bot_a_bot_is_rung_to_meet_once_a_half_hour() {
     assert_eq!(meets, 1, "once a half hour");
 }
 
-// L30, E22: on a public floor they went out to, bots answer each other, within the cap.
+// L30, E22: on a public floor they went out to, bots answer each other, with no daily cap.
 #[tokio::test]
-async fn out_on_a_public_floor_another_bots_mention_rings_within_the_cap() {
+async fn out_on_a_public_floor_another_bots_mention_always_rings() {
     let server = Server::start().await;
     let (room, justin, _) = server.room().await;
     server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
@@ -1482,19 +1483,119 @@ async fn out_on_a_public_floor_another_bots_mention_rings_within_the_cap() {
     assert_eq!(rings(&hook), 1, "public wakes need no social hours");
     server.tool(&bots[0].2, "read_room", json!({ "hangout_id": room })).await;
 
-    server.open_all_day(&bots[0].0, &bots[0].1, 1).await;
     server.say(rex, &room, "@Pixel how about a workshop?").await;
     settle().await;
-    assert_eq!(rings(&hook), 1, "the first public wake used the cap");
+    assert_eq!(rings(&hook), 2, "a later mention still wakes");
     server.tool(&bots[0].2, "read_room", json!({ "hangout_id": room })).await;
     server.say(rex, &room, "@Pixel still there?").await;
     settle().await;
-    assert_eq!(rings(&hook), 1, "that's its cap");
+    assert_eq!(rings(&hook), 3, "there is no daily cap");
 }
 
-// L39: in a project's room, the project's bots answer each other, in their hours and within the cap.
+async fn two_bots_out_on_a_public_floor(
+    server: &Server,
+) -> (String, String, String, String, String, String) {
+    let (room, justin, _) = server.room().await;
+    server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
+    let floor = format!("/api/floors/{room}/walk-in");
+    let mut bots = Vec::new();
+    for (owner, bot) in [("Pat", "Pixel"), ("Sam", "Rex")] {
+        let made =
+            server.post("", "/api/hangouts", json!({ "name": "Home", "your_name": owner })).await;
+        let key = made.body["owner_key"].as_str().unwrap().to_string();
+        let home = made.body["hangout"]["id"].as_str().unwrap().to_string();
+        let (token, id) = server.bot(&key, &home, bot).await;
+        let walked = server.post(&key, &floor, json!({ "agent_id": id })).await;
+        assert_eq!(walked.status, StatusCode::OK, "{}", walked.body);
+        bots.push((key, id, token));
+    }
+    (room, justin, bots[0].0.clone(), bots[0].1.clone(), bots[0].2.clone(), bots[1].2.clone())
+}
+
+async fn fill_bot_chain(server: &Server, sender: &str, room: &str, target: &str) {
+    for _ in 0..MAX_BOT_RUNS_IN_A_ROW {
+        let line = server
+            .post(sender, &format!("/api/hangouts/{room}/messages"), json!({ "text": "a line" }))
+            .await;
+        let id = line.body["id"].as_i64().unwrap();
+        assert!(server.state.db.note_wake_ring(target, id, now(), true).unwrap());
+    }
+}
+
+// L10: after five bot-started wakes, further mentions are held then delivered together.
 #[tokio::test]
-async fn in_a_projects_room_another_of_its_bots_mention_rings_within_the_cap() {
+async fn a_bot_to_bot_chain_holds_then_delivers_every_mention() {
+    let server = Server::start().await;
+    let (room, _, pat, pixel, pixel_token, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({ "url": url })).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+
+    server.say(&rex, &room, "@Pixel still there?").await;
+    settle().await;
+    assert_eq!(rings(&hook), 0, "the sixth waits");
+    let held = wait_decision(&server, &pat, &pixel, "held").await;
+    assert_eq!(held["reason"], "chain");
+    assert!(held["says"].as_str().unwrap().contains("waits a few minutes"), "{held}");
+    assert!(!held["says"].as_str().unwrap().contains("cap is used up"), "{held}");
+
+    server.say(&rex, &room, "@Pixel and this one too").await;
+    settle().await;
+    assert_eq!(rings(&hook), 0, "another held mention is not dropped");
+
+    agenthangout::worlds::housekeeping(&server.state, now() + BOT_CHAIN_HOLD_SECS + 1);
+    for _ in 0..50 {
+        if rings(&hook) >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(rings(&hook), 1, "one coalesced wake for every held mention");
+    let inbox = server.tool(&pixel_token, "inbox", json!({})).await;
+    assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 2, "{inbox}");
+
+    server.tool(&pixel_token, "read_room", json!({ "hangout_id": room })).await;
+    server.say(&rex, &room, "@Pixel after the hold").await;
+    settle().await;
+    assert_eq!(rings(&hook), 1, "the next bot mention waits out another hold");
+    let held_again = wait_decision(&server, &pat, &pixel, "held").await;
+    assert_eq!(held_again["reason"], "chain");
+
+    agenthangout::worlds::housekeeping(&server.state, now() + 2 * BOT_CHAIN_HOLD_SECS + 1);
+    for _ in 0..50 {
+        if rings(&hook) >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(rings(&hook), 2, "the later mention is still delivered");
+}
+
+// L10: a person's chat delivers held bot mentions without waiting out the hold.
+#[tokio::test]
+async fn a_person_posting_delivers_held_bot_mentions_now() {
+    let server = Server::start().await;
+    let (room, justin, pat, pixel, _, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({ "url": url })).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel still there?").await;
+    wait_decision(&server, &pat, &pixel, "held").await;
+    assert_eq!(rings(&hook), 0);
+
+    server.say(&justin, &room, "What are you two up to?").await;
+    for _ in 0..50 {
+        if rings(&hook) >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(rings(&hook), 1, "a person posting delivers the held mentions now");
+}
+
+// L39: in a project's room, the project's bots answer each other, in their hours, with no daily cap.
+#[tokio::test]
+async fn in_a_projects_room_another_of_its_bots_mention_always_rings() {
     let server = Server::start().await;
     let (room, justin, _) = server.room().await;
     server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
@@ -1526,14 +1627,14 @@ async fn in_a_projects_room_another_of_its_bots_mention_rings_within_the_cap() {
     settle().await;
     assert_eq!(rings(&hook), 0, "not in its social hours");
 
-    server.open_all_day(&bots[0].0, &bots[0].1, 1).await;
+    server.open_all_day(&bots[0].0, &bots[0].1).await;
     server.say(rex, &project, "@Pixel moisture or light?").await;
     settle().await;
     assert_eq!(rings(&hook), 1, "in its hours, another bot of the project rings it");
     server.tool(&bots[0].2, "read_room", json!({ "hangout_id": project })).await;
     server.say(rex, &project, "@Pixel still there?").await;
     settle().await;
-    assert_eq!(rings(&hook), 1, "that's its cap");
+    assert_eq!(rings(&hook), 2, "there is no daily cap");
 }
 
 // E22: bots can't set off a loop, and a bot's line doesn't use up a person's ring.
@@ -1831,7 +1932,7 @@ async fn trusted_bot_ring_reservations_deduplicate_limit_and_require_human_reset
     let resumed = message(at + 3000);
     assert!(server.state.db.note_bot_wake_ring(&target, resumed.id, at + 3000).unwrap());
     // A bot ring never consumes a human ring reservation.
-    assert!(server.state.db.note_wake_ring(&target, resumed.id, at + 3000, None).unwrap());
+    assert!(server.state.db.note_wake_ring(&target, resumed.id, at + 3000, false).unwrap());
 }
 
 // E27: deleting chat history or a secondary floor cannot reset a durable recipient budget.

@@ -453,7 +453,6 @@ async fn inbox_keeps_mentions_until_the_bot_reads_the_room() {
         "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
         "starts": "00:00",
         "ends": "24:00",
-        "max_social_runs": 5,
         "public_places": true,
     });
     server.put(&town.bo.key, &format!("/api/agents/{rover_id}/routine"), hours).await.ok();
