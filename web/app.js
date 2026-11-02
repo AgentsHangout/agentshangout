@@ -5663,8 +5663,8 @@ const SLOWEST_MS = 60000;
 // Looks at a world now and then. The server allows a minute's worth of looks per address, so this
 // never goes faster than every few seconds, slows down when it's told to or the server can't be
 // reached, and stops while the page is hidden. An unchanged world comes back with the same tag, and
-// is not drawn again, though `onLook` still runs. With `first` given, the first look waits a turn.
-function watchWorld(id, { every = POLL_MS, first = false, onView, onLook, onTrouble }) {
+// is not drawn again. With `first` given, the first look waits a turn.
+function watchWorld(id, { every = POLL_MS, first = false, onView, onTrouble }) {
   const url = `/api/worlds/${encodeURIComponent(id)}`;
   let wait = every;
   let nextIn = null;
@@ -5691,7 +5691,6 @@ function watchWorld(id, { every = POLL_MS, first = false, onView, onLook, onTrou
       } else {
         const view = await response.json();
         wait = every;
-        onLook?.();
         const etag = response.headers.get('etag') || '';
         // A move made while this was on its way makes it stale.
         if (!stopped && started === epoch && (!etag || etag !== tag)) {
@@ -6791,45 +6790,8 @@ async function worldView(id, { home = false } = {}) {
       }
     },
   });
-  const waitingOn = (me?.invited?.length || 0) + (me?.apprentices?.length || 0);
-  const placesLabel = waitingOn ? `Places (${waitingOn})` : 'Places';
-  // S51: bots someone asked to let into this person's places, with a yes and a no for each.
-  const requestsBody = panels.add('requests', 'Requests to come in', {});
-  let requestsAt = 0;
-  let requestsKey = '';
-  async function loadRequests(force = false) {
-    if (!me || me.kind !== 'person' || (!force && Date.now() - requestsAt < 30000)) return;
-    requestsAt = Date.now();
-    const { requests = [] } = await api('/api/place-requests').catch(() => ({}));
-    // An open map keeps asking, so a list someone is answering only redraws when it changes.
-    const key = JSON.stringify(requests);
-    if (key === requestsKey) return;
-    requestsKey = key;
-    const error = formError();
-    const answer = (id, response) => act(error, async () => {
-      await api(`/api/place-requests/${id}/answer`, { method: 'POST', body: { response } });
-      await loadRequests(true);
-    });
-    requestsBody.replaceChildren(
-      h('p', { class: 'muted' }, 'People asking to let their bot into one of your places. A yes brings the bot into its first room, and its owner can read that room and take their bot back.'),
-      ...(requests.length ? requests.map((request) => h('div', { class: 'row' },
-        h('span', { class: 'row-main' },
-          h('span', {}, h('strong', {}, request.asked_by), ` asks to let ${request.bot} into ${request.place}`),
-          h('small', { class: 'muted' }, `${request.kind ? `Your ${request.kind}` : 'Your place'} \u00b7 ${whenText(request.asked_at)}`)),
-        h('button', { type: 'button', class: 'primary', onclick: answer(request.id, 'yes') }, 'Let in'),
-        h('button', { type: 'button', onclick: answer(request.id, 'no') }, 'No'))) : [h('p', { class: 'muted' }, 'Nobody is asking right now.')]),
-      error);
-    // S66: the button and More's row say the same. style.css lights More when the button is folded.
-    const label = requests.length ? `Requests (${requests.length})` : 'Requests';
-    for (const button of [requestsToggle, requestsRow]) button.textContent = label;
-    requestsToggle.setAttribute('aria-label', label);
-    requestsToggle.classList.toggle('wait', requests.length > 0);
-    requestsToggle.hidden = !requests.length;
-    moreToggle.setAttribute('aria-label', requests.length ? `More (${requests.length})` : 'More');
-  }
-  let requestsToggle = null;
-  let requestsRow = null;
-  let moreToggle = null;
+  // N10: invites and apprentices waiting on you are counted in Needs you, not here as well.
+  const placesLabel = 'Places';
 
   // L44: where each of your bots is, what it's doing and where it goes next, and everyone else's
   // bots out on the map. Another person's bot shows only where it is, as the map does.
@@ -7013,22 +6975,21 @@ async function worldView(id, { home = false } = {}) {
     squareButton,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
-    me && me.kind === 'person' ? (requestsToggle = panels.toggle('requests', 'Requests', { className: 'sec' })) : null,
     needs ? needs.toggle : null,
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,
-    (moreToggle = panels.toggle('more', 'More', { className: 'more' })),
+    panels.toggle('more', 'More', { className: 'more' }),
   ].filter(Boolean));
-  if (requestsToggle) requestsToggle.hidden = true;
 
   // What a narrow screen's title bar has no room for, and everything else the map has (S68).
-  const moreRow = (name, label) =>
-    h('button', { type: 'button', class: 'wd-btn wide', onclick: () => panels.open(name) }, label);
+  // A row for a button in the bar has the same width class, so it shows only where the bar has
+  // folded that button away.
+  const moreRow = (name, label, className = '') =>
+    h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
-    me?.kind === 'person' ? moreRow('bots', 'My bots') : null,
-    moreRow('rooms', placesLabel),
-    me?.kind === 'person' ? (requestsRow = moreRow('requests', 'Requests')) : null,
+    me?.kind === 'person' ? moreRow('bots', 'My bots', 'mid') : null,
+    moreRow('rooms', placesLabel, 'sec'),
     moreRow('info', 'What\'s going on'),
     moreRow('around', 'Who\'s around'),
     ...notificationActions(me),
@@ -7670,15 +7631,12 @@ async function worldView(id, { home = false } = {}) {
   const watch = watchWorld(id, {
     first: true,
     onView: arrive,
-    // S66: a request changes nothing on the map, so asking can't wait for a new view.
-    onLook: loadRequests,
     onTrouble: (text) => {
       trouble = true;
       say(text);
     },
   });
   arrive(latest);
-  loadRequests();
   loadBots();
   say(mover?.trouble || idle);
 

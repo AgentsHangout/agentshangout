@@ -1604,11 +1604,6 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .wd-room .wd-title-actions .wd-tbtn[aria-expanded="true"] { background: #cdb98a; box-shadow: inset 1px 1px 3px rgba(60, 40, 10, .6); }
 .wd .wd-tbtn.wait { background: linear-gradient(#ffd98a, #f0aa44); }
 .room-count { margin-left: 5px; padding: 0 4px; color: #ffc65c; background: #0a140d; font: 700 11px/1.35 "Courier New", Consolas, monospace; text-shadow: none; }
-/* The map's bar can't take another button on a phone, and a wider More would move the rest, so
-   More only lights up for what the bar has folded away. */
-@media (max-width: 1359px) {
-  .wd-map .wd-title-actions:has(.sec.wait) .more { background: linear-gradient(#ffd98a, #f0aa44); }
-}
 @media (max-width: 999px) {
   .wd-game .wd-title-actions .mid:not(.wait) { display: none; }
 }
@@ -1616,7 +1611,11 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   .game-more .wd-btn.mid { display: none; }
 }
 @media (min-width: 1100px) {
-  .game-more .wd-btn.sec { display: none; }
+  .wd-room .game-more .wd-btn.sec { display: none; }
+}
+/* The map keeps its narrower bar until 1360px, so its rows for those buttons stay until then too. */
+@media (min-width: 1360px) {
+  .wd-map .game-more .wd-btn.sec { display: none; }
 }
 /* A room's bar holds more than the map's, so when it won't all fit the buttons take a line of their
    own, and the name is never squeezed out. */
