@@ -2441,11 +2441,12 @@ async function roomView(id) {
   frame.host.append(stage);
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
+  const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
   const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => bringBot() }, 'Bring a bot');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
-  // The board comes last, so that a room with no bots yet can still be written on.
-  stage.append(emptyEl, boardEl);
+  // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
+  stage.append(emptyEl, boardEl, pinStrip);
   const builder = buildMode({ id, room, stage, frame, panels, beside, say, view: () => snapshot, reload: () => reload() });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
 
@@ -2588,6 +2589,109 @@ async function roomView(id) {
           board ? h('button', { type: 'button', class: 'ghost danger', onclick: act(error, () => write('')) }, 'Wipe it') : null,
           h('button', { type: 'submit', class: 'primary' }, 'Save'))));
     dialog.querySelector('textarea').focus();
+  }
+
+  const pinBy = (pin) => (pin.pinned_by?.is_bot ? `${pin.pinned_by.name}'s bot` : (pin.pinned_by?.name || ''));
+
+  function pinDialog(pin) {
+    const credit = h('small', { class: 'muted' }, `${pinBy(pin)} · ${whenText(pin.pinned_at)}`);
+    const body = [];
+    if (pin.kind === 'link' && pin.url) {
+      body.push(h('p', {}, h('a', { href: pin.url, target: '_blank', rel: 'noopener noreferrer' }, pin.title || pin.url)));
+      if (pin.preview?.title || pin.preview?.description) {
+        body.push(h('p', { class: 'muted' }, [pin.preview.site, pin.preview.title].filter(Boolean).join(' · ')));
+        if (pin.preview.description) body.push(h('p', {}, pin.preview.description));
+      }
+    } else {
+      body.push(h('p', { class: 'board-read' }, pin.title));
+    }
+    if (pin.caption) body.push(h('p', {}, pin.caption));
+    const error = formError();
+    const actions = [];
+    if (pin.can_unpin) {
+      actions.push(h('button', { type: 'button', class: 'ghost danger', onclick: act(error, async () => {
+        await api(`/api/pins/${encodeURIComponent(pin.id)}`, { method: 'DELETE' });
+        dialog.close();
+        await reload();
+      }) }, 'Unpin'));
+    }
+    const dialog = modal(pin.kind === 'link' ? 'Pinned link' : 'Pinned note', ...body, credit, error,
+      actions.length ? h('div', { class: 'modal-actions' }, ...actions) : null);
+  }
+
+  function addPinDialog() {
+    const error = formError();
+    const urlField = field('URL', h('input', { name: 'url', type: 'url', placeholder: 'https://' }));
+    const kind = h('select', { name: 'kind', onchange: () => { urlField.hidden = kind.value !== 'link'; } },
+      h('option', { value: 'note' }, 'Note'),
+      h('option', { value: 'link' }, 'Link'));
+    urlField.hidden = true;
+    const dialog = modal('Pin on the board',
+      h('p', {}, 'A link or a short note under the whiteboard. Every bot here reads it.'),
+      h('form', { onsubmit: submitter(error, async (values) => {
+        const body = { kind: values.kind, title: values.title, caption: values.caption || undefined };
+        if (values.kind === 'link') body.url = values.url;
+        await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'POST', body });
+        dialog.close();
+        await reload();
+      }) },
+        field('Kind', kind),
+        field('Title', h('input', { name: 'title', maxLength: 80, required: true })),
+        urlField,
+        field('Caption', h('input', { name: 'caption', maxLength: 280 })),
+        error,
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Pin'))));
+  }
+
+  // I81: a strip under the whiteboard. The classes are hooks for richer styling later.
+  function renderPins() {
+    const pins = snapshot.pins || [];
+    pinStrip.replaceChildren();
+    for (const pin of pins) {
+      pinStrip.append(h('button', {
+        type: 'button',
+        class: 'pin-card',
+        onclick: () => pinDialog(pin),
+        title: pin.title,
+      },
+        h('span', { class: 'pin-kind' }, pin.kind),
+        h('span', { class: 'pin-title' }, pin.title),
+        h('span', { class: 'pin-by' }, pinBy(pin))));
+    }
+    if (snapshot.can_pin) {
+      pinStrip.append(h('button', { type: 'button', class: 'pin-add ghost', onclick: () => addPinDialog() }, 'Pin'));
+    }
+    if (snapshot.can_clear_pins && pins.length) {
+      pinStrip.append(h('button', { type: 'button', class: 'pin-clear ghost', onclick: async () => {
+        try {
+          await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'DELETE' });
+          await reload();
+        } catch (error) {
+          say(error.message);
+        }
+      } }, 'Clear pins'));
+    }
+    if (snapshot.can_clear_pins && snapshot.floor?.floor?.access === 'public') {
+      const policy = snapshot.pin_policy || 'anyone';
+      pinStrip.append(h('select', {
+        class: 'pin-policy',
+        'aria-label': 'Who can pin',
+        onchange: async (event) => {
+          try {
+            await api(`/api/hangouts/${encodeURIComponent(id)}/pin-policy`, {
+              method: 'PUT',
+              body: { policy: event.target.value },
+            });
+            await reload();
+          } catch (error) {
+            say(error.message);
+          }
+        },
+      },
+        h('option', { value: 'anyone', selected: policy === 'anyone' }, 'Anyone can pin'),
+        h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
+        h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')));
+    }
   }
 
   // The status bar's copy can be cut short on a small screen, and the one in the Crew panel never is.
@@ -3153,6 +3257,7 @@ async function roomView(id) {
     renderFloors();
     renderGuest();
     renderBoard();
+    renderPins();
     renderLegend();
     renderStats();
     renderQuestions();

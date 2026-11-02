@@ -950,6 +950,36 @@ CREATE TABLE IF NOT EXISTS held_mention_wakes (
 );
 CREATE INDEX IF NOT EXISTS held_mention_wakes_due ON held_mention_wakes (due_at);
 CREATE INDEX IF NOT EXISTS held_mention_wakes_room ON held_mention_wakes (hangout_id, agent_id);
+-- I68: pins on a room's wall whiteboard, not an item.
+CREATE TABLE IF NOT EXISTS floor_pin_settings (
+    hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    policy TEXT NOT NULL CHECK (policy IN ('anyone', 'owners', 'off'))
+);
+CREATE TABLE IF NOT EXISTS room_pins (
+    id TEXT PRIMARY KEY,
+    hangout_id TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('link', 'image', 'note')),
+    title TEXT NOT NULL,
+    url TEXT,
+    image_asset_id TEXT,
+    image_alt TEXT,
+    caption TEXT,
+    preview_site TEXT,
+    preview_title TEXT,
+    preview_description TEXT,
+    preview_status TEXT CHECK (
+        preview_status IS NULL OR preview_status IN ('pending', 'ok', 'failed')
+    ),
+    preview_fetched_at INTEGER,
+    person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    pinned_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    CHECK ((kind = 'link') = (url IS NOT NULL)),
+    CHECK (kind <> 'image' OR image_asset_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS room_pins_by_room ON room_pins (hangout_id, pinned_at);
+CREATE INDEX IF NOT EXISTS room_pins_by_person ON room_pins (hangout_id, person_id);
 
 "#;
 
@@ -1238,6 +1268,47 @@ impl Board {
             _ => None,
         }
     }
+}
+
+/// A pin on a room's wall whiteboard (I68). `image_*` is stored for a later change; bots pin
+/// links and notes only (I80).
+#[derive(Clone, Debug, Serialize)]
+pub struct RoomPin {
+    pub id: String,
+    pub hangout_id: String,
+    pub kind: String,
+    pub title: String,
+    pub url: Option<String>,
+    pub image_asset_id: Option<String>,
+    pub image_alt: Option<String>,
+    pub caption: Option<String>,
+    pub preview_site: Option<String>,
+    pub preview_title: Option<String>,
+    pub preview_description: Option<String>,
+    pub preview_status: Option<String>,
+    pub preview_fetched_at: Option<i64>,
+    pub person_id: String,
+    pub pinned_by: String,
+    pub agent_id: Option<String>,
+    pub via_bot: Option<String>,
+    pub pinned_at: i64,
+    pub expires_at: Option<i64>,
+}
+
+pub struct NewRoomPin<'a> {
+    pub id: &'a str,
+    pub hangout_id: &'a str,
+    pub kind: &'a str,
+    pub title: &'a str,
+    pub url: Option<&'a str>,
+    pub caption: Option<&'a str>,
+    pub preview_status: Option<&'a str>,
+    pub person_id: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub now: i64,
+    pub expires_at: Option<i64>,
+    pub max_room: i64,
+    pub max_person: i64,
 }
 
 /// What `read_room` carries for a board: counts, and no card text (K10).
@@ -9856,6 +9927,167 @@ impl Db {
         Ok(())
     }
 
+    fn room_pin_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoomPin> {
+        Ok(RoomPin {
+            id: row.get(0)?,
+            hangout_id: row.get(1)?,
+            kind: row.get(2)?,
+            title: row.get(3)?,
+            url: row.get(4)?,
+            image_asset_id: row.get(5)?,
+            image_alt: row.get(6)?,
+            caption: row.get(7)?,
+            preview_site: row.get(8)?,
+            preview_title: row.get(9)?,
+            preview_description: row.get(10)?,
+            preview_status: row.get(11)?,
+            preview_fetched_at: row.get(12)?,
+            person_id: row.get(13)?,
+            pinned_by: row.get(14)?,
+            agent_id: row.get(15)?,
+            via_bot: row.get(16)?,
+            pinned_at: row.get(17)?,
+            expires_at: row.get(18)?,
+        })
+    }
+
+    /// Live pins on a room's whiteboard (I68). `since` leaves out earlier ones for a guest (I72).
+    pub fn room_pins(
+        &self,
+        hangout_id: &str,
+        since: i64,
+        now: i64,
+    ) -> rusqlite::Result<Vec<RoomPin>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
+                    p.caption, p.preview_site, p.preview_title, p.preview_description,
+                    p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
+                    a.name, p.pinned_at, p.expires_at
+             FROM room_pins p
+             JOIN people ON people.id = p.person_id
+             LEFT JOIN agents a ON a.id = p.agent_id
+             WHERE p.hangout_id = ?1 AND p.pinned_at > ?2
+               AND (p.expires_at IS NULL OR p.expires_at > ?3)
+             ORDER BY p.pinned_at, p.id",
+        )?;
+        let rows = stmt.query_map(params![hangout_id, since, now], Self::room_pin_from_row)?;
+        rows.collect()
+    }
+
+    pub fn room_pin(&self, id: &str) -> rusqlite::Result<Option<RoomPin>> {
+        self.conn()
+            .query_row(
+                "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
+                        p.caption, p.preview_site, p.preview_title, p.preview_description,
+                        p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
+                        a.name, p.pinned_at, p.expires_at
+                 FROM room_pins p
+                 JOIN people ON people.id = p.person_id
+                 LEFT JOIN agents a ON a.id = p.agent_id
+                 WHERE p.id = ?",
+                [id],
+                Self::room_pin_from_row,
+            )
+            .optional()
+    }
+
+    /// None when it was saved. `full` or `person` when a limit was hit (I68).
+    pub fn insert_room_pin(&self, pin: &NewRoomPin) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let live = "expires_at IS NULL OR expires_at > ?";
+        let room: i64 = tx.query_row(
+            &format!("SELECT COUNT(*) FROM room_pins WHERE hangout_id = ? AND ({live})"),
+            params![pin.hangout_id, pin.now],
+            |row| row.get(0),
+        )?;
+        if room >= pin.max_room {
+            return Ok(Some("full"));
+        }
+        let person: i64 = tx.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM room_pins WHERE hangout_id = ? AND person_id = ? AND ({live})"
+            ),
+            params![pin.hangout_id, pin.person_id, pin.now],
+            |row| row.get(0),
+        )?;
+        if person >= pin.max_person {
+            return Ok(Some("person"));
+        }
+        tx.execute(
+            "INSERT INTO room_pins (
+                id, hangout_id, kind, title, url, caption, preview_status,
+                person_id, agent_id, pinned_at, expires_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                pin.id,
+                pin.hangout_id,
+                pin.kind,
+                pin.title,
+                pin.url,
+                pin.caption,
+                pin.preview_status,
+                pin.person_id,
+                pin.agent_id,
+                pin.now,
+                pin.expires_at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(None)
+    }
+
+    pub fn set_pin_preview(
+        &self,
+        id: &str,
+        site: Option<&str>,
+        title: Option<&str>,
+        description: Option<&str>,
+        status: &str,
+        fetched_at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE room_pins
+             SET preview_site = ?2, preview_title = ?3, preview_description = ?4,
+                 preview_status = ?5, preview_fetched_at = ?6
+             WHERE id = ?1",
+            params![id, site, title, description, status, fetched_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_room_pin(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM room_pins WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    pub fn clear_room_pins(&self, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM room_pins WHERE hangout_id = ?", [hangout_id])?;
+        Ok(())
+    }
+
+    pub fn pin_policy(&self, hangout_id: &str) -> rusqlite::Result<String> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT policy FROM floor_pin_settings WHERE hangout_id = ?",
+                [hangout_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "anyone".to_string()))
+    }
+
+    pub fn set_pin_policy(&self, hangout_id: &str, policy: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO floor_pin_settings (hangout_id, policy) VALUES (?1, ?2)
+             ON CONFLICT (hangout_id) DO UPDATE SET policy = ?2",
+            params![hangout_id, policy],
+        )?;
+        Ok(())
+    }
+
     pub fn board_summaries(
         &self,
         hangout_id: &str,
@@ -11309,7 +11541,7 @@ impl Db {
                AND (?4 IS NULL OR name = ?4)
                AND (?5 IS NULL OR hangout_id = ?5)
                AND (?6 = 0 OR name IN
-                    ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place'))
+                    ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'pin_added'))
              ORDER BY id LIMIT ?7",
         )?;
         let rows = stmt.query_map(
@@ -11345,7 +11577,7 @@ impl Db {
                    AND (?4 IS NULL OR name = ?4)
                    AND (?5 IS NULL OR hangout_id = ?5)
                    AND (?6 = 0 OR name IN
-                        ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place'))
+                        ('mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'pin_added'))
                  LIMIT 1",
                 params![agent_id, after, not_before, name, hangout_id, actionable],
                 |row| row.get(0),

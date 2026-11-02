@@ -1079,6 +1079,7 @@ struct ChangeFloor {
     flooring: Option<String>,
     hidden: Option<Vec<String>>,
     create_code: Option<String>,
+    pins: Option<String>,
 }
 
 async fn change_floor(
@@ -1178,6 +1179,9 @@ async fn change_floor(
         }
     } else if body.access.as_deref() == Some("private") && floor.access == "public" {
         ops::announce(&state, &floor.id, "This floor is private again.")?;
+    }
+    if let Some(policy) = &body.pins {
+        crate::pins::set_policy(&state, &caller, &floor.id, policy)?;
     }
     refresh_space(&state, &state.db.floors_of(&space.id)?);
     Ok(Json(state.db.floor(&id)?.ok_or_else(ApiError::not_found)?))

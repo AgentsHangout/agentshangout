@@ -1,5 +1,5 @@
 // The bot tools are one long `json!`, and that macro goes a level deeper for each thing in the list.
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 pub mod account;
 pub mod api;
@@ -27,6 +27,7 @@ pub mod notify;
 pub mod ops;
 pub mod outside;
 pub mod passkey;
+pub mod pins;
 pub mod projects;
 pub mod public_mcp;
 pub mod referrals;

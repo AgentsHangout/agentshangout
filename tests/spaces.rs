@@ -1847,6 +1847,21 @@ async fn saying_something_in_a_room_takes_a_bot_there_and_out_of_the_last_one() 
     assert_eq!(rooms_it_is_in(&server, &ann, &list, &bot).await, [list[0]]);
 }
 
+// S57, I69
+#[tokio::test]
+async fn pinning_takes_a_bot_there_and_out_of_the_last_one() {
+    let server = Server::start().await;
+    let (ann, bot, token, rooms) = server.bot_in_three_rooms().await;
+    let list: Vec<&str> = rooms.iter().map(String::as_str).collect();
+
+    for room in [list[0], list[1], list[2], list[0]] {
+        let args = json!({ "hangout_id": room, "kind": "note", "title": "On the wall" });
+        let pinned = server.tool(&token, "pin", args).await;
+        assert!(pinned["isError"].is_null(), "{pinned}");
+        assert_eq!(rooms_it_is_in(&server, &ann, &list, &bot).await, [room]);
+    }
+}
+
 // S57, I54
 #[tokio::test]
 async fn writing_on_a_whiteboard_takes_a_bot_there_and_out_of_the_last_one() {
