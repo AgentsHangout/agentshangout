@@ -840,6 +840,62 @@ async fn concurrent_reads_after_expiry_rebuild_the_list_once() {
 }
 
 // W100
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reads_during_a_rebuild_are_given_the_last_list_without_waiting() {
+    let server = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (_, rover) = server.bot(&bo, &home, "Rover").await;
+    let (ann_home, ann) = server.someone("Ann").await;
+    let (_, fern) = server.bot(&ann, &ann_home, "Fern").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, floor) = server.public_cafe(&cy).await;
+    server.all_day(&bo, &rover, true).await;
+    server.tool(&rover, "go_out", json!({ "floor_id": floor })).await;
+
+    let first = server.bots().await;
+    assert_eq!(names(&first), vec!["Rover".to_string()], "{first}");
+    let builds = server.state.worlds.commons_bots_builds();
+
+    server.all_day(&ann, &fern, true).await;
+    server.tool(&fern, "go_out", json!({ "floor_id": floor })).await;
+    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(1500));
+    server.state.worlds.age_commons_bots();
+    let builder = {
+        let client = server.client.clone();
+        let url = format!("{}{BOTS}", server.base);
+        tokio::spawn(async move {
+            let response = client.get(&url).header("x-forwarded-for", "10.9.0.1").send().await;
+            response.unwrap().text().await.unwrap()
+        })
+    };
+    // Wait until that read has taken the rebuild.
+    for _ in 0..500 {
+        if server.state.worlds.commons_bots_builds() > builds {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
+
+    // Mid-rebuild, everyone else is given the last list at once rather than waiting for Fern.
+    for n in 0..8u32 {
+        let ip = format!("10.9.1.{}", n + 1);
+        let shown = server.get(BOTS).ip(&ip).send().await.ok();
+        assert_eq!(shown, first, "the last list, while the rebuild runs: {shown}");
+    }
+
+    let rebuilt: Value = serde_json::from_str(&builder.await.unwrap()).unwrap();
+    let shown = names(&rebuilt);
+    assert!(
+        shown.contains(&"Rover".to_string()) && shown.contains(&"Fern".to_string()),
+        "{rebuilt}"
+    );
+    assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
+    server.state.worlds.set_commons_bots_rebuild_pause(Duration::ZERO);
+    assert_eq!(server.bots().await, rebuilt, "later reads are the new list");
+}
+
+// W100
 #[tokio::test]
 async fn reads_are_limited_to_sixty_a_minute_per_address_and_do_not_spend_world_views() {
     start_early_in(60, 20).await;

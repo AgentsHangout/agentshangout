@@ -16,7 +16,7 @@ use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, TryLockError,
     },
     time::{Duration, Instant},
 };
@@ -370,8 +370,10 @@ pub struct Runtime {
     commons_bots_rebuild_pause_ms: AtomicU64,
     /// W100: who may read the public Commons bots list from another site.
     viewer_origins: Mutex<Vec<String>>,
-    /// W100: the last Commons bots list, served until it ages out.
+    /// W100: the last Commons bots list, served until it ages out, and while it is rebuilt.
     commons_bots: Mutex<Option<(Instant, Bytes)>>,
+    /// W100: held by the one caller rebuilding the Commons bots list.
+    commons_bots_build: Mutex<()>,
     /// L17, W100: `BOTS_AT_PLACES_ROWS`, unless a test lowers it to reach the cut.
     place_rows: AtomicUsize,
 }
@@ -399,6 +401,7 @@ impl Runtime {
             commons_bots_rebuild_pause_ms: AtomicU64::new(0),
             viewer_origins: Mutex::new(parse_viewer_origins(None)),
             commons_bots: Mutex::new(None),
+            commons_bots_build: Mutex::new(()),
             place_rows: AtomicUsize::new(BOTS_AT_PLACES_ROWS),
         }
     }
@@ -411,6 +414,16 @@ impl Runtime {
     /// W100: drop the cached Commons bots list, so the next read builds it again.
     pub fn expire_commons_bots(&self) {
         *locked(&self.commons_bots) = None;
+    }
+
+    /// W100: age the cached Commons bots list past its 20 seconds but keep it, so the next read
+    /// rebuilds it while other reads can still be given it.
+    pub fn age_commons_bots(&self) {
+        if let Some((built, _)) = locked(&self.commons_bots).as_mut() {
+            if let Some(old) = Instant::now().checked_sub(COMMONS_BOTS_CACHE) {
+                *built = old;
+            }
+        }
     }
 
     /// L17, W100: how many rows the bots-at-places query reads at once.
@@ -2312,10 +2325,24 @@ fn commons_bots_ok(body: Bytes) -> Response {
 }
 
 /// W100: the public Commons bots list, from memory. Rebuilt at most every 20 seconds.
-/// One caller builds while the others wait for it and then share what it made.
+/// One caller builds. The others are given the last list meanwhile, or, when there is none yet,
+/// wait for it and then share what it made. Run it off the async workers: it can wait.
 fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
-    let mut cache = locked(&state.worlds.commons_bots);
-    if let Some((built, body)) = cache.as_ref() {
+    let last = match locked(&state.worlds.commons_bots).as_ref() {
+        Some((built, body)) if built.elapsed() < COMMONS_BOTS_CACHE => return Ok(body.clone()),
+        Some((_, body)) => Some(body.clone()),
+        None => None,
+    };
+    let building = match state.worlds.commons_bots_build.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => match last {
+            Some(body) => return Ok(body),
+            None => locked(&state.worlds.commons_bots_build),
+        },
+    };
+    // Someone may have finished a rebuild while this caller waited for its turn.
+    if let Some((built, body)) = locked(&state.worlds.commons_bots).as_ref() {
         if built.elapsed() < COMMONS_BOTS_CACHE {
             return Ok(body.clone());
         }
@@ -2356,7 +2383,8 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
         })
         .map_err(internal)?,
     );
-    *cache = Some((Instant::now(), body.clone()));
+    *locked(&state.worlds.commons_bots) = Some((Instant::now(), body.clone()));
+    drop(building);
     Ok(body)
 }
 
@@ -2365,10 +2393,18 @@ pub async fn commons_bots(State(state): State<AppState>, headers: HeaderMap) -> 
     let now = now();
     let mut response = match allow_commons_bots(&state, &headers, now) {
         Err(error) => error.into_response(),
-        Ok(()) => match commons_bots_body(&state, now) {
-            Ok(body) => commons_bots_ok(body),
-            Err(error) => error.into_response(),
-        },
+        Ok(()) => {
+            let built_state = state.clone();
+            match tokio::task::spawn_blocking(move || commons_bots_body(&built_state, now)).await {
+                Ok(Ok(body)) => commons_bots_ok(body),
+                Ok(Err(error)) => error.into_response(),
+                Err(error) => {
+                    tracing::error!(%error, "the Commons bots list could not be built");
+                    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "something went wrong")
+                        .into_response()
+                }
+            }
+        }
     };
     add_viewer_cors(&state, &headers, &mut response);
     response
