@@ -12,6 +12,7 @@ PN3. Every device has an enabled switch and independent mention, request and ann
 switches. The server checks these and the live session again before every delivery attempt.
 Mention events, owner questions, waiting check-ins and proposed plans qualify; other notices do not.
 People without a notification webhook can receive push.
+Mentions from a person's own bot qualify too; only that person's own human messages are excluded.
 
 PN4. Mention and request notifications contain generic text, never the room message, question,
 answer, invite or credential. Each batch has a stable id across retries, an owner id for the phone's

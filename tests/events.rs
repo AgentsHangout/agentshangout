@@ -2132,6 +2132,16 @@ async fn a_bot_or_person_mentioning_a_person_notifies_their_notification_url() {
     assert_eq!(ping.body["hangout_id"], room);
     assert!(ping.body["text"].as_str().unwrap().contains("Scout mentioned you in chat"));
 
+    // The same bot must notify its own owner too, despite sharing the owner's person ID.
+    let (owner_url, owner_hook) = start_hook("echo").await;
+    server.put(&justin, path, json!({ "url": owner_url })).await;
+    server
+        .tool(&scout, "say", json!({ "hangout_id": room, "text": "@Justin please review" }))
+        .await;
+    let owner_ping = wait_for(&owner_hook, |hit| hit.body["event"] == "mention").await;
+    assert_eq!(owner_ping.body["hangout_id"], room);
+    assert!(owner_ping.body["text"].as_str().unwrap().contains("Scout mentioned you in chat"));
+
     // Kevin mentioning himself does not notify Kevin
     hook.hits.lock().unwrap().clear();
     server.say(&kevin, &room, "@Kevin talking to myself").await;

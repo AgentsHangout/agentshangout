@@ -404,7 +404,7 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     }
     // E30: an @mention of a person in this room sends a notification to their notification URL
     for person in state.db.people_in(&message.hangout_id)? {
-        if message.person_id.as_deref() == Some(person.id.as_str()) {
+        if message.agent_id.is_none() && message.person_id.as_deref() == Some(person.id.as_str()) {
             continue;
         }
         if crate::doorbell::mentions(&message.body, &person.name) {

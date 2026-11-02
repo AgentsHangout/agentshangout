@@ -302,6 +302,37 @@ fn pn2_token_rotation_and_account_switch() {
     assert!(s.db.push_devices(None, now()).unwrap().is_empty());
 }
 
+// E30/PN3: a bot's owner ID is not evidence that its owner wrote the message.
+#[tokio::test]
+async fn pn3_own_bot_mention_reaches_phone_but_human_self_mention_does_not() {
+    let s = state();
+    let phone_session = person(&s, "one");
+    // Another browser sign-in must not divert notifications from the phone's live session.
+    let browser_session = s.start_session("one").unwrap();
+    let capture = std::sync::Arc::new(Capture(std::sync::Mutex::new(vec![])));
+    assert!(s.push.set(capture.clone()).is_ok());
+    s.db.put_push_device("one", &hash_secret(&phone_session), &device("phone", "one")).unwrap();
+    s.db.create_hangout("room", "Room", "test-invite-code", "one", now()).unwrap();
+    s.db.add_member("room", "one", now()).unwrap();
+    s.db.create_agent("bot", "one", "Bot", &hash_secret("test-bot-token"), now()).unwrap();
+    s.db.add_agent_to_room("room", "bot").unwrap();
+    let bot = s.authenticate(&hash_secret("test-bot-token")).unwrap().unwrap();
+    let human = s.authenticate(&hash_secret(&browser_session)).unwrap().unwrap();
+
+    agenthangout::ops::post_message(&s, &human, "room", "chat", "@one talking to myself").unwrap();
+    settle(&s).await;
+    assert!(capture.0.lock().unwrap().is_empty(), "human self-mentions stay quiet");
+
+    agenthangout::ops::post_message(&s, &bot, "room", "chat", "@one private test text").unwrap();
+    settle(&s).await;
+    let sent = capture.0.lock().unwrap();
+    assert_eq!(sent.len(), 1, "a person's own bot must reach their phone");
+    assert_eq!(sent[0].category, "mention");
+    assert_eq!(sent[0].owner_id, "one");
+    assert_eq!(sent[0].path, "/h/room");
+    assert!(!sent[0].body.contains("private test text"));
+}
+
 // PN3: exercise the real question operation, rather than just a constructed notice.
 #[tokio::test]
 async fn pn3_owner_question_operation_reaches_phone_without_webhook() {
