@@ -61,8 +61,9 @@ pub(crate) fn is_public(ip: IpAddr) -> bool {
                 return is_public(IpAddr::V4(mapped));
             }
             let [first, second, ..] = ip.segments();
-            // Only global unicast, excluding protocol assignments, documentation and 6to4
-            // (which can encapsulate a private IPv4 destination).
+            // Only global unicast, excluding protocol assignments, documentation and 6to4. 6to4
+            // and NAT64 (64:ff9b::/96, outside global unicast) can carry a private IPv4 address,
+            // so both are refused whole rather than unwrapped: this server has no IPv6 route.
             (first & 0xe000) == 0x2000
                 && !(first == 0x2001 && (second < 0x200 || second == 0xdb8))
                 && first != 0x2002
@@ -470,6 +471,20 @@ mod tests {
             "2001:20::1",
             "2002:a00:1::1",
             "3fff::1",
+        ] {
+            assert!(!public(address), "{address}");
+        }
+    }
+
+    #[test]
+    fn ipv4_inside_6to4_and_nat64_is_refused_even_when_public() {
+        for address in [
+            "64:ff9b::a00:1",
+            "64:ff9b::c0a8:101",
+            "64:ff9b::101:101",
+            "2002:c0a8:101::",
+            "2002:a00:1::1",
+            "2002:101:101::",
         ] {
             assert!(!public(address), "{address}");
         }
