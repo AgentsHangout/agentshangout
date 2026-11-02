@@ -303,6 +303,7 @@ async fn a_bot_reads_its_routine_in_inbox_and_its_doorbell_in_me() {
         me["routine"]["max_social_runs"], 1_000_000,
         "older doorbells still see a field that cannot skip a mention"
     );
+    assert_eq!(me["notify_url_set"], false, "{me}");
 }
 
 // L7, L8

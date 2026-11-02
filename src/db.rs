@@ -1481,6 +1481,12 @@ pub struct WakeDecision {
     pub at: i64,
 }
 
+/// L10: bot mentions the server is holding, and those it has already rung, by room.
+pub struct BotMentionWakeIds {
+    pub held: BTreeMap<String, Vec<i64>>,
+    pub rung: BTreeMap<String, Vec<i64>>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Message {
     pub id: i64,
@@ -5839,7 +5845,22 @@ impl Db {
         )
     }
 
+    /// L10: when this room already has a hold for this bot, so a later mention can join it.
+    pub fn held_mention_due_at(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn().query_row(
+            "SELECT MIN(due_at) FROM held_mention_wakes WHERE agent_id = ? AND hangout_id = ?",
+            params![agent_id, hangout_id],
+            |row| row.get(0),
+        )
+    }
+
     /// L10: remember a bot mention until the chain hold ends, then wake for it.
+    /// A mention that arrives during an open hold joins that hold's due time, so one wake includes
+    /// every held mention.
     pub fn hold_mention_wake(
         &self,
         agent_id: &str,
@@ -5848,6 +5869,7 @@ impl Db {
         due_at: i64,
         now: i64,
     ) -> rusqlite::Result<()> {
+        let due_at = self.held_mention_due_at(agent_id, hangout_id)?.unwrap_or(due_at);
         self.conn().execute(
             "INSERT OR IGNORE INTO held_mention_wakes
              (agent_id, hangout_id, message_id, due_at, created_at)
@@ -5855,6 +5877,35 @@ impl Db {
             params![agent_id, hangout_id, message_id, due_at, now],
         )?;
         Ok(())
+    }
+
+    /// L10: bot mentions this bot's doorbell must not send again: the server is holding them, or
+    /// has already rung them.
+    pub fn bot_mention_wake_ids(&self, agent_id: &str) -> rusqlite::Result<BotMentionWakeIds> {
+        fn group(rows: Vec<(String, i64)>) -> BTreeMap<String, Vec<i64>> {
+            let mut map: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+            for (hangout, id) in rows {
+                map.entry(hangout).or_default().push(id);
+            }
+            map
+        }
+        let conn = self.conn();
+        let mut held_stmt = conn.prepare(
+            "SELECT hangout_id, message_id FROM held_mention_wakes
+             WHERE agent_id = ? ORDER BY hangout_id, message_id",
+        )?;
+        let held = held_stmt
+            .query_map([agent_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut rung_stmt = conn.prepare(
+            "SELECT m.hangout_id, r.message_id FROM wake_rings r
+             JOIN messages m ON m.id = r.message_id
+             WHERE r.agent_id = ? ORDER BY m.hangout_id, r.message_id",
+        )?;
+        let rung = rung_stmt
+            .query_map([agent_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(BotMentionWakeIds { held: group(held), rung: group(rung) })
     }
 
     fn group_held_mentions(rows: Vec<(String, String, i64)>) -> Vec<(String, String, Vec<i64>)> {
@@ -5902,6 +5953,8 @@ impl Db {
     /// Claim only the selected rows. Reserving the wake in the same transaction means a stale
     /// or concurrent flusher cannot send twice, and a reservation failure leaves the queue intact.
     /// With no reservation time, discard only this selected batch (for example, Only me).
+    /// Every claimed mention is recorded as rung so a doorbell cannot send the same burst again;
+    /// only the latest counts toward the chain hold.
     pub fn take_held_mentions(
         &self,
         agent_id: &str,
@@ -5911,7 +5964,7 @@ impl Db {
     ) -> rusqlite::Result<Option<i64>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let mut latest = None;
+        let mut claimed = Vec::new();
         for &message_id in message_ids {
             if tx.execute(
                 "DELETE FROM held_mention_wakes
@@ -5919,9 +5972,10 @@ impl Db {
                 params![agent_id, hangout_id, message_id],
             )? > 0
             {
-                latest = Some(latest.map_or(message_id, |previous: i64| previous.max(message_id)));
+                claimed.push(message_id);
             }
         }
+        let latest = claimed.iter().copied().max();
         if let (Some(message_id), Some(at)) = (latest, reserve_at) {
             // Keep the same retention as an immediate ring, even for a continuously held chain.
             tx.execute("DELETE FROM wake_rings WHERE rung_at < ?", [at - 24 * 60 * 60])?;
@@ -5931,8 +5985,20 @@ impl Db {
                 params![message_id, agent_id, at],
             )?;
             if reserved == 0 {
-                latest = None;
+                tx.commit()?;
+                return Ok(None);
             }
+            for &id in &claimed {
+                if id != message_id {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO wake_rings (message_id, agent_id, capped, rung_at)
+                         VALUES (?, ?, 0, ?)",
+                        params![id, agent_id, at],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            return Ok(Some(message_id));
         }
         tx.commit()?;
         Ok(latest)

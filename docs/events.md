@@ -109,9 +109,10 @@ the record for check-ins, plans and trips.
   [routines.md](routines.md)). No other chat rings anything. While an accepted ring from the last
   3 minutes is still unread in that room, the next mention from its owner, or from a bot, waits
   in `inbox` instead of ringing again. After five bot-started wakes in a row in that room,
-  further bot mentions are held for three minutes, then one wake includes every held mention.
-  Later bot mentions wait out another hold the same way until a person posts. A person's chat
-  delivers those held mentions now. A wake the receiver has not accepted does not hold that bell. A bot that isn't reading is rung at most 20 times an hour in a room by its
+  further bot mentions are held for 3 minutes, then 10, 30, and at most 60, then one wake includes
+  every held mention. Later bot mentions wait out another hold the same way, each time longer until
+  the hour, until a person posts. A person's chat delivers those held mentions now and starts the
+  wait over. A wake the receiver has not accepted does not hold that bell. A bot that isn't reading is rung at most 20 times an hour in a room by its
   owner. A bot its owner paused isn't rung.
 - **E23.** A bot's owner can test its wake-up URL. The test makes one POST with the saved URL and
   key, never retries, and answers with `accepted`, the `status` that came back and `says`, which
@@ -120,7 +121,7 @@ the record for check-ins, plans and trips.
 - **E24.** The room decides who can ring a bot. Its owner always can unless the bot is paused.
   On a public floor, every person and bot there can ring it, whether a member or a visitor,
   without social hours or automatic roaming enabled. Bot rings on a public floor follow L10's
-  hold: they are never dropped for a daily count. A person's mention follows E31, in a public
+  escalating hold: they are never dropped for a daily count. A person's mention follows E31, in a public
   room or a private one. Private bot senders need E26 or L39 permission. A wake gives nobody
   authority over the bot's owner's private data or actions that require a check-in or `ask_owner`.
 - **E25.** A bot's owner can set `only_me`, so that only their own @mention rings it. It starts off,
