@@ -12,6 +12,7 @@ use std::{
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 
+use crate::github_display::{CachedDisplay, GitHubDisplay};
 use crate::world::{Change, Kind, Pos, Tile, Tiles};
 
 /// An agent that wrote something this recently sits at the table.
@@ -23,6 +24,7 @@ pub const LISTENING_SECS: i64 = 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod github_display;
 mod oauth;
 
 const SCHEMA: &str = r#"
@@ -1012,6 +1014,25 @@ CREATE TABLE IF NOT EXISTS push_devices (
     announcements INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS push_devices_person ON push_devices(person_id);
+CREATE TABLE IF NOT EXISTS github_display (
+    person_id      TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    show_repos     INTEGER NOT NULL DEFAULT 0,
+    show_stars     INTEGER NOT NULL DEFAULT 0,
+    show_languages INTEGER NOT NULL DEFAULT 0,
+    show_badge     INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS github_display_cache (
+    github_user_id     TEXT PRIMARY KEY,
+    github_login       TEXT NOT NULL,
+    repos_json         TEXT NOT NULL DEFAULT '[]',
+    top_languages_json TEXT NOT NULL DEFAULT '[]',
+    merged_pr_count    INTEGER NOT NULL DEFAULT 0,
+    fetched_at         INTEGER NOT NULL DEFAULT 0,
+    repos_etag         TEXT,
+    search_etag        TEXT,
+    last_attempt_at    INTEGER NOT NULL DEFAULT 0
+);
 
 -- A65-A69: independent, revocable MCP OAuth grants. Legacy credentials are unchanged.
 CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
@@ -1047,6 +1068,14 @@ CREATE INDEX IF NOT EXISTS mcp_oauth_requests_owner ON mcp_oauth_requests(owner_
 CREATE INDEX IF NOT EXISTS mcp_oauth_requests_expiry ON mcp_oauth_requests(expires_at);
 CREATE INDEX IF NOT EXISTS mcp_oauth_grants_expiry ON mcp_oauth_grants(expires_at);
 
+-- A72-A73: an in-flight refresh is bound to one current owner link and consent state.
+CREATE TABLE IF NOT EXISTS github_display_refresh_claims (
+ person_id TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+ claim_id TEXT NOT NULL,
+ github_user_id TEXT NOT NULL,
+ github_login TEXT NOT NULL,
+ claimed_at INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -3432,6 +3461,29 @@ impl Db {
                    WHERE l.person_id = ?1 AND l.site = ?2 AND l.account_id <> ?3)",
             [person_id, site, account_id],
         )?;
+        if site == "github" {
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT account_id FROM sign_in_links WHERE person_id=? AND site='github'",
+                    [person_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if old.as_deref() != Some(account_id) {
+                tx.execute(
+                    "DELETE FROM github_display_refresh_claims WHERE person_id=?",
+                    [person_id],
+                )?;
+                tx.execute("DELETE FROM github_display WHERE person_id=?", [person_id])?;
+                if let Some(old) = old {
+                    tx.execute("DELETE FROM github_display_cache WHERE github_user_id=?", [old])?;
+                }
+                tx.execute(
+                    "DELETE FROM github_display_cache WHERE github_user_id=?",
+                    [account_id],
+                )?;
+            }
+        }
         tx.execute(
             "INSERT OR REPLACE INTO sign_in_links
                  (person_id, site, account_id, account_name, linked_at)
@@ -3494,10 +3546,21 @@ impl Db {
         Ok(Some(person))
     }
 
-    /// A36: the link and every session it started.
+    /// A36: the link and every session it started. A73: a GitHub link's display switches
+    /// and cache row go in the same transaction, so unlinking can't leave either behind.
     pub fn remove_sign_in_link(&self, person_id: &str, site: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        let github_account: Option<String> = if site == "github" {
+            tx.query_row(
+                "SELECT account_id FROM sign_in_links WHERE person_id = ? AND site = 'github'",
+                [person_id],
+                |row| row.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
         tx.execute(
             "DELETE FROM sessions WHERE person_id = ?1
                AND token_hash IN (SELECT token_hash FROM sign_in_sessions WHERE site = ?2)",
@@ -3507,6 +3570,11 @@ impl Db {
             "DELETE FROM sign_in_links WHERE person_id = ? AND site = ?",
             [person_id, site],
         )?;
+        if let Some(account_id) = github_account {
+            tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
+            tx.execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;
+            tx.execute("DELETE FROM github_display_cache WHERE github_user_id = ?", [account_id])?;
+        }
         tx.commit()
     }
 
@@ -3516,6 +3584,165 @@ impl Db {
             [person_id],
             |row| row.get(0),
         )
+    }
+
+    // GitHub display
+
+    /// A70: what this person chose to show of their linked GitHub account. Nothing when they
+    /// never turned anything on.
+    pub fn github_display_for(&self, person_id: &str) -> rusqlite::Result<Option<GitHubDisplay>> {
+        self.conn()
+            .query_row(
+                "SELECT show_repos, show_stars, show_languages, show_badge FROM github_display
+                 WHERE person_id = ?",
+                [person_id],
+                |row| {
+                    Ok(GitHubDisplay {
+                        show_repos: row.get::<_, i64>(0)? != 0,
+                        show_stars: row.get::<_, i64>(1)? != 0,
+                        show_languages: row.get::<_, i64>(2)? != 0,
+                        show_badge: row.get::<_, i64>(3)? != 0,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// A70: stores what this person chose to show.
+    pub fn set_github_display(
+        &self,
+        person_id: &str,
+        display: &GitHubDisplay,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("UPDATE github_display_cache SET last_attempt_at=0 WHERE github_user_id IN (SELECT github_user_id FROM github_display_refresh_claims WHERE person_id=?)", [person_id])?;
+        tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
+        tx.execute(
+            "INSERT INTO github_display
+                 (person_id, show_repos, show_stars, show_languages, show_badge, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(person_id) DO UPDATE SET
+                 show_repos = excluded.show_repos,
+                 show_stars = excluded.show_stars,
+                 show_languages = excluded.show_languages,
+                 show_badge = excluded.show_badge,
+                 updated_at = excluded.updated_at",
+            params![
+                person_id,
+                display.show_repos as i64,
+                display.show_stars as i64,
+                display.show_languages as i64,
+                display.show_badge as i64,
+                now,
+            ],
+        )?;
+        tx.commit()
+    }
+
+    /// The GitHub account this person linked, as its numeric id and username, if any.
+    pub fn github_link(&self, person_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT account_id, account_name FROM sign_in_links
+                 WHERE person_id = ? AND site = 'github'",
+                [person_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// A72: the cached public display data for one GitHub account id.
+    pub fn github_display_cache_for(
+        &self,
+        github_user_id: &str,
+    ) -> rusqlite::Result<Option<CachedDisplay>> {
+        self.conn()
+            .query_row(
+                "SELECT github_user_id, github_login, repos_json, top_languages_json,
+                        merged_pr_count, fetched_at, repos_etag, search_etag, last_attempt_at
+                 FROM github_display_cache WHERE github_user_id = ?",
+                [github_user_id],
+                |row| {
+                    Ok(CachedDisplay {
+                        github_user_id: row.get(0)?,
+                        github_login: row.get(1)?,
+                        repos_json: row.get(2)?,
+                        top_languages_json: row.get(3)?,
+                        merged_pr_count: row.get(4)?,
+                        fetched_at: row.get(5)?,
+                        repos_etag: row.get(6)?,
+                        search_etag: row.get(7)?,
+                        last_attempt_at: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// A72: stores a refreshed cache row, whole.
+    pub fn set_github_display_cache(&self, cache: &CachedDisplay) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO github_display_cache
+                 (github_user_id, github_login, repos_json, top_languages_json, merged_pr_count,
+                  fetched_at, repos_etag, search_etag, last_attempt_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(github_user_id) DO UPDATE SET
+                 github_login = excluded.github_login,
+                 repos_json = excluded.repos_json,
+                 top_languages_json = excluded.top_languages_json,
+                 merged_pr_count = excluded.merged_pr_count,
+                 fetched_at = excluded.fetched_at,
+                 repos_etag = excluded.repos_etag,
+                 search_etag = excluded.search_etag,
+                 last_attempt_at = excluded.last_attempt_at",
+            params![
+                cache.github_user_id,
+                cache.github_login,
+                cache.repos_json,
+                cache.top_languages_json,
+                cache.merged_pr_count,
+                cache.fetched_at,
+                cache.repos_etag,
+                cache.search_etag,
+                cache.last_attempt_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// A72: records a refresh attempt that failed, keeping the old data. A row that doesn't
+    /// exist yet is made as a stub, so later views back off instead of trying again each time.
+    pub fn note_github_display_attempt(
+        &self,
+        github_user_id: &str,
+        github_login: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO github_display_cache
+                 (github_user_id, github_login, last_attempt_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(github_user_id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at",
+            params![github_user_id, github_login, now],
+        )?;
+        Ok(())
+    }
+
+    /// A73: the display switches go with the link.
+    pub fn delete_github_display(&self, person_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;
+        Ok(())
+    }
+
+    /// A73: the cache row goes with the link.
+    pub fn delete_github_display_cache(&self, github_user_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM github_display_cache WHERE github_user_id = ?",
+            [github_user_id],
+        )?;
+        Ok(())
     }
 
     // Passkeys
@@ -11657,6 +11884,13 @@ impl Db {
             "SELECT m.hangout_id FROM members m WHERE m.person_id = ?1
                AND EXISTS (SELECT 1 FROM members o
                            WHERE o.hangout_id = m.hangout_id AND o.person_id <> ?1)",
+            [person_id],
+        )?;
+        // A73: the display cache is keyed by GitHub account id, not by person, so it doesn't
+        // cascade with the person row; it goes here, while the link rows still name it.
+        tx.execute(
+            "DELETE FROM github_display_cache WHERE github_user_id IN
+               (SELECT account_id FROM sign_in_links WHERE person_id = ? AND site = 'github')",
             [person_id],
         )?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;

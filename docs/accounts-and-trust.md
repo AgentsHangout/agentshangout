@@ -347,6 +347,82 @@ username can be changed and then taken by someone else. `account_name` is only f
   off answers 409 to starting anything, and `GET /api/sign-in` lists only the sites that are on, so
   the page offers nothing else.
 
+### Showing a linked GitHub account
+
+Linking is not showing. A person who linked GitHub can turn each part of it on for anyone to
+see, and everything stays off until they do.
+
+#### What's stored
+
+```sql
+CREATE TABLE IF NOT EXISTS github_display (
+    person_id      TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    show_repos     INTEGER NOT NULL DEFAULT 0,
+    show_stars     INTEGER NOT NULL DEFAULT 0,
+    show_languages INTEGER NOT NULL DEFAULT 0,
+    show_badge     INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS github_display_cache (
+    github_user_id     TEXT PRIMARY KEY,
+    github_login       TEXT NOT NULL,
+    repos_json         TEXT NOT NULL DEFAULT '[]',
+    top_languages_json TEXT NOT NULL DEFAULT '[]',
+    merged_pr_count    INTEGER NOT NULL DEFAULT 0,
+    fetched_at         INTEGER NOT NULL DEFAULT 0,
+    repos_etag         TEXT,
+    search_etag        TEXT,
+    last_attempt_at    INTEGER NOT NULL DEFAULT 0
+);
+```
+
+`github_display` is the person's own switches, one per section. `github_display_cache` is keyed
+by the GitHub account id, not by the person, because a username can change (A52) while the id
+doesn't. It holds only what GitHub shows anyone: repo names, links, star counts, languages and a
+merged-pull-request count. No tokens, no private repos, no emails.
+
+#### Rules
+
+- **A70.** Showing is opt-in per section: public repos, stars received, top languages, and a
+  merged-pull-request badge. Each starts off, and only the person turns one on, from the Discord
+  and GitHub card on their home page. A bot gets 403 on the route that changes them, as on every
+  route here (A46). Partial switch updates are atomic: changing one cannot restore another
+  switch that a concurrent request turned off. The UI disables a switch while saving and restores
+  the server-confirmed value if the save fails. If the follow-up read also fails, it marks the
+  switch indeterminate and asks for a reload rather than claiming that disclosure is off.
+- **A71.** What shows is public data: the person's public repos, without forks, archived repos or
+  private ones — only the six most-starred show, though the star total counts them all; stars
+  received, as a total and as the count on each repo shown; top languages counted across those
+  repos; and how many pull requests they merged into AgentsHangout. The server reads all of it
+  from GitHub's public API without any token, so there is nothing private to leak. Repo names
+  and descriptions are user text, so a view renders them as text, never as HTML.
+- **A72.** A view refreshes the cache only when it's older than six hours. A per-person atomic
+  claim starts before network work; at most four refreshes run server-wide at once. Repository
+  pages are fetched independently without reusing a page-one ETag for the whole list. Search may
+  use its own ETag. The whole refresh is bounded by five seconds. The repo list pages a hundred at a
+  time, at most three pages, so a huge account can't stall the refresh. When GitHub answers
+  badly or not at all — a 403 or 429 included — the view still answers 200 with what the cache
+  holds and never blanks the profile, and the attempt is written down so the next view within
+  the hour doesn't try again. A failed first fetch is unknown, never a fabricated zero count. A
+  completed fetch rechecks its exact claim, current link and display switches before storing or
+  returning data; unlink, deletion, replacement and any toggle change invalidate old claims.
+- **A73.** Unlinking GitHub (A55) deletes the switches and the cache row with the link, in the
+  same transaction, so unlinking can't leave either behind. Deleting the account does the same:
+  the switches go with the person row, and the cache row is deleted outright, since nothing
+  points at it. Anything already earned from it, like furniture unlocks, is not display data
+  and stays. Replacing the linked account clears the previous account's display consent too.
+- **A74.** With every switch off, the public response is indistinguishable from an unlinked
+  account: no login, link status or sections are exposed, and no upstream request is made. With
+  explicit section opt-in, the endpoint may show the current linked login and only enabled cached
+  sections. It reads current authorization state atomically; a bot's view carries no GitHub itself.
+- **A75.** Showing implies nothing. A link gives no standing (A57) and doesn't verify a name, and
+  neither do star counts or merged pull requests. They are counts from public data, not
+  endorsements. Each refresh verifies the public login against the linked numeric account ID
+  before and after fetching; repository owners must match that ID too. Reassigned or unsafe
+  usernames fail closed. Each upstream JSON response is capped at two MiB.
+
+The display-switch browser regression can also be run with `node tests/github_display_ui.cjs`.
+
 ### Making an account with one
 
 Someone new can start with Discord or GitHub instead of a passkey. The site proves the account, then
@@ -387,9 +463,13 @@ left with a second one holding their link.
 | `POST /api/sign-in/finish` | `{code, state}` | `{ok}`, setting the session cookie for a sign-in, or `{new_account: {step, site, name, account}}` for an account nobody has linked | Whoever started it |
 | `POST /api/sign-in/new-account` | `{step, your_name}` | `{person, owner_key}`, setting the session cookie | Whoever started it, signed out |
 | `DELETE /api/sign-in/{site}` | | `{ok}` | A signed-in person |
+| `PUT /api/me/github-display` | `{show_repos, show_stars, show_languages, show_badge}`, each optional | `{ok}` | A signed-in person |
+| `GET /api/people/{person_id}/github` | | The sections they turned on, or `{linked: false}` | Anyone |
 
 `GET /api/me` gains `sign_in: [{site, name, linked}]`, where `linked` is the username or null, and
-`sign_in_session`, which says whether a site started this session.
+`sign_in_session`, which says whether a site started this session. It also gains
+`github_display: {show_repos, show_stars, show_languages, show_badge}`, the person's own
+switches.
 
 ## Trust
 
