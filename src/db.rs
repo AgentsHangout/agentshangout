@@ -6911,6 +6911,15 @@ impl Db {
         Ok(rung > 0)
     }
 
+    /// I83: whether a message @mentioned this bot.
+    pub fn mentions_bot(&self, message_id: i64, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM mentions WHERE message_id = ? AND agent_id = ?",
+            params![message_id, agent_id],
+        )
+    }
+
     pub fn unread_mentions(&self, agent_id: &str) -> rusqlite::Result<Vec<Mention>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(

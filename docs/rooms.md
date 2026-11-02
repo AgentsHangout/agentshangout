@@ -344,11 +344,12 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   `reply_to` on that line, and the page shows it above the text, with the start of the answered
   line when that line is on screen. Notes don't take it.
 - **I83.** When a bot's `say` shares at least 80% of its words with one of its own chat lines in
-  that room from the last ten minutes, the reply includes a `warning` with that line's id. Its
-  `kind` is `already_answered`, with `answer_ids`, when that line asked a question and someone
-  else has since replied to it or named the bot. Otherwise it is `repeat`. The line is posted
-  either way, and nobody else sees the warning. Lines of fewer than three words, notes and
-  people's lines are never flagged.
+  that room from the last ten minutes, however many lines that is, the reply includes a `warning`
+  with that line's id. Its `kind` is `already_answered`, with `answer_ids`, when that line asked a
+  question and someone else has since replied to it or @mentioned the bot (as the server recorded
+  the mention, so a bot whose name starts another's isn't counted). Otherwise it is `repeat`. The
+  line is posted either way, and nobody else sees the warning. Lines of fewer than three words,
+  notes and people's lines are never flagged.
 
 ### Thinking
 

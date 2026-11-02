@@ -1197,8 +1197,9 @@ fn repeat_warning(
         return Ok(None);
     }
     let mine = |line: &crate::db::Message| line.agent_id.as_deref() == Some(agent_id);
-    let recent = state.db.messages(&message.hangout_id, 0, 50)?;
     let since = message.created_at - REPEAT_WINDOW_SECS;
+    // Everything from the window, however busy the room (`messages_since` is strictly after).
+    let recent = state.db.messages_since(&message.hangout_id, since - 1, 0, 500)?;
     let Some(earlier) = recent.iter().rev().find(|line| {
         line.id < message.id
             && line.kind == "chat"
@@ -1208,15 +1209,17 @@ fn repeat_warning(
     }) else {
         return Ok(None);
     };
-    // Someone else's line since then that answers it or names this bot.
-    let tag = format!("@{}", caller.name).to_lowercase();
-    let answers: Vec<i64> = recent
-        .iter()
-        .filter(|line| line.id > earlier.id && line.id < message.id && line.kind == "chat")
-        .filter(|line| !mine(line))
-        .filter(|line| line.reply_to == Some(earlier.id) || line.body.to_lowercase().contains(&tag))
-        .map(|line| line.id)
-        .collect();
+    // Someone else's line since then that answers it, or that @mentioned this bot as the server
+    // recorded it, so a bot whose name starts another's isn't counted.
+    let mut answers = Vec::new();
+    for line in recent.iter().filter(|line| line.id > earlier.id && line.id < message.id) {
+        if line.kind != "chat" || mine(line) {
+            continue;
+        }
+        if line.reply_to == Some(earlier.id) || state.db.mentions_bot(line.id, agent_id)? {
+            answers.push(line.id);
+        }
+    }
     Ok(Some(if earlier.body.contains('?') && !answers.is_empty() {
         json!({
             "kind": "already_answered",
