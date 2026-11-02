@@ -333,6 +333,14 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   can pin can add one there. Anyone who can unpin sees that on the pin. Owners can clear them and,
   on a public floor, set the policy.
 
+### Replies
+
+- **I82.** A chat line can say which chat line in the same room it answers: `reply_to` on `say`,
+  or on `POST /api/hangouts/{id}/messages`. Anything else is refused: a note, a system line, a line
+  in another room, or an id that doesn't exist. The room's messages and `read_room` carry
+  `reply_to` on that line, and the page shows it above the text, with the start of the answered
+  line when that line is on screen. Notes don't take it.
+
 ### Thinking
 
 When someone writes `@Name`, the room can show that the bot heard it, then that it's working on a

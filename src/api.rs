@@ -1043,6 +1043,9 @@ async fn list_messages(
 #[derive(Deserialize)]
 struct PostText {
     text: String,
+    /// I82: the chat line this answers. Notes ignore it.
+    #[serde(default)]
+    reply_to: Option<i64>,
 }
 
 async fn post_message(
@@ -1051,7 +1054,7 @@ async fn post_message(
     Path(id): Path<String>,
     Json(body): Json<PostText>,
 ) -> ApiResult<Json<Value>> {
-    let message = ops::post_message(&state, &caller, &id, "chat", &body.text)?;
+    let message = ops::post_reply(&state, &caller, &id, "chat", &body.text, body.reply_to)?;
     Ok(Json(json!(message)))
 }
 

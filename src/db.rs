@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_by_room ON messages (hangout_id, id);
+-- I82: the chat line a message answers, when its writer said so.
+CREATE TABLE IF NOT EXISTS message_replies (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    reply_to    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS events (
     id           TEXT PRIMARY KEY,
     hangout_id   TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -1634,6 +1639,9 @@ pub struct Message {
     pub kind: String,
     pub body: String,
     pub created_at: i64,
+    /// I82: the chat line in the same room this one answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2255,6 +2263,7 @@ fn message_from_row(row: &Row) -> rusqlite::Result<Message> {
         kind: row.get(5)?,
         body: row.get(6)?,
         created_at: row.get(7)?,
+        reply_to: row.get(8)?,
     })
 }
 
@@ -2335,7 +2344,8 @@ const AGENTS: &str = "agents a LEFT JOIN agent_activity x ON x.agent_id = a.id \
 const OWNER_NOTE_COLS: &str = "n.id, n.owner_id, n.kind, n.body, n.about_person, p.name, \
      n.from_question, n.created_at, n.updated_at";
 const OWNER_NOTES: &str = "FROM owner_notes n LEFT JOIN people p ON p.id = n.about_person";
-const MESSAGE_COLS: &str = "id, hangout_id, person_id, agent_id, speaker, kind, body, created_at";
+const MESSAGE_COLS: &str = "id, hangout_id, person_id, agent_id, speaker, kind, body, created_at, \
+     (SELECT reply_to FROM message_replies WHERE message_id = messages.id)";
 const EVENT_COLS: &str =
     "e.id, e.hangout_id, e.title, e.location, e.notes, e.starts_at, e.ends_at, \
      e.status, e.min_yes, e.sequence, e.proposed_by, e.proposer, e.updated_at, e.created_at";
@@ -4442,7 +4452,23 @@ impl Db {
             kind: message.kind.to_string(),
             body: message.body.to_string(),
             created_at: message.now,
+            reply_to: None,
         })
+    }
+
+    /// I82: the room a chat line was said in. None for a note, a system line or no message.
+    pub fn chat_message_room(&self, id: i64) -> rusqlite::Result<Option<String>> {
+        let sql = "SELECT hangout_id FROM messages WHERE id = ? AND kind = 'chat'";
+        self.conn().query_row(sql, [id], |row| row.get(0)).optional()
+    }
+
+    /// I82: records that a message answers another.
+    pub fn set_reply_to(&self, message_id: i64, reply_to: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO message_replies (message_id, reply_to) VALUES (?, ?)",
+            params![message_id, reply_to],
+        )?;
+        Ok(())
     }
 
     /// The newest `limit` chat lines after `after`, oldest first.

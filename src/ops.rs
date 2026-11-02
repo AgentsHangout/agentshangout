@@ -266,14 +266,31 @@ pub fn post_message(
     kind: &str,
     body: &str,
 ) -> ApiResult<Message> {
+    post_reply(state, caller, hangout_id, kind, body, None)
+}
+
+/// I82: the same, saying which chat line in this room it answers.
+pub fn post_reply(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    kind: &str,
+    body: &str,
+    reply_to: Option<i64>,
+) -> ApiResult<Message> {
     require_room(state, caller, hangout_id)?;
     items::no_quiet(state, caller, hangout_id)?;
     let body = clean(body, "message", MAX_MESSAGE_CHARS)?;
+    if let Some(to) = reply_to {
+        if state.db.chat_message_room(to)?.as_deref() != Some(hangout_id) {
+            return Err(ApiError::bad_request("reply_to must be a chat message in this room"));
+        }
+    }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
     // S57: a bot has to be in a room to talk there.
     spaces::go_to(state, caller, hangout_id)?;
-    let message = state.db.insert_message(&NewMessage {
+    let mut message = state.db.insert_message(&NewMessage {
         hangout_id,
         person_id: Some(&caller.person_id),
         agent_id: caller.agent_id.as_deref(),
@@ -282,6 +299,10 @@ pub fn post_message(
         body: &body,
         now: now(),
     })?;
+    if let Some(to) = reply_to {
+        state.db.set_reply_to(message.id, to)?;
+        message.reply_to = Some(to);
+    }
     if caller.agent_id.is_none() && message.kind == "chat" {
         state.db.note_bot_wake_owner_chat(message.id)?;
     }

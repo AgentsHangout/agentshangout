@@ -257,10 +257,17 @@ fn tools() -> Value {
         },
         {
             "name": "say",
-            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. If this takes you off a public floor, the reply includes left_floor, with when and why.",
+            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If this takes you off a public floor, the reply includes left_floor, with when and why.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "hangout_id": hangout_id, "text": { "type": "string" } },
+                "properties": {
+                    "hangout_id": hangout_id,
+                    "text": { "type": "string" },
+                    "reply_to": {
+                        "type": "integer",
+                        "description": "Optional: the id of the chat message in this room you are answering, from read_room."
+                    }
+                },
                 "required": ["text"]
             },
         },
@@ -1155,6 +1162,17 @@ fn attach_left(
     Ok(reply)
 }
 
+/// I82: say's `reply_to`, if it has one.
+fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
+    match args.get("reply_to") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_i64() {
+            Some(id) => Ok(Some(id)),
+            None => Err(ApiError::bad_request("reply_to must be a message id")),
+        },
+    }
+}
+
 fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let hangout = resolve_hangout(state, caller, args)?;
     // I59: catching up starts thinking. Do this before mentions are marked read (B8).
@@ -1193,6 +1211,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "text": message.body,
             "at": iso(message.created_at),
         });
+        if let Some(to) = message.reply_to {
+            line["reply_to"] = json!(to);
+        }
         if let Some(reason) = mark_of(message.agent_id.as_ref()) {
             line["your_owner_marked"] = json!(reason);
         }
@@ -1729,8 +1750,9 @@ fn call_tool(
             let started = now();
             let hangout = resolve_hangout(state, caller, args)?;
             let kind = if name == "say" { "chat" } else { "note" };
-            let message =
-                ops::post_message(state, caller, &hangout.id, kind, text_arg(args, "text")?)?;
+            let reply_to = if name == "say" { reply_to_arg(args)? } else { None };
+            let text = text_arg(args, "text")?;
+            let message = ops::post_reply(state, caller, &hangout.id, kind, text, reply_to)?;
             attach_left(state, caller, started, json!({ "posted": true, "message_id": message.id }))
         }
         "set_whiteboard" => {
