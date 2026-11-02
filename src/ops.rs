@@ -266,14 +266,43 @@ pub fn post_message(
     kind: &str,
     body: &str,
 ) -> ApiResult<Message> {
+    post_reply(state, caller, hangout_id, kind, body, None)
+}
+
+/// I82: one answer for every reply_to that can't be used, so it says nothing about a line the
+/// writer can't read.
+fn cannot_answer() -> ApiError {
+    ApiError::bad_request("reply_to must be a chat message in this room")
+}
+
+/// I82: the same, saying which chat line in this room it answers.
+pub fn post_reply(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    kind: &str,
+    body: &str,
+    reply_to: Option<i64>,
+) -> ApiResult<Message> {
     require_room(state, caller, hangout_id)?;
     items::no_quiet(state, caller, hangout_id)?;
     let body = clean(body, "message", MAX_MESSAGE_CHARS)?;
+    // I82: a guest can answer only what they can read. Checked here so a refusal moves nobody,
+    // and again as the reply is written, in case the line went in between.
+    let seen_after = match reply_to {
+        Some(_) => state.guest_visit(caller, hangout_id)?.map(|visit| visit.since),
+        None => None,
+    };
+    if let Some(to) = reply_to {
+        if !state.db.can_answer(hangout_id, to, seen_after)? {
+            return Err(cannot_answer());
+        }
+    }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
     // S57: a bot has to be in a room to talk there.
     spaces::go_to(state, caller, hangout_id)?;
-    let message = state.db.insert_message(&NewMessage {
+    let new = NewMessage {
         hangout_id,
         person_id: Some(&caller.person_id),
         agent_id: caller.agent_id.as_deref(),
@@ -281,7 +310,11 @@ pub fn post_message(
         kind,
         body: &body,
         now: now(),
-    })?;
+    };
+    let message = match reply_to {
+        None => state.db.insert_message(&new)?,
+        Some(to) => state.db.insert_reply(&new, to, seen_after)?.ok_or_else(cannot_answer)?,
+    };
     if caller.agent_id.is_none() && message.kind == "chat" {
         state.db.note_bot_wake_owner_chat(message.id)?;
     }

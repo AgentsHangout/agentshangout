@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_by_room ON messages (hangout_id, id);
+-- I82: the chat line a message answers, when its writer said so.
+CREATE TABLE IF NOT EXISTS message_replies (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    reply_to    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS events (
     id           TEXT PRIMARY KEY,
     hangout_id   TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -1634,6 +1639,9 @@ pub struct Message {
     pub kind: String,
     pub body: String,
     pub created_at: i64,
+    /// I82: the chat line in the same room this one answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2255,6 +2263,7 @@ fn message_from_row(row: &Row) -> rusqlite::Result<Message> {
         kind: row.get(5)?,
         body: row.get(6)?,
         created_at: row.get(7)?,
+        reply_to: row.get(8)?,
     })
 }
 
@@ -2335,7 +2344,8 @@ const AGENTS: &str = "agents a LEFT JOIN agent_activity x ON x.agent_id = a.id \
 const OWNER_NOTE_COLS: &str = "n.id, n.owner_id, n.kind, n.body, n.about_person, p.name, \
      n.from_question, n.created_at, n.updated_at";
 const OWNER_NOTES: &str = "FROM owner_notes n LEFT JOIN people p ON p.id = n.about_person";
-const MESSAGE_COLS: &str = "id, hangout_id, person_id, agent_id, speaker, kind, body, created_at";
+const MESSAGE_COLS: &str = "id, hangout_id, person_id, agent_id, speaker, kind, body, created_at, \
+     (SELECT reply_to FROM message_replies WHERE message_id = messages.id)";
 const EVENT_COLS: &str =
     "e.id, e.hangout_id, e.title, e.location, e.notes, e.starts_at, e.ends_at, \
      e.status, e.min_yes, e.sequence, e.proposed_by, e.proposer, e.updated_at, e.created_at";
@@ -2564,6 +2574,49 @@ fn bot_places_sql(city: &str, from: &str) -> String {
 
 fn exists(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> rusqlite::Result<bool> {
     conn.query_row(sql, params, |_| Ok(())).optional().map(|found| found.is_some())
+}
+
+fn insert_message_row(conn: &Connection, message: &NewMessage) -> rusqlite::Result<Message> {
+    conn.execute(
+        "INSERT INTO messages (hangout_id, person_id, agent_id, speaker, kind, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            message.hangout_id,
+            message.person_id,
+            message.agent_id,
+            message.speaker,
+            message.kind,
+            message.body,
+            message.now
+        ],
+    )?;
+    Ok(Message {
+        id: conn.last_insert_rowid(),
+        hangout_id: message.hangout_id.to_string(),
+        person_id: message.person_id.map(str::to_string),
+        agent_id: message.agent_id.map(str::to_string),
+        speaker: message.speaker.to_string(),
+        kind: message.kind.to_string(),
+        body: message.body.to_string(),
+        created_at: message.now,
+        reply_to: None,
+    })
+}
+
+/// I82: see `Db::can_answer`. Guests read lines strictly after they arrived, so the same second
+/// is out, as in `messages_since`.
+fn answerable(
+    conn: &Connection,
+    hangout_id: &str,
+    id: i64,
+    seen_after: Option<i64>,
+) -> rusqlite::Result<bool> {
+    exists(
+        conn,
+        "SELECT 1 FROM messages
+         WHERE id = ? AND hangout_id = ? AND kind = 'chat' AND created_at > ?",
+        params![id, hangout_id, seen_after.unwrap_or(i64::MIN)],
+    )
 }
 
 /// H10: whether this room is one a bot on a trip is a guest in right now.
@@ -4419,30 +4472,42 @@ impl Db {
     // Messages
 
     pub fn insert_message(&self, message: &NewMessage) -> rusqlite::Result<Message> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO messages (hangout_id, person_id, agent_id, speaker, kind, body, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![
-                message.hangout_id,
-                message.person_id,
-                message.agent_id,
-                message.speaker,
-                message.kind,
-                message.body,
-                message.now
-            ],
+        insert_message_row(&self.conn(), message)
+    }
+
+    /// I82: whether this writer can answer a chat line here. `seen_after` is a guest's arrival:
+    /// a guest can answer only the lines they can read, which are the ones after it.
+    pub fn can_answer(
+        &self,
+        hangout_id: &str,
+        id: i64,
+        seen_after: Option<i64>,
+    ) -> rusqlite::Result<bool> {
+        answerable(&self.conn(), hangout_id, id, seen_after)
+    }
+
+    /// I82: stores a chat line that answers another, checking the answered line in the same step,
+    /// so the line and its link are written together or not at all. None, and nothing written, if
+    /// the answered line can't be answered (any more).
+    pub fn insert_reply(
+        &self,
+        message: &NewMessage,
+        reply_to: i64,
+        seen_after: Option<i64>,
+    ) -> rusqlite::Result<Option<Message>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if !answerable(&tx, message.hangout_id, reply_to, seen_after)? {
+            return Ok(None);
+        }
+        let mut stored = insert_message_row(&tx, message)?;
+        tx.execute(
+            "INSERT INTO message_replies (message_id, reply_to) VALUES (?, ?)",
+            params![stored.id, reply_to],
         )?;
-        Ok(Message {
-            id: conn.last_insert_rowid(),
-            hangout_id: message.hangout_id.to_string(),
-            person_id: message.person_id.map(str::to_string),
-            agent_id: message.agent_id.map(str::to_string),
-            speaker: message.speaker.to_string(),
-            kind: message.kind.to_string(),
-            body: message.body.to_string(),
-            created_at: message.now,
-        })
+        tx.commit()?;
+        stored.reply_to = Some(reply_to);
+        Ok(Some(stored))
     }
 
     /// The newest `limit` chat lines after `after`, oldest first.
@@ -13087,6 +13152,45 @@ mod tests {
     ) -> Arrival {
         agreed_trip(db, id, agent_id, house_id, minutes, now);
         db.arrive(id, now).unwrap()
+    }
+
+    // I82
+    #[test]
+    fn a_reply_to_a_line_that_is_gone_writes_nothing() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_hangout("h2", "Other", "code2", "p1", 0).unwrap();
+        let asked = say(&db, "h1", "chat", "Who has the keys?", 100);
+        let note = say(&db, "h1", "note", "Keys by the door", 100);
+        let elsewhere = say(&db, "h2", "chat", "hi", 100);
+        let reply = |reply_to: i64, seen_after: Option<i64>| {
+            let message = NewMessage {
+                hangout_id: "h1",
+                person_id: Some("p1"),
+                agent_id: None,
+                speaker: "Justin",
+                kind: "chat",
+                body: "I do",
+                now: 200,
+            };
+            db.insert_reply(&message, reply_to, seen_after).unwrap()
+        };
+        let count = || db.messages("h1", 0, 100).unwrap().len();
+
+        // Gone, a note, another room, or from before a guest arrived: nothing is written.
+        let before = count();
+        for (target, seen_after) in [(asked + 1000, None), (note, None), (elsewhere, None)] {
+            assert!(reply(target, seen_after).is_none(), "{target}");
+        }
+        assert!(reply(asked, Some(100)).is_none(), "the same second as arriving is out");
+        assert_eq!(count(), before);
+
+        let stored = reply(asked, Some(99)).unwrap();
+        assert_eq!(stored.reply_to, Some(asked));
+        let read = db.messages("h1", 0, 100).unwrap();
+        assert_eq!(read.last().unwrap().reply_to, Some(asked));
+        assert_eq!(count(), before + 1);
     }
 
     fn say(db: &Db, hangout_id: &str, kind: &str, body: &str, now: i64) -> i64 {

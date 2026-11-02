@@ -520,6 +520,7 @@ input::placeholder { color: #8b7a5e; }
 .msg-body { min-width: 0; }
 .msg-head { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; font-size: 13px; }
 .msg-body p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.msg-reply { margin: 2px 0; padding-left: 6px; border-left: 2px solid var(--line); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .event { display: flex; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 .event.confirmed { border-color: var(--accent); }

@@ -2306,6 +2306,81 @@ async fn quiet_stops_a_bot_that_was_sent_in_as_well() {
     assert_eq!(said["isError"], true, "{said}");
 }
 
+// I82
+#[tokio::test]
+async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let asked = server.post(&ann.key, &messages, json!({ "text": "Who has the keys?" })).await.ok();
+    let asked_id = asked["id"].as_i64().unwrap();
+    assert!(asked.get("reply_to").is_none(), "{asked}");
+
+    let answer = json!({ "hangout_id": room, "text": "I do", "reply_to": asked_id });
+    let said = server.tool(&rover.token, "say", answer).await;
+    assert_ne!(said["isError"], true, "{said}");
+    let answer_id = said["structuredContent"]["message_id"].as_i64().unwrap();
+
+    let read = server.read_room(&rover.token, &room).await;
+    let line = |id: i64| {
+        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == id).cloned().unwrap()
+    };
+    assert_eq!(line(answer_id)["reply_to"], asked_id, "{read}");
+    assert!(line(asked_id).get("reply_to").is_none(), "{read}");
+    let snapshot = server.snapshot(&ann.key, &room).await;
+    let shown = snapshot["messages"].as_array().unwrap().iter().find(|m| m["id"] == answer_id);
+    assert_eq!(shown.unwrap()["reply_to"], asked_id, "{snapshot}");
+
+    // A person can reply over HTTP too, with the same refusals.
+    let thanks = json!({ "text": "Thanks", "reply_to": answer_id });
+    assert_eq!(server.post(&ann.key, &messages, thanks).await.ok()["reply_to"], answer_id);
+
+    // Not a line in another room, a note, a missing id, or something that isn't an id.
+    let (bo_room, bo) = server.someone("Bo").await;
+    let elsewhere = server
+        .post(&bo.key, &format!("/api/hangouts/{bo_room}/messages"), json!({ "text": "hi" }))
+        .await
+        .ok();
+    let notes = format!("/api/hangouts/{room}/notes");
+    let note = server.post(&ann.key, &notes, json!({ "text": "Keys by the door" })).await.ok();
+    for bad in [elsewhere["id"].clone(), note["id"].clone(), json!(999_999), json!("one")] {
+        let args = json!({ "hangout_id": room, "text": "re", "reply_to": bad });
+        let refused = server.tool(&rover.token, "say", args).await;
+        assert_eq!(refused["isError"], true, "{bad}: {refused}");
+    }
+    let over_http = json!({ "text": "re", "reply_to": elsewhere["id"] });
+    server.post(&ann.key, &messages, over_http).await.refused(StatusCode::BAD_REQUEST);
+    let after = server.read_room(&rover.token, &room).await;
+    let texts: Vec<String> =
+        after["messages"].as_array().unwrap().iter().map(|m| text(&m["text"])).collect();
+    assert!(!texts.contains(&"re".to_string()), "nothing refused was posted: {after}");
+}
+
+// I82
+#[tokio::test]
+async fn a_guest_can_answer_only_lines_from_after_they_walked_in() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let messages = format!("/api/hangouts/{room}/messages");
+    let said = server.post(&ann.key, &messages, json!({ "text": "Welcome" })).await.ok();
+    let (id, at) = (said["id"].as_i64().unwrap(), said["created_at"].as_i64().unwrap());
+    let (_, eve) = server.someone("Eve").await;
+    server.walk_in(&eve, &room).await;
+
+    // Arrival times are set, so each case is exact: before, the same second, and after.
+    let arrive = |since: i64| server.state.db.set_visit_times(&room, &eve.id, since, now() + 3600);
+    for since in [at + 5, at] {
+        assert!(arrive(since).unwrap());
+        let reply = json!({ "text": "re", "reply_to": id });
+        server.post(&eve.key, &messages, reply).await.refused(StatusCode::BAD_REQUEST);
+    }
+    assert!(arrive(at - 1).unwrap());
+    let reply = json!({ "text": "Thanks", "reply_to": id });
+    assert_eq!(server.post(&eve.key, &messages, reply).await.ok()["reply_to"], id);
+}
+
 // I18
 
 #[tokio::test]

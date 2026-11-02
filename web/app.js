@@ -2527,6 +2527,8 @@ async function roomView(id) {
   if (!snapshot) return;
   const me = await api('/api/me').catch(() => null);
   const shownMessages = new Set();
+  // I82: what each shown line said, so a reply can say what it answers.
+  const shownById = new Map();
 
   const frame = windowFrame({ label: snapshot.hangout.name, stats: ROOM_STATS, heading: 'h1', live: true });
   frame.root.classList.add('wd-game', 'wd-room');
@@ -2610,6 +2612,11 @@ async function roomView(id) {
     const isBot = Boolean(message.agent_id);
     const avatar = h('span', { class: 'avatar' }, isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
     avatar.style.background = colorOf(message.person_id);
+    const answered = message.reply_to ? shownById.get(message.reply_to) : null;
+    const replyLine = !message.reply_to ? null
+      : h('div', { class: 'msg-reply muted' }, answered
+        ? `↩ ${answered.speaker}: ${answered.body.slice(0, 120)}`
+        : `↩ an earlier message`);
     return h('div', { class: 'msg' },
       avatar,
       h('div', { class: 'msg-body' },
@@ -2617,12 +2624,14 @@ async function roomView(id) {
           h('strong', {}, message.speaker),
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
+        replyLine,
         h('p', {}, message.body)));
   }
 
   function addMessage(message) {
     if (shownMessages.has(message.id)) return;
     shownMessages.add(message.id);
+    shownById.set(message.id, message);
     const atBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 60;
     chatLog.append(messageRow(message));
     if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
