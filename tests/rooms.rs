@@ -2357,6 +2357,105 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
     assert!(!texts.contains(&"re".to_string()), "nothing refused was posted: {after}");
 }
 
+// I83
+#[tokio::test]
+async fn saying_the_same_thing_again_warns_the_bot_but_still_posts() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let say = |text: &str| {
+        let args = json!({ "hangout_id": room, "text": text });
+        let token = rover.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "say", args).await["structuredContent"].clone() }
+    };
+
+    let first = say("Who is bringing snacks on Friday?").await;
+    assert!(first.get("warning").is_none(), "{first}");
+    let asked = first["message_id"].as_i64().unwrap();
+    // Short lines and different lines aren't flagged.
+    assert!(say("ok").await.get("warning").is_none());
+    assert!(say("ok").await.get("warning").is_none());
+    assert!(say("I will set up the tables early").await.get("warning").is_none());
+
+    let again = say("who is bringing the snacks on Friday?").await;
+    assert_eq!(again["posted"], true, "{again}");
+    assert_eq!(again["warning"]["kind"], "repeat", "{again}");
+    assert_eq!(again["warning"]["your_earlier_message_id"], asked, "{again}");
+
+    let messages = format!("/api/hangouts/{room}/messages");
+    let answer = server.post(&ann.key, &messages, json!({ "text": "@Rover I am" })).await.ok();
+    let third = say("Who is bringing snacks on Friday??").await;
+    assert_eq!(third["warning"]["kind"], "already_answered", "{third}");
+    assert_eq!(third["warning"]["answer_ids"], json!([answer["id"]]), "{third}");
+
+    // A person repeating themselves gets nothing extra.
+    let echo = json!({ "text": "Who is bringing snacks on Friday?" });
+    let posted = server.post(&ann.key, &messages, echo).await.ok();
+    assert!(posted.get("warning").is_none(), "{posted}");
+}
+
+// I83
+#[tokio::test]
+async fn a_visiting_bot_is_never_pointed_at_lines_from_before_it_arrived() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let (bo_room, bo) = server.someone("Bo").await;
+    let rover = server.bot(&bo, &bo_room, "Rover").await;
+    let hours = json!({
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": "00:00",
+        "ends": "24:00",
+        "public_places": true,
+    });
+    server.put(&bo.key, &format!("/api/agents/{}/routine", rover.id), hours).await.ok();
+    server.tool(&rover.token, "go_out", json!({ "floor_id": room })).await;
+
+    let messages = format!("/api/hangouts/{room}/messages");
+    let at = |id: i64| {
+        let lines = server.state.db.messages(&room, 0, 100).unwrap();
+        lines.iter().find(|line| line.id == id).unwrap().created_at
+    };
+    let arrive = |since: i64| {
+        server.state.db.set_visit_times(&room, &rover.id, since, now() + 3600).unwrap()
+    };
+    // Rover asks, Ann answers it, and Rover says it again: the warning, if any.
+    let ask_and_answer = |text: &'static str| {
+        let (server, rover, room, ann, messages) = (&server, &rover, &room, &ann, &messages);
+        async move {
+            let ask = json!({ "hangout_id": room, "text": text });
+            let asked = server.tool(&rover.token, "say", ask).await["structuredContent"].clone();
+            let asked_id = asked["message_id"].as_i64().unwrap();
+            let answer = json!({ "text": "Ann will", "reply_to": asked_id });
+            let answer_id = server.post(&ann.key, messages, answer).await.ok()["id"].as_i64();
+            (asked_id, answer_id.unwrap())
+        }
+    };
+    let say_again = |text: &'static str| {
+        let (server, rover, room) = (&server, &rover, &room);
+        async move {
+            let again = json!({ "hangout_id": room, "text": text });
+            server.tool(&rover.token, "say", again).await["structuredContent"].clone()
+        }
+    };
+
+    // Arrived the second the answer was written: neither line can be read, so nothing is named.
+    // Without the arrival cutoff this would say already_answered with the hidden answer.
+    let (_, hidden) = ask_and_answer("Who is bringing snacks on Friday?").await;
+    assert!(arrive(at(hidden)));
+    let later = say_again("Who is bringing snacks on Friday?").await;
+    assert_eq!(later["posted"], true, "{later}");
+    assert!(later.get("warning").is_none(), "{later}");
+
+    // A different question, with an arrival before it: the answer is readable and named.
+    let (asked, answer) = ask_and_answer("Who can drive us to the lake on Saturday?").await;
+    assert!(arrive(at(asked) - 1));
+    let again = say_again("Who can drive us to the lake on Saturday?").await;
+    assert_eq!(again["warning"]["kind"], "already_answered", "{again}");
+    assert_eq!(again["warning"]["answer_ids"], json!([answer]), "{again}");
+}
+
 // I82
 #[tokio::test]
 async fn a_guest_can_answer_only_lines_from_after_they_walked_in() {
