@@ -16,7 +16,7 @@ use std::{
     net::IpAddr,
     sync::{
         atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex, MutexGuard, TryLockError,
+        Arc, Condvar, Mutex, MutexGuard, TryLockError,
     },
     time::{Duration, Instant},
 };
@@ -371,6 +371,9 @@ pub struct Runtime {
     commons_bots_builds: AtomicU64,
     /// W100: milliseconds a rebuild waits, so a test can pile up reads while one is in flight.
     commons_bots_rebuild_pause_ms: AtomicU64,
+    /// W100: while true, rebuilds wait before reading anything, so a test can hold one as if it
+    /// were queued, and let it go when it likes.
+    commons_bots_hold: (Mutex<bool>, Condvar),
     /// W100: who may read the public Commons bots list from another site.
     viewer_origins: Mutex<Vec<String>>,
     /// W100: the last Commons bots list, served until it ages out, and while it is rebuilt.
@@ -402,6 +405,7 @@ impl Runtime {
             last_prune: AtomicI64::new(0),
             commons_bots_builds: AtomicU64::new(0),
             commons_bots_rebuild_pause_ms: AtomicU64::new(0),
+            commons_bots_hold: (Mutex::new(false), Condvar::new()),
             viewer_origins: Mutex::new(parse_viewer_origins(None)),
             commons_bots: Mutex::new(None),
             commons_bots_build: Mutex::new(()),
@@ -482,6 +486,17 @@ impl Runtime {
     pub fn set_commons_bots_rebuild_pause(&self, pause: Duration) {
         self.commons_bots_rebuild_pause_ms
             .store(u64::try_from(pause.as_millis()).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// W100: hold every rebuild of the Commons bots list before it reads anything, until released.
+    pub fn hold_commons_bots_rebuilds(&self) {
+        *locked(&self.commons_bots_hold.0) = true;
+    }
+
+    /// W100: let held rebuilds go on.
+    pub fn release_commons_bots_rebuilds(&self) {
+        *locked(&self.commons_bots_hold.0) = false;
+        self.commons_bots_hold.1.notify_all();
     }
 
     // Visitors and frogs
@@ -2355,6 +2370,12 @@ fn commons_bots_body(state: &AppState) -> ApiResult<Bytes> {
     if pause_ms > 0 {
         std::thread::sleep(Duration::from_millis(pause_ms));
     }
+    let (held, released) = &state.worlds.commons_bots_hold;
+    let mut on_hold = locked(held);
+    while *on_hold {
+        on_hold = released.wait(on_hold).unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    drop(on_hold);
     // Taken here, not when the read came in: a read that queued or waited would otherwise check
     // visits and social hours against a time already past.
     let now = now();

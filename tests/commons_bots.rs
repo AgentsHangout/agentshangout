@@ -6,7 +6,7 @@ use std::time::Duration;
 use agenthangout::{
     app, auth,
     db::Db,
-    now, ops,
+    now,
     world::{self, Kind},
     worlds::{self, Move, COMMONS_BOTS_PER_IP_PER_MINUTE, DEFAULT_COMMONS_VIEWER_ORIGIN},
     AppState, Config,
@@ -388,6 +388,29 @@ impl Server {
 
     async fn bots(&self) -> Value {
         self.get(BOTS).send().await.ok()
+    }
+
+    /// A read from this address that runs on its own, for while a rebuild is held.
+    fn read_aside(&self, ip: &str) -> tokio::task::JoinHandle<Value> {
+        let client = self.client.clone();
+        let url = format!("{}{BOTS}", self.base);
+        let ip = ip.to_string();
+        tokio::spawn(async move {
+            let response = client.get(&url).header("x-forwarded-for", ip).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            serde_json::from_str(&response.text().await.unwrap()).unwrap()
+        })
+    }
+
+    /// Until a read has started this many rebuilds since the server started.
+    async fn wait_for_builds(&self, builds: u64) {
+        for _ in 0..500 {
+            if self.state.worlds.commons_bots_builds() >= builds {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no rebuild started");
     }
 }
 
@@ -858,40 +881,26 @@ async fn reads_during_a_rebuild_are_given_the_last_list_without_waiting() {
 
     server.all_day(&ann, &fern, true).await;
     server.tool(&fern, "go_out", json!({ "floor_id": floor })).await;
-    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(1500));
     server.state.worlds.age_commons_bots(Duration::from_secs(worlds::COMMONS_BOTS_CACHE_SECS));
-    let builder = {
-        let client = server.client.clone();
-        let url = format!("{}{BOTS}", server.base);
-        tokio::spawn(async move {
-            let response = client.get(&url).header("x-forwarded-for", "10.9.0.1").send().await;
-            response.unwrap().text().await.unwrap()
-        })
-    };
-    // Wait until that read has taken the rebuild.
-    for _ in 0..500 {
-        if server.state.worlds.commons_bots_builds() > builds {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
+    server.state.worlds.hold_commons_bots_rebuilds();
+    let builder = server.read_aside("10.9.0.1");
+    server.wait_for_builds(builds + 1).await;
 
-    // Mid-rebuild, everyone else is given the last list at once rather than waiting for Fern.
+    // While the rebuild is held, everyone else is given the last list at once, without Fern.
     for n in 0..8u32 {
         let ip = format!("10.9.1.{}", n + 1);
         let shown = server.get(BOTS).ip(&ip).send().await.ok();
         assert_eq!(shown, first, "the last list, while the rebuild runs: {shown}");
     }
 
-    let rebuilt: Value = serde_json::from_str(&builder.await.unwrap()).unwrap();
+    server.state.worlds.release_commons_bots_rebuilds();
+    let rebuilt = builder.await.unwrap();
     let shown = names(&rebuilt);
     assert!(
         shown.contains(&"Rover".to_string()) && shown.contains(&"Fern".to_string()),
         "{rebuilt}"
     );
     assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
-    server.state.worlds.set_commons_bots_rebuild_pause(Duration::ZERO);
     assert_eq!(server.bots().await, rebuilt, "later reads are the new list");
 }
 
@@ -912,43 +921,49 @@ async fn a_list_too_old_to_hand_out_makes_reads_wait_for_the_rebuild() {
 
     // Nobody reads for a while, and meanwhile Bo turns public places off.
     server.all_day(&bo, &rover, false).await;
-    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(1500));
     server.state.worlds.age_commons_bots(worlds::COMMONS_BOTS_STALE);
-    let builder = {
-        let client = server.client.clone();
-        let url = format!("{}{BOTS}", server.base);
-        tokio::spawn(async move {
-            let response = client.get(&url).header("x-forwarded-for", "10.9.2.1").send().await;
-            response.unwrap().text().await.unwrap()
-        })
-    };
-    for _ in 0..500 {
-        if server.state.worlds.commons_bots_builds() > builds {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    server.state.worlds.hold_commons_bots_rebuilds();
+    let builder = server.read_aside("10.9.2.1");
+    server.wait_for_builds(builds + 1).await;
 
-    // That list is too old to hand out mid-rebuild, so this read waits and never shows Rover.
-    let waited = server.get(BOTS).ip("10.9.2.2").send().await.ok();
-    assert!(names(&waited).is_empty(), "{waited}");
-    let rebuilt: Value = serde_json::from_str(&builder.await.unwrap()).unwrap();
+    // That list is too old to hand out mid-rebuild, so this read waits rather than show Rover.
+    let waiting = server.read_aside("10.9.2.2");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!waiting.is_finished(), "a read during the rebuild waits for it");
+    server.state.worlds.release_commons_bots_rebuilds();
+    let waited = waiting.await.unwrap();
+    let rebuilt = builder.await.unwrap();
     assert!(names(&rebuilt).is_empty(), "{rebuilt}");
     assert_eq!(waited, rebuilt, "the waiting read shares the new list");
     assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
 }
 
 // W100
-#[tokio::test]
-async fn a_rebuild_checks_presence_against_the_time_it_runs() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rebuild_held_past_the_end_of_a_visit_leaves_that_bot_out() {
     let server = Server::start().await;
-    // The pause stands in for a rebuild that sat in the queue behind others.
-    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(2100));
-    server.state.worlds.expire_commons_bots();
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, floor) = server.public_cafe(&cy).await;
+    server.all_day(&bo, &rover, true).await;
+    server.tool(&rover, "go_out", json!({ "floor_id": floor })).await;
+    let builds = server.state.worlds.commons_bots_builds();
+
+    // Rover's visit runs out a second from now, and the read comes in while it is still on.
     let asked = now();
-    let body = server.bots().await;
-    // `as_of` is the time visits and social hours were checked against: when it ran, not asked.
-    assert!(text(&body["as_of"]) >= ops::iso(asked + 2), "asked at {}: {body}", ops::iso(asked));
+    assert!(server.state.db.set_visit_times(&floor, &rover_id, asked - 60, asked + 1).unwrap());
+    server.state.worlds.hold_commons_bots_rebuilds();
+    let read = server.read_aside("10.9.3.1");
+    server.wait_for_builds(builds + 1).await;
+
+    // The rebuild is held, as if queued behind others, until the visit is over.
+    while now() <= asked + 1 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    server.state.worlds.release_commons_bots_rebuilds();
+    let shown = read.await.unwrap();
+    assert!(names(&shown).is_empty(), "a visit that ended before the build ran: {shown}");
 }
 
 // W100
