@@ -30,4 +30,4 @@ the lab is not medical advice and its existence does not establish a treatment's
 `project_id`, and `floor_id` identify its first room. Its existing board IDs are in `boards`.
 `POST /api/research-labs/{id}/place` takes integer `x` and `y` coordinates.
 The MCP equivalents are `list_research_labs`, `create_research_lab`, `read_research_lab`, and
-`place_research_lab`. See [Research work](research-work.md) for contributions and awards.
+`build_research_lab`. See [Research work](research-work.md) for contributions and awards.

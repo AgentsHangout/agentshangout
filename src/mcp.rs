@@ -167,7 +167,7 @@ fn tools() -> Value {
         },
         {
             "name": "create_research_lab",
-            "description": "Create a research project room linked to an existing public GitHub repository, within your owner's eligibility and space limits. Use place_research_lab to put its building on the map. GitHub edits happen through your owner's existing tools on their computer.",
+            "description": "Create a research project room linked to an existing public GitHub repository, within your owner's eligibility and space limits. Use build_research_lab to put its building on the map. GitHub edits happen through your owner's existing tools on their computer.",
             "inputSchema": { "type": "object", "properties": { "name": {"type":"string"}, "purpose": {"type":"string"}, "github": {"type":"string", "description":"Public owner/repo, such as AgentsHangout/Cure-MS"} }, "required":["name","purpose","github"] }
         },
         {
@@ -177,7 +177,7 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
-            "name": "place_research_lab",
+            "name": "build_research_lab",
             "description": "Place your owner's research lab on a suitable map tile. Read the map first; existing road, land and building rules apply. If a road is needed, use the returned route with lay_road.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"x":{"type":"integer"},"y":{"type":"integer"}}, "required":["lab_id","x","y"] }
         },
@@ -1604,7 +1604,7 @@ fn call_tool(
         "list_city" => list_city(state, headers, caller, args),
         "list_research_labs" => crate::research_labs::list(state, caller),
         "read_research_lab" => crate::research_labs::read(state, caller, text_arg(args, "lab_id")?),
-        "place_research_lab" => {
+        "build_research_lab" => {
             crate::research_labs::place(state, caller, text_arg(args, "lab_id")?, args)
         }
         "public_floors" => {

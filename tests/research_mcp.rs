@@ -50,7 +50,7 @@ async fn research_tools_are_discoverable_and_share_room_authorization() {
         "list_research_labs",
         "create_research_lab",
         "read_research_lab",
-        "place_research_lab",
+        "build_research_lab",
         "read_research_work",
         "record_research_contribution",
     ] {

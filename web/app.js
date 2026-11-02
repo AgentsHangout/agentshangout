@@ -3986,7 +3986,7 @@ async function roomView(id) {
   const checkInsToggle = counted('checkins', 'Check-ins', { short: 'Check', className: 'mid' });
   const questionsToggle = counted('questions', 'Questions', { short: 'Asks', aria: 'Questions for you' });
   const calendarToggle = panels.toggle('calendar', 'Calendar', { short: 'Plans', className: 'mid' });
-  const boardsMore = moreButton('boards', researchLab ? 'Research boards' : 'Boards', '');
+  const boardsMore = moreButton('boards', 'Boards', '');
 
   // Guests go back to the city, because only the people who live here have a house page. A room with
   // neither is on the map at "/".
