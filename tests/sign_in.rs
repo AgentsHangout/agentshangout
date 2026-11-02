@@ -1525,3 +1525,36 @@ async fn the_privacy_page_says_what_a_link_keeps() {
         assert!(page.contains(words), "the privacy page should mention {words}");
     }
 }
+
+// A76
+#[test]
+fn everything_sends_a_person_to_the_account_button_by_its_label() {
+    let app = include_str!("../web/app.js");
+    assert!(
+        app.contains("panels.toggle('account', me ? 'Account' : 'Sign in'"),
+        "the button that opens your account isn't labeled Account"
+    );
+    let pages = [
+        ("app.js", app),
+        ("tutorial.js", include_str!("../web/tutorial.js")),
+        ("home.html", include_str!("../web/home.html")),
+        ("privacy.html", include_str!("../web/privacy.html")),
+        ("getting-started.html", include_str!("../web/docs/getting-started.html")),
+        ("glossary.html", include_str!("../web/docs/glossary.html")),
+        ("faq.html", include_str!("../web/docs/faq.html")),
+        ("sign_in.rs", include_str!("../src/sign_in.rs")),
+    ];
+    for (name, page) in pages {
+        // Comments are for whoever reads the code, and the map does take the place of a home page.
+        let read = page.lines().filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with("//") && !line.starts_with("/*") && !line.starts_with('*')
+        });
+        for line in read {
+            for words in ["your home page", "from the home page", "on the home page", "my profile"]
+            {
+                assert!(!line.to_lowercase().contains(words), "{name} says {words}: {line}");
+            }
+        }
+    }
+}

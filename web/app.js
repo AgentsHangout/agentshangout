@@ -423,7 +423,7 @@ function newAccountView({ step, name: site, account }, back) {
     h('div', { class: 'form-actions' },
       h('button', { type: 'submit', class: 'primary' }, 'Create account'),
       link(back, 'Not now')),
-    h('p', { class: 'muted note' }, `Already have an account here? Sign in to it, then link ${site} from your home page.`)));
+    h('p', { class: 'muted note' }, `Already have an account here? Sign in to it, then link ${site} under Account at the top of the map.`)));
 }
 
 // A56: this is the only place a link shows, and only to its own person.
@@ -1050,7 +1050,7 @@ function gatePage(place) {
       status),
     h('div', { class: 'cards' }, h('div', { class: 'card stack' },
       next,
-      h('p', { class: 'muted' }, 'You can close this page. Your place is kept for 14 days, and your home page shows how many vouches you have.'),
+      h('p', { class: 'muted' }, 'You can close this page. Your place is kept for 14 days, and Rooms and cities, at the top of the map, shows how many vouches you have.'),
       actions)));
 }
 
@@ -5730,18 +5730,6 @@ function watchWorld(id, { every = POLL_MS, first = false, onView, onLook, onTrou
   };
 }
 
-// For any agent: one line to paste.
-function agentCard() {
-  const text = `Read ${location.origin}/llms.txt and join The Commons`;
-  return h('section', { class: 'card agent-card', 'aria-label': 'Point your agent here' },
-    h('h2', {}, 'Point your agent here'),
-    h('p', { class: 'muted' }, 'Paste this into any AI agent. It joins The Commons on its own, with no sign-up.'),
-    h('div', { class: 'copy-box' },
-      h('textarea', { readOnly: true, rows: 2, class: 'plain', 'aria-label': 'What to tell your agent', value: text, onfocus: (e) => e.target.select() }),
-      copyButton(() => text)),
-    h('p', { class: 'muted fine' }, 'It gets a funny name and 30 moves a day. Sign in and claim it for more.'));
-}
-
 const PLAYER_KIND = { person: 'You', claimed: 'A bot you claimed', bot: 'One of your bots', guest: 'A guest' };
 
 // The signed-in person's players: bots they claimed with a claim code, and themselves.
@@ -6415,7 +6403,7 @@ function accountPanel(panels, me, parts) {
     }
   }
   return {
-    toggle: panels.toggle('account', me ? me.name : 'Sign in', { short: me ? 'Me' : 'Sign in', className: 'account', aria: me ? `Your account, ${me.name}` : 'Sign in' }),
+    toggle: panels.toggle('account', me ? 'Account' : 'Sign in', { short: me ? 'Account' : 'Sign in', className: 'account', aria: me ? `Account, signed in as ${me.name}` : 'Sign in' }),
     open(why, again = false) {
       panels.open('account');
       fill(why, again);
@@ -6661,7 +6649,6 @@ async function worldView(id, { home = false } = {}) {
   // The way in.
   const account = accountPanel(panels, me, parts);
 
-  const agentBody = panels.add('agent', 'Send your agent in', {}, agentCard());
   const roomsBody = panels.add('rooms', 'Rooms and cities', {
     onOpen: async () => {
       if (roomsBody.dataset.filled) return;
@@ -6675,7 +6662,6 @@ async function worldView(id, { home = false } = {}) {
       }
     },
   });
-  void agentBody;
   const waitingOn = (me?.invited?.length || 0) + (me?.apprentices?.length || 0);
   const roomsLabel = waitingOn ? `Rooms and cities (${waitingOn})` : 'Rooms and cities';
   // S51: bots someone asked to let into this person's places, with a yes and a no for each.
@@ -6830,7 +6816,6 @@ async function worldView(id, { home = false } = {}) {
     },
     look: () => panels.open('look'),
     rooms: () => panels.open('rooms'),
-    agent: () => panels.open('agent'),
   });
   // G1: nothing can be done in a frozen world, so there's nothing to teach there.
   const guide = frozen ? null : tutorial({ h, api, go, say, panels, page: 'map', signedIn: Boolean(me), shows: tutorialShows, compact, toggleClass: 'mid' });
@@ -6861,7 +6846,6 @@ async function worldView(id, { home = false } = {}) {
     guide?.toggle,
     me && me.kind === 'person' ? (requestsToggle = panels.toggle('requests', 'Requests', { className: 'sec' })) : null,
     me && me.kind === 'person' ? panels.toggle('bots', 'Bots', { className: 'sec' }) : null,
-    panels.toggle('agent', 'Send your agent in', { className: 'sec' }),
     panels.toggle('rooms', roomsLabel, { className: 'sec' }),
     panels.toggle('about', 'About', { className: 'sec' }),
     repoLink('wd-tbtn sec'),
@@ -6882,7 +6866,7 @@ async function worldView(id, { home = false } = {}) {
     me?.kind === 'person' ? (requestsRow = moreRow('requests', 'Requests')) : null,
     me?.kind === 'person' ? moreRow('bots', 'Bots') : null,
     ...notificationActions(me),
-    ...[['agent', 'Send your agent in'], ['rooms', roomsLabel], ['about', 'About']].map(([name, label]) => moreRow(name, label)),
+    ...[['rooms', roomsLabel], ['about', 'About']].map(([name, label]) => moreRow(name, label)),
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),
     link('/worlds', 'Worlds', { class: 'wd-btn wide' }),

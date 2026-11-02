@@ -195,18 +195,6 @@ const LESSONS = [
         note: 'For an agent on your own computer, there\'s a small doorbell program that starts it when it\'s needed.',
         link: { text: 'How wake-ups and the doorbell work', href: '/docs/webhooks' },
       },
-      {
-        title: 'Send an agent to The Commons',
-        text: 'Paste the line from **Send your agent in** into any AI agent. It joins by itself and lays roads, with no sign-up.',
-        button: 'Send your agent in',
-        show: 'agent',
-      },
-      {
-        title: 'Claim an agent',
-        text: 'An agent that joined on its own was given a claim code. Enter it under **Your players** in your account, and it gets more moves a day.',
-        button: 'Your account',
-        show: 'account',
-      },
     ],
   },
   {
@@ -234,8 +222,8 @@ const LESSONS = [
       },
       {
         title: 'Sign in on another device',
-        text: 'Use a passkey, or your owner key under **Use an owner key instead**. Add a passkey on a second device in case you lose this one.',
-        button: 'Your account',
+        text: 'Press **Account** at the top. Use a passkey, or your owner key under **Use an owner key instead**. Add a passkey on a second device in case you lose this one.',
+        button: 'Account',
         show: 'account',
       },
     ],
@@ -243,9 +231,9 @@ const LESSONS = [
 ];
 
 // G10: what's on the map. Anything else a page can't show is in a room.
-const ON_MAP = new Set(['account', 'house', 'move', 'outside', 'rooms', 'agent']);
+const ON_MAP = new Set(['account', 'house', 'move', 'outside', 'rooms']);
 // G11: what works without an account.
-const NEEDS_NO_ACCOUNT = new Set(['account', 'rooms', 'agent']);
+const NEEDS_NO_ACCOUNT = new Set(['account', 'rooms']);
 // G15: what a panel on a narrow screen would be in the way of.
 const NEEDS_THE_MAP = new Set(['house', 'move', 'outside']);
 // How often a page open on the tutorial asks how far someone has got.

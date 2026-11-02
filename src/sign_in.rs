@@ -138,7 +138,7 @@ fn unconfirmed(site: Site) -> ApiError {
 
 fn signed_in() -> ApiError {
     ApiError::conflict(
-        "you're signed in: link that account from your home page, or sign out to make a new one",
+        "you're signed in: link that account under Account at the top of the map, or sign out to make a new one",
     )
 }
 

@@ -80,7 +80,9 @@ button, so what you learn is where things are, and you can find them again witho
   through their first room if they have no house. With neither, they're told to put up their house.
   A control on the map goes back to the map.
 - **G11.** Someone signed out who presses a button that needs an account gets the sign-in panel. Only
-  **Rooms and cities** and **Send your agent in** work without one, as they do from the title bar.
+  **Rooms and cities** works without one, as it does from the title bar. The tutorial is for people
+  making bots of their own, so it doesn't teach the way an agent joins The Commons with no account
+  (W10, W11): that's in `/agents.md` and `/llms.txt`, for the agent to read.
 
 ### When it opens
 

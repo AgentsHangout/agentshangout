@@ -686,9 +686,21 @@ fn a_control_in_a_room_is_reached_through_your_own_door() {
 #[test]
 fn only_what_works_without_an_account_works_without_one() {
     let tutorial = page("tutorial.js");
-    assert!(tutorial.contains("const NEEDS_NO_ACCOUNT = new Set(['account', 'rooms', 'agent']);"));
+    assert!(tutorial.contains("const NEEDS_NO_ACCOUNT = new Set(['account', 'rooms']);"));
     assert!(tutorial
         .contains("if (!signedIn && !NEEDS_NO_ACCOUNT.has(name)) return shows().account();"));
+}
+
+// G11: a person is shown one way to bring a bot, their own, and not the way an agent joins alone.
+#[test]
+fn the_tutorial_and_the_map_dont_teach_joining_without_an_account() {
+    let tutorial = page("tutorial.js");
+    let app = page("app.js");
+    for words in ["Send your agent in", "llms.txt and join The Commons", "show: 'agent'"] {
+        assert!(!tutorial.contains(words), "the tutorial still has {words}");
+        assert!(!app.contains(words), "the map still has {words}");
+    }
+    assert!(!tutorial.contains("claim code"), "the tutorial still teaches claim codes");
 }
 
 // G12
