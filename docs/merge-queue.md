@@ -1,61 +1,43 @@
-# Automatic merge queue enrollment (#303)
+# Reviewer-enrolled merge queue (#303)
 
-This is the first-stage policy approved by Justin on November 2, 2026: one approval from a
-non-author GitHub account, required `test` and `workflows` checks, squash merge queue. A future
-bot-review check is separate work; names in review text do not authenticate independent bots.
+Justin approved this narrower first-stage plan on November 2, 2026: keep owner-attributed GitHub
+accounts; an authorized final reviewer queues the exact reviewed head. GitHub then performs the
+queue checks and merge. There is no App enrollment workflow, new credential, or automatic review.
 
-## Rules
+## CI rules
 
-- MQ1: CI runs the same `test` and `workflows` jobs for pull requests and merge groups. Different
-  pull requests and queue refs have separate concurrency groups.
-- MQ2: Enrollment uses trusted base-branch code, never code from the proposed change. It re-reads
-  the PR, skips drafts/closed PRs/non-main targets/stale event heads/already-enabled auto-merge,
-  and asks GitHub to enforce the rules using `--auto --match-head-commit`, never `--admin`.
-- MQ3: Enrollment is disabled until `MERGE_QUEUE_ENABLED` is exactly `true`. Enable it only after
-  the main ruleset requires the queue, one non-author approval, and both CI checks, and the App
-  has no bypass role. Missing App configuration fails closed. The script also verifies the active main rules include queue, review, and both checks. GitHub
-  remains the policy gate.
-- MQ4: PR content is not executed with write credentials. An installation token is scoped to this
-  repository with Contents, Pull requests and Merge queues write, and revoked at job end. No reviews are
-  submitted by the workflow. Queue admission is not proof of merge or production deployment.
+- MQ1: Both `pull_request` and `merge_group` run the same required `test` and `workflows` jobs.
+  Different PRs and queue refs have separate concurrency groups. CI has only Contents read.
+- MQ2: The final reviewer and PR author must use different GitHub accounts. Two bots sharing
+  one account are not independent GitHub reviewers. A bot without owner-authorized GitHub write
+  access can provide review notes, but cannot submit a formal approval or enqueue a merge.
+- MQ3: Queue only the exact head reviewed and approved, with the owner's applicable permission.
+  Queueing is a consequential merge action, not an exemption from the owner's approval rules.
+  Never use admin bypass. A changed head needs fresh review under the repository policy.
 
-## Rollout (repository administrator, with owner authorization)
+## Rollout and acceptance
 
-1. Merge the workflow PR while enrollment stays disabled. This PR does not create credentials,
-   install an App, change grants, or change repository protection.
-2. Configure the main ruleset: require the squash merge queue (initial maximum group size 1),
-   one non-author approval, and checks `test` and `workflows`. Preserve force-push/deletion
-   restrictions and do not give the enrollment App a bypass role. Reconcile classic protection
-   before removing anything; do not leave a protection gap.
-3. Supply an already-approved repository-scoped App using variable `AUTOMERGE_APP_ID` and
-   secret `AUTOMERGE_APP_PRIVATE_KEY`. New App installation, credentials or grants need their
-   own authorization. The workflow requests Contents, Pull requests and Merge queues write, not administration access;
-   verify the installed App can enroll a PR during acceptance testing. This is a bounded requested
-   permission set, not a claim that every permission is the provable minimum.
-4. Set `MERGE_QUEUE_ENABLED=true` only after verifying those protections and configuration.
-   New, reopened, updated or newly-ready PRs targeting main enroll automatically. Existing open
-   PRs can be handled by the workflow's manual `pr_number` input after an authorized operator
-   chooses the PR. No author click is needed for new eligible events.
-5. Verify one real PR: enrollment, required review and PR checks, merge-group checks, squash
-   merge, then the exact main commit's Publish install/health/latest promotion. Never infer
-   deployment from a green obsolete run. Keep #303 open until this succeeds.
+1. Merge the CI change. The repository administrator configures the authorized main ruleset:
+   one non-author account approval, required `test` and `workflows`, and a squash-only merge
+   queue (initial maximum group size 1). Preserve force-push/deletion protections and reconcile
+   classic protection without leaving a gap. This PR does not change those settings.
+2. The authorized final reviewer verifies the current PR targets main, the queue is required,
+   and the exact head has the required approval and successful checks. They enqueue with:
 
-To stop new enrollment, set `MERGE_QUEUE_ENABLED=false`; this does not cancel entries already in
-GitHub's queue or auto-merge requests. Review those separately rather than assuming a full stop.
-No permanent polling, schedule, or blanket enrollment of all existing PRs is added.
+   `gh pr merge <number> --repo AgentsHangout/agentshangout --squash --auto --match-head-commit <reviewed-sha>`
 
-Run offline safety tests with `python3 -m unittest discover -s .github/tests -v`. CI also runs these
-in the workflows job. These tests mock `gh`; they do not test a live queue or require credentials.
+   The author does not need to click merge. GitHub enforces the configured gates. Do not use the
+   command if the queue requirement is missing: `gh pr merge` can otherwise merge directly.
+   Head binding is not a base-branch lock; do not retarget or change policy during enrollment.
+3. Verify a real queued PR: reviewed SHA, queue CI, squash merge, then the exact main commit's
+   Publish installation, live health check and latest-release promotion. A green obsolete Publish
+   run does not prove shipping. Keep #303 open until this end-to-end acceptance succeeds.
 
-GitHub documents that the built-in `GITHUB_TOKEN` cannot add PRs to a merge queue:
+The built-in Actions `GITHUB_TOKEN` cannot add PRs to a merge queue, per GitHub's automation docs:
 https://docs.github.com/en/code-security/tutorials/secure-your-dependencies/automate-dependabot-with-actions
-There is no fallback to that token. The pinned create-github-app-token v3 action exposes the App's
-`permission-merge-queues` input; this is not a `GITHUB_TOKEN` workflow permission key.
+This plan uses the reviewer's already-authorized owner-account connection instead. It creates no
+App, PAT, secret, or persistent access and does not expand any bot's permissions. Any later custom
+bot-quorum check is separate work; signatures in review text do not authenticate distinct agents.
 
-## Boundary of the preflight
-
-The head SHA is bound in the write. GitHub's auto-merge API does not bind a base branch in that
-write, so an authorized repository writer retargeting a PR between the metadata read and write
-remains a race. Likewise, an administrator can change policy after preflight. Do not retarget PRs
-while enrollment is running; GitHub enforces the actual target's protections. This is not a
-replacement for controlling repository write/admin access, nor a guarantee against such changes.
+Run CI wiring tests with `python3 -m unittest discover -s .github/tests -v`. They also run in the
+workflows job; they test repository configuration, not a live queue or deployment.
