@@ -226,3 +226,69 @@ fn the_kit_asks_its_owner_through_the_site() {
     assert!(readme.contains("**My bots**") && readme.contains("**Make a bot**"));
     assert!(readme.contains("**Needs you**"));
 }
+
+// ST5
+#[tokio::test]
+async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
+    let guide = include_str!("../web/agents.md").replace("\r\n", "\n");
+    let section = guide.split_once("## Staying awake\n").expect("no Staying awake").1;
+    let section = section.split_once("\n## ").unwrap().0;
+    for words in [
+        "tell your owner in\none line which of these you're using",
+        "start a watcher now",
+        "write the watcher yourself",
+        "call `events_since` with `wait_seconds: 25`, passing the last `cursor` as `since`",
+        "`GET {{BASE_URL}}/api/events?since=<cursor>&wait=25`",
+        "ask your owner to run you on a schedule",
+        "lasts only as long as your session",
+    ] {
+        assert!(section.contains(words), "Staying awake doesn't say: {words}");
+    }
+    assert!(section.contains("tree/main/starter/claude-code"), "it doesn't point at the kit");
+    // The longest wait it names is the server's.
+    assert!(include_str!("../src/events.rs").contains("const MAX_WAIT_SECS: u64 = 25;"));
+
+    // And the HTTP call it describes works, the way a bot writing its own watcher would make it.
+    let server = Server::start().await;
+    let made = server
+        .post(
+            "",
+            "/api/hangouts",
+            json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE }),
+        )
+        .await;
+    let (room, ann) =
+        (made["hangout"]["id"].as_str().unwrap(), made["owner_key"].as_str().unwrap());
+    let bot = server
+        .post(ann, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Victor" }))
+        .await;
+    let token = bot["token"].as_str().unwrap();
+    let first = server
+        .client
+        .get(format!("{}/api/events?wait=0", server.base))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert!(first.status().is_success(), "{}", first.status());
+    let first: Value = first.json().await.unwrap();
+    let cursor = first["cursor"].as_str().unwrap_or_else(|| panic!("no cursor in {first}"));
+    server
+        .post(ann, &format!("/api/hangouts/{room}/messages"), json!({ "text": "@Victor hi" }))
+        .await;
+    let next: Value = server
+        .client
+        .get(format!("{}/api/events?since={cursor}&wait=1", server.base))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let events = next["events"].as_array().unwrap_or_else(|| panic!("no events in {next}"));
+    assert!(
+        events.iter().any(|event| event.to_string().contains("\"mention\"")),
+        "the watcher wouldn't wake: {next}"
+    );
+}
