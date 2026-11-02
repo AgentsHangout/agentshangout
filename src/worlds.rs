@@ -362,6 +362,10 @@ pub struct Runtime {
     limits: Limits,
     builds: AtomicU64,
     last_prune: AtomicI64,
+    /// W100: how many times the public Commons bots list has been built since the server started.
+    commons_bots_builds: AtomicU64,
+    /// W100: milliseconds a rebuild waits, so a test can pile up reads while one is in flight.
+    commons_bots_rebuild_pause_ms: AtomicU64,
     /// W100: who may read the public Commons bots list from another site.
     viewer_origins: Mutex<Vec<String>>,
     /// W100: the last Commons bots list, served until it ages out.
@@ -387,6 +391,8 @@ impl Runtime {
             limits: Limits::new(),
             builds: AtomicU64::new(0),
             last_prune: AtomicI64::new(0),
+            commons_bots_builds: AtomicU64::new(0),
+            commons_bots_rebuild_pause_ms: AtomicU64::new(0),
             viewer_origins: Mutex::new(parse_viewer_origins(None)),
             commons_bots: Mutex::new(None),
         }
@@ -434,6 +440,17 @@ impl Runtime {
     /// should add about one a second per world, not a thousand.
     pub fn view_builds(&self) -> u64 {
         self.builds.load(Ordering::Relaxed)
+    }
+
+    /// How many times the public Commons bots list has been built since the server started.
+    pub fn commons_bots_builds(&self) -> u64 {
+        self.commons_bots_builds.load(Ordering::Relaxed)
+    }
+
+    /// W100: pause each rebuild this long, so a test can overlap reads after expiry.
+    pub fn set_commons_bots_rebuild_pause(&self, pause: Duration) {
+        self.commons_bots_rebuild_pause_ms
+            .store(u64::try_from(pause.as_millis()).unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
     // Visitors and frogs
@@ -2279,14 +2296,19 @@ fn commons_bots_ok(body: Bytes) -> Response {
         .into_response()
 }
 
+/// W100: the public Commons bots list, from memory. Rebuilt at most every 20 seconds.
+/// One caller builds while the others wait for it and then share what it made.
 fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
-    {
-        let cache = locked(&state.worlds.commons_bots);
-        if let Some((built, body)) = cache.as_ref() {
-            if built.elapsed() < COMMONS_BOTS_CACHE {
-                return Ok(body.clone());
-            }
+    let mut cache = locked(&state.worlds.commons_bots);
+    if let Some((built, body)) = cache.as_ref() {
+        if built.elapsed() < COMMONS_BOTS_CACHE {
+            return Ok(body.clone());
         }
+    }
+    state.worlds.commons_bots_builds.fetch_add(1, Ordering::Relaxed);
+    let pause_ms = state.worlds.commons_bots_rebuild_pause_ms.load(Ordering::Relaxed);
+    if pause_ms > 0 {
+        std::thread::sleep(Duration::from_millis(pause_ms));
     }
     ensure_commons(state)?;
     let tiles = state.db.world_tiles(COMMONS_ID)?;
@@ -2317,7 +2339,7 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
         })
         .map_err(internal)?,
     );
-    *locked(&state.worlds.commons_bots) = Some((Instant::now(), body.clone()));
+    *cache = Some((Instant::now(), body.clone()));
     Ok(body)
 }
 
