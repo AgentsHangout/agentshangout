@@ -68,6 +68,8 @@ DELETE FROM hangouts;
 -- notification URL.
 DELETE FROM bot_events;
 DELETE FROM event_subscriptions;
+DELETE FROM oauth_event_subscriptions;
+DELETE FROM oauth_event_retention;
 -- These name a place with no foreign key, so nothing above took them.
 DELETE FROM entry_rules;
 DELETE FROM friend_invites;

@@ -26,6 +26,9 @@ use crate::{
     AppState,
 };
 
+// OAuth's durable delivery is separate from legacy bot-token webhook subscriptions.
+pub mod oauth;
+
 const NAMES: [&str; 8] =
     ["mention", "message", "owner_answer", "check_in", "plan", "trip", "place", "pin_added"];
 const RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
@@ -805,23 +808,30 @@ pub async fn subscribe(state: &AppState, caller: &Caller, params: &Value) -> Res
 }
 
 async fn verify_endpoint(state: &AppState, url: &str, secret: &str) -> Result<(), Fail> {
+    verify_endpoint_with_id(state, url, secret, None).await
+}
+
+async fn verify_endpoint_with_id(
+    state: &AppState,
+    url: &str,
+    secret: &str,
+    subscription_id: Option<&str>,
+) -> Result<(), Fail> {
     let challenge = random_hex(32);
     let body = json!({ "type": "verification", "challenge": challenge }).to_string();
     let webhook_id = format!("msg_verification_{}", random_hex(8));
     let at = now();
     let stamp = at.to_string();
     let signature = sign_header(secret, None, None, &webhook_id, at, &body);
-    let posted = notify::post_body(
-        state,
-        url,
-        &[
-            ("webhook-id", webhook_id.as_str()),
-            ("webhook-timestamp", stamp.as_str()),
-            ("webhook-signature", signature.as_str()),
-        ],
-        &body,
-    )
-    .await;
+    let mut headers = vec![
+        ("webhook-id", webhook_id.as_str()),
+        ("webhook-timestamp", stamp.as_str()),
+        ("webhook-signature", signature.as_str()),
+    ];
+    if let Some(id) = subscription_id {
+        headers.push(("X-MCP-Subscription-Id", id));
+    }
+    let posted = notify::post_body(state, url, &headers, &body).await;
     match posted.status {
         Some(status) if (200..300).contains(&status) => {
             let echoed = serde_json::from_str::<Value>(&posted.body).ok().and_then(|value| {
@@ -1397,6 +1407,11 @@ mod tests {
     fn hmac_matches_the_known_answer() {
         let mac = hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog");
         assert_eq!(hex(&mac), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
+        let secret = format!("whsec_{}", b64_encode(&[b'a'; 32]));
+        assert_eq!(
+            sign_one(&secret, "evt_42", 1700000000, r#"{"x":1}"#).unwrap(),
+            "v1,gRhAIVxNjVtBVMSG+JduLwqjvF9DzUIVkQ+UoPAdOf4="
+        );
     }
 
     #[test]

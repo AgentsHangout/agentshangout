@@ -149,7 +149,9 @@ Access tokens last one hour; rotating refresh tokens expire with the grant after
 days. Owners can inspect and revoke grants at `{{BASE_URL}}/oauth/connections`. A replayed code or
 refresh token revokes its grant. Grants and token history are bounded; fresh consent is required
 when a bound is reached. OAuth credentials are for `/mcp` only, not REST or public-player calls.
-Polling and event streams work; durable webhook subscriptions are unavailable to OAuth grants.
+Polling and event streams work. Grants with explicit `mcp:bot mcp:events` consent can also manage
+their own `mention` webhook subscriptions, capped by grant expiry. Reconnect older grants to
+consent to webhooks. See [setup and lifecycle](../docs/oauth-events.md).
 
 Keep credentials in the client's secure connection store, never in chat, URLs or plugin files.
 A tunnel is not required, nor is the separate "Sign in with ChatGPT" identity product.

@@ -61,12 +61,12 @@ pub(crate) fn is_public(ip: IpAddr) -> bool {
                 return is_public(IpAddr::V4(mapped));
             }
             let [first, second, ..] = ip.segments();
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-                || (first == 0x2001 && second == 0xdb8))
+            // Only global unicast, excluding protocol assignments, documentation and 6to4
+            // (which can encapsulate a private IPv4 destination).
+            (first & 0xe000) == 0x2000
+                && !(first == 0x2001 && (second < 0x200 || second == 0xdb8))
+                && first != 0x2002
+                && !(first == 0x3fff && second < 0x1000)
         }
     }
 }
@@ -110,12 +110,12 @@ pub(crate) async fn public_address(host: &str) -> Option<SocketAddr> {
 }
 
 async fn client_for(state: &AppState, url: &Url) -> Option<Client> {
-    let builder = Client::builder().redirect(redirect::Policy::none()).timeout(TIMEOUT);
+    let builder = Client::builder().redirect(redirect::Policy::none()).timeout(TIMEOUT).no_proxy();
     if state.config.allow_private_webhooks {
         return builder.build().ok();
     }
     let host = url.host_str()?;
-    let address = public_address(host).await?;
+    let address = tokio::time::timeout(TIMEOUT, public_address(host)).await.ok()??;
     builder.resolve(host, address).build().ok()
 }
 
@@ -155,12 +155,26 @@ pub async fn post_body(
     headers: &[(&str, &str)],
     body: &str,
 ) -> Posted {
+    post_body_checked(state, url, headers, body, || true).await
+}
+
+/// Check access again after DNS resolution, immediately before opening the connection.
+pub(crate) async fn post_body_checked(
+    state: &AppState,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+    allowed: impl Fn() -> bool,
+) -> Posted {
     let Ok(url) = Url::parse(url) else {
         return Posted { status: None, body: String::new(), error: Some("connection_refused") };
     };
     let Some(client) = client_for(state, &url).await else {
         return Posted { status: None, body: String::new(), error: Some("connection_refused") };
     };
+    if !allowed() {
+        return Posted::nothing("access_revoked");
+    }
     let mut request = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -169,10 +183,18 @@ pub async fn post_body(
         request = request.header(*name, *value);
     }
     match request.send().await {
-        Ok(response) => {
+        Ok(mut response) => {
             let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_default();
-            let body = text.chars().take(1000).collect();
+            let mut bytes = Vec::new();
+            while bytes.len() < 1000 {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        bytes.extend_from_slice(&chunk[..chunk.len().min(1000 - bytes.len())])
+                    }
+                    _ => break,
+                }
+            }
+            let body = String::from_utf8_lossy(&bytes).into_owned();
             Posted { status: Some(status), body, error: None }
         }
         Err(error) => Posted { status: None, body: String::new(), error: Some(net_error(&error)) },
@@ -442,6 +464,12 @@ mod tests {
             "fd00::1",
             "::ffff:169.254.169.254",
             "::ffff:168.63.129.16",
+            "::127.0.0.1",
+            "64:ff9b::a00:1",
+            "100::1",
+            "2001:20::1",
+            "2002:a00:1::1",
+            "3fff::1",
         ] {
             assert!(!public(address), "{address}");
         }

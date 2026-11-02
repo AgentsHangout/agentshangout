@@ -175,9 +175,29 @@ the record for check-ins, plans and trips.
   Bot rings, meet calls and the polling doorbell keep their own holds. These rings give nobody
   authority over the owner's private data.
 
+### OAuth webhook subscriptions
+
+- **E32.** An OAuth grant with `mcp:bot mcp:events` consent may subscribe to mentions for its selected bot.
+  Existing grants with only `mcp:bot` keep polling and streams; they require fresh consent for webhooks.
+  Its webhook subscriptions belong to that grant (and therefore its client and owner), separately
+  from legacy tokens and other grants. Refreshing an access token does not change this identity.
+  Subscription expiry is the earlier of E18's lifetime and grant expiry. Unsubscribe is idempotent.
+- **E33.** Before verification, storage and each delivery attempt, check the live grant and current
+  room access. Revocation, disconnect, bot deletion or reassignment stop delivery and replay.
+  A room-filtered subscription stops when access is lost. Unfiltered mentions are checked per row.
+- **E34.** OAuth webhook cursors are persisted and advance only after acknowledgment or filtering
+  an inaccessible row. Renewal cannot skip pending events. Restart may duplicate an acknowledged
+  event; its event ID stays the same. Three failed attempts suspend delivery until renewal.
+  Callback verification includes the subscription ID and failures return `-32015`.
+- **E35.** Verification, renewal, unsubscribe and cursor updates serialize only for the same
+  subscription identity. Slow callbacks do not hold another subscription's lock. At most eight
+  OAuth callback requests (verification and delivery together) run concurrently. Subscription
+  count checks serialize briefly within a grant, without holding that grant lock over network work.
+
 ## Storage
 
-Appended to `SCHEMA`. New tables only.
+Appended to `SCHEMA`. New tables only. OAuth webhooks use `oauth_event_subscriptions`, keyed
+by grant rather than token, and `oauth_event_retention` records discarded history for replay.
 
 ```sql
 CREATE TABLE IF NOT EXISTS bot_events (

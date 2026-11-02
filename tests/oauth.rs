@@ -9,7 +9,22 @@ struct Server {
     state: AppState,
 }
 impl Server {
+    async fn event_rpc(&self, token: &str, method: &str, params: Value) -> Value {
+        self.client
+            .post(format!("{}/mcp", self.base))
+            .bearer_auth(token)
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
     async fn start() -> Self {
+        Self::start_with(true).await
+    }
+    async fn start_with(allow_private_webhooks: bool) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let state = AppState::new(
@@ -17,7 +32,7 @@ impl Server {
             Config {
                 public_url: base.clone(),
                 create_code: None,
-                allow_private_webhooks: true,
+                allow_private_webhooks,
                 keeper_id: None,
                 god_ids: vec![],
             },
@@ -30,6 +45,69 @@ impl Server {
             state,
         }
     }
+}
+#[tokio::test]
+async fn oauth_discovers_webhook_mentions() {
+    let s = Server::start().await;
+    let (session, bot, _, _) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let reply =
+        s.event_rpc(tokens["access_token"].as_str().unwrap(), "events/list", json!({})).await;
+    let mention = reply["result"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "mention")
+        .unwrap();
+    assert!(mention["delivery"].as_array().unwrap().contains(&json!("webhook")));
+}
+
+#[tokio::test]
+async fn oauth_webhooks_require_explicit_event_scope_and_cannot_be_added_by_refresh() {
+    let s = Server::start().await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let page = s.authorize_scope(&session, &client, "mcp:bot").await.text().await.unwrap();
+    assert!(page.contains("Webhook subscriptions are excluded"));
+    let response = s.consent(&session, &hidden(&page, "nonce"), &bot, "allow").await;
+    let location = reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+    let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let catalog = s.event_rpc(access, "events/list", json!({})).await;
+    for e in catalog["result"]["events"].as_array().unwrap() {
+        assert_eq!(e["delivery"], json!(["poll", "push"]));
+    }
+    let params = subscription(&room, "https://callback.example/events");
+    assert_eq!(
+        s.event_rpc(access, "events/subscribe", params.clone()).await["error"]["code"],
+        -32024
+    );
+    let rotated: Value = s
+        .client
+        .post(format!("{}/oauth/token", s.base))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", client.as_str()),
+            ("resource", format!("{}/mcp", s.base).as_str()),
+            ("refresh_token", t["refresh_token"].as_str().unwrap()),
+            ("scope", "mcp:bot mcp:events"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rotated["scope"], "mcp:bot");
+    assert_eq!(
+        s.event_rpc(rotated["access_token"].as_str().unwrap(), "events/subscribe", params).await
+            ["error"]["code"],
+        -32024
+    );
+    assert_eq!(s.mcp(access).await.status(), StatusCode::OK);
 }
 #[tokio::test]
 async fn oauth_discovery_and_mcp_challenge_describe_the_same_protected_resource() {
@@ -60,6 +138,562 @@ async fn oauth_discovery_and_mcp_challenge_describe_the_same_protected_resource(
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 const CALLBACK: &str = "https://client.example/callback";
+const WEBHOOK_SECRET: &str = "whsec_YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=";
+
+#[derive(Clone, Default)]
+struct Webhook {
+    requests: std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, Value)>>>,
+    fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    bad_challenge: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    block_verification: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    block_events: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+impl Webhook {
+    async fn start() -> (Self, String) {
+        use axum::{
+            extract::State,
+            http::{HeaderMap, StatusCode},
+            routing::post,
+            Json, Router,
+        };
+        let hook = Self::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/callback", listener.local_addr().unwrap());
+        let router = Router::new().route("/callback", post(|State(h): State<Webhook>, headers: HeaderMap, Json(body): Json<Value>| async move {
+            assert!(headers.contains_key("x-mcp-subscription-id"));
+            assert!(headers["webhook-signature"].to_str().unwrap().starts_with("v1,"));
+            h.requests.lock().unwrap().push((headers,body.clone()));
+            let blocked = if body["type"] == "verification" { &h.block_verification } else { &h.block_events };
+            if blocked.load(std::sync::atomic::Ordering::SeqCst) {
+                h.entered.notify_one();
+                h.release.notified().await;
+            }
+            if h.fail.load(std::sync::atomic::Ordering::SeqCst) { return (StatusCode::SERVICE_UNAVAILABLE,Json(json!({}))); }
+            if h.bad_challenge.load(std::sync::atomic::Ordering::SeqCst) { return (StatusCode::OK,Json(json!({"challenge":"wrong"}))); }
+            (StatusCode::OK,Json(json!({"challenge":body["challenge"]})))
+        })).with_state(hook.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (hook, url)
+    }
+    fn events(&self) -> Vec<Value> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, b)| b.get("eventId").is_some())
+            .map(|(_, b)| b.clone())
+            .collect()
+    }
+}
+
+fn subscription(room: &str, url: &str) -> Value {
+    json!({"name":"mention","arguments":{"hangout_id":room},"delivery":{"mode":"webhook","url":url,"secret":WEBHOOK_SECRET}})
+}
+
+#[tokio::test]
+async fn stalled_verification_does_not_block_an_independent_grant() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let a: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let code = s.code(&session, &client, &bot).await;
+    let b: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let (slow, slow_url) = Webhook::start().await;
+    let (fast, fast_url) = Webhook::start().await;
+    let fast_params = subscription(&room, &fast_url);
+    let access = b["access_token"].as_str().unwrap();
+    assert!(
+        s.event_rpc(access, "events/subscribe", fast_params.clone()).await["result"].is_object()
+    );
+    slow.block_verification.store(true, Ordering::SeqCst);
+    let params = subscription(&room, &slow_url);
+    let caller = s.clone();
+    let waiting = tokio::spawn(async move {
+        caller.event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", params).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), slow.entered.notified()).await.unwrap();
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "independent", "{}", agenthangout::now(), 0)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+        assert_eq!(fast.events().len(), 1);
+        let renewed = s.event_rpc(access, "events/subscribe", fast_params.clone()).await;
+        assert_eq!(renewed["result"]["cursor"], fast.events()[0]["cursor"]);
+        assert!(s.event_rpc(access, "events/unsubscribe", fast_params).await["result"].is_object());
+    })
+    .await
+    .expect("another grant must not wait for stalled verification");
+    assert!(!waiting.is_finished());
+    slow.release.notify_waiters();
+    assert!(waiting.await.unwrap()["result"].is_object());
+}
+
+#[tokio::test]
+async fn stalled_delivery_does_not_block_an_independent_grant() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let a: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let code = s.code(&session, &client, &bot).await;
+    let b: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let (slow, slow_url) = Webhook::start().await;
+    let (fast, fast_url) = Webhook::start().await;
+    let slow_params = subscription(&room, &slow_url);
+    let fast_params = subscription(&room, &fast_url);
+    assert!(s
+        .event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", slow_params.clone())
+        .await["result"]
+        .is_object());
+    assert!(s
+        .event_rpc(b["access_token"].as_str().unwrap(), "events/subscribe", fast_params.clone())
+        .await["result"]
+        .is_object());
+    slow.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "parallel", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pending =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), slow.entered.notified()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fast.events().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let renewed = s
+            .event_rpc(b["access_token"].as_str().unwrap(), "events/subscribe", fast_params.clone())
+            .await;
+        assert_eq!(renewed["result"]["cursor"], fast.events()[0]["cursor"]);
+        assert!(s
+            .event_rpc(b["access_token"].as_str().unwrap(), "events/unsubscribe", fast_params)
+            .await["result"]
+            .is_object());
+    })
+    .await
+    .expect("another grant must not wait for stalled delivery");
+    assert!(!pending.is_finished());
+    slow.release.notify_waiters();
+    pending.await.unwrap();
+    let renewed =
+        s.event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", slow_params).await;
+    assert_eq!(renewed["result"]["cursor"], slow.events()[0]["cursor"]);
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(slow.events().len(), 1, "renewal must retain the acknowledged cursor");
+}
+
+#[tokio::test]
+async fn oauth_outbound_limit_is_shared_and_concurrent_creates_respect_the_grant_cap() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap().to_string();
+    let (delivery, url) = Webhook::start().await;
+    let initial = subscription(&room, &url);
+    assert!(s.event_rpc(&access, "events/subscribe", initial).await["result"].is_object());
+    delivery.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "bounded", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pass =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), delivery.entered.notified()).await.unwrap();
+    let (verification, url) = Webhook::start().await;
+    verification.block_verification.store(true, Ordering::SeqCst);
+    let mut creates = Vec::new();
+    for i in 0..8 {
+        let caller = s.clone();
+        let access = access.clone();
+        let params = subscription(&room, &format!("{url}?sub={i}"));
+        creates.push(tokio::spawn(async move {
+            caller.event_rpc(&access, "events/subscribe", params).await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while verification.requests.lock().unwrap().len() < 7 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        verification.requests.lock().unwrap().len(),
+        7,
+        "one delivery plus seven verifications exhaust the shared limit"
+    );
+    verification.block_verification.store(false, Ordering::SeqCst);
+    verification.release.notify_waiters();
+    for create in creates {
+        assert!(create.await.unwrap()["result"].is_object());
+    }
+    delivery.release.notify_waiters();
+    pass.await.unwrap();
+    // There are nine subscriptions now. Twelve concurrent identities may add only eleven.
+    let mut creates = Vec::new();
+    for i in 8..20 {
+        let caller = s.clone();
+        let access = access.clone();
+        let params = subscription(&room, &format!("{url}?sub={i}"));
+        creates.push(tokio::spawn(async move {
+            caller.event_rpc(&access, "events/subscribe", params).await
+        }));
+    }
+    let mut accepted = 0;
+    let mut limited = 0;
+    for create in creates {
+        let result = create.await.unwrap();
+        if result["result"].is_object() {
+            accepted += 1;
+        } else {
+            assert_eq!(result["error"]["code"], -32025);
+            limited += 1;
+        }
+    }
+    assert_eq!((accepted, limited), (11, 1));
+}
+
+#[tokio::test]
+async fn same_subscription_delivery_renewal_and_recreation_preserve_progress() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap().to_string();
+    let (hook, url) = Webhook::start().await;
+    let params = subscription(&room, &url);
+    let first = s.event_rpc(&access, "events/subscribe", params.clone()).await;
+    let id = first["result"]["id"].clone();
+    hook.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "consistent", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pending =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), hook.entered.notified()).await.unwrap();
+    // Overlapping passes must skip the locked identity rather than deliver its stale snapshot.
+    tokio::time::timeout(Duration::from_secs(2), agenthangout::events::oauth::deliver(&s.state))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(hook.events().len(), 1);
+    let caller = s.clone();
+    let token = access.clone();
+    let renewal = params.clone();
+    let renewing =
+        tokio::spawn(async move { caller.event_rpc(&token, "events/subscribe", renewal).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!renewing.is_finished(), "renewal must wait for this identity's acknowledgment");
+    hook.block_events.store(false, Ordering::SeqCst);
+    hook.release.notify_waiters();
+    pending.await.unwrap();
+    let renewed = renewing.await.unwrap();
+    assert_eq!(renewed["result"]["cursor"], hook.events()[0]["cursor"]);
+    assert_eq!(renewed["result"]["id"], id);
+    assert!(s.event_rpc(&access, "events/unsubscribe", params.clone()).await["result"].is_object());
+    let recreated = s.event_rpc(&access, "events/subscribe", params).await;
+    assert_eq!(recreated["result"]["id"], id);
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(
+        hook.events().len(),
+        1,
+        "an old delivery result cannot overwrite a recreated identity"
+    );
+}
+
+#[tokio::test]
+async fn oauth_webhooks_require_public_https_callbacks_in_production() {
+    let s = Server::start_with(false).await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    for url in [
+        "http://callback.example/events",
+        "https://127.0.0.1/events",
+        "https://[::1]/events",
+        "https://localhost/events",
+        "https://user:pass@callback.example/events",
+        "https://callback.example:444/events",
+        "https://callback.example/events#fragment",
+    ] {
+        assert_eq!(
+            s.event_rpc(
+                t["access_token"].as_str().unwrap(),
+                "events/subscribe",
+                subscription(&room, url)
+            )
+            .await["error"]["code"],
+            -32602,
+            "{url}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn real_mention_reaches_the_persistent_worker_without_a_poll_listener() {
+    let s = Server::start().await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let (hook, url) = Webhook::start().await;
+    let params = subscription(&room, &url);
+    let subscribed =
+        s.event_rpc(t["access_token"].as_str().unwrap(), "events/subscribe", params.clone()).await;
+    assert!(subscribed["result"]["id"].is_string(), "{subscribed}");
+    let worker = tokio::spawn(agenthangout::events::oauth::run(s.state.clone()));
+    let posted = s
+        .client
+        .post(format!("{}/api/hangouts/{room}/messages", s.base))
+        .bearer_auth(&session)
+        .json(&json!({"text":"@Dedicated bot please read this room"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while hook.events().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(hook.events()[0]["name"], "mention");
+    assert_eq!(hook.events()[0]["data"]["body"], "@Dedicated bot please read this room");
+    assert_eq!(hook.events()[0]["data"]["hangout_id"], room);
+    s.event_rpc(t["access_token"].as_str().unwrap(), "events/unsubscribe", params).await;
+    worker.abort();
+}
+
+#[tokio::test]
+async fn oauth_signing_key_rotation_reverifies_and_overlaps_signatures_without_new_identity() {
+    let s = Server::start().await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let (hook, url) = Webhook::start().await;
+    let mut params = subscription(&room, &url);
+    let first = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    params["delivery"]["secret"] = json!("whsec_YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=");
+    let rotated = s.event_rpc(access, "events/subscribe", params).await;
+    assert_eq!(rotated["result"]["id"], first["result"]["id"]);
+    assert_eq!(hook.requests.lock().unwrap().len(), 2, "replacement key must verify again");
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "rotated", "{}", agenthangout::now(), 0)
+        .unwrap();
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    let requests = hook.requests.lock().unwrap();
+    let signature = requests.last().unwrap().0["webhook-signature"].to_str().unwrap();
+    let parts: Vec<_> = signature.split(' ').collect();
+    assert_eq!(parts.len(), 2);
+    assert_ne!(parts[0], parts[1]);
+}
+
+#[tokio::test]
+async fn oauth_webhook_lifecycle_is_grant_owned_and_refresh_preserves_pending_cursor() {
+    let s = Server::start().await;
+    let (session, bot, legacy, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let (hook, url) = Webhook::start().await;
+    let params = subscription(&room, &url);
+    let first = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert!(first["result"]["id"].is_string(), "{first}");
+    assert_eq!(hook.requests.lock().unwrap().len(), 1);
+    let id = first["result"]["id"].clone();
+    let at = agenthangout::now();
+    s.state
+        .db
+        .insert_bot_event(
+            &bot,
+            "mention",
+            Some(&room),
+            "pending",
+            &json!({"hangout_id":room,"body":"@Dedicated bot","what_to_do":"legacy instructions"})
+                .to_string(),
+            at,
+            0,
+        )
+        .unwrap();
+    let rotated: Value =
+        s.refresh(&client, t["refresh_token"].as_str().unwrap()).await.json().await.unwrap();
+    let access = rotated["access_token"].as_str().unwrap();
+    let renewed = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert_eq!(renewed["result"]["id"], id);
+    assert_eq!(
+        renewed["result"]["cursor"], first["result"]["cursor"],
+        "pending event must not be skipped"
+    );
+    assert_eq!(
+        hook.requests.lock().unwrap().len(),
+        1,
+        "verification cache is bounded and principal scoped"
+    );
+
+    // A different grant of the same client and bot cannot delete this subscription.
+    let code = s.code(&session, &client, &bot).await;
+    let other: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    assert!(s
+        .event_rpc(other["access_token"].as_str().unwrap(), "events/unsubscribe", params.clone())
+        .await["result"]
+        .is_object());
+    // Nor can its legacy bot token.
+    let _ = s.event_rpc(&legacy, "events/unsubscribe", params.clone()).await;
+    let foreign_client = s.register().await;
+    let code = s.code(&session, &foreign_client, &bot).await;
+    let foreign: Value = s.exchange(&foreign_client, &code, VERIFIER).await.json().await.unwrap();
+    s.event_rpc(foreign["access_token"].as_str().unwrap(), "events/unsubscribe", params.clone())
+        .await;
+    let other_bot: Value = s
+        .client
+        .post(format!("{}/api/hangouts/{room}/agents", s.base))
+        .bearer_auth(&session)
+        .json(&json!({"name":"Other bot"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let code = s.code(&session, &client, other_bot["agent"]["id"].as_str().unwrap()).await;
+    let foreign: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    s.event_rpc(foreign["access_token"].as_str().unwrap(), "events/unsubscribe", params.clone())
+        .await;
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 1);
+    let event = &hook.events()[0];
+    assert_eq!(event["data"]["body"], "@Dedicated bot");
+    assert!(event["data"].get("what_to_do").is_none());
+    let renewed = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert_eq!(renewed["result"]["cursor"], event["cursor"]);
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 1, "acknowledged events are not resent on renewal");
+
+    let second = s
+        .event_rpc(other["access_token"].as_str().unwrap(), "events/subscribe", params.clone())
+        .await;
+    assert_ne!(second["result"]["id"], id);
+    assert_eq!(
+        hook.requests.lock().unwrap().len(),
+        3,
+        "another grant must verify its own callback"
+    );
+    for _ in 0..2 {
+        assert!(
+            s.event_rpc(access, "events/unsubscribe", params.clone()).await["result"].is_object()
+        );
+    }
+    s.state.db.insert_bot_event(&bot, "mention", Some(&room), "second", "{}", at, 0).unwrap();
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 2, "unsubscribe affects only its own grant");
+    s.client
+        .post(format!("{}/oauth/revoke", s.base))
+        .form(&[("client_id", client.as_str()), ("token", other["access_token"].as_str().unwrap())])
+        .send()
+        .await
+        .unwrap();
+    s.state.db.insert_bot_event(&bot, "mention", Some(&room), "revoked", "{}", at, 0).unwrap();
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 2);
+}
+
+#[tokio::test]
+async fn oauth_webhook_rejects_bad_filters_secrets_and_failed_verification() {
+    let s = Server::start().await;
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let (hook, url) = Webhook::start().await;
+    let params = subscription(&room, &url);
+    for (field, value) in [
+        ("arguments", json!({"other":room})),
+        ("arguments", json!({"hangout_id":5})),
+        ("name", json!("bogus")),
+        ("cursor", json!("oops")),
+        ("ttlMs", json!(-1)),
+    ] {
+        let mut bad = params.clone();
+        bad[field] = value;
+        assert!(s.event_rpc(access, "events/subscribe", bad).await.get("error").is_some());
+    }
+    let mut bad = params.clone();
+    bad["arguments"]["hangout_id"] = json!("not-your-room");
+    assert_eq!(s.event_rpc(access, "events/subscribe", bad).await["error"]["code"], -32023);
+    for secret in ["bad", "whsec_aGVsbG8=", "whsec_===a"] {
+        let mut bad = params.clone();
+        bad["delivery"]["secret"] = json!(secret);
+        assert_eq!(s.event_rpc(access, "events/subscribe", bad).await["error"]["code"], -32602);
+    }
+    assert!(hook.requests.lock().unwrap().is_empty());
+    hook.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failed = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert_eq!(failed["error"]["code"], -32015, "{failed}");
+    assert_eq!(failed["error"]["data"]["reason"], "http_5xx");
+    hook.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    hook.bad_challenge.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failed = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert_eq!(failed["error"]["data"]["reason"], "challenge_failed");
+    hook.bad_challenge.store(false, std::sync::atomic::Ordering::SeqCst);
+    let ok = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    assert!(ok["result"]["id"].is_string());
+    // No pending retry may deliver after membership removal.
+    hook.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "retry", "{}", agenthangout::now(), 0)
+        .unwrap();
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 1);
+    s.state.db.remove_agent_from_room(&room, &bot).unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(hook.events().len(), 1);
+}
 fn hidden(html: &str, name: &str) -> String {
     html.split(&format!("name=\"{name}\" value=\""))
         .nth(1)
@@ -110,6 +744,9 @@ impl Server {
         r.json::<Value>().await.unwrap()["client_id"].as_str().unwrap().into()
     }
     async fn authorize(&self, session: &str, client: &str) -> reqwest::Response {
+        self.authorize_scope(session, client, "mcp:bot mcp:events").await
+    }
+    async fn authorize_scope(&self, session: &str, client: &str, scope: &str) -> reqwest::Response {
         self.client
             .get(format!("{}/oauth/authorize", self.base))
             .header("cookie", format!("ah_session={session}"))
@@ -120,7 +757,7 @@ impl Server {
                 ("code_challenge", CHALLENGE),
                 ("code_challenge_method", "S256"),
                 ("resource", &format!("{}/mcp", self.base)),
-                ("scope", "mcp:bot"),
+                ("scope", scope),
                 ("state", "client-state"),
             ])
             .send()
@@ -290,7 +927,7 @@ async fn oauth_requests_validate_redirect_resource_scope_pkce_and_origin() {
             ("client_id", client.as_str()),
             ("redirect_uri", CALLBACK),
             ("resource", s.base.as_str()),
-            ("scope", "mcp:bot"),
+            ("scope", "mcp:bot mcp:events"),
             ("code_challenge", CHALLENGE),
             ("code_challenge_method", "S256"),
             ("response_type", "code"),
@@ -323,7 +960,7 @@ async fn oauth_requests_validate_redirect_resource_scope_pkce_and_origin() {
     assert_eq!(s.consent(&session, &nonce, &bot, "allow").await.status(), StatusCode::SEE_OTHER);
 }
 #[tokio::test]
-async fn oauth_preserves_restricted_social_login_and_blocks_durable_webhooks() {
+async fn oauth_preserves_restricted_social_login_and_validates_webhook_requests() {
     let s = Server::start().await;
     let (session, bot, _, _) = s.setup().await;
     let client = s.register().await;
@@ -342,7 +979,7 @@ async fn oauth_preserves_restricted_social_login_and_blocks_durable_webhooks() {
             .json()
             .await
             .unwrap();
-        assert_eq!(r["error"]["code"], -32026);
+        assert_eq!(r["error"]["code"], -32602);
     }
     let r: Value = s
         .client
@@ -356,7 +993,14 @@ async fn oauth_preserves_restricted_social_login_and_blocks_durable_webhooks() {
         .await
         .unwrap();
     for event in r["result"]["events"].as_array().unwrap() {
-        assert_eq!(event["delivery"], json!(["poll", "push"]));
+        assert_eq!(
+            event["delivery"],
+            if event["name"] == "mention" {
+                json!(["poll", "push", "webhook"])
+            } else {
+                json!(["poll", "push"])
+            }
+        );
     }
     s.state.db.mark_sign_in_session(&agenthangout::auth::hash_secret(&session), "github").unwrap();
     let page = s.authorize(&session, &client).await.text().await.unwrap();
