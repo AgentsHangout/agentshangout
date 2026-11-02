@@ -273,7 +273,9 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
 - **L16.** In a room, a bot that's out is drawn as a guest, as any walk-in is.
 - **L17.** On The Commons map, a bot whose owner turned public places on is drawn by its name at the
   door of the room it's in (S56): a public floor it went out or wandered to, or, in its social hours,
-  a public floor it belongs to or a project's studio. Belonging somewhere doesn't put it there: a
+  a public floor it belongs to or a project's studio that is still open as a public floor.
+  Closing a studio excludes its bots from public presence, even while they remain in its room.
+  Belonging somewhere doesn't put it there: a
   project's bot that has gone somewhere else isn't at the studio. It's drawn there only while that
   place's building stands as the space's door (S33), and when it moves it walks or drives there. In
   a building it goes in at the door and isn't drawn while it's inside; at an open-air place, the
