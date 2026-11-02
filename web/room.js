@@ -1874,6 +1874,37 @@ function paintResearchBench(g, x, y, t, wide, deep) {
   r(g, '#20283e', x + 8, top + 3, 6, 1);
 }
 
+// A lab microscope on a low bench: a base, an arm, the tube and a slide lit from below.
+function paintMicroscope(g, x, y, t) {
+  const light = Math.floor(t / 700) % 2 ? '#bfe6f5' : '#7fd4ff';
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#8a5c37', x - 11, y - 8, 22, 6);
+  r(g, '#6b4628', x - 11, y - 3, 22, 1);
+  r(g, '#e8ecf4', x - 5, y - 11, 10, 3);
+  r(g, light, x - 3, y - 13, 6, 2);
+  r(g, '#3b4158', x + 1, y - 22, 3, 11);
+  r(g, '#e8ecf4', x - 3, y - 26, 4, 12);
+  r(g, '#20283e', x - 3, y - 28, 4, 2);
+  r(g, '#9aa3b8', x - 2, y - 15, 2, 2);
+}
+
+// A lit board for a lab's current study: a chart, a bar graph and a heading line.
+function paintResearchDisplay(g, x, y, t) {
+  const bar = Math.floor(t / 900) % 3;
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#3b4158', x - 15, y - 8, 2, 6);
+  r(g, '#3b4158', x + 13, y - 8, 2, 6);
+  r(g, '#20283e', x - 17, y - 34, 34, 26);
+  r(g, '#eef6fb', x - 16, y - 33, 32, 24);
+  r(g, '#3f8fc4', x - 14, y - 31, 18, 2);
+  r(g, '#3ddc97', x - 14, y - 16, 3, 5);
+  r(g, '#3ddc97', x - 10, y - 20 - bar, 3, 9 + bar);
+  r(g, '#3ddc97', x - 6, y - 18, 3, 7);
+  r(g, '#ff7ad9', x + 2, y - 26, 12, 12);
+  r(g, '#eef6fb', x + 5, y - 23, 6, 6);
+  r(g, '#9aa3b8', x - 14, y - 11, 28, 1);
+}
+
 // The Fall pack, for Thanksgiving and the leaves changing.
 
 const FALL_WOOD = ['#3f2a1c', '#6b4628', '#8a5c37', '#a0703f'];
@@ -3194,6 +3225,8 @@ const ITEMS = {
   anvil: { paint: paintAnvil, side: endOf(12, '#6d7890', '#3b4158'), rise: 15 },
   sewing_table: { paint: paintSewingTable, rise: 28 },
   research_bench: { paint: paintResearchBench, rise: 32 },
+  microscope: { paint: paintMicroscope, side: endOf(14, '#e8ecf4', '#9aa3b8'), rise: 26 },
+  research_display: { paint: paintResearchDisplay, side: edgeOf(30, '#20283e', '#3b4158'), rise: 34 },
   maple_tree: { paint: paintMapleTree, side: paintMapleTree, rise: 66 },
   birch_tree: { paint: paintBirchTree, side: paintBirchTree, rise: 66 },
   leaf_pile: { paint: paintLeafPile, side: paintLeafPile, rise: 16 },
@@ -3249,6 +3282,7 @@ const USES = {
   piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
   easel: { spots: 1, pose: 'stand', hands: true },
+  microscope: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },
@@ -3683,6 +3717,14 @@ const CHESTS = {
   heart: (g, x, y) => plate(g, x, y, '#ff5d7a', ['#..#', '####', '.##.']),
   star: (g, x, y) => plate(g, x, y, '#ffd24d', ['.##.', '####', '.##.']),
   bolt: (g, x, y) => plate(g, x, y, '#8be0ff', ['..##', '.##.', '##..']),
+  // White coat fronts over the shell, open in the middle, with a pen in the pocket.
+  lab_coat: (g, x, y) => {
+    r(g, '#f4f6fa', x - 4, y - 1, 3, 6);
+    r(g, '#f4f6fa', x + 1, y - 1, 3, 6);
+    r(g, '#c9cfdc', x - 1, y - 1, 1, 6);
+    r(g, '#c9cfdc', x + 1, y - 1, 1, 2);
+    r(g, '#3f8fc4', x + 2, y + 1, 1, 2);
+  },
 };
 
 const pick = (table, word, otherwise) => (Object.hasOwn(table, word) ? table[word] : otherwise);

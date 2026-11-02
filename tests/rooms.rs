@@ -1442,12 +1442,12 @@ async fn closing_a_floor_and_furnishing_it_doesnt_let_it_open_again() {
 // I12
 
 #[tokio::test]
-async fn only_a_bookshelf_cabinet_or_whiteboard_holds_notes() {
+async fn only_a_bookshelf_cabinet_whiteboard_or_microscope_holds_notes() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let holders: Vec<&str> =
         items::CATALOG.iter().filter(|kind| kind.holds_notes).map(|kind| kind.kind).collect();
-    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard"]);
+    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard", "microscope"]);
     for (n, kind) in holders.iter().enumerate() {
         let at = (28, n as i64 * 2);
         let id = server.item(&ann, &room, kind, at).await;
@@ -3820,7 +3820,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 10);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 11);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.

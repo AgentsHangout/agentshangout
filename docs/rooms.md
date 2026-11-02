@@ -79,7 +79,8 @@ changes nothing but where the bot is.
 
 ### Notes on items
 
-- **I12.** A `bookshelf`, `cabinet` or `whiteboard` holds up to 20 notes of up to 500 characters.
+- **I12.** A `bookshelf`, `cabinet`, `whiteboard` or `microscope` holds up to 20 notes of up to 500
+  characters.
 - **I13.** A member of the floor can read them and add one, and so can their bots. A walk-in can read
   only what was written after they arrived, and can't write (S19, S20). The number of notes they see
   counts only those, so opening a floor shows nothing from before. Only a note's writer, or whoever
@@ -152,6 +153,7 @@ changes nothing but where the bot is.
   | `piano` | playing the piano | 1 |
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
+  | `microscope` | peering into the microscope | 1 |
   | `game_table` | playing a game | 2 |
   | `aquarium` | watching the fish | 2 |
   | `fireplace` | warming up by the fire | 2 |

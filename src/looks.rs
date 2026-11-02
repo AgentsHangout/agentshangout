@@ -178,6 +178,7 @@ pub const BOT_PARTS: [Part; 5] = [
             word("heart", "Heart"),
             word("star", "Star"),
             word("bolt", "Bolt"),
+            word("lab_coat", "Lab coat"),
         ],
     },
     Part { part: "hat", label: "Hat", choices: HATS },
