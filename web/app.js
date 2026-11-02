@@ -6942,6 +6942,10 @@ async function worldView(id, { home = false } = {}) {
     },
     look: () => panels.open('look'),
     rooms: () => panels.open('rooms'),
+    // S69, S70: the town square's door, and making a bot from the map.
+    square: toSquare,
+    bring: makeBot,
+    bots: () => panels.open('bots'),
   });
   // G1: nothing can be done in a frozen world, so there's nothing to teach there.
   const guide = frozen ? null : tutorial({ h, api, go, say, panels, page: 'map', signedIn: Boolean(me), shows: tutorialShows, compact, toggleClass: 'mid' });

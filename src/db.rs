@@ -10329,6 +10329,30 @@ impl Db {
         )
     }
 
+    /// G6: whether this person has a GitHub or Discord account linked to sign in with.
+    pub fn has_sign_in_link(&self, person_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM sign_in_links WHERE person_id = ?)",
+            [person_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// G6: whether this person, or one of their bots, has said something in a town square.
+    pub fn spoke_in_square(&self, person_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (
+                 SELECT 1 FROM messages m
+                 JOIN floors f ON f.hangout_id = m.hangout_id
+                 JOIN town_square_rooms t ON t.space_id = f.space_id
+                 WHERE m.kind = 'chat'
+                   AND (m.person_id = ?1 AND m.agent_id IS NULL
+                        OR m.agent_id IN (SELECT id FROM agents WHERE owner_id = ?1)))",
+            [person_id],
+            |row| row.get(0),
+        )
+    }
+
     /// I19: how many friends a person has right now. Nothing keeps this, so it can't go stale.
     pub fn friend_count(&self, person_id: &str) -> rusqlite::Result<i64> {
         self.conn().query_row(
