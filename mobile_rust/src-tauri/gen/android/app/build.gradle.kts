@@ -2,6 +2,14 @@ import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import groovy.json.JsonOutput
 import java.security.MessageDigest
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 
 plugins {
     id("com.android.application")
@@ -16,22 +24,24 @@ val tauriProperties = Properties().apply {
     }
 }
 
-// The native client ships the same sources as the server, never a separately maintained UI.
-val clientSource = rootProject.file("../../../../web")
-val clientFiles = fileTree(clientSource) {
-    include("*.js", "*.css", "*.svg", "index.html", "og.jpg")
-}
-val generatedClientAssets = layout.buildDirectory.dir("generated/clientAssets")
-val generateClientAssets = tasks.register("generateClientAssets") {
-    inputs.files(clientFiles)
-    outputs.dir(generatedClientAssets)
-    doLast {
-        val destination = generatedClientAssets.get().dir("client").asFile
+// A standalone task stores only Gradle managed properties, so configuration-cache replay does
+// not serialize references to this build script or Project.
+abstract class GenerateClientAssets : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val destinationDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val destination = destinationDirectory.get().dir("client").asFile
         destination.mkdirs()
         val entries = sortedMapOf<String, Map<String, Any>>()
         fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(it) }
-        clientFiles.files.sortedBy { it.name }.forEach { source ->
+        sources.files.sortedBy { it.name }.forEach { source ->
             // Match the release packager and runtime's content-addressed manifest.
             val bytes = source.readBytes()
             source.copyTo(destination.resolve(source.name), overwrite = true)
@@ -45,6 +55,15 @@ val generateClientAssets = tasks.register("generateClientAssets") {
             "files" to entries
         )))
     }
+}
+
+// The native client ships the same sources as the server, never a separately maintained UI.
+val generatedClientAssets = layout.buildDirectory.dir("generated/clientAssets")
+val generateClientAssets = tasks.register<GenerateClientAssets>("generateClientAssets") {
+    sources.from(fileTree(rootProject.file("../../../../web")) {
+        include("*.js", "*.css", "*.svg", "index.html", "og.jpg")
+    })
+    destinationDirectory.set(generatedClientAssets)
 }
 
 android {
