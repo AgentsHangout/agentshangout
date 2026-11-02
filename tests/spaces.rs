@@ -3590,7 +3590,6 @@ fn the_map_bar_has_what_gets_someone_going_and_more_has_the_rest() {
             "squareButton",
             "panels.toggle('bots', 'My bots'",
             "panels.toggle('rooms', placesLabel",
-            "panels.toggle('requests', 'Requests'",
             "account.toggle",
         ],
     );
@@ -3839,69 +3838,48 @@ async fn a_yes_doesnt_bring_in_a_bot_told_to_stay_home_since_its_owner_asked() {
 
 // S66
 #[test]
-fn a_narrow_window_on_the_map_can_see_and_reach_requests_to_come_in() {
-    // A narrower window's bar folds the `sec` buttons away, and Requests had no row in More, so
-    // nobody in such a window could answer a request. Nothing here runs a browser, so this reads
-    // the page.
-    let app = include_str!("../web/app.js");
+fn requests_to_come_in_are_answered_in_needs_you_and_not_a_button_of_their_own() {
+    // A request was a button that only showed on a wide screen, and a row in More, so it was easy to
+    // miss. Nothing here runs a browser, so this reads the page.
+    let app = &include_str!("../web/app.js").replace("\r\n", "\n");
+    let needs = app.split_once("function needsYouPanel(").unwrap().1;
+    let needs = needs.split_once("\n}\n").unwrap().0;
+    assert!(needs.contains("...list.requests.map(requestItem),"), "Needs you doesn't list them");
+    assert!(
+        needs.contains("api(`/api/place-requests/${encodeURIComponent(request.id)}/answer`"),
+        "they can't be answered there"
+    );
+    for gone in ["panels.toggle('requests'", "moreRow('requests'", "panels.add('requests'"] {
+        assert!(!app.contains(gone), "{gone} is still on the page");
+    }
+
+    // A row in More for a button in the bar shows only where the bar has folded it away, so
+    // nothing is in both (S68).
     let map = app.split_once("async function worldView(").unwrap().1;
     let more = map.split_once("panels.add('more'").unwrap().1.split_once("]));").unwrap().0;
     for button in top_bar(app, "worldView").split("panels.toggle('").skip(1) {
         let (name, rest) = button.split_once('\'').unwrap();
-        if rest.lines().next().unwrap().contains("'sec'") {
-            assert!(more.contains(&format!("'{name}'")), "{name} folds away with no row in More");
+        let line = rest.lines().next().unwrap();
+        for width in ["mid", "sec"] {
+            if line.contains(&format!("className: '{width}'")) {
+                let row = more
+                    .lines()
+                    .find(|row| row.contains(&format!("moreRow('{name}'")))
+                    .unwrap_or_else(|| panic!("{name} folds away with no row in More"));
+                assert!(row.contains(&format!("'{width}')")), "{name}'s row is in both: {row}");
+            }
         }
     }
+    let css = include_str!("../web/style.css").replace("\r\n", "\n");
     assert!(
-        more.contains("me?.kind === 'person' ? (requestsRow = "),
-        "the row is there for someone who can't have requests"
+        css.contains("@media (min-width: 1000px) {\n  .game-more .wd-btn.mid { display: none; }")
     );
-
-    // The button and the row can't say different numbers, and a screen reader hears them.
-    let load = map.split_once("async function loadRequests(").unwrap().1;
-    let load = load.split_once("let requestsToggle").unwrap().0;
-    assert!(
-        load.contains(
-            "for (const button of [requestsToggle, requestsRow]) button.textContent = label;"
-        ),
-        "the button and the row don't both get the count"
-    );
-    assert!(
-        load.contains("requestsToggle.setAttribute('aria-label', label);"),
-        "a screen reader is told a different number from the one on the button"
-    );
-    assert!(
-        load.contains("moreToggle.setAttribute('aria-label', "),
-        "a screen reader can't tell that More lit up"
-    );
-
-    // A request changes nothing on the map, so asking about them can't wait for the map to change.
-    assert!(map.contains("onLook: loadRequests,"), "an open map doesn't ask about requests");
-    let look = app.split_once("function watchWorld(").unwrap().1;
-    let look = look.split_once("etag !== tag").unwrap().0;
-    assert!(look.contains("onLook?.();"), "an open map only asks once the map has changed");
-    assert!(
-        load.contains("if (key === requestsKey) return;"),
-        "asking again rebuilds a list someone may be using"
-    );
-
-    // The button lights up. Where it's folded away More does instead, and More stays the same
-    // width, so the buttons to its left don't move (S64).
-    assert!(
-        load.contains("requestsToggle.classList.toggle('wait', "),
-        "a waiting request doesn't light the button"
-    );
-    // The button is in the bar only while one is waiting, and the row in More is always there.
-    assert!(map.contains("if (requestsToggle) requestsToggle.hidden = true;"));
-    assert!(load.contains("requestsToggle.hidden = !requests.length;"), "Requests is always shown");
-    let css = include_str!("../web/style.css");
-    let width = |rule: &str| {
-        let before = css.split_once(rule).unwrap_or_else(|| panic!("{rule} is gone")).0;
-        before.rsplit_once("(max-width: ").unwrap().1.split_once(')').unwrap().0
-    };
-    assert_eq!(
-        width(".wd-map .wd-title-actions:has(.sec.wait) .more {"),
-        width(".wd-game:not(.wd-room) .wd-title-actions .sec {"),
-        "More lights up at a different width from the one that folds the button away"
-    );
+    assert!(css.contains(
+        "@media (min-width: 1100px) {\n  .wd-room .game-more .wd-btn.sec { display: none; }"
+    ));
+    // The map folds its sec buttons away until 1360px, so its rows for them stay until then.
+    assert!(css.contains("@media (min-width: 1100px) and (max-width: 1359px) {\n  .wd-game:not(.wd-room) .wd-title-actions .sec { display: none; }"));
+    assert!(css.contains(
+        "@media (min-width: 1360px) {\n  .wd-map .game-more .wd-btn.sec { display: none; }"
+    ));
 }

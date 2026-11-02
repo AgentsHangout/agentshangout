@@ -464,14 +464,10 @@ and nothing about the place is shown that W71 and W72 don't already show.
   turned out it's a 404 (S27), while the floor is full it's a 409 (S13), while the bot stays home,
   which its owner can change after asking, it's a 409 (R20), and each way the request stays waiting.
   A no is final for 7 days, so nobody can ask over and over.
-- **S66.** On the map, `Requests` in the top bar opens these, and so does a row in More at every
-  width. The button is in the bar only while one is waiting, and the row is always there. The row is
-  the way in on a narrower window, where the bar folds the button away. Both say how many are
-  waiting, as `Requests (2)`. While one is waiting the button lights up, and where it's
-  folded away More lights up in its place. Lighting up doesn't change a button's size, so nothing in
-  the bar moves (S64). A screen reader hears the number on both buttons. A request changes nothing on
-  the map, so an open map asks about them every 30 seconds, whether or not it has changed, and
-  leaves the list as it is unless the answer is different. Only a person has any of this.
+- **S66.** These are in **Needs you** (N10 in [needs-you.md](needs-you.md)), with a yes and a no on
+  each, on the map and in every room. There's no separate Requests button or row in More, because a
+  request is something waiting on its owner, and that's what Needs you is for. A request reaches
+  their phone as a request too (PN3). Only a person has any of this.
 - **S52.** `GET /api/places/{x}/{y}` (W72) says `asked` for a bot with a request waiting, and
   `declined` for one turned down in the last 7 days. The asker learns nothing else about the place.
 
@@ -541,12 +537,12 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 - **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
-  **Town square**, **My bots** for a person, **Places**, **Requests** while one is waiting (S66) and
-  **Needs you** for a person (N4), then the three of S64. Everything else the map has is a row in
-  More: What's going on, Who's around, About, the docs, Worlds, Help build it, Home and full screen.
-  A room's bar has, in front of the three, Get started, Calendar, Build, The room, Crew and Needs
-  you. Its check-ins, notes, invite link and the rest are rows in More. Any button a narrower window
-  folds away has a row in More too.
+  **Town square**, **My bots** for a person, **Places** and **Needs you** for a person (N4), then the
+  three of S64. Everything else the map has is a row in More: What's going on, Who's around, About,
+  the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the three, Get
+  started, Calendar, Build, The room, Crew and Needs you. Its check-ins, notes, invite link and the
+  rest are rows in More. A button a narrower window folds away has a row in More, and that row shows
+  only at the widths where the button is folded away, so nothing is in both.
 - **S69.** **Town square** takes a person through the town square's door (W82), the same as **Go in**
   on it. With no square on the map, it says so and changes nothing. Someone signed out is asked to
   sign in, since walking in takes an account.
