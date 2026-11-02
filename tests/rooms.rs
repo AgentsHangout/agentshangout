@@ -4,7 +4,10 @@
 
 use std::{
     collections::BTreeSet,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicI64, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -75,10 +78,17 @@ impl Server {
     }
 
     async fn start_db(db: Db) -> Self {
+        Self::start_db_with_write_clock(db, now).await
+    }
+
+    async fn start_db_with_write_clock(
+        db: Db,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
-        let state = AppState::new(
+        let state = AppState::with_write_clock(
             db,
             Config {
                 public_url: base.clone(),
@@ -87,6 +97,7 @@ impl Server {
                 keeper_id: None,
                 god_ids: Vec::new(),
             },
+            clock,
         );
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
@@ -4168,11 +4179,38 @@ async fn a_quiet_sign_doesnt_stop_a_bot_using_something_and_nothing_is_said() {
 
 #[tokio::test]
 async fn using_something_counts_as_one_of_a_bots_writes() {
-    let server = Server::start().await;
+    // Keep all requests in one limiter minute, even if wall-clock time crosses a boundary.
+    let server = Server::start_db_with_write_clock(Db::open(":memory:").unwrap(), || 120).await;
     let (room, ann) = server.someone("Ann").await;
     let scout = server.bot(&ann, &room, "Scout").await;
     let stool = server.item(&ann, &room, "stool", (30, 2)).await;
     for _ in 0..agenthangout::ops::MAX_AGENT_WRITES_PER_MINUTE {
+        server.use_item(&scout.token, &stool).await.ok();
+    }
+    server.use_item(&scout.token, &stool).await.refused(StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn item_use_write_budget_resets_only_when_the_clock_minute_changes() {
+    let clock = Arc::new(AtomicI64::new(120));
+    let server_clock = Arc::clone(&clock);
+    let server = Server::start_db_with_write_clock(Db::open(":memory:").unwrap(), move || {
+        server_clock.load(Ordering::SeqCst)
+    })
+    .await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let stool = server.item(&ann, &room, "stool", (30, 2)).await;
+
+    for _ in 0..ops::MAX_AGENT_WRITES_PER_MINUTE {
+        server.use_item(&scout.token, &stool).await.ok();
+    }
+    clock.store(179, Ordering::SeqCst);
+    server.use_item(&scout.token, &stool).await.refused(StatusCode::TOO_MANY_REQUESTS);
+
+    // The next minute restores exactly one full budget, not an unlimited allowance.
+    clock.store(180, Ordering::SeqCst);
+    for _ in 0..ops::MAX_AGENT_WRITES_PER_MINUTE {
         server.use_item(&scout.token, &stool).await.ok();
     }
     server.use_item(&scout.token, &stool).await.refused(StatusCode::TOO_MANY_REQUESTS);
