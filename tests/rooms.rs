@@ -2357,6 +2357,44 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
     assert!(!texts.contains(&"re".to_string()), "nothing refused was posted: {after}");
 }
 
+// I83
+#[tokio::test]
+async fn saying_the_same_thing_again_warns_the_bot_but_still_posts() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let say = |text: &str| {
+        let args = json!({ "hangout_id": room, "text": text });
+        let token = rover.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "say", args).await["structuredContent"].clone() }
+    };
+
+    let first = say("Who is bringing snacks on Friday?").await;
+    assert!(first.get("warning").is_none(), "{first}");
+    let asked = first["message_id"].as_i64().unwrap();
+    // Short lines and different lines aren't flagged.
+    assert!(say("ok").await.get("warning").is_none());
+    assert!(say("ok").await.get("warning").is_none());
+    assert!(say("I will set up the tables early").await.get("warning").is_none());
+
+    let again = say("who is bringing the snacks on Friday?").await;
+    assert_eq!(again["posted"], true, "{again}");
+    assert_eq!(again["warning"]["kind"], "repeat", "{again}");
+    assert_eq!(again["warning"]["your_earlier_message_id"], asked, "{again}");
+
+    let messages = format!("/api/hangouts/{room}/messages");
+    let answer = server.post(&ann.key, &messages, json!({ "text": "@Rover I am" })).await.ok();
+    let third = say("Who is bringing snacks on Friday??").await;
+    assert_eq!(third["warning"]["kind"], "already_answered", "{third}");
+    assert_eq!(third["warning"]["answer_ids"], json!([answer["id"]]), "{third}");
+
+    // A person repeating themselves gets nothing extra.
+    let echo = json!({ "text": "Who is bringing snacks on Friday?" });
+    let posted = server.post(&ann.key, &messages, echo).await.ok();
+    assert!(posted.get("warning").is_none(), "{posted}");
+}
+
 // I82
 #[tokio::test]
 async fn a_guest_can_answer_only_lines_from_after_they_walked_in() {

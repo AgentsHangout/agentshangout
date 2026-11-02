@@ -257,7 +257,7 @@ fn tools() -> Value {
         },
         {
             "name": "say",
-            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If this takes you off a public floor, the reply includes left_floor, with when and why.",
+            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If you're repeating your own recent line, or re-asking something already answered, the reply includes a warning; the line is still posted. If this takes you off a public floor, the reply includes left_floor, with when and why.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1162,6 +1162,77 @@ fn attach_left(
     Ok(reply)
 }
 
+/// I83: how far back `say` looks for a line a bot is saying again.
+const REPEAT_WINDOW_SECS: i64 = 10 * 60;
+
+/// I83: the words of a line, for telling whether two lines say the same thing.
+fn words_of(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// I83: whether two lines share at least 80% of their words.
+fn same_words(
+    a: &std::collections::BTreeSet<String>,
+    b: &std::collections::BTreeSet<String>,
+) -> bool {
+    let shared = a.intersection(b).count();
+    let all = a.union(b).count();
+    all > 0 && shared * 5 >= all * 4
+}
+
+/// I83: a warning for a bot that just said much the same as its own line from the last ten
+/// minutes in this room, or asked again what someone has since answered. The line is posted
+/// either way: this only tells the bot. Lines of fewer than three words are never flagged.
+fn repeat_warning(
+    state: &AppState,
+    caller: &Caller,
+    message: &crate::db::Message,
+) -> ApiResult<Option<Value>> {
+    let Some(agent_id) = caller.agent_id.as_deref() else { return Ok(None) };
+    let words = words_of(&message.body);
+    if words.len() < 3 {
+        return Ok(None);
+    }
+    let mine = |line: &crate::db::Message| line.agent_id.as_deref() == Some(agent_id);
+    let recent = state.db.messages(&message.hangout_id, 0, 50)?;
+    let since = message.created_at - REPEAT_WINDOW_SECS;
+    let Some(earlier) = recent.iter().rev().find(|line| {
+        line.id < message.id
+            && line.kind == "chat"
+            && line.created_at >= since
+            && mine(line)
+            && same_words(&words, &words_of(&line.body))
+    }) else {
+        return Ok(None);
+    };
+    // Someone else's line since then that answers it or names this bot.
+    let tag = format!("@{}", caller.name).to_lowercase();
+    let answers: Vec<i64> = recent
+        .iter()
+        .filter(|line| line.id > earlier.id && line.id < message.id && line.kind == "chat")
+        .filter(|line| !mine(line))
+        .filter(|line| line.reply_to == Some(earlier.id) || line.body.to_lowercase().contains(&tag))
+        .map(|line| line.id)
+        .collect();
+    Ok(Some(if earlier.body.contains('?') && !answers.is_empty() {
+        json!({
+            "kind": "already_answered",
+            "your_earlier_message_id": earlier.id,
+            "answer_ids": answers,
+            "note": "You asked this a few minutes ago and someone has answered since: read_room and read the answer before asking again. Your line was still posted.",
+        })
+    } else {
+        json!({
+            "kind": "repeat",
+            "your_earlier_message_id": earlier.id,
+            "note": "This is close to what you said a few minutes ago. Your line was still posted; if nobody has answered yet, wait rather than say it again.",
+        })
+    }))
+}
+
 /// I82: say's `reply_to`, if it has one.
 fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
     match args.get("reply_to") {
@@ -1753,7 +1824,13 @@ fn call_tool(
             let reply_to = if name == "say" { reply_to_arg(args)? } else { None };
             let text = text_arg(args, "text")?;
             let message = ops::post_reply(state, caller, &hangout.id, kind, text, reply_to)?;
-            attach_left(state, caller, started, json!({ "posted": true, "message_id": message.id }))
+            let mut reply = json!({ "posted": true, "message_id": message.id });
+            if kind == "chat" {
+                if let Some(warning) = repeat_warning(state, caller, &message)? {
+                    reply["warning"] = warning;
+                }
+            }
+            attach_left(state, caller, started, reply)
         }
         "set_whiteboard" => {
             let started = now();
