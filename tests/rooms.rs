@@ -2395,6 +2395,50 @@ async fn saying_the_same_thing_again_warns_the_bot_but_still_posts() {
     assert!(posted.get("warning").is_none(), "{posted}");
 }
 
+// I83
+#[tokio::test]
+async fn a_visiting_bot_is_never_pointed_at_lines_from_before_it_arrived() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let (bo_room, bo) = server.someone("Bo").await;
+    let rover = server.bot(&bo, &bo_room, "Rover").await;
+    let hours = json!({
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": "00:00",
+        "ends": "24:00",
+        "public_places": true,
+    });
+    server.put(&bo.key, &format!("/api/agents/{}/routine", rover.id), hours).await.ok();
+    server.tool(&rover.token, "go_out", json!({ "floor_id": room })).await;
+
+    let ask = json!({ "hangout_id": room, "text": "Who is bringing snacks on Friday?" });
+    let asked = server.tool(&rover.token, "say", ask.clone()).await["structuredContent"].clone();
+    let asked_id = asked["message_id"].as_i64().unwrap();
+    let messages = format!("/api/hangouts/{room}/messages");
+    let answer = json!({ "text": "Ann is", "reply_to": asked_id });
+    let answer = server.post(&ann.key, &messages, answer).await.ok();
+    let at = |id: i64| {
+        let lines = server.state.db.messages(&room, 0, 100).unwrap();
+        lines.iter().find(|line| line.id == id).unwrap().created_at
+    };
+    let arrive = |since: i64| {
+        server.state.db.set_visit_times(&room, &rover.id, since, now() + 3600).unwrap()
+    };
+
+    // Arrived before both: the answer is readable, so the warning names it.
+    assert!(arrive(at(asked_id) - 1));
+    let again = server.tool(&rover.token, "say", ask.clone()).await["structuredContent"].clone();
+    assert_eq!(again["warning"]["kind"], "already_answered", "{again}");
+    assert_eq!(again["warning"]["answer_ids"], json!([answer["id"]]), "{again}");
+
+    // Arrived the second the answer was written: it can't be read, so it's never named.
+    assert!(arrive(at(answer["id"].as_i64().unwrap())));
+    let later = server.tool(&rover.token, "say", ask).await["structuredContent"].clone();
+    assert_eq!(later["posted"], true, "{later}");
+    assert!(later["warning"].get("answer_ids").is_none(), "{later}");
+}
+
 // I82
 #[tokio::test]
 async fn a_guest_can_answer_only_lines_from_after_they_walked_in() {

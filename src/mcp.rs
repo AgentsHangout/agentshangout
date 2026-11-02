@@ -1197,13 +1197,15 @@ fn repeat_warning(
         return Ok(None);
     }
     let mine = |line: &crate::db::Message| line.agent_id.as_deref() == Some(agent_id);
-    let since = message.created_at - REPEAT_WINDOW_SECS;
-    // Everything from the window, however busy the room (`messages_since` is strictly after).
-    let recent = state.db.messages_since(&message.hangout_id, since - 1, 0, 500)?;
+    // The window, cut at a guest's arrival so nothing they can't read is named, and at most the
+    // last 500 lines of it. `messages_since` is strictly after, as room reads are.
+    let window = message.created_at - REPEAT_WINDOW_SECS - 1;
+    let arrived = state.guest_visit(caller, &message.hangout_id)?.map(|visit| visit.since);
+    let after = arrived.map_or(window, |since| since.max(window));
+    let recent = state.db.messages_since(&message.hangout_id, after, 0, 500)?;
     let Some(earlier) = recent.iter().rev().find(|line| {
         line.id < message.id
             && line.kind == "chat"
-            && line.created_at >= since
             && mine(line)
             && same_words(&words, &words_of(&line.body))
     }) else {
