@@ -1,13 +1,7 @@
-//! Agents Hangout on Android and iOS. There is no second app here: the shell opens the server's own
-//! web client (`web/`), so every page, map and room is the same code people already use in a
-//! browser, and a change to `web/` reaches the phone the moment the server has it.
-//!
-//! Pointing it somewhere else is a build-time choice, so a release can't be aimed at a different
-//! server by anything on the phone:
-//!
-//! ```text
-//! AGENTSHANGOUT_URL=http://10.0.2.2:8787 cargo tauri android dev   # emulator -> your PC's cargo run
-//! ```
+//! Agents Hangout on Android and iOS. The shell opens the server's own web client (`web/`), so the
+//! map, rooms and sign-in are the same game as the site. The phone build marks that page with
+//! `apple-hig`, which is the touch layout (and the sideways layout). A desktop window does not:
+//! it is the site a browser already shows, and it must not grow the phone's buttons.
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -17,55 +11,26 @@ const SERVER: &str = match option_env!("AGENTSHANGOUT_URL") {
     None => "https://agentshangout.com",
 };
 
-const HIG_CSS: &str = include_str!("../../../web/style.css");
+/// Keeps the touch layout on in the phone app, including when the WebView reports a fine pointer
+/// or the phone is turned sideways and comes out wider than a narrow window.
+#[cfg(mobile)]
+const MARK_PHONE: &str = r#"(function(){function mark(){var root=document.querySelector('.wd-game');if(root)root.classList.add('apple-hig');document.documentElement.classList.add('in-app');}mark();document.addEventListener('DOMContentLoaded',function(){mark();if(!document.body)return;new MutationObserver(mark).observe(document.body,{childList:true,subtree:true});});window.addEventListener('orientationchange',mark);})();"#;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let url = SERVER.parse().expect("AGENTSHANGOUT_URL must be a full URL");
-            let inject_js = format!(
-                r#"
-                (function() {{
-                    function inject() {{
-                        if (!document.head) {{
-                            setTimeout(inject, 10);
-                            return;
-                        }}
-                        if (!document.getElementById('apple-hig-styles')) {{
-                            const style = document.createElement('style');
-                            style.id = 'apple-hig-styles';
-                            style.textContent = {};
-                            document.head.appendChild(style);
-                        }}
-                        if (document.body) {{
-                            document.body.classList.add('apple-hig');
-                            const root = document.querySelector('.wd-game, .wd');
-                            if (root) root.classList.add('apple-hig');
-                        }}
-                    }}
-                    inject();
-                    document.addEventListener('DOMContentLoaded', () => {{
-                        inject();
-                        const observer = new MutationObserver(() => {{
-                            const root = document.querySelector('.wd-game, .wd');
-                            if (root && !root.classList.contains('apple-hig')) {{
-                                root.classList.add('apple-hig');
-                            }}
-                        }});
-                        if (document.body) {{
-                            observer.observe(document.body, {{ childList: true, subtree: true }});
-                        }}
-                    }});
-                }})();
-                "#,
-                serde_json::to_string(HIG_CSS).unwrap()
-            );
             #[allow(unused_mut)]
-            let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .initialization_script(&inject_js);
+            let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url));
+            #[cfg(mobile)]
+            {
+                window = window.initialization_script(MARK_PHONE);
+            }
             #[cfg(desktop)]
-            let window = window.title("Agents Hangout").inner_size(480.0, 860.0);
+            {
+                window = window.title("Agents Hangout").inner_size(480.0, 860.0);
+            }
             window.build()?;
             Ok(())
         })

@@ -1830,6 +1830,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 }
 @media (max-width: 759px) {
   .build-tiles.build-templates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Public docs: paper sheets on the desk, readable with no JavaScript. */
 
 .docs-skip {
@@ -2037,14 +2039,14 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   --apple-accent: #8e2f18;
 }
 
-/* On desktop, hide mobile-only elements */
+/* A desktop window never shows the phone chrome, however short or narrow it is. */
 .apple-tab-bar,
 .apple-build-sheet,
 .apple-placement-banner,
 .apple-fab-hud,
 .sheet-scrim,
 .sheet-grabber {
-  display: none;
+  display: none !important;
 }
 
 /* Active Apple HIG Mobile Experience */
@@ -2559,4 +2561,48 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   width: 32px !important;
   height: 32px !important;
   display: block !important;
+}
+
+/* A phone on its side: the tab bar takes the left edge, so the map keeps the height. */
+@media (orientation: landscape) {
+  .apple-hig .wd-well {
+    left: calc(76px + env(safe-area-inset-left)) !important;
+    right: 0 !important;
+    width: auto !important;
+  }
+  .apple-hig .wd-title {
+    left: calc(50% + 38px) !important;
+  }
+  .apple-hig > .wd-status {
+    left: calc(90px + env(safe-area-inset-left)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+  }
+  .apple-hig .apple-tab-bar {
+    flex-direction: column !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: auto !important;
+    width: calc(76px + env(safe-area-inset-left)) !important;
+    height: auto !important;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left) !important;
+    border-top: 0 !important;
+    border-right: 0.5px solid var(--apple-border) !important;
+  }
+  .apple-hig .apple-tab-item {
+    width: 100%;
+    height: auto;
+    min-height: 52px;
+    flex: 1 1 auto;
+  }
+  .apple-hig .apple-fab-hud {
+    top: 50% !important;
+    bottom: auto !important;
+    right: max(14px, env(safe-area-inset-right)) !important;
+    transform: translateY(-50%) !important;
+  }
+  .apple-hig .apple-build-sheet {
+    left: calc(76px + env(safe-area-inset-left)) !important;
+    max-height: 70% !important;
+  }
 }

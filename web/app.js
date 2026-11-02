@@ -2429,7 +2429,7 @@ async function roomView(id) {
   const root = h('main', { class: 'game' }, frame.root);
   const lampEl = frame.root.querySelector('.wd-live');
   const panels = createPanels(frame.root);
-  installAppleHigRoom({ frame, panels, compact: matchMedia(COMPACT) });
+  installAppleHigRoom({ frame, panels });
   const parts = homePartsOnDemand(me);
   const account = accountPanel(panels, me, parts);
   const beside = matchMedia(BESIDE);
@@ -5711,14 +5711,19 @@ const COMPACT = '(max-width: 759px)';
 // The panels that open over a game window from buttons in its title bar, one at a time. Each has a
 // close button of its own, and Escape closes it. `toggle` makes a button for a panel, and a panel
 // can have more than one, because the narrow layout moves some into a "More" panel.
-// Apple HIG Mobile Infrastructure
-function installAppleHigMap({ frame, panels, choose, movesCount, compact, viewGroup }) {
-  const syncHig = () => {
-    const isMobile = compact.matches || ('ontouchstart' in window && window.innerWidth <= 840);
-    frame.root.classList.toggle('apple-hig', isMobile);
-  };
-  compact.addEventListener('change', syncHig);
-  syncHig();
+// The phone chrome is for a touch screen. A mouse window keeps the desktop game, even when it is
+// short or narrow. Turning the phone sideways is a media-query change, so this listens for that too.
+function watchPhoneChrome(root) {
+  const phone = matchMedia('(pointer: coarse)');
+  const sync = () => root.classList.toggle('apple-hig', phone.matches);
+  phone.addEventListener('change', sync);
+  window.addEventListener('resize', sync);
+  window.addEventListener('orientationchange', sync);
+  sync();
+}
+
+function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
+  watchPhoneChrome(frame.root);
 
   // Ensure title subtitle element exists for compact display
   if (!frame.title.querySelector('.wd-title-sub')) {
@@ -5869,13 +5874,8 @@ function installAppleHigMap({ frame, panels, choose, movesCount, compact, viewGr
   return { updatePlacement, openBuildSheet, closeBuildSheet };
 }
 
-function installAppleHigRoom({ frame, panels, compact }) {
-  const syncHig = () => {
-    const isMobile = compact.matches || ('ontouchstart' in window && window.innerWidth <= 840);
-    frame.root.classList.toggle('apple-hig', isMobile);
-  };
-  compact.addEventListener('change', syncHig);
-  syncHig();
+function installAppleHigRoom({ frame, panels }) {
+  watchPhoneChrome(frame.root);
 
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [
@@ -6623,7 +6623,6 @@ async function worldView(id, { home = false } = {}) {
     panels,
     choose: (t) => pick(t),
     movesCount: () => moves,
-    compact,
     viewGroup,
   });
 
