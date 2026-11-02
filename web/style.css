@@ -2740,3 +2740,6 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
     max-height: 70% !important;
   }
 }
+/* Announcement content stays readable on narrow phones and preserves the keeper's line breaks. */
+.push-review { overflow-wrap: anywhere; }
+.push-message { white-space: pre-wrap; }

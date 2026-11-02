@@ -119,6 +119,79 @@ function field(label, input, hint) {
   return h('label', { class: 'field' }, h('span', {}, label), input, hint && h('small', {}, hint));
 }
 
+// Phone settings belong to the signed-in person, independently of any room. The trusted Android
+// bridge owns permission, device tokens and preferences; ordinary browsers have no phone control.
+function nativeNotificationAction(action) {
+  const bridge = window.AgentsHangoutNotifications;
+  if (typeof bridge?.postMessage !== 'function') return false;
+  try {
+    bridge.postMessage(JSON.stringify({ action }));
+    return true;
+  } catch (_) { return false; }
+}
+
+function notificationActions(me, className = 'wd-btn wide') {
+  if (me?.kind !== 'person') return [];
+  const buttons = [];
+  if (typeof window.AgentsHangoutNotifications?.postMessage === 'function') {
+    buttons.push(h('button', { type: 'button', class: className, onclick: () => {
+      if (!nativeNotificationAction('openSettings')) {
+        modal('Phone notifications', h('p', { role: 'alert' }, 'Phone settings could not open. Please reopen the app and try again.'));
+      }
+    } }, 'Phone notifications'));
+  }
+  if (me.keeper) buttons.push(h('button', {
+    type: 'button', class: className, onclick: announcementDialog,
+  }, 'Send server announcement'));
+  return buttons;
+}
+
+async function announcementDialog() {
+  const content = h('div', {}, h('p', { role: 'status' }, 'Checking announcement access…'));
+  const dialog = modal('Server announcement', content);
+  try {
+    const status = await api('/api/push/status');
+    if (!dialog.isConnected) return;
+    if (!status.admin) throw new Error('Only a server keeper can send announcements.');
+    if (!status.configured) throw new Error('Phone notifications are not configured on this server yet.');
+    const audience = h('p', { class: 'note' }, 'This goes to people who enabled server announcements on their phones.');
+    const title = h('input', { name: 'title', required: true, autocomplete: 'off' });
+    const body = h('textarea', { name: 'body', required: true, rows: 4 });
+    const error = formError();
+    const review = h('section', { class: 'push-review', hidden: true, 'aria-label': 'Review announcement' });
+    const form = h('form', { onsubmit: event => {
+      event.preventDefault(); error.hidden = true;
+      const message = { title: title.value.trim(), body: body.value.trim() };
+      if (!message.title || !message.body || [...message.title].length > 80 || [...message.body].length > 300) {
+        error.textContent = 'Enter a title of 1–80 characters and a message of 1–300 characters.';
+        error.hidden = false; return;
+      }
+      const edit = h('button', { type: 'button', class: 'ghost', onclick: () => {
+        review.hidden = true; form.hidden = false; error.hidden = true; title.focus();
+      } }, 'Edit');
+      const send = h('button', { type: 'button', class: 'primary', onclick: async () => {
+        send.disabled = true; edit.disabled = true; error.hidden = true;
+        try {
+          await api('/api/push/announcements', { method: 'POST', body: message });
+          if (!dialog.isConnected) return;
+          content.replaceChildren(h('p', { role: 'status' }, 'Announcement queued. Delivery depends on each phone’s notification settings and connection.'));
+        } catch (failure) {
+          error.textContent = failure.message; error.hidden = false;
+          send.disabled = false; edit.disabled = false;
+        }
+      } }, 'Send announcement');
+      review.replaceChildren(h('h3', {}, message.title), h('p', { class: 'push-message' }, message.body),
+        h('div', { class: 'modal-actions' }, edit, send));
+      form.hidden = true; review.hidden = false; send.focus();
+    } }, field('Title', title, 'Up to 80 characters.'), field('Message', body, 'Up to 300 characters. Avoid private information.'),
+    h('button', { type: 'submit', class: 'primary' }, 'Review announcement'));
+    content.replaceChildren(audience, form, review, error);
+    title.focus();
+  } catch (error) {
+    if (dialog.isConnected) content.replaceChildren(h('p', { class: 'error', role: 'alert' }, error.message));
+  }
+}
+
 // With a passkey the owner key is the way back in after losing every one, not the only way in. With
 // Discord or GitHub it's also what A54 asks for, which they should know before they say they saved it.
 function showOwnerKey(key, then, { passkey = false, site } = {}) {
@@ -508,7 +581,7 @@ async function homeParts(me) {
     h('button', {
       type: 'button',
       class: 'ghost',
-      onclick: async () => { await api('/api/session', { method: 'DELETE' }); route(); },
+      onclick: async () => { await api('/api/session', { method: 'DELETE' }); nativeNotificationAction('signedOut'); route(); },
     }, 'Sign out'),
     me.sign_in_session ? null : h('button', { type: 'button', class: 'ghost danger', onclick: () => deleteAccountDialog(me) }, 'Delete account'));
 
@@ -3537,7 +3610,7 @@ async function roomView(id) {
     const result = h('p', { class: 'muted', hidden: true, role: 'status' });
     const save = (url) => api('/api/notify', { method: 'PUT', body: { url: url || null } });
     const input = h('input', { name: 'url', type: 'url', value: mine.notify_url || '', placeholder: 'https://', autocomplete: 'off' });
-    modal('Notify me',
+    modal('Webhook notifications',
       h('p', {}, 'Get pinged when someone is waiting on you or a plan needs an answer. Paste a Slack, Discord or Teams incoming webhook.'),
       h('p', { class: 'muted' }, 'For phone pushes, install the free ntfy app, subscribe to a long random topic, and paste https://ntfy.sh/your-topic. Anyone who knows that topic can read it.'),
       h('form', {
@@ -3906,7 +3979,8 @@ async function roomView(id) {
       moreButton('boards', 'Boards', 'sec'),
       moreButton('yours', 'Notes for your bots', 'sec'),
       inviteButton,
-      h('button', { type: 'button', class: 'wd-btn wide', onclick: notifyDialog }, 'Notify me'),
+      ...notificationActions(me),
+      h('button', { type: 'button', class: 'wd-btn wide', onclick: notifyDialog }, 'Webhook notifications'),
       h('button', { type: 'button', class: 'wd-btn wide', onclick: calendarDialog }, 'My calendar'),
       backPath === '/' ? null : link('/', 'The Commons', { class: 'wd-btn wide' }),
     ].filter(Boolean)));
@@ -6293,7 +6367,8 @@ function accountPanel(panels, me, parts) {
       const ready = await parts();
       body.replaceChildren(
         ...(why ? [h('p', { class: 'note', role: 'status' }, why)] : []),
-        ...(again ? [ready.signIn()] : ready.account));
+        ...(again ? [ready.signIn()] : ready.account),
+        ...(again ? [] : notificationActions(me)));
     } catch (error) {
       body.replaceChildren(h('p', { class: 'error' }, error.message));
     }
@@ -6765,6 +6840,7 @@ async function worldView(id, { home = false } = {}) {
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Tutorial') : null,
     me?.kind === 'person' ? (requestsRow = moreRow('requests', 'Requests')) : null,
     me?.kind === 'person' ? moreRow('bots', 'Bots') : null,
+    ...notificationActions(me),
     ...[['agent', 'Send your agent in'], ['rooms', roomsLabel], ['about', 'About']].map(([name, label]) => moreRow(name, label)),
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),

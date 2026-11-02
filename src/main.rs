@@ -68,6 +68,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         apps,
     );
     // W28: The Commons is there before anyone asks.
+    if let Ok(project) = env::var("AGENTHANGOUT_FCM_PROJECT") {
+        match agenthangout::push::Fcm::from_project(project) {
+            Ok(sender) => {
+                let _ = state.push.set(std::sync::Arc::new(sender));
+            }
+            Err(message) => tracing::error!(message, "phone notifications remain disabled"),
+        }
+    }
     if let Err(error) = worlds::ensure_commons(&state) {
         tracing::error!(status = %error.status, "The Commons could not be made");
     }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- A restored phone must obtain its own token and explicitly opt in. -->
+    <exclude domain="sharedpref" path="phone_push.xml" />
+    <exclude domain="sharedpref" path="com.google.firebase.messaging.xml" />
+</full-backup-content>

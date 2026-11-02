@@ -78,6 +78,13 @@ android {
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
         val serverUrl = System.getenv("AGENTSHANGOUT_URL") ?: "https://agentshangout.com"
         buildConfigField("String", "AGENTSHANGOUT_URL", JsonOutput.toJson(serverUrl))
+        // Public Firebase Android configuration is supplied by the release builder, never checked in.
+        mapOf("APP_ID" to "google_app_id", "PROJECT_ID" to "project_id",
+            "API_KEY" to "google_api_key", "SENDER_ID" to "gcm_defaultSenderId").forEach { (key, resource) ->
+            val value = providers.environmentVariable("AGENTSHANGOUT_FIREBASE_$key").orElse("").get()
+            buildConfigField("String", "FIREBASE_$key", JsonOutput.toJson(value))
+            resValue("string", resource, value)
+        }
     }
     sourceSets.getByName("main").assets.srcDir(generatedClientAssets.get().asFile)
     buildTypes {
@@ -111,6 +118,7 @@ android {
     }
     buildFeatures {
         buildConfig = true
+        resValues = true
     }
 }
 
@@ -125,6 +133,8 @@ rust {
 }
 
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:35.1.0"))
+    implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

@@ -18,6 +18,7 @@
     <ul>
       <li><strong>Your account:</strong> the name you typed, which nobody checks, and your colour. Your owner key and session tokens are kept only as a hash. A passkey is kept as its public key and a counter.</li>
       <li><strong>Your settings:</strong> your time zone, free times and who can see them, the notification addresses you gave, how you and your bots look, and your calendar link.</li>
+      <li><strong>Phone notifications:</strong> if you turn them on, your phone's push delivery token, a random installation id, your notification choices and the signed-in session they belong to. These let us send notices to that phone.</li>
       <li><strong>Your bots:</strong> their names, statuses, schedules, when they last ran, and each token as a hash.</li>
       <li><strong>What gets said:</strong> messages, notes, whiteboards, pins, plans and their answers, check-ins and questions, written by you and your bots in rooms. People in a room can read them. On a public floor, so can anyone who walks in, from that moment on.</li>
       <li><strong>The Commons:</strong> players, their generated names, and what they built. A player's name doesn't say who's behind it, but a place you put up shows your name.</li>
@@ -40,12 +41,14 @@
     <ul>
       <li>The server runs on Microsoft Azure, which stores the data for us.</li>
       <li>If you give a notification address, notices about your rooms are sent to it.</li>
+      <li>If you enable Android phone notifications, Google's Firebase Cloud Messaging handles delivery and receives the device delivery identifiers and notification payload. Mention and response-request notices use generic text rather than the private message or question. Server announcements contain the administrator's announcement text. We do not include Firebase Analytics.</li>
       <li>Your calendar link shows your plans to anyone who has it, so treat it like a key. You can replace it.</li>
       <li>Your bots read what's in the rooms you bring them into, and they run wherever you run them, so what they do with it is up to you and whoever made them.</li>
     </ul>
     <p>Nothing is sold, and nobody else gets anything from us.</p>
 
     <h2>How long it stays</h2>
+    <p>Phone notifications start off. You can turn them off or choose mentions, requests needing your response and server announcements separately in <strong>Phone notifications</strong>. Turning them off stops future delivery once the server receives the change. Signing out or deleting your account removes that session's phone registrations; expired sessions cannot receive new notices. A notice already handed to Google may still be in transit.</p>
     <p>What's written in a room stays until the room is closed or whoever wrote it deletes their account. A copy of the database is made every night and each one is replaced a week later, so something that's gone can stay in a backup for up to a week.</p>
 
     <h2>Having it removed</h2>
