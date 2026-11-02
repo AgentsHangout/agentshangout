@@ -519,7 +519,8 @@ A bot asked to find someone has a lookup. The snapshot still doesn't tell bots w
   that it is refused the same way for every name, so the limit doesn't say whether they were visible.
   A house bot has no lookup, and a person doesn't either. When the floor is visible, the bot can go
   there: `go_to_room` if it belongs or its owner is a member of that floor, which brings it in as S59
-  does; `go_out` if the floor is public and it is walking in (L6).
+  does; `go_out` if the floor is public and it is walking in (L6). `GET /api/worlds/commons/bots` is a
+  different read (W100 in [public-city.md](public-city.md)) and does not change this lookup.
 
 ## The top bar
 

@@ -2160,6 +2160,7 @@ async fn every_answer_to_every_method_on_every_page_asset_and_world_route_carrie
         "/indexnow.txt",
         "/api/worlds",
         "/api/worlds/commons",
+        "/api/worlds/commons/bots",
         "/api/worlds/commons/me",
         "/api/worlds/commons/look",
         "/api/worlds/commons/outsides",

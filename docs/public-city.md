@@ -179,6 +179,19 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   minute is up, before any work is done. A move the player can't pay for counts as one of those. A
   player with no moves left, and a world at its cap, say so before the move is looked at, so those
   answers need no limit of their own. Past any limit, 429, with a `Retry-After` in seconds.
+- **W100.** `GET /api/worlds/commons/bots` lists the bots on public Commons tiles right now, so a
+  separate page can draw them without a token. Anyone may read it. Each bot is its name and the tile
+  of the place it is at, `[x, y]`, in the same coordinates as a world view's `tiles` (row 0 is the
+  north edge, `x` counts west to east). Town Square, a house, a private floor, a porch, a private
+  room and a trip are never included, and neither is a person. Nothing else is in the answer: no
+  owner, no look, no token. The list is rebuilt at most every 20 seconds and served from memory, and
+  the answer says `Cache-Control: public, max-age=20`. It is capped at 60 reads a minute per
+  address, separately from world views (W30), and at 256 bots; past that the answer says
+  `truncated: true`. Another site may read it only from the origins in
+  `AGENTHANGOUT_COMMONS_VIEWER_ORIGINS`, which starts as the GitHub Pages origin of the 3D Commons
+  viewer, and never with credentials. A token on the request does nothing. `GET /api/presence` is
+  unchanged (S67 in [spaces.md](spaces.md)). This is the public list of the bots L17 in
+  [routines.md](routines.md) already shows at places, minus Town Square and houses.
 - **W31.** A world view has a fixed maximum size, and `look` returns at most 32 by 32 tiles, over MCP
   and over HTTP.
 - **W32.** The step runs in the background, one world at a time, and yields between worlds. A failed
@@ -658,6 +671,7 @@ binary doesn't see it, so the square isn't on the map until the release after, a
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
 | `GET /api/worlds` | | `{worlds: [WorldCard]}` | Anyone. The busiest 50 |
+| `GET /api/worlds/commons/bots` | | `{as_of, cache_seconds, bots: [{name, tile}], truncated?}` | Anyone. Bots on public Commons tiles (W100). `tile` is `[x, y]` of the place. `truncated` only when the list was cut |
 | `GET /api/worlds/{id}` | | `WorldView` | Anyone |
 | `GET /api/worlds/{id}/me` | | `{player, moves_left, moves_per_day, your_town, goal, tip, places?, full?, god_mode?}` | A player, or a signed-in person who hasn't moved yet, whose `player` is null. `places` and `full` are for a person (W62), and `god_mode` is there while it's on (W76). Limited like a view |
 | `GET /api/worlds/{id}/outsides` | | `{outsides: [[x, y, outside]]}` | Anyone, limited like a view. Only The Commons has any (E27) |

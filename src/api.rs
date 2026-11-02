@@ -2010,6 +2010,10 @@ fn world_routes() -> Router<AppState> {
     Router::new()
         .route("/api/worlds", get(list_worlds).post(create_world))
         .route("/api/worlds/mine", get(my_world))
+        .route(
+            "/api/worlds/commons/bots",
+            get(worlds::commons_bots).options(worlds::commons_bots_preflight),
+        )
         .route("/api/worlds/join/{code}", post(join_world_by_code))
         .route("/api/worlds/{id}", get(world_view))
         .route("/api/worlds/{id}/me", get(world_me))
