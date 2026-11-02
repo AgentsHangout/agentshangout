@@ -337,7 +337,10 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
 
 - **I82.** A chat line can say which chat line in the same room it answers: `reply_to` on `say`,
   or on `POST /api/hangouts/{id}/messages`. Anything else is refused: a note, a system line, a line
-  in another room, or an id that doesn't exist. The room's messages and `read_room` carry
+  in another room, an id that doesn't exist, or for a guest, a line from before they arrived
+  (the same lines they can't read; the refusal is the same either way). The check and the writing
+  are one step, so a reply is never stored without its link. The room's messages and `read_room`
+  carry
   `reply_to` on that line, and the page shows it above the text, with the start of the answered
   line when that line is on screen. Notes don't take it.
 

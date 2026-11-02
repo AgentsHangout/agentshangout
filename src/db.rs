@@ -2576,6 +2576,49 @@ fn exists(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> rusqli
     conn.query_row(sql, params, |_| Ok(())).optional().map(|found| found.is_some())
 }
 
+fn insert_message_row(conn: &Connection, message: &NewMessage) -> rusqlite::Result<Message> {
+    conn.execute(
+        "INSERT INTO messages (hangout_id, person_id, agent_id, speaker, kind, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            message.hangout_id,
+            message.person_id,
+            message.agent_id,
+            message.speaker,
+            message.kind,
+            message.body,
+            message.now
+        ],
+    )?;
+    Ok(Message {
+        id: conn.last_insert_rowid(),
+        hangout_id: message.hangout_id.to_string(),
+        person_id: message.person_id.map(str::to_string),
+        agent_id: message.agent_id.map(str::to_string),
+        speaker: message.speaker.to_string(),
+        kind: message.kind.to_string(),
+        body: message.body.to_string(),
+        created_at: message.now,
+        reply_to: None,
+    })
+}
+
+/// I82: see `Db::can_answer`. Guests read lines strictly after they arrived, so the same second
+/// is out, as in `messages_since`.
+fn answerable(
+    conn: &Connection,
+    hangout_id: &str,
+    id: i64,
+    seen_after: Option<i64>,
+) -> rusqlite::Result<bool> {
+    exists(
+        conn,
+        "SELECT 1 FROM messages
+         WHERE id = ? AND hangout_id = ? AND kind = 'chat' AND created_at > ?",
+        params![id, hangout_id, seen_after.unwrap_or(i64::MIN)],
+    )
+}
+
 /// H10: whether this room is one a bot on a trip is a guest in right now.
 fn guest_on_trip(
     conn: &Connection,
@@ -4429,46 +4472,42 @@ impl Db {
     // Messages
 
     pub fn insert_message(&self, message: &NewMessage) -> rusqlite::Result<Message> {
-        let conn = self.conn();
-        conn.execute(
-            "INSERT INTO messages (hangout_id, person_id, agent_id, speaker, kind, body, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![
-                message.hangout_id,
-                message.person_id,
-                message.agent_id,
-                message.speaker,
-                message.kind,
-                message.body,
-                message.now
-            ],
-        )?;
-        Ok(Message {
-            id: conn.last_insert_rowid(),
-            hangout_id: message.hangout_id.to_string(),
-            person_id: message.person_id.map(str::to_string),
-            agent_id: message.agent_id.map(str::to_string),
-            speaker: message.speaker.to_string(),
-            kind: message.kind.to_string(),
-            body: message.body.to_string(),
-            created_at: message.now,
-            reply_to: None,
-        })
+        insert_message_row(&self.conn(), message)
     }
 
-    /// I82: the room a chat line was said in. None for a note, a system line or no message.
-    pub fn chat_message_room(&self, id: i64) -> rusqlite::Result<Option<String>> {
-        let sql = "SELECT hangout_id FROM messages WHERE id = ? AND kind = 'chat'";
-        self.conn().query_row(sql, [id], |row| row.get(0)).optional()
+    /// I82: whether this writer can answer a chat line here. `seen_after` is a guest's arrival:
+    /// a guest can answer only the lines they can read, which are the ones after it.
+    pub fn can_answer(
+        &self,
+        hangout_id: &str,
+        id: i64,
+        seen_after: Option<i64>,
+    ) -> rusqlite::Result<bool> {
+        answerable(&self.conn(), hangout_id, id, seen_after)
     }
 
-    /// I82: records that a message answers another.
-    pub fn set_reply_to(&self, message_id: i64, reply_to: i64) -> rusqlite::Result<()> {
-        self.conn().execute(
+    /// I82: stores a chat line that answers another, checking the answered line in the same step,
+    /// so the line and its link are written together or not at all. None, and nothing written, if
+    /// the answered line can't be answered (any more).
+    pub fn insert_reply(
+        &self,
+        message: &NewMessage,
+        reply_to: i64,
+        seen_after: Option<i64>,
+    ) -> rusqlite::Result<Option<Message>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if !answerable(&tx, message.hangout_id, reply_to, seen_after)? {
+            return Ok(None);
+        }
+        let mut stored = insert_message_row(&tx, message)?;
+        tx.execute(
             "INSERT INTO message_replies (message_id, reply_to) VALUES (?, ?)",
-            params![message_id, reply_to],
+            params![stored.id, reply_to],
         )?;
-        Ok(())
+        tx.commit()?;
+        stored.reply_to = Some(reply_to);
+        Ok(Some(stored))
     }
 
     /// The newest `limit` chat lines after `after`, oldest first.
@@ -13113,6 +13152,45 @@ mod tests {
     ) -> Arrival {
         agreed_trip(db, id, agent_id, house_id, minutes, now);
         db.arrive(id, now).unwrap()
+    }
+
+    // I82
+    #[test]
+    fn a_reply_to_a_line_that_is_gone_writes_nothing() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_hangout("h2", "Other", "code2", "p1", 0).unwrap();
+        let asked = say(&db, "h1", "chat", "Who has the keys?", 100);
+        let note = say(&db, "h1", "note", "Keys by the door", 100);
+        let elsewhere = say(&db, "h2", "chat", "hi", 100);
+        let reply = |reply_to: i64, seen_after: Option<i64>| {
+            let message = NewMessage {
+                hangout_id: "h1",
+                person_id: Some("p1"),
+                agent_id: None,
+                speaker: "Justin",
+                kind: "chat",
+                body: "I do",
+                now: 200,
+            };
+            db.insert_reply(&message, reply_to, seen_after).unwrap()
+        };
+        let count = || db.messages("h1", 0, 100).unwrap().len();
+
+        // Gone, a note, another room, or from before a guest arrived: nothing is written.
+        let before = count();
+        for (target, seen_after) in [(asked + 1000, None), (note, None), (elsewhere, None)] {
+            assert!(reply(target, seen_after).is_none(), "{target}");
+        }
+        assert!(reply(asked, Some(100)).is_none(), "the same second as arriving is out");
+        assert_eq!(count(), before);
+
+        let stored = reply(asked, Some(99)).unwrap();
+        assert_eq!(stored.reply_to, Some(asked));
+        let read = db.messages("h1", 0, 100).unwrap();
+        assert_eq!(read.last().unwrap().reply_to, Some(asked));
+        assert_eq!(count(), before + 1);
     }
 
     fn say(db: &Db, hangout_id: &str, kind: &str, body: &str, now: i64) -> i64 {

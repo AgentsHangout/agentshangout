@@ -2332,7 +2332,7 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
     let shown = snapshot["messages"].as_array().unwrap().iter().find(|m| m["id"] == answer_id);
     assert_eq!(shown.unwrap()["reply_to"], asked_id, "{snapshot}");
 
-    // A person can reply over HTTP too.
+    // A person can reply over HTTP too, with the same refusals.
     let thanks = json!({ "text": "Thanks", "reply_to": answer_id });
     assert_eq!(server.post(&ann.key, &messages, thanks).await.ok()["reply_to"], answer_id);
 
@@ -2349,10 +2349,36 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
         let refused = server.tool(&rover.token, "say", args).await;
         assert_eq!(refused["isError"], true, "{bad}: {refused}");
     }
+    let over_http = json!({ "text": "re", "reply_to": elsewhere["id"] });
+    server.post(&ann.key, &messages, over_http).await.refused(StatusCode::BAD_REQUEST);
     let after = server.read_room(&rover.token, &room).await;
     let texts: Vec<String> =
         after["messages"].as_array().unwrap().iter().map(|m| text(&m["text"])).collect();
     assert!(!texts.contains(&"re".to_string()), "nothing refused was posted: {after}");
+}
+
+// I82
+#[tokio::test]
+async fn a_guest_can_answer_only_lines_from_after_they_walked_in() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let messages = format!("/api/hangouts/{room}/messages");
+    let said = server.post(&ann.key, &messages, json!({ "text": "Welcome" })).await.ok();
+    let (id, at) = (said["id"].as_i64().unwrap(), said["created_at"].as_i64().unwrap());
+    let (_, eve) = server.someone("Eve").await;
+    server.walk_in(&eve, &room).await;
+
+    // Arrival times are set, so each case is exact: before, the same second, and after.
+    let arrive = |since: i64| server.state.db.set_visit_times(&room, &eve.id, since, now() + 3600);
+    for since in [at + 5, at] {
+        assert!(arrive(since).unwrap());
+        let reply = json!({ "text": "re", "reply_to": id });
+        server.post(&eve.key, &messages, reply).await.refused(StatusCode::BAD_REQUEST);
+    }
+    assert!(arrive(at - 1).unwrap());
+    let reply = json!({ "text": "Thanks", "reply_to": id });
+    assert_eq!(server.post(&eve.key, &messages, reply).await.ok()["reply_to"], id);
 }
 
 // I18
