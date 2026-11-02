@@ -599,6 +599,9 @@ impl GuestSet {
         assert_ok(&server.say(&w.ann.key, &porch, BEFORE_CHAT).await);
         assert_ok(&server.note(&w.ann.key, &porch, BEFORE_NOTE).await);
         let event = text(&server.propose(&w.ann.key, &porch, BEFORE_PLAN).await.body["id"]);
+        // N8: a check-in needs someone from another side who could answer it. A guest can't (R16),
+        // so Cal lives here too.
+        server.move_in(&w.ann_home, "Cal").await;
         let check_in = text(&server.check_in(&w.ann.key, &porch, BEFORE_CHECK).await.body["id"]);
         if pause {
             pause_a_second().await;
@@ -4698,6 +4701,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "mcp_oauth_tokens",
         "oauth_event_subscriptions",
         "oauth_event_retention",
+        "owner_waits",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4721,6 +4725,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "owner_waits",
             "oauth_event_subscriptions",
             "oauth_event_retention",
             "held_mention_wakes",
@@ -6781,6 +6786,8 @@ async fn a_line_written_in_the_same_second_a_guest_arrives_is_not_shown_to_it() 
         let w = server.world().await;
         let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
         let porch = &w.ann_home.porch;
+        // N8: someone from another side who could answer the check-in. A guest can't (R16).
+        server.move_in(&w.ann_home, "Cal").await;
         let ask = text(
             &server.ask_trip(&scout.token, None, &w.ann_home.id, "call", "", None).await.body["id"],
         );

@@ -2546,6 +2546,8 @@ async function roomView(id) {
   installAppleHigRoom({ frame, panels });
   const parts = homePartsOnDemand(me);
   const account = accountPanel(panels, me, parts);
+  // N4: what's waiting on you from every room, not only this one.
+  const needs = needsYouPanel(panels);
   const beside = matchMedia(BESIDE);
   const say = (text) => {
     if (frame.message.textContent !== text) frame.message.textContent = text;
@@ -2958,12 +2960,15 @@ async function roomView(id) {
 
   function checkInCard(checkIn) {
     const target = checkIn.to_person ? person(checkIn.to_person)?.name : 'the room';
-    const answer = async (response) => {
-      await api(`/api/check-ins/${checkIn.id}/answer`, { method: 'POST', body: { response } });
+    // N9: a refused answer says why, beside it.
+    const error = formError();
+    const answer = (response) => act(error, async () => {
+      await api(`/api/check-ins/${encodeURIComponent(checkIn.id)}/answer`, { method: 'POST', body: { response } });
       await reload();
-    };
+    });
+    const ours = checkIn.asked_by === snapshot.you.person_id;
     const label = {
-      waiting: `Waiting until ${timeFormat.format(fromUnix(checkIn.expires_at))}`,
+      waiting: `${ours ? 'Waiting for someone on another side to answer, until' : 'Waiting until'} ${timeFormat.format(fromUnix(checkIn.expires_at))}`,
       go: `Go from ${checkIn.answered_by}`,
       hold: `Hold from ${checkIn.answered_by}`,
       expired: 'Expired with no answer: treated as no',
@@ -2974,8 +2979,9 @@ async function roomView(id) {
       checkIn.note ? h('p', { class: 'muted' }, checkIn.note) : null,
       h('small', { class: 'check-in-status' }, label),
       canAnswer(checkIn) ? h('div', { class: 'event-actions' },
-        h('button', { type: 'button', class: 'primary', onclick: () => answer('go') }, 'Go'),
-        h('button', { type: 'button', onclick: () => answer('hold') }, 'Hold')) : null);
+        h('button', { type: 'button', class: 'primary', onclick: answer('go') }, 'Go'),
+        h('button', { type: 'button', onclick: answer('hold') }, 'Hold')) : null,
+      error);
   }
 
   function renderCheckIns() {
@@ -3387,6 +3393,7 @@ async function roomView(id) {
     builder.render();
     dresser.render();
     guide.refresh();
+    needs.refresh();
     boardsMore.hidden = !snapshot.floor;
     if (panels.current === 'boards') loadBoards();
     snapshot.messages.forEach(addMessage);
@@ -3972,13 +3979,12 @@ async function roomView(id) {
   frame.back.append(backLink(backPath, backText, backShort));
   // S64, S68: what only a room has goes first, and the bar ends in the same three as the map's.
   frame.actions.append(
-    questionsToggle.button,
     guide.toggle,
-    checkInsToggle.button,
     calendarToggle,
     builder.toggle,
     chatToggle.button,
     panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    needs.toggle,
     account.toggle,
     dresser.toggle,
     panels.toggle('more', 'More', { className: 'more' }));
@@ -4011,7 +4017,7 @@ async function roomView(id) {
     aboutMore,
     h('div', { class: 'game-more' }, ...[
       moreButton('tutorial', 'Get started', 'sec'),
-      moreButton('checkins', 'Check-ins', 'mid'),
+      moreButton('checkins', 'Check-ins', ''),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
@@ -6379,6 +6385,130 @@ function homePartsOnDemand(me) {
   return parts;
 }
 
+// N4: everything waiting on this person, from every room, the same button and panel on the map and
+// in a room. It asks every 30 seconds, and `refresh` asks now. The list is drawn again only when it
+// changes, so an answer someone is typing stays put.
+function needsYouPanel(panels) {
+  const toggle = panels.toggle('needs', 'Needs you', { short: 'Needs', aria: 'Needs you' });
+  const number = h('span', { class: 'room-count', hidden: true });
+  toggle.append(number);
+  const body = panels.add('needs', 'Needs you', { onOpen: () => refresh() });
+  let shownKey = null;
+
+  // Each item gets its own place to say why something was refused (N3).
+  const item = (title, ...rest) => h('article', { class: 'check-in waiting' }, title, ...rest);
+  const roomLink = (room) => link(`/h/${encodeURIComponent(room.id)}`, room.name, { class: 'link' });
+  const done = (run) => async () => {
+    await run();
+    await refresh(true);
+  };
+
+  function questionItem(question) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, question.bot), ' asks you, in ', roomLink(question.room)),
+      h('p', {}, question.question),
+      h('form', {
+        class: 'chat-form',
+        onsubmit: submitter(error, async ({ answer }) => {
+          await api(`/api/owner-questions/${encodeURIComponent(question.id)}/answer`, { method: 'POST', body: { answer } });
+          await refresh(true);
+        }),
+      },
+        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Your answer', autocomplete: 'off', 'aria-label': `Answer ${question.bot}` }),
+        h('button', { type: 'submit', class: 'primary' }, 'Answer')),
+      error);
+  }
+
+  function checkInItem(checkIn) {
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/check-ins/${encodeURIComponent(checkIn.id)}/answer`, { method: 'POST', body: { response } })));
+    return item(
+      h('p', {}, h('strong', {}, checkIn.asker), ' asks before acting, in ', roomLink(checkIn.room)),
+      h('p', {}, checkIn.about),
+      h('small', { class: 'check-in-status' }, `Waiting until ${timeFormat.format(fromUnix(checkIn.expires_at))}`),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('go') }, 'Go'),
+        h('button', { type: 'button', onclick: answer('hold') }, 'Hold')),
+      error);
+  }
+
+  function waitingItem(wait) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, wait.bot.name), ` is waiting for you somewhere else, since ${agoText(wait.since)}`),
+      h('p', {}, wait.about),
+      h('p', { class: 'muted' }, 'Answer it where it is, such as on your computer. It clears when the bot carries on.'),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', onclick: act(error, done(() => api(`/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}`, { method: 'DELETE' }))) }, 'Dismiss')),
+      error);
+  }
+
+  function requestItem(request) {
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/place-requests/${encodeURIComponent(request.id)}/answer`, { method: 'POST', body: { response } })));
+    return item(
+      h('p', {}, h('strong', {}, request.asked_by), ` asks to let ${request.bot} into ${request.place}`),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Let in'),
+        h('button', { type: 'button', onclick: answer('no') }, 'No')),
+      error);
+  }
+
+  function inviteItem(invite) {
+    const error = formError();
+    return item(
+      h('p', {}, `${invite.from} invited you to `, h('strong', {}, invite.name)),
+      h('div', { class: 'event-actions' },
+        link(invite.path, 'Open', { class: 'link' }),
+        h('button', { type: 'button', class: 'link', onclick: act(error, done(() => api(`/api/friend-invites/${encodeURIComponent(invite.id)}/decline`, { method: 'POST' }))) }, 'No thanks')),
+      error);
+  }
+
+  function apprenticeItem(ask) {
+    return item(
+      h('p', {}, `${ask.proposer} and ${ask.partner} would like to make an apprentice: `, h('strong', {}, ask.name)),
+      h('div', { class: 'event-actions' }, link('/#rooms', 'Answer in Places', { class: 'link' })));
+  }
+
+  function render(list) {
+    const parts = [
+      ...list.waiting.map(waitingItem),
+      ...list.questions.map(questionItem),
+      ...list.check_ins.map(checkInItem),
+      ...list.requests.map(requestItem),
+      ...list.invites.map(inviteItem),
+      ...list.apprentices.map(apprenticeItem),
+    ];
+    body.replaceChildren(...(parts.length ? parts : [h('p', { class: 'muted' }, 'Nothing needs you right now.')]));
+    number.textContent = String(list.count);
+    number.hidden = !list.count;
+    toggle.classList.toggle('wait', list.count > 0);
+    toggle.setAttribute('aria-label', list.count ? `Needs you (${list.count})` : 'Needs you');
+  }
+
+  let askedAt = 0;
+  async function refresh(force = false) {
+    if (!force && Date.now() - askedAt < 2000) return;
+    askedAt = Date.now();
+    const list = await api('/api/needs-you').catch(() => null);
+    if (!list) return;
+    const key = JSON.stringify(list);
+    if (key === shownKey) return;
+    shownKey = key;
+    render(list);
+  }
+  // A page that's gone stops asking.
+  const timer = setInterval(() => {
+    if (!toggle.isConnected) clearInterval(timer);
+    else if (!document.hidden) refresh();
+  }, 30000);
+  refresh(true);
+  return { toggle, refresh };
+}
+
 // Your account, the same button and the same panel on the map and in a room (S64). Someone who
 // tried to build, or whose sign-in ran out, is told why at the top.
 function accountPanel(panels, me, parts) {
@@ -6645,6 +6775,8 @@ async function worldView(id, { home = false } = {}) {
 
   // The way in.
   const account = accountPanel(panels, me, parts);
+  // N4: for a person, what's waiting on them from every room.
+  const needs = me?.kind === 'person' ? needsYouPanel(panels) : null;
 
   const roomsBody = panels.add('rooms', 'Places', {
     onOpen: async () => {
@@ -6882,6 +7014,7 @@ async function worldView(id, { home = false } = {}) {
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     me && me.kind === 'person' ? (requestsToggle = panels.toggle('requests', 'Requests', { className: 'sec' })) : null,
+    needs ? needs.toggle : null,
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,
     (moreToggle = panels.toggle('more', 'More', { className: 'more' })),

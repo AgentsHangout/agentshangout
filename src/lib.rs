@@ -24,6 +24,7 @@ pub mod ical;
 pub mod items;
 pub mod looks;
 pub mod mcp;
+pub mod needs_you;
 pub mod notify;
 pub mod oauth;
 pub mod ops;

@@ -848,6 +848,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `docs/referrals.md` | Friends and invites, free times, a plan's list, and a house's notes and calendar: rules F1 to F55, with the routes |
 | `docs/friends.md` | Who your friends are, and inviting them by name: rules FR1 to FR8, with the routes |
 | `docs/bonds.md` | Which bots have built together, and how two of them propose an apprentice: rules K1 to K26, with the routes |
+| `docs/needs-you.md` | One list of everything waiting on you, from every room: bots' questions, check-ins, requests to come in and invites. Rules N1 to N10, with the routes |
 | `docs/outside.md` | The outside of a place: the builder, the catalog, pets and what happens when a place comes down, numbered E1 to E38 |
 | `docs/tutorial.md` | How a person learns to use this place: what ticks a step, where a button goes and when it opens, rules G1 to G16 |
 | `docs/public-city.md` | The public place made of moves instead of words: its rules, routes and pages |

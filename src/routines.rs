@@ -58,6 +58,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
     ops::require_human(&caller, "see where your bots are")?;
     let now = now();
     let mut bots = Vec::new();
+    let waits = crate::needs_you::waits_of(&state, &caller.person_id)?;
     for agent in state.db.agents_of(&caller.person_id, now)? {
         if state.db.bot_home(&agent.id)?.is_some_and(|home| home.is_house) {
             continue;
@@ -124,6 +125,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "social_now": routine.social_now,
             "public_places": routine.public_places,
             "next": next,
+            "waiting": waits.get(&agent.id),
         }));
     }
     Ok(Json(json!({ "bots": bots })))

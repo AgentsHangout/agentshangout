@@ -481,18 +481,23 @@ async fn ask_to_let_in(
 /// S51: the requests waiting on this person's places.
 async fn place_requests(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "see requests to come in")?;
+    Ok(Json(json!({ "requests": requests_for(&state, &caller.person_id)? })))
+}
+
+/// S51: the requests waiting for this place owner, oldest first. Needs you lists them too (N2).
+pub(crate) fn requests_for(state: &AppState, person_id: &str) -> ApiResult<Vec<Value>> {
     let now = now();
     let mut list = Vec::new();
     for (id, space_id, place, bot, asker, at) in
-        state.db.place_requests_for_owner(&caller.person_id, now - REQUEST_SECS)?
+        state.db.place_requests_for_owner(person_id, now - REQUEST_SECS)?
     {
         let kind = match state.db.space(&space_id)? {
-            Some(space) => building_of(&state, &space)?.map(|(kind, _)| kind),
+            Some(space) => building_of(state, &space)?.map(|(kind, _)| kind),
             None => None,
         };
         list.push(json!({ "id": id, "place": place, "kind": kind, "bot": bot, "asked_by": asker, "asked_at": at }));
     }
-    Ok(Json(json!({ "requests": list })))
+    Ok(list)
 }
 
 #[derive(Deserialize)]

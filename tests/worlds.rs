@@ -2864,7 +2864,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"pin")
             && private_names.contains(&"unpin")
             && private_names.contains(&"where_is")
-            && private_names.len() == 60,
+            && private_names.contains(&"waiting_on_owner")
+            && private_names.len() == 61,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

@@ -186,6 +186,35 @@ async fn pn3_generic_delivery_and_immediate_off() {
     assert_eq!(capture.0.lock().unwrap().len(), 4);
 }
 
+// PN3, N10: what Needs you lists reaches the phone as a request, generic, opening the map.
+#[tokio::test]
+async fn pn3_what_needs_you_lists_is_a_request_on_the_phone() {
+    let s = state();
+    let session = person(&s, "one");
+    let capture = std::sync::Arc::new(Capture(std::sync::Mutex::new(vec![])));
+    assert!(s.push.set(capture.clone()).is_ok());
+    s.db.put_push_device("one", &hash_secret(&session), &device("phone", "one")).unwrap();
+    for event in ["owner.waiting", "place.asked", "friend.invite", "apprentice.asked"] {
+        agenthangout::notify::send(
+            &s,
+            &["one".into()],
+            &agenthangout::notify::Notice {
+                event,
+                hangout_id: String::new(),
+                text: "PRIVATE DO NOT LEAK".into(),
+            },
+        );
+    }
+    settle(&s).await;
+    let messages = capture.0.lock().unwrap();
+    assert_eq!(messages.len(), 4);
+    for m in messages.iter() {
+        assert_eq!(m.category, "request");
+        assert_eq!(m.path, "/");
+        assert!(!m.body.contains("PRIVATE"));
+    }
+}
+
 #[tokio::test]
 async fn pn5_admin_and_device_endpoints() {
     let s = state();

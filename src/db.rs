@@ -1100,6 +1100,14 @@ CREATE TRIGGER IF NOT EXISTS oauth_event_retention_agent_delete AFTER DELETE ON 
  DELETE FROM oauth_event_retention WHERE agent_id=OLD.id;
 END;
 
+-- N5, N6: a bot saying it's waiting for its owner somewhere else. It's showing while the bot hasn't
+-- written anything since, which is worked out on read, so clearing it touches nothing else.
+CREATE TABLE IF NOT EXISTS owner_waits (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    about      TEXT NOT NULL,
+    set_at     INTEGER NOT NULL
+);
+
 
 "#;
 
@@ -1766,6 +1774,15 @@ pub struct OwnerQuestion {
     pub answered_at: Option<i64>,
 }
 
+/// N5: one of a person's bots saying it's waiting for them somewhere else.
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerWait {
+    pub agent_id: String,
+    pub name: String,
+    pub about: String,
+    pub since: i64,
+}
+
 pub struct NewOwnerQuestion<'a> {
     pub id: &'a str,
     pub hangout_id: &'a str,
@@ -2280,6 +2297,11 @@ fn check_in_from_row(row: &Row, now: i64) -> rusqlite::Result<CheckIn> {
         created_at: row.get(13)?,
     })
 }
+
+/// N6: a wait is showing while it's newer than `?1` and its bot hasn't written anything since. Only
+/// writes move `last_active_at`, so a watcher that keeps reading doesn't clear it.
+const OWNER_WAIT_SHOWING: &str = "JOIN agents a ON a.id = w.agent_id
+     WHERE w.set_at > ?1 AND (a.last_active_at IS NULL OR a.last_active_at <= w.set_at)";
 
 const OWNER_QUESTION_COLS: &str =
     "id, hangout_id, agent_id, owner_id, asker, question, answer, created_at, answered_at";
@@ -4573,6 +4595,98 @@ impl Db {
         ))?;
         let rows =
             stmt.query_map(params![hangout_id, owner_id, open_since], owner_question_from_row)?;
+        rows.collect()
+    }
+
+    /// N2: every open question for this owner, in any room, with the room's name, oldest first.
+    pub fn open_owner_questions_anywhere(
+        &self,
+        owner_id: &str,
+        open_since: i64,
+    ) -> rusqlite::Result<Vec<(OwnerQuestion, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {OWNER_QUESTION_COLS},
+                    (SELECT name FROM hangouts WHERE id = owner_questions.hangout_id)
+             FROM owner_questions
+             WHERE owner_id = ? AND answer IS NULL AND created_at > ?
+             ORDER BY created_at, rowid"
+        ))?;
+        let rows = stmt.query_map(params![owner_id, open_since], |row| {
+            Ok((
+                owner_question_from_row(row)?,
+                row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// N5, N7: says this bot is waiting for its owner, replacing what it said before. True when
+    /// that starts a wait, and false when one was already showing.
+    pub fn set_owner_wait(
+        &self,
+        agent_id: &str,
+        about: &str,
+        now: i64,
+        shown_since: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let showing = conn
+            .query_row(
+                &format!("SELECT 1 FROM owner_waits w {OWNER_WAIT_SHOWING} AND w.agent_id = ?2"),
+                params![shown_since, agent_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        conn.execute(
+            "INSERT INTO owner_waits (agent_id, about, set_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(agent_id) DO UPDATE SET about = excluded.about, set_at = excluded.set_at",
+            params![agent_id, about, now],
+        )?;
+        Ok(!showing)
+    }
+
+    /// Moves a wait's clock back, and its bot's last write with it, for tests of how long one
+    /// shows (N6).
+    pub fn age_owner_wait(&self, agent_id: &str, by: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE owner_waits SET set_at = set_at - ?2 WHERE agent_id = ?1",
+            params![agent_id, by],
+        )?;
+        conn.execute(
+            "UPDATE agents SET last_active_at = last_active_at - ?2 WHERE id = ?1",
+            params![agent_id, by],
+        )?;
+        Ok(())
+    }
+
+    /// N6: clears what a bot said about waiting, whether it was still showing or not.
+    pub fn clear_owner_wait(&self, agent_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM owner_waits WHERE agent_id = ?", [agent_id])?;
+        Ok(())
+    }
+
+    /// N2, N5: this owner's bots that are waiting for them, oldest first.
+    pub fn owner_waits(
+        &self,
+        owner_id: &str,
+        shown_since: i64,
+    ) -> rusqlite::Result<Vec<OwnerWait>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT w.agent_id, a.name, w.about, w.set_at FROM owner_waits w {OWNER_WAIT_SHOWING}
+             AND a.owner_id = ?2 ORDER BY w.set_at, w.agent_id"
+        ))?;
+        let rows = stmt.query_map(params![shown_since, owner_id], |row| {
+            Ok(OwnerWait {
+                agent_id: row.get(0)?,
+                name: row.get(1)?,
+                about: row.get(2)?,
+                since: row.get(3)?,
+            })
+        })?;
         rows.collect()
     }
 
