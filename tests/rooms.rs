@@ -5174,9 +5174,7 @@ async fn pin_urls_are_https_public_and_secrets_are_refused() {
             .await;
         reply.refused(StatusCode::BAD_REQUEST);
     }
-    for title in
-        ["sk_live_example", "ah_bot_abcdefghijklmnopqrstuvwxyzabcdefghij"]
-    {
+    for title in ["sk_live_example", "ah_bot_abcdefghijklmnopqrstuvwxyzabcdefghij"] {
         server
             .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": title }))
             .await
