@@ -133,10 +133,10 @@ fn pin_json(caller: &Caller, pin: &RoomPin) -> Value {
         "preview": preview_json(pin),
         "pinned_by": {
             "name": pin.pinned_by,
-            "is_bot": pin.agent_id.is_some(),
+            "is_bot": pin.bot_origin,
         },
         "via_bot": pin.via_bot,
-        "from_your_owner": items::from_your_owner(
+        "from_your_owner": !pin.bot_origin && items::from_your_owner(
             caller,
             &pin.person_id,
             pin.agent_id.as_deref(),
@@ -364,9 +364,9 @@ fn query_has_secret(text: &str) -> bool {
         return false;
     };
     const KEYS: [&str; 6] = ["token", "api_key", "apikey", "secret", "password", "access_token"];
-    query.split('&').any(|pair| {
-        let key = pair.split('=').next().unwrap_or("").trim();
-        KEYS.iter().any(|known| key.eq_ignore_ascii_case(known))
+    Url::parse(&format!("https://pin.invalid/?{query}")).is_ok_and(|url| {
+        url.query_pairs()
+            .any(|(key, _)| KEYS.iter().any(|known| key.trim().eq_ignore_ascii_case(known)))
     })
 }
 
@@ -549,7 +549,18 @@ pub(crate) fn parse_preview(html: &str, host: &str) -> Option<(String, String, S
     Some((clip(&site, MAX_TITLE), clip(&title, MAX_TITLE), clip(&description, MAX_CAPTION)))
 }
 
+async fn preview_with_deadline<F>(operation: F) -> Option<String>
+where
+    F: std::future::Future<Output = Option<String>>,
+{
+    tokio::time::timeout(PREVIEW_TIMEOUT, operation).await.ok().flatten()
+}
+
 async fn fetch_html(url: &str) -> Option<String> {
+    preview_with_deadline(fetch_html_inner(url)).await
+}
+
+async fn fetch_html_inner(url: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
     let host = parsed.host_str()?;
     let address = notify::public_address(host).await?;
@@ -592,14 +603,26 @@ async fn fetch_html(url: &str) -> Option<String> {
 }
 
 async fn fetch_preview(state: &AppState, pin_id: &str) {
+    fetch_preview_with(state, pin_id, |url| async move { fetch_html(&url).await }).await;
+}
+
+async fn fetch_preview_with<F, Fut>(state: &AppState, pin_id: &str, fetch: F)
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
     let Ok(Some(pin)) = state.db.room_pin(pin_id) else {
         return;
     };
     let Some(url) = pin.url.clone() else {
         return;
     };
+    // The database claim wins before any DNS or HTTP work, even across concurrent room reads.
+    if !state.db.claim_pin_preview(pin_id, now(), PREVIEW_STALE_SECS).unwrap_or(false) {
+        return;
+    }
     let host = Url::parse(&url).ok().and_then(|url| url.host_str().map(str::to_string));
-    let fetched = fetch_html(&url).await;
+    let fetched = fetch(url).await;
     let parsed =
         fetched.as_deref().and_then(|html| parse_preview(html, host.as_deref().unwrap_or("")));
     let at = now();
@@ -909,6 +932,90 @@ async fn put_policy(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn concurrent_preview_requests_fetch_once() {
+        let path = std::env::temp_dir().join(format!("pin-claim-{}.db", crate::auth::new_id()));
+        let db = crate::db::Db::open(path.to_str().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        db.create_person("person", "Owner", "hash", "feed", now()).unwrap();
+        db.create_hangout("room", "Room", "invite", "person", now()).unwrap();
+        db.insert_room_pin(&crate::db::NewRoomPin {
+            id: "pin",
+            hangout_id: "room",
+            kind: "link",
+            title: "Link",
+            url: Some("https://example.invalid/doc"),
+            caption: None,
+            preview_status: Some("pending"),
+            person_id: "person",
+            agent_id: None,
+            now: now(),
+            expires_at: None,
+            max_room: 10,
+            max_person: 10,
+        })
+        .unwrap();
+        let state = AppState::new(
+            db,
+            crate::Config {
+                public_url: "http://127.0.0.1".into(),
+                create_code: None,
+                allow_private_webhooks: false,
+                keeper_id: None,
+                god_ids: vec![],
+            },
+        );
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        futures_util::future::join_all((0..8).map(|_| {
+            fetch_preview_with(&state, "pin", |_| async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Some("<title>Fixture</title>".into())
+            })
+        }))
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            state.db.room_pin("pin").unwrap().unwrap().preview_status.as_deref(),
+            Some("ok")
+        );
+        let old = now() - PREVIEW_STALE_SECS - 1;
+        conn.execute("UPDATE room_pins SET preview_fetched_at=? WHERE id='pin'", [old]).unwrap();
+        conn.execute("UPDATE room_pin_preview_claims SET claimed_at=? WHERE pin_id='pin'", [old])
+            .unwrap();
+        futures_util::future::join_all((0..8).map(|_| {
+            fetch_preview_with(&state, "pin", |_| async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Some("<title>Refreshed</title>".into())
+            })
+        }))
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        fetch_preview_with(&state, "pin", |_| async { panic!("fresh preview fetched again") })
+            .await;
+        conn.execute(
+            "UPDATE room_pins SET preview_fetched_at=?, expires_at=? WHERE id='pin'",
+            [old, now() - 1],
+        )
+        .unwrap();
+        conn.execute("UPDATE room_pin_preview_claims SET claimed_at=? WHERE pin_id='pin'", [old])
+            .unwrap();
+        fetch_preview_with(&state, "pin", |_| async { panic!("expired pin fetched") }).await;
+        state.db.remove_room_pin("pin").unwrap();
+        let claims: i64 = conn
+            .query_row("SELECT COUNT(*) FROM room_pin_preview_claims", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(claims, 0);
+        fetch_preview_with(&state, "pin", |_| async { panic!("deleted pin fetched") }).await;
+    }
+
+    #[tokio::test]
+    async fn preview_deadline_also_bounds_an_operation_that_never_returns() {
+        assert!(preview_with_deadline(std::future::pending()).await.is_none());
+    }
+
     #[test]
     fn a_literal_private_address_never_lands() {
         for url in [
@@ -940,6 +1047,9 @@ mod tests {
             "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefsighere",
             "https://example.com/?api_key=secret",
             "https://example.com/?token=abc",
+            "https://example.com/?%74oken=abc",
+            "https://example.com/?api%5Fkey=abc",
+            "https://example.com/?%41cCeSs_ToKeN=abc",
             "sk-proj-example",
         ] {
             assert!(looks_like_secret(text), "{text}");

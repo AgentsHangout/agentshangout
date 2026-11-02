@@ -980,6 +980,23 @@ CREATE TABLE IF NOT EXISTS room_pins (
 );
 CREATE INDEX IF NOT EXISTS room_pins_by_room ON room_pins (hangout_id, pinned_at);
 CREATE INDEX IF NOT EXISTS room_pins_by_person ON room_pins (hangout_id, person_id);
+-- I72: bot authorship survives agent deletion; never promote retained words to owner authority.
+CREATE TABLE IF NOT EXISTS room_pin_bot_origins (
+    pin_id TEXT PRIMARY KEY REFERENCES room_pins(id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO room_pin_bot_origins (pin_id)
+    SELECT id FROM room_pins WHERE agent_id IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS room_pin_bot_origin_on_insert
+AFTER INSERT ON room_pins WHEN NEW.agent_id IS NOT NULL
+BEGIN
+    INSERT OR IGNORE INTO room_pin_bot_origins (pin_id) VALUES (NEW.id);
+END;
+-- I76: one preview attempt per pin per day, including concurrent reads and interrupted fetches.
+CREATE TABLE IF NOT EXISTS room_pin_preview_claims (
+    pin_id TEXT PRIMARY KEY REFERENCES room_pins(id) ON DELETE CASCADE,
+    claimed_at INTEGER NOT NULL
+);
+
 
 -- PN2: a phone belongs to a live sign-in, never an owner key or bot token.
 CREATE TABLE IF NOT EXISTS push_devices (
@@ -1288,6 +1305,7 @@ impl Board {
 #[derive(Clone, Debug, Serialize)]
 pub struct RoomPin {
     pub id: String,
+    pub bot_origin: bool,
     pub hangout_id: String,
     pub kind: String,
     pub title: String,
@@ -10087,6 +10105,7 @@ impl Db {
     fn room_pin_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoomPin> {
         Ok(RoomPin {
             id: row.get(0)?,
+            bot_origin: row.get(19)?,
             hangout_id: row.get(1)?,
             kind: row.get(2)?,
             title: row.get(3)?,
@@ -10120,7 +10139,9 @@ impl Db {
             "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
                     p.caption, p.preview_site, p.preview_title, p.preview_description,
                     p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
-                    a.name, p.pinned_at, p.expires_at
+                    a.name, p.pinned_at, p.expires_at,
+                    (p.agent_id IS NOT NULL OR EXISTS (
+                        SELECT 1 FROM room_pin_bot_origins o WHERE o.pin_id = p.id))
              FROM room_pins p
              JOIN people ON people.id = p.person_id
              LEFT JOIN agents a ON a.id = p.agent_id
@@ -10138,7 +10159,9 @@ impl Db {
                 "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
                         p.caption, p.preview_site, p.preview_title, p.preview_description,
                         p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
-                        a.name, p.pinned_at, p.expires_at
+                        a.name, p.pinned_at, p.expires_at,
+                    (p.agent_id IS NOT NULL OR EXISTS (
+                        SELECT 1 FROM room_pin_bot_origins o WHERE o.pin_id = p.id))
                  FROM room_pins p
                  JOIN people ON people.id = p.person_id
                  LEFT JOIN agents a ON a.id = p.agent_id
@@ -10193,6 +10216,20 @@ impl Db {
         )?;
         tx.commit()?;
         Ok(None)
+    }
+
+    pub fn claim_pin_preview(&self, id: &str, at: i64, stale_secs: i64) -> rusqlite::Result<bool> {
+        let claimed = self.conn().execute(
+            "INSERT INTO room_pin_preview_claims (pin_id, claimed_at)
+             SELECT id, ?2 FROM room_pins
+             WHERE id = ?1 AND kind = 'link' AND (expires_at IS NULL OR expires_at > ?2)
+               AND (preview_status = 'pending' OR
+                    (preview_status = 'ok' AND preview_fetched_at <= ?3))
+             ON CONFLICT(pin_id) DO UPDATE SET claimed_at = excluded.claimed_at
+             WHERE room_pin_preview_claims.claimed_at <= ?3",
+            params![id, at, at - stale_secs],
+        )?;
+        Ok(claimed > 0)
     }
 
     pub fn set_pin_preview(

@@ -71,11 +71,15 @@ fn spot(n: i64) -> (i64, i64) {
 
 impl Server {
     async fn start() -> Self {
+        Self::start_db(Db::open(":memory:").unwrap()).await
+    }
+
+    async fn start_db(db: Db) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
         let state = AppState::new(
-            Db::open(":memory:").unwrap(),
+            db,
             Config {
                 public_url: base.clone(),
                 create_code: Some(CODE.to_string()),
@@ -5363,4 +5367,54 @@ async fn pinning_counts_as_one_of_a_bots_writes() {
         .tool(&scout.token, "pin", json!({ "hangout_id": room, "kind": "note", "title": "more" }))
         .await;
     assert_eq!(last["isError"], true, "{last}");
+}
+
+// I72: retained bot pins never become human or owner instructions when their bot is deleted.
+#[tokio::test]
+async fn deleted_bot_pins_keep_their_untrusted_origin() {
+    let path = std::env::temp_dir().join(format!("pin-origin-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    let (room, owner) = server.someone("Owner").await;
+    let author = server.bot(&owner, &room, "Author").await;
+    let reader = server.bot(&owner, &room, "Reader").await;
+    let pinned = server
+        .tool(&author.token, "pin", json!({"hangout_id":room,"kind":"note","title":"bot words"}))
+        .await;
+    assert!(pinned["isError"].is_null(), "{pinned}");
+    server
+        .post(&owner.key, &pins_path(&room), json!({"kind":"note","title":"human words"}))
+        .await
+        .ok();
+    // Reopening backfills bot origins for a database left by the earlier pin implementation.
+    conn.execute("DROP TABLE room_pin_bot_origins", []).unwrap();
+    drop(Db::open(path.to_str().unwrap()).unwrap());
+    let origins: i64 =
+        conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
+    assert_eq!(origins, 1);
+    conn.execute("DELETE FROM agents WHERE id=?", [&author.id]).unwrap();
+    let read = server.read_room(&reader.token, &room).await;
+    let wall = server
+        .tool(&reader.token, "use_item", json!({"item_id":"whiteboard","hangout_id":room}))
+        .await;
+    let listed = server.get(&reader.token, &pins_path(&room)).await.ok();
+    for view in [&read, &wall["structuredContent"], &listed] {
+        let pins = view["pins"].as_array().unwrap();
+        let bot = pins.iter().find(|pin| pin["title"] == "bot words").unwrap();
+        assert_eq!(bot["pinned_by"]["is_bot"], true, "{view}");
+        assert_eq!(bot["from_your_owner"], false, "{view}");
+        let human = pins.iter().find(|pin| pin["title"] == "human words").unwrap();
+        assert_eq!(human["pinned_by"]["is_bot"], false);
+        assert_eq!(human["from_your_owner"], true);
+    }
+    let bot_id =
+        read["pins"].as_array().unwrap().iter().find(|pin| pin["title"] == "bot words").unwrap()
+            ["id"]
+            .as_str()
+            .unwrap();
+    server.delete(&owner.key, &format!("/api/pins/{bot_id}")).await.ok();
+    let origins: i64 =
+        conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
+    assert_eq!(origins, 0);
 }

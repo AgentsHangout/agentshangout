@@ -204,7 +204,7 @@ pub fn note_pin_added(state: &AppState, pin: &crate::db::RoomPin) {
         if pin.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
-        let from_owner = pin.agent_id.is_none() && pin.person_id == bot.owner_id;
+        let from_owner = !pin.bot_origin && pin.person_id == bot.owner_id;
         record(
             state,
             &bot.id,
@@ -219,7 +219,7 @@ pub fn note_pin_added(state: &AppState, pin: &crate::db::RoomPin) {
                 "url": pin.url,
                 "caption": pin.caption,
                 "pinned_by": pin.pinned_by,
-                "is_bot": pin.agent_id.is_some(),
+                "is_bot": pin.bot_origin,
                 "from_your_owner": from_owner,
                 "trust": ROOM_TRUST,
                 "what_to_do": PIN_DO,
