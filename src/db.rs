@@ -12326,6 +12326,84 @@ impl Db {
     }
 }
 
+/// Private delivery address. Deliberately has no Debug or Serialize implementation.
+pub struct PushDevice {
+    pub id: String,
+    pub person_id: String,
+    pub token: String,
+    pub enabled: bool,
+    pub mentions: bool,
+    pub requests: bool,
+    pub announcements: bool,
+}
+
+impl Db {
+    pub fn put_push_device(
+        &self,
+        person: &str,
+        session: &str,
+        d: &PushDevice,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let existing: Option<(String, String)> = tx
+            .query_row("SELECT person_id, token FROM push_devices WHERE id = ?", [&d.id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        // A device id alone cannot take another person's registration. A phone switching accounts
+        // proves possession with the same private FCM token, then binds to the new session.
+        if existing.as_ref().is_some_and(|(p, t)| p != person && t != &d.token) {
+            return Ok(false);
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM push_devices WHERE person_id = ? AND id != ?",
+            params![person, d.id],
+            |r| r.get(0),
+        )?;
+        if count >= 10 {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM push_devices WHERE token = ? AND id != ?", params![d.token, d.id])?;
+        tx.execute("INSERT INTO push_devices(id,person_id,session_hash,token,enabled,mentions,requests,announcements) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET person_id=excluded.person_id,session_hash=excluded.session_hash,token=excluded.token,enabled=excluded.enabled,mentions=excluded.mentions,requests=excluded.requests,announcements=excluded.announcements",
+            params![d.id, person, session, d.token, d.enabled, d.mentions, d.requests, d.announcements])?;
+        tx.commit()?;
+        Ok(true)
+    }
+    pub fn push_devices(
+        &self,
+        person: Option<&str>,
+        now: i64,
+    ) -> rusqlite::Result<Vec<PushDevice>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT d.id,d.person_id,d.token,d.enabled,d.mentions,d.requests,d.announcements FROM push_devices d JOIN sessions s ON s.token_hash=d.session_hash AND s.person_id=d.person_id WHERE s.expires_at > ?1 AND (?2 IS NULL OR d.person_id=?2)")?;
+        let devices = stmt
+            .query_map(params![now, person], |r| {
+                Ok(PushDevice {
+                    id: r.get(0)?,
+                    person_id: r.get(1)?,
+                    token: r.get(2)?,
+                    enabled: r.get(3)?,
+                    mentions: r.get(4)?,
+                    requests: r.get(5)?,
+                    announcements: r.get(6)?,
+                })
+            })?
+            .collect();
+        devices
+    }
+    pub fn delete_push_device(&self, person: &str, id: &str) -> rusqlite::Result<()> {
+        self.conn()
+            .execute("DELETE FROM push_devices WHERE person_id=? AND id=?", params![person, id])?;
+        Ok(())
+    }
+    pub fn invalidate_push_token(&self, id: &str, token: &str) -> rusqlite::Result<()> {
+        self.conn()
+            .execute("DELETE FROM push_devices WHERE id=? AND token=?", params![id, token])?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13778,83 +13856,5 @@ mod tests {
 
         line("system");
         assert_eq!(seen(), ["f2", "s1"]);
-    }
-}
-
-/// Private delivery address. Deliberately has no Debug or Serialize implementation.
-pub struct PushDevice {
-    pub id: String,
-    pub person_id: String,
-    pub token: String,
-    pub enabled: bool,
-    pub mentions: bool,
-    pub requests: bool,
-    pub announcements: bool,
-}
-
-impl Db {
-    pub fn put_push_device(
-        &self,
-        person: &str,
-        session: &str,
-        d: &PushDevice,
-    ) -> rusqlite::Result<bool> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let existing: Option<(String, String)> = tx
-            .query_row("SELECT person_id, token FROM push_devices WHERE id = ?", [&d.id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .optional()?;
-        // A device id alone cannot take another person's registration. A phone switching accounts
-        // proves possession with the same private FCM token, then binds to the new session.
-        if existing.as_ref().is_some_and(|(p, t)| p != person && t != &d.token) {
-            return Ok(false);
-        }
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM push_devices WHERE person_id = ? AND id != ?",
-            params![person, d.id],
-            |r| r.get(0),
-        )?;
-        if count >= 10 {
-            return Ok(false);
-        }
-        tx.execute("DELETE FROM push_devices WHERE token = ? AND id != ?", params![d.token, d.id])?;
-        tx.execute("INSERT INTO push_devices(id,person_id,session_hash,token,enabled,mentions,requests,announcements) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET person_id=excluded.person_id,session_hash=excluded.session_hash,token=excluded.token,enabled=excluded.enabled,mentions=excluded.mentions,requests=excluded.requests,announcements=excluded.announcements",
-            params![d.id, person, session, d.token, d.enabled, d.mentions, d.requests, d.announcements])?;
-        tx.commit()?;
-        Ok(true)
-    }
-    pub fn push_devices(
-        &self,
-        person: Option<&str>,
-        now: i64,
-    ) -> rusqlite::Result<Vec<PushDevice>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT d.id,d.person_id,d.token,d.enabled,d.mentions,d.requests,d.announcements FROM push_devices d JOIN sessions s ON s.token_hash=d.session_hash AND s.person_id=d.person_id WHERE s.expires_at > ?1 AND (?2 IS NULL OR d.person_id=?2)")?;
-        let devices = stmt
-            .query_map(params![now, person], |r| {
-                Ok(PushDevice {
-                    id: r.get(0)?,
-                    person_id: r.get(1)?,
-                    token: r.get(2)?,
-                    enabled: r.get(3)?,
-                    mentions: r.get(4)?,
-                    requests: r.get(5)?,
-                    announcements: r.get(6)?,
-                })
-            })?
-            .collect();
-        devices
-    }
-    pub fn delete_push_device(&self, person: &str, id: &str) -> rusqlite::Result<()> {
-        self.conn()
-            .execute("DELETE FROM push_devices WHERE person_id=? AND id=?", params![person, id])?;
-        Ok(())
-    }
-    pub fn invalidate_push_token(&self, id: &str, token: &str) -> rusqlite::Result<()> {
-        self.conn()
-            .execute("DELETE FROM push_devices WHERE id=? AND token=?", params![id, token])?;
-        Ok(())
     }
 }
