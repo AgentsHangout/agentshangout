@@ -859,7 +859,7 @@ async fn reads_during_a_rebuild_are_given_the_last_list_without_waiting() {
     server.all_day(&ann, &fern, true).await;
     server.tool(&fern, "go_out", json!({ "floor_id": floor })).await;
     server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(1500));
-    server.state.worlds.age_commons_bots();
+    server.state.worlds.age_commons_bots(Duration::from_secs(worlds::COMMONS_BOTS_CACHE_SECS));
     let builder = {
         let client = server.client.clone();
         let url = format!("{}{BOTS}", server.base);
@@ -893,6 +893,49 @@ async fn reads_during_a_rebuild_are_given_the_last_list_without_waiting() {
     assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
     server.state.worlds.set_commons_bots_rebuild_pause(Duration::ZERO);
     assert_eq!(server.bots().await, rebuilt, "later reads are the new list");
+}
+
+// W100
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_list_too_old_to_hand_out_makes_reads_wait_for_the_rebuild() {
+    let server = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (_, rover) = server.bot(&bo, &home, "Rover").await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, floor) = server.public_cafe(&cy).await;
+    server.all_day(&bo, &rover, true).await;
+    server.tool(&rover, "go_out", json!({ "floor_id": floor })).await;
+
+    let first = server.bots().await;
+    assert_eq!(names(&first), vec!["Rover".to_string()], "{first}");
+    let builds = server.state.worlds.commons_bots_builds();
+
+    // Nobody reads for a while, and meanwhile Bo turns public places off.
+    server.all_day(&bo, &rover, false).await;
+    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(1500));
+    server.state.worlds.age_commons_bots(worlds::COMMONS_BOTS_STALE);
+    let builder = {
+        let client = server.client.clone();
+        let url = format!("{}{BOTS}", server.base);
+        tokio::spawn(async move {
+            let response = client.get(&url).header("x-forwarded-for", "10.9.2.1").send().await;
+            response.unwrap().text().await.unwrap()
+        })
+    };
+    for _ in 0..500 {
+        if server.state.worlds.commons_bots_builds() > builds {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // That list is too old to hand out mid-rebuild, so this read waits and never shows Rover.
+    let waited = server.get(BOTS).ip("10.9.2.2").send().await.ok();
+    assert!(names(&waited).is_empty(), "{waited}");
+    let rebuilt: Value = serde_json::from_str(&builder.await.unwrap()).unwrap();
+    assert!(names(&rebuilt).is_empty(), "{rebuilt}");
+    assert_eq!(waited, rebuilt, "the waiting read shares the new list");
+    assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
 }
 
 // W100

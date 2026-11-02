@@ -106,6 +106,9 @@ const VIEWS_PER_IP_PER_MINUTE: u32 = 240;
 /// W100: the public Commons bots list is rebuilt at most this often.
 pub const COMMONS_BOTS_CACHE_SECS: u64 = 20;
 const COMMONS_BOTS_CACHE: Duration = Duration::from_secs(COMMONS_BOTS_CACHE_SECS);
+/// W100: the oldest list given to reads while another read rebuilds it. Older than this, they
+/// wait for the new one, so a list nobody has read for a while is never handed out.
+pub const COMMONS_BOTS_STALE: Duration = Duration::from_secs(2 * COMMONS_BOTS_CACHE_SECS);
 /// W100: reads of that list, per address, a minute at a time. Separate from world views so a
 /// viewer polling does not use up looking at the map.
 pub const COMMONS_BOTS_PER_IP_PER_MINUTE: u32 = 60;
@@ -416,13 +419,13 @@ impl Runtime {
         *locked(&self.commons_bots) = None;
     }
 
-    /// W100: age the cached Commons bots list past its 20 seconds but keep it, so the next read
-    /// rebuilds it while other reads can still be given it.
-    pub fn age_commons_bots(&self) {
-        if let Some((built, _)) = locked(&self.commons_bots).as_mut() {
-            if let Some(old) = Instant::now().checked_sub(COMMONS_BOTS_CACHE) {
-                *built = old;
-            }
+    /// W100: make the cached Commons bots list this much older, so a test can reach a rebuild
+    /// without waiting. If the clock can't go back that far, the list is dropped instead, which
+    /// reads treat the same as one too old to hand out.
+    pub fn age_commons_bots(&self, by: Duration) {
+        let mut cache = locked(&self.commons_bots);
+        if let Some((built, body)) = cache.take() {
+            *cache = built.checked_sub(by).map(|old| (old, body));
         }
     }
 
@@ -2325,13 +2328,13 @@ fn commons_bots_ok(body: Bytes) -> Response {
 }
 
 /// W100: the public Commons bots list, from memory. Rebuilt at most every 20 seconds.
-/// One caller builds. The others are given the last list meanwhile, or, when there is none yet,
-/// wait for it and then share what it made. Run it off the async workers: it can wait.
+/// One caller builds. The others are given the last list meanwhile if it is under 40 seconds
+/// old, and otherwise wait for it and share what it made. Run it off the async workers.
 fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
     let last = match locked(&state.worlds.commons_bots).as_ref() {
         Some((built, body)) if built.elapsed() < COMMONS_BOTS_CACHE => return Ok(body.clone()),
-        Some((_, body)) => Some(body.clone()),
-        None => None,
+        Some((built, body)) if built.elapsed() < COMMONS_BOTS_STALE => Some(body.clone()),
+        _ => None,
     };
     let building = match state.worlds.commons_bots_build.try_lock() {
         Ok(guard) => guard,
