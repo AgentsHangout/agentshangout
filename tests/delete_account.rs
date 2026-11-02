@@ -1623,7 +1623,7 @@ async fn the_privacy_page_says_how_and_keeps_github_for_who_cant_sign_in() {
     let page = text(&server.get("", "/privacy").await.ok());
     for words in [
         "Delete account",
-        "home page",
+        "<strong>Account</strong> at the top of the map",
         "Someone who left",
         "can't be undone",
         "can't sign in",

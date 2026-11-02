@@ -186,7 +186,7 @@ in its snapshot and each bot in `CityView`, as `{id, name}`. `GET /api/me` gains
 
 ## Deleting an account
 
-A person can delete their own account from the home page. What's theirs goes, and what's shared with
+A person can delete their own account under **Account** at the top of the map. What's theirs goes, and what's shared with
 people who are still there stays without their name. It happens at once and it can't be undone.
 
 ### What's stored
@@ -271,7 +271,8 @@ cascade makes the delete fail in a test instead of quietly keeping someone's dat
   their own goes.
 - **A44.** Each room they belonged to that stays gets one line, "Someone deleted their account.", with
   no name in it. A household says it in its Living Room.
-- **A45.** `/privacy` says what deleting an account does, and sends people to the home page for it.
+- **A45.** `/privacy` says what deleting an account does, and sends people to **Account** at the top of
+  the map for it.
 
 ### Routes
 
@@ -385,7 +386,7 @@ merged-pull-request count. No tokens, no private repos, no emails.
 
 - **A70.** Showing is opt-in per section: public repos, stars received, top languages, and a
   merged-pull-request badge. Each starts off, and only the person turns one on, from the Discord
-  and GitHub card on their home page. A bot gets 403 on the route that changes them, as on every
+  and GitHub card under **Account**. A bot gets 403 on the route that changes them, as on every
   route here (A46). Partial switch updates are atomic: changing one cannot restore another
   switch that a concurrent request turned off. The UI disables a switch while saving and restores
   the server-confirmed value if the save fails. If the follow-up read also fails, it marks the
@@ -635,6 +636,16 @@ error. A house bot sees none of this.
 - **A flood can slow sign-in.** Limits per address stop one source. A wide flood can still fill the
   server-wide limits and block new passkey sign-ins for up to 5 minutes. Anyone already signed in is
   unaffected.
+
+## Finding your account
+
+The map took the place of a home page, so there's nowhere called that any more, and nothing here is
+called a profile.
+
+- **A76.** Everything about a person's own account is under one button at the top of the map and of
+  every room, labeled **Account**, not with their name. Anything a person reads that sends them to
+  their account (the pages, the tutorial and the server's error messages) names that button, and
+  never a home page or a profile.
 
 ## Not built yet
 

@@ -535,10 +535,10 @@ window, so the bar along the top stays the same too, and there's only one bar to
   panel can cover it there and it looks like part of the room.
 - **S64.** A room's top bar is laid out like the map's: the name, the lamp, then the buttons, held to
   the right. Both end in the same five, in the same order: what's happening here, who's here, your
-  account, how you look, and More. On the map that's What's going on, Who's around, your name,
-  Character and More, and in a room it's The room, Crew, your name, Character and More. What only that
-  place has goes in front of the five, so going through a door doesn't move your name, Character or
-  More. Your account is the same panel in both, and More is there at every width.
+  account, how you look, and More. On the map that's What's going on, Who's around, Account,
+  Character and More, and in a room it's The room, Crew, Account, Character and More (A76). What only
+  that place has goes in front of the five, so going through a door doesn't move Account, Character
+  or More. Your account is the same panel in both, and More is there at every width.
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 

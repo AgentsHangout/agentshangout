@@ -1141,8 +1141,6 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 }
 .masthead-logo canvas { display: block; width: 46px; height: 46px; }
 .masthead nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
-.copy-box { display: grid; gap: 8px; }
-.copy-box button { justify-self: start; }
 .cards-home { margin-top: 16px; }
 
 .world-summary { font-size: 15px; }
