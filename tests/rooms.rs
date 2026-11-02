@@ -2412,12 +2412,7 @@ async fn a_visiting_bot_is_never_pointed_at_lines_from_before_it_arrived() {
     server.put(&bo.key, &format!("/api/agents/{}/routine", rover.id), hours).await.ok();
     server.tool(&rover.token, "go_out", json!({ "floor_id": room })).await;
 
-    let ask = json!({ "hangout_id": room, "text": "Who is bringing snacks on Friday?" });
-    let asked = server.tool(&rover.token, "say", ask.clone()).await["structuredContent"].clone();
-    let asked_id = asked["message_id"].as_i64().unwrap();
     let messages = format!("/api/hangouts/{room}/messages");
-    let answer = json!({ "text": "Ann is", "reply_to": asked_id });
-    let answer = server.post(&ann.key, &messages, answer).await.ok();
     let at = |id: i64| {
         let lines = server.state.db.messages(&room, 0, 100).unwrap();
         lines.iter().find(|line| line.id == id).unwrap().created_at
@@ -2425,18 +2420,40 @@ async fn a_visiting_bot_is_never_pointed_at_lines_from_before_it_arrived() {
     let arrive = |since: i64| {
         server.state.db.set_visit_times(&room, &rover.id, since, now() + 3600).unwrap()
     };
+    // Rover asks, Ann answers it, and Rover says it again: the warning, if any.
+    let ask_and_answer = |text: &'static str| {
+        let (server, rover, room, ann, messages) = (&server, &rover, &room, &ann, &messages);
+        async move {
+            let ask = json!({ "hangout_id": room, "text": text });
+            let asked = server.tool(&rover.token, "say", ask).await["structuredContent"].clone();
+            let asked_id = asked["message_id"].as_i64().unwrap();
+            let answer = json!({ "text": "Ann will", "reply_to": asked_id });
+            let answer_id = server.post(&ann.key, messages, answer).await.ok()["id"].as_i64();
+            (asked_id, answer_id.unwrap())
+        }
+    };
+    let say_again = |text: &'static str| {
+        let (server, rover, room) = (&server, &rover, &room);
+        async move {
+            let again = json!({ "hangout_id": room, "text": text });
+            server.tool(&rover.token, "say", again).await["structuredContent"].clone()
+        }
+    };
 
-    // Arrived before both: the answer is readable, so the warning names it.
-    assert!(arrive(at(asked_id) - 1));
-    let again = server.tool(&rover.token, "say", ask.clone()).await["structuredContent"].clone();
-    assert_eq!(again["warning"]["kind"], "already_answered", "{again}");
-    assert_eq!(again["warning"]["answer_ids"], json!([answer["id"]]), "{again}");
-
-    // Arrived the second the answer was written: it can't be read, so it's never named.
-    assert!(arrive(at(answer["id"].as_i64().unwrap())));
-    let later = server.tool(&rover.token, "say", ask).await["structuredContent"].clone();
+    // Arrived the second the answer was written: neither line can be read, so nothing is named.
+    // Without the arrival cutoff this would say already_answered with the hidden answer.
+    let (_, hidden) = ask_and_answer("Who is bringing snacks on Friday?").await;
+    assert!(arrive(at(hidden)));
+    let later = say_again("Who is bringing snacks on Friday?").await;
     assert_eq!(later["posted"], true, "{later}");
-    assert!(later["warning"].get("answer_ids").is_none(), "{later}");
+    assert!(later.get("warning").is_none(), "{later}");
+
+    // A different question, with an arrival before it: the answer is readable and named.
+    let (asked, answer) = ask_and_answer("Who can drive us to the lake on Saturday?").await;
+    assert!(arrive(at(asked) - 1));
+    let again = say_again("Who can drive us to the lake on Saturday?").await;
+    assert_eq!(again["warning"]["kind"], "already_answered", "{again}");
+    assert_eq!(again["warning"]["answer_ids"], json!([answer]), "{again}");
 }
 
 // I82
