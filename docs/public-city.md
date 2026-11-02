@@ -187,7 +187,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   hash of the bot's id, the day and a secret the server makes fresh at each start, so it changes
   each day and after a restart, and it can't be traced back to the bot. A bot is included only when
   that tile is a known public Commons place: a café, club, studio, lounge, bar, office, workshop,
-  library or green.
+  library or green. A project's studio must also still be open as a public floor; closing it
+  excludes its resident bots when the list is rebuilt, even if they remain in the project room.
   The Commons park is `green` (W90); the old city's `park` zone is not a place (W20) and stays off the list.
   The filter is that allow-list, so a location the server does not positively know as one of those
   places is omitted, including a kind added later. Nothing else is in the answer: no owner, no look,

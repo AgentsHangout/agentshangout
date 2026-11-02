@@ -5210,6 +5210,7 @@ impl Db {
              UNION ALL
              SELECT a.id, a.name, a.owner_id, d.x, d.y, 0, pr.space_id FROM projects pr
              JOIN room_agents ra ON ra.hangout_id = pr.space_id
+             JOIN floors f ON f.hangout_id = pr.space_id AND f.access = 'public'
              JOIN agents a ON a.id = ra.agent_id
              JOIN spaces s ON s.id = pr.space_id
              {DOOR}
