@@ -145,6 +145,10 @@ struct Webhook {
     requests: std::sync::Arc<std::sync::Mutex<Vec<(axum::http::HeaderMap, Value)>>>,
     fail: std::sync::Arc<std::sync::atomic::AtomicBool>,
     bad_challenge: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    block_verification: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    block_events: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
 }
 impl Webhook {
     async fn start() -> (Self, String) {
@@ -161,6 +165,11 @@ impl Webhook {
             assert!(headers.contains_key("x-mcp-subscription-id"));
             assert!(headers["webhook-signature"].to_str().unwrap().starts_with("v1,"));
             h.requests.lock().unwrap().push((headers,body.clone()));
+            let blocked = if body["type"] == "verification" { &h.block_verification } else { &h.block_events };
+            if blocked.load(std::sync::atomic::Ordering::SeqCst) {
+                h.entered.notify_one();
+                h.release.notified().await;
+            }
             if h.fail.load(std::sync::atomic::Ordering::SeqCst) { return (StatusCode::SERVICE_UNAVAILABLE,Json(json!({}))); }
             if h.bad_challenge.load(std::sync::atomic::Ordering::SeqCst) { return (StatusCode::OK,Json(json!({"challenge":"wrong"}))); }
             (StatusCode::OK,Json(json!({"challenge":body["challenge"]})))
@@ -183,6 +192,250 @@ impl Webhook {
 
 fn subscription(room: &str, url: &str) -> Value {
     json!({"name":"mention","arguments":{"hangout_id":room},"delivery":{"mode":"webhook","url":url,"secret":WEBHOOK_SECRET}})
+}
+
+#[tokio::test]
+async fn stalled_verification_does_not_block_an_independent_grant() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let a: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let code = s.code(&session, &client, &bot).await;
+    let b: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let (slow, slow_url) = Webhook::start().await;
+    let (fast, fast_url) = Webhook::start().await;
+    let fast_params = subscription(&room, &fast_url);
+    let access = b["access_token"].as_str().unwrap();
+    assert!(
+        s.event_rpc(access, "events/subscribe", fast_params.clone()).await["result"].is_object()
+    );
+    slow.block_verification.store(true, Ordering::SeqCst);
+    let params = subscription(&room, &slow_url);
+    let caller = s.clone();
+    let waiting = tokio::spawn(async move {
+        caller.event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", params).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), slow.entered.notified()).await.unwrap();
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "independent", "{}", agenthangout::now(), 0)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+        assert_eq!(fast.events().len(), 1);
+        let renewed = s.event_rpc(access, "events/subscribe", fast_params.clone()).await;
+        assert_eq!(renewed["result"]["cursor"], fast.events()[0]["cursor"]);
+        assert!(s.event_rpc(access, "events/unsubscribe", fast_params).await["result"].is_object());
+    })
+    .await
+    .expect("another grant must not wait for stalled verification");
+    assert!(!waiting.is_finished());
+    slow.release.notify_waiters();
+    assert!(waiting.await.unwrap()["result"].is_object());
+}
+
+#[tokio::test]
+async fn stalled_delivery_does_not_block_an_independent_grant() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let a: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let code = s.code(&session, &client, &bot).await;
+    let b: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let (slow, slow_url) = Webhook::start().await;
+    let (fast, fast_url) = Webhook::start().await;
+    let slow_params = subscription(&room, &slow_url);
+    let fast_params = subscription(&room, &fast_url);
+    assert!(s
+        .event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", slow_params.clone())
+        .await["result"]
+        .is_object());
+    assert!(s
+        .event_rpc(b["access_token"].as_str().unwrap(), "events/subscribe", fast_params.clone())
+        .await["result"]
+        .is_object());
+    slow.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "parallel", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pending =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), slow.entered.notified()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while fast.events().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let renewed = s
+            .event_rpc(b["access_token"].as_str().unwrap(), "events/subscribe", fast_params.clone())
+            .await;
+        assert_eq!(renewed["result"]["cursor"], fast.events()[0]["cursor"]);
+        assert!(s
+            .event_rpc(b["access_token"].as_str().unwrap(), "events/unsubscribe", fast_params)
+            .await["result"]
+            .is_object());
+    })
+    .await
+    .expect("another grant must not wait for stalled delivery");
+    assert!(!pending.is_finished());
+    slow.release.notify_waiters();
+    pending.await.unwrap();
+    let renewed =
+        s.event_rpc(a["access_token"].as_str().unwrap(), "events/subscribe", slow_params).await;
+    assert_eq!(renewed["result"]["cursor"], slow.events()[0]["cursor"]);
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(slow.events().len(), 1, "renewal must retain the acknowledged cursor");
+}
+
+#[tokio::test]
+async fn oauth_outbound_limit_is_shared_and_concurrent_creates_respect_the_grant_cap() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap().to_string();
+    let (delivery, url) = Webhook::start().await;
+    let initial = subscription(&room, &url);
+    assert!(s.event_rpc(&access, "events/subscribe", initial).await["result"].is_object());
+    delivery.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "bounded", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pass =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), delivery.entered.notified()).await.unwrap();
+    let (verification, url) = Webhook::start().await;
+    verification.block_verification.store(true, Ordering::SeqCst);
+    let mut creates = Vec::new();
+    for i in 0..8 {
+        let caller = s.clone();
+        let access = access.clone();
+        let params = subscription(&room, &format!("{url}?sub={i}"));
+        creates.push(tokio::spawn(async move {
+            caller.event_rpc(&access, "events/subscribe", params).await
+        }));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while verification.requests.lock().unwrap().len() < 7 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        verification.requests.lock().unwrap().len(),
+        7,
+        "one delivery plus seven verifications exhaust the shared limit"
+    );
+    verification.block_verification.store(false, Ordering::SeqCst);
+    verification.release.notify_waiters();
+    for create in creates {
+        assert!(create.await.unwrap()["result"].is_object());
+    }
+    delivery.release.notify_waiters();
+    pass.await.unwrap();
+    // There are nine subscriptions now. Twelve concurrent identities may add only eleven.
+    let mut creates = Vec::new();
+    for i in 8..20 {
+        let caller = s.clone();
+        let access = access.clone();
+        let params = subscription(&room, &format!("{url}?sub={i}"));
+        creates.push(tokio::spawn(async move {
+            caller.event_rpc(&access, "events/subscribe", params).await
+        }));
+    }
+    let mut accepted = 0;
+    let mut limited = 0;
+    for create in creates {
+        let result = create.await.unwrap();
+        if result["result"].is_object() {
+            accepted += 1;
+        } else {
+            assert_eq!(result["error"]["code"], -32025);
+            limited += 1;
+        }
+    }
+    assert_eq!((accepted, limited), (11, 1));
+}
+
+#[tokio::test]
+async fn same_subscription_delivery_renewal_and_recreation_preserve_progress() {
+    use std::{
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
+    let s = Arc::new(Server::start().await);
+    let (session, bot, _, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap().to_string();
+    let (hook, url) = Webhook::start().await;
+    let params = subscription(&room, &url);
+    let first = s.event_rpc(&access, "events/subscribe", params.clone()).await;
+    let id = first["result"]["id"].clone();
+    hook.block_events.store(true, Ordering::SeqCst);
+    s.state
+        .db
+        .insert_bot_event(&bot, "mention", Some(&room), "consistent", "{}", agenthangout::now(), 0)
+        .unwrap();
+    let caller = s.clone();
+    let pending =
+        tokio::spawn(
+            async move { agenthangout::events::oauth::deliver(&caller.state).await.unwrap() },
+        );
+    tokio::time::timeout(Duration::from_secs(2), hook.entered.notified()).await.unwrap();
+    // Overlapping passes must skip the locked identity rather than deliver its stale snapshot.
+    tokio::time::timeout(Duration::from_secs(2), agenthangout::events::oauth::deliver(&s.state))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(hook.events().len(), 1);
+    let caller = s.clone();
+    let token = access.clone();
+    let renewal = params.clone();
+    let renewing =
+        tokio::spawn(async move { caller.event_rpc(&token, "events/subscribe", renewal).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!renewing.is_finished(), "renewal must wait for this identity's acknowledgment");
+    hook.block_events.store(false, Ordering::SeqCst);
+    hook.release.notify_waiters();
+    pending.await.unwrap();
+    let renewed = renewing.await.unwrap();
+    assert_eq!(renewed["result"]["cursor"], hook.events()[0]["cursor"]);
+    assert_eq!(renewed["result"]["id"], id);
+    assert!(s.event_rpc(&access, "events/unsubscribe", params.clone()).await["result"].is_object());
+    let recreated = s.event_rpc(&access, "events/subscribe", params).await;
+    assert_eq!(recreated["result"]["id"], id);
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    assert_eq!(
+        hook.events().len(),
+        1,
+        "an old delivery result cannot overwrite a recreated identity"
+    );
 }
 
 #[tokio::test]

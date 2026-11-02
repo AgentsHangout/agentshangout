@@ -186,6 +186,10 @@ the record for check-ins, plans and trips.
   an inaccessible row. Renewal cannot skip pending events. Restart may duplicate an acknowledged
   event; its event ID stays the same. Three failed attempts suspend delivery until renewal.
   Callback verification includes the subscription ID and failures return `-32015`.
+- **E35.** Verification, renewal, unsubscribe and cursor updates serialize only for the same
+  subscription identity. Slow callbacks do not hold another subscription's lock. At most eight
+  OAuth callback requests (verification and delivery together) run concurrently. Subscription
+  count checks serialize briefly within a grant, without holding that grant lock over network work.
 
 ## Storage
 

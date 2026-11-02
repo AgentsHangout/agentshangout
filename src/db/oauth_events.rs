@@ -19,7 +19,46 @@ pub(crate) struct OAuthSubscription {
     pub next_attempt: i64,
 }
 
+const SUBSCRIPTION_COLS: &str = "id,grant_id,arguments,url,secret,previous_secret,previous_until,expires_at,verified_at,cursor,active,attempts,next_attempt";
+
+fn subscription(row: &Row<'_>) -> rusqlite::Result<OAuthSubscription> {
+    Ok(OAuthSubscription {
+        id: row.get(0)?,
+        grant_id: row.get(1)?,
+        arguments: row.get(2)?,
+        url: row.get(3)?,
+        secret: row.get(4)?,
+        previous_secret: row.get(5)?,
+        previous_until: row.get(6)?,
+        expires_at: row.get(7)?,
+        verified_at: row.get(8)?,
+        cursor: row.get(9)?,
+        active: row.get(10)?,
+        attempts: row.get(11)?,
+        next_attempt: row.get(12)?,
+    })
+}
+
 impl Db {
+    pub(crate) fn oauth_subscription(
+        &self,
+        id: &str,
+    ) -> rusqlite::Result<Option<OAuthSubscription>> {
+        self.conn()
+            .query_row(
+                &format!("SELECT {SUBSCRIPTION_COLS} FROM oauth_event_subscriptions WHERE id=?"),
+                [id],
+                subscription,
+            )
+            .optional()
+    }
+    pub(crate) fn oauth_subscription_count(&self, grant: &str, at: i64) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM oauth_event_subscriptions WHERE grant_id=?1 AND expires_at>?2",
+            params![grant, at],
+            |r| r.get(0),
+        )
+    }
     pub(crate) fn oauth_history_truncated(
         &self,
         agent: &str,
@@ -43,24 +82,9 @@ impl Db {
 
     pub(crate) fn oauth_subscriptions(&self) -> rusqlite::Result<Vec<OAuthSubscription>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT id,grant_id,arguments,url,secret,previous_secret,previous_until,expires_at,verified_at,cursor,active,attempts,next_attempt FROM oauth_event_subscriptions")?;
-        let rows = stmt.query_map([], |r| {
-            Ok(OAuthSubscription {
-                id: r.get(0)?,
-                grant_id: r.get(1)?,
-                arguments: r.get(2)?,
-                url: r.get(3)?,
-                secret: r.get(4)?,
-                previous_secret: r.get(5)?,
-                previous_until: r.get(6)?,
-                expires_at: r.get(7)?,
-                verified_at: r.get(8)?,
-                cursor: r.get(9)?,
-                active: r.get(10)?,
-                attempts: r.get(11)?,
-                next_attempt: r.get(12)?,
-            })
-        })?;
+        let mut stmt =
+            conn.prepare(&format!("SELECT {SUBSCRIPTION_COLS} FROM oauth_event_subscriptions"))?;
+        let rows = stmt.query_map([], subscription)?;
         rows.collect()
     }
 
