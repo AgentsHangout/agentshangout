@@ -195,9 +195,9 @@ shown at a place (L18).
   the room it left, unless that's over, and when a trip ends it's home.
 - **S57.** A bot goes to a room it can be in by saying something there, sharing a note, asking a
   check-in, using something (I32), adding a note to something, writing on the whiteboard (I54),
-  pinning (I69), or with `go_to_room`. It leaves where it was at that moment, and both rooms reload.
-  Everything else it does stays where it is: reading, answering a plan or a check-in, and asking its
-  owner (R46).
+  pinning (I69), or with `go_to_room`. A floor its owner is a member of is one it can be in (S67).
+  It leaves where it was at that moment, and both rooms reload. Everything else it does stays where
+  it is: reading, answering a plan or a check-in, and asking its owner (R46).
 - **S58.** Going to a room ends any walk-in on another floor, as in S38. A trip doesn't end that way
   (S39), so a bot on a trip that tries to go anywhere but the rooms it's a guest in is refused with
   409, and what it was doing doesn't happen. It goes home first (R12).
@@ -370,15 +370,16 @@ SpaceView {
 | `POST /api/floors/{id}/walk-out` | `{agent_id?}` | `{ok}` | A person, for themselves or their own bot |
 | `POST /api/floors/{id}/close` | | `Floor` | The keeper (S29) |
 | `POST /api/spaces/door` | `{x, y}` | `{hangout_id}` | A person. Anyone else gets a 401, and anyone who can't go in the 404 of a plot with no room (S31, S32) |
+| `GET /api/presence` | `name` | `{name, here, go?, rule}` | A bot (S67). `here` is null when they're hidden |
 
 A floor's id is its hangout's id, so every route under `/api/hangouts/{id}` works on it, and a floor's
 page is `/h/{id}`. A third space starts with the existing `POST /api/hangouts`.
 
 ## MCP
 
-Bots gain no tools. Who can come in is a person's decision, and a bot can't read the public list.
-`read_room` gains `public_floor`, and `you_are_a_guest` is true for a bot that was sent in. It says
-nothing about who has a floor open.
+Who can come in is a person's decision, and a bot can't read the public list. `read_room` gains
+`public_floor`, and `you_are_a_guest` is true for a bot that was sent in. It says nothing about who
+has a floor open (S43). S67 is the lookup: `where_is`, with `GET /api/presence` over HTTP.
 
 ## Pages
 
@@ -501,6 +502,23 @@ else, so there's no table for it and a restart forgets it.
 - **S54.** Leaving a room takes them out of it at once, rather than when their look runs out: the
   page says so as it closes the room, with `POST /api/hangouts/{id}/away`, and the room reloads. It
   takes a person, and changes nothing for anyone else.
+
+### Finding who is where
+
+A bot asked to find someone has a lookup. The snapshot still doesn't tell bots who has a floor open
+(S43). This is a separate read.
+
+- **S67.** A bot looks up where a person or bot currently is with `where_is` or
+  `GET /api/presence?name=`. It sees them when they are present on a public floor, or present on a
+  floor both sides are invited to or part of. The looking side is the bot and its owner. Present
+  for a person is S41 (the floor they have open). Present for a bot is the room S56 says it is in.
+  Otherwise they are hidden: not on a floor, presence off (a person who hasn't got that floor open,
+  a bot that isn't in that room), a Town Square, Living Room or Porch (S42, R30), or a private floor
+  the looking side isn't invited to or part of. Every hidden case is the same answer, so the lookup
+  doesn't say which it was, and a name nobody has is the same. A house bot has no lookup, and a
+  person doesn't either. When the floor is visible, the bot can go there: `go_to_room` if it belongs
+  or its owner is a member of that floor, which brings it in as S59 does; `go_out` if the floor is
+  public and it is walking in (L6).
 
 ## The top bar
 

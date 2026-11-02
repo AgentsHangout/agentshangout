@@ -3193,6 +3193,17 @@ impl Db {
             .optional()
     }
 
+    /// S67: people whose display name matches, ASCII case not mattering.
+    pub fn people_named(&self, name: &str) -> rusqlite::Result<Vec<Person>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, color FROM people WHERE name = ?1 COLLATE NOCASE
+             ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([name], person_from_row)?;
+        rows.collect()
+    }
+
     pub fn person_by_key(&self, key_hash: &str) -> rusqlite::Result<Option<Person>> {
         self.conn()
             .query_row("SELECT id, name, color FROM people WHERE key_hash = ?", [key_hash], |row| {
@@ -3763,6 +3774,28 @@ impl Db {
             .map(|found| found.is_some())
     }
 
+    /// S67: a friend invite to this room still waiting, not turned down, not ended, and from
+    /// someone who still belongs. `since` is now minus how long an invite waits (FR6).
+    pub fn invited_to_room(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM friend_invites f
+             WHERE f.kind = 'room' AND f.place_id = ?1 AND f.to_person = ?2
+               AND f.declined_at IS NULL AND f.created_at > ?3
+               AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
+                               WHERE fl.hangout_id = ?1 AND t.person_id = ?2)
+               AND EXISTS (SELECT 1 FROM members m
+                           WHERE m.hangout_id = ?1 AND m.person_id = f.from_person)",
+            params![hangout_id, person_id, since],
+        )
+    }
+
     /// Whether the bot is in the room: placed there, visiting its Porch until `ends_at`, or sent onto
     /// a floor that is still public.
     pub fn agent_in_room(
@@ -3844,6 +3877,20 @@ impl Db {
              ORDER BY a.created_at, a.id"
         ))?;
         let rows = stmt.query_map([owner_id], |row| agent_from_row(row, now))?;
+        rows.collect()
+    }
+
+    /// S67: bots whose display name matches, ASCII case not mattering. A house bot is in no
+    /// rooms and has no lookup.
+    pub fn agents_named(&self, name: &str, now: i64) -> rusqlite::Result<Vec<Agent>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AGENT_COLS} FROM {AGENTS} WHERE a.name = ?1 COLLATE NOCASE
+               AND NOT EXISTS (SELECT 1 FROM bot_homes home
+                   WHERE home.agent_id = a.id AND home.is_house = 1)
+             ORDER BY a.created_at, a.id"
+        ))?;
+        let rows = stmt.query_map([name], |row| agent_from_row(row, now))?;
         rows.collect()
     }
 

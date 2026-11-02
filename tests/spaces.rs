@@ -1902,6 +1902,134 @@ async fn go_to_room_moves_a_bot_and_it_can_tell_where_it_is() {
     assert_eq!(rooms_it_is_in(&server, &ann, &list, &bot).await, [list[0]]);
 }
 
+fn hidden_presence(name: &str) -> Value {
+    json!({
+        "name": name,
+        "here": Value::Null,
+        "note": "They're not somewhere you can see.",
+        "rule": spaces::PRESENCE_RULE,
+    })
+}
+
+fn lookup(got: &Value) -> Value {
+    assert!(got["isError"].is_null(), "{got}");
+    got["structuredContent"].clone()
+}
+
+// S67
+#[tokio::test]
+async fn where_is_sees_someone_on_a_public_floor() {
+    let server = Server::start().await;
+    let (floor, bo) = server.someone("Bo").await;
+    server.open(&bo, &floor).await;
+    server.snapshot(&bo.key, &floor).await.ok();
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+
+    let found = lookup(&server.tool(&token, "where_is", json!({ "name": "Bo" })).await);
+    assert_eq!(found["name"], "Bo", "{found}");
+    assert_eq!(found["kind"], "person", "{found}");
+    assert_eq!(found["here"]["id"], floor, "{found}");
+    assert_eq!(found["go"], "go_out", "{found}");
+    assert_eq!(found["rule"], spaces::PRESENCE_RULE, "{found}");
+
+    let http = server.get(&token, "/api/presence?name=Bo").await.ok();
+    assert_eq!(http["here"]["id"], floor, "{http}");
+    assert_eq!(http["go"], "go_out", "{http}");
+    server.get(&ann.key, "/api/presence?name=Bo").await.refused(StatusCode::FORBIDDEN);
+    server.get(&token, "/api/presence").await.refused(StatusCode::BAD_REQUEST);
+
+    // Seeing them on a public floor is not joining it: go_to_room still needs belonging.
+    let refused = server.tool(&token, "go_to_room", json!({ "hangout_id": floor })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+}
+
+// S67
+#[tokio::test]
+async fn where_is_sees_someone_on_a_floor_both_sides_share() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let bo = server.join(&ann, &beach, "Bo").await;
+    server.snapshot(&bo.key, &beach).await.ok();
+    server.bot(&bo, &beach, "Ron").await;
+
+    let listed = server.tool(&token, "list_hangouts", json!({})).await;
+    let ids: Vec<&str> = listed["structuredContent"]["hangouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|room| room["id"].as_str().unwrap())
+        .collect();
+    assert!(!ids.contains(&beach.as_str()), "{listed}");
+
+    let person = lookup(&server.tool(&token, "where_is", json!({ "name": "bo" })).await);
+    assert_eq!(person["name"], "Bo", "{person}");
+    assert_eq!(person["kind"], "person", "{person}");
+    assert_eq!(person["here"]["id"], beach, "{person}");
+    assert_eq!(person["go"], "go_to_room", "{person}");
+
+    let bot = lookup(&server.tool(&token, "where_is", json!({ "name": "Ron" })).await);
+    assert_eq!(bot["kind"], "bot", "{bot}");
+    assert_eq!(bot["here"]["id"], beach, "{bot}");
+    assert_eq!(bot["go"], "go_to_room", "{bot}");
+}
+
+// S67
+#[tokio::test]
+async fn where_is_hides_someone_on_a_private_floor_you_dont_share() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let (floor, bo) = server.someone("Bo").await;
+    server.snapshot(&bo.key, &floor).await.ok();
+
+    let hidden = lookup(&server.tool(&token, "where_is", json!({ "name": "Bo" })).await);
+    assert_eq!(hidden, hidden_presence("Bo"), "{hidden}");
+    let nobody = lookup(&server.tool(&token, "where_is", json!({ "name": "Nobody" })).await);
+    assert_eq!(nobody, hidden_presence("Nobody"), "{nobody}");
+}
+
+// S67
+#[tokio::test]
+async fn where_is_hides_someone_who_has_not_got_the_floor_open() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    server.join(&ann, &beach, "Bo").await;
+
+    let hidden = lookup(&server.tool(&token, "where_is", json!({ "name": "Bo" })).await);
+    assert_eq!(hidden, hidden_presence("Bo"), "{hidden}");
+    let nobody = lookup(&server.tool(&token, "where_is", json!({ "name": "Nobody" })).await);
+    assert_eq!(nobody["note"], hidden["note"]);
+    assert!(nobody["here"].is_null() && hidden["here"].is_null());
+}
+
+// S67
+#[tokio::test]
+async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (fern, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let bo = server.join(&ann, &beach, "Bo").await;
+    server.snapshot(&bo.key, &beach).await.ok();
+
+    let found = lookup(&server.tool(&token, "where_is", json!({ "name": "Bo" })).await);
+    assert_eq!(found["here"]["id"], beach, "{found}");
+    assert_eq!(found["go"], "go_to_room", "{found}");
+
+    let went = server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    assert_eq!(went["structuredContent"]["hangout_id"], beach, "{went}");
+    assert_eq!(
+        rooms_it_is_in(&server, &ann, &[home.as_str(), beach.as_str()], &fern).await,
+        [beach.as_str()]
+    );
+}
+
 // S55
 #[tokio::test]
 async fn a_bot_thats_away_still_hears_from_the_room() {
