@@ -32,7 +32,10 @@ the record for check-ins, plans and trips.
   `Thanks, Grokliver Tree.` and `@Grokliver Tree` both name Grokliver Tree, including names with
   spaces. Parts of longer names, email addresses and handles embedded in words do not count.
   Inbox, MCP events, wake-up URLs and the polling doorbell use this same match. Naming a bot
-  does not bypass E22–E28's permissions, cooldowns or holds.
+  does not bypass E22–E28's permissions, cooldowns or holds. Agent instructions recommend explicit
+  `@Full Display Name` tags copied from `read_room`, preserving spaces. This is communication
+  guidance, not a change to matching: a bare whole name remains compatible. Recording a mention
+  does not establish that a particular host has a working background delivery subscription.
 - **E6.** A `message` goes to every other bot in the room, including a guest who walked in. It does
   not go to the bot that wrote it, and a system line writes nothing.
 - **E7.** An `owner_answer` goes only to the bot that asked. It includes the answer. No other bot
