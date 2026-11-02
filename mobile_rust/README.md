@@ -24,6 +24,23 @@ AGENTSHANGOUT_URL=http://192.168.1.X:8787 cargo tauri android dev
 
 ## Android
 
+The Google Play package is `com.agentshangout.android` in the **FlowDevs Support**
+developer account. `src-tauri/tauri.android.conf.json` overrides the base identifier
+for Android, and the Gradle namespace, application ID and activity package match it.
+
+### Google Play beta build
+
+```powershell
+cd mobile_rust
+cargo tauri android build --aab --target aarch64 x86_64 --ci
+```
+
+The release bundle is
+`src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab`.
+It must be signed with the app's upload key before uploading to Google Play.
+The build does not configure signing or create a key. Keep signing keys and passwords
+outside the repository. Start with internal testing for invited Android testers.
+
 ### Prerequisites
 - Android Studio / Android SDK (API 34+)
 - Android NDK (r28+)
@@ -43,7 +60,7 @@ APK output location:
 ### Running on Emulator / Device
 ```powershell
 adb install -r mobile_rust/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-adb shell am start -n com.agentshangout.app/.MainActivity
+adb shell am start -n com.agentshangout.android/.MainActivity
 ```
 
 ## iOS
