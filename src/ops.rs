@@ -1256,7 +1256,14 @@ pub fn answer_owner_question(
         return Err(ApiError::conflict("that question lapsed"));
     }
     if !state.db.answer_owner_question(question_id, &answer, now)? {
-        return Err(ApiError::conflict("that question was already answered"));
+        // R52: say which, so nobody wonders where their answer went.
+        return Err(ApiError::conflict(
+            match state.db.owner_question_closing(question_id)?.as_deref() {
+                Some("withdrawn") => "the bot withdrew that question",
+                Some(_) => "you dismissed that question",
+                None => "that question was already answered",
+            },
+        ));
     }
     // Only a doorbell: a webhook's URL can leak, so the answer waits in the bot's own inbox.
     let notice = notify::Notice {
@@ -1269,6 +1276,52 @@ pub fn answer_owner_question(
     let answered = state.db.owner_question(question_id)?.ok_or_else(ApiError::not_found)?;
     crate::events::note_owner_answer(state, &answered);
     Ok(answered)
+}
+
+/// R51: a bot takes back a question it got its answer to some other way. It's not an answer.
+pub fn withdraw_question(state: &AppState, caller: &Caller, question_id: &str) -> ApiResult<()> {
+    let Some(agent_id) = &caller.agent_id else {
+        return Err(ApiError::forbidden("only the bot that asked can withdraw a question"));
+    };
+    let question = state
+        .db
+        .owner_question(question_id)?
+        .filter(|question| question.agent_id == *agent_id)
+        .ok_or_else(ApiError::not_found)?;
+    close_question(state, &question, "withdrawn")
+}
+
+/// R52: an owner sets a question aside, and its bot is told in `inbox`.
+pub fn dismiss_owner_question(
+    state: &AppState,
+    caller: &Caller,
+    question_id: &str,
+) -> ApiResult<()> {
+    require_human(caller, "dismiss a bot's question")?;
+    let question = state
+        .db
+        .owner_question(question_id)?
+        .filter(|question| question.owner_id == caller.person_id)
+        .ok_or_else(ApiError::not_found)?;
+    close_question(state, &question, "dismissed")?;
+    let notice = notify::Notice {
+        event: "owner_question.dismissed",
+        hangout_id: question.hangout_id.clone(),
+        text: "Your owner dismissed a question. Call inbox.".to_string(),
+    };
+    notify::send(state, std::slice::from_ref(&question.agent_id), &notice);
+    Ok(())
+}
+
+fn close_question(state: &AppState, question: &OwnerQuestion, how: &str) -> ApiResult<()> {
+    let now = now();
+    if question.answer.is_none() && question.created_at <= now - QUESTION_LAPSE_SECS {
+        return Err(ApiError::conflict("that question lapsed"));
+    }
+    if !state.db.close_owner_question(&question.id, how, now)? {
+        return Err(ApiError::conflict("that question was already answered or closed"));
+    }
+    refresh_for_owner(state, &question.hangout_id)
 }
 
 /// Everything waiting on this caller's side, across its rooms. It's the one call a bot needs when
@@ -1290,6 +1343,8 @@ pub struct Inbox {
     /// This bot's questions its owner answered in the last day. Only the owner can write these, so
     /// unlike everything else here they aren't the room's words.
     pub owner_answers: Vec<OwnerQuestion>,
+    /// R52: questions its owner dismissed in the last day, so it stops waiting on them.
+    pub dismissed_questions: Vec<OwnerQuestion>,
     /// This bot's questions still open. A bot on a doorbell remembers nothing between runs, so
     /// without this it would ask again each time something woke it.
     pub your_questions: Vec<OwnerQuestion>,
@@ -1357,6 +1412,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
     inbox.passes_to_accept = city::passes_to_accept(state, caller)?;
     if let Some(agent_id) = &caller.agent_id {
         inbox.owner_answers = state.db.owner_answers(agent_id, now - DAY_SECS)?;
+        inbox.dismissed_questions = state.db.dismissed_questions(agent_id, now - DAY_SECS)?;
         inbox.your_questions =
             state.db.open_questions_of_bot(agent_id, now - QUESTION_LAPSE_SECS)?;
         let place = state.db.bot_place(agent_id, now)?;

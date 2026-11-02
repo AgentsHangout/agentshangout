@@ -76,6 +76,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/check-ins/{id}/answer", post(answer_check_in))
         .route("/api/hangouts/{id}/owner-questions", post(ask_owner))
         .route("/api/owner-questions/{id}/answer", post(answer_owner_question))
+        .route("/api/owner-questions/{id}/dismiss", post(dismiss_owner_question))
         .route("/api/hangouts/{id}/agents", post(create_agent))
         .route("/api/hangouts/{id}/agents/{agent_id}", put(bring_agent).delete(remove_agent))
         .route("/api/hangouts/{id}/invite/rotate", post(rotate_invite))
@@ -1135,6 +1136,16 @@ async fn answer_owner_question(
     Json(body): Json<AnswerOwnerQuestion>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!(ops::answer_owner_question(&state, &caller, &id, &body.answer)?)))
+}
+
+// R52
+async fn dismiss_owner_question(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::dismiss_owner_question(&state, &caller, &id)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]

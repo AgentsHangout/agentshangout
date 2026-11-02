@@ -6416,6 +6416,14 @@ function needsYouPanel(panels) {
       },
         h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Your answer', autocomplete: 'off', 'aria-label': `Answer ${question.bot}` }),
         h('button', { type: 'submit', class: 'primary' }, 'Answer')),
+      // R52: answered some other way, or it no longer matters. The bot is told, and stops waiting.
+      h('div', { class: 'event-actions' },
+        h('button', {
+          type: 'button',
+          class: 'link',
+          title: 'Already answered, or no longer matters. Your bot is told.',
+          onclick: act(error, done(() => api(`/api/owner-questions/${encodeURIComponent(question.id)}/dismiss`, { method: 'POST' }))),
+        }, 'Dismiss')),
       error);
   }
 

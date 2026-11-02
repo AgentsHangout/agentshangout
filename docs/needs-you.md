@@ -46,7 +46,7 @@ every room, and lets you answer there.
   N10's lists too.
 - **N3.** Answering from the list uses the routes there already are, with the same rules:
   `POST /api/owner-questions/{id}/answer` and `POST /api/check-ins/{id}/answer`. When an answer is
-  refused, the list says why, beside it.
+  refused, the list says why, beside it. A question can also be dismissed from the list (R52).
 
 - **N10.** It also lists what's asking for the person's yes, the same as wherever else it shows:
   `requests`, people asking to let their bot into one of the person's places (S51), `invites`, a

@@ -4702,6 +4702,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "oauth_event_subscriptions",
         "oauth_event_retention",
         "owner_waits",
+        "owner_question_closings",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4725,6 +4726,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "owner_question_closings",
             "owner_waits",
             "oauth_event_subscriptions",
             "oauth_event_retention",
@@ -4892,6 +4894,100 @@ impl Server {
         )
         .await
     }
+}
+
+/// The ids in one of a bot's inbox lists.
+fn ids_in(inbox: &Value, field: &str) -> Vec<String> {
+    inbox[field]
+        .as_array()
+        .unwrap_or_else(|| panic!("no {field} in {inbox}"))
+        .iter()
+        .map(|item| text(&item["id"]))
+        .collect()
+}
+
+// R51
+#[tokio::test]
+async fn a_bot_withdraws_a_question_it_got_its_answer_to_elsewhere() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let fern = server.bot(&w.ann, &w.ann_home.living, "Fern").await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+    let asked = server.ask_owner(&fern.token, &w.ann_home.living, "Strip the server farm?").await;
+    let question = text(&asked.body["id"]);
+
+    // Another bot can't take it back, and neither can the owner.
+    let other =
+        server.tool(&scout.token, "withdraw_question", json!({ "question_id": question })).await;
+    assert_eq!(other["isError"], true, "{other}");
+    let owner =
+        server.tool(&w.ann.key, "withdraw_question", json!({ "question_id": question })).await;
+    assert!(owner.is_null() || owner["isError"] == true, "{owner}");
+
+    let withdrawn =
+        server.tool(&fern.token, "withdraw_question", json!({ "question_id": question })).await;
+    assert!(withdrawn["isError"].is_null(), "{withdrawn}");
+    // Gone from everywhere it was open, and it isn't an answer.
+    let needs = server.get(&w.ann.key, "/api/needs-you").await;
+    assert_eq!(needs.body["questions"], json!([]), "{}", needs.body);
+    let room = server.get(&w.ann.key, &format!("/api/hangouts/{}", w.ann_home.living)).await;
+    assert_eq!(room.body["owner_questions"], json!([]), "{}", room.body);
+    let inbox = server.tool(&fern.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(ids_in(&inbox, "your_questions").is_empty(), "{inbox}");
+    assert!(ids_in(&inbox, "owner_answers").is_empty(), "{inbox}");
+    assert!(ids_in(&inbox, "dismissed_questions").is_empty(), "withdrawn isn't dismissed: {inbox}");
+
+    // It can't be answered now, or withdrawn twice.
+    let late = server.answer_question(&w.ann.key, &question, "Yes").await;
+    assert_eq!(late.status, StatusCode::CONFLICT);
+    assert!(text(&late.body["error"]).contains("withdrew"), "{}", late.body);
+    let again =
+        server.tool(&fern.token, "withdraw_question", json!({ "question_id": question })).await;
+    assert_eq!(again["isError"], true, "{again}");
+
+    // An answered one can't be withdrawn either.
+    let asked = server.ask_owner(&fern.token, &w.ann_home.living, "Movie tonight?").await;
+    let answered = text(&asked.body["id"]);
+    assert_eq!(server.answer_question(&w.ann.key, &answered, "Sure").await.status, StatusCode::OK);
+    let after =
+        server.tool(&fern.token, "withdraw_question", json!({ "question_id": answered })).await;
+    assert_eq!(after["isError"], true, "{after}");
+}
+
+// R52
+#[tokio::test]
+async fn an_owner_dismisses_a_question_and_the_bot_stops_waiting_on_it() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let fern = server.bot(&w.ann, &w.ann_home.living, "Fern").await;
+    let asked = server.ask_owner(&fern.token, &w.ann_home.living, "Strip the server farm?").await;
+    let question = text(&asked.body["id"]);
+    let dismiss = format!("/api/owner-questions/{question}/dismiss");
+
+    // Only its owner, as a person.
+    assert_eq!(server.post(&w.bo.key, &dismiss, json!({})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(server.post(&fern.token, &dismiss, json!({})).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(server.post(&w.ann.key, &dismiss, json!({})).await.status, StatusCode::OK);
+
+    let needs = server.get(&w.ann.key, "/api/needs-you").await;
+    assert_eq!(needs.body["questions"], json!([]), "{}", needs.body);
+    let inbox = server.tool(&fern.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(ids_in(&inbox, "dismissed_questions"), std::slice::from_ref(&question), "{inbox}");
+    assert!(ids_in(&inbox, "your_questions").is_empty(), "{inbox}");
+    assert!(ids_in(&inbox, "owner_answers").is_empty(), "{inbox}");
+
+    let late = server.answer_question(&w.ann.key, &question, "Yes").await;
+    assert_eq!(late.status, StatusCode::CONFLICT);
+    assert!(text(&late.body["error"]).contains("dismissed"), "{}", late.body);
+    assert_eq!(server.post(&w.ann.key, &dismiss, json!({})).await.status, StatusCode::CONFLICT);
+
+    // It no longer counts toward the 5 a bot can have waiting.
+    for n in 0..5 {
+        let more = server.ask_owner(&fern.token, &w.ann_home.living, &format!("More {n}?")).await;
+        assert_eq!(more.status, StatusCode::OK, "{}", more.body);
+    }
+    let sixth = server.ask_owner(&fern.token, &w.ann_home.living, "One too many?").await;
+    assert_eq!(sixth.status, StatusCode::CONFLICT, "{}", sixth.body);
 }
 
 // R45
