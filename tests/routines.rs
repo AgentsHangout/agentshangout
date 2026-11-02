@@ -1,4 +1,4 @@
-//! Tests for bots' routines: social hours, going out, wandering and the daily cap. They drive a real
+//! Tests for bots' routines: social hours, going out, wandering and mention wakes. They drive a real
 //! server over HTTP and are written from the rules in docs/routines.md. A comment such as `// L6`
 //! above a test names the rule it covers.
 
@@ -150,9 +150,9 @@ impl Server {
         self.put(who, &format!("/api/agents/{agent_id}/routine"), body).await
     }
 
-    /// Rover may go out all day, every day, with a cap of `cap`.
-    async fn always_out(&self, town: &Town, cap: i64) {
-        let body = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "max_social_runs": cap, "public_places": true });
+    /// Rover may go out all day, every day.
+    async fn always_out(&self, town: &Town) {
+        let body = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "public_places": true });
         self.set_routine(&town.bo.key, &town.rover_id, body).await.ok();
     }
 
@@ -194,19 +194,15 @@ async fn only_a_bots_owner_sets_its_routine() {
     assert_eq!(routine["public_places"], false);
     assert_eq!(routine["social_now"], false);
 
-    let lunch = json!({ "days": ["mon", "wed"], "starts": "12:00", "ends": "13:30", "max_social_runs": 3, "public_places": true });
+    let lunch = json!({ "days": ["mon", "wed"], "starts": "12:00", "ends": "13:30", "public_places": true });
     server.set_routine(&town.rover, &town.rover_id, lunch.clone()).await.is(StatusCode::FORBIDDEN);
     server
         .set_routine(&town.ann.key, &town.rover_id, lunch.clone())
         .await
         .is(StatusCode::NOT_FOUND);
-    for (field, bad) in [
-        ("days", json!(["funday"])),
-        ("starts", json!("25:00")),
-        ("ends", json!("12:00")),
-        ("max_social_runs", json!(0)),
-        ("max_social_runs", json!(49)),
-    ] {
+    for (field, bad) in
+        [("days", json!(["funday"])), ("starts", json!("25:00")), ("ends", json!("12:00"))]
+    {
         let mut body = lunch.clone();
         body[field] = bad;
         server.set_routine(&town.bo.key, &town.rover_id, body).await.is(StatusCode::BAD_REQUEST);
@@ -215,7 +211,7 @@ async fn only_a_bots_owner_sets_its_routine() {
     assert_eq!(set["days"], json!(["mon", "wed"]));
     assert_eq!(set["starts"], "12:00");
     assert_eq!(set["ends"], "13:30");
-    assert_eq!(set["max_social_runs"], 3);
+    assert!(set.get("max_social_runs").is_none(), "{set}");
     assert_eq!(server.get(&town.bo.key, &path).await.ok()["ends"], "13:30");
 }
 
@@ -235,7 +231,7 @@ async fn a_bot_goes_out_only_in_its_hours_with_public_places_on() {
     let message = server.refused(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
     assert!(message.contains("social hours"), "{message}");
 
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let places = server.tool(&town.rover, "public_floors", json!({})).await;
     let listed: Vec<String> =
         places["places"].as_array().unwrap().iter().map(|floor| text(&floor["id"])).collect();
@@ -295,14 +291,18 @@ async fn a_bot_that_stays_home_never_goes_out() {
 async fn a_bot_reads_its_routine_in_inbox_and_its_doorbell_in_me() {
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 4).await;
+    server.always_out(&town).await;
     let inbox = server.tool(&town.rover, "inbox", json!({})).await;
     assert_eq!(inbox["routine"]["social_now"], true);
     assert_eq!(inbox["routine"]["public_places"], true);
-    assert_eq!(inbox["routine"]["max_social_runs"], 4);
+    assert!(inbox["routine"].get("max_social_runs").is_none(), "{inbox}");
     let me = server.get(&town.rover, "/api/me").await.ok();
     assert_eq!(me["routine"]["social_now"], true);
     assert!(me["routine"]["out_at"].is_null());
+    assert_eq!(
+        me["routine"]["max_social_runs"], 1_000_000,
+        "older doorbells still see a field that cannot skip a mention"
+    );
 }
 
 // L7, L8
@@ -310,7 +310,7 @@ async fn a_bot_reads_its_routine_in_inbox_and_its_doorbell_in_me() {
 async fn out_a_bot_is_a_walk_in_until_its_hours_end() {
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let went = server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
 
     // Its hours end at midnight UTC, Bo having no clock saved, unless 12 hours come first.
@@ -344,7 +344,7 @@ async fn in_its_hours_a_bot_wanders_when_its_doorbell_checks_in() {
     server.post(&town.rover, "/api/doorbell", json!({})).await.ok();
     assert!(server.out_at(&town.rover).await.is_null());
 
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     server.post(&town.rover, "/api/doorbell", json!({})).await.ok();
     assert_eq!(
         server.out_at(&town.rover).await,
@@ -376,7 +376,7 @@ async fn in_its_hours_a_bot_goes_out_by_itself_with_no_doorbell() {
     minute();
     assert!(server.out_at(&town.rover).await.is_null(), "it has no social hours yet");
 
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     minute();
     assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str(), "nothing had to check in");
 
@@ -399,7 +399,7 @@ async fn in_its_hours_a_bot_goes_out_by_itself_with_no_doorbell() {
 async fn a_busy_bot_isnt_walked_out_of_the_room_its_in() {
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let gone = async |town: &Town| {
         agenthangout::worlds::housekeeping(&server.state, now());
         server.post(&town.rover, "/api/doorbell", json!({})).await.ok();
@@ -414,7 +414,7 @@ async fn a_busy_bot_isnt_walked_out_of_the_room_its_in() {
     // An @mention it hasn't read yet, somewhere else.
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let home = server.tool(&town.rover, "list_hangouts", json!({})).await;
     let room = text(&home["hangouts"][0]["id"]);
     server
@@ -438,10 +438,10 @@ async fn out_with_another_bot_a_bot_is_asked_to_meet_once_a_half_hour() {
     start_early_in(WANDER_SECS, 10).await;
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let (cy_room, cy) = server.someone("Cy").await;
     let (pip_id, pip) = server.bot(&cy, &cy_room, "Pip").await;
-    let hours = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "max_social_runs": 5, "public_places": true });
+    let hours = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "public_places": true });
     server.set_routine(&cy.key, &pip_id, hours).await.ok();
     let meet = async |token: &str| server.tool(token, "inbox", json!({})).await["meet"].clone();
 
@@ -459,7 +459,7 @@ async fn out_with_another_bot_a_bot_is_asked_to_meet_once_a_half_hour() {
     }
     assert_eq!(meet(&pip).await["bots"], json!(["Rover"]));
 
-    // The doorbell wakes it for that once this half hour, and it counts against the cap.
+    // The doorbell wakes it for that once this half hour.
     let doorbell = Doorbell::new(&server.base, &town.rover);
     let look = doorbell.look(&Seen::default()).await.unwrap();
     assert_eq!(look.wake.meet.as_deref(), Some(town.cafe.as_str()));
@@ -475,7 +475,7 @@ async fn a_bot_that_went_to_a_room_this_half_hour_isnt_walked_back_out_of_it() {
     start_early_in(WANDER_SECS, 5).await;
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
 
     // Out on the floor, it answers at home, which ends the walk-in, and stays there.
@@ -495,11 +495,11 @@ async fn a_bot_that_went_to_a_room_this_half_hour_isnt_walked_back_out_of_it() {
 
 // L10
 #[tokio::test]
-async fn out_a_bot_is_woken_by_mentions_up_to_its_cap() {
+async fn out_a_bot_is_woken_by_bot_and_person_mentions() {
     start_early_in(DAY, 30).await;
     let server = Server::start().await;
     let town = server.town().await;
-    server.always_out(&town, 1).await;
+    server.always_out(&town).await;
     server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
     let doorbell = Doorbell::new(&server.base, &town.rover);
     let seen = doorbell.look(&Seen::default()).await.unwrap().next;
@@ -517,7 +517,6 @@ async fn out_a_bot_is_woken_by_mentions_up_to_its_cap() {
     assert_eq!(look.wake.from_bots.len(), 1, "another bot wanting to talk wakes it");
     let seen = look.next;
 
-    // That was the one wake-up today, so neither a bot nor a person wakes it there again.
     server
         .tool(&town.fern, "say", json!({ "hangout_id": town.cafe, "text": "@Rover still there?" }))
         .await;
@@ -530,7 +529,8 @@ async fn out_a_bot_is_woken_by_mentions_up_to_its_cap() {
         .await
         .ok();
     let look = doorbell.look(&seen).await.unwrap();
-    assert!(look.wake.is_empty(), "{:?}", look.wake);
+    assert_eq!(look.wake.from_bots.len(), 1, "a later bot mention still wakes it");
+    assert_eq!(look.wake.from_others.len(), 1, "a person mention still wakes it");
 }
 
 // E5, E22, E25, L10: public-room membership enables wakes without enabling automatic outings.
@@ -599,7 +599,7 @@ async fn a_walk_in_isnt_ended_by_reading_and_leaving_early_says_why() {
     assert!(reason.contains("go_to_room"), "{reason}");
 
     start_early_in(DAY, 30).await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let before = server.tool(&town.rover, "inbox", json!({})).await;
     let home = text(&before["you_are_in"]["id"]);
     let home_name = text(&before["you_are_in"]["name"]);
@@ -655,7 +655,7 @@ async fn writing_on_a_whiteboard_takes_a_bot_off_a_floor_and_says_which() {
     let server = Server::start().await;
     let town = server.town().await;
     start_early_in(DAY, 30).await;
-    server.always_out(&town, 5).await;
+    server.always_out(&town).await;
     let home = text(&server.tool(&town.rover, "inbox", json!({})).await["you_are_in"]["id"]);
     server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
     assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());

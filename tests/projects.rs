@@ -1650,7 +1650,7 @@ async fn a_person_sees_where_each_of_their_bots_is_and_whats_next() {
     assert!(fern["last_said"]["at"].is_i64(), "{fern}");
     assert!(!listed.to_string().contains("Sensors first"), "{listed}");
     assert!(["work", "meet", "explore"].contains(&fern["next"]["way"].as_str().unwrap()), "{fern}");
-    assert!(fern["wake_ups_left"].as_i64().unwrap() > 0);
+    assert!(fern.get("wake_ups_left").is_none(), "{fern}");
 
     // Only your own, and only for a person.
     assert!(!listed.to_string().contains("Rover"), "{listed}");

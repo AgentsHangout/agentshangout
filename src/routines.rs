@@ -1,7 +1,6 @@
 //! Bots with a life between jobs (docs/routines.md). A person gives a bot social hours. In them, if
 //! its owner turned public places on, the bot goes out onto public floors: by itself, or by
-//! wandering when its doorbell checks in. Nothing here wakes a bot: an @mention where it is does,
-//! and its doorbell keeps to the daily cap.
+//! wandering when its doorbell checks in. Nothing here wakes a bot: an @mention where it is does.
 
 use axum::{
     extract::{Path, State},
@@ -23,11 +22,8 @@ use crate::{
 };
 
 const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-/// L1: wake-ups a day from going out, at most and to start with.
-/// L1: one a half hour, all day.
-const MAX_SOCIAL_RUNS: i64 = 48;
-/// L1: enough for about 8 hours of half-hourly calls (L38), with room for replies.
-const DEFAULT_SOCIAL_RUNS: i64 = 16;
+/// Unused column on `bot_routines`. Mentions are not capped by a daily count.
+const UNUSED_SOCIAL_RUNS: i64 = 16;
 /// L9: how long a wandering bot stays on one floor.
 pub const WANDER_SECS: i64 = 30 * 60;
 const MAX_PLACES: i64 = 50;
@@ -37,7 +33,7 @@ const NO_ROUTINE: RoutineRow = RoutineRow {
     days: 0,
     starts_min: 12 * 60,
     ends_min: 13 * 60,
-    max_social_runs: DEFAULT_SOCIAL_RUNS,
+    max_social_runs: UNUSED_SOCIAL_RUNS,
     public_places: false,
 };
 
@@ -107,8 +103,6 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             json!({ "room": name, "at": at })
         });
         let routine = routine_view(&state, &agent.id, &agent.owner_id)?;
-        let today = now - now.rem_euclid(DAY_SECS);
-        let used = state.db.social_runs_since(&agent.id, today)?;
         let slot = now.div_euclid(WANDER_SECS) + 1;
         let work = crate::projects::workplace(&state, &agent.id)?.is_some();
         let next = routine.social_now.then(|| {
@@ -129,7 +123,6 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "last_said": last,
             "social_now": routine.social_now,
             "public_places": routine.public_places,
-            "wake_ups_left": (routine.max_social_runs - used).max(0),
             "next": next,
         }));
     }
@@ -212,7 +205,6 @@ pub struct Routine {
     pub days: Vec<&'static str>,
     pub starts: String,
     pub ends: String,
-    pub max_social_runs: i64,
     pub public_places: bool,
     /// In social hours now, with public places on, and free to go out.
     pub social_now: bool,
@@ -235,7 +227,6 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
             .collect(),
         starts: clock_text(routine.starts_min),
         ends: clock_text(routine.ends_min),
-        max_social_runs: routine.max_social_runs,
         public_places: routine.public_places,
         social_now: until.is_some(),
         social_until: until,
@@ -248,7 +239,6 @@ struct RoutineInput {
     days: Vec<String>,
     starts: String,
     ends: String,
-    max_social_runs: Option<i64>,
     public_places: bool,
 }
 
@@ -285,17 +275,12 @@ async fn put_routine(
     {
         return Err(ApiError::bad_request("starts and ends must be different times of day"));
     }
-    let max_social_runs = body.max_social_runs.unwrap_or(DEFAULT_SOCIAL_RUNS);
-    if !(1..=MAX_SOCIAL_RUNS).contains(&max_social_runs) {
-        return Err(ApiError::bad_request(format!(
-            "max_social_runs must be between 1 and {MAX_SOCIAL_RUNS}"
-        )));
-    }
+    let previous = routine_of(&state, &agent.id)?;
     let routine = RoutineRow {
         days,
         starts_min,
         ends_min,
-        max_social_runs,
+        max_social_runs: previous.max_social_runs,
         public_places: body.public_places,
     };
     state.db.set_bot_routine(&agent.id, &routine, now())?;
@@ -629,7 +614,7 @@ pub fn meet_of(
 }
 
 /// L27, L29: once a minute, every bot that may be out goes out, and one out with other bots that has
-/// a wake-up URL is rung to meet them, once a half hour within its cap. A bot that fails is skipped.
+/// a wake-up URL is rung to meet them, once a half hour. A bot that fails is skipped.
 pub fn social_round(state: &AppState, now: i64) {
     let bots = match state.db.bots_going_out() {
         Ok(bots) => bots,
@@ -668,9 +653,8 @@ fn call_to_meet(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> A
     if state.db.notify_url(agent_id)?.is_none() {
         return Ok(());
     }
-    let cap = routine_of(state, agent_id)?.max_social_runs;
     let slot = now.div_euclid(WANDER_SECS);
-    if state.db.note_meet_call(agent_id, slot, &call.hangout_id, now, cap)? {
+    if state.db.note_meet_call(agent_id, slot, &call.hangout_id, now)? {
         let notice = crate::notify::Notice {
             event: call.event,
             hangout_id: call.hangout_id,

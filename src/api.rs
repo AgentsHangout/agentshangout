@@ -312,6 +312,13 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         } else {
             state.db.cities_for_person(&caller.person_id)?
         };
+        // Older doorbells required this field and used it as a daily cap. A large number keeps
+        // them from skipping mentions until they update.
+        let view = routines::routine_view(&state, agent_id, &caller.person_id)?;
+        let mut routine = json!(view);
+        if let Some(map) = routine.as_object_mut() {
+            map.insert("max_social_runs".into(), json!(1_000_000));
+        }
         return Ok(Json(json!({
             "kind": "agent",
             "agent_id": agent_id,
@@ -326,8 +333,8 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
             "cities": cities.iter().map(|c| json!({"id": c.id, "name": c.name})).collect::<Vec<_>>(),
             // The trip under way, or null. A house bot never has one.
             "trip": city::my_trip(&state, &caller)?,
-            // L5: its social hours, its cap, and where it is if it's out, for its doorbell.
-            "routine": routines::routine_view(&state, agent_id, &caller.person_id)?,
+            // L5: its social hours and where it is if it's out, for its doorbell.
+            "routine": routine,
             // H18: bots its owner marked, which its doorbell doesn't wake it for. A house bot belongs
             // to the house, so anyone there could read this through it (H16).
             "ignored_bots": if caller.is_house {

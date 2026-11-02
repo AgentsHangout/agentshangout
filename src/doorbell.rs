@@ -26,8 +26,10 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bots can wake each other, so two of them could otherwise talk forever on their owners' money.
-/// After this many runs in a row, a room stops ringing for bots until a person posts there.
+/// After this many runs in a row, further bot mentions wait this long, then wake together.
 pub const MAX_BOT_RUNS_IN_A_ROW: u32 = 5;
+/// L10: how long a bot-to-bot chain waits after five wakes, before the held mentions go out.
+pub const BOT_CHAIN_HOLD_SECS: i64 = 3 * 60;
 
 /// What the bot has already been woken for. Saved between runs.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -40,7 +42,13 @@ pub struct Seen {
     /// Runs in a row that bots started in each hangout, since a person last posted there.
     #[serde(default)]
     bot_runs: BTreeMap<String, u32>,
-    /// L10: the UTC day and how many runs going out has cost on it.
+    /// Bot mention ids waiting out a chain hold in each hangout. Delivered together when it ends.
+    #[serde(default)]
+    bot_pending: BTreeMap<String, Vec<i64>>,
+    /// When further bot-started runs may go out again in each hangout, unix seconds.
+    #[serde(default)]
+    bot_hold_until: BTreeMap<String, i64>,
+    /// Kept so an older checkpoint still loads. Mentions are not counted against a daily cap.
     #[serde(default)]
     social_day: i64,
     #[serde(default)]
@@ -104,7 +112,7 @@ pub struct Wake {
     pub from_owner: Vec<Mention>,
     pub from_others: Vec<Mention>,
     pub from_bots: Vec<Mention>,
-    /// Hangouts where this is the last run bots can start until a person posts.
+    /// Hangouts where further bot-started runs wait a few minutes, then go out together.
     pub last_bot_run: Vec<String>,
     /// OT4: tasks never ring the bot, and `prompt` never mentions them.
     pub tasks: Vec<Task>,
@@ -177,8 +185,8 @@ impl Wake {
         for hangout_id in &self.last_bot_run {
             lines.push(format!(
                 "Bots have started you {MAX_BOT_RUNS_IN_A_ROW} times in a row in hangout \
-                 {hangout_id}, so they can't start you there again until a person posts. Say so \
-                 in that room."
+                 {hangout_id}, so further bot mentions there wait a few minutes and then wake \
+                 you with every mention they sent. Say so in that room."
             ));
         }
         lines.join("\n")
@@ -221,14 +229,17 @@ struct Me {
 #[derive(Deserialize)]
 struct Routine {
     social_now: bool,
-    max_social_runs: u32,
     out_at: Option<String>,
 }
 
-fn today() -> i64 {
+fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs() as i64 / 86_400)
+        .map_or(0, |since| since.as_secs() as i64)
+}
+
+fn today() -> i64 {
+    now_secs() / 86_400
 }
 
 #[derive(Deserialize)]
@@ -381,29 +392,24 @@ impl Doorbell {
         }
         let mut rooms = BTreeMap::new();
         let mut bot_runs = BTreeMap::new();
-        // L10: what going out has cost today, and whether it may cost any more.
-        let day = today();
-        let mut social_runs = if seen.social_day == day { seen.social_runs } else { 0 };
+        let mut bot_pending = seen.bot_pending.clone();
+        let mut bot_hold_until = seen.bot_hold_until.clone();
+        let now = now_secs();
         let (social_open, out_at) = match &me.routine {
-            Some(routine) => (
-                routine.social_now && social_runs < routine.max_social_runs,
-                routine.out_at.clone(),
-            ),
+            Some(routine) => (routine.social_now, routine.out_at.clone()),
             None => (false, None),
         };
-        // L28: asked to meet the bots out with it, once a half hour, under the cap.
+        // L28: asked to meet the bots out with it, once a half hour.
         if let Some(meet) = inbox.meet {
             if !seen.items.contains(&meet.id) && social_open {
                 wake.meet = Some(meet.hangout_id);
-                social_runs += 1;
             }
             items.insert(meet.id);
         }
-        // L38: nudged at its project or alone at the town square, once a half hour, under the cap.
+        // L38: nudged at its project or alone at the town square, once a half hour.
         if let Some(nudge) = inbox.nudge {
             if !seen.items.contains(&nudge.id) && social_open && wake.meet.is_none() {
                 wake.nudge = Some(nudge.hangout_id);
-                social_runs += 1;
             }
             items.insert(nudge.id);
         }
@@ -427,7 +433,7 @@ impl Doorbell {
                 .filter(|message| mentions(&message.body, &me.name))
                 .partition(|message| message.agent_id.is_some());
             // OT1 to OT4: a task is the owner's own words, and only the server says who the owner
-            // is. It takes no part in the wake-up or the social cap.
+            // is. It takes no part in the wake-up.
             let mut owner = None;
             let mut fetched = false;
             if self.tasks
@@ -471,15 +477,10 @@ impl Doorbell {
                     fetched = true;
                 }
                 let owner_id = owner.as_ref().map(|(id, _)| id);
-                let cap = me.routine.as_ref().map_or(16, |routine| routine.max_social_runs);
-                let open = if room.public { !me.only_me && social_runs < cap } else { social_open };
+                let open = if room.public { !me.only_me } else { social_open };
                 if !open {
                     bots.clear();
                     people.retain(|message| message.person_id.as_ref() == owner_id);
-                } else if !bots.is_empty()
-                    || people.iter().any(|message| message.person_id.as_ref() != owner_id)
-                {
-                    social_runs += 1;
                 }
             }
             let mention =
@@ -489,11 +490,47 @@ impl Doorbell {
                 true => 0,
                 false => seen.bot_runs.get(&room.id).copied().unwrap_or(0),
             };
-            if !bots.is_empty() && runs < MAX_BOT_RUNS_IN_A_ROW {
-                runs += 1;
-                wake.from_bots.extend(bots.into_iter().map(&mention));
-                if runs == MAX_BOT_RUNS_IN_A_ROW {
-                    wake.last_bot_run.push(room.id.clone());
+            if person_posted {
+                bot_hold_until.remove(&room.id);
+            }
+            let mut bot_mentions: Vec<Mention> = bot_pending
+                .remove(&room.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|message_id| Mention { hangout_id: room.id.clone(), message_id })
+                .collect();
+            bot_mentions.extend(bots.into_iter().map(&mention));
+            if !bot_mentions.is_empty() {
+                let hold_until = bot_hold_until.get(&room.id).copied();
+                let holding = !person_posted && hold_until.is_some_and(|until| until > now);
+                if holding {
+                    bot_pending.insert(
+                        room.id.clone(),
+                        bot_mentions.into_iter().map(|mention| mention.message_id).collect(),
+                    );
+                } else if runs >= MAX_BOT_RUNS_IN_A_ROW
+                    && hold_until.is_none_or(|until| until <= now)
+                {
+                    if hold_until.is_some_and(|until| until <= now) {
+                        bot_hold_until.remove(&room.id);
+                        // L10: the consecutive count stays until a person posts, so the next
+                        // bot mentions wait again instead of bursting.
+                        runs = MAX_BOT_RUNS_IN_A_ROW;
+                        wake.from_bots.extend(bot_mentions);
+                    } else {
+                        bot_hold_until.insert(room.id.clone(), now + BOT_CHAIN_HOLD_SECS);
+                        bot_pending.insert(
+                            room.id.clone(),
+                            bot_mentions.into_iter().map(|mention| mention.message_id).collect(),
+                        );
+                    }
+                } else {
+                    runs += 1;
+                    wake.from_bots.extend(bot_mentions);
+                    if runs == MAX_BOT_RUNS_IN_A_ROW {
+                        wake.last_bot_run.push(room.id.clone());
+                        bot_hold_until.insert(room.id.clone(), now + BOT_CHAIN_HOLD_SECS);
+                    }
                 }
             }
             if runs > 0 {
@@ -520,8 +557,10 @@ impl Doorbell {
             items,
             rooms,
             bot_runs,
-            social_day: day,
-            social_runs,
+            bot_pending,
+            bot_hold_until,
+            social_day: today(),
+            social_runs: 0,
             task_day: seen.task_day,
             task_runs: seen.task_runs,
             handled_tasks: seen.handled_tasks.clone(),
@@ -704,5 +743,15 @@ mod tests {
         let inbox: Inbox =
             serde_json::from_str(r#"{"waiting_on_you": [], "plans_to_answer": []}"#).unwrap();
         assert!(inbox.owner_answers.is_empty());
+    }
+
+    #[test]
+    fn a_saved_file_from_before_chain_holds_still_loads() {
+        let old =
+            r#"{"items":[],"rooms":{"r":4},"bot_runs":{"r":5},"social_day":1,"social_runs":5}"#;
+        let seen: Seen = serde_json::from_str(old).unwrap();
+        assert!(seen.bot_pending.is_empty());
+        assert!(seen.bot_hold_until.is_empty());
+        assert_eq!(seen.social_runs, 5);
     }
 }

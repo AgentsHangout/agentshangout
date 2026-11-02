@@ -939,6 +939,17 @@ CREATE TABLE IF NOT EXISTS board_cards (
 CREATE INDEX IF NOT EXISTS board_cards_by_board ON board_cards (board_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS board_cards_one_issue
     ON board_cards (board_id, github_issue) WHERE github_issue IS NOT NULL;
+-- L10, E24: bot mentions waiting out a chain hold, then delivered together. Never dropped.
+CREATE TABLE IF NOT EXISTS held_mention_wakes (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL,
+    due_at      INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS held_mention_wakes_due ON held_mention_wakes (due_at);
+CREATE INDEX IF NOT EXISTS held_mention_wakes_room ON held_mention_wakes (hangout_id, agent_id);
 
 "#;
 
@@ -1515,7 +1526,7 @@ pub struct Relation {
     pub plans_together: i64,
 }
 
-/// L1, L2: when a bot may go out, how often it may be woken there, and whether it may go at all.
+/// L1, L2: when a bot may go out, and whether it may go at all. `max_social_runs` is unused.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoutineRow {
     /// Bits from Monday (1) to Sunday (64).
@@ -5721,30 +5732,108 @@ impl Db {
         )
     }
 
-    /// E24: records that this message rang this bot and returns whether it did. With a `cap`, it
-    /// only does while fewer than that many capped rings went out this UTC day.
+    /// E24: records that this message rang this bot and returns whether it did. `capped` marks a
+    /// bot-to-bot ring so a chain hold can count it (L10). Mentions are never refused for a daily count.
     pub fn note_wake_ring(
         &self,
         agent_id: &str,
         message_id: i64,
         now: i64,
-        cap: Option<i64>,
+        capped: bool,
     ) -> rusqlite::Result<bool> {
         const DAY_SECS: i64 = 24 * 60 * 60;
-        let today = now - now.rem_euclid(DAY_SECS);
         let conn = self.conn();
-        conn.execute("DELETE FROM wake_rings WHERE rung_at < ?", [today - DAY_SECS])?;
-        // L29: a call to meet comes out of the same cap.
+        conn.execute("DELETE FROM wake_rings WHERE rung_at < ?", [now - DAY_SECS])?;
         let rung = conn.execute(
             "INSERT OR IGNORE INTO wake_rings (message_id, agent_id, capped, rung_at)
-             SELECT ?1, ?2, ?3, ?4
-             WHERE ?5 IS NULL OR (SELECT COUNT(*) FROM wake_rings
-                                  WHERE agent_id = ?2 AND capped = 1 AND rung_at >= ?6)
-                               + (SELECT COUNT(*) FROM meet_calls
-                                  WHERE agent_id = ?2 AND rung_at >= ?6) < ?5",
-            params![message_id, agent_id, cap.is_some(), now, cap, today],
+             VALUES (?1, ?2, ?3, ?4)",
+            params![message_id, agent_id, capped, now],
         )?;
         Ok(rung > 0)
+    }
+
+    /// L10: bot-originated mention rings in this room since a person last posted there.
+    pub fn bot_mention_chain(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM wake_rings r
+             JOIN messages m ON m.id = r.message_id
+             WHERE r.agent_id = ?1 AND m.hangout_id = ?2 AND r.capped = 1
+               AND m.agent_id IS NOT NULL
+               AND m.id > IFNULL((
+                   SELECT MAX(id) FROM messages
+                   WHERE hangout_id = ?2 AND kind = 'chat' AND agent_id IS NULL
+               ), 0)",
+            params![agent_id, hangout_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// L10: remember a bot mention until the chain hold ends, then wake for it.
+    pub fn hold_mention_wake(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        message_id: i64,
+        due_at: i64,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO held_mention_wakes
+             (agent_id, hangout_id, message_id, due_at, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![agent_id, hangout_id, message_id, due_at, now],
+        )?;
+        Ok(())
+    }
+
+    fn group_held_mentions(rows: Vec<(String, String, i64)>) -> Vec<(String, String, Vec<i64>)> {
+        let mut groups: Vec<(String, String, Vec<i64>)> = Vec::new();
+        for (agent_id, hangout_id, message_id) in rows {
+            match groups.last_mut() {
+                Some((agent, hangout, ids)) if agent == &agent_id && hangout == &hangout_id => {
+                    ids.push(message_id);
+                }
+                _ => groups.push((agent_id, hangout_id, vec![message_id])),
+            }
+        }
+        groups
+    }
+
+    /// L10: held bot mentions whose wait is over.
+    pub fn held_mentions_due(&self, now: i64) -> rusqlite::Result<Vec<(String, String, Vec<i64>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, hangout_id, message_id FROM held_mention_wakes
+             WHERE due_at <= ? ORDER BY agent_id, hangout_id, message_id",
+        )?;
+        let rows = stmt
+            .query_map([now], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(Self::group_held_mentions(rows))
+    }
+
+    /// L10: held bot mentions in this room, so a person's chat can deliver them now.
+    pub fn held_mentions_in(
+        &self,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Vec<(String, String, Vec<i64>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, hangout_id, message_id FROM held_mention_wakes
+             WHERE hangout_id = ? ORDER BY agent_id, message_id",
+        )?;
+        let rows = stmt
+            .query_map([hangout_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(Self::group_held_mentions(rows))
+    }
+
+    pub fn take_held_mentions(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM held_mention_wakes WHERE agent_id = ? AND hangout_id = ?",
+            params![agent_id, hangout_id],
+        )?;
+        Ok(())
     }
 
     /// E31: whether this room accepted a non-owner person's wake after `since`.
@@ -5857,27 +5946,21 @@ impl Db {
         rows.collect()
     }
 
-    /// L29: records a call to meet for this half hour and returns whether it's new and fits in the
-    /// day's cap, which E24's capped rings share.
+    /// L29: records a call to meet for this half hour and returns whether it's new.
     pub fn note_meet_call(
         &self,
         agent_id: &str,
         slot: i64,
         hangout_id: &str,
         now: i64,
-        cap: i64,
     ) -> rusqlite::Result<bool> {
         const DAY_SECS: i64 = 24 * 60 * 60;
-        let today = now - now.rem_euclid(DAY_SECS);
         let conn = self.conn();
-        conn.execute("DELETE FROM meet_calls WHERE rung_at < ?", [today - DAY_SECS])?;
+        conn.execute("DELETE FROM meet_calls WHERE rung_at < ?", [now - DAY_SECS])?;
         let rung = conn.execute(
             "INSERT OR IGNORE INTO meet_calls (agent_id, slot, hangout_id, rung_at)
-             SELECT ?1, ?2, ?3, ?4
-             WHERE (SELECT COUNT(*) FROM wake_rings
-                    WHERE agent_id = ?1 AND capped = 1 AND rung_at >= ?5)
-                 + (SELECT COUNT(*) FROM meet_calls WHERE agent_id = ?1 AND rung_at >= ?5) < ?6",
-            params![agent_id, slot, hangout_id, now, today, cap],
+             VALUES (?1, ?2, ?3, ?4)",
+            params![agent_id, slot, hangout_id, now],
         )?;
         Ok(rung > 0)
     }
@@ -5892,16 +5975,6 @@ impl Db {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-    }
-
-    /// L44: social wake-ups a bot has had since `since`, as the cap counts them (L10, L38).
-    pub fn social_runs_since(&self, agent_id: &str, since: i64) -> rusqlite::Result<i64> {
-        self.conn().query_row(
-            "SELECT (SELECT COUNT(*) FROM wake_rings WHERE agent_id = ?1 AND capped = 1 AND rung_at >= ?2)
-                  + (SELECT COUNT(*) FROM meet_calls WHERE agent_id = ?1 AND rung_at >= ?2)",
-            params![agent_id, since],
-            |row| row.get(0),
-        )
     }
 
     /// L31: whether a bot is working on a reply in any room right now (I58).

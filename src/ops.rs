@@ -286,6 +286,10 @@ pub fn post_message(
         state.db.note_bot_wake_owner_chat(message.id)?;
     }
     note_mentions(state, &message)?;
+    // L10: a person's chat resets a bot-to-bot chain and delivers held mentions now.
+    if caller.agent_id.is_none() && message.kind == "chat" {
+        flush_held_mentions_in(state, hangout_id, message.created_at)?;
+    }
     // I62: a chat line in this room clears thinking here. A note doesn't.
     if kind == "chat" {
         if let Some(agent_id) = caller.agent_id.as_deref() {
@@ -300,8 +304,13 @@ pub fn post_message(
 
 /// What a mention does to a wake-up URL. `person` is a human who is not the bot's owner.
 enum MentionRing {
-    Send { once: bool, person: bool },
+    Send {
+        once: bool,
+        person: bool,
+    },
     Skip(&'static str),
+    /// L10: a bot-to-bot chain is waiting; this mention goes out when the hold ends.
+    Hold,
 }
 
 /// B8: an @mention of a bot that's in this room, kept until that bot reads the room. E22 and E31:
@@ -348,6 +357,22 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
                     {
                         // Diagnostics must not fail stored chat or prevent later mentions.
                         tracing::warn!("a skipped wake decision could not be saved");
+                    }
+                }
+                MentionRing::Hold => {
+                    if state
+                        .db
+                        .note_wake_decision(
+                            &bot.id,
+                            Some(&message.hangout_id),
+                            Some(message.id),
+                            "held",
+                            "chain",
+                            message.created_at,
+                        )
+                        .is_err()
+                    {
+                        tracing::warn!("a held wake decision could not be saved");
                     }
                 }
                 MentionRing::Send { once, person } => {
@@ -434,8 +459,8 @@ fn record_mention_delivery(
 }
 
 /// E22, E24, E25, E31: who this mention rings, and why it doesn't. `belongs` is whether the bot
-/// belongs in this room. A capped ring is recorded here, because the cap is decided as it's counted.
-/// A non-owner person's ring is not: it counts only once the receiver accepts it.
+/// belongs in this room. Bot rings are recorded here so a chain hold can count them. A non-owner
+/// person's ring is not: it counts only once the receiver accepts it.
 fn rings_for_mention(
     state: &AppState,
     message: &Message,
@@ -466,7 +491,7 @@ fn rings_for_mention(
     if !owner && state.db.wakes_only_for_owner(&bot.id)? {
         return Ok(MentionRing::Skip("only_me"));
     }
-    // E31: anyone who could post here. Not the daily cap, and not social hours. One try.
+    // E31: anyone who could post here. Not social hours. One try.
     if !from_bot && !owner {
         if state.db.person_wake_recent(&bot.id, room, at - MENTION_RING_SECS)? {
             return Ok(MentionRing::Skip("cooldown"));
@@ -478,20 +503,107 @@ fn rings_for_mention(
     }
     // A bot on a trip isn't out, so its hosts can wake it the way the doorbell does (L10).
     let out = !belongs && state.db.bot_visits(&bot.id, at)?.contains(room);
-    let cap = if owner || (!public && !from_bot && !out && state.db.is_member(room, speaker)?) {
-        None
-    } else {
-        let routine = crate::routines::routine_view(state, &bot.id, &bot.owner_id)?;
-        if !public && !routine.social_now {
-            return Ok(MentionRing::Skip("social_hours"));
+    let social = !(owner || (!public && !from_bot && !out && state.db.is_member(room, speaker)?));
+    if social {
+        if !public {
+            let routine = crate::routines::routine_view(state, &bot.id, &bot.owner_id)?;
+            if !routine.social_now {
+                return Ok(MentionRing::Skip("social_hours"));
+            }
         }
-        Some(routine.max_social_runs)
-    };
-    if state.db.note_wake_ring(&bot.id, message.id, at, cap)? {
-        Ok(MentionRing::Send { once: false, person: false })
-    } else {
-        Ok(MentionRing::Skip("cap"))
+        if from_bot
+            && state.db.bot_mention_chain(&bot.id, room)?
+                >= i64::from(crate::doorbell::MAX_BOT_RUNS_IN_A_ROW)
+        {
+            match state.db.hold_mention_wake(
+                &bot.id,
+                room,
+                message.id,
+                at + crate::doorbell::BOT_CHAIN_HOLD_SECS,
+                at,
+            ) {
+                Ok(()) => return Ok(MentionRing::Hold),
+                // Holding is loop protection, not a reason to drop the mention or fail chat.
+                Err(_) => tracing::warn!("a mention could not be held; sending it now"),
+            }
+        }
     }
+    state.db.note_wake_ring(&bot.id, message.id, at, from_bot)?;
+    Ok(MentionRing::Send { once: false, person: false })
+}
+
+/// L10: send every held bot mention that is due, as one wake per bot and room.
+pub fn flush_held_mentions(state: &AppState, now: i64) {
+    let groups = match state.db.held_mentions_due(now) {
+        Ok(groups) => groups,
+        Err(error) => {
+            tracing::error!(%error, "held mention wakes could not be listed");
+            return;
+        }
+    };
+    for (agent_id, hangout_id, message_ids) in groups {
+        if let Err(error) = deliver_held_mentions(state, &agent_id, &hangout_id, &message_ids, now)
+        {
+            tracing::warn!(status = %error.status, "a held mention wake could not go out");
+        }
+    }
+}
+
+fn flush_held_mentions_in(state: &AppState, hangout_id: &str, now: i64) -> ApiResult<()> {
+    for (agent_id, hangout_id, message_ids) in state.db.held_mentions_in(hangout_id)? {
+        deliver_held_mentions(state, &agent_id, &hangout_id, &message_ids, now)?;
+    }
+    Ok(())
+}
+
+fn deliver_held_mentions(
+    state: &AppState,
+    agent_id: &str,
+    hangout_id: &str,
+    message_ids: &[i64],
+    now: i64,
+) -> ApiResult<()> {
+    let Some(&latest) = message_ids.last() else {
+        return Ok(());
+    };
+    if state.db.notify_url(agent_id)?.is_none() {
+        state.db.take_held_mentions(agent_id, hangout_id)?;
+        if state
+            .db
+            .note_wake_decision(agent_id, Some(hangout_id), Some(latest), "skipped", "no_url", now)
+            .is_err()
+        {
+            tracing::warn!("a skipped held wake decision could not be saved");
+        }
+        return Ok(());
+    }
+    if state.db.doorbell_paused(agent_id)? {
+        return Ok(());
+    }
+    if state.db.wakes_only_for_owner(agent_id)? {
+        state.db.take_held_mentions(agent_id, hangout_id)?;
+        if state
+            .db
+            .note_wake_decision(agent_id, Some(hangout_id), Some(latest), "skipped", "only_me", now)
+            .is_err()
+        {
+            tracing::warn!("a skipped held wake decision could not be saved");
+        }
+        return Ok(());
+    }
+    state.db.take_held_mentions(agent_id, hangout_id)?;
+    let _ = state.db.note_wake_ring(agent_id, latest, now, true)?;
+    let notice = notify::Notice {
+        event: "mention",
+        hangout_id: hangout_id.to_string(),
+        text: "Someone mentioned you. Call inbox. To reply in a room, call say.".to_string(),
+    };
+    let send_id = agent_id.to_string();
+    let hangout_id = hangout_id.to_string();
+    notify::send_result(state, agent_id, &notice, false, move |state, posted| {
+        record_mention_delivery(state, &send_id, latest, &hangout_id, false, &posted);
+    });
+    Ok(())
 }
 
 /// L39: whether this room is a project's and the bot that wrote this line is in it too.
@@ -1496,6 +1608,11 @@ fn decision_says(decision: &str, reason: &str, room: Option<&str>) -> String {
         }
         ("skipped", "cap") => {
             format!("Skipped a mention in {room}: today's social wake-up cap is used up.")
+        }
+        ("held", _) => {
+            format!(
+                "Holding a mention in {room}: other bots have woken it several times in a row, so this one waits a few minutes and then goes out."
+            )
         }
         ("skipped", "social_hours") => {
             format!("Skipped a mention in {room}: it is outside social hours.")

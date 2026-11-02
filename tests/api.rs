@@ -379,21 +379,53 @@ async fn bots_can_wake_a_bot_until_a_person_needs_to_step_in() {
             }],
         );
         let last = run == MAX_BOT_RUNS_IN_A_ROW;
-        assert_eq!(rung.wake.prompt().contains("until a person posts"), last, "run {run}");
+        assert_eq!(rung.wake.prompt().contains("wait a few minutes"), last, "run {run}");
         seen = rung.next;
     }
 
-    // Past the limit it stops, and what it skipped isn't saved up for later.
-    nudge().await;
+    // Past the limit it holds the mentions instead of dropping them.
+    let first_held = nudge().await;
+    let second_held = nudge().await;
     let stopped = doorbell.look(&seen).await.unwrap();
     assert!(stopped.wake.is_empty(), "{:?}", stopped.wake);
-    seen = stopped.next;
+    let pending = serde_json::to_value(&stopped.next).unwrap();
+    assert_eq!(pending["bot_pending"][&room.id].as_array().unwrap().len(), 2, "{pending}");
 
-    // A person posting anything starts the count again.
+    // When the hold is over, one wake includes every held mention.
+    let mut expired = pending;
+    expired["bot_hold_until"][&room.id] = json!(0);
+    let mut seen: Seen = serde_json::from_value(expired).unwrap();
+    let delivered = doorbell.look(&seen).await.unwrap();
+    assert_eq!(
+        delivered.wake.from_bots.iter().map(|mention| mention.message_id).collect::<Vec<_>>(),
+        vec![first_held.body["id"].as_i64().unwrap(), second_held.body["id"].as_i64().unwrap(),],
+        "{:?}",
+        delivered.wake
+    );
+    seen = delivered.next;
+
+    // Until a person posts, further bot mentions wait again instead of bursting.
+    let third_held = nudge().await;
+    let waiting = doorbell.look(&seen).await.unwrap();
+    assert!(waiting.wake.is_empty(), "{:?}", waiting.wake);
+    let waiting_pending = serde_json::to_value(&waiting.next).unwrap();
+    assert_eq!(
+        waiting_pending["bot_pending"][&room.id],
+        json!([third_held.body["id"].as_i64().unwrap()]),
+        "{waiting_pending}"
+    );
+    seen = waiting.next;
+
+    // A person posting anything starts the count again and delivers held mentions now.
     server.post(&room.kevin, &messages, json!({ "text": "What are you two up to?" })).await;
-    let quiet = doorbell.look(&seen).await.unwrap();
-    assert!(quiet.wake.is_empty(), "{:?}", quiet.wake);
-    seen = quiet.next;
+    let flushed = doorbell.look(&seen).await.unwrap();
+    assert_eq!(
+        flushed.wake.from_bots.iter().map(|mention| mention.message_id).collect::<Vec<_>>(),
+        vec![third_held.body["id"].as_i64().unwrap()],
+        "{:?}",
+        flushed.wake
+    );
+    seen = flushed.next;
     let said = nudge().await;
     let rung = doorbell.look(&seen).await.unwrap();
     assert_eq!(rung.wake.from_bots.len(), 1);
