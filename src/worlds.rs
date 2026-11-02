@@ -2181,9 +2181,22 @@ pub fn parse_viewer_origins(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// W100: a public Commons tile the 3D viewer may pin. Town Square and houses are never shown.
+/// W100: kinds that are a known public Commons place. A bot is pinned only when its tile is one of
+/// these; anything else, including a kind added later, stays off the list until it is named here.
+const PUBLIC_COMMONS_PLACE_KINDS: [Kind; 9] = [
+    Kind::Cafe,
+    Kind::Club,
+    Kind::Studio,
+    Kind::Green,
+    Kind::Lounge,
+    Kind::Bar,
+    Kind::Office,
+    Kind::Workshop,
+    Kind::Library,
+];
+
 fn public_commons_tile(kind: Kind) -> bool {
-    kind.is_building() && !matches!(kind, Kind::Square | Kind::House)
+    PUBLIC_COMMONS_PLACE_KINDS.contains(&kind)
 }
 
 #[derive(Serialize)]
@@ -3019,11 +3032,22 @@ mod tests {
 
     // W100
     #[test]
-    fn public_commons_pins_skip_square_and_house_and_the_cache_header_matches_the_seconds() {
-        assert!(public_commons_tile(Kind::Cafe) && public_commons_tile(Kind::Green));
-        assert!(public_commons_tile(Kind::Studio) && public_commons_tile(Kind::Library));
-        assert!(!public_commons_tile(Kind::Square) && !public_commons_tile(Kind::House));
-        assert!(!public_commons_tile(Kind::Road) && !public_commons_tile(Kind::Cleared));
+    fn public_commons_pins_are_an_allow_list_of_known_places() {
+        for kind in PUBLIC_COMMONS_PLACE_KINDS {
+            assert!(public_commons_tile(kind), "{kind:?}");
+        }
+        for kind in [
+            Kind::Road,
+            Kind::Homes,
+            Kind::Shops,
+            Kind::Workshops,
+            Kind::Park,
+            Kind::Cleared,
+            Kind::House,
+            Kind::Square,
+        ] {
+            assert!(!public_commons_tile(kind), "{kind:?} is not a known public Commons place");
+        }
         assert_eq!(format!("public, max-age={COMMONS_BOTS_CACHE_SECS}"), "public, max-age=20");
         let mut pins: Vec<CommonsBotPin> = (0..COMMONS_BOTS_MAX + 5)
             .map(|i| CommonsBotPin { name: format!("n{i:03}"), tile: [0, i as u16] })
