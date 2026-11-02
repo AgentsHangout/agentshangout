@@ -1123,6 +1123,24 @@ CREATE TABLE IF NOT EXISTS owner_question_closings (
     closed_at   INTEGER NOT NULL
 );
 
+-- N12: a message that @mentioned a person, until they open the room or clear it.
+CREATE TABLE IF NOT EXISTS person_mentions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL,
+    UNIQUE (person_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS person_mentions_by_person ON person_mentions (person_id, hangout_id);
+
+-- N13: actual answer time, without changing the original check_ins table.
+CREATE TABLE IF NOT EXISTS check_in_answers (
+    check_in_id TEXT PRIMARY KEY REFERENCES check_ins(id) ON DELETE CASCADE,
+    answered_at INTEGER NOT NULL
+);
+
+
 
 -- RL1-RL4: public research projects; only repository names, never credentials.
 CREATE TABLE IF NOT EXISTS research_labs (
@@ -1829,6 +1847,17 @@ pub struct OwnerQuestion {
     pub answer: Option<String>,
     pub created_at: i64,
     pub answered_at: Option<i64>,
+}
+
+/// N12: a message that mentioned a person, as Needs you lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PersonMention {
+    pub id: i64,
+    pub hangout_id: String,
+    pub room: String,
+    pub by: String,
+    pub text: String,
+    pub at: i64,
 }
 
 /// N5: one of a person's bots saying it's waiting for them somewhere else.
@@ -4652,6 +4681,35 @@ impl Db {
         rows.collect()
     }
 
+    /// N13: retain handling time independently from when the question was asked.
+    pub fn handled_check_ins(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        since: i64,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(CheckIn, Option<i64>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {CHECK_IN_COLS}, CASE
+                WHEN status = 'waiting' AND expires_at <= ?3 THEN expires_at
+                ELSE (SELECT answered_at FROM check_in_answers WHERE check_in_id = check_ins.id)
+             END AS handled_at
+             FROM check_ins
+             WHERE hangout_id = ?1 AND (
+                 handled_at >= ?2
+                 OR (status = 'waiting' AND expires_at > ?3 AND asked_by = ?4)
+                 OR (status != 'waiting' AND answered_by_bot = 1 AND asked_by != ?4
+                     AND (to_person IS NULL OR to_person = ?4))
+                 OR (status != 'waiting' AND handled_at IS NULL AND created_at >= ?2))
+             ORDER BY COALESCE(handled_at, created_at) DESC, id LIMIT 50"
+        ))?;
+        let rows = stmt.query_map(params![hangout_id, since, now, person_id], |row| {
+            Ok((check_in_from_row(row, now)?, row.get(14)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn answer_check_in(
         &self,
         id: &str,
@@ -4659,12 +4717,20 @@ impl Db {
         answered_by: &str,
         by_bot: bool,
         note: &str,
+        now: i64,
     ) -> rusqlite::Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE check_ins SET status = ?, answered_by = ?, answered_by_bot = ?, note = ? WHERE id = ?",
             params![status, answered_by, by_bot, note, id],
         )?;
-        Ok(())
+        tx.execute(
+            "INSERT INTO check_in_answers (check_in_id, answered_at) VALUES (?1, ?2)
+             ON CONFLICT(check_in_id) DO UPDATE SET answered_at = excluded.answered_at",
+            params![id, now],
+        )?;
+        tx.commit()
     }
 
     // Questions for a bot's owner. `open_since` is the oldest a question can be and still be open.
@@ -4851,6 +4917,104 @@ impl Db {
         ))?;
         let rows = stmt.query_map(params![agent_id, since], owner_question_from_row)?;
         rows.collect()
+    }
+
+    /// N13: this owner's questions answered or closed since then, newest first, each with its
+    /// room's name and how it was closed, if it was.
+    pub fn handled_owner_questions(
+        &self,
+        owner_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Vec<(OwnerQuestion, String, Option<String>)>> {
+        let conn = self.conn();
+        let cols = OWNER_QUESTION_COLS
+            .split(", ")
+            .map(|col| format!("q.{col}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {cols}, (SELECT name FROM hangouts WHERE id = q.hangout_id), c.how
+             FROM owner_questions q
+             LEFT JOIN owner_question_closings c ON c.question_id = q.id
+             WHERE q.owner_id = ?1 AND (q.answered_at >= ?2 OR c.closed_at >= ?2)
+             ORDER BY COALESCE(q.answered_at, c.closed_at) DESC, q.rowid DESC"
+        ))?;
+        let rows = stmt.query_map(params![owner_id, since], |row| {
+            Ok((
+                owner_question_from_row(row)?,
+                row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                row.get(10)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// N12: remembers that this message mentioned this person.
+    pub fn add_person_mention(
+        &self,
+        person_id: &str,
+        hangout_id: &str,
+        message_id: i64,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO person_mentions (person_id, hangout_id, message_id, at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![person_id, hangout_id, message_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// N12: the mentions waiting for this person since then, newest first: the mention's id, the
+    /// room's id and name, who said it, what they said and when.
+    pub fn person_mentions(
+        &self,
+        person_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Vec<PersonMention>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT pm.id, pm.hangout_id, h.name, m.speaker, m.body, pm.at
+             FROM person_mentions pm
+             JOIN messages m ON m.id = pm.message_id
+             JOIN hangouts h ON h.id = pm.hangout_id
+             JOIN members mb ON mb.hangout_id = pm.hangout_id AND mb.person_id = pm.person_id
+             WHERE pm.person_id = ?1 AND pm.at > ?2
+             ORDER BY pm.at DESC, pm.id DESC LIMIT 50",
+        )?;
+        let rows = stmt.query_map(params![person_id, since], |row| {
+            Ok(PersonMention {
+                id: row.get(0)?,
+                hangout_id: row.get(1)?,
+                room: row.get(2)?,
+                by: row.get(3)?,
+                text: row.get(4)?,
+                at: row.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// N12: opening a room clears its mentions of this person.
+    pub fn clear_person_mentions_in(
+        &self,
+        person_id: &str,
+        hangout_id: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM person_mentions WHERE person_id = ? AND hangout_id = ?",
+            params![person_id, hangout_id],
+        )?;
+        Ok(())
+    }
+
+    /// N12: clears one mention, if it's this person's. False when it isn't there.
+    pub fn delete_person_mention(&self, id: i64, person_id: &str) -> rusqlite::Result<bool> {
+        let gone = self.conn().execute(
+            "DELETE FROM person_mentions WHERE id = ? AND person_id = ?",
+            params![id, person_id],
+        )?;
+        Ok(gone == 1)
     }
 
     /// R51, R52: closes an open question without an answer. False when it was already answered or
