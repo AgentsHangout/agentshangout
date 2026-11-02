@@ -14,7 +14,23 @@ const SERVER: &str = match option_env!("AGENTSHANGOUT_URL") {
 /// Keeps the touch layout on in the phone app, including when the WebView reports a fine pointer
 /// or the phone is turned sideways and comes out wider than a narrow window.
 #[cfg(mobile)]
-const MARK_PHONE: &str = r#"(function(){function mark(){var root=document.querySelector('.wd-game');if(root)root.classList.add('apple-hig');document.documentElement.classList.add('in-app');}mark();document.addEventListener('DOMContentLoaded',function(){mark();if(!document.body)return;new MutationObserver(mark).observe(document.body,{childList:true,subtree:true});});window.addEventListener('orientationchange',mark);})();"#;
+const MARK_PHONE: &str = r#"(function(){
+  function mark() {
+    document.documentElement?.classList.add('in-app');
+    document.querySelectorAll('.wd-game').forEach(root => root.classList.add('apple-hig'));
+    // The server's style-src 'self' blocks injected style elements. CSSOM property
+    // changes from this trusted native script work without loosening that policy.
+    document.querySelectorAll('.apple-fab-hud').forEach(hud => hud.style.setProperty('display', 'none', 'important'));
+  }
+  function watch() {
+    mark();
+    if (document.body) new MutationObserver(mark).observe(document.body, {childList:true, subtree:true});
+  }
+  mark();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch, {once:true});
+  else watch();
+  window.addEventListener('orientationchange', mark);
+})();"#;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
