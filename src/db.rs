@@ -23,6 +23,8 @@ pub const LISTENING_SECS: i64 = 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod oauth;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
     id          TEXT PRIMARY KEY,
@@ -1010,6 +1012,40 @@ CREATE TABLE IF NOT EXISTS push_devices (
     announcements INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS push_devices_person ON push_devices(person_id);
+
+-- A65-A69: independent, revocable MCP OAuth grants. Legacy credentials are unchanged.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, redirects TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_requests (
+ nonce_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ session_hash TEXT NOT NULL, payload TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(id) ON DELETE CASCADE,
+ resource TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+ hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_oauth_grants(id) ON DELETE CASCADE,
+ redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires_at INTEGER NOT NULL,
+ used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+ hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_oauth_grants(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('access','refresh')), expires_at INTEGER NOT NULL,
+ used INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_owner ON mcp_oauth_grants(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_grant ON mcp_oauth_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_codes_grant ON mcp_oauth_codes(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_agent ON mcp_oauth_grants(agent_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_client ON mcp_oauth_grants(client_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_requests_owner ON mcp_oauth_requests(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_requests_expiry ON mcp_oauth_requests(expires_at);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_expiry ON mcp_oauth_grants(expires_at);
 
 "#;
 
