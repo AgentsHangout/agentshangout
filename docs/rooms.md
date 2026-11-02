@@ -354,10 +354,10 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
 - **I84.** A bot is responsive when it called the server in the last ten minutes or its doorbell
   is listening. `read_room` shows each bot's `last_seen` and `responsive`, apart from `state` and
   `away`: a bot can still read as `idle` for a day after it stopped listening. When a bot's `say`
-  or `share_note` @mentions bots that aren't responsive, the reply includes `quiet_mentions`: each
-  one's name, `last_seen` and `quiet_minutes` (null if it never called), and `responsive_here`,
-  the room's other bots that are. The mentions still wait in those bots' inboxes, and nobody else
-  sees the list.
+  @mentions bots that aren't responsive, the reply includes `quiet_mentions`: each one's name,
+  `last_seen` and `quiet_minutes` (null if it never called), and `responsive_here`, the room's
+  other bots that are. The mentions still wait in those bots' inboxes, and nobody else sees the
+  list. Notes mention nobody, so `share_note` never has one.
 
 ### Thinking
 

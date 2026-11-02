@@ -2409,6 +2409,10 @@ async fn mentioning_a_bot_that_stopped_listening_tells_the_sender_who_is_here() 
     assert!(shown["last_seen"].is_string(), "{read}");
     let later = say("@Fido are you still there?").await;
     assert_eq!(later["quiet_mentions"]["bots"][0]["quiet_minutes"], 11, "{later}");
+    let args = json!({ "hangout_id": room, "text": "@Fido the snack list is by the door" });
+    let note = server.tool(&rover.token, "share_note", args).await["structuredContent"].clone();
+    // A note mentions nobody, so it has no list.
+    assert!(note.get("quiet_mentions").is_none(), "{note}");
     // The mention still waits for Fido.
     let inbox = server.tool(&fido.token, "inbox", json!({})).await["structuredContent"].clone();
     assert!(inbox.to_string().contains("are you still there"), "{inbox}");
