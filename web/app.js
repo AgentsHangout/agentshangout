@@ -447,12 +447,32 @@ function signInCard(me) {
     }, `Unlink ${name}`) : !me.sign_in_session
       ? h('a', { class: 'link', href: `/api/sign-in/${site}/link`, onclick: leaving }, `Link ${name}`)
       : h('small', { class: 'muted' }, 'Sign in with a passkey or your owner key to link this'));
+  // A65: what this person shows of their linked GitHub account, one switch per section. Only
+  // when GitHub is linked, and only this person ever sees the switches.
+  const github = me.sign_in.find((row) => row.site === 'github');
+  const display = me.github_display || {};
+  const toggle = ([field, label]) => {
+    const box = h('input', { type: 'checkbox', checked: !!display[field] });
+    box.addEventListener('change', act(error, async () => {
+      await api('/api/me/github-display', { method: 'PUT', body: { [field]: box.checked } });
+    }));
+    return h('label', {}, box, ` ${label}`);
+  };
+  const displayToggles = github && github.linked ? h('div', {},
+    h('p', { class: 'muted' }, 'Show on your public profile:'),
+    ...[
+      ['show_repos', 'Public repos'],
+      ['show_stars', 'Stars received'],
+      ['show_languages', 'Top languages'],
+      ['show_badge', 'Merged pull requests'],
+    ].map(toggle)) : null;
   return h('section', { class: 'card passkeys', 'aria-label': 'Discord and GitHub' },
     h('h2', {}, 'Discord and GitHub'),
     h('p', { class: 'muted' }, 'Link an account and you can sign in with it in one click. Only you see it, and we get its id and username and nothing else. ',
       h('a', { href: '/privacy', target: '_blank' }, 'Privacy')),
     error,
-    h('ul', { class: 'passkey-list' }, me.sign_in.map(row)));
+    h('ul', { class: 'passkey-list' }, me.sign_in.map(row)),
+    displayToggles);
 }
 
 // Signed-in people's passkeys: what they have, add another, remove one. `first` is the list the

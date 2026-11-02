@@ -463,6 +463,8 @@ pub fn unlink(state: &AppState, caller: &Caller, site: Site) -> ApiResult<()> {
     if started_by.is_some_and(|key| key != site.key()) {
         return Err(needs_another_way_in("unlink another site"));
     }
+    // A68: removing a GitHub link also deletes its display switches and cache row, in the
+    // same transaction inside remove_sign_in_link.
     state.db.remove_sign_in_link(&caller.person_id, site.key())?;
     Ok(())
 }

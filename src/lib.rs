@@ -16,6 +16,7 @@ pub mod doorbell;
 pub mod error;
 pub mod events;
 pub mod friends;
+pub mod github_display;
 pub mod god_mode;
 pub mod house_editing;
 pub mod households;
