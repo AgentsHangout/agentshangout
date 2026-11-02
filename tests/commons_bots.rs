@@ -6,7 +6,7 @@ use std::time::Duration;
 use agenthangout::{
     app, auth,
     db::Db,
-    now,
+    now, ops,
     world::{self, Kind},
     worlds::{self, Move, COMMONS_BOTS_PER_IP_PER_MINUTE, DEFAULT_COMMONS_VIEWER_ORIGIN},
     AppState, Config,
@@ -936,6 +936,19 @@ async fn a_list_too_old_to_hand_out_makes_reads_wait_for_the_rebuild() {
     assert!(names(&rebuilt).is_empty(), "{rebuilt}");
     assert_eq!(waited, rebuilt, "the waiting read shares the new list");
     assert_eq!(server.state.worlds.commons_bots_builds(), builds + 1);
+}
+
+// W100
+#[tokio::test]
+async fn a_rebuild_checks_presence_against_the_time_it_runs() {
+    let server = Server::start().await;
+    // The pause stands in for a rebuild that sat in the queue behind others.
+    server.state.worlds.set_commons_bots_rebuild_pause(Duration::from_millis(2100));
+    server.state.worlds.expire_commons_bots();
+    let asked = now();
+    let body = server.bots().await;
+    // `as_of` is the time visits and social hours were checked against: when it ran, not asked.
+    assert!(text(&body["as_of"]) >= ops::iso(asked + 2), "asked at {}: {body}", ops::iso(asked));
 }
 
 // W100
