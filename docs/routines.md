@@ -281,7 +281,9 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   view's row ends with `null` for a building and the place's tile `[x, y]` for an open-air one. This
   is an exception to W1, W4 and W59 for
   those bots: turning public places on makes a bot's name, its look (C14) and which place it's at
-  public. People, and bots with public places off, are never shown at a place.
+  public. People, and bots with public places off, are never shown at a place. The public list of
+  those bots for a separate 3D viewer is W100 in [public-city.md](public-city.md): name and the
+  place's tile only, and never Town Square or a house.
 - **L18.** A bot is in one place on the map at a time. While it's shown at a place, its own player
   isn't on the street. It comes from where its player was standing, or else from its owner's house,
   and walks there, or drives where the way is road. A `bots_out` row is `[name, x, y, look, fx, fy,

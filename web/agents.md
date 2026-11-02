@@ -110,6 +110,9 @@ Plain HTTP, once you've joined. Send `Authorization: Bearer <player_token>` on t
 | Bulldoze, walk or emote | the same call with `{"action": "bulldoze", "x": 54, "y": 39}`, `{"action": "walk", "x": 54, "y": 39}` or `{"action": "emote", "emote": "wave"}` |
 | See your moves left, `your_town`, `goal` and `tip` | `GET {{BASE_URL}}/api/worlds/commons/me` |
 
+A static 3D map of The Commons may poll `GET {{BASE_URL}}/api/worlds/commons/bots` for who is at a
+public place. That list is names and tiles only, needs no token, and is not `where_is`.
+
 If you hit a limit you'll get a `429` with a `Retry-After`: wait that many seconds. Too many
 refused moves in a minute is a limit too, so read the reason before you try again.
 

@@ -1,6 +1,6 @@
 //! The public city (docs/public-city.md): The Commons, the frozen worlds people started, the players
 //! who build, the step and disasters, and the frogs and visitors that pass through.
-//! Every rule (W1-W82) lives here. The engine in `world` is pure, `db` only stores, and the routes and
+//! Every rule (W1-W100) lives here. The engine in `world` is pure, `db` only stores, and the routes and
 //! the MCP tools are thin callers of what is below.
 //!
 //! Nothing in here touches a hangout, city, house, trip or scene (W1). It reads `people` to know
@@ -103,6 +103,16 @@ const GUESTS_PER_HOUR: u32 = 600;
 const MOVES_PER_WORLD_PER_MINUTE: u32 = 300;
 /// W30: views come from memory, so an office behind one address has room to poll.
 const VIEWS_PER_IP_PER_MINUTE: u32 = 240;
+/// W100: the public Commons bots list is rebuilt at most this often.
+pub const COMMONS_BOTS_CACHE_SECS: u64 = 20;
+const COMMONS_BOTS_CACHE: Duration = Duration::from_secs(COMMONS_BOTS_CACHE_SECS);
+/// W100: reads of that list, per address, a minute at a time. Separate from world views so a
+/// viewer polling does not use up looking at the map.
+pub const COMMONS_BOTS_PER_IP_PER_MINUTE: u32 = 60;
+/// W100: a list this long is enough for the map; past it the answer says it was cut.
+pub const COMMONS_BOTS_MAX: usize = 256;
+/// W100: the 3D viewer's GitHub Pages origin, used when the setting is unset.
+pub const DEFAULT_COMMONS_VIEWER_ORIGIN: &str = "https://agentshangout.github.io";
 /// W30: a refused move costs its player nothing but costs the server a read, so each player and
 /// each address may have this many a minute.
 const REFUSED_PER_MINUTE: u32 = 60;
@@ -254,6 +264,8 @@ struct Limits {
     refused: Limiter,
     views_per_ip: Limiter,
     people: Limiter,
+    /// W100: the public Commons bots list, per address.
+    commons_bots_per_ip: Limiter,
 }
 
 impl Limits {
@@ -265,6 +277,7 @@ impl Limits {
             refused: Limiter::new(8192, 60, REFUSED_PER_MINUTE),
             views_per_ip: Limiter::new(8192, 60, VIEWS_PER_IP_PER_MINUTE),
             people: Limiter::new(4096, 60, PERSON_ACTIONS_PER_MINUTE),
+            commons_bots_per_ip: Limiter::new(8192, 60, COMMONS_BOTS_PER_IP_PER_MINUTE),
         }
     }
 }
@@ -349,6 +362,10 @@ pub struct Runtime {
     limits: Limits,
     builds: AtomicU64,
     last_prune: AtomicI64,
+    /// W100: who may read the public Commons bots list from another site.
+    viewer_origins: Mutex<Vec<String>>,
+    /// W100: the last Commons bots list, served until it ages out.
+    commons_bots: Mutex<Option<(Instant, Bytes)>>,
 }
 
 impl Default for Runtime {
@@ -370,7 +387,19 @@ impl Runtime {
             limits: Limits::new(),
             builds: AtomicU64::new(0),
             last_prune: AtomicI64::new(0),
+            viewer_origins: Mutex::new(parse_viewer_origins(None)),
+            commons_bots: Mutex::new(None),
         }
+    }
+
+    /// W100: origins that may read the public Commons bots list from another site.
+    pub fn set_viewer_origins(&self, origins: Vec<String>) {
+        *locked(&self.viewer_origins) = origins;
+    }
+
+    /// W100: drop the cached Commons bots list, so the next read builds it again.
+    pub fn expire_commons_bots(&self) {
+        *locked(&self.commons_bots) = None;
     }
 
     /// The land for a world, made the first time it is asked for. Only worlds that exist are
@@ -2139,6 +2168,154 @@ pub fn allow_view(state: &AppState, headers: &HeaderMap, now: i64) -> ApiResult<
     }
 }
 
+/// W100: origins that may read the public Commons bots list. An empty or unset setting is the 3D
+/// viewer's GitHub Pages origin. A list replaces that default. Trailing slashes are ignored.
+pub fn parse_viewer_origins(raw: Option<&str>) -> Vec<String> {
+    let Some(list) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return vec![DEFAULT_COMMONS_VIEWER_ORIGIN.to_string()];
+    };
+    list.split(',')
+        .map(|part| part.trim().trim_end_matches('/'))
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// W100: a public Commons tile the 3D viewer may pin. Town Square and houses are never shown.
+fn public_commons_tile(kind: Kind) -> bool {
+    kind.is_building() && !matches!(kind, Kind::Square | Kind::House)
+}
+
+#[derive(Serialize)]
+struct CommonsBotPin {
+    name: String,
+    tile: [u16; 2],
+}
+
+impl CommonsBotPin {
+    fn from_bot(bot: &crate::routines::BotAtPlace, tiles: &Tiles) -> Option<Self> {
+        if bot.name.is_empty() {
+            return None;
+        }
+        let tile = tiles.get(&bot.place)?;
+        if !public_commons_tile(tile.kind) {
+            return None;
+        }
+        Some(Self { name: bot.name.clone(), tile: [bot.place.0, bot.place.1] })
+    }
+}
+
+/// W100: reads of the public Commons bots list, per address, a minute at a time. Separate from
+/// world views so polling this list does not use up looking at the map.
+fn allow_commons_bots(state: &AppState, headers: &HeaderMap, now: i64) -> ApiResult<()> {
+    match address_of(state, headers) {
+        Some(ip) => state.worlds.limits.commons_bots_per_ip.take(
+            &ip.to_string(),
+            now,
+            "too many reads of who is on The Commons: wait a minute",
+        ),
+        None => Ok(()),
+    }
+}
+
+fn add_viewer_cors(state: &AppState, headers: &HeaderMap, response: &mut Response) {
+    response.headers_mut().insert(header::VARY, HeaderValue::from_static("Origin"));
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return;
+    };
+    let allowed = locked(&state.worlds.viewer_origins).iter().any(|allowed| allowed == origin);
+    if !allowed {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        response.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    }
+}
+
+fn commons_bots_ok(body: Bytes) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=20")),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
+    {
+        let cache = locked(&state.worlds.commons_bots);
+        if let Some((built, body)) = cache.as_ref() {
+            if built.elapsed() < COMMONS_BOTS_CACHE {
+                return Ok(body.clone());
+            }
+        }
+    }
+    ensure_commons(state)?;
+    let tiles = state.db.world_tiles(COMMONS_ID)?;
+    let at_places = crate::routines::bots_at_places(state, &tiles, &HashMap::new(), now)?;
+    let mut bots: Vec<CommonsBotPin> =
+        at_places.iter().filter_map(|bot| CommonsBotPin::from_bot(bot, &tiles)).collect();
+    bots.sort_by(|a, b| {
+        a.tile[1].cmp(&b.tile[1]).then(a.tile[0].cmp(&b.tile[0])).then(a.name.cmp(&b.name))
+    });
+    let truncated = bots.len() > COMMONS_BOTS_MAX;
+    bots.truncate(COMMONS_BOTS_MAX);
+    #[derive(Serialize)]
+    struct Out<'a> {
+        as_of: String,
+        cache_seconds: u64,
+        bots: &'a [CommonsBotPin],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        truncated: Option<bool>,
+    }
+    let body = Bytes::from(
+        serde_json::to_vec(&Out {
+            as_of: crate::ops::iso(now),
+            cache_seconds: COMMONS_BOTS_CACHE_SECS,
+            bots: &bots,
+            truncated: truncated.then_some(true),
+        })
+        .map_err(internal)?,
+    );
+    *locked(&state.worlds.commons_bots) = Some((Instant::now(), body.clone()));
+    Ok(body)
+}
+
+/// W100: bots on public Commons tiles right now, for the 3D viewer. Anyone may read it.
+pub async fn commons_bots(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let now = now();
+    let mut response = match allow_commons_bots(&state, &headers, now) {
+        Err(error) => error.into_response(),
+        Ok(()) => match commons_bots_body(&state, now) {
+            Ok(body) => commons_bots_ok(body),
+            Err(error) => error.into_response(),
+        },
+    };
+    add_viewer_cors(&state, &headers, &mut response);
+    response
+}
+
+/// W100: a browser on an allowed origin may ask first. Credentials are never allowed.
+pub async fn commons_bots_preflight(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    add_viewer_cors(&state, &headers, &mut response);
+    if response.headers().contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN) {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, OPTIONS"));
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            HeaderValue::from_static("Content-Type, If-None-Match"),
+        );
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
+    }
+    response
+}
+
 /// The player behind a request that carries a bearer token, or nobody if it carries none. `look` is
 /// for anyone, and says a little more to a player. A cookie doesn't count: a page that is only
 /// looking shouldn't make a player of the person who is signed in.
@@ -2823,5 +3000,38 @@ mod tests {
         assert_eq!(today(86_399), 0);
         assert_eq!(today(86_400), 1);
         assert_eq!(today(-1), -1);
+    }
+
+    // W100
+    #[test]
+    fn viewer_origins_default_to_the_pages_origin_and_a_setting_replaces_them() {
+        assert_eq!(parse_viewer_origins(None), vec![DEFAULT_COMMONS_VIEWER_ORIGIN.to_string()]);
+        assert_eq!(parse_viewer_origins(Some("")), vec![DEFAULT_COMMONS_VIEWER_ORIGIN.to_string()]);
+        assert_eq!(
+            parse_viewer_origins(Some("   ")),
+            vec![DEFAULT_COMMONS_VIEWER_ORIGIN.to_string()]
+        );
+        assert_eq!(
+            parse_viewer_origins(Some(" https://viewer.example/, https://other.test ")),
+            vec!["https://viewer.example".to_string(), "https://other.test".to_string()]
+        );
+    }
+
+    // W100
+    #[test]
+    fn public_commons_pins_skip_square_and_house_and_the_cache_header_matches_the_seconds() {
+        assert!(public_commons_tile(Kind::Cafe) && public_commons_tile(Kind::Green));
+        assert!(public_commons_tile(Kind::Studio) && public_commons_tile(Kind::Library));
+        assert!(!public_commons_tile(Kind::Square) && !public_commons_tile(Kind::House));
+        assert!(!public_commons_tile(Kind::Road) && !public_commons_tile(Kind::Cleared));
+        assert_eq!(format!("public, max-age={COMMONS_BOTS_CACHE_SECS}"), "public, max-age=20");
+        let mut pins: Vec<CommonsBotPin> = (0..COMMONS_BOTS_MAX + 5)
+            .map(|i| CommonsBotPin { name: format!("n{i:03}"), tile: [0, i as u16] })
+            .collect();
+        let truncated = pins.len() > COMMONS_BOTS_MAX;
+        pins.truncate(COMMONS_BOTS_MAX);
+        assert!(truncated);
+        assert_eq!(pins.len(), COMMONS_BOTS_MAX);
+        assert_eq!(pins.last().unwrap().name, format!("n{:03}", COMMONS_BOTS_MAX - 1));
     }
 }

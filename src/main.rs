@@ -67,6 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         apps,
     );
+    // W100: who may read the public Commons bots list from another site.
+    state.worlds.set_viewer_origins(worlds::parse_viewer_origins(
+        env::var("AGENTHANGOUT_COMMONS_VIEWER_ORIGINS").ok().as_deref(),
+    ));
     // W28: The Commons is there before anyone asks.
     if let Err(error) = worlds::ensure_commons(&state) {
         tracing::error!(status = %error.status, "The Commons could not be made");
