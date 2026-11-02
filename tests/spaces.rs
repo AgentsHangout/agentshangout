@@ -3553,11 +3553,11 @@ fn a_room_keeps_the_top_bar_of_the_map() {
     in_order(
         room,
         &[
-            "questionsToggle.button",
-            "checkInsToggle.button",
+            "guide.toggle",
             "builder.toggle",
             "chatToggle.button",
             "panels.toggle('crew'",
+            "needs.toggle",
             "account.toggle",
             "dresser.toggle",
             "panels.toggle('more'",

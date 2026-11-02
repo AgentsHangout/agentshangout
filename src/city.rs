@@ -2253,6 +2253,10 @@ mod tests {
             },
         )
         .unwrap();
+        // N8: a check-in needs someone from another side who could answer it, so Zoe lives here.
+        let (zoe, _) = person(&w.state, "Zoe");
+        let house_code = w.state.db.house(&w.hz.id).unwrap().unwrap().invite_code;
+        join_house(&w.state, &zoe, &house_code, false).unwrap();
         let ann_check = ops::create_check_in(
             &w.state,
             &w.ann,

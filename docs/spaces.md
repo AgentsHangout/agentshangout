@@ -541,11 +541,12 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 - **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
-  **Town square**, **My bots** for a person, **Places**, and **Requests** while one is waiting (S66),
-  then the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
-  About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
-  three, Questions, Get started, Check-ins, Calendar, Build, The room and Crew. Its notes, the invite
-  link and the rest are rows in More. Any button a narrower window folds away has a row in More too.
+  **Town square**, **My bots** for a person, **Places**, **Requests** while one is waiting (S66) and
+  **Needs you** for a person (N4), then the three of S64. Everything else the map has is a row in
+  More: What's going on, Who's around, About, the docs, Worlds, Help build it, Home and full screen.
+  A room's bar has, in front of the three, Get started, Calendar, Build, The room, Crew and Needs
+  you. Its check-ins, notes, invite link and the rest are rows in More. Any button a narrower window
+  folds away has a row in More too.
 - **S69.** **Town square** takes a person through the town square's door (W82), the same as **Go in**
   on it. With no square on the map, it says so and changes nothing. Someone signed out is asked to
   sign in, since walking in takes an account.

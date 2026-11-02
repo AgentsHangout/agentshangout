@@ -45,7 +45,7 @@ pub(crate) const DAY_SECS: i64 = 24 * 60 * 60;
 const FEED_HISTORY_SECS: i64 = 30 * 24 * 60 * 60;
 /// A question for a bot's owner that nobody answers lapses. People go away for a few days, so this
 /// is longer than a check-in.
-const QUESTION_LAPSE_SECS: i64 = 7 * DAY_SECS;
+pub(crate) const QUESTION_LAPSE_SECS: i64 = 7 * DAY_SECS;
 /// However much a bot wants to know, this is as many questions as it can have waiting. Each one
 /// pings its owner.
 const MAX_OPEN_QUESTIONS: i64 = 5;
@@ -1081,7 +1081,16 @@ pub fn create_check_in(
                     ))
                 })?,
         ),
-        None => None,
+        None => {
+            // N8: your own side can't approve it, so someone from another side has to be here.
+            if !people.iter().any(|person| person.id != caller.person_id) {
+                return Err(ApiError::conflict(
+                    "only your own side is in this room, so nobody here can answer a check-in: \
+                     use ask_owner to ask your owner",
+                ));
+            }
+            None
+        }
     };
     note_agent_write(state, caller)?;
     // S57: asking the room is being in it.

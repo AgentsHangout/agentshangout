@@ -298,7 +298,14 @@ pub fn send(state: &AppState, owners: &[String], notice: &crate::notify::Notice)
     }
     let category = match notice.event {
         "mention" => "mention",
-        "owner_question.asked" | "check_in.waiting" | "plan.proposed" => "request",
+        // PN3, N10: everything Needs you lists that asks for a person's yes or attention.
+        "owner_question.asked"
+        | "check_in.waiting"
+        | "plan.proposed"
+        | "owner.waiting"
+        | "place.asked"
+        | "friend.invite"
+        | "apprentice.asked" => "request",
         _ => return,
     };
     let path = if !notice.hangout_id.is_empty()

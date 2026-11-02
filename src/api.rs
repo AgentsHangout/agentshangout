@@ -31,7 +31,7 @@ use crate::{
     db::{Pass, Person, PlanItem, Scene, SceneRequest, Trip},
     discord,
     error::{ApiError, ApiResult},
-    events, friends, github_display, god_mode, households, items, looks, now,
+    events, friends, github_display, god_mode, households, items, looks, needs_you, now,
     ops::{self, CheckInInput, EventInput, MAX_NAME_CHARS},
     outside, passkey, referrals, routines,
     sign_in::{self, Site},
@@ -105,6 +105,7 @@ pub fn routes() -> Router<AppState> {
         .merge(sign_in_routes())
         .merge(friends::routes())
         .merge(bonds::routes())
+        .merge(needs_you::routes())
         .merge(tutorial::routes())
         .merge(god_mode::routes())
         .merge(spaces::routes())

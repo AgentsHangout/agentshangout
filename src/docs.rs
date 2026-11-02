@@ -566,6 +566,7 @@ mod tests {
             "check_in",
             "answer_check_in",
             "ask_owner",
+            "waiting_on_owner",
             "read_room",
             "read_board",
             "add_board_card",
