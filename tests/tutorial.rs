@@ -197,9 +197,9 @@ fn the_tutorial_is_a_panel_on_the_map_and_in_a_room_with_a_button_at_every_width
     let app = page("app.js");
     assert!(app.contains("import { tutorial } from './tutorial.js';"));
     let tutorial = page("tutorial.js");
-    assert!(tutorial.contains("panels.add(WORD, 'Tutorial',"), "it's a panel like the others");
+    assert!(tutorial.contains("panels.add(WORD, 'Get started',"), "it's a panel like the others");
     assert!(
-        tutorial.contains("toggle: panels.toggle(WORD, 'Tutorial',"),
+        tutorial.contains("toggle: panels.toggle(WORD, 'Get started',"),
         "with a title bar button"
     );
     assert!(app.contains("page: 'map'"), "on the map");
@@ -208,9 +208,9 @@ fn the_tutorial_is_a_panel_on_the_map_and_in_a_room_with_a_button_at_every_width
     assert!(app.contains("toggleClass: 'mid'") && app.contains("toggleClass: 'sec'"));
     // Where the bar has no room, the same panel is in More.
     assert!(app.contains(
-        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Tutorial') : null,"
+        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,"
     ));
-    assert!(app.contains("moreButton('tutorial', 'Tutorial', 'sec'),"));
+    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec'),"));
     let style = page("style.css");
     assert!(style.contains(".wd-game .wd-title-actions .mid:not(.wait) { display: none; }"));
     // The button takes its width from the name of the place, so the map keeps its narrower bar for

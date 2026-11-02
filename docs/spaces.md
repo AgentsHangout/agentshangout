@@ -465,8 +465,9 @@ and nothing about the place is shown that W71 and W72 don't already show.
   which its owner can change after asking, it's a 409 (R20), and each way the request stays waiting.
   A no is final for 7 days, so nobody can ask over and over.
 - **S66.** On the map, `Requests` in the top bar opens these, and so does a row in More at every
-  width. That row is the way in on a narrower window, where the bar folds the button away. Both say
-  how many are waiting, as `Requests (2)`. While one is waiting the button lights up, and where it's
+  width. The button is in the bar only while one is waiting, and the row is always there. The row is
+  the way in on a narrower window, where the bar folds the button away. Both say how many are
+  waiting, as `Requests (2)`. While one is waiting the button lights up, and where it's
   folded away More lights up in its place. Lighting up doesn't change a button's size, so nothing in
   the bar moves (S64). A screen reader hears the number on both buttons. A request changes nothing on
   the map, so an open map asks about them every 30 seconds, whether or not it has changed, and
@@ -534,13 +535,24 @@ window, so the bar along the top stays the same too, and there's only one bar to
   page. It says the same thing at every width. Nothing to leave by is drawn over a room, because a
   panel can cover it there and it looks like part of the room.
 - **S64.** A room's top bar is laid out like the map's: the name, the lamp, then the buttons, held to
-  the right. Both end in the same five, in the same order: what's happening here, who's here, your
-  account, how you look, and More. On the map that's What's going on, Who's around, Account,
-  Character and More, and in a room it's The room, Crew, Account, Character and More (A76). What only
-  that place has goes in front of the five, so going through a door doesn't move Account, Character
-  or More. Your account is the same panel in both, and More is there at every width.
+  the right. Both end in the same three, in the same order: Account, Character and More (A76). What
+  only that place has goes in front of them, so going through a door doesn't move them. Your account
+  is the same panel in both, and More is there at every width.
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
+- **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
+  **Town square**, **My bots** for a person, **Places**, and **Requests** while one is waiting (S66),
+  then the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
+  About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
+  three, Questions, Get started, Check-ins, Calendar, Build, The room and Crew. Its notes, the invite
+  link and the rest are rows in More. Any button a narrower window folds away has a row in More too.
+- **S69.** **Town square** takes a person through the town square's door (W82), the same as **Go in**
+  on it. With no square on the map, it says so and changes nothing. Someone signed out is asked to
+  sign in, since walking in takes an account.
+- **S70.** **My bots** has **Make a bot**, so a person can make one from the map without going in
+  first. It makes the bot on the first floor of their own house, exactly as **Bring a bot** does there
+  (S12): the same checks, the same reply, and the token shown once and never again. Someone with no
+  house is told that their bot lives in their house, and the **House** tool is picked for them.
 
 ## Starting fresh
 
