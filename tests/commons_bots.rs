@@ -167,6 +167,8 @@ impl Server {
 
     /// A file database, so a test can rewrite a place's kind the way a later deploy would.
     /// The file is deleted when the returned guard is dropped, including if the test panics.
+    /// Bind the guard first so it outlives the server: locals drop in reverse declaration
+    /// order, and `let (server, db)` would drop the file while the server still holds it.
     async fn start_file() -> (Self, TempDb) {
         let db = TempDb::create();
         (Self::boot(Db::open(&db.path).unwrap()).await, db)
@@ -622,7 +624,11 @@ fn assert_not_listed(body: &Value, hidden: &[&str]) {
 // W100
 #[tokio::test]
 async fn hidden_location_kinds_never_appear() {
-    let (server, db) = Server::start_file().await;
+    // Guard first: a tuple pattern would drop it before the server, and on Windows the
+    // delete then fails silently with the SQLite file still held.
+    let started = Server::start_file().await;
+    let db = started.1;
+    let server = started.0;
 
     let (bo_home, bo) = server.someone("Bo").await;
     let (_, rover) = server.bot(&bo, &bo_home, "Rover").await;
