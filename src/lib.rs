@@ -119,7 +119,33 @@ pub struct Shared {
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
-    write_windows: Mutex<HashMap<String, (i64, u32)>>,
+    write_windows: Mutex<HashMap<String, Window>>,
+}
+
+/// One key's writes: the minute being counted, its count, and the count of the minute before.
+#[derive(Clone, Copy, Default)]
+struct Window {
+    minute: i64,
+    count: u32,
+    previous: u32,
+}
+
+impl Window {
+    /// Moves on to `minute`, keeping the last count only if it was for the minute just before.
+    fn roll(&mut self, minute: i64) {
+        if self.minute != minute {
+            self.previous = if self.minute == minute - 1 { self.count } else { 0 };
+            self.minute = minute;
+            self.count = 0;
+        }
+    }
+
+    /// The writes in the last 60 seconds, estimated by weighing the minute before by how much of
+    /// it still falls inside them, rounded up.
+    fn last_sixty_seconds(&self, second: i64) -> u64 {
+        let weight = (60 - second.clamp(0, 59)) as u64;
+        (u64::from(self.previous) * weight).div_ceil(60) + u64::from(self.count)
+    }
 }
 
 #[derive(Clone)]
@@ -176,13 +202,27 @@ impl AppState {
 
     /// Counts one more against this key's one-minute window, and says if it's within `limit`.
     pub fn allow_writes(&self, key: &str, limit: u32) -> bool {
-        let minute = now() / 60;
+        self.count_write(key, |window, _| window.count <= limit)
+    }
+
+    /// Like `allow_writes`, but counts over the last 60 seconds rather than the clock's minute,
+    /// so a burst either side of a minute boundary can't reach twice `limit`.
+    pub fn allow_writes_sliding(&self, key: &str, limit: u32) -> bool {
+        self.count_write(key, |window, second| {
+            window.last_sixty_seconds(second) <= u64::from(limit)
+        })
+    }
+
+    fn count_write(&self, key: &str, within: impl Fn(&Window, i64) -> bool) -> bool {
+        let now = now();
+        let minute = now / 60;
         let mut windows =
             self.write_windows.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        windows.retain(|_, (window, _)| *window == minute);
-        let (_, count) = windows.entry(key.to_string()).or_insert((minute, 0));
-        *count += 1;
-        *count <= limit
+        windows.retain(|_, window| window.minute >= minute - 1);
+        let window = windows.entry(key.to_string()).or_default();
+        window.roll(minute);
+        window.count += 1;
+        within(window, now % 60)
     }
 }
 
@@ -201,4 +241,28 @@ pub fn app(state: AppState) -> Router {
         // Outermost, so it sees every request. It only watches (W38).
         .layer(middleware::from_fn_with_state(state.clone(), worlds::observe))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Window;
+
+    #[test]
+    fn a_sliding_window_carries_the_last_minute_into_this_one() {
+        let mut window = Window::default();
+        window.roll(100);
+        window.count = 30;
+        window.roll(101);
+        assert_eq!((window.previous, window.count), (30, 0));
+        // At the boundary all of the last minute still counts, halfway through half of it does.
+        assert_eq!(window.last_sixty_seconds(0), 30);
+        assert_eq!(window.last_sixty_seconds(30), 15);
+        assert_eq!(window.last_sixty_seconds(59), 1);
+        // 30 just before the boundary and one just after is over a limit of 30.
+        window.count = 1;
+        assert_eq!(window.last_sixty_seconds(0), 31);
+        // A gap of more than a minute forgets it.
+        window.roll(103);
+        assert_eq!((window.previous, window.count), (0, 0));
+    }
 }

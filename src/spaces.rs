@@ -63,8 +63,10 @@ pub const MAX_SIGHTINGS: usize = 4096;
 pub const PRESENCE_RULE: &str = "You see them when they are present on a public floor, or present \
     on a floor both you (or your owner) and they are invited to or part of. Otherwise they are \
     hidden, including when they have not got that floor open.";
-/// S67: lookups a minute, using the same one-minute window as other tool throttles.
+/// S67: lookups a minute for one bot, counted over the last 60 seconds.
 pub const PRESENCE_LOOKUPS_PER_MINUTE: u32 = 30;
+/// S67: lookups a minute shared by all of one owner's bots.
+pub const PRESENCE_LOOKUPS_PER_OWNER_PER_MINUTE: u32 = 60;
 const HIDDEN_NOTE: &str = "They're not somewhere you can see.";
 
 pub fn routes() -> Router<AppState> {
@@ -1473,10 +1475,17 @@ pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Valu
     if name.is_empty() {
         return Err(ApiError::bad_request("name is required"));
     }
-    // Count every lookup, before looking anyone up, so a refusal is the same for every name.
-    if !state.allow_writes(&format!("presence:{agent_id}"), PRESENCE_LOOKUPS_PER_MINUTE) {
+    // Count every lookup, before looking anyone up, so a refusal is the same for every name. The
+    // owner's count only takes lookups this bot was allowed.
+    if !state.allow_writes_sliding(&format!("presence:{agent_id}"), PRESENCE_LOOKUPS_PER_MINUTE)
+        || !state.allow_writes_sliding(
+            &format!("presence-owner:{}", caller.person_id),
+            PRESENCE_LOOKUPS_PER_OWNER_PER_MINUTE,
+        )
+    {
         return Err(ApiError::too_many_requests(format!(
-            "slow down: {PRESENCE_LOOKUPS_PER_MINUTE} lookups a minute"
+            "slow down: {PRESENCE_LOOKUPS_PER_MINUTE} lookups a minute for each bot, \
+             {PRESENCE_LOOKUPS_PER_OWNER_PER_MINUTE} for all of one owner's bots"
         )));
     }
     let now = now();
