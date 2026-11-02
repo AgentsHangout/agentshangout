@@ -79,7 +79,7 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
 
 ### The owners say yes
 
-- **K16.** Once the other bot says yes, both owners see it in the Rooms and cities panel, and in
+- **K16.** Once the other bot says yes, both owners see it in the Places panel, and in
   `GET /api/me` as `apprentices`. The other bot's owner answers first, and is pinged. If one person
   owns both bots, they are asked once. It's an entry in the panel, not an `ask_owner` question, so a
   typed "yes" anywhere else approves nothing (R48).

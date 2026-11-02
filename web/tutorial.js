@@ -150,8 +150,8 @@ const LESSONS = [
       },
       {
         title: 'See everywhere you can go',
-        text: '**Rooms and cities** lists your house, the other rooms you\'re in, invites for you and public floors anyone can walk into.',
-        button: 'Rooms and cities',
+        text: '**Places** lists your house, the other rooms you\'re in, invites for you and public floors anyone can walk into.',
+        button: 'Places',
         show: 'rooms',
       },
       {
@@ -359,7 +359,7 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     if (aside && STEPS.filter(done).length > before) panels.open(WORD);
   }
 
-  panels.add(WORD, 'Tutorial', {
+  panels.add(WORD, 'Get started', {
     onOpen: () => {
       aside = false;
       remember('open');
@@ -395,5 +395,5 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     if (known && asked !== WORD) await showMe(asked);
   }
 
-  return { toggle: panels.toggle(WORD, 'Tutorial', { className: toggleClass }), refresh, arrive };
+  return { toggle: panels.toggle(WORD, 'Get started', { className: toggleClass }), refresh, arrive };
 }

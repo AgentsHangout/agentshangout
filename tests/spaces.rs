@@ -3547,24 +3547,13 @@ fn a_room_keeps_the_top_bar_of_the_map() {
     let app = include_str!("../web/app.js");
     let map = top_bar(app, "worldView");
     let room = top_bar(app, "roomView");
-    // The same five end both bars, and the buttons are held to the right, so what only one of them
-    // has goes in front. Then a door moves none of the five.
-    in_order(
-        map,
-        &[
-            "panels.toggle('about'",
-            "panels.toggle('info'",
-            "panels.toggle('around'",
-            "account.toggle",
-            "dresser.toggle",
-            "panels.toggle('more'",
-        ],
-    );
+    // The same three end both bars, and the buttons are held to the right, so what only one of them
+    // has goes in front. Then a door moves none of the three.
+    in_order(map, &["guide?.toggle", "account.toggle", "dresser.toggle", "panels.toggle('more'"]);
     in_order(
         room,
         &[
             "questionsToggle.button",
-            "panels.toggle('notes'",
             "checkInsToggle.button",
             "builder.toggle",
             "chatToggle.button",
@@ -3585,6 +3574,84 @@ fn a_room_keeps_the_top_bar_of_the_map() {
         2,
         "your account isn't the same panel on the map and in a room"
     );
+}
+
+// S68
+#[test]
+fn the_map_bar_has_what_gets_someone_going_and_more_has_the_rest() {
+    // The bar had fourteen buttons, so nothing in it said where to start. Nothing here runs a
+    // browser, so this reads the page.
+    let app = include_str!("../web/app.js");
+    let map = top_bar(app, "worldView");
+    in_order(
+        map,
+        &[
+            "guide?.toggle",
+            "squareButton",
+            "panels.toggle('bots', 'My bots'",
+            "panels.toggle('rooms', placesLabel",
+            "panels.toggle('requests', 'Requests'",
+            "account.toggle",
+        ],
+    );
+    let view = app.split_once("async function worldView(").unwrap().1;
+    let more = view.split_once("panels.add('more'").unwrap().1.split_once("]));").unwrap().0;
+    for (name, row) in [
+        ("info", r"moreRow('info', 'What\'s going on')"),
+        ("around", r"moreRow('around', 'Who\'s around')"),
+        ("about", "moreRow('about', 'About')"),
+    ] {
+        assert!(!map.contains(&format!("panels.toggle('{name}'")), "{name} is still in the bar");
+        assert!(more.contains(row), "{name} has no row in More");
+    }
+    for gone in ["repoLink(", "link('/docs'", "link('/', 'Home'"] {
+        assert!(!map.contains(gone), "{gone} is still in the bar");
+        assert!(more.contains(gone), "{gone} isn't in More");
+    }
+    // A room's notes and boards left its bar, so their rows in More show at every width.
+    let room = top_bar(app, "roomView");
+    for gone in ["panels.toggle('notes'", "panels.toggle('yours'", "boardsToggle"] {
+        assert!(!room.contains(gone), "{gone} is still in a room's bar");
+    }
+    assert!(app.contains("moreButton('notes', 'Shared notes', ''),"));
+    assert!(app.contains("moreButton('yours', 'Notes for your bots', ''),"));
+    assert!(app.contains("const boardsMore = moreButton('boards', 'Boards', '');"));
+    assert!(
+        app.contains("boardsMore.hidden = !snapshot.floor;"),
+        "a room with no floor has boards"
+    );
+}
+
+// S69
+#[test]
+fn town_square_goes_through_the_squares_door() {
+    let app = include_str!("../web/app.js");
+    let square = app.split_once("function toSquare() {").unwrap().1;
+    let square = square.split_once("\n  }").unwrap().0;
+    assert!(square.contains("if (!me) return account.open("), "signed out isn't asked to sign in");
+    assert!(square.contains("kind === 'square'"), "it doesn't look for the square");
+    assert!(square.contains("return say("), "no square says nothing");
+    assert!(square.contains("return goIn({ x: square[0], y: square[1] });"), "it isn't Go in");
+}
+
+// S70
+#[test]
+fn make_a_bot_on_the_map_brings_it_into_your_own_house() {
+    let app = include_str!("../web/app.js");
+    let make = app.split_once("async function makeBot() {").unwrap().1;
+    let make = make.split_once("\n  }").unwrap().0;
+    assert!(make.contains("await api('/api/tutorial')"), "it doesn't find your house");
+    assert!(make.contains("pick('house');"), "no house doesn't pick House");
+    assert!(
+        make.contains("api('/api/spaces/door', { method: 'POST', body: house })"),
+        "it doesn't go through your own door (S34)"
+    );
+    assert!(
+        make.contains("api(`/api/hangouts/${encodeURIComponent(room)}/agents`, { method: 'POST', body: values })"),
+        "it isn't Bring a bot"
+    );
+    assert!(make.contains("showToken(result.agent.name, result.token, result.mcp_url);"));
+    assert!(app.contains("onclick: makeBot }, 'Make a bot')"), "My bots has no Make a bot");
 }
 
 // S65
@@ -3824,6 +3891,9 @@ fn a_narrow_window_on_the_map_can_see_and_reach_requests_to_come_in() {
         load.contains("requestsToggle.classList.toggle('wait', "),
         "a waiting request doesn't light the button"
     );
+    // The button is in the bar only while one is waiting, and the row in More is always there.
+    assert!(map.contains("if (requestsToggle) requestsToggle.hidden = true;"));
+    assert!(load.contains("requestsToggle.hidden = !requests.length;"), "Requests is always shown");
     let css = include_str!("../web/style.css");
     let width = |rule: &str| {
         let before = css.split_once(rule).unwrap_or_else(|| panic!("{rule} is gone")).0;

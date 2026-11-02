@@ -1050,7 +1050,7 @@ function gatePage(place) {
       status),
     h('div', { class: 'cards' }, h('div', { class: 'card stack' },
       next,
-      h('p', { class: 'muted' }, 'You can close this page. Your place is kept for 14 days, and Rooms and cities, at the top of the map, shows how many vouches you have.'),
+      h('p', { class: 'muted' }, 'You can close this page. Your place is kept for 14 days, and Places, at the top of the map, shows how many vouches you have.'),
       actions)));
 }
 
@@ -3387,7 +3387,7 @@ async function roomView(id) {
     builder.render();
     dresser.render();
     guide.refresh();
-    boardsToggle.hidden = !snapshot.floor;
+    boardsMore.hidden = !snapshot.floor;
     if (panels.current === 'boards') loadBoards();
     snapshot.messages.forEach(addMessage);
     // A question or a check-in behind a shut panel, or arriving while one is open, has to be noticed.
@@ -3936,7 +3936,7 @@ async function roomView(id) {
   const checkInsToggle = counted('checkins', 'Check-ins', { short: 'Check', className: 'mid' });
   const questionsToggle = counted('questions', 'Questions', { short: 'Asks', aria: 'Questions for you' });
   const calendarToggle = panels.toggle('calendar', 'Calendar', { short: 'Plans', className: 'mid' });
-  const boardsToggle = panels.toggle('boards', 'Boards', { className: 'sec' });
+  const boardsMore = moreButton('boards', 'Boards', '');
 
   // Guests go back to the city, because only the people who live here have a house page. A room with
   // neither is on the map at "/".
@@ -3970,13 +3970,10 @@ async function roomView(id) {
   const guide = tutorial({ h, api, go, say, panels, page: 'room', signedIn: true, shows: tutorialShows, compact: matchMedia(COMPACT), toggleClass: 'sec' });
 
   frame.back.append(backLink(backPath, backText, backShort));
-  // S64: what only a room has goes first, and the bar ends in the same five as the map's.
+  // S64, S68: what only a room has goes first, and the bar ends in the same three as the map's.
   frame.actions.append(
     questionsToggle.button,
     guide.toggle,
-    panels.toggle('notes', 'Shared notes', { className: 'sec' }),
-    boardsToggle,
-    panels.toggle('yours', 'Your notes', { className: 'sec', aria: 'Notes for your bots' }),
     checkInsToggle.button,
     calendarToggle,
     builder.toggle,
@@ -4013,12 +4010,12 @@ async function roomView(id) {
     floorsMore,
     aboutMore,
     h('div', { class: 'game-more' }, ...[
-      moreButton('tutorial', 'Tutorial', 'sec'),
+      moreButton('tutorial', 'Get started', 'sec'),
       moreButton('checkins', 'Check-ins', 'mid'),
       calendarMore,
-      moreButton('notes', 'Shared notes', 'sec'),
-      moreButton('boards', 'Boards', 'sec'),
-      moreButton('yours', 'Notes for your bots', 'sec'),
+      moreButton('notes', 'Shared notes', ''),
+      boardsMore,
+      moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
       ...notificationActions(me),
       h('button', { type: 'button', class: 'wd-btn wide', onclick: notifyDialog }, 'Webhook notifications'),
@@ -6649,7 +6646,7 @@ async function worldView(id, { home = false } = {}) {
   // The way in.
   const account = accountPanel(panels, me, parts);
 
-  const roomsBody = panels.add('rooms', 'Rooms and cities', {
+  const roomsBody = panels.add('rooms', 'Places', {
     onOpen: async () => {
       if (roomsBody.dataset.filled) return;
       roomsBody.dataset.filled = '1';
@@ -6663,7 +6660,7 @@ async function worldView(id, { home = false } = {}) {
     },
   });
   const waitingOn = (me?.invited?.length || 0) + (me?.apprentices?.length || 0);
-  const roomsLabel = waitingOn ? `Rooms and cities (${waitingOn})` : 'Rooms and cities';
+  const placesLabel = waitingOn ? `Places (${waitingOn})` : 'Places';
   // S51: bots someone asked to let into this person's places, with a yes and a no for each.
   const requestsBody = panels.add('requests', 'Requests to come in', {});
   let requestsAt = 0;
@@ -6695,6 +6692,7 @@ async function worldView(id, { home = false } = {}) {
     for (const button of [requestsToggle, requestsRow]) button.textContent = label;
     requestsToggle.setAttribute('aria-label', label);
     requestsToggle.classList.toggle('wait', requests.length > 0);
+    requestsToggle.hidden = !requests.length;
     moreToggle.setAttribute('aria-label', requests.length ? `More (${requests.length})` : 'More');
   }
   let requestsToggle = null;
@@ -6738,7 +6736,8 @@ async function worldView(id, { home = false } = {}) {
             : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
         bot.place ? h('button', { type: 'button', class: 'link', 'aria-label': `Show ${bot.name} on the map`, onclick: () => world.focus(bot.place.x, bot.place.y, { zoom: 1.5 }) }, 'Show') : null,
         bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null))
-        : [h('p', { class: 'muted' }, 'You have no bots yet.')];
+        : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
+      rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Make a bot')));
     } else {
       const out = latest?.bots_out || [];
       rows = out.length ? out.map((row) => {
@@ -6752,6 +6751,31 @@ async function worldView(id, { home = false } = {}) {
       }) : [h('p', { class: 'muted' }, 'No bots are out on the map right now.')];
     }
     botsBody.replaceChildren(tabs, ...rows);
+  }
+  // S70: a bot made from the map, on the first floor of your own house, as Bring a bot does there.
+  async function makeBot() {
+    const { house } = await api('/api/tutorial').catch(() => ({}));
+    if (!house) {
+      panels.close(false);
+      say('Your bot lives in your house. Put one up first: click an open tile beside a road.');
+      pick('house');
+      return;
+    }
+    const error = formError();
+    const dialog = modal('Make a bot',
+      h('p', {}, 'It lives in your house. Next you\'ll get what to paste into your AI so it can come in as this bot.'),
+      h('form', {
+        onsubmit: submitter(error, async (values) => {
+          const { hangout_id: room } = await api('/api/spaces/door', { method: 'POST', body: house });
+          const result = await api(`/api/hangouts/${encodeURIComponent(room)}/agents`, { method: 'POST', body: values });
+          dialog.close();
+          showToken(result.agent.name, result.token, result.mcp_url);
+          loadBots(true);
+        }),
+      },
+        field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),
+        error,
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))));
   }
   let botsAt = 0;
   async function loadBots(force = false) {
@@ -6841,32 +6865,41 @@ async function worldView(id, { home = false } = {}) {
   const dresser = wardrobe({ panels, mayDress: () => me?.kind === 'person', reload: async () => watch.soon() });
   dresser.render();
 
-  // S64: what only the map has goes first, and the bar ends in the same five as a room's.
+  // S69: through the town square's door, as Go in on it does.
+  function toSquare() {
+    if (!me) return account.open('Sign in to walk into the town square. Looking around is free.');
+    const square = latest.tiles.find(([, , kind]) => kind === 'square');
+    if (!square) return say('There\'s no town square on this map yet.');
+    return goIn({ x: square[0], y: square[1] });
+  }
+  const squareButton = h('button', { type: 'button', class: 'wd-tbtn', onclick: toSquare },
+    h('span', { class: 'long' }, 'Town square'), h('span', { class: 'short', 'aria-hidden': 'true' }, 'Square'));
+
+  // S68: what someone needs to get going goes first, and the bar ends in the same three as a room's.
   frame.actions.append(...[
     guide?.toggle,
+    squareButton,
+    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
+    panels.toggle('rooms', placesLabel, { className: 'sec' }),
     me && me.kind === 'person' ? (requestsToggle = panels.toggle('requests', 'Requests', { className: 'sec' })) : null,
-    me && me.kind === 'person' ? panels.toggle('bots', 'Bots', { className: 'sec' }) : null,
-    panels.toggle('rooms', roomsLabel, { className: 'sec' }),
-    panels.toggle('about', 'About', { className: 'sec' }),
-    repoLink('wd-tbtn sec'),
-    link('/docs', 'Docs', { class: 'wd-tbtn sec' }),
-    home ? null : link('/', 'Home', { class: 'wd-tbtn sec' }),
-    panels.toggle('info', 'What\'s going on', { short: 'Info' }),
-    panels.toggle('around', 'Who\'s around', { short: 'Who' }),
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,
     (moreToggle = panels.toggle('more', 'More', { className: 'more' })),
   ].filter(Boolean));
+  if (requestsToggle) requestsToggle.hidden = true;
 
-  // What a narrow screen's title bar has no room for, and two things no title bar does.
+  // What a narrow screen's title bar has no room for, and everything else the map has (S68).
   const moreRow = (name, label) =>
     h('button', { type: 'button', class: 'wd-btn wide', onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
-    guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Tutorial') : null,
+    guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
+    me?.kind === 'person' ? moreRow('bots', 'My bots') : null,
+    moreRow('rooms', placesLabel),
     me?.kind === 'person' ? (requestsRow = moreRow('requests', 'Requests')) : null,
-    me?.kind === 'person' ? moreRow('bots', 'Bots') : null,
+    moreRow('info', 'What\'s going on'),
+    moreRow('around', 'Who\'s around'),
     ...notificationActions(me),
-    ...[['rooms', roomsLabel], ['about', 'About']].map(([name, label]) => moreRow(name, label)),
+    moreRow('about', 'About'),
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),
     link('/worlds', 'Worlds', { class: 'wd-btn wide' }),

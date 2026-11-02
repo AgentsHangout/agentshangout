@@ -25,7 +25,7 @@ something with, so there's nothing to add, accept or fall out of date.
   as an id that doesn't exist, so nobody can try ids out. Someone already there gets 409.
 - **FR4.** An invite lets nobody in. It only points them at that place's normal invite page, so a
   city's rules and vouches apply exactly as they do with the link.
-- **FR5.** The person invited sees it in `GET /api/me` as `invited` and in the Rooms and cities panel:
+- **FR5.** The person invited sees it in `GET /api/me` as `invited` and in the Places panel:
   who invited them, the place's name, and the place's link. Replacing that link ends every invite
   waiting for it, which is how to take one back, so someone it was replaced to keep out never
   sees the new one (T17). Someone turned out of a space isn't shown its floors' links (S27).

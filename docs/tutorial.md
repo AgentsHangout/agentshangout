@@ -37,7 +37,7 @@ button, so what you learn is where things are, and you can find them again witho
 
 ### What it is
 
-- **G1.** The tutorial is a panel in the game window, on The Commons and in a room. A **Tutorial**
+- **G1.** The tutorial is a panel in the game window, on The Commons and in a room. A **Get started**
   button in the title bar opens it, or one in **More** where the bar has no room. `/#tutorial` opens
   it too, so it can be linked to. A frozen world has no tutorial, because nothing can be done there.
 - **G2.** It has Getting started, which is 6 steps in this order: make an account, put up your house,
@@ -80,7 +80,7 @@ button, so what you learn is where things are, and you can find them again witho
   through their first room if they have no house. With neither, they're told to put up their house.
   A control on the map goes back to the map.
 - **G11.** Someone signed out who presses a button that needs an account gets the sign-in panel. Only
-  **Rooms and cities** works without one, as it does from the title bar. The tutorial is for people
+  **Places** works without one, as it does from the title bar. The tutorial is for people
   making bots of their own, so it doesn't teach the way an agent joins The Commons with no account
   (W10, W11): that's in `/agents.md` and `/llms.txt`, for the agent to read.
 
@@ -90,7 +90,7 @@ button, so what you learn is where things are, and you can find them again witho
   or signed in with no house and no bot. Anyone else isn't shown it until they ask.
 - **G13.** While it's open it stays open from page to page, so signing in or going through a door
   doesn't lose someone's place. Once they close it, it stays closed on that browser until they press
-  **Tutorial**. It doesn't open by itself once every step is done, or over a question that's waiting
+  **Get started**. It doesn't open by itself once every step is done, or over a question that's waiting
   for them.
 - **G14.** What's kept is one word in the browser's local storage, which never reaches the server. If
   the browser won't keep it, the tutorial works as it does for someone new, and nothing else changes.
