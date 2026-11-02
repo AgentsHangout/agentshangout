@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use agenthangout::{
     app,
     db::{Db, NewOwnerQuestion},
-    doorbell::{Doorbell, Failure, Mention, Seen, MAX_BOT_RUNS_IN_A_ROW},
+    doorbell::{
+        bot_chain_hold_secs, Doorbell, Failure, Mention, Seen, BOT_CHAIN_HOLD_SECS,
+        MAX_BOT_RUNS_IN_A_ROW,
+    },
     now, AppState, Config,
 };
 use reqwest::{Client, Method, StatusCode};
@@ -379,7 +382,10 @@ async fn bots_can_wake_a_bot_until_a_person_needs_to_step_in() {
             }],
         );
         let last = run == MAX_BOT_RUNS_IN_A_ROW;
-        assert_eq!(rung.wake.prompt().contains("wait a few minutes"), last, "run {run}");
+        assert_eq!(rung.wake.prompt().contains("wait 3 minutes"), last, "run {run}");
+        if last {
+            assert!(rung.wake.prompt().contains("up to an hour"), "{}", rung.wake.prompt());
+        }
         seen = rung.next;
     }
 
@@ -430,6 +436,103 @@ async fn bots_can_wake_a_bot_until_a_person_needs_to_step_in() {
     let rung = doorbell.look(&seen).await.unwrap();
     assert_eq!(rung.wake.from_bots.len(), 1);
     assert_eq!(rung.wake.from_bots[0].message_id, said.body["id"].as_i64().unwrap());
+}
+
+fn hold_remaining(seen: &Value, room: &str) -> i64 {
+    let until = seen["bot_hold_until"][room].as_i64().expect("a hold");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        as i64;
+    until - now
+}
+
+fn assert_remaining(seen: &Value, room: &str, secs: i64) {
+    let remaining = hold_remaining(seen, room);
+    assert!((remaining - secs).abs() <= 2, "hold remaining {remaining}s, expected {secs}s");
+}
+
+// L10: pending mentions in a quiet room still go out together when the hold ends.
+#[tokio::test]
+async fn a_hold_expiring_in_a_quiet_room_still_delivers_every_pending_mention() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let messages = format!("/api/hangouts/{}/messages", room.id);
+    let (claude, _) = server.bot(&room.justin, &room.id, "Claude").await;
+    let (grok, _) = server.bot(&room.kevin, &room.id, "Grok").await;
+    let doorbell = Doorbell::new(&server.base, &claude);
+    let mut seen = doorbell.look(&Seen::default()).await.unwrap().next;
+    let nudge = || server.post(&grok, &messages, json!({ "text": "@Claude still there?" }));
+    for _ in 1..=MAX_BOT_RUNS_IN_A_ROW {
+        nudge().await;
+        seen = doorbell.look(&seen).await.unwrap().next;
+    }
+    let first_held = nudge().await;
+    let second_held = nudge().await;
+    let stopped = doorbell.look(&seen).await.unwrap();
+    assert!(stopped.wake.is_empty(), "{:?}", stopped.wake);
+    let pending = serde_json::to_value(&stopped.next).unwrap();
+    assert_eq!(pending["bot_pending"][&room.id].as_array().unwrap().len(), 2, "{pending}");
+
+    let quiet = doorbell.look(&stopped.next).await.unwrap();
+    assert!(quiet.wake.is_empty(), "{:?}", quiet.wake);
+    let still = serde_json::to_value(&quiet.next).unwrap();
+    assert_eq!(still["bot_pending"][&room.id].as_array().unwrap().len(), 2, "{still}");
+
+    let mut expired = still;
+    expired["bot_hold_until"][&room.id] = json!(0);
+    let delivered = doorbell.look(&serde_json::from_value(expired).unwrap()).await.unwrap();
+    assert_eq!(
+        delivered.wake.from_bots.iter().map(|mention| mention.message_id).collect::<Vec<_>>(),
+        vec![first_held.body["id"].as_i64().unwrap(), second_held.body["id"].as_i64().unwrap()],
+        "{:?}",
+        delivered.wake
+    );
+}
+
+// L10: doorbell holds escalate 3, 10, 30, 60 until a person posts, then start over.
+#[tokio::test]
+async fn doorbell_bot_mention_holds_escalate_until_a_person_posts() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let messages = format!("/api/hangouts/{}/messages", room.id);
+    let (claude, _) = server.bot(&room.justin, &room.id, "Claude").await;
+    let (grok, _) = server.bot(&room.kevin, &room.id, "Grok").await;
+    let doorbell = Doorbell::new(&server.base, &claude);
+    let mut seen = doorbell.look(&Seen::default()).await.unwrap().next;
+    let nudge = || server.post(&grok, &messages, json!({ "text": "@Claude still there?" }));
+    for _ in 1..=MAX_BOT_RUNS_IN_A_ROW {
+        nudge().await;
+        seen = doorbell.look(&seen).await.unwrap().next;
+    }
+    let pending = serde_json::to_value(&seen).unwrap();
+    assert_remaining(&pending, &room.id, BOT_CHAIN_HOLD_SECS);
+
+    for delivered in MAX_BOT_RUNS_IN_A_ROW..=MAX_BOT_RUNS_IN_A_ROW + 3 {
+        let held = nudge().await;
+        let stopped = doorbell.look(&seen).await.unwrap();
+        assert!(stopped.wake.is_empty(), "{:?}", stopped.wake);
+        let waiting = serde_json::to_value(&stopped.next).unwrap();
+        assert_remaining(&waiting, &room.id, bot_chain_hold_secs(delivered));
+        let mut expired = waiting;
+        expired["bot_hold_until"][&room.id] = json!(0);
+        let delivered_wake =
+            doorbell.look(&serde_json::from_value(expired).unwrap()).await.unwrap();
+        assert_eq!(
+            delivered_wake.wake.from_bots.iter().map(|m| m.message_id).collect::<Vec<_>>(),
+            vec![held.body["id"].as_i64().unwrap()],
+        );
+        seen = delivered_wake.next;
+    }
+
+    server.post(&room.kevin, &messages, json!({ "text": "What are you two up to?" })).await;
+    seen = doorbell.look(&seen).await.unwrap().next;
+    for run in 1..=MAX_BOT_RUNS_IN_A_ROW {
+        nudge().await;
+        let rung = doorbell.look(&seen).await.unwrap();
+        assert_eq!(rung.wake.from_bots.len(), 1, "run {run}: {:?}", rung.wake);
+        seen = rung.next;
+    }
+    let reset = serde_json::to_value(&seen).unwrap();
+    assert_remaining(&reset, &room.id, BOT_CHAIN_HOLD_SECS);
 }
 
 #[tokio::test]

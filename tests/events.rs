@@ -9,7 +9,7 @@ use std::{
 use agenthangout::{
     app,
     db::Db,
-    doorbell::{BOT_CHAIN_HOLD_SECS, MAX_BOT_RUNS_IN_A_ROW},
+    doorbell::{bot_chain_hold_secs, Doorbell, Seen, BOT_CHAIN_HOLD_SECS, MAX_BOT_RUNS_IN_A_ROW},
     now, AppState, Config,
 };
 use axum::{
@@ -1539,7 +1539,8 @@ async fn a_bot_to_bot_chain_holds_then_delivers_every_mention() {
     assert_eq!(rings(&hook), 0, "the sixth waits");
     let held = wait_decision(&server, &pat, &pixel, "held").await;
     assert_eq!(held["reason"], "chain");
-    assert!(held["says"].as_str().unwrap().contains("waits a few minutes"), "{held}");
+    assert!(held["says"].as_str().unwrap().contains("waits 3 minutes"), "{held}");
+    assert!(held["says"].as_str().unwrap().contains("up to an hour"), "{held}");
     assert!(!held["says"].as_str().unwrap().contains("cap is used up"), "{held}");
 
     server.say(&rex, &room, "@Pixel and this one too").await;
@@ -1564,7 +1565,10 @@ async fn a_bot_to_bot_chain_holds_then_delivers_every_mention() {
     let held_again = wait_decision(&server, &pat, &pixel, "held").await;
     assert_eq!(held_again["reason"], "chain");
 
-    agenthangout::worlds::housekeeping(&server.state, now() + 2 * BOT_CHAIN_HOLD_SECS + 1);
+    agenthangout::worlds::housekeeping(
+        &server.state,
+        now() + bot_chain_hold_secs(MAX_BOT_RUNS_IN_A_ROW + 1) + 1,
+    );
     for _ in 0..50 {
         if rings(&hook) >= 2 {
             break;
@@ -1594,6 +1598,107 @@ async fn a_person_posting_delivers_held_bot_mentions_now() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(rings(&hook), 1, "a person posting delivers the held mentions now");
+}
+
+fn assert_hold_secs(server: &Server, bot: &str, room: &str, secs: i64) {
+    let due = server.state.db.held_mention_due_at(bot, room).unwrap().expect("a hold");
+    let delta = due - now();
+    assert!((delta - secs).abs() <= 2, "hold due in {delta}s, expected {secs}s");
+}
+
+async fn wait_mention_rings(hook: &Hook, n: usize) {
+    for _ in 0..50 {
+        if rings(hook) >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("wanted {n} mention rings, got {}", rings(hook));
+}
+
+// L10: a hold that expires with no new chat still delivers every held mention.
+#[tokio::test]
+async fn held_mentions_in_a_quiet_room_still_go_out_together() {
+    let server = Server::start().await;
+    let (room, _, pat, pixel, pixel_token, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({ "url": url })).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel still there?").await;
+    let first_due = server.state.db.held_mention_due_at(&pixel, &room).unwrap().unwrap();
+    server.say(&rex, &room, "@Pixel and this one too").await;
+    let second_due = server.state.db.held_mention_due_at(&pixel, &room).unwrap().unwrap();
+    assert_eq!(first_due, second_due, "mentions that arrive during a hold join it");
+    assert_eq!(rings(&hook), 0);
+
+    agenthangout::worlds::housekeeping(&server.state, now() + BOT_CHAIN_HOLD_SECS + 1);
+    wait_mention_rings(&hook, 1).await;
+    assert_eq!(rings(&hook), 1, "one coalesced wake in a quiet room");
+    let inbox = server.tool(&pixel_token, "inbox", json!({})).await;
+    assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 2, "{inbox}");
+}
+
+// L10: holds escalate 3, 10, 30, 60 while no person posts, and a person resets the wait.
+#[tokio::test]
+async fn a_bot_to_bot_hold_escalates_until_a_person_posts() {
+    let server = Server::start().await;
+    let (room, justin, pat, pixel, pixel_token, rex) =
+        two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({ "url": url })).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+
+    let mut delivered = MAX_BOT_RUNS_IN_A_ROW;
+    for step in 0..4 {
+        server.say(&rex, &room, &format!("@Pixel hold {step}")).await;
+        assert_hold_secs(&server, &pixel, &room, bot_chain_hold_secs(delivered));
+        agenthangout::worlds::housekeeping(
+            &server.state,
+            now() + bot_chain_hold_secs(delivered) + 1,
+        );
+        wait_mention_rings(&hook, step + 1).await;
+        server.tool(&pixel_token, "read_room", json!({ "hangout_id": room })).await;
+        delivered += 1;
+    }
+    assert_eq!(bot_chain_hold_secs(delivered), 60 * 60);
+    server.say(&rex, &room, "@Pixel still the hour").await;
+    assert_hold_secs(&server, &pixel, &room, 60 * 60);
+
+    server.say(&justin, &room, "That's enough.").await;
+    wait_mention_rings(&hook, 5).await;
+    server.tool(&pixel_token, "read_room", json!({ "hangout_id": room })).await;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel after a person").await;
+    assert_hold_secs(&server, &pixel, &room, BOT_CHAIN_HOLD_SECS);
+}
+
+// L10: a wake-up URL and a doorbell must not both deliver the same held burst.
+#[tokio::test]
+async fn a_webhook_and_the_doorbell_do_not_both_deliver_a_held_burst() {
+    let server = Server::start().await;
+    let (room, _, pat, pixel, pixel_token, rex) = two_bots_out_on_a_public_floor(&server).await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&pat, &format!("/api/agents/{pixel}/notify"), json!({ "url": url })).await;
+    let me = server.get(&pixel_token, "/api/me").await;
+    assert_eq!(me.body["notify_url_set"], true, "{}", me.body);
+    let doorbell = Doorbell::new(&server.base, &pixel_token);
+    let mut seen = doorbell.look(&Seen::default()).await.unwrap().next;
+    fill_bot_chain(&server, &rex, &room, &pixel).await;
+    server.say(&rex, &room, "@Pixel still there?").await;
+    server.say(&rex, &room, "@Pixel and this one too").await;
+    wait_decision(&server, &pat, &pixel, "held").await;
+    let me = server.get(&pixel_token, "/api/me").await;
+    assert!(!me.body["held_bot_mentions"][&room].as_array().unwrap().is_empty(), "{}", me.body);
+    let held = doorbell.look(&seen).await.unwrap();
+    assert!(held.wake.from_bots.is_empty(), "{:?}", held.wake);
+    seen = held.next;
+    assert_eq!(rings(&hook), 0);
+
+    agenthangout::worlds::housekeeping(&server.state, now() + BOT_CHAIN_HOLD_SECS + 1);
+    wait_mention_rings(&hook, 1).await;
+    let after = doorbell.look(&seen).await.unwrap();
+    assert!(after.wake.from_bots.is_empty(), "{:?}", after.wake);
+    assert_eq!(rings(&hook), 1, "the server owns the burst when a wake-up URL is set");
 }
 
 // L39: in a project's room, the project's bots answer each other, in their hours, with no daily cap.
@@ -2232,5 +2337,5 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
     let rings: i64 = conn
         .query_row("SELECT COUNT(*) FROM wake_rings WHERE agent_id=?", [&bot], |r| r.get(0))
         .unwrap();
-    assert_eq!(rings, 1, "the successful held claim prunes the expired reservation");
+    assert_eq!(rings, 2, "every claimed mention is rung so a doorbell cannot send the burst twice");
 }

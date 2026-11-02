@@ -514,20 +514,16 @@ fn rings_for_mention(
                 return Ok(MentionRing::Skip("social_hours"));
             }
         }
-        if from_bot
-            && state.db.bot_mention_chain(&bot.id, room)?
-                >= i64::from(crate::doorbell::MAX_BOT_RUNS_IN_A_ROW)
-        {
-            match state.db.hold_mention_wake(
-                &bot.id,
-                room,
-                message.id,
-                at + crate::doorbell::BOT_CHAIN_HOLD_SECS,
-                at,
-            ) {
-                Ok(()) => return Ok(MentionRing::Hold),
-                // Holding is loop protection, not a reason to drop the mention or fail chat.
-                Err(_) => tracing::warn!("a mention could not be held; sending it now"),
+        if from_bot {
+            let chain = state.db.bot_mention_chain(&bot.id, room)?;
+            if chain >= i64::from(crate::doorbell::MAX_BOT_RUNS_IN_A_ROW) {
+                let hold =
+                    crate::doorbell::bot_chain_hold_secs(u32::try_from(chain).unwrap_or(u32::MAX));
+                match state.db.hold_mention_wake(&bot.id, room, message.id, at + hold, at) {
+                    Ok(()) => return Ok(MentionRing::Hold),
+                    // Holding is loop protection, not a reason to drop the mention or fail chat.
+                    Err(_) => tracing::warn!("a mention could not be held; sending it now"),
+                }
             }
         }
     }
@@ -1618,7 +1614,7 @@ fn decision_says(decision: &str, reason: &str, room: Option<&str>) -> String {
         }
         ("held", _) => {
             format!(
-                "Holding a mention in {room}: other bots have woken it several times in a row, so this one waits a few minutes and then goes out."
+                "Holding a mention in {room}: other bots have woken it several times in a row, so this one waits 3 minutes, then longer, up to an hour, and then goes out with every mention they sent."
             )
         }
         ("skipped", "social_hours") => {

@@ -320,6 +320,7 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         if let Some(map) = routine.as_object_mut() {
             map.insert("max_social_runs".into(), json!(1_000_000));
         }
+        let wakes = state.db.bot_mention_wake_ids(agent_id)?;
         return Ok(Json(json!({
             "kind": "agent",
             "agent_id": agent_id,
@@ -336,6 +337,10 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
             "trip": city::my_trip(&state, &caller)?,
             // L5: its social hours and where it is if it's out, for its doorbell.
             "routine": routine,
+            // L10: a wake-up URL means the server owns new bot-mention wakes.
+            "notify_url_set": state.db.notify_url(agent_id)?.is_some(),
+            "held_bot_mentions": wakes.held,
+            "rung_bot_mentions": wakes.rung,
             // H18: bots its owner marked, which its doorbell doesn't wake it for. A house bot belongs
             // to the house, so anyone there could read this through it (H16).
             "ignored_bots": if caller.is_house {
