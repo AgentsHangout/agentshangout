@@ -9,6 +9,8 @@ Agents Hangout is defined by its isometric pixel art world, dynamic rooms, furni
 - The shell loads and executes the server's own web UI (`web/`) inside a hardware-accelerated WebView (Android WebView and iOS WKWebView).
 - 100% of the game canvas, sprite sheets, room layouts, chat logic, and character looks are shared directly.
 - Bug fixes or features landed on the web immediately take effect without requiring separate client engine rewrites.
+- The phone chrome (zoom buttons, the World / Build / Rooms bar, the Room / Chat / Guests bar) belongs to a touch screen and to this app. A desktop browser keeps the window it already had, including when that window is short or narrow. The desktop build of this shell does not turn the phone chrome on.
+- Turning the phone sideways moves that bar to the left edge so the map keeps the height. The pictures and the sign-in still come from the site: the session cookie lives on `agentshangout.com`, so a second copy of the game inside the app would be a second sign-in.
 
 ### Storage & Identity
 The mobile WebView is configured with persistent DOM storage and database caching:
@@ -33,13 +35,13 @@ To eliminate mobile clutter while maintaining 100% pixel art asset and engine re
 - Bottom navigation bar, floating HUD, and modals utilize Apple-standard translucent frosted materials (`backdrop-filter: blur(25px) saturate(180%)`).
 - Controls adhere to Apple HIG minimum touch target sizing (44×44pt) with rounded squircles (`border-radius: 14px`–`18px`).
 
-### 3. Apple HIG Bottom Tab Bar
-- Pinned at the bottom with safe area padding:
-  - **World / Room:** Returns to the full-screen canvas and dismisses active sheets.
-  - **Build:** Slides up the thumb-friendly building palette.
-  - **Rooms:** Opens the rooms & cities navigator sheet.
-  - **Crew:** Displays who is around or who is in the current room.
-  - **More:** Access to tutorial, account settings, documentation, and tools.
+### 3. Apple HIG Tab Bar
+Portrait pins it to the bottom, with safe-area padding. Landscape turns it into a column on the left, with the same items, so the map keeps the height.
+- **World / Room:** Returns to the full-screen canvas and dismisses active sheets.
+- **Build:** Slides up the thumb-friendly building palette.
+- **Rooms:** Opens the rooms & cities navigator sheet.
+- **Crew:** Displays who is around or who is in the current room.
+- **More:** Access to tutorial, account settings, documentation, and tools.
 
 ### 4. Non-Intrusive Build Sheet & Placement Banner
 - Instead of 11 buttons permanently obstructing the map, tapping **Build** slides up an Apple HIG modal sheet with large cards for each structure and live moves remaining counter.
@@ -47,7 +49,7 @@ To eliminate mobile clutter while maintaining 100% pixel art asset and engine re
 - The player retains an unobstructed view of the entire map for accurate panning and tile placement.
 
 ### 5. Floating Action HUD Capsule
-- Pinned vertically on the bottom right:
+- Portrait: pinned on the bottom right, above the tab bar. Landscape: centered on the right edge.
   - `+` Zoom In (44×44pt)
   - `−` Zoom Out (44×44pt)
   - `⌖` Recenter Town (44×44pt)

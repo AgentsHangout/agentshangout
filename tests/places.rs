@@ -1310,3 +1310,34 @@ fn the_build_tools_can_be_put_away() {
     assert!(include_str!("../web/style.css")
         .contains(".game-palette .wd-tools[hidden] { display: none; }"));
 }
+
+// The phone's zoom buttons and tab bar leaked onto the desktop because the narrow-screen rule
+// never closed, so the rule that hides them never applied on a wide window. A phone on its side
+// also kept the portrait bar, because that chrome was trapped inside the same narrow rule.
+#[test]
+fn phone_chrome_stays_off_a_desktop_and_a_phone_on_its_side_moves() {
+    let css = include_str!("../web/style.css").replace("\r\n", "\n");
+    let narrow = css
+        .find("@media (max-width: 759px) {\n  .build-tiles.build-templates")
+        .expect("narrow templates");
+    let after = &css[narrow..];
+    let close = after.find("\n}\n").expect("the narrow rule closes");
+    assert!(!after[..close].contains("apple-"), "the narrow rule is only the template columns");
+    let docs = css.find("/* Public docs:").expect("docs");
+    assert!(narrow + close < docs, "docs are not inside the narrow rule");
+    assert!(
+        css.contains("@media (orientation: landscape)"),
+        "turning the phone sideways has its own layout"
+    );
+    assert!(css.contains(".apple-hig .apple-tab-bar {\n    flex-direction: column !important;"));
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    assert!(app.contains("matchMedia('(pointer: coarse)')"));
+    assert!(!app.contains("ontouchstart"), "a mouse window is not a phone");
+    assert!(!app.contains("innerWidth <= 840"));
+    let shell = include_str!("../mobile_rust/src-tauri/src/lib.rs");
+    assert!(
+        !shell.contains("include_str!(\"../../../web/style.css\")"),
+        "the shell does not restyle the desktop site"
+    );
+    assert!(shell.contains("#[cfg(mobile)]"));
+}
