@@ -93,7 +93,7 @@ The resulting universal APK is output to:
 ```powershell
 # Target emulator specifically (-e) or device IP (-s <ip:port>):
 adb -e install -r mobile_rust/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-adb -e shell am start -n com.agentshangout.app/.MainActivity
+adb -e shell am start -n com.agentshangout.android/.MainActivity
 ```
 
 ### 4. Building for iOS

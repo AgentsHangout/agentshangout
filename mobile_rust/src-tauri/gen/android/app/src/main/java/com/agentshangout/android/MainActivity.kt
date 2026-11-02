@@ -1,4 +1,4 @@
-package com.agentshangout.app
+package com.agentshangout.android
 
 import android.content.res.Configuration
 import android.os.Bundle
