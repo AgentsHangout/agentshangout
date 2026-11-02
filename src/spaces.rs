@@ -6,7 +6,7 @@
 use std::{collections::HashMap, sync::Mutex};
 
 use axum::{
-    extract::{rejection::JsonRejection, Path, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     routing::{get, post, put},
     Json, Router,
 };
@@ -59,11 +59,17 @@ const MAX_DOORS_PER_MINUTE: u32 = 30;
 pub const PRESENT_SECS: i64 = 45;
 /// S41: however many people look at however many floors, this is all that's remembered.
 pub const MAX_SIGHTINGS: usize = 4096;
+/// S67: what a bot is told about when it can see someone.
+pub const PRESENCE_RULE: &str = "You see them when they are present on a public floor, or present \
+    on a floor both you (or your owner) and they are invited to or part of. Otherwise they are \
+    hidden, including when they have not got that floor open.";
+const HIDDEN_NOTE: &str = "They're not somewhere you can see.";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/spaces", get(my_spaces))
         .route("/api/spaces/public", get(public_floors))
+        .route("/api/presence", get(presence))
         .route("/api/spaces/door", post(go_through_door))
         .route("/api/places/{x}/{y}", get(place_details))
         .route("/api/hangouts/{id}/away", post(away))
@@ -1441,6 +1447,178 @@ pub fn place_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResul
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct PresenceQuery {
+    name: Option<String>,
+}
+
+/// S67: `GET /api/presence?name=`.
+async fn presence(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(query): Query<PresenceQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(where_is(&state, &caller, query.name.as_deref().unwrap_or(""))?))
+}
+
+/// S67: where a person or bot currently is, if this bot is allowed to see them.
+pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Value> {
+    ops::no_house_bot(caller)?;
+    if !caller.is_agent() {
+        return Err(ApiError::forbidden("only bots look up where someone is"));
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("name is required"));
+    }
+    let now = now();
+    let mut visible = Vec::new();
+    for person in state.db.people_named(name)? {
+        if let Some(found) = sighting(state, caller, "person", &person.name, &person.id, None, now)?
+        {
+            visible.push(found);
+        }
+    }
+    for agent in state.db.agents_named(name, now)? {
+        if let Some(found) =
+            sighting(state, caller, "bot", &agent.name, &agent.owner_id, Some(&agent.id), now)?
+        {
+            visible.push(found);
+        }
+    }
+    match visible.len() {
+        0 => Ok(json!({
+            "name": name,
+            "here": Value::Null,
+            "note": HIDDEN_NOTE,
+            "rule": PRESENCE_RULE,
+        })),
+        1 => Ok(visible.remove(0)),
+        _ => Err(ApiError::conflict(
+            "more than one person or bot has that name somewhere you can see",
+        )),
+    }
+}
+
+fn sighting(
+    state: &AppState,
+    caller: &Caller,
+    kind: &'static str,
+    name: &str,
+    owner_id: &str,
+    agent_id: Option<&str>,
+    now: i64,
+) -> ApiResult<Option<Value>> {
+    let hangout_id = match agent_id {
+        Some(id) => state.db.bot_place(id, now)?,
+        None => state.presence.floor_of(owner_id, now),
+    };
+    let Some(hangout_id) = hangout_id else {
+        return Ok(None);
+    };
+    let Some(floor) = state.db.floor(&hangout_id)? else {
+        return Ok(None);
+    };
+    let public = floor.access == "public";
+    let Some(hangout) = state.db.hangout(&hangout_id)? else {
+        return Ok(None);
+    };
+    if !public && !shared_floor(state, caller, owner_id, agent_id, &hangout_id, now)? {
+        return Ok(None);
+    }
+    let go = go_tool(state, caller, &hangout_id, public, now)?;
+    let mut body = json!({
+        "name": name,
+        "kind": kind,
+        "here": { "id": hangout.id, "name": hangout.name },
+        "rule": PRESENCE_RULE,
+    });
+    if let Some(go) = go {
+        body["go"] = json!(go);
+    }
+    Ok(Some(body))
+}
+
+fn shared_floor(
+    state: &AppState,
+    caller: &Caller,
+    their_owner_id: &str,
+    their_agent_id: Option<&str>,
+    hangout_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    Ok(side_of(state, &caller.person_id, caller.agent_id.as_deref(), hangout_id, now)?
+        && side_of(state, their_owner_id, their_agent_id, hangout_id, now)?)
+}
+
+fn side_of(
+    state: &AppState,
+    person_id: &str,
+    agent_id: Option<&str>,
+    hangout_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    if let Some(agent_id) = agent_id {
+        if state.db.agent_in_room(hangout_id, agent_id, now)? {
+            return Ok(true);
+        }
+    }
+    Ok(state.db.is_member(hangout_id, person_id)?
+        || state.db.invited_to_room(hangout_id, person_id, now - crate::friends::INVITE_SECS)?)
+}
+
+fn go_tool(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    public: bool,
+    now: i64,
+) -> ApiResult<Option<&'static str>> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(None);
+    };
+    if state.db.agent_in_room(hangout_id, agent_id, now)?
+        || state.db.is_member(hangout_id, &caller.person_id)?
+    {
+        return Ok(Some("go_to_room"));
+    }
+    if public {
+        return Ok(Some("go_out"));
+    }
+    Ok(None)
+}
+
+/// S67: a floor its owner is a member of is one this bot can be in, so going there brings it in
+/// as S59 does. Anything else is left for `require_room` to refuse the same way it always did.
+fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(());
+    };
+    let now = now();
+    if state.db.agent_in_room(hangout_id, agent_id, now)? {
+        return Ok(());
+    }
+    if state.db.floor(hangout_id)?.is_none() {
+        return Ok(());
+    }
+    if !state.db.is_member(hangout_id, &caller.person_id)? {
+        return Ok(());
+    }
+    if let Some(home) = state.db.bot_home(agent_id)? {
+        let own_living_room =
+            state.db.house(&home.house_id)?.is_some_and(|house| house.living_room_id == hangout_id);
+        if home.stays_home && !own_living_room {
+            return Err(ApiError::conflict(
+                "you stay home: you can only be in your own house's Living Room",
+            ));
+        }
+    }
+    check_can_join(state, &caller.person_id, hangout_id)?;
+    require_public_conversations(state, agent_id, hangout_id)?;
+    state.db.add_agent_to_room(hangout_id, agent_id)?;
+    Ok(())
+}
+
 /// S57, S58: a bot takes itself to a room it can be in, before it does something there. A person
 /// has nowhere to go, and neither has a bot that's already there.
 pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
@@ -1460,12 +1638,14 @@ pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<(
     place_bot(state, agent_id, hangout_id)
 }
 
-/// S57: `go_to_room`, for a bot going somewhere with nothing to do there yet.
+/// S57, S67: `go_to_room`, for a bot going somewhere with nothing to do there yet. A floor its
+/// owner is a member of is one it can be in.
 pub fn go_to_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
     ops::no_house_bot(caller)?;
     if !caller.is_agent() {
         return Err(ApiError::forbidden("only bots go to rooms"));
     }
+    join_owners_floor(state, caller, hangout_id)?;
     let hangout = ops::require_room(state, caller, hangout_id)?;
     ops::note_agent_write(state, caller)?;
     go_to(state, caller, &hangout.id)?;
@@ -1563,6 +1743,15 @@ impl Presence {
     pub fn has_seen(&self, floor_id: &str, person_id: &str, now: i64) -> bool {
         let key = (floor_id.to_string(), person_id.to_string());
         self.sightings().get(&key).is_some_and(|seen| now - *seen <= PRESENT_SECS)
+    }
+
+    /// S41, S53, S67: the floor this person has open, if any.
+    pub fn floor_of(&self, person_id: &str, now: i64) -> Option<String> {
+        self.sightings()
+            .iter()
+            .filter(|((_, person), seen)| person == person_id && now - **seen <= PRESENT_SECS)
+            .max_by_key(|(_, seen)| **seen)
+            .map(|((floor, _), _)| floor.clone())
     }
 
     /// S45: gone at once, rather than when the look runs out.

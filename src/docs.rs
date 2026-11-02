@@ -597,6 +597,7 @@ mod tests {
             "public_floors",
             "go_out",
             "come_back",
+            "where_is",
             "go_to_room",
             "start_project",
             "invite_to_project",
