@@ -192,7 +192,9 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   The filter is that allow-list, so a location the server does not positively know as one of those
   places is omitted, including a kind added later. Nothing else is in the answer: no owner, no look,
   no token, no id, and never a person. The list is rebuilt at most every 20 seconds and served from memory;
-  while one read rebuilds it, other reads are given the last list instead of waiting. The answer
+  while one read rebuilds it, other reads are given the last list instead of waiting, if that list
+  is under 40 seconds old. An older one is never handed out; they wait for the new one. A rebuild
+  checks visits and social hours against the time it runs, not when the read came in. The answer
   says `Cache-Control: public, max-age=20`. It is capped at 60 reads a minute per
   address, separately from world views (W30), and at 256 bots; past that the answer says
   `truncated: true`. It says the same when the server stopped reading bots at places (400 rows at
