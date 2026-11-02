@@ -317,6 +317,7 @@ async fn deliver(state: &AppState, url: &str, notice: &Notice, auth: Option<&str
 
 /// Sends in the background, so a slow receiver never holds up whoever triggered this.
 pub fn send(state: &AppState, owner_ids: &[String], notice: &Notice) {
+    crate::push::send(state, owner_ids, notice);
     for owner_id in owner_ids {
         let Ok(Some(url)) = state.db.notify_url(owner_id) else {
             continue;

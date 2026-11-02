@@ -1,0 +1,84 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Push settings regression checks</title>
+<link rel="stylesheet" href="../../web/style.css">
+<pre id="results">Running…</pre>
+<script type="module">
+const results = document.querySelector('#results');
+const checks = [];
+function check(ok, label) { if (!ok) throw new Error(label); checks.push(`PASS ${label}`); }
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+try {
+  const source = await (await fetch('../../web/app.js', {cache:'no-store'})).text();
+  check(source.includes('function notificationActions('), 'production notification controls exist');
+  const hSource = source.slice(source.indexOf('function h('), source.indexOf('\nasync function api('));
+  const helpers = source.slice(source.indexOf('function modal('), source.indexOf('// With a passkey'));
+  const calls = []; let configured = true; let admin = true;
+  const api = async (path, options) => {
+    calls.push({path, ...options});
+    if (path === '/api/push/status') return {configured, admin};
+    if (path === '/api/push/announcements') return {accepted:true};
+    throw new Error(`Unexpected request: ${path}`);
+  };
+  const {notificationActions, nativeNotificationAction} = new Function('api', `${hSource}\n${helpers}\nreturn {notificationActions,nativeNotificationAction};`)(api);
+  const person = {kind:'person',name:'Fixture'};
+  delete window.AgentsHangoutNotifications;
+  check(notificationActions(person).length === 0, 'desktop has no phone setting');
+  const messages = [];
+  window.AgentsHangoutNotifications = Object.freeze({
+    openSettings: (...args) => messages.push({action:'openSettings',args}),
+    signedOut: (...args) => messages.push({action:'signedOut',args}),
+    status: (...args) => messages.push({action:'status',args}),
+  });
+  check(notificationActions(null).length === 0 && notificationActions({kind:'bot'}).length === 0, 'only signed-in people get controls');
+  const phone = notificationActions(person)[0]; document.body.append(phone); phone.click();
+  check(messages.length === 1 && messages[0].action === 'openSettings' && messages[0].args.length === 0, 'phone entry opens real native settings without arguments');
+  const accountSource = source.slice(source.indexOf('function accountPanel('), source.indexOf('// A small bevelled menu'));
+  const accountPanel = new Function('h', 'notificationActions', `${accountSource}\nreturn accountPanel;`)(
+    new Function(`${hSource}\nreturn h;`)(), notificationActions);
+  const accountBody = document.createElement('section');
+  const panels = {add: () => accountBody, toggle: () => document.createElement('button'), open: () => {}};
+  const account = accountPanel(panels, person, async () => ({account: [], signIn: () => document.createElement('p')}));
+  account.open(''); await tick();
+  check(accountBody.textContent.includes('Phone notifications'), 'actual shared account panel exposes phone settings');
+  account.open('', true); await tick();
+  check(!accountBody.textContent.includes('Phone notifications'), 'expired sign-in account view hides phone settings');
+  nativeNotificationAction('signedOut');
+  check(messages[1].action === 'signedOut' && messages[1].args.length === 0, 'sign-out disables native notification capability without arguments');
+  check(notificationActions(person).every(button => !button.textContent.includes('announcement')), 'non-keeper has no broadcast control');
+  const keeper = notificationActions({...person,keeper:true});
+  keeper.find(button => button.textContent.includes('announcement')).click(); await tick();
+  let dialog = document.querySelector('dialog[open]');
+  check(dialog.textContent.includes('people who enabled server announcements'), 'broadcast audience is explicit');
+  dialog.querySelector('[name=title]').value = 'Fixture announcement';
+  dialog.querySelector('[name=body]').value = '<img src=x onerror=alert(1)> Fixture body';
+  dialog.querySelector('[name=title]').value = 'x'.repeat(81);
+  dialog.querySelector('form').requestSubmit(); await tick();
+  check(!dialog.querySelector('form').hidden && !dialog.querySelector('[role=alert]').hidden, 'oversized title cannot advance to review');
+  dialog.querySelector('[name=title]').value = 'Fixture announcement';
+  dialog.querySelector('[name=body]').value = 'x'.repeat(301);
+  dialog.querySelector('form').requestSubmit(); await tick();
+  check(!dialog.querySelector('form').hidden, 'oversized body cannot advance to review');
+  dialog.querySelector('[name=body]').value = '<img src=x onerror=alert(1)> Fixture body';
+  dialog.querySelector('form').requestSubmit(); await tick();
+  check(!calls.some(call => call.path.endsWith('/announcements')), 'review does not send');
+  check(dialog.querySelector('.push-review') && !dialog.querySelector('img'), 'review renders message as text');
+  [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Edit').click();
+  check(!calls.some(call => call.path.endsWith('/announcements')), 'editing never sends');
+  dialog.querySelector('form').requestSubmit(); await tick();
+  [...dialog.querySelectorAll('button')].find(button => button.textContent === 'Send announcement').click(); await tick();
+  const sent = calls.filter(call => call.path.endsWith('/announcements'));
+  check(sent.length === 1 && sent[0].method === 'POST' && sent[0].body.title === 'Fixture announcement', 'separate confirmation sends once');
+  check(dialog.textContent.includes('queued'), 'success describes queued delivery');
+  dialog.close(); await tick();
+  configured = false;
+  notificationActions({...person,keeper:true}).find(button => button.textContent.includes('announcement')).click(); await tick();
+  dialog = document.querySelector('dialog[open]');
+  check(dialog.textContent.includes('not configured') && !dialog.querySelector('form'), 'unconfigured server cannot compose or claim delivery');
+  dialog.close(); await tick(); configured = true; admin = false;
+  notificationActions({...person,keeper:true}).find(button => button.textContent.includes('announcement')).click(); await tick();
+  check(!document.querySelector('dialog[open] form'), 'server confirms keeper permission before compose');
+  document.querySelector('dialog[open]').close();
+  results.textContent = checks.join('\n') + '\nALL PASSED';
+} catch(error) { results.textContent = checks.join('\n') + '\nFAIL ' + error.message; }
+</script>

@@ -1,5 +1,5 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "com.agentshangout.android",
-  "version": "0.1.3"
+  "version": "0.1.4"
 }

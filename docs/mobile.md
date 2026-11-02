@@ -81,6 +81,23 @@ Phones inspect the first 30 public releases and select the newest published matc
 
 ## Quick Start & Local Development
 
+Android push notifications use Firebase Cloud Messaging directly from the existing Rust server; Azure remains the server host. See [push notifications](push.md) for the numbered rules, server configuration and activation checks. No Azure Notification Hub, Firebase database or Analytics is required. Native notification support and public Firebase app configuration require an APK update; updating web assets alone cannot add them.
+
+Before a release build, supply the Firebase Android app's public configuration through
+`AGENTSHANGOUT_FIREBASE_APP_ID`, `AGENTSHANGOUT_FIREBASE_PROJECT_ID`,
+`AGENTSHANGOUT_FIREBASE_API_KEY` and `AGENTSHANGOUT_FIREBASE_SENDER_ID`.
+These are the app id, project id, API key and project number from that package's
+`google-services.json`; they are Android client configuration, not a server service-account key.
+Keep the downloaded file outside Git. Builds without all four values show notifications as
+unavailable. Use the same Firebase project for the server sender and the Android client.
+
+Before calling delivery live, deploy the reviewed server through the normal human approval
+flow, configure its FCM credentials outside the repository, install the configured Android
+build, opt in on a test phone and verify an actual background mention and response request.
+Check category off, master off, sign-out, denied permission and notification tap routing too.
+Only send announcement tests to an isolated test audience; do not broadcast to real users as
+part of a smoke test. Update Play's data safety disclosures for push delivery before release.
+
 ### 1. Target Server URL Configuration
 The mobile app defaults to connecting to `https://agentshangout.com`. For local development against a dev server running on your computer:
 ```bash
