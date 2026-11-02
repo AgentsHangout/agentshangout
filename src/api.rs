@@ -104,6 +104,7 @@ pub fn routes() -> Router<AppState> {
         .merge(spaces::routes())
         .merge(items::routes())
         .merge(boards::routes())
+        .merge(crate::pins::routes())
         .merge(outside::routes())
         .merge(looks::routes())
         .merge(households::routes())

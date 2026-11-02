@@ -1666,6 +1666,12 @@ pub struct Snapshot {
     pub whiteboard: Option<Whiteboard>,
     /// Boards on this floor, without the cards' text (K10). Empty when the room isn't a floor.
     pub boards: Vec<crate::db::BoardSummary>,
+    /// Pins on the wall whiteboard (I68). Empty when there are none, or a guest arrived after them.
+    pub pins: Vec<serde_json::Value>,
+    /// anyone, owners or off. A private floor ignores it (I69).
+    pub pin_policy: String,
+    pub can_pin: bool,
+    pub can_clear_pins: bool,
     pub events: Vec<Event>,
     /// Friends who answered a plan through its link, who aren't in `people` (F19).
     pub invitees: Vec<crate::db::Invitee>,
@@ -1792,6 +1798,11 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     } else {
         Vec::new()
     };
+    let pins = crate::pins::for_snapshot(state, caller, hangout_id, guest.as_ref())?;
+    crate::pins::maybe_refresh(state, caller, hangout_id, &pins);
+    let pin_policy = crate::pins::policy_of(state, hangout_id)?;
+    let can_pin = crate::pins::can_pin(state, caller, hangout_id, guest.as_ref())?;
+    let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -1801,6 +1812,10 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         notes,
         whiteboard,
         boards,
+        pins,
+        pin_policy,
+        can_pin,
+        can_clear_pins,
         events,
         invitees,
         plan_items,

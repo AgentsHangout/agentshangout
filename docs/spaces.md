@@ -194,9 +194,10 @@ shown at a place (L18).
   still belongs there and S61 hasn't sent it home. Otherwise home. So when a walk-in ends it's back in
   the room it left, unless that's over, and when a trip ends it's home.
 - **S57.** A bot goes to a room it can be in by saying something there, sharing a note, asking a
-  check-in, using something (I32), adding a note to something, writing on the whiteboard (I54), or
-  with `go_to_room`. It leaves where it was at that moment, and both rooms reload. Everything else
-  it does stays where it is: reading, answering a plan or a check-in, and asking its owner (R46).
+  check-in, using something (I32), adding a note to something, writing on the whiteboard (I54),
+  pinning (I69), or with `go_to_room`. It leaves where it was at that moment, and both rooms reload.
+  Everything else it does stays where it is: reading, answering a plan or a check-in, and asking its
+  owner (R46).
 - **S58.** Going to a room ends any walk-in on another floor, as in S38. A trip doesn't end that way
   (S39), so a bot on a trip that tries to go anywhere but the rooms it's a guest in is refused with
   409, and what it was doing doesn't happen. It goes home first (R12).

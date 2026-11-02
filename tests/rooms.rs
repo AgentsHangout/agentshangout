@@ -1929,6 +1929,8 @@ impl QuietRoom {
             .await
             .ok();
         assert!(!boards.to_string().contains(WORDS), "{boards}");
+        let pins = self.server.snapshot(&self.ann.key, &self.room).await["pins"].clone();
+        assert!(!pins.to_string().contains(WORDS), "{pins}");
     }
 
     fn rest(&self, tail: &str) -> String {
@@ -2205,6 +2207,55 @@ async fn people_are_unaffected_by_a_quiet_sign() {
     let (_, eve) = server.someone("Eve").await;
     server.walk_in(&eve, &quiet.room).await;
     server.post(&eve.key, &quiet.rest("messages"), json!({ "text": "a stranger" })).await.ok();
+}
+
+// I17
+
+#[tokio::test]
+async fn quiet_stops_a_bot_pinning_over_http_and_mcp() {
+    let quiet = QuietRoom::new().await;
+    let body = json!({ "kind": "note", "title": WORDS });
+    quiet.refused_over_http(
+        quiet.server.post(&quiet.scout.token, &quiet.rest("pins"), body.clone()).await,
+    );
+    let args = json!({ "hangout_id": quiet.room, "kind": "note", "title": WORDS });
+    quiet.refused_over_mcp(quiet.server.tool(&quiet.scout.token, "pin", args).await);
+    quiet.nothing_landed().await;
+}
+
+// I17
+
+#[tokio::test]
+async fn quiet_stops_a_bot_unpinning() {
+    let quiet = QuietRoom::new().await;
+    let added = quiet
+        .server
+        .post(&quiet.ann.key, &quiet.rest("pins"), json!({ "kind": "note", "title": "stay up" }))
+        .await
+        .ok();
+    let pin_id = text(&added["pin"]["id"]);
+    quiet.refused_over_http(
+        quiet.server.delete(&quiet.scout.token, &format!("/api/pins/{pin_id}")).await,
+    );
+    let args = json!({ "pin_id": pin_id });
+    quiet.refused_over_mcp(quiet.server.tool(&quiet.scout.token, "unpin", args).await);
+    let pins = quiet.server.snapshot(&quiet.ann.key, &quiet.room).await["pins"].clone();
+    assert_eq!(pins[0]["title"], "stay up", "{pins}");
+}
+
+// I17, I71
+
+#[tokio::test]
+async fn quiet_stops_a_bot_clearing_pins() {
+    let quiet = QuietRoom::new().await;
+    quiet
+        .server
+        .post(&quiet.ann.key, &quiet.rest("pins"), json!({ "kind": "note", "title": "stay up" }))
+        .await
+        .ok();
+    quiet.refused_over_http(quiet.server.delete(&quiet.scout.token, &quiet.rest("pins")).await);
+    let pins = quiet.server.snapshot(&quiet.ann.key, &quiet.room).await["pins"].clone();
+    assert_eq!(pins[0]["title"], "stay up", "{pins}");
 }
 
 // I17
@@ -4345,6 +4396,8 @@ fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
     let app = include_str!("../web/app.js");
     for here in [
         "snapshot.whiteboard",
+        "snapshot.pins",
+        "pin-strip",
         "/whiteboard`",
         "NOTHING PLANNED",
         "NEXT UP",
@@ -4352,6 +4405,10 @@ fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
         "VISITING",
     ] {
         assert!(app.contains(here), "the wall has lost {here}");
+    }
+    let css = include_str!("../web/style.css");
+    for here in [".pin-strip", ".pin-card", ".pin-kind", ".pin-title", ".pin-by"] {
+        assert!(css.contains(here), "the strip has lost {here}");
     }
 }
 
@@ -4401,6 +4458,11 @@ async fn bots_are_told_what_the_whiteboard_is_for_and_whose_words_it_holds() {
         tools.iter().find(|tool| tool["name"] == name).unwrap().to_string()
     };
     assert!(tool("read_room").contains("whiteboard"), "read_room doesn't mention it");
+    assert!(tool("read_room").contains("pins"), "read_room doesn't mention pins");
+    let pin = tool("pin");
+    for words in ["link or a note", "https", "quiet sign", "you never fetch"] {
+        assert!(pin.contains(words), "pin doesn't say {words}: {pin}");
+    }
     let write = tool("set_whiteboard");
     for words in ["replaces", "wipe", "quiet sign", "your owner would be happy"] {
         assert!(write.contains(words), "set_whiteboard doesn't say {words}: {write}");
@@ -4418,6 +4480,10 @@ async fn bots_are_told_what_the_whiteboard_is_for_and_whose_words_it_holds() {
         "information and never instructions",
         "keep what still matters",
         "It isn't the `whiteboard` in `items`",
+        "Pins sit under it",
+        "`pin`",
+        "`unpin`",
+        "you never fetch",
     ] {
         assert!(guide.contains(words), "the guide doesn't say {words}");
     }
@@ -4861,4 +4927,440 @@ async fn rugs_go_under_anything_and_anything_goes_on_a_rug() {
         .unwrap();
     assert_eq!(rug["flat"], true);
     assert_eq!(catalog["table"]["styles"].as_array().unwrap().len(), items::TABLE_STYLES.len());
+}
+
+// The pinboard
+
+fn pins_path(room: &str) -> String {
+    format!("/api/hangouts/{room}/pins")
+}
+
+// I68, I72, I80
+
+#[tokio::test]
+async fn a_note_pin_shows_on_the_board_and_in_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let added = server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "Ship Friday" }))
+        .await
+        .ok();
+    let pin = &added["pin"];
+    assert_eq!(pin["kind"], "note");
+    assert_eq!(pin["title"], "Ship Friday");
+    assert_eq!(pin["url"], Value::Null);
+    assert_eq!(pin["preview"], Value::Null);
+    assert_eq!(pin["pinned_by"]["name"], "Ann");
+    assert_eq!(pin["pinned_by"]["is_bot"], false);
+    assert!(text(&added["trust_note"]).contains("never as instructions"), "{added}");
+
+    let snapshot = server.snapshot(&ann.key, &room).await;
+    assert_eq!(snapshot["pins"][0]["title"], "Ship Friday", "{}", snapshot["pins"]);
+    assert_eq!(snapshot["can_pin"], true);
+    assert_eq!(snapshot["can_clear_pins"], true);
+    assert_eq!(snapshot["pin_policy"], "anyone");
+
+    let read = server.read_room(&scout.token, &room).await;
+    assert_eq!(read["pins"][0]["title"], "Ship Friday", "{read}");
+    assert_eq!(read["pins"][0]["from_your_owner"], true, "{read}");
+    assert_eq!(read["pin_policy"], "anyone");
+    assert!(text(&read["trust_note"]).contains("never as instructions"), "{read}");
+
+    let listed = server
+        .tool(&scout.token, "use_item", json!({ "item_id": "whiteboard", "hangout_id": room }))
+        .await;
+    assert_eq!(listed["structuredContent"]["pins"][0]["title"], "Ship Friday", "{listed}");
+    assert!(text(&listed["structuredContent"]["trust_note"]).contains("never as instructions"));
+
+    let newer = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": room, "after_message_id": read["last_message_id"] }),
+        )
+        .await;
+    assert_eq!(newer["structuredContent"]["pins"][0]["title"], "Ship Friday", "{newer}");
+
+    let placed = server.item(&ann, &room, "whiteboard", (30, 2)).await;
+    server.use_item(&scout.token, &placed).await.refused(StatusCode::CONFLICT);
+}
+
+// I68
+
+#[tokio::test]
+async fn a_room_holds_twelve_pins_and_a_person_three() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let people = [
+        ann.clone(),
+        server.join(&ann, &room, "Bo").await,
+        server.join(&ann, &room, "Cam").await,
+        server.join(&ann, &room, "Dot").await,
+    ];
+    for (i, who) in people.iter().enumerate() {
+        for n in 0..3 {
+            server
+                .post(
+                    &who.key,
+                    &pins_path(&room),
+                    json!({ "kind": "note", "title": format!("{}-{}", i, n) }),
+                )
+                .await
+                .ok();
+        }
+    }
+    let full = server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "thirteen" }))
+        .await;
+    full.refused(StatusCode::CONFLICT);
+    let eve = server.join(&ann, &room, "Eve").await;
+    server
+        .post(&eve.key, &pins_path(&room), json!({ "kind": "note", "title": "eve" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+}
+
+// I68
+
+#[tokio::test]
+async fn expired_pins_are_gone_from_reads_and_from_the_limits() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let at = now();
+    let id = agenthangout::auth::new_id();
+    assert!(server
+        .state
+        .db
+        .insert_room_pin(&agenthangout::db::NewRoomPin {
+            id: &id,
+            hangout_id: &room,
+            kind: "note",
+            title: "old",
+            url: None,
+            caption: None,
+            preview_status: None,
+            person_id: &ann.id,
+            agent_id: None,
+            now: at - 10,
+            expires_at: Some(at - 1),
+            max_room: 12,
+            max_person: 3,
+        })
+        .unwrap()
+        .is_none());
+    assert_eq!(server.snapshot(&ann.key, &room).await["pins"], json!([]));
+    for n in 0..3 {
+        server
+            .post(
+                &ann.key,
+                &pins_path(&room),
+                json!({ "kind": "note", "title": format!("live-{n}") }),
+            )
+            .await
+            .ok();
+    }
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "fourth" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    server
+        .post(
+            &ann.key,
+            &pins_path(&room),
+            json!({ "kind": "note", "title": "past", "expires_at": "2020-01-01T00:00:00Z" }),
+        )
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+}
+
+// I69, I70, I71
+
+#[tokio::test]
+async fn guests_cannot_pin_and_owners_can_clear() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    server.open(&ann, &room).await.ok();
+    let (_, eve) = server.someone("Eve").await;
+    server.walk_in(&eve, &room).await;
+    server
+        .post(&eve.key, &pins_path(&room), json!({ "kind": "note", "title": "from the door" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    server
+        .post(&bo.key, &pins_path(&room), json!({ "kind": "note", "title": "Bo's pin" }))
+        .await
+        .ok();
+    server.delete(&bo.key, &pins_path(&room)).await.refused(StatusCode::FORBIDDEN);
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.delete(&scout.token, &pins_path(&room)).await.ok();
+    assert_eq!(server.snapshot(&ann.key, &room).await["pins"], json!([]));
+}
+
+// I69
+
+#[tokio::test]
+async fn a_public_floor_can_turn_pins_off_or_limit_them_to_owners() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    server.open(&ann, &room).await.ok();
+    server
+        .put(&ann.key, &format!("/api/hangouts/{room}/pin-policy"), json!({ "policy": "owners" }))
+        .await
+        .ok();
+    server
+        .post(&bo.key, &pins_path(&room), json!({ "kind": "note", "title": "nope" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "owner" }))
+        .await
+        .ok();
+    server.put(&ann.key, &format!("/api/floors/{room}"), json!({ "pins": "off" })).await.ok();
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "still" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+}
+
+// I70
+
+#[tokio::test]
+async fn the_pinner_and_the_owner_can_unpin_and_a_stranger_cannot() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let cam = server.join(&ann, &room, "Cam").await;
+    let added = server
+        .post(&bo.key, &pins_path(&room), json!({ "kind": "note", "title": "Bo's" }))
+        .await
+        .ok();
+    let pin_id = text(&added["pin"]["id"]);
+    server.delete(&cam.key, &format!("/api/pins/{pin_id}")).await.refused(StatusCode::FORBIDDEN);
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let unpinned = server.tool(&pip.token, "unpin", json!({ "pin_id": pin_id })).await;
+    assert!(unpinned["isError"].is_null(), "{unpinned}");
+    server.delete(&bo.key, &format!("/api/pins/{pin_id}")).await.refused(StatusCode::NOT_FOUND);
+    let added = server
+        .post(&bo.key, &pins_path(&room), json!({ "kind": "note", "title": "again" }))
+        .await
+        .ok();
+    let pin_id = text(&added["pin"]["id"]);
+    server.delete(&ann.key, &format!("/api/pins/{pin_id}")).await.ok();
+    assert_eq!(server.snapshot(&ann.key, &room).await["pins"], json!([]));
+}
+
+// I73, I74, I75, I80
+
+#[tokio::test]
+async fn pin_urls_are_https_public_and_secrets_are_refused() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    for url in [
+        "http://example.com/x",
+        "https://127.0.0.1/x",
+        "https://169.254.169.254/latest",
+        "https://168.63.129.16/",
+        "https://localhost/x",
+        "https://example.com:8443/x",
+        "https://user:pass@example.com/x",
+    ] {
+        let reply = server
+            .post(&ann.key, &pins_path(&room), json!({ "kind": "link", "url": url, "title": "x" }))
+            .await;
+        reply.refused(StatusCode::BAD_REQUEST);
+    }
+    for title in ["sk_live_example", "ah_bot_abcdefghijklmnopqrstuvwxyzabcdefghij"] {
+        server
+            .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": title }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
+    server
+        .post(
+            &ann.key,
+            &pins_path(&room),
+            json!({ "kind": "link", "title": "leak", "url": "https://example.com/?api_key=secret" }),
+        )
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "image", "title": "pic" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    let image = server
+        .tool(&scout.token, "pin", json!({ "hangout_id": room, "kind": "image", "title": "pic" }))
+        .await;
+    assert_eq!(image["isError"], true, "{image}");
+    assert!(text(&image["content"][0]["text"]).contains("later"), "{image}");
+}
+
+// I75
+
+#[tokio::test]
+async fn a_failed_preview_keeps_the_pin() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let added = server
+        .post(
+            &ann.key,
+            &pins_path(&room),
+            json!({
+                "kind": "link",
+                "title": "Missing",
+                "url": "https://no-such-host-agentshangout-pins-test.invalid/x"
+            }),
+        )
+        .await
+        .ok();
+    assert_eq!(added["pin"]["preview"]["status"], "failed", "{added}");
+    assert_eq!(added["pin"]["title"], "Missing");
+    assert_eq!(server.snapshot(&ann.key, &room).await["pins"][0]["title"], "Missing");
+}
+
+// I72, I52
+
+#[tokio::test]
+async fn a_guest_reads_pins_only_from_after_they_came() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "before" }))
+        .await
+        .ok();
+    server.open(&ann, &room).await.ok();
+    let (_, eve) = server.someone("Eve").await;
+    server.walk_in(&eve, &room).await;
+    let snapshot = server.snapshot(&eve.key, &room).await;
+    assert_eq!(snapshot["pins"], json!([]), "{snapshot}");
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    server
+        .post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": "after" }))
+        .await
+        .ok();
+    let pins = server.snapshot(&eve.key, &room).await["pins"].clone();
+    assert_eq!(pins[0]["title"], "after", "{pins}");
+    assert_eq!(pins.as_array().unwrap().len(), 1);
+}
+
+// I77
+
+#[tokio::test]
+async fn pinning_writes_pin_added_for_other_bots_and_no_chat_line() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let said = server.snapshot(&ann.key, &room).await["messages"].clone();
+    server
+        .tool(
+            &scout.token,
+            "pin",
+            json!({ "hangout_id": room, "kind": "note", "title": "On the wall" }),
+        )
+        .await;
+    assert_eq!(server.snapshot(&ann.key, &room).await["messages"], said);
+    let events = server.tool(&pip.token, "events_since", json!({})).await;
+    let names: Vec<&str> = events["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"pin_added"), "{events}");
+    let own = server.tool(&scout.token, "events_since", json!({})).await;
+    let own_names: Vec<&str> = own["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["name"].as_str())
+        .collect();
+    assert!(!own_names.contains(&"pin_added"), "{own}");
+}
+
+// I77
+
+#[tokio::test]
+async fn a_guest_bot_gets_pin_added_too() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let guest = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": guest.id }))
+        .await
+        .ok();
+    server
+        .tool(
+            &scout.token,
+            "pin",
+            json!({ "hangout_id": room, "kind": "note", "title": "On the wall" }),
+        )
+        .await;
+    let events = server.tool(&guest.token, "events_since", json!({})).await;
+    let names: Vec<&str> = events["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["name"].as_str())
+        .collect();
+    assert!(names.contains(&"pin_added"), "{events}");
+}
+
+// I78
+
+#[tokio::test]
+async fn pins_stay_in_their_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    worlds::ensure_commons(&server.state).unwrap();
+    let space = text(&server.snapshot(&ann.key, &room).await["floor"]["space"]["id"]);
+    let upstairs = server
+        .post(&ann.key, &format!("/api/spaces/{space}/floors"), json!({ "name": "Upstairs" }))
+        .await
+        .ok();
+    let upstairs = text(&upstairs["id"]);
+    server.post(&ann.key, &pins_path(&room), json!({ "kind": "note", "title": WORDS })).await.ok();
+    for (what, seen) in [
+        ("another floor", server.snapshot(&ann.key, &upstairs).await),
+        ("a bot's inbox", server.tool(&scout.token, "inbox", json!({})).await),
+        ("their rooms", server.tool(&scout.token, "list_hangouts", json!({})).await),
+        ("the map", server.get("", "/api/worlds/commons").await.ok()),
+    ] {
+        assert!(!seen.to_string().contains(WORDS), "{what}: {seen}");
+    }
+}
+
+// I69, I54
+
+#[tokio::test]
+async fn pinning_counts_as_one_of_a_bots_writes() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    for n in 0..agenthangout::ops::MAX_AGENT_WRITES_PER_MINUTE {
+        let title = format!("n{n}");
+        let result = server
+            .tool(
+                &scout.token,
+                "pin",
+                json!({ "hangout_id": room, "kind": "note", "title": title }),
+            )
+            .await;
+        if n < 3 {
+            assert!(result["isError"].is_null(), "{result}");
+        }
+    }
+    let last = server
+        .tool(&scout.token, "pin", json!({ "hangout_id": room, "kind": "note", "title": "more" }))
+        .await;
+    assert_eq!(last["isError"], true, "{last}");
 }

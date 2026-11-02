@@ -38,7 +38,7 @@ const AZURE_HOST_ADDRESS: Ipv4Addr = Ipv4Addr::new(168, 63, 129, 16);
 
 /// Blocks everything that isn't a routable public address, including the 169.254.169.254
 /// metadata service, private networks and IPv4 addresses wrapped in IPv6.
-fn is_public(ip: IpAddr) -> bool {
+pub(crate) fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, ..] = ip.octets();
@@ -99,7 +99,7 @@ pub fn clean_url(state: &AppState, url: &str) -> ApiResult<String> {
 }
 
 /// The first public address for this host. IPv4 comes first because this server has no IPv6 route.
-async fn public_address(host: &str) -> Option<SocketAddr> {
+pub(crate) async fn public_address(host: &str) -> Option<SocketAddr> {
     let mut addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, 443))
         .await
         .ok()?
