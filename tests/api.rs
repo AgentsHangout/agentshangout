@@ -7,7 +7,7 @@ use agenthangout::{
     app,
     db::{Db, NewOwnerQuestion},
     doorbell::{
-        bot_chain_hold_secs, Doorbell, Failure, Mention, Seen, BOT_CHAIN_HOLD_SECS,
+        bot_chain_hold_secs, Doorbell, Failure, Mention, Seen, Task, Wake, BOT_CHAIN_HOLD_SECS,
         MAX_BOT_RUNS_IN_A_ROW,
     },
     now, AppState, Config,
@@ -1544,7 +1544,12 @@ async fn only_the_owners_own_task_message_is_a_task_and_it_never_rings_the_bot()
     assert!(too_long.too_long && too_long.text.is_empty());
     let prompt = ring.wake.prompt();
     assert!(!prompt.contains("typo") && !prompt.contains("README"), "{prompt}");
-    assert!(!prompt.contains(&id(&task).to_string()), "{prompt}");
+    for task_id in [id(&task), id(&long)] {
+        assert!(
+            !prompt.contains(&format!("message {task_id} of hangout {}.", room.id)),
+            "{prompt}"
+        );
+    }
 
     // Only tasks: the bot isn't started for them, but they are something.
     let only = say(&room.justin, "@Claude task: again").await;
@@ -1553,6 +1558,34 @@ async fn only_the_owners_own_task_message_is_a_task_and_it_never_rings_the_bot()
     assert_eq!(after.wake.tasks[0].message_id, id(&only));
     assert!(!after.wake.needs_bot() && !after.wake.is_empty(), "{:?}", after.wake);
     assert!(doorbell.look(&after.next).await.unwrap().wake.is_empty());
+}
+
+// OT4: a task number may also occur inside an unrelated, opaque hangout id.
+#[test]
+fn a_task_number_inside_a_hangout_id_is_not_a_task_in_the_prompt() {
+    let room = "1Qb11sEaexM8j1Ff";
+    let task_id = 11;
+    let mut wake = Wake {
+        from_owner: vec![Mention { hangout_id: room.into(), message_id: 7 }],
+        tasks: vec![Task {
+            hangout_id: room.into(),
+            message_id: task_id,
+            text: "fix the typo in the README".into(),
+            too_long: false,
+            owner_name: Some("Justin".into()),
+        }],
+        ..Wake::default()
+    };
+    let prompt = wake.prompt();
+    assert!(prompt.contains(&format!("message 7 of hangout {room}.")), "{prompt}");
+    assert!(!prompt.contains("typo") && !prompt.contains("README"), "{prompt}");
+    assert!(prompt.contains(&task_id.to_string()), "the fixture must contain the collision");
+    let task_reference = format!("message {task_id} of hangout {room}.");
+    assert!(!prompt.contains(&task_reference), "{prompt}");
+
+    // The same check must still detect an actual task reference leaking into a wake-up.
+    wake.from_owner.push(Mention { hangout_id: room.into(), message_id: task_id });
+    assert!(wake.prompt().contains(&task_reference));
 }
 
 // OT6
