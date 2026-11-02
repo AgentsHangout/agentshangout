@@ -121,6 +121,7 @@ pub struct Shared {
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
     write_windows: Mutex<HashMap<String, Window>>,
+    write_clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 /// One key's writes: the minute being counted, its count, and the count of the minute before.
@@ -166,6 +167,27 @@ impl AppState {
     }
 
     pub fn with_apps(db: Db, config: Config, apps: Apps) -> Self {
+        Self::with_apps_and_write_clock(db, config, apps, now)
+    }
+
+    /// Builds an isolated state with a controlled Unix-seconds clock for write-limit tests.
+    /// Only write windows use this clock; authentication, events and other time stay real.
+    /// Normal constructors always use the wall clock.
+    #[doc(hidden)]
+    pub fn with_write_clock(
+        db: Db,
+        config: Config,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_apps_and_write_clock(db, config, Apps::default(), clock)
+    }
+
+    fn with_apps_and_write_clock(
+        db: Db,
+        config: Config,
+        apps: Apps,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+    ) -> Self {
         let (hub, _) = broadcast::channel(256);
         let (bot_events, _) = broadcast::channel(1024);
         let webauthn = passkey::webauthn_for(&config.public_url);
@@ -188,6 +210,7 @@ impl AppState {
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
             write_windows: Mutex::new(HashMap::new()),
+            write_clock: Arc::new(clock),
         }))
     }
 
@@ -215,7 +238,7 @@ impl AppState {
     }
 
     fn count_write(&self, key: &str, within: impl Fn(&Window, i64) -> bool) -> bool {
-        let now = now();
+        let now = (self.write_clock)();
         let minute = now / 60;
         let mut windows =
             self.write_windows.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
