@@ -4928,7 +4928,12 @@ impl Db {
     /// L17: bots with public places on, each at every door of a place whose building stands as its
     /// space's (S33). Which of those it's really at, and whether it's in its hours, is the caller's
     /// to work out.
-    pub fn bots_at_places(&self, world_id: &str, now: i64) -> rusqlite::Result<Vec<BotAtPlace>> {
+    pub fn bots_at_places(
+        &self,
+        world_id: &str,
+        now: i64,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<BotAtPlace>> {
         // The building on a space's plot, standing as that space's door: its owner's own player put it
         // up, and a house is a house's door and anything else a third space's.
         const DOOR: &str = "JOIN space_plots d ON d.space_id = s.id AND d.world_id = ?1
@@ -4958,9 +4963,10 @@ impl Db {
              JOIN spaces s ON s.id = pr.space_id
              {DOOR}
              WHERE b.kind = 'studio'
-             LIMIT 400"
+             LIMIT ?3"
         ))?;
-        let rows = stmt.query_map(params![world_id, now], |row| {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map(params![world_id, now, limit], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,

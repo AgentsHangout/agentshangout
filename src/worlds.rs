@@ -15,7 +15,7 @@ use std::{
     hash::BuildHasher,
     net::IpAddr,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard,
     },
     time::{Duration, Instant},
@@ -111,6 +111,8 @@ const COMMONS_BOTS_CACHE: Duration = Duration::from_secs(COMMONS_BOTS_CACHE_SECS
 pub const COMMONS_BOTS_PER_IP_PER_MINUTE: u32 = 60;
 /// W100: a list this long is enough for the map; past it the answer says it was cut.
 pub const COMMONS_BOTS_MAX: usize = 256;
+/// L17, W100: rows the bots-at-places query reads at once, before anything is filtered out.
+pub const BOTS_AT_PLACES_ROWS: usize = 400;
 /// W100: the 3D viewer's GitHub Pages origin, used when the setting is unset.
 pub const DEFAULT_COMMONS_VIEWER_ORIGIN: &str = "https://agentshangout.github.io";
 /// W30: a refused move costs its player nothing but costs the server a read, so each player and
@@ -366,6 +368,8 @@ pub struct Runtime {
     viewer_origins: Mutex<Vec<String>>,
     /// W100: the last Commons bots list, served until it ages out.
     commons_bots: Mutex<Option<(Instant, Bytes)>>,
+    /// L17, W100: `BOTS_AT_PLACES_ROWS`, unless a test lowers it to reach the cut.
+    place_rows: AtomicUsize,
 }
 
 impl Default for Runtime {
@@ -389,6 +393,7 @@ impl Runtime {
             last_prune: AtomicI64::new(0),
             viewer_origins: Mutex::new(parse_viewer_origins(None)),
             commons_bots: Mutex::new(None),
+            place_rows: AtomicUsize::new(BOTS_AT_PLACES_ROWS),
         }
     }
 
@@ -400,6 +405,16 @@ impl Runtime {
     /// W100: drop the cached Commons bots list, so the next read builds it again.
     pub fn expire_commons_bots(&self) {
         *locked(&self.commons_bots) = None;
+    }
+
+    /// L17, W100: how many rows the bots-at-places query reads at once.
+    pub fn place_rows(&self) -> usize {
+        self.place_rows.load(Ordering::Relaxed)
+    }
+
+    /// W100: change that, so a test can reach the limit without hundreds of bots.
+    pub fn set_place_rows(&self, rows: usize) {
+        self.place_rows.store(rows, Ordering::Relaxed);
     }
 
     /// The land for a world, made the first time it is asked for. Only worlds that exist are
@@ -2290,7 +2305,8 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
     }
     ensure_commons(state)?;
     let tiles = state.db.world_tiles(COMMONS_ID)?;
-    let at_places = crate::routines::bots_at_places(state, &tiles, &HashMap::new(), now)?;
+    let (at_places, cut) =
+        crate::routines::bots_at_places_and_cut(state, &tiles, &HashMap::new(), now)?;
     let mut bots: Vec<CommonsBotPin> = at_places
         .iter()
         .filter_map(|bot| CommonsBotPin::from_bot(bot, &tiles, &state.worlds, now))
@@ -2298,7 +2314,8 @@ fn commons_bots_body(state: &AppState, now: i64) -> ApiResult<Bytes> {
     bots.sort_by(|a, b| {
         a.tile[1].cmp(&b.tile[1]).then(a.tile[0].cmp(&b.tile[0])).then(a.name.cmp(&b.name))
     });
-    let truncated = bots.len() > COMMONS_BOTS_MAX;
+    // Cut short either here or by the database's row limit, before anything was filtered.
+    let truncated = cut || bots.len() > COMMONS_BOTS_MAX;
     bots.truncate(COMMONS_BOTS_MAX);
     #[derive(Serialize)]
     struct Out<'a> {
