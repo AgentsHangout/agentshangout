@@ -72,11 +72,19 @@ fn live(state: &AppState, caller: &Caller) -> Result<crate::oauth::Grant, Fail> 
         .oauth_access(&caller.secret_hash, &format!("{}/mcp", state.config.public_url), now())
         .map_err(internal)?
         .ok_or_else(denied)?;
-    if !crate::oauth::webhook_scope(&g.scope)
-        || caller.agent_id.as_deref() != Some(&g.agent_id)
-        || caller.person_id != g.owner_id
-    {
+    if caller.agent_id.as_deref() != Some(&g.agent_id) || caller.person_id != g.owner_id {
         return Err(denied());
+    }
+    if !crate::oauth::webhook_scope(&g.scope) {
+        // Refresh can't add it, so say what would: a new connection that asks for both.
+        return Err(Fail {
+            code: -32024,
+            message: "Forbidden",
+            data: json!({
+                "reason": "this connection was not granted mention webhooks; connect again asking for mcp:bot mcp:events and allow them",
+                "required_scope": "mcp:bot mcp:events",
+            }),
+        });
     }
     Ok(g)
 }
