@@ -1,4 +1,4 @@
-//! Showing a linked GitHub account: the rules in docs/accounts-and-trust.md (A65 to A70).
+//! Showing a linked GitHub account: the rules in docs/accounts-and-trust.md (A70 to A75).
 //!
 //! Linking is not showing. A person turns each section on, and only then does anyone else see
 //! it, read from a cache of public fields that is refreshed lazily from GitHub's public API.
@@ -11,9 +11,9 @@ use reqwest::{header, redirect, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// How old a cache row may be before a view refreshes it (A67).
+/// How old a cache row may be before a view refreshes it (A72).
 const STALE_AFTER_SECS: i64 = 6 * 60 * 60;
-/// How long a failed refresh keeps later views from trying again (A67).
+/// How long a failed refresh keeps later views from trying again (A72).
 const RETRY_AFTER_SECS: i64 = 60 * 60;
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// GitHub's API refuses a request that doesn't say who's asking.
@@ -28,7 +28,7 @@ const TOP_REPOS_SHOWN: usize = 6;
 /// Longer than any username GitHub gives out (same bound as the sign-in code).
 const MAX_LOGIN_CHARS: usize = 64;
 
-/// What a person chose to show, one switch per section, all off until they turn one on (A65).
+/// What a person chose to show, one switch per section, all off until they turn one on (A70).
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct GitHubDisplay {
     pub show_repos: bool,
@@ -37,13 +37,21 @@ pub struct GitHubDisplay {
     pub show_badge: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+pub struct DisplayPatch {
+    pub show_repos: Option<bool>,
+    pub show_stars: Option<bool>,
+    pub show_languages: Option<bool>,
+    pub show_badge: Option<bool>,
+}
+
 impl GitHubDisplay {
     pub fn any(&self) -> bool {
         self.show_repos || self.show_stars || self.show_languages || self.show_badge
     }
 }
 
-/// One public repo, with only the fields the cache keeps (A66).
+/// One public repo, with only the fields the cache keeps (A71).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repo {
     pub name: String,
@@ -64,6 +72,7 @@ pub struct LanguageCount {
 /// Everything else GitHub sends is ignored, so it can't be kept by accident.
 #[derive(Deserialize)]
 struct RawRepo {
+    owner: PublicIdentity,
     name: String,
     html_url: String,
     stargazers_count: i64,
@@ -77,13 +86,48 @@ struct RawRepo {
     private: bool,
 }
 
+#[derive(Deserialize)]
+struct PublicIdentity {
+    id: u64,
+    login: String,
+}
+
+/// Bound public responses before deserializing; an upstream body cannot consume unlimited memory.
+async fn bounded_json<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Option<T> {
+    const MAX_BYTES: usize = 2 * 1024 * 1024;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len().checked_add(chunk.len())? > MAX_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).ok()
+}
+
+async fn identity_matches(client: &Client, base: &str, login: &str, id: u64) -> Option<()> {
+    let response = client
+        .get(format!("{base}/users/{login}"))
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .ok()?;
+    if response.status() != StatusCode::OK {
+        return None;
+    }
+    let identity: PublicIdentity = bounded_json(response).await?;
+    (identity.id == id && identity.login.eq_ignore_ascii_case(login)).then_some(())
+}
+
 /// What the search API sends for a count query.
 #[derive(Deserialize)]
 struct SearchResult {
     total_count: i64,
 }
 
-/// A row of `github_display_cache`: one GitHub account's public display data (A67).
+/// A row of `github_display_cache`: one GitHub account's public display data (A72).
 #[derive(Clone, Debug)]
 pub struct CachedDisplay {
     pub github_user_id: String,
@@ -97,7 +141,15 @@ pub struct CachedDisplay {
     pub last_attempt_at: i64,
 }
 
-/// Whether a view refreshes this cache row now (A67): no row, or a row older than six hours
+/// A refresh lease, invalidated by changing display consent or replacing/unlinking the identity.
+pub struct RefreshClaim {
+    pub id: String,
+    pub github_user_id: String,
+    pub github_login: String,
+    pub existing: Option<CachedDisplay>,
+}
+
+/// Whether a view refreshes this cache row now (A72): no row, or a row older than six hours
 /// whose last attempt wasn't within the last hour.
 pub fn should_refresh(cache: Option<&CachedDisplay>, now: i64) -> bool {
     match cache {
@@ -136,19 +188,21 @@ pub fn top_languages(repos: &[Repo]) -> Vec<LanguageCount> {
 }
 
 /// Stars received: the total across the repos shown, each of which already carries its own
-/// count (A66).
+/// count (A71).
 pub fn stars_received(repos: &[Repo]) -> i64 {
     repos.iter().map(|repo| repo.stargazers_count).sum()
 }
 
 fn login_fits(login: &str) -> bool {
     (1..=MAX_LOGIN_CHARS).contains(&login.chars().count())
-        && !login.chars().any(char::is_control)
+        && login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !login.starts_with('-')
+        && !login.ends_with('-')
 }
 
 /// Refreshes one account's cache row from GitHub's public API, without any token. `None` means
-/// the refresh failed somewhere, and the caller keeps the stale row (A67). Each call keeps its
-/// own etag, so an unchanged answer costs no rate limit.
+/// the refresh failed somewhere, and the caller keeps the stale row (A72). Each call keeps its
+/// search etag. Repo pages are fetched unconditionally because page one's etag cannot validate later pages.
 pub async fn refresh(
     api_base: &str,
     github_user_id: &str,
@@ -165,9 +219,13 @@ pub async fn refresh(
         .user_agent(USER_AGENT)
         .build()
         .ok()?;
-    let (repos, repos_etag) = fetch_repos(&client, api_base, login, existing).await?;
+    let id: u64 = github_user_id.parse().ok()?;
+    identity_matches(&client, api_base, login, id).await?;
+    let (repos, repos_etag) = fetch_repos(&client, api_base, login, id).await?;
     let (merged_pr_count, search_etag) =
         fetch_merged_prs(&client, api_base, login, existing).await?;
+    // The search API is login-based. Check again after all reads, and never cache a reassigned login.
+    identity_matches(&client, api_base, login, id).await?;
     let languages = top_languages(&repos);
     Some(CachedDisplay {
         github_user_id: github_user_id.to_string(),
@@ -186,30 +244,28 @@ async fn fetch_repos(
     client: &Client,
     api_base: &str,
     login: &str,
-    existing: Option<&CachedDisplay>,
+    github_user_id: u64,
 ) -> Option<(Vec<Repo>, Option<String>)> {
     let mut repos = Vec::new();
     let mut etag = None;
     for page in 1..=MAX_REPO_PAGES {
         let page_text = page.to_string();
-        let mut request = client
+        let request = client
             .get(format!("{api_base}/users/{login}/repos"))
             .query(&[("per_page", "100"), ("page", page_text.as_str())])
             .header(header::ACCEPT, "application/vnd.github+json");
-        // Only the first page carries an etag: a 304 there keeps the whole kept list, since
-        // the list's order puts anything new on the first page.
-        if page == 1 {
-            if let Some(old) = existing.and_then(|row| row.repos_etag.as_deref()) {
-                request = request.header(header::IF_NONE_MATCH, old);
-            }
-        }
         let response = request.send().await.ok()?;
         match response.status() {
             StatusCode::OK => {
                 if page == 1 {
                     etag = etag_of(&response);
                 }
-                let raw: Vec<RawRepo> = response.json().await.ok()?;
+                let raw: Vec<RawRepo> = bounded_json(response).await?;
+                if raw.iter().any(|repo| {
+                    repo.owner.id != github_user_id || !repo.owner.login.eq_ignore_ascii_case(login)
+                }) {
+                    return None;
+                }
                 let fresh = raw.len();
                 let kept: Vec<Repo> = raw
                     .into_iter()
@@ -226,11 +282,6 @@ async fn fetch_repos(
                 if fresh < REPOS_PER_PAGE {
                     break;
                 }
-            }
-            StatusCode::NOT_MODIFIED if page == 1 => {
-                let kept = existing.map(repos_of).unwrap_or_default();
-                let kept_etag = existing.and_then(|row| row.repos_etag.clone());
-                return Some((kept, kept_etag));
             }
             _ => return None,
         }
@@ -256,7 +307,10 @@ async fn fetch_merged_prs(
     match response.status() {
         StatusCode::OK => {
             let etag = etag_of(&response);
-            let found: SearchResult = response.json().await.ok()?;
+            let found: SearchResult = bounded_json(response).await?;
+            if found.total_count < 0 {
+                return None;
+            }
             Some((found.total_count, etag))
         }
         StatusCode::NOT_MODIFIED => {
@@ -272,8 +326,8 @@ fn etag_of(response: &reqwest::Response) -> Option<String> {
     response.headers().get(header::ETAG)?.to_str().ok().map(str::to_string)
 }
 
-/// The sections a public view shows for this person: only what they turned on (A65, A69).
-/// The repos section is the six most-starred, while the star total counts them all (A66).
+/// The sections a public view shows for this person: only what they turned on (A70, A74).
+/// The repos section is the six most-starred, while the star total counts them all (A71).
 pub fn public_sections(display: &GitHubDisplay, cache: &CachedDisplay) -> Value {
     let repos = repos_of(cache);
     let mut shown = json!({});

@@ -4,29 +4,62 @@
 
 use std::{
     fs,
+    ops::Deref,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use agenthangout::doorbell::{pr_url, run_task, TaskOutcome};
 
+// These tests mutate the process environment and create executable files. Keep setup and
+// child execution together: another test must not fork while an executable is open for writing.
+static PROCESS_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug)]
+struct WorkerFixture {
+    path: PathBuf,
+    directory: PathBuf,
+}
+impl Deref for WorkerFixture {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+impl Drop for WorkerFixture {
+    fn drop(&mut self) {
+        // Only this fixture's file/directory, never the shared target root or a worktree.
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+fn fixture_path(name: &str) -> WorkerFixture {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    fs::create_dir_all(root).unwrap();
+    let directory =
+        root.join(format!("doorbell-task-{}-{}", std::process::id(), agenthangout::auth::new_id()));
+    fs::create_dir(&directory).unwrap();
+    let path =
+        directory.join(if cfg!(windows) { format!("{name}.cmd") } else { format!("{name}.sh") });
+    WorkerFixture { path, directory }
+}
+
 /// A worker is one program path, so on Windows it is a `.cmd` and elsewhere a shell script.
-fn worker(name: &str, body: &[&str]) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("doorbell-tasks");
-    fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(if cfg!(windows) { format!("{name}.cmd") } else { format!("{name}.sh") });
+fn worker(name: &str, body: &[&str]) -> WorkerFixture {
+    let fixture = fixture_path(name);
+    let path = &fixture.path;
     let mut script = if cfg!(windows) { "@echo off\r\n" } else { "#!/bin/sh\n" }.to_string();
     for line in body {
         script.push_str(line);
         script.push_str(if cfg!(windows) { "\r\n" } else { "\n" });
     }
-    fs::write(&path, script).unwrap();
+    fs::write(path, script).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    path
+    fixture
 }
 
 /// The doorbell has its own token and address in its environment, as it does when it is run.
@@ -39,6 +72,7 @@ fn doorbell_environment() {
 // OT7
 #[tokio::test]
 async fn the_worker_gets_the_task_on_stdin_and_never_the_token() {
+    let _guard = PROCESS_TEST.lock().await;
     doorbell_environment();
     let report = if cfg!(windows) {
         worker(
@@ -88,11 +122,12 @@ async fn the_worker_gets_the_task_on_stdin_and_never_the_token() {
 // OT6
 #[tokio::test]
 async fn a_worker_that_fails_or_cant_start_is_a_failure() {
+    let _guard = PROCESS_TEST.lock().await;
     let fails = worker("fails", &["exit 3"]);
     let outcome = run_task(&fails, "x", "t", Duration::from_secs(60), "a/b").await;
     assert!(matches!(outcome, TaskOutcome::Failed(_)), "{outcome:?}");
 
-    let missing = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-such-worker");
+    let missing = fixture_path("no-such-worker");
     let outcome = run_task(&missing, "x", "t", Duration::from_secs(60), "a/b").await;
     assert!(matches!(outcome, TaskOutcome::Failed(_)), "{outcome:?}");
 }
@@ -100,6 +135,7 @@ async fn a_worker_that_fails_or_cant_start_is_a_failure() {
 // OT6
 #[tokio::test]
 async fn a_worker_that_runs_too_long_is_killed() {
+    let _guard = PROCESS_TEST.lock().await;
     let slow = if cfg!(windows) {
         worker("slow", &["ping -n 60 127.0.0.1 >nul"])
     } else {
@@ -118,4 +154,14 @@ fn the_worker_preserves_worktrees_for_explicit_owner_cleanup() {
     assert!(!script.contains("Remove-Item"));
     assert!(!script.contains("worktree remove"));
     assert!(!script.contains("branch -D"));
+}
+
+#[tokio::test]
+async fn worker_fixture_names_do_not_reuse_or_overwrite_an_existing_executable() {
+    let _guard = PROCESS_TEST.lock().await;
+    let first = worker("same-name", &["echo first"]);
+    let second = worker("same-name", &["echo second"]);
+    assert_ne!(first.path, second.path, "each fixture invocation needs its own executable path");
+    assert!(fs::read_to_string(&*first).unwrap().contains("echo first"));
+    assert!(fs::read_to_string(&*second).unwrap().contains("echo second"));
 }

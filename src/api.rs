@@ -375,7 +375,7 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         "passkeys": state.db.passkey_count(&caller.person_id)?,
         // A56: their own links, which nobody else is shown.
         "sign_in": sign_in::for_person(&state, &caller.person_id)?,
-        // A65: their own GitHub display switches, which nobody else is shown.
+        // A70: their own GitHub display switches, which nobody else is shown.
         "github_display": state.db.github_display_for(&caller.person_id)?.unwrap_or_default(),
         // A54: whether a site started this session, so the page doesn't offer what it can't do.
         "sign_in_session": state.db.is_sign_in_session(&caller.secret_hash)?,
@@ -1310,92 +1310,50 @@ async fn set_sharing(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// A65: what a person turns on for their linked GitHub account. Absent switches keep their
+/// A70: what a person turns on for their linked GitHub account. Absent switches keep their
 /// value, as with sharing.
-#[derive(Deserialize)]
-struct GithubDisplayInput {
-    show_repos: Option<bool>,
-    show_stars: Option<bool>,
-    show_languages: Option<bool>,
-    show_badge: Option<bool>,
-}
-
 async fn set_github_display(
     State(state): State<AppState>,
     caller: Caller,
-    Json(body): Json<GithubDisplayInput>,
+    Json(body): Json<github_display::DisplayPatch>,
 ) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "change GitHub display")?;
-    let mut display = state.db.github_display_for(&caller.person_id)?.unwrap_or_default();
-    if let Some(show) = body.show_repos {
-        display.show_repos = show;
-    }
-    if let Some(show) = body.show_stars {
-        display.show_stars = show;
-    }
-    if let Some(show) = body.show_languages {
-        display.show_languages = show;
-    }
-    if let Some(show) = body.show_badge {
-        display.show_badge = show;
-    }
-    state.db.set_github_display(&caller.person_id, &display, now())?;
+    state.db.patch_github_display(&caller.person_id, &body, now())?;
     Ok(Json(json!({ "ok": true })))
 }
 
-/// A65 to A70: what anyone sees of one person's linked GitHub account: only the sections they
-/// turned on, read from the cache, never from the link rows (A69). Unauthenticated on purpose:
+/// A70 to A75: what anyone sees of one person's linked GitHub account: only the sections they
+/// turned on, read from the cache, never from the link rows (A74). Unauthenticated on purpose:
 /// it's what the person chose to show.
 async fn show_github_display(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let Some((github_user_id, login)) = state.db.github_link(&person_id)? else {
-        return Ok(Json(json!({ "linked": false })));
-    };
-    let display = state.db.github_display_for(&person_id)?.unwrap_or_default();
-    if !display.any() {
-        return Ok(Json(json!({ "linked": true, "login": login })));
-    }
-    let cache = state.db.github_display_cache_for(&github_user_id)?;
-    let mut fresh = None;
-    if github_display::should_refresh(cache.as_ref(), now()) {
-        let api_base = state
-            .github
-            .as_ref()
-            .map(|app| app.api_url.clone())
-            .unwrap_or_else(|| "https://api.github.com".to_string());
-        let refreshed = github_display::refresh(
-            &api_base,
-            &github_user_id,
-            &login,
-            cache.as_ref(),
-            now(),
-        )
-        .await;
-        match refreshed {
-            Some(row) => {
-                state.db.set_github_display_cache(&row)?;
-                fresh = Some(row);
-            }
-            None => {
-                state.db.note_github_display_attempt(&github_user_id, &login, now())?;
-            }
+    if let Ok(_permit) = state.github_refresh_slots.clone().try_acquire_owned() {
+        if let Some(claim) = state.db.claim_github_display_refresh(&person_id, now())? {
+            let api_base = state
+                .github
+                .as_ref()
+                .map(|app| app.api_url.clone())
+                .unwrap_or_else(|| "https://api.github.com".to_string());
+            let refreshed = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                github_display::refresh(
+                    &api_base,
+                    &claim.github_user_id,
+                    &claim.github_login,
+                    claim.existing.as_ref(),
+                    now(),
+                ),
+            )
+            .await
+            .ok()
+            .flatten();
+            state.db.finish_github_display_refresh(&person_id, &claim, refreshed.as_ref())?;
         }
     }
-    let cache = match fresh {
-        Some(row) => row,
-        // No row and no refresh: the first refresh failed before there was anything to keep,
-        // so there is nothing to show yet.
-        None => match cache {
-            Some(row) => row,
-            None => return Ok(Json(json!({ "linked": true, "login": login }))),
-        },
-    };
-    let mut shown = github_display::public_sections(&display, &cache);
-    shown["linked"] = json!(true);
-    shown["login"] = json!(login);
-    Ok(Json(shown))
+    // Re-read current identity and switches, never the state captured before network work.
+    Ok(Json(state.db.github_public_snapshot(&person_id)?))
 }
 
 async fn house_notes(

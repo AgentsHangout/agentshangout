@@ -156,7 +156,8 @@ the record for check-ins, plans and trips.
   bot follows E31.
 - **E30.** When chat in a room contains an @mention of a person in that room, the server delivers a
   mention notice to that person's notification URL, naming the room and who mentioned them. A
-  person is not notified of their own message.
+  person is not notified of their own human message. A bot mentioning its owner does notify that
+  owner: the bot's message is not a human self-mention, even though it carries the owner's ID.
 - **E31.** A person who is not the bot's owner, naming it in a room the bot is in (E5), rings its
   wake-up URL. It does not matter whether that person is a member or a guest, or whether the bot
   is in its social hours. `only_me` and Pause still block it, and a bot with no URL is not rung.

@@ -1,4 +1,4 @@
-//! A65 to A70: showing a linked GitHub account, against a stand-in for GitHub's public API
+//! A70 to A75: showing a linked GitHub account, against a stand-in for GitHub's public API
 //! that answers as the real one does and writes down everything it was sent.
 
 use std::{
@@ -26,6 +26,10 @@ use serde_json::{json, Value};
 
 #[derive(Default)]
 struct FakeState {
+    identity_id: u64,
+    repo_owner_id: Option<u64>,
+    gate: Option<Arc<tokio::sync::Semaphore>>,
+    entered: Option<Arc<tokio::sync::Notify>>,
     /// What was hit, in order: `repos`, `search:<query>`, or `search` when no query came.
     hits: Vec<String>,
     /// What `/users/{login}/repos` answers with.
@@ -53,6 +57,17 @@ async fn repos(
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
+    let (gate, entered) = {
+        let state = fake.lock().unwrap();
+        (state.gate.clone(), state.entered.clone())
+    };
+    if let Some(entered) = entered {
+        entered.notify_one();
+    }
+    let _permit = match gate {
+        Some(gate) => Some(gate.acquire_owned().await.unwrap()),
+        None => None,
+    };
     let mut state = fake.lock().unwrap();
     state.hits.push("repos".to_string());
     if state.repos_status != 0 && state.repos_status != 200 {
@@ -71,7 +86,7 @@ async fn repos(
     let page: usize = params.get("page").and_then(|value| value.parse().ok()).unwrap_or(1);
     let per_page: usize =
         params.get("per_page").and_then(|value| value.parse().ok()).unwrap_or(100);
-    let body = match state.repos_body.as_array() {
+    let mut body = match state.repos_body.as_array() {
         Some(repos) => {
             let start = (page - 1) * per_page;
             if start >= repos.len() {
@@ -82,6 +97,15 @@ async fn repos(
         }
         None => state.repos_body.clone(),
     };
+    if let Some(repos) = body.as_array_mut() {
+        for repo in repos {
+            if repo.get("owner").is_none() {
+                repo["owner"] = json!({});
+            }
+            repo["owner"]["id"] = json!(state.repo_owner_id.unwrap_or(1001));
+            repo["owner"]["login"] = json!("ann-codes");
+        }
+    }
     etag_response(AxumStatus::OK, body, "repos-etag")
 }
 
@@ -115,6 +139,7 @@ async fn start_fake() -> (String, Fake) {
     let fake = Fake::default();
     {
         let mut state = fake.lock().unwrap();
+        state.identity_id = 1001;
         state.repos_body = json!([
             { "name": "alpha", "html_url": "https://github.com/ann-codes/alpha",
               "stargazers_count": 5, "language": "Rust", "description": "A",
@@ -133,6 +158,12 @@ async fn start_fake() -> (String, Fake) {
         state.search_total = 7;
     }
     let routes = Router::new()
+        .route(
+            "/users/{login}",
+            get(|State(fake): State<Fake>| async move {
+                Json(json!({"id":fake.lock().unwrap().identity_id,"login":"ann-codes"}))
+            }),
+        )
         .route("/users/{login}/repos", get(repos))
         .route("/search/issues", get(search))
         .with_state(fake.clone());
@@ -217,13 +248,7 @@ impl Server {
         Self { base, client, state, fake }
     }
 
-    async fn send(
-        &self,
-        token: &str,
-        method: Method,
-        path: &str,
-        body: Option<Value>,
-    ) -> Reply {
+    async fn send(&self, token: &str, method: Method, path: &str, body: Option<Value>) -> Reply {
         let mut request = self.client.request(method, format!("{}{path}", self.base));
         if !token.is_empty() {
             request = request.bearer_auth(token);
@@ -264,21 +289,14 @@ impl Server {
             )
             .await
             .ok();
-        let who = Who {
-            key: text(&made["owner_key"]),
-            id: text(&made["person"]["id"]),
-        };
+        let who = Who { key: text(&made["owner_key"]), id: text(&made["person"]["id"]) };
         (text(&made["hangout"]["id"]), who)
     }
 
     /// A bot's id and its token.
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
         let made = self
-            .post(
-                &owner.key,
-                &format!("/api/hangouts/{room}/agents"),
-                json!({ "name": name }),
-            )
+            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
             .await
             .ok();
         (text(&made["agent"]["id"]), text(&made["token"]))
@@ -286,9 +304,11 @@ impl Server {
 
     /// Links GitHub straight into storage: the link flow itself is covered elsewhere.
     fn link_github(&self, person_id: &str, account_id: &str, login: &str) {
-        assert!(
-            self.state.db.set_sign_in_link(person_id, "github", account_id, login, now()).unwrap()
-        );
+        assert!(self
+            .state
+            .db
+            .set_sign_in_link(person_id, "github", account_id, login, now())
+            .unwrap());
     }
 
     fn set_display(&self, person_id: &str, display: &GitHubDisplay) {
@@ -332,7 +352,7 @@ fn fresh_cache(now: i64) -> CachedDisplay {
     }
 }
 
-// A65
+// A70
 
 #[tokio::test]
 async fn toggles_default_off_and_no_link_means_unlinked() {
@@ -351,17 +371,11 @@ async fn toggles_default_off_and_no_link_means_unlinked() {
 async fn put_persists_partially_and_is_person_only() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
-    server
-        .put(&ann.key, "/api/me/github-display", json!({ "show_repos": true }))
-        .await
-        .ok();
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_repos": true })).await.ok();
     let me = server.get(&ann.key, "/api/me").await.ok();
     assert_eq!(me["github_display"]["show_repos"], true);
     assert_eq!(me["github_display"]["show_stars"], false);
-    server
-        .put(&ann.key, "/api/me/github-display", json!({ "show_badge": true }))
-        .await
-        .ok();
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_badge": true })).await.ok();
     let me = server.get(&ann.key, "/api/me").await.ok();
     assert_eq!(me["github_display"]["show_repos"], true);
     assert_eq!(me["github_display"]["show_badge"], true);
@@ -373,7 +387,7 @@ async fn put_persists_partially_and_is_person_only() {
         .refused(StatusCode::FORBIDDEN);
 }
 
-// A65, A69
+// A70, A74
 
 #[tokio::test]
 async fn public_view_returns_only_enabled_sections() {
@@ -402,18 +416,17 @@ async fn public_view_returns_only_enabled_sections() {
 }
 
 #[tokio::test]
-async fn all_toggles_off_returns_login_only_and_refreshes_nothing() {
+async fn all_toggles_off_hides_identity_and_refreshes_nothing() {
     let server = Server::start().await;
     let (_, ann) = server.someone("Ann").await;
     server.link_github(&ann.id, "1001", "ann-codes");
     let view = server.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
-    assert_eq!(view["linked"], true);
-    assert_eq!(view["login"], "ann-codes");
+    assert_eq!(view, json!({"linked": false}));
     assert!(view["repos"].is_null(), "{}", view);
     assert!(server.hits().is_empty(), "{:?}", server.hits());
 }
 
-// A67
+// A72
 
 #[tokio::test]
 async fn stale_cache_refreshes_once_and_fresh_cache_does_not() {
@@ -443,7 +456,7 @@ async fn stale_cache_refreshes_once_and_fresh_cache_does_not() {
 }
 
 #[tokio::test]
-async fn etag_304_keeps_data_and_bumps_fetched_at() {
+async fn search_304_keeps_badge_while_repo_pages_refresh() {
     let server = Server::start().await;
     let (_, ann) = server.someone("Ann").await;
     server.link_github(&ann.id, "1001", "ann-codes");
@@ -453,12 +466,14 @@ async fn etag_304_keeps_data_and_bumps_fetched_at() {
     cached.search_etag = Some("search-etag".to_string());
     server.seed_cache(&cached);
     let view = server.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
-    assert_eq!(view["repos"].as_array().unwrap().len(), 2);
+    assert_eq!(view["repos"].as_array().unwrap().len(), 1);
     assert_eq!(view["repos"][0]["name"], "alpha");
     assert_eq!(view["badge"]["merged_prs"], 7);
     let kept = server.state.db.github_display_cache_for("1001").unwrap().unwrap();
     assert!(kept.fetched_at >= now() - 60, "{}", kept.fetched_at);
-    assert_eq!(kept.repos_json, cached.repos_json);
+    assert_eq!(serde_json::from_str::<Value>(&kept.repos_json).unwrap(), view["repos"]);
+    assert_eq!(kept.merged_pr_count, cached.merged_pr_count);
+    assert_eq!(view["stars"]["total"], 5);
 }
 
 async fn failure_keeps_stale(status: u16) {
@@ -503,7 +518,7 @@ fn many_repos(count: i64) -> Value {
     )
 }
 
-// A66, A67
+// A71, A72
 
 #[tokio::test]
 async fn shown_repos_cap_at_six_most_starred() {
@@ -568,7 +583,7 @@ async fn network_failure_still_answers_200_with_stale_data() {
     assert_eq!(view["repos"].as_array().unwrap().len(), 2);
 }
 
-// A66
+// A71
 
 #[tokio::test]
 async fn cache_json_holds_only_whitelisted_public_fields() {
@@ -590,7 +605,7 @@ async fn cache_json_holds_only_whitelisted_public_fields() {
     assert_eq!(keys, ["description", "html_url", "language", "name", "stargazers_count"]);
 }
 
-// A68
+// A73
 
 #[tokio::test]
 async fn unlink_deletes_settings_and_cache_rows() {
@@ -609,7 +624,7 @@ async fn unlink_deletes_settings_and_cache_rows() {
     assert!(server.hits().is_empty(), "{:?}", server.hits());
 }
 
-// A69
+// A74
 
 #[tokio::test]
 async fn a_bot_view_carries_no_github() {
@@ -661,4 +676,267 @@ fn db_round_trips_display_and_cache_rows() {
     db.delete_github_display_cache("1001").unwrap();
     assert!(db.github_display_for("p1").unwrap().is_none());
     assert!(db.github_display_cache_for("1001").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn disabled_display_is_indistinguishable_from_an_unlinked_account() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    let path = format!("/api/people/{}/github", ann.id);
+    let unlinked = s.get("", &path).await.ok();
+    s.link_github(&ann.id, "1001", "ann-codes");
+    assert_eq!(
+        s.get("", &path).await.ok(),
+        unlinked,
+        "linking must not disclose identity without opt-in"
+    );
+    assert!(s.hits().is_empty());
+}
+#[tokio::test]
+async fn repeated_first_fetch_failure_never_fabricates_zero_sections() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.fake.lock().unwrap().repos_status = 403;
+    for _ in 0..3 {
+        let view = s.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
+        for section in ["repos", "stars", "languages", "badge"] {
+            assert!(view.get(section).is_none(), "unknown is not zero: {view}");
+        }
+    }
+}
+#[tokio::test]
+async fn changes_only_on_later_repo_pages_are_not_hidden_by_page_one_etag() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.fake.lock().unwrap().repos_body=Value::Array((0..101).map(|i|json!({"name":format!("repo-{i:03}"),"html_url":format!("https://github.com/ann-codes/repo-{i:03}"),"stargazers_count":1,"language":"Rust","description":null})).collect());
+    let path = format!("/api/people/{}/github", ann.id);
+    assert_eq!(s.get("", &path).await.ok()["stars"]["total"], 101);
+    let mut cache = s.state.db.github_display_cache_for("1001").unwrap().unwrap();
+    cache.fetched_at = now() - 7 * 3600;
+    cache.last_attempt_at = 0;
+    s.seed_cache(&cache);
+    s.fake.lock().unwrap().repos_body[100]["stargazers_count"] = json!(999);
+    assert_eq!(s.get("", &path).await.ok()["stars"]["total"], 1099);
+}
+async fn delayed_refresh_change(change: &str) {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut fake = s.fake.lock().unwrap();
+        fake.gate = Some(gate.clone());
+        fake.entered = Some(entered.clone());
+    }
+    let request = s.client.get(format!("{}/api/people/{}/github", s.base, ann.id));
+    let pending =
+        tokio::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified()).await.unwrap();
+    match change {
+        "unlink" => s.state.db.remove_sign_in_link(&ann.id, "github").unwrap(),
+        "delete" => {
+            s.state.db.delete_person(&ann.id, "Ann").unwrap();
+        }
+        _ => s.set_display(&ann.id, &GitHubDisplay::default()),
+    }
+    gate.add_permits(1);
+    let view = pending.await.unwrap();
+    assert_eq!(view, json!({"linked":false}));
+    if change != "off" {
+        assert!(
+            s.state.db.github_display_cache_for("1001").unwrap().is_none(),
+            "late completion recreated cache"
+        );
+    }
+}
+#[tokio::test]
+async fn delayed_refresh_cannot_recreate_cache_after_unlink() {
+    delayed_refresh_change("unlink").await;
+}
+#[tokio::test]
+async fn delayed_refresh_cannot_recreate_cache_after_account_deletion() {
+    delayed_refresh_change("delete").await;
+}
+#[tokio::test]
+async fn delayed_refresh_cannot_disclose_sections_after_opt_out() {
+    delayed_refresh_change("off").await;
+}
+
+#[tokio::test]
+async fn renamed_identity_can_claim_only_once_during_backoff() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.seed_cache(&fresh_cache(now()));
+    s.link_github(&ann.id, "1001", "ann-renamed");
+    assert!(s.state.db.claim_github_display_refresh(&ann.id, now()).unwrap().is_some());
+    assert!(s.state.db.claim_github_display_refresh(&ann.id, now()).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn upstream_username_reassignment_does_not_display_another_account() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "9999", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    let view = s.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
+    assert!(view.get("repos").is_none(), "wrong numeric identity must fail closed: {view}");
+}
+
+#[tokio::test]
+async fn concurrent_public_reads_share_one_refresh_claim() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut fake = s.fake.lock().unwrap();
+        fake.gate = Some(gate.clone());
+        fake.entered = Some(entered.clone());
+    }
+    let path = format!("/api/people/{}/github", ann.id);
+    let request = s.client.get(format!("{}{}", s.base, path));
+    let pending =
+        tokio::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified()).await.unwrap();
+    for _ in 0..8 {
+        let view = tokio::time::timeout(std::time::Duration::from_secs(1), s.get("", &path))
+            .await
+            .unwrap()
+            .ok();
+        assert!(view.get("repos").is_none());
+    }
+    gate.add_permits(1);
+    assert_eq!(pending.await.unwrap()["stars"]["total"], 5);
+    assert_eq!(s.hits().iter().filter(|hit| hit.as_str() == "repos").count(), 1);
+}
+
+#[tokio::test]
+async fn replaced_account_does_not_inherit_display_consent_or_cache() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.seed_cache(&fresh_cache(now()));
+    s.link_github(&ann.id, "2002", "bo-codes");
+    assert!(s.state.db.github_display_for(&ann.id).unwrap().is_none());
+    assert!(s.state.db.github_display_cache_for("1001").unwrap().is_none());
+    assert_eq!(
+        s.get("", &format!("/api/people/{}/github", ann.id)).await.ok(),
+        json!({"linked":false})
+    );
+}
+
+#[tokio::test]
+async fn old_claim_cannot_finish_after_off_on_or_unlink_relink() {
+    for change in ["toggle", "relink"] {
+        let s = Server::start().await;
+        let (_, ann) = s.someone("Ann").await;
+        s.link_github(&ann.id, "1001", "ann-codes");
+        s.set_display(&ann.id, &display_all_on());
+        let old = s.state.db.claim_github_display_refresh(&ann.id, now()).unwrap().unwrap();
+        if change == "toggle" {
+            s.set_display(&ann.id, &GitHubDisplay::default());
+        } else {
+            s.state.db.remove_sign_in_link(&ann.id, "github").unwrap();
+            s.link_github(&ann.id, "1001", "ann-codes");
+        }
+        s.set_display(&ann.id, &display_all_on());
+        let new = s.state.db.claim_github_display_refresh(&ann.id, now()).unwrap().unwrap();
+        assert!(!s
+            .state
+            .db
+            .finish_github_display_refresh(&ann.id, &old, Some(&fresh_cache(now())))
+            .unwrap());
+        assert!(s
+            .state
+            .db
+            .finish_github_display_refresh(&ann.id, &new, Some(&fresh_cache(now())))
+            .unwrap());
+        assert_eq!(s.state.db.github_public_snapshot(&ann.id).unwrap()["stars"]["total"], 8);
+    }
+}
+
+#[tokio::test]
+async fn unsafe_logins_do_not_make_upstream_requests() {
+    for login in ["../other", "ann?x=y", "ann#other", "ann+repo:other", "ann/other", "-ann", "ann-"]
+    {
+        let s = Server::start().await;
+        let (_, ann) = s.someone("Ann").await;
+        s.link_github(&ann.id, "1001", login);
+        s.set_display(&ann.id, &display_all_on());
+        let view = s.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
+        assert!(view.get("repos").is_none());
+        assert!(s.hits().is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_partial_updates_never_restore_an_unrelated_opt_out() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    for _ in 0..200 {
+        s.set_display(&ann.id, &display_all_on());
+        let (off, badge) = tokio::join!(
+            s.put(&ann.key, "/api/me/github-display", json!({"show_repos":false})),
+            s.put(&ann.key, "/api/me/github-display", json!({"show_badge":false}))
+        );
+        off.ok();
+        badge.ok();
+        let display = s.state.db.github_display_for(&ann.id).unwrap().unwrap();
+        assert!(!display.show_repos && !display.show_badge, "an unrelated update restored consent");
+    }
+}
+
+#[tokio::test]
+async fn mismatched_repository_owner_is_not_cached() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.fake.lock().unwrap().repo_owner_id = Some(9999);
+    assert!(s.get("", &format!("/api/people/{}/github", ann.id)).await.ok().get("repos").is_none());
+}
+
+#[tokio::test]
+async fn oversized_upstream_body_is_not_cached() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    s.fake.lock().unwrap().repos_body[0]["description"] = json!("x".repeat(2 * 1024 * 1024));
+    let view = s.get("", &format!("/api/people/{}/github", ann.id)).await.ok();
+    assert!(view.get("repos").is_none());
+    assert_eq!(s.state.db.github_display_cache_for("1001").unwrap().unwrap().fetched_at, 0);
+}
+
+#[tokio::test]
+async fn account_identity_changed_during_fetch_is_not_cached() {
+    let s = Server::start().await;
+    let (_, ann) = s.someone("Ann").await;
+    s.link_github(&ann.id, "1001", "ann-codes");
+    s.set_display(&ann.id, &display_all_on());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    {
+        let mut fake = s.fake.lock().unwrap();
+        fake.gate = Some(gate.clone());
+        fake.entered = Some(entered.clone());
+    }
+    let request = s.client.get(format!("{}/api/people/{}/github", s.base, ann.id));
+    let pending =
+        tokio::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified()).await.unwrap();
+    s.fake.lock().unwrap().identity_id = 9999;
+    gate.add_permits(1);
+    assert!(pending.await.unwrap().get("repos").is_none());
 }

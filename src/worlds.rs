@@ -2183,6 +2183,7 @@ pub fn parse_viewer_origins(raw: Option<&str>) -> Vec<String> {
 
 /// W100: kinds that are a known public Commons place. A bot is pinned only when its tile is one of
 /// these; anything else, including a kind added later, stays off the list until it is named here.
+/// `Kind::Green` is the Commons park (W90). `Kind::Park` is the old city zone, not a place (W20).
 const PUBLIC_COMMONS_PLACE_KINDS: [Kind; 9] = [
     Kind::Cafe,
     Kind::Club,
@@ -3036,6 +3037,10 @@ mod tests {
         for kind in PUBLIC_COMMONS_PLACE_KINDS {
             assert!(public_commons_tile(kind), "{kind:?}");
         }
+        // Kind::Green is the Commons park people go into (W90). Kind::Park is the old city zone
+        // (W20), which is not a place, so a bot there is not listed.
+        assert!(public_commons_tile(Kind::Green));
+        assert!(!public_commons_tile(Kind::Park));
         for kind in [
             Kind::Road,
             Kind::Homes,

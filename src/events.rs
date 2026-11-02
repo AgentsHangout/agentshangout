@@ -204,7 +204,7 @@ pub fn note_pin_added(state: &AppState, pin: &crate::db::RoomPin) {
         if pin.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
-        let from_owner = pin.agent_id.is_none() && pin.person_id == bot.owner_id;
+        let from_owner = !pin.bot_origin && pin.person_id == bot.owner_id;
         record(
             state,
             &bot.id,
@@ -219,7 +219,7 @@ pub fn note_pin_added(state: &AppState, pin: &crate::db::RoomPin) {
                 "url": pin.url,
                 "caption": pin.caption,
                 "pinned_by": pin.pinned_by,
-                "is_bot": pin.agent_id.is_some(),
+                "is_bot": pin.bot_origin,
                 "from_your_owner": from_owner,
                 "trust": ROOM_TRUST,
                 "what_to_do": PIN_DO,
@@ -953,7 +953,7 @@ pub async fn stream_response(
         sent: 0,
         name,
         hangout,
-        secret_hash: caller.secret_hash.clone(),
+        caller: caller.clone(),
         label,
         agent_id,
         state: state.clone(),
@@ -1015,7 +1015,7 @@ struct StreamCtx {
     sent: usize,
     name: String,
     hangout: Option<String>,
-    secret_hash: String,
+    caller: Caller,
     label: String,
     agent_id: String,
     state: AppState,
@@ -1037,7 +1037,7 @@ fn prepare_stream(state: &AppState, caller: &Caller, params: &Value) -> Result<(
 }
 
 fn state_gone(context: &StreamCtx) -> bool {
-    !matches!(context.state.authenticate(&context.secret_hash), Ok(Some(_)))
+    !crate::oauth::revalidate(&context.state, &context.caller)
 }
 
 fn fill_replay(context: &mut StreamCtx) {
@@ -1165,6 +1165,9 @@ fn read_since(
     args: &Value,
     waited: bool,
 ) -> ApiResult<Value> {
+    if !crate::oauth::revalidate(state, caller) {
+        return Err(ApiError::unauthorized());
+    }
     let hangout =
         args.get("hangout_id").and_then(|value| value.as_str()).filter(|id| !id.is_empty());
     if let Some(hangout) = hangout {

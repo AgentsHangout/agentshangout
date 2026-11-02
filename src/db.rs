@@ -24,6 +24,9 @@ pub const LISTENING_SECS: i64 = 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod github_display;
+mod oauth;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
     id          TEXT PRIMARY KEY,
@@ -981,6 +984,23 @@ CREATE TABLE IF NOT EXISTS room_pins (
 );
 CREATE INDEX IF NOT EXISTS room_pins_by_room ON room_pins (hangout_id, pinned_at);
 CREATE INDEX IF NOT EXISTS room_pins_by_person ON room_pins (hangout_id, person_id);
+-- I72: bot authorship survives agent deletion; never promote retained words to owner authority.
+CREATE TABLE IF NOT EXISTS room_pin_bot_origins (
+    pin_id TEXT PRIMARY KEY REFERENCES room_pins(id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO room_pin_bot_origins (pin_id)
+    SELECT id FROM room_pins WHERE agent_id IS NOT NULL;
+CREATE TRIGGER IF NOT EXISTS room_pin_bot_origin_on_insert
+AFTER INSERT ON room_pins WHEN NEW.agent_id IS NOT NULL
+BEGIN
+    INSERT OR IGNORE INTO room_pin_bot_origins (pin_id) VALUES (NEW.id);
+END;
+-- I76: one preview attempt per pin per day, including concurrent reads and interrupted fetches.
+CREATE TABLE IF NOT EXISTS room_pin_preview_claims (
+    pin_id TEXT PRIMARY KEY REFERENCES room_pins(id) ON DELETE CASCADE,
+    claimed_at INTEGER NOT NULL
+);
+
 
 -- PN2: a phone belongs to a live sign-in, never an owner key or bot token.
 CREATE TABLE IF NOT EXISTS push_devices (
@@ -1014,6 +1034,48 @@ CREATE TABLE IF NOT EXISTS github_display_cache (
     last_attempt_at    INTEGER NOT NULL DEFAULT 0
 );
 
+-- A65-A69: independent, revocable MCP OAuth grants. Legacy credentials are unchanged.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, redirects TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_requests (
+ nonce_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ session_hash TEXT NOT NULL, payload TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(id) ON DELETE CASCADE,
+ resource TEXT NOT NULL, scope TEXT NOT NULL, created_at INTEGER NOT NULL,
+ expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+ hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_oauth_grants(id) ON DELETE CASCADE,
+ redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires_at INTEGER NOT NULL,
+ used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+ hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_oauth_grants(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('access','refresh')), expires_at INTEGER NOT NULL,
+ used INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_owner ON mcp_oauth_grants(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_grant ON mcp_oauth_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_codes_grant ON mcp_oauth_codes(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_agent ON mcp_oauth_grants(agent_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_client ON mcp_oauth_grants(client_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_requests_owner ON mcp_oauth_requests(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_requests_expiry ON mcp_oauth_requests(expires_at);
+CREATE INDEX IF NOT EXISTS mcp_oauth_grants_expiry ON mcp_oauth_grants(expires_at);
+
+-- A72-A73: an in-flight refresh is bound to one current owner link and consent state.
+CREATE TABLE IF NOT EXISTS github_display_refresh_claims (
+ person_id TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+ claim_id TEXT NOT NULL,
+ github_user_id TEXT NOT NULL,
+ github_login TEXT NOT NULL,
+ claimed_at INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -1308,6 +1370,7 @@ impl Board {
 #[derive(Clone, Debug, Serialize)]
 pub struct RoomPin {
     pub id: String,
+    pub bot_origin: bool,
     pub hangout_id: String,
     pub kind: String,
     pub title: String,
@@ -3398,6 +3461,29 @@ impl Db {
                    WHERE l.person_id = ?1 AND l.site = ?2 AND l.account_id <> ?3)",
             [person_id, site, account_id],
         )?;
+        if site == "github" {
+            let old: Option<String> = tx
+                .query_row(
+                    "SELECT account_id FROM sign_in_links WHERE person_id=? AND site='github'",
+                    [person_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if old.as_deref() != Some(account_id) {
+                tx.execute(
+                    "DELETE FROM github_display_refresh_claims WHERE person_id=?",
+                    [person_id],
+                )?;
+                tx.execute("DELETE FROM github_display WHERE person_id=?", [person_id])?;
+                if let Some(old) = old {
+                    tx.execute("DELETE FROM github_display_cache WHERE github_user_id=?", [old])?;
+                }
+                tx.execute(
+                    "DELETE FROM github_display_cache WHERE github_user_id=?",
+                    [account_id],
+                )?;
+            }
+        }
         tx.execute(
             "INSERT OR REPLACE INTO sign_in_links
                  (person_id, site, account_id, account_name, linked_at)
@@ -3460,7 +3546,7 @@ impl Db {
         Ok(Some(person))
     }
 
-    /// A36: the link and every session it started. A68: a GitHub link's display switches
+    /// A36: the link and every session it started. A73: a GitHub link's display switches
     /// and cache row go in the same transaction, so unlinking can't leave either behind.
     pub fn remove_sign_in_link(&self, person_id: &str, site: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();
@@ -3485,11 +3571,9 @@ impl Db {
             [person_id, site],
         )?;
         if let Some(account_id) = github_account {
+            tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
             tx.execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;
-            tx.execute(
-                "DELETE FROM github_display_cache WHERE github_user_id = ?",
-                [account_id],
-            )?;
+            tx.execute("DELETE FROM github_display_cache WHERE github_user_id = ?", [account_id])?;
         }
         tx.commit()
     }
@@ -3504,7 +3588,7 @@ impl Db {
 
     // GitHub display
 
-    /// A65: what this person chose to show of their linked GitHub account. Nothing when they
+    /// A70: what this person chose to show of their linked GitHub account. Nothing when they
     /// never turned anything on.
     pub fn github_display_for(&self, person_id: &str) -> rusqlite::Result<Option<GitHubDisplay>> {
         self.conn()
@@ -3524,14 +3608,18 @@ impl Db {
             .optional()
     }
 
-    /// A65: stores what this person chose to show.
+    /// A70: stores what this person chose to show.
     pub fn set_github_display(
         &self,
         person_id: &str,
         display: &GitHubDisplay,
         now: i64,
     ) -> rusqlite::Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("UPDATE github_display_cache SET last_attempt_at=0 WHERE github_user_id IN (SELECT github_user_id FROM github_display_refresh_claims WHERE person_id=?)", [person_id])?;
+        tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
+        tx.execute(
             "INSERT INTO github_display
                  (person_id, show_repos, show_stars, show_languages, show_badge, updated_at)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -3550,7 +3638,7 @@ impl Db {
                 now,
             ],
         )?;
-        Ok(())
+        tx.commit()
     }
 
     /// The GitHub account this person linked, as its numeric id and username, if any.
@@ -3565,7 +3653,7 @@ impl Db {
             .optional()
     }
 
-    /// A67: the cached public display data for one GitHub account id.
+    /// A72: the cached public display data for one GitHub account id.
     pub fn github_display_cache_for(
         &self,
         github_user_id: &str,
@@ -3593,7 +3681,7 @@ impl Db {
             .optional()
     }
 
-    /// A67: stores a refreshed cache row, whole.
+    /// A72: stores a refreshed cache row, whole.
     pub fn set_github_display_cache(&self, cache: &CachedDisplay) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO github_display_cache
@@ -3624,7 +3712,7 @@ impl Db {
         Ok(())
     }
 
-    /// A67: records a refresh attempt that failed, keeping the old data. A row that doesn't
+    /// A72: records a refresh attempt that failed, keeping the old data. A row that doesn't
     /// exist yet is made as a stub, so later views back off instead of trying again each time.
     pub fn note_github_display_attempt(
         &self,
@@ -3642,13 +3730,13 @@ impl Db {
         Ok(())
     }
 
-    /// A68: the display switches go with the link.
+    /// A73: the display switches go with the link.
     pub fn delete_github_display(&self, person_id: &str) -> rusqlite::Result<()> {
         self.conn().execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;
         Ok(())
     }
 
-    /// A68: the cache row goes with the link.
+    /// A73: the cache row goes with the link.
     pub fn delete_github_display_cache(&self, github_user_id: &str) -> rusqlite::Result<()> {
         self.conn().execute(
             "DELETE FROM github_display_cache WHERE github_user_id = ?",
@@ -10280,6 +10368,7 @@ impl Db {
     fn room_pin_from_row(row: &rusqlite::Row) -> rusqlite::Result<RoomPin> {
         Ok(RoomPin {
             id: row.get(0)?,
+            bot_origin: row.get(19)?,
             hangout_id: row.get(1)?,
             kind: row.get(2)?,
             title: row.get(3)?,
@@ -10313,7 +10402,9 @@ impl Db {
             "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
                     p.caption, p.preview_site, p.preview_title, p.preview_description,
                     p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
-                    a.name, p.pinned_at, p.expires_at
+                    a.name, p.pinned_at, p.expires_at,
+                    (p.agent_id IS NOT NULL OR EXISTS (
+                        SELECT 1 FROM room_pin_bot_origins o WHERE o.pin_id = p.id))
              FROM room_pins p
              JOIN people ON people.id = p.person_id
              LEFT JOIN agents a ON a.id = p.agent_id
@@ -10331,7 +10422,9 @@ impl Db {
                 "SELECT p.id, p.hangout_id, p.kind, p.title, p.url, p.image_asset_id, p.image_alt,
                         p.caption, p.preview_site, p.preview_title, p.preview_description,
                         p.preview_status, p.preview_fetched_at, p.person_id, people.name, p.agent_id,
-                        a.name, p.pinned_at, p.expires_at
+                        a.name, p.pinned_at, p.expires_at,
+                    (p.agent_id IS NOT NULL OR EXISTS (
+                        SELECT 1 FROM room_pin_bot_origins o WHERE o.pin_id = p.id))
                  FROM room_pins p
                  JOIN people ON people.id = p.person_id
                  LEFT JOIN agents a ON a.id = p.agent_id
@@ -10386,6 +10479,20 @@ impl Db {
         )?;
         tx.commit()?;
         Ok(None)
+    }
+
+    pub fn claim_pin_preview(&self, id: &str, at: i64, stale_secs: i64) -> rusqlite::Result<bool> {
+        let claimed = self.conn().execute(
+            "INSERT INTO room_pin_preview_claims (pin_id, claimed_at)
+             SELECT id, ?2 FROM room_pins
+             WHERE id = ?1 AND kind = 'link' AND (expires_at IS NULL OR expires_at > ?2)
+               AND (preview_status = 'pending' OR
+                    (preview_status = 'ok' AND preview_fetched_at <= ?3))
+             ON CONFLICT(pin_id) DO UPDATE SET claimed_at = excluded.claimed_at
+             WHERE room_pin_preview_claims.claimed_at <= ?3",
+            params![id, at, at - stale_secs],
+        )?;
+        Ok(claimed > 0)
     }
 
     pub fn set_pin_preview(
@@ -11779,7 +11886,7 @@ impl Db {
                            WHERE o.hangout_id = m.hangout_id AND o.person_id <> ?1)",
             [person_id],
         )?;
-        // A68: the display cache is keyed by GitHub account id, not by person, so it doesn't
+        // A73: the display cache is keyed by GitHub account id, not by person, so it doesn't
         // cascade with the person row; it goes here, while the link rows still name it.
         tx.execute(
             "DELETE FROM github_display_cache WHERE github_user_id IN

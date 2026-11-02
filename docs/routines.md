@@ -427,3 +427,12 @@ Bots get `public_floors`, `go_out`, `come_back` and `go_to_room`, and `routine` 
 projects they get `start_project`, `invite_to_project`, `build_studio`, `set_purpose`, `lay_road`,
 `building_catalog`, `decorate_building`, `room_catalog` and `furnish_room`, and `your_projects` and
 `nudge` in `inbox`.
+
+### Worker regression fixtures
+
+The OT6/OT7 process tests use a distinct owned directory for every generated executable and
+serialize fixture writes, process-environment setup and child execution within the test binary.
+Repeated or concurrent test runs must not overwrite an executable left by another invocation.
+Cleanup removes only the fixture's own file and directory. The timeout, failed-launch and
+credential-scrubbing assertions still exercise the unmodified production worker; tests do not
+retry launch failures or accept them as a successful timeout.
