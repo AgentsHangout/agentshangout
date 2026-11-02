@@ -259,7 +259,15 @@ fn getting_started_is_six_steps_in_order() {
         .filter_map(|line| line.trim().strip_prefix("id: '"))
         .map(|rest| rest.trim_end_matches("',"))
         .collect();
-    assert_eq!(ids, ["account", "house", "bot", "connected", "friend", "plan"]);
+    assert_eq!(ids, ["account", "linked", "house", "bot", "connected", "square"]);
+    // Linking is the optional one, and nothing else is.
+    let linked = part(&steps, "id: 'linked',", "  },");
+    assert!(linked.contains("optional: true,"));
+    assert_eq!(steps.matches("optional: true,").count(), 1);
+    assert!(tutorial.contains("const REQUIRED = STEPS.filter((step) => !step.optional);"));
+    assert!(tutorial.contains(
+        "count.textContent = `${REQUIRED.filter(done).length} of ${REQUIRED.length} done`;"
+    ));
 }
 
 // G2
@@ -269,7 +277,18 @@ fn the_first_lessons_are_about_changing_your_house() {
     let lessons = part(&tutorial, "const LESSONS = [", "\n];");
     let headings: Vec<&str> =
         lessons.lines().filter_map(|line| line.trim().strip_prefix("heading: '")).collect();
-    assert_eq!(headings[0], "Change your house',");
+    assert_eq!(headings[0], "What next',");
+    assert_eq!(headings[1], "Change your house',");
+    let next = part(&lessons, "heading: 'What next'", "heading: 'Change your house'");
+    let firsts: Vec<&str> = next
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("title: '"))
+        .map(|rest| rest.trim_end_matches("',"))
+        .collect();
+    assert_eq!(
+        firsts,
+        ["Invite a friend", "Make a plan", "Start a project with other bots", "Build in the city"]
+    );
     let house = part(&lessons, "heading: 'Change your house'", "heading: 'Get around'");
     let titles: Vec<&str> = house
         .lines()
@@ -425,6 +444,8 @@ async fn someone_new_has_done_nothing_yet() {
             "friend": false,
             "plan": false,
             "room": null,
+            "linked": false,
+            "square": false,
         })
     );
 }
@@ -539,13 +560,13 @@ fn what_happens_during_the_wait_between_looks_still_arrives() {
 fn the_open_step_is_the_first_one_not_done_on_this_page() {
     let tutorial = page("tutorial.js");
     assert!(tutorial.contains(
-        "const next = () => STEPS.find((step) => step.on === page && !done(step)) || STEPS.find((step) => !done(step));"
+        "const next = () => REQUIRED.find((step) => step.on === page && !done(step)) || REQUIRED.find((step) => !done(step));"
     ));
     // Someone in a room from an invite has a step to do there before any on the map.
     let steps = part(&tutorial, "const STEPS = [", "\n];");
     let pages: Vec<&str> =
         steps.lines().filter_map(|line| line.trim().strip_prefix("on: '")).collect();
-    assert_eq!(pages, ["map',", "map',", "room',", "room',", "room',", "room',"]);
+    assert_eq!(pages, ["map',", "map',", "map',", "room',", "room',", "map',"]);
 }
 
 // G8
@@ -570,7 +591,10 @@ async fn finishing_earns_nothing_and_nothing_else_can_see_it() {
     let after = server.get(&ann.key, "/api/worlds/commons/me").await.ok();
     assert_eq!(after["moves_per_day"], before["moves_per_day"]);
     // There's no score in what comes back, and no sign of it in what anyone else can read.
-    assert_eq!(done.as_object().unwrap().len(), 6);
+    assert_eq!(done.as_object().unwrap().len(), 8);
+    for field in ["linked", "square"] {
+        assert!(done[field].is_boolean(), "{field} is more than a yes or no: {done}");
+    }
     let room_view = server.get(&bo.key, &format!("/api/hangouts/{room}")).await.ok();
     assert!(!room_view.to_string().contains("tutorial"));
     assert!(!server.get(&ann.key, "/api/me").await.ok().to_string().contains("tutorial"));
@@ -716,7 +740,7 @@ fn it_opens_by_itself_for_someone_new() {
 #[test]
 fn it_stays_open_until_someone_closes_it_and_stays_closed_after() {
     let tutorial = page("tutorial.js");
-    let opening = part(&tutorial, "    onOpen: () => {", "  },\n    signedIn ?");
+    let opening = part(&tutorial, "    onOpen: () => {", "  },\n    welcome,");
     assert!(opening.contains("remember('open');"), "open carries from page to page");
     assert!(opening.contains("if (!aside) remember('closed');"), "and closing it sticks");
     // It doesn't open when there's nothing left to do, or over a question that's waiting.
@@ -772,4 +796,67 @@ fn on_a_narrow_screen_it_leaves_the_top_of_the_window_showing() {
     assert!(
         tutorial.contains("if (aside && STEPS.filter(done).length > before) panels.open(WORD);")
     );
+}
+
+// G6
+#[tokio::test]
+async fn linking_github_or_discord_ticks_the_optional_step() {
+    let server = Server::start().await;
+    let ann = server.someone("Ann").await;
+    assert_eq!(server.progress(&ann).await["linked"], false);
+    server.state.db.set_sign_in_link(&ann.id, "github", "4417", "ann-codes", 1).unwrap();
+    assert_eq!(server.progress(&ann).await["linked"], true);
+    server.state.db.remove_sign_in_link(&ann.id, "github").unwrap();
+    assert_eq!(server.progress(&ann).await["linked"], false, "unlinking undoes it");
+}
+
+// G6
+#[tokio::test]
+async fn saying_something_in_the_town_square_ticks_meeting_there() {
+    let server = Server::start().await;
+    let (square, code, ann) = server.room("Ann").await;
+    let (elsewhere, _, bo) = server.room("Bo").await;
+    let token = server.bot(&ann, &square).await;
+    server.post(&bo.key, &format!("/api/invites/{code}/join"), json!({})).await.ok();
+    let room = server.get(&ann.key, &format!("/api/hangouts/{square}")).await.ok();
+    let space = text(&room["floor"]["space"]["id"]);
+    server.state.db.mark_town_square_room(&space).unwrap();
+    let say = |token: String, room: String, words: &'static str| {
+        let server = &server;
+        async move {
+            let path = format!("/api/hangouts/{room}/messages");
+            server.post(&token, &path, json!({ "text": words })).await.ok();
+        }
+    };
+    say(bo.key.clone(), elsewhere.clone(), "not the square").await;
+    assert_eq!(server.progress(&bo).await["square"], false, "another room isn't the square");
+    // A bot of theirs meeting there counts for them, and not for anyone else.
+    say(token, square.clone(), "hello from Scout").await;
+    assert_eq!(server.progress(&ann).await["square"], true);
+    assert_eq!(server.progress(&bo).await["square"], false);
+    say(bo.key.clone(), square, "hi all").await;
+    assert_eq!(server.progress(&bo).await["square"], true);
+}
+
+// G17
+#[test]
+fn someone_new_is_welcomed_first_with_a_way_in_and_a_way_out() {
+    let tutorial = page("tutorial.js");
+    let welcome = part(&tutorial, "const WELCOME = [", "\n];");
+    assert!(welcome.contains("This is Agents Hangout."));
+    assert!(welcome.contains("work with other people\\'s agents on real things"));
+    assert!(welcome.contains("The Commons is the city you\\'re looking at."));
+    assert!(welcome.contains("the town square is where bots meet"));
+    assert!(
+        tutorial.contains("const isNew = () => !signedIn || (!progress?.house && !progress?.bot);")
+    );
+    assert!(tutorial.contains("welcome.hidden = !isNew();"));
+    // Start is the first step's own button, and Just look around is closing the panel.
+    assert!(tutorial.contains(
+        "onclick: () => { const step = next(); if (step) showMe(step.show); } }, 'Start')"
+    ));
+    assert!(tutorial.contains("onclick: () => panels.close() }, 'Just look around')"));
+    // It's first in the panel, before the steps.
+    let panel = part(&tutorial, "panels.add(WORD, 'Get started',", "render();");
+    assert!(panel.find("    welcome,").unwrap() < panel.find("'Getting started'").unwrap());
 }

@@ -25,5 +25,7 @@ async fn progress(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
         "friend": state.db.friend_count(person)? > 0,
         "plan": state.db.has_plan_on_calendar(person)?,
         "room": room.map(|room| room.id),
+        "linked": state.db.has_sign_in_link(person)?,
+        "square": state.db.spoke_in_square(person)?,
     })))
 }
