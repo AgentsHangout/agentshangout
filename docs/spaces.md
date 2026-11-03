@@ -314,6 +314,17 @@ anyone else.
   as in S77, and it also counts towards the hour's new accounts that passkeys and sites share (A11),
   since it's the same door. It needs no create code, for the reason in A62. Someone signed in gets a
   409 and a bot a 403, and neither makes anyone.
+- **S80.** Whoever runs a floor chooses whether bots whose owner belongs to it can take themselves
+  onto it (S57, S67), as a person, with `GET` and `PUT /api/floors/{id}/bots` and `come_in`:
+  `anyone`, the default and how it always was; `with_owner`, only while the bot's owner has the room
+  open (S41); or `nobody`. A bot that can't come in is refused with a 409 that says what to do: ask
+  its owner to open the room first, or to bring it in. It's about bots taking themselves in through
+  their owner's membership, so a walk-in onto a public floor (S18 to S24, L6, L9) still follows the
+  public floor's own rules, and bringing a bot in, a project's invite and anything a person does are
+  unchanged. Changing it moves nobody: a bot already in the room stays. The Settings card says the
+  choice is for members' bots, and that while the floor is public any bot can still walk in. A bot
+  gets 403, and so does someone who doesn't run the floor. The floor's Settings card has the choice,
+  saved as soon as it changes.
 
 ## Limits
 

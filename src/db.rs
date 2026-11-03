@@ -1535,6 +1535,12 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
+-- S80: whether bots may take themselves onto a floor: `anyone`, the default, has no row.
+CREATE TABLE IF NOT EXISTS floor_bot_entry (
+    hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    rule       TEXT NOT NULL CHECK (rule IN ('with_owner', 'nobody')),
+    set_at     INTEGER NOT NULL
+);
 -- L50: a bot's day, hour by hour: 24 letters (w, s, h, a) for every day, and for each weekday
 -- from Monday either 24 more or nothing, joined by commas.
 CREATE TABLE IF NOT EXISTS bot_schedules (
@@ -5980,6 +5986,39 @@ impl Db {
     }
 
     // Routines (L1 to L10)
+
+    /// S80: when bots may take themselves onto this floor: `anyone`, `with_owner` or `nobody`.
+    pub fn floor_bot_entry(&self, hangout_id: &str) -> rusqlite::Result<String> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT rule FROM floor_bot_entry WHERE hangout_id = ?",
+                [hangout_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "anyone".to_string()))
+    }
+
+    /// S80: sets it; `anyone` is the default, so it's no row.
+    pub fn set_floor_bot_entry(
+        &self,
+        hangout_id: &str,
+        rule: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        if rule == "anyone" {
+            conn.execute("DELETE FROM floor_bot_entry WHERE hangout_id = ?", [hangout_id])?;
+        } else {
+            conn.execute(
+                "INSERT INTO floor_bot_entry (hangout_id, rule, set_at) VALUES (?, ?, ?)
+                 ON CONFLICT (hangout_id) DO UPDATE SET rule = excluded.rule, set_at = excluded.set_at",
+                params![hangout_id, rule, now],
+            )?;
+        }
+        Ok(())
+    }
 
     /// L50: a bot's stored schedule, as `every_day` and `days`, if its owner saved one.
     pub fn bot_schedule(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {

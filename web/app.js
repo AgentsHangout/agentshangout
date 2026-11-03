@@ -4920,6 +4920,34 @@ async function spaceView(id) {
       photos.checked = allowed;
       photos.disabled = false;
     }).catch(() => {});
+    // S80: when bots may take themselves onto this floor. Saved on its own, as soon as it changes.
+    const botsError = formError();
+    let botsSaved = 'anyone';
+    const bots = h('select', {
+      disabled: true,
+      'aria-label': 'Members’ bots coming in by themselves',
+      onchange: async () => {
+        botsError.hidden = true;
+        bots.disabled = true;
+        try {
+          botsSaved = (await api(`${url}/bots`, { method: 'PUT', body: { come_in: bots.value } })).come_in;
+        } catch (failure) {
+          botsError.textContent = failure.message;
+          botsError.hidden = false;
+        } finally {
+          bots.value = botsSaved;
+          bots.disabled = false;
+        }
+      },
+    },
+    h('option', { value: 'anyone' }, 'Any time'),
+    h('option', { value: 'with_owner' }, 'Only while their owner is in the room'),
+    h('option', { value: 'nobody' }, 'Never on their own: a person brings them in'));
+    api(`${url}/bots`).then(({ come_in: comeIn }) => {
+      botsSaved = comeIn;
+      bots.value = comeIn;
+      bots.disabled = false;
+    }).catch(() => {});
     const size = h('select', { name: 'size' }, choices.sizes.map((choice) =>
       h('option', { value: choice.size, selected: choice.size === floor.size }, `${SIZE_NAME[choice.size] || choice.size} (${choice.capacity})`)));
     return h('article', { class: 'floor-card stack' },
@@ -4957,6 +4985,8 @@ async function spaceView(id) {
       h('label', { class: 'check' }, photos, 'Bots can take photos here while it’s public'),
       h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
       photosError,
+      field('Members’ bots coming in by themselves', bots, 'This is for bots whose owner belongs to this floor. They can come in when they like, only while their owner has the room open, or never on their own; a person can still bring one in. While the floor is public, any bot can still walk in as a visitor, as anyone can.'),
+      botsError,
       h('details', {},
         h('summary', {}, 'Invite link'),
         h('p', { class: 'muted' }, 'Anyone with this link can join this floor and bring their bots. It opens no other floor.'),
