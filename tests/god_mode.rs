@@ -943,6 +943,106 @@ async fn a_bot_with_no_project_meets_at_the_town_square_and_explores_in_turn() {
     assert_eq!(server.out_at(&scout).await, cafe.as_str());
 }
 
+// L47, L48
+#[tokio::test]
+async fn a_bot_with_a_workplace_works_there_and_comes_back_to_it() {
+    let (server, justin, _) = Server::start().await;
+    let (_, square) = server.town_square(&justin).await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover").await;
+    server.all_day(&bo, &rover_id, true).await;
+    let office = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Office", "create_code": CODE }))
+        .await
+        .ok();
+    let office = text(&office["hangout"]["id"]);
+    let path = format!("/api/agents/{rover_id}/workplace");
+
+    // Only a room it belongs to, with a job, set by its owner as a person.
+    let job = json!({ "room_id": office, "job": "Building Agents Hangout" });
+    server.put(&bo.key, &path, job.clone()).await.refused(StatusCode::BAD_REQUEST);
+    server.state.db.add_agent_to_room(&office, &rover_id).unwrap();
+    for bad in [
+        "",
+        "  ",
+        "two
+lines",
+    ] {
+        let body = json!({ "room_id": office, "job": bad });
+        server.put(&bo.key, &path, body).await.refused(StatusCode::BAD_REQUEST);
+    }
+    let long = json!({ "room_id": office, "job": "x".repeat(201) });
+    server.put(&bo.key, &path, long).await.refused(StatusCode::BAD_REQUEST);
+    let square_job = json!({ "room_id": square, "job": "Meeting people" });
+    server.put(&bo.key, &path, square_job).await.refused(StatusCode::BAD_REQUEST);
+    server.put(&rover, &path, job.clone()).await.refused(StatusCode::FORBIDDEN);
+    let cy = server.person("Cy").await;
+    server.put(&cy.key, &path, job.clone()).await.refused(StatusCode::NOT_FOUND);
+
+    // Set, it goes there now, and its owner can pick it from the rooms it belongs to.
+    let set = server.put(&bo.key, &path, job).await.ok();
+    assert_eq!(set["workplace"]["room_id"], office.as_str(), "{set}");
+    assert_eq!(set["workplace"]["job"], "Building Agents Hangout");
+    assert_eq!(
+        server.state.db.bot_place(&rover_id, now()).unwrap().as_deref(),
+        Some(office.as_str())
+    );
+    let routine = server.get(&bo.key, &format!("/api/agents/{rover_id}/routine")).await.ok();
+    let choices: Vec<&str> = routine["workplace_choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|room| room["id"].as_str().unwrap())
+        .collect();
+    assert!(choices.contains(&home.as_str()) && choices.contains(&office.as_str()), "{routine}");
+    // The bot reads it, with its job, but not its owner's choices.
+    let me = server.get(&rover, "/api/me").await.ok();
+    assert_eq!(me["routine"]["workplace"]["name"], "Office", "{me}");
+    assert!(me["routine"].get("workplace_choices").is_none());
+
+    // In a meeting half hour and an exploring one it stays at work, not the town square.
+    for at in [half_hour(2, 0), half_hour(2, 1)] {
+        routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
+        assert!(server.out_at(&rover).await.is_null());
+        assert_eq!(
+            server.state.db.bot_place(&rover_id, now()).unwrap().as_deref(),
+            Some(office.as_str())
+        );
+    }
+    let bots = server.get(&bo.key, "/api/me/bots").await.ok();
+    assert_eq!(bots["bots"][0]["next"]["way"], "work", "{bots}");
+
+    // Called home for a standup that runs past the half hour, it stays while it has the standup's
+    // mention to read (L31), and comes back to work at the next half hour once it's free.
+    server.state.db.set_bot_place(&rover_id, &home, now()).unwrap();
+    let say = json!({ "text": "@Rover standup: what are you working on?" });
+    server.post(&bo.key, &format!("/api/hangouts/{home}/messages"), say).await.ok();
+    routines::wander_at(&server.state, &rover_id, &bo.id, half_hour(2, 0)).unwrap();
+    assert_eq!(
+        server.state.db.bot_place(&rover_id, now()).unwrap().as_deref(),
+        Some(home.as_str())
+    );
+    server.tool(&rover, "read_room", json!({ "hangout_id": home })).await;
+    assert!(server.state.db.unread_mentions(&rover_id).unwrap().is_empty());
+    routines::wander_at(&server.state, &rover_id, &bo.id, half_hour(2, 0)).unwrap();
+    assert_eq!(
+        server.state.db.bot_place(&rover_id, now()).unwrap().as_deref(),
+        Some(office.as_str())
+    );
+
+    // Taken out of the room, it's no workplace, and the bot wanders again.
+    server.state.db.remove_agent_from_room(&office, &rover_id).unwrap();
+    let me = server.get(&rover, "/api/me").await.ok();
+    assert!(me["routine"]["workplace"].is_null(), "{me}");
+    routines::wander_at(&server.state, &rover_id, &bo.id, half_hour(2, 0)).unwrap();
+    assert_eq!(server.out_at(&rover).await, square.as_str());
+
+    // Its owner clears it.
+    server.state.db.add_agent_to_room(&office, &rover_id).unwrap();
+    let cleared = server.send(&bo.key, Method::DELETE, &path, None).await.ok();
+    assert!(cleared["workplace"].is_null(), "{cleared}");
+}
+
 // L41, L9
 #[tokio::test]
 async fn a_bot_explores_its_owners_places_too_and_meets_when_there_is_nowhere_else() {

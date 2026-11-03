@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Path, State},
-    routing::get,
+    routing::{get, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ const UNUSED_SOCIAL_RUNS: i64 = 16;
 /// L9: how long a wandering bot stays on one floor.
 pub const WANDER_SECS: i64 = 30 * 60;
 const MAX_PLACES: i64 = 50;
+/// L47: how long a bot's job may be.
+const JOB_CHARS: usize = 200;
 
 /// What a bot has before its owner gives it a routine: no social hours and public places off.
 const NO_ROUTINE: RoutineRow = RoutineRow {
@@ -41,6 +43,7 @@ const NO_ROUTINE: RoutineRow = RoutineRow {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/routine", get(get_routine).put(put_routine))
+        .route("/api/agents/{id}/workplace", put(put_workplace).delete(delete_workplace))
         .route("/api/me/bots", get(my_bots))
 }
 
@@ -107,8 +110,10 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
         let routine = routine_view(&state, &agent.id, &agent.owner_id)?;
         let slot = now.div_euclid(WANDER_SECS) + 1;
         let work = crate::projects::workplace(&state, &agent.id)?.is_some();
+        let assigned = routine.workplace.is_some();
         let next = routine.social_now.then(|| {
             let way = match turn_of(work, slot) {
+                _ if assigned => "work",
                 0 => "work",
                 1 => "meet",
                 _ => "explore",
@@ -215,6 +220,20 @@ pub struct Routine {
     pub social_until: Option<i64>,
     /// The public floor it's on, if it's out.
     pub out_at: Option<String>,
+    /// L47: the room its owner gave it to work in, its name, and its job there.
+    pub workplace: Option<Value>,
+    /// L47: for its owner, the rooms it belongs to, any of which can be its workplace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workplace_choices: Option<Vec<Value>>,
+}
+
+/// L47: the room its owner gave this bot to work in, and its job there, while it still belongs
+/// to that room. A room it has been taken out of is no workplace.
+pub fn workplace_of(state: &AppState, agent_id: &str) -> ApiResult<Option<(String, String)>> {
+    let Some((room, job)) = state.db.bot_workplace(agent_id)? else {
+        return Ok(None);
+    };
+    Ok(state.db.belongs_to_room(&room, agent_id)?.then_some((room, job)))
 }
 
 pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<Routine> {
@@ -234,6 +253,14 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
         social_now: until.is_some(),
         social_until: until,
         out_at: state.db.bot_visits(agent_id, now)?.into_iter().next(),
+        workplace: workplace_of(state, agent_id)?
+            .map(|(room, job)| {
+                let name = state.db.hangout(&room)?.map(|room| room.name);
+                Ok::<_, ApiError>(json!({ "room_id": room, "name": name, "job": job,
+                    "how": "This is your main office and your job. Go back here with go_to_room whenever you're called away, such as home for a standup." }))
+            })
+            .transpose()?,
+        workplace_choices: None,
     })
 }
 
@@ -251,6 +278,62 @@ async fn get_routine(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "see a bot's routine")?;
+    let mut view = routine_view(&state, &agent.id, &agent.owner_id)?;
+    let mut choices = vec![];
+    for room in state.db.hangouts_for_agent(&agent.id, now())? {
+        if state.db.belongs_to_room(&room.id, &agent.id)? {
+            choices.push(json!({ "id": room.id, "name": room.name }));
+        }
+    }
+    view.workplace_choices = Some(choices);
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+struct WorkplaceInput {
+    room_id: String,
+    job: String,
+}
+
+/// L47: only the bot's owner, as a person, gives it a workplace: a room it belongs to, and a job.
+/// It goes there now.
+async fn put_workplace(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<WorkplaceInput>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
+        return Err(ApiError::conflict("this bot stays home, so its home is where it works"));
+    }
+    let job = body.job.trim();
+    if job.is_empty() || job.chars().count() > JOB_CHARS || job.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(format!(
+            "job must be 1 to {JOB_CHARS} characters on one line"
+        )));
+    }
+    if !state.db.belongs_to_room(&body.room_id, &agent.id)? {
+        return Err(ApiError::bad_request("a workplace must be a room this bot belongs to"));
+    }
+    crate::spaces::require_public_conversations(&state, &agent.id, &body.room_id)?;
+    let now = now();
+    state.db.set_bot_workplace(&agent.id, Some((&body.room_id, job)), now)?;
+    if state.db.bot_place(&agent.id, now)?.as_deref() != Some(body.room_id.as_str()) {
+        crate::spaces::place_bot(&state, &agent.id, &body.room_id)?;
+        crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
+    }
+    Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
+}
+
+/// L47: back to wandering as L41 says.
+async fn delete_workplace(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    state.db.set_bot_workplace(&agent.id, None, now())?;
     Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
 }
 
@@ -929,6 +1012,11 @@ fn pick(
     owner_id: &str,
     now: i64,
 ) -> ApiResult<Option<(String, bool)>> {
+    // L48: a bot with a workplace works there in every half hour, and doesn't wander off to meet
+    // or explore.
+    if let Some((room, _)) = workplace_of(state, agent_id)? {
+        return Ok(Some((room, true)));
+    }
     let slot = now.div_euclid(WANDER_SECS);
     let open = state.db.public_floors(owner_id, now, MAX_PLACES)?;
     let open: Vec<PublicFloor> =

@@ -580,6 +580,13 @@ CREATE TABLE IF NOT EXISTS bot_routines (
     public_places   INTEGER NOT NULL DEFAULT 0,
     updated_at      INTEGER NOT NULL
 );
+-- L47: the room its owner gave a bot to work in, and what its job there is.
+CREATE TABLE IF NOT EXISTS bot_workplaces (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    job        TEXT NOT NULL,
+    set_at     INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS projects (
     space_id    TEXT PRIMARY KEY REFERENCES spaces(id) ON DELETE CASCADE,
     agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
@@ -5763,6 +5770,37 @@ impl Db {
     }
 
     // Routines (L1 to L10)
+
+    /// L47: the room a bot's owner gave it to work in, and its job there.
+    pub fn bot_workplace(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, job FROM bot_workplaces WHERE agent_id = ?",
+                [agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// L47: sets a bot's workplace, or with `None` clears it.
+    pub fn set_bot_workplace(
+        &self,
+        agent_id: &str,
+        workplace: Option<(&str, &str)>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match workplace {
+            Some((hangout_id, job)) => conn.execute(
+                "INSERT INTO bot_workplaces (agent_id, hangout_id, job, set_at) VALUES (?, ?, ?, ?)
+                 ON CONFLICT (agent_id) DO UPDATE SET hangout_id = excluded.hangout_id,
+                     job = excluded.job, set_at = excluded.set_at",
+                params![agent_id, hangout_id, job, now],
+            )?,
+            None => conn.execute("DELETE FROM bot_workplaces WHERE agent_id = ?", [agent_id])?,
+        };
+        Ok(())
+    }
 
     pub fn bot_routine(&self, agent_id: &str) -> rusqlite::Result<Option<RoutineRow>> {
         self.conn()
