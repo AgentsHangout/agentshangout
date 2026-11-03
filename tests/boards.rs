@@ -1,5 +1,7 @@
 //! Boards on a floor. The rules are K1 to K17 in docs/boards.md.
 
+mod support;
+
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -143,11 +145,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        Bot { id: text(&made["agent"]["id"]), token: text(&made["token"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {

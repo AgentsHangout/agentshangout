@@ -2,6 +2,8 @@
 //! and marks. They drive a real server over HTTP and are written from the rules in
 //! docs/households.md. A comment such as `// H3` above a test names the rule it covers.
 
+mod support;
+
 use agenthangout::{
     app,
     db::Db,
@@ -194,11 +196,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        token
     }
 
     async fn bot_id(&self, token: &str) -> String {

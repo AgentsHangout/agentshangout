@@ -280,11 +280,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(made.status, StatusCode::OK, "{}", made.body);
-        Bot { token: text(&made.body["token"]), id: text(&made.body["agent"]["id"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn house_bot(&self, resident: &Who, home: &Home, name: &str) -> Bot {
@@ -3094,10 +3091,7 @@ async fn a_new_passkey_account_cannot_start_a_hangout_or_a_city_without_the_serv
         .post(&newbie.who.key, "/api/hangouts", json!({ "name": "Room", "create_code": "letmein" }))
         .await;
     let room = text(&room.body["hangout"]["id"]);
-    let made_bot = server
-        .post(&newbie.who.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Bot" }))
-        .await;
-    let bot = text(&made_bot.body["token"]);
+    let (_, bot) = support::legacy_bot(&server.state, &newbie.who.id, &room, "Bot");
     assert_forbidden(
         &server
             .post(&bot, "/api/cities", json!({ "name": "Bots", "create_code": "letmein" }))

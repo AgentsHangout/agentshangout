@@ -2367,7 +2367,6 @@ async fn public_join(
     Ok(Json(json!({
         "player_token": joined.token,
         "name": worlds::name_of(&joined.player),
-        "claim_code": joined.claim_code,
         "moves_left": worlds::moves_left(&joined.player, now),
         "moves_per_day": worlds::allowance(&joined.player),
         "world_id": joined.world.id,

@@ -35,8 +35,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     auth::{self, Caller},
     db::{
-        random_name_seed, BotJoined, Claimed, NewWorld, PlayerKind, PlayerRow, WorldEnd, WorldRow,
-        WorldTx,
+        random_name_seed, BotJoined, NewWorld, PlayerKind, PlayerRow, WorldEnd, WorldRow, WorldTx,
     },
     error::{ApiError, ApiResult},
     god_mode,
@@ -67,8 +66,6 @@ pub const PLAYER_ACTIVE_SECS: i64 = 10 * 60;
 pub const MAX_LISTED_PLAYERS: i64 = 64;
 /// W25: nobody starts a world any more, and this is what the server held when they could.
 pub const MAX_OWN_WORLDS: i64 = 200;
-/// W11: a person can claim this many guests.
-pub const MAX_CLAIMS: i64 = 20;
 /// W56: houses a person can have.
 pub const MAX_HOUSES: i64 = 1;
 /// W56: buildings a person can have beside their house, and all the buildings The Commons holds.
@@ -1527,8 +1524,6 @@ fn summary_json(summary: &Summary) -> Value {
 pub struct Joined {
     pub player: PlayerRow,
     pub token: String,
-    /// Only a guest has one: a bot's player already belongs to its owner.
-    pub claim_code: Option<String>,
     pub world: WorldRow,
     /// One fixed sentence on what to do first, from `world::TIPS`.
     pub tip: &'static str,
@@ -1572,7 +1567,7 @@ pub fn join(
     refuse_frozen(&world)?;
     let token = auth::new_guest_token();
     let token_hash = auth::hash_secret(&token);
-    let (player, claim_code) = match auth::bearer_token(headers) {
+    let player = match auth::bearer_token(headers) {
         Some(bearer) => {
             // W30: a bot coming back is looked at like a view, so it can't be made to do the work
             // of one over and over.
@@ -1593,7 +1588,7 @@ pub fn join(
             // W18: a player the owner removed from this world can't come back by joining again.
             let joined =
                 state.db.join_as_bot(agent_id, &caller.person_id, &token_hash, &world.id, now)?;
-            let player = match joined {
+            match joined {
                 BotJoined::Done(player) => player,
                 BotJoined::Removed => {
                     return Err(ApiError::forbidden("this bot was removed from the public worlds"))
@@ -1601,14 +1596,11 @@ pub fn join(
                 BotJoined::Barred => {
                     return Err(ApiError::forbidden("you were removed from this world"))
                 }
-            };
-            (player, None)
+            }
         }
         None => {
             allow_new_guest(state, headers, now)?;
-            let claim = auth::new_claim_code();
-            let player = state.db.create_guest(&token_hash, &auth::hash_secret(&claim), now)?;
-            (player, Some(claim))
+            state.db.create_anonymous_guest(&token_hash, now)?
         }
     };
     let land = state.worlds.land_for(world.seed, world.size);
@@ -1624,12 +1616,9 @@ pub fn join(
     state.worlds.mark_stale(&world.id);
     state.worlds.cards_stale.store(true, Ordering::Release);
     // A new guest has built nothing. A bot that comes back may have a town, which is its own tiles.
-    let own = match claim_code {
-        Some(_) => Tiles::new(),
-        None => state.db.player_tiles(&world.id, player.id)?,
-    };
+    let own = state.db.player_tiles(&world.id, player.id)?;
     let tip = world::tip(&own, false, moves_left(&player, now));
-    Ok(Joined { player, token, claim_code, world, tip })
+    Ok(Joined { player, token, world, tip })
 }
 
 /// W27: a world's link opened one that was still open. Every world with a link is frozen now, so all
@@ -1647,23 +1636,14 @@ pub fn join_by_code(
     Ok(world.id)
 }
 
-/// W11: a signed-in person enters a claim code, and the guest becomes theirs.
-pub fn claim(state: &AppState, caller: &Caller, code: &str, now: i64) -> ApiResult<PlayerRow> {
+/// W11: claiming anonymous players is retired. Only house Crew creates owned bots.
+pub fn claim(state: &AppState, caller: &Caller, _code: &str, now: i64) -> ApiResult<PlayerRow> {
     require_person(caller)?;
     state.worlds.limits.people.take(&format!("claim:{}", caller.person_id), now, "slow down")?;
-    let claimed = state.db.claim_player(
-        &auth::hash_secret(code),
-        &caller.person_id,
-        MAX_CLAIMS,
-        now - GUEST_IDLE_SECS,
-    )?;
-    match claimed {
-        Claimed::Done(player) => Ok(player),
-        Claimed::NoSuchCode => {
-            Err(ApiError::new(StatusCode::NOT_FOUND, "that claim code doesn't work"))
-        }
-        Claimed::TooMany => Err(ApiError::conflict("you have claimed as many players as you can")),
-    }
+    Err(ApiError::new(
+        StatusCode::GONE,
+        "player claiming has ended: open Crew in your house to add a bot",
+    ))
 }
 
 /// W4: the one place a player is tied to a person, and only to that person.

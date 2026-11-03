@@ -1,4 +1,6 @@
 //! CP1–CP7: real HTTP/MCP camera access, photo settings, images and revocation.
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -70,16 +72,10 @@ impl Server {
         }
     }
     async fn bot(&self, owner: &Who, name: &str) -> (String, String) {
-        let v = self
-            .ok(
-                &owner.key,
-                Method::POST,
-                &format!("/api/hangouts/{}/agents", owner.room),
-                json!({"name":name}),
-            )
-            .await;
-        (v["agent"]["id"].as_str().unwrap().into(), v["token"].as_str().unwrap().into())
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, &owner.room, name);
+        (agent.id, token)
     }
+
     async fn consent(&self, owner: &Who, bot: &str, on: bool) {
         self.ok(
             &owner.key,

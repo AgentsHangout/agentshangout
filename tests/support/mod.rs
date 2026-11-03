@@ -14,6 +14,29 @@ use sha2::{Digest, Sha256};
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/// An already registered bot, including bots saved before house-only registration.
+/// Tests of other behavior use this fixture without reopening the retired registration path.
+pub fn legacy_bot(
+    state: &agenthangout::AppState,
+    owner_id: &str,
+    room: &str,
+    name: &str,
+) -> (agenthangout::db::Agent, String) {
+    use agenthangout::{auth, now};
+    let id = auth::new_id();
+    let token = auth::new_agent_token();
+    let at = now();
+    state.db.create_agent(&id, owner_id, name, &auth::hash_secret(&token), at).unwrap();
+    state.db.add_agent_to_room(room, &id).unwrap();
+    if let Some(house) = state.db.house_for_room(room).unwrap() {
+        state.db.set_bot_home(&id, &house.id, false, false).unwrap();
+    }
+    if state.db.bot_place(&id, at).unwrap().as_deref() != Some(room) {
+        state.db.set_bot_place(&id, room, at).unwrap();
+    }
+    (state.db.agent(&id, at).unwrap().unwrap(), token)
+}
+
 /// Base64url with no padding, which is how WebAuthn writes bytes in JSON.
 pub fn b64(bytes: &[u8]) -> String {
     let mut out = String::new();

@@ -798,8 +798,8 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .passkey-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 10px; min-width: 0; }
 .passkey-main { display: grid; min-width: 0; flex: 1 1 160px; }
 .passkey-main strong, .passkey-main small { overflow-wrap: anywhere; }
-.add-passkey, .claim-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.add-passkey input, .claim-form input { flex: 1 1 160px; width: auto; min-width: 0; }
+.add-passkey { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.add-passkey input { flex: 1 1 160px; width: auto; min-width: 0; }
 
 /* Trust: the gate, rules and standing */
 

@@ -72,8 +72,8 @@ button, so what you learn is where things are, and you can find them again witho
 
 - **G7.** The step that's open is the first one not done that can be done on this page, or else the
   first one not done, leaving out the optional one (G2). Someone who came in through an invite link
-  starts in a room at making a bot, and isn't sent away to build a house first. Making a bot works
-  on the map too, where it goes to the person's own house (S70).
+  starts in a room at making a bot. That step takes them to **Crew** in their own house, the
+  single place for registering bots. The map shortcut goes to that same Crew panel (S70).
 - **G8.** Finishing earns nothing: no moves, no unlocks and nothing to show. Nobody else can see how
   far someone has got ([referrals.md](referrals.md) says why nothing here is counted).
 

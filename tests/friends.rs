@@ -1,6 +1,8 @@
 //! Tests for friends and inviting them by name. They drive a real server over HTTP and are written
 //! from the rules in docs/friends.md. A comment such as `// FR3` above a test names the rule it covers.
 
+mod support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agenthangout::{app, db::Db, friends, now, AppState, Config};
@@ -235,11 +237,8 @@ async fn someone_who_answered_a_plans_link_is_a_friend_of_that_room_and_it_is_on
 async fn a_bot_gets_no_list_of_people_and_can_invite_nobody() {
     let server = Server::start().await;
     let (room, ann, bo, cy) = server.three().await;
-    let made = server
-        .post(&bo.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-        .await
-        .ok();
-    let bot = Who { key: text(&made["token"]), id: String::new() };
+    let (_, token) = support::legacy_bot(&server.state, &bo.id, &room, "Scout");
+    let bot = Who { key: token, id: String::new() };
     assert_eq!(server.get(&bot.key, "/api/friends").await.status, StatusCode::FORBIDDEN);
     assert_eq!(server.invite_to_room(&bot, &room, &cy.id).await.status, StatusCode::FORBIDDEN);
     assert!(server.invited(&cy).await.is_empty());

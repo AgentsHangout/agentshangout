@@ -2,6 +2,8 @@
 //! docs/rooms.md. A comment such as `// I17` above a test names the rule it covers. Most of these are
 //! about what strangers, walk-ins and bots can't do.
 
+mod support;
+
 use std::{
     collections::BTreeSet,
     sync::{
@@ -193,11 +195,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        Bot { id: text(&made["agent"]["id"]), token: text(&made["token"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn open(&self, owner: &Who, room: &str) -> Reply {

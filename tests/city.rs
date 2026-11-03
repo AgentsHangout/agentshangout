@@ -7,6 +7,8 @@
 //! and reads leave that second out. Tests showing a guest CAN see something therefore sleep a little
 //! over a second after arriving, and the few tests that need it say so.
 
+mod support;
+
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -192,11 +194,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let reply = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        Bot { token: text(&reply.body["token"]), id: text(&reply.body["agent"]["id"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn say(&self, token: &str, room: &str, words: &str) -> Reply {
@@ -4447,8 +4446,9 @@ async fn hangouts_outside_a_city_behave_as_they_always_did() {
     assert_ok(&joined);
     // Leaving works, takes the bot with it, and a bot has no home or trip anywhere.
     let lena = text(&joined.body["owner_key"]);
-    let lena_bot =
-        server.bot(&Who { key: lena.clone(), id: String::new() }, &room, "Lena Bot").await;
+    let lena_bot = server
+        .bot(&Who { key: lena.clone(), id: text(&joined.body["person"]["id"]) }, &room, "Lena Bot")
+        .await;
     assert_ok(&server.post(&lena, &format!("/api/hangouts/{room}/leave"), json!({})).await);
     assert_not_found(&server.get(&lena_bot.token, &format!("/api/hangouts/{room}")).await);
     assert_not_found(&server.get(&lena, &format!("/api/hangouts/{room}")).await);
