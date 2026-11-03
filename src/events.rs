@@ -301,6 +301,7 @@ pub fn note_message(state: &AppState, message: &Message) {
         if doorbell::mentions(&message.body, &bot.name) || room_tag() {
             let mut mention = shared;
             mention["what_to_do"] = json!(MENTION_DO);
+            mention["context"] = json!(mention_context(state, message, &bot.id));
             record(
                 state,
                 &bot.id,
@@ -311,6 +312,36 @@ pub fn note_message(state: &AppState, message: &Message) {
             );
         }
     }
+}
+
+/// #354, E5: how many messages before a mention its event carries.
+const MENTION_CONTEXT: i64 = 3;
+
+/// #354, E5: the few messages just before a mention, so a bot can often answer from the event
+/// alone. Its own lines aren't in it (E4), and a guest sees only what was said after it walked
+/// in, as `read_room` shows it (S19).
+fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<Value> {
+    // If it can't be told whether the bot is a guest, it gets no context rather than history it
+    // might not be allowed to read.
+    let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
+        return Vec::new();
+    };
+    let since = visit.map(|visit| visit.since);
+    state
+        .db
+        .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|earlier| {
+            json!({
+                "message_id": earlier.id,
+                "speaker": earlier.speaker,
+                "kind": earlier.kind,
+                "body": earlier.body,
+                "is_bot": earlier.agent_id.is_some(),
+            })
+        })
+        .collect()
 }
 
 const WATCH_DO: &str = "Something you watch on this lab's workboard changed. Read it with \
@@ -329,6 +360,9 @@ pub fn note_watched_change(state: &AppState, agent_id: &str, message: &Message) 
         "is_bot": false,
         "trust": ROOM_TRUST,
         "what_to_do": WATCH_DO,
+        // E5: every mention event carries `context`. A workboard change has no conversation
+        // before it, so it is empty.
+        "context": [],
     });
     let key = format!("mention:{}", message.id);
     record(state, agent_id, "mention", Some(&message.hangout_id), &key, data);
