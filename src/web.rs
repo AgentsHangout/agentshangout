@@ -46,6 +46,12 @@ const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
 const TUTORIAL_JS: &str = include_str!("../web/tutorial.js");
 const FAVICON: &str = include_str!("../web/favicon.svg");
+const FAVICON_ICO: &[u8] = include_bytes!("../web/favicon.ico");
+const FAVICON_32: &[u8] = include_bytes!("../web/favicon-32.png");
+const APPLE_TOUCH_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
+const ICON_192: &[u8] = include_bytes!("../web/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../web/icon-512.png");
+const MANIFEST: &str = include_str!("../web/site.webmanifest");
 const AGENT_GUIDE: &str = include_str!("../web/agents.md");
 const OG_IMAGE: &[u8] = include_bytes!("../web/og.jpg");
 const AI_CATALOG: &str = include_str!("../web/ai-catalog.json");
@@ -65,8 +71,22 @@ fn asset(content_type: &'static str, body: &'static str) -> Response {
 
 /// Files that name this server, so a copy run elsewhere points at itself.
 fn addressed(state: &AppState, content_type: &'static str, body: &str) -> Response {
-    let body = body.replace("{{BASE_URL}}", &state.config.public_url);
+    let body = fill(state, body);
     ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body)
+        .into_response()
+}
+
+fn fill(state: &AppState, body: &str) -> String {
+    body.replace("{{BASE_URL}}", &state.config.public_url)
+        .replace("{{SOCIAL_LINKS}}", &crate::brand::social_links_html())
+        .replace("{{SAME_AS_JSON}}", &crate::brand::same_as_json())
+        .replace("{{SITE_DESCRIPTION}}", crate::brand::SITE_DESCRIPTION)
+        .replace("{{OG_IMAGE_ALT}}", crate::brand::OG_IMAGE_ALT)
+        .replace("{{ICON_LINK_TAGS}}", crate::brand::ICON_LINK_TAGS)
+}
+
+fn cached_bytes(content_type: &'static str, body: &'static [u8]) -> Response {
+    ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "public, max-age=86400")], body)
         .into_response()
 }
 
@@ -80,7 +100,7 @@ const DISCOVERY_CORS: [(HeaderName, &str); 3] = [
 /// The two files the MCP discovery spec has clients read from anywhere, browsers included, so these
 /// are the only answers another site may read. They hold public metadata and nothing else.
 fn discoverable(state: &AppState, content_type: &'static str, body: &str) -> Response {
-    let body = body.replace("{{BASE_URL}}", &state.config.public_url);
+    let body = fill(state, body);
     (
         [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "public, max-age=3600")],
         DISCOVERY_CORS,
@@ -123,11 +143,7 @@ async fn server_card(State(state): State<AppState>) -> Response {
 
 /// The picture a shared link shows. Social sites fetch it a lot and it rarely changes.
 async fn og_image() -> Response {
-    (
-        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=86400")],
-        OG_IMAGE,
-    )
-        .into_response()
+    cached_bytes("image/jpeg", OG_IMAGE)
 }
 
 async fn privacy(State(state): State<AppState>) -> Response {
@@ -244,7 +260,16 @@ pub fn routes() -> Router<AppState> {
             "/tutorial.js",
             get(|| async { asset("text/javascript; charset=utf-8", TUTORIAL_JS) }),
         )
+        .route("/favicon.ico", get(|| async { cached_bytes("image/x-icon", FAVICON_ICO) }))
         .route("/favicon.svg", get(|| async { asset("image/svg+xml", FAVICON) }))
+        .route("/favicon-32.png", get(|| async { cached_bytes("image/png", FAVICON_32) }))
+        .route(
+            "/apple-touch-icon.png",
+            get(|| async { cached_bytes("image/png", APPLE_TOUCH_ICON) }),
+        )
+        .route("/icon-192.png", get(|| async { cached_bytes("image/png", ICON_192) }))
+        .route("/icon-512.png", get(|| async { cached_bytes("image/png", ICON_512) }))
+        .route("/site.webmanifest", get(|| async { asset("application/manifest+json", MANIFEST) }))
         .route("/og.jpg", get(og_image))
         .route("/agents.md", get(agent_guide))
         .route("/robots.txt", get(robots))

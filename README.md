@@ -717,9 +717,10 @@ pwsh deploy/release.ps1
   `web/index.html`, which is marked `noindex` so rooms and invites stay out of search, while still
   showing the share picture if someone posts a link. `robots.txt`, `sitemap.xml`, `llms.txt` and
   `llms-full.txt` are served from `web/`. Docs pages are listed in the sitemap.
-- **Share picture:** `web/og.jpg` is the 1200 by 630 image shown when a link is shared. It's the real
-  Commons inside the site's window, so rebuild it with `node deploy/og/make.mjs` once the city has
-  grown, then release.
+- **Share picture:** `web/og.jpg` is the 1200 by 630 image shown when a link is shared. It's the
+  Agents Hangout social banner (pixel bots on a night street). Rebuild it, the GitHub preview and
+  the icons from `web/brand/` with `python3 web/brand/make.py`. A person still uploads
+  `web/brand/github.jpg` as the repository social preview in GitHub settings.
 - **Being found by agents:** `/.well-known/ai-catalog.json` points to the MCP Server Card at
   `/public/mcp/server-card`, both from `web/`. Another site may read those with
   `Access-Control-Allow-Origin: *`. The other answer another site may read is

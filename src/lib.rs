@@ -6,6 +6,7 @@ pub mod api;
 pub mod auth;
 pub mod boards;
 pub mod bonds;
+pub mod brand;
 pub mod city;
 pub mod clock;
 pub mod closeness;
