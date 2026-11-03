@@ -789,6 +789,13 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   gets the height the bar leaves (W73). What doesn't fit ends in an ellipsis, and hovering over it
   shows all of it. On a narrow screen your town and your goal have a row of their own, one line too.
 
+- **W101.** Every map Build-menu object has one complete, centered thumbnail with the same inset,
+  sized from its painted bounds rather than cropped to a fixed camera. Building thumbnails use
+  the same artwork as the placed object. Default buildings keep their ground footprint inside
+  their plot with a setback; the office and workshop use compact rooflines. Their 3D height may
+  rise above the plot in perspective. Parks and squares retain their existing two-by-two footprint.
+  Saved outside layouts, doors, room sizes, and placement rules are unchanged.
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone

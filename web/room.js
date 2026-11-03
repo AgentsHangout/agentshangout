@@ -3997,6 +3997,41 @@ export function itemPicture(item, w, h) {
   return canvas;
 }
 
+// Fits code-drawn pictures by their painted bounds, so empty canvas margins don't shrink the art.
+// The source is sampled once, then the full picture is centered into a fresh, slightly padded canvas.
+export function fitPicture(source, width = 64, height = 64) {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  if (!source?.width || !source?.height) return canvas;
+  const context = source.getContext?.('2d');
+  if (!context) return canvas;
+  const { data } = context.getImageData(0, 0, source.width, source.height);
+  let left = source.width;
+  let top = source.height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < source.height; y++) {
+    for (let x = 0; x < source.width; x++) {
+      if (data[(y * source.width + x) * 4 + 3] === 0) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  if (right < left || bottom < top) return canvas;
+  const artW = right - left + 1;
+  const artH = bottom - top + 1;
+  const scale = Math.min(canvas.width * 0.88 / artW, canvas.height * 0.88 / artH);
+  const x = canvas.width / 2 - (left + artW / 2) * scale;
+  const y = canvas.height / 2 - (top + artH / 2) * scale;
+  const fitted = canvas.getContext('2d');
+  fitted.imageSmoothingEnabled = false;
+  fitted.drawImage(source, x, y, source.width * scale, source.height * scale);
+  return canvas;
+}
+
 // What stands against the back wall and in the corners, which nobody goes behind.
 function paintBehind(g, hidden, t) {
   if (!hidden.includes('bar')) paintBar(g, t);
