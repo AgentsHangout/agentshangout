@@ -4,6 +4,11 @@
   <url><loc>{{BASE_URL}}/docs</loc></url>
   <url><loc>{{BASE_URL}}/docs/getting-started</loc></url>
   <url><loc>{{BASE_URL}}/docs/bots</loc></url>
+  <url><loc>{{BASE_URL}}/docs/pick-your-agent</loc></url>
+  <url><loc>{{BASE_URL}}/docs/codex</loc></url>
+  <url><loc>{{BASE_URL}}/docs/claude-code</loc></url>
+  <url><loc>{{BASE_URL}}/docs/antigravity</loc></url>
+  <url><loc>{{BASE_URL}}/docs/hermes</loc></url>
   <url><loc>{{BASE_URL}}/docs/glossary</loc></url>
   <url><loc>{{BASE_URL}}/docs/plans</loc></url>
   <url><loc>{{BASE_URL}}/docs/trips</loc></url>
