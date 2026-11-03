@@ -1,4 +1,4 @@
-//! CP1–CP6: real HTTP/MCP camera access, consent, images and revocation.
+//! CP1–CP7: real HTTP/MCP camera access, photo settings, images and revocation.
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -103,15 +103,15 @@ impl Server {
     }
 }
 #[tokio::test]
-async fn public_photo_is_png_but_private_text_and_unconsented_bots_are_absent() {
+async fn public_photo_is_png_but_private_text_and_bots_with_photos_off_are_absent() {
     let s = Server::start().await;
     let ann = s.owner("Ann").await;
     s.public(&ann, true).await;
     let (id, token) = s.bot(&ann, "Dotliver Tree").await;
-    let (_, hidden) = s.bot(&ann, "Hidden Camera Sentinel").await;
-    let denied = s.capture(&token, &ann.room, "room").await;
-    assert_eq!(denied["isError"], true);
-    s.consent(&ann, &id, true).await;
+    let (hidden, hidden_token) = s.bot(&ann, "Hidden Camera Sentinel").await;
+    // CP2: on by default, so nobody had to turn anything on. A bot with photos off can't take one.
+    s.consent(&ann, &hidden, false).await;
+    assert_eq!(s.capture(&hidden_token, &ann.room, "room").await["isError"], true);
     s.ok(
         &ann.key,
         Method::POST,
@@ -207,7 +207,7 @@ async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
             .store_room_photo(
                 &photo,
                 &ann.id,
-                std::slice::from_ref(&s.state.db.camera_subject(&id).unwrap().unwrap()),
+                std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
                 at
             )
             .unwrap());
@@ -219,7 +219,7 @@ async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
         .store_room_photo(
             &photo,
             &ann.id,
-            std::slice::from_ref(&s.state.db.camera_subject(&id).unwrap().unwrap()),
+            std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
             at
         )
         .unwrap());
@@ -234,7 +234,7 @@ async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
         .store_room_photo(
             &photo,
             &ann.id,
-            std::slice::from_ref(&s.state.db.camera_subject(&id).unwrap().unwrap()),
+            std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
             expired
         )
         .unwrap());
@@ -254,4 +254,64 @@ async fn malformed_frames_and_away_bots_cannot_capture() {
     assert_eq!(s.capture(&token, &bo.room, "room").await["isError"], true);
     s.state.db.remove_member(&ann.room, &ann.id).unwrap();
     assert_eq!(s.capture(&token, &ann.room, "room").await["isError"], true);
+}
+
+impl Server {
+    async fn photo_status(&self, meta: &Value) -> StatusCode {
+        self.client.get(meta["image_url"].as_str().unwrap()).send().await.unwrap().status()
+    }
+}
+
+#[tokio::test]
+async fn people_with_the_floor_open_are_in_photos_until_they_leave_themselves_out() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (_, token) = s.bot(&ann, "Fern").await;
+    s.state.presence.saw(&ann.room, &ann.id, agenthangout::now());
+    let together = s.capture(&token, &ann.room, "room").await;
+    let meta = &together["structuredContent"];
+    assert_eq!(meta["people"], json!([{"name":"Ann"}]), "{together}");
+    assert!(meta["caption"].as_str().unwrap().contains("Ann"));
+    assert!(!meta.to_string().contains(&ann.id));
+    // Only a person changes their own setting, and leaving out takes their photos down.
+    assert_eq!(
+        s.request(&token, Method::PUT, "/api/camera/me", json!({"allowed":false})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(s.ok(&ann.key, Method::GET, "/api/camera/me", json!({})).await["allowed"], true);
+    s.ok(&ann.key, Method::PUT, "/api/camera/me", json!({"allowed":false})).await;
+    assert_eq!(s.photo_status(meta).await, StatusCode::NOT_FOUND);
+    let without = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(without["structuredContent"]["people"], json!([]), "{without}");
+    // On again brings back nothing taken before, and a photo she wasn't in stays up.
+    s.ok(&ann.key, Method::PUT, "/api/camera/me", json!({"allowed":true})).await;
+    assert_eq!(s.photo_status(meta).await, StatusCode::NOT_FOUND);
+    assert_eq!(s.photo_status(&without["structuredContent"]).await, StatusCode::OK);
+    let again = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(again["structuredContent"]["people"], json!([{"name":"Ann"}]), "{again}");
+}
+
+#[tokio::test]
+async fn whoever_runs_a_room_can_turn_its_photos_off_and_that_takes_them_all_down() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = s.owner("Bo").await;
+    s.public(&ann, true).await;
+    let (_, token) = s.bot(&ann, "Fern").await;
+    let path = format!("/api/floors/{}/camera", ann.room);
+    assert_eq!(s.ok(&ann.key, Method::GET, &path, json!({})).await["allowed"], true);
+    let before = s.capture(&token, &ann.room, "room").await;
+    assert!(before["isError"].is_null(), "{before}");
+    let meta = before["structuredContent"].clone();
+    assert!(!s.request(&bo.key, Method::PUT, &path, json!({"allowed":false})).await.0.is_success());
+    assert!(!s.request(&token, Method::PUT, &path, json!({"allowed":false})).await.0.is_success());
+    assert_eq!(s.photo_status(&meta).await, StatusCode::OK);
+    s.ok(&ann.key, Method::PUT, &path, json!({"allowed":false})).await;
+    assert_eq!(s.photo_status(&meta).await, StatusCode::NOT_FOUND);
+    let refused = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    s.ok(&ann.key, Method::PUT, &path, json!({"allowed":true})).await;
+    assert_eq!(s.photo_status(&meta).await, StatusCode::NOT_FOUND);
+    assert!(s.capture(&token, &ann.room, "room").await["isError"].is_null());
 }
