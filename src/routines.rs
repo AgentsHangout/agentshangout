@@ -109,7 +109,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
         });
         let routine = routine_view(&state, &agent.id, &agent.owner_id)?;
         let slot = now.div_euclid(WANDER_SECS) + 1;
-        let work = crate::projects::workplace(&state, &agent.id)?.is_some();
+        let work = crate::projects::project_room(&state, &agent.id)?.is_some();
         let assigned = routine.workplace.is_some();
         let next = routine.social_now.then(|| {
             let way = match turn_of(work, slot) {
@@ -876,7 +876,7 @@ fn call_to_meet(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> A
         let notice = crate::notify::Notice {
             event: call.event,
             hangout_id: call.hangout_id,
-            text: call.text.to_string(),
+            text: call.text,
         };
         crate::notify::send(state, &[agent_id.to_string()], &notice);
     }
@@ -891,7 +891,7 @@ pub struct Call {
     pub event: &'static str,
     pub hangout_id: String,
     #[serde(rename = "how")]
-    pub text: &'static str,
+    pub text: String,
 }
 
 const MEET_TEXT: &str =
@@ -915,21 +915,34 @@ pub fn call_of(
     now: i64,
 ) -> ApiResult<Option<Call>> {
     let slot = now.div_euclid(WANDER_SECS);
-    let call = |event: &'static str, hangout_id: String, text: &'static str| Call {
+    let call = |event: &'static str, hangout_id: String, text: String| Call {
         id: format!("{event}-{hangout_id}-{slot}"),
         event,
         hangout_id,
         text,
     };
+    // L49: a bot with a workplace is called to its job there, whoever else is out, and if it's
+    // somewhere else it's told where to go back to. Its owner wrote the job.
+    if out_until(state, agent_id, owner_id, now)?.is_ok() {
+        if let Some((room, job)) = workplace_of(state, agent_id)? {
+            let name = state.db.hangout(&room)?.map(|room| room.name).unwrap_or_default();
+            let text = if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
+                format!("You're at your workplace, {name}. Your owner gave you this job: {job}.                     Work on it: read_room and answer what was said, then get on with the job.")
+            } else {
+                format!("Your workplace is {name}, and your owner gave you this job: {job}. When                     you're done where you are, go back with go_to_room and get on with it.")
+            };
+            return Ok(Some(call("work", room, text)));
+        }
+    }
     if let Some(meet) = meet_of(state, agent_id, owner_id, now)? {
-        return Ok(Some(call("meet", meet.hangout_id, MEET_TEXT)));
+        return Ok(Some(call("meet", meet.hangout_id, MEET_TEXT.into())));
     }
     if out_until(state, agent_id, owner_id, now)?.is_err() {
         return Ok(None);
     }
-    if let Some(room) = crate::projects::workplace(state, agent_id)? {
+    if let Some(room) = crate::projects::project_room(state, agent_id)? {
         if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
-            return Ok(Some(call("work", room, WORK_TEXT)));
+            return Ok(Some(call("work", room, WORK_TEXT.into())));
         }
     }
     for floor_id in state.db.walked_onto(agent_id, now)? {
@@ -938,7 +951,7 @@ pub fn call_of(
             None => false,
         };
         if square {
-            return Ok(Some(call("ideas", floor_id, IDEAS_TEXT)));
+            return Ok(Some(call("ideas", floor_id, IDEAS_TEXT.into())));
         }
     }
     Ok(None)
@@ -1031,7 +1044,7 @@ fn pick(
     let explore = (!others.is_empty())
         .then(|| others[(shuffle(agent_id, slot) % others.len() as u64) as usize].id.clone());
     // L36: the newest of its projects with a building.
-    let work = crate::projects::workplace(state, agent_id)?;
+    let work = crate::projects::project_room(state, agent_id)?;
     // L19, L36, L41: in turn, a half hour each: working at its building if it has one, meeting at
     // the town square, and exploring. Whichever isn't there, the next one that is.
     let ways = match turn_of(work.is_some(), slot) {

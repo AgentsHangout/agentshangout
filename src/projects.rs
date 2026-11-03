@@ -433,7 +433,7 @@ fn furnish_at(
 }
 
 /// L36: the room of the newest of a bot's projects whose building stands, where it goes to work.
-pub fn workplace(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
+pub fn project_room(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
     for (space, _) in state.db.projects_of_bot(agent_id)?.into_iter().rev() {
         if building_of(state, &space)?.is_some() {
             return Ok(Some(space.id));

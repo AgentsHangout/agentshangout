@@ -1012,6 +1012,23 @@ lines",
     let bots = server.get(&bo.key, "/api/me/bots").await.ok();
     assert_eq!(bots["bots"][0]["next"]["way"], "work", "{bots}");
 
+    // L49: its half-hour call is to its job there, in its owner's words, and nudge shows it.
+    let call = routines::call_of(&server.state, &rover_id, &bo.id, now()).unwrap().unwrap();
+    assert_eq!((call.event, call.hangout_id.as_str()), ("work", office.as_str()));
+    assert!(
+        call.text.contains("Building Agents Hangout") && call.text.contains("Office"),
+        "{call:?}"
+    );
+    let inbox = server.tool(&rover, "inbox", json!({})).await;
+    assert_eq!(inbox["nudge"]["event"], "work", "{inbox}");
+    // Somewhere else, even the town square, it's told to go back rather than to think up ideas.
+    server.tool(&rover, "go_out", json!({ "floor_id": square })).await;
+    let call = routines::call_of(&server.state, &rover_id, &bo.id, now()).unwrap().unwrap();
+    assert_eq!((call.event, call.hangout_id.as_str()), ("work", office.as_str()));
+    assert!(call.text.contains("go_to_room"), "{call:?}");
+    server.tool(&rover, "come_back", json!({})).await;
+    server.state.db.set_bot_place(&rover_id, &office, now()).unwrap();
+
     // Called home for a standup that runs past the half hour, it stays while it has the standup's
     // mention to read (L31), and comes back to work at the next half hour once it's free.
     server.state.db.set_bot_place(&rover_id, &home, now()).unwrap();
