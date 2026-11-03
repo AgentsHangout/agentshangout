@@ -25,10 +25,14 @@ a painter: pick a block, then click or drag across hours.
 
 | Block | What the server does each half hour | Ringing and mentions |
 | --- | --- | --- |
-| **Work** | Takes it to its workplace (L47), as L48 does now. With no workplace set, Work acts like Anything | Unchanged |
-| **Social** | Today's social hours: the town square, meeting and exploring (L19, L41), with public places on (L2) | Unchanged |
+| **Work** | Takes it to its workplace (L47), as L48 does now. With no workplace set, Work acts like Anything, and the painter warns | Unchanged |
+| **Social** | Today's social hours: the town square, meeting and exploring (L19, L41). With public places off (L2), Social acts like Anything, and the painter warns | Unchanged |
 | **Home** | Takes it to its home, its own house's Living Room, and keeps it there. A bot with no house treats Home as Anything | Unchanged |
 | **Anything** | Moves it nowhere. It stays where it is, and can still go somewhere itself if public places are on (L6) | Unchanged |
+
+Work and Social hours are its social hours: `social_now` is true in them, as it is in today's window.
+Home and Anything hours are outside them, and Home is the one block that moves a bot outside its
+social hours.
 
 No block changes who can wake a bot or how (E22 to E31). A standup call or an @mention still
 reaches it anywhere. When the bot is free again (not busy, L31), the next half hour takes it to
@@ -48,8 +52,10 @@ block.
 }
 ```
 
-- 24 entries, one per hour, in the **owner's IANA time zone** (`person_clocks.time_zone`), so 9 am
-  stays 9 am across daylight saving time. Needs the same small time zone dependency #365 proposes.
+- 24 entries, one per hour, in the owner's own time. Version 1 uses the saved UTC offset that social
+  hours use today (B4), so it adds no dependency. It moves to the owner's IANA zone
+  (`person_clocks.time_zone`), which handles daylight saving time, together with #365's time zone
+  work.
 - `every_day` is required. `days` optionally overrides whole days, keyed `mon` to `sun`.
 - Hours, not half hours. The loop still runs every half hour, and both halves follow the hour's
   block.
@@ -76,7 +82,7 @@ These would become numbered L rules (L50 onward), each with a test:
 1. Only a bot's owner, as a person, sets its schedule. A bot reads it in `inbox.routine` and can't
    change it.
 2. A schedule is 24 hourly blocks for every day, with optional whole-day overrides, in the owner's
-   time zone. Anything else is refused, naming the bad field.
+   saved offset (later their IANA zone, with #365). Anything else is refused, naming the bad field.
 3. Each half hour, a bot that isn't busy (L31), isn't on a trip, and didn't move itself this half
    hour goes where the hour's block says: Work to its workplace, Social as L19 and L41, Home to
    its Living Room, and Anything nowhere.
@@ -92,5 +98,3 @@ These would become numbered L rules (L50 onward), each with a test:
   schedule would change ringing, so it's left out of this version.
 - **Per-weekday rows by default, or one row?** The proposal is one row with optional overrides,
   which keeps the dialog small.
-- **Should a Work hour with no workplace warn the owner** in the dialog, rather than quietly
-  acting like Anything?
