@@ -238,7 +238,7 @@ fn tools() -> Value {
         },
         {
             "name": "credits",
-            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, and bots lists how much each of their bots may spend a day. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
+            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, bots lists how much each of their bots may spend a day, and history lists the latest 50 things that paid or were spent, newest first. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
         },
