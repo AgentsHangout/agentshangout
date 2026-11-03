@@ -6078,6 +6078,10 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
     let messages = format!("/api/hangouts/{room}/messages");
     server.post(&bob.key, &messages, json!({ "text": "@room hello all" })).await.ok();
     assert!(mentions_of(&fido.token).await.is_empty(), "Bob isn't the room's owner");
+    // I86: the word alone isn't `@room`, and it doesn't use up the ten minutes either.
+    let plain = say(&rover.token, "standup in the room now").await;
+    assert!(plain["room_mention"].is_null(), "{plain}");
+    assert!(mentions_of(&fido.token).await.is_empty());
     let sent = say(&rover.token, "@room standup now").await;
     assert_eq!(sent["room_mention"]["reached"], 1, "{sent}");
     assert_eq!(mentions_of(&fido.token).await, ["@room standup now"]);
