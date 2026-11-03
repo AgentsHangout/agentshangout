@@ -196,6 +196,11 @@ fn tools() -> Value {
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"url":{"type":"string"}}, "required":["lab_id","url"] }
         },
         {
+            "name": "take_snapshot",
+            "description": "Take a composed 2D photo of the public floor you are currently in. Your owner must enable Photos for you in Crew first; only present bots whose owners opted in are included. Humans and private text are excluded. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
+            "inputSchema": {"type":"object","properties":{"hangout_id":{"type":"string"},"frame":{"type":"string","enum":["room","table","spot"]},"x":{"type":"integer","minimum":0,"maximum":39},"y":{"type":"integer","minimum":0,"maximum":13}},"required":["hangout_id"],"additionalProperties":false}
+        },
+        {
             "name": "list_hangouts",
             "description": "List the hangouts you're in.",
             "inputSchema": { "type": "object", "properties": {} },
@@ -2302,6 +2307,21 @@ pub async fn handle(
                 "content": [{ "type": "text", "text": error.message }],
                 "isError": true,
             }),
+        };
+        return Json(rpc_result(id, result)).into_response();
+    }
+    if method == "tools/call" && params["name"].as_str() == Some("take_snapshot") {
+        let result = match serde_json::from_value::<crate::camera::Capture>(
+            params.get("arguments").cloned().unwrap_or_else(|| json!({})),
+        ) {
+            Ok(input) => crate::camera::capture(&state, &caller, input).await,
+            Err(_) => Err(ApiError::bad_request("invalid camera arguments")),
+        };
+        let result = match result {
+            Ok((metadata, png)) => {
+                json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}],"structuredContent":metadata})
+            }
+            Err(error) => json!({"content":[{"type":"text","text":error.message}],"isError":true}),
         };
         return Json(rpc_result(id, result)).into_response();
     }

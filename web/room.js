@@ -3921,6 +3921,10 @@ export class Room {
     requestAnimationFrame((t) => this.frame(t));
   }
 
+  cameraFlash(botId) {
+    if (this.bots.has(botId)) this.photoFlash = { botId, until: performance.now() + 350 };
+  }
+
   destroy() {
     this.running = false;
     fillGrid([]);
@@ -4465,6 +4469,16 @@ export class Room {
     // A sign changes what bots can do here, so nothing and nobody ever stands in front of it.
     for (const item of this.items) if (item.sign) this.drawItem(g, item, still);
     this.drawHand(g, still);
+    if (this.photoFlash && time < this.photoFlash.until) {
+      const bot = this.bots.get(this.photoFlash.botId);
+      if (bot) {
+        r(g, '#151b2b', Math.round(bot.x) + 5, Math.round(bot.y) - 15, 10, 7);
+        r(g, '#e5f6ff', Math.round(bot.x) + 8, Math.round(bot.y) - 13, 4, 4);
+      }
+      g.globalAlpha = Math.max(0, (this.photoFlash.until - time) / 350) * 0.2;
+      r(g, '#ffffff', 0, 0, W, H);
+      g.globalAlpha = 1;
+    } else { this.photoFlash = null; }
 
     this.confetti = this.confetti.filter((bit) => bit.life > 0);
     for (const bit of this.confetti) {

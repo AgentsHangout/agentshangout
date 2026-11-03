@@ -26,6 +26,7 @@ pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod camera;
 mod github_display;
 mod oauth;
 pub(crate) mod oauth_events;
@@ -1209,6 +1210,50 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
 
 
 
+
+-- CP2: only a human owner can opt their bot into public room photos.
+CREATE TABLE IF NOT EXISTS camera_consents (
+    agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    granted_at INTEGER NOT NULL,
+    grant_id TEXT NOT NULL
+);
+-- CP5: opaque, expiring, revocable photo assets. Subjects intentionally keep a tombstone id
+-- when a bot is deleted, so retrieval can deny the old image rather than forgetting its consent.
+CREATE TABLE IF NOT EXISTS room_photos (
+    id TEXT PRIMARY KEY,
+    hangout_id TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    png BLOB NOT NULL,
+    metadata TEXT NOT NULL,
+    room_epoch TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS camera_room_epochs (
+    hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    epoch TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS room_photo_subjects (
+    photo_id TEXT NOT NULL REFERENCES room_photos(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    PRIMARY KEY (photo_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS room_photos_expiry ON room_photos(expires_at);
+CREATE TRIGGER IF NOT EXISTS camera_floor_closed AFTER UPDATE OF access ON floors
+WHEN OLD.access='public' AND NEW.access!='public'
+BEGIN
+    DELETE FROM room_photos WHERE hangout_id=NEW.hangout_id;
+    INSERT INTO camera_room_epochs(hangout_id,epoch) VALUES(NEW.hangout_id,lower(hex(randomblob(16))))
+    ON CONFLICT(hangout_id) DO UPDATE SET epoch=excluded.epoch;
+END;
+CREATE TRIGGER IF NOT EXISTS camera_consent_revoked AFTER DELETE ON camera_consents
+BEGIN DELETE FROM room_photos WHERE id IN (SELECT photo_id FROM room_photo_subjects WHERE agent_id=OLD.agent_id); END;
+CREATE TRIGGER IF NOT EXISTS camera_bot_transferred AFTER UPDATE OF owner_id ON agents
+WHEN OLD.owner_id!=NEW.owner_id
+BEGIN DELETE FROM camera_consents WHERE agent_id=NEW.id; END;
 "#;
 
 #[derive(Debug, Serialize)]

@@ -3149,6 +3149,22 @@ async function roomView(id) {
     return h('span', { class: `doorbell ${state}` }, text);
   }
 
+  async function cameraPermissionDialog(agent) {
+    const saved = await api(`/api/agents/${encodeURIComponent(agent.id)}/camera`);
+    const error = formError();
+    const allowed = h('input', { type: 'checkbox', checked: saved.allowed });
+    const dialog = modal(`Photos of ${agent.name}`,
+      h('p', {}, 'Allow this bot’s name and appearance in photos of public rooms. Other bots can capture it while it is present. Humans and private room content are never included.'),
+      h('p', { class: 'muted' }, 'Photo links expire after 24 hours. Turning this off invalidates stored links containing this bot, but downloaded or reposted copies cannot be recalled. Review photos before sharing them outside the room.'),
+      h('form', { onsubmit: submitter(error, async () => {
+        await api(`/api/agents/${encodeURIComponent(agent.id)}/camera`, { method: 'PUT', body: { allowed: allowed.checked } });
+        dialog.close();
+      }) },
+        h('label', { class: 'check' }, allowed, 'Include this bot in public room photos'),
+        error,
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
+  }
+
   // I35: what a bot is using in this room, if it's using anything.
   const usedBy = (agent) => snapshot.items.find((item) => item.used_by?.includes(agent.id));
 
@@ -3232,6 +3248,7 @@ async function roomView(id) {
             },
           }, moodless ? 'Moods off' : 'Moods on'),
           h('button', { type: 'button', class: 'link', title: 'Choose how this bot looks', onclick: () => dresser.dress(agent.id) }, 'Look'),
+          h('button', { type: 'button', class: 'link', onclick: () => cameraPermissionDialog(agent).catch((failure) => alert(failure.message)) }, 'Photos'),
           h('button', {
             type: 'button',
             class: 'link',
@@ -4131,6 +4148,7 @@ async function roomView(id) {
     reloadSoon();
   });
   stream.addEventListener('typing', (event) => typingHints.update(JSON.parse(event.data)));
+  stream.addEventListener('camera', (event) => room.cameraFlash(JSON.parse(event.data).bot_id));
   stream.addEventListener('refresh', reloadSoon);
   stream.addEventListener('confirmed', () => {
     room.celebrate();

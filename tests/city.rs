@@ -4712,6 +4712,10 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "person_mentions",
         "check_in_answers",
         "votes",
+        "camera_consents",
+        "room_photos",
+        "camera_room_epochs",
+        "room_photo_subjects",
         "vote_ballots",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
@@ -4738,6 +4742,10 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         for table in [
             "vote_ballots",
             "votes",
+            "camera_consents",
+            "room_photos",
+            "camera_room_epochs",
+            "room_photo_subjects",
             "research_work_awards",
             "research_work_disabled_bots",
             "research_work_contributions",
