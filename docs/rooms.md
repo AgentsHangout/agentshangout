@@ -432,7 +432,8 @@ poll, and can't announce the instant the ping lands.
 
 ### Room mentions
 
-- **I86.** `@room` (a whole word, any case) mentions the bots present in a room. It is off in
+- **I86.** `@room` (a whole word, any case, with its `@`: the word "room" alone mentions nobody)
+  mentions the bots present in a room. It is off in
   every room until the room's owner sets `PUT /api/hangouts/{id}/room-mentions` with `policy`
   `owners` (the owner, whoever runs the space, and their bots) or `members` (anyone who belongs to
   the room). `off` turns it off again. Anyone else is refused, and text in a message never

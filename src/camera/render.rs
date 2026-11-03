@@ -1,6 +1,23 @@
 use serde_json::Value;
 
-pub fn png(scene: &Value) -> Result<Vec<u8>, String> {
+/// The last line of camera-render.js, which draws the photo.
+const DRAW: &str = "JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));";
+
+/// A rendered photo and the ids of the bots drawn at an item in it.
+pub struct Photo {
+    pub png: Vec<u8>,
+    pub at_items: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct Drawn {
+    svg: String,
+    at: Vec<String>,
+}
+
+/// Runs the room art and camera-render.js on a scene, in a bounded runtime. `last` replaces the
+/// script's final line, which draws the photo.
+fn run(scene: &Value, last: Option<&str>) -> Result<String, String> {
     let runtime = rquickjs::Runtime::new().map_err(|e| e.to_string())?;
     runtime.set_memory_limit(64 * 1024 * 1024);
     runtime.set_max_stack_size(512 * 1024);
@@ -14,13 +31,29 @@ pub fn png(scene: &Value) -> Result<Vec<u8>, String> {
         .map(|line| line.strip_prefix("export ").unwrap_or(line))
         .collect::<Vec<_>>()
         .join("\n");
-    let script = format!("{art}\n{}", include_str!("../../web/camera-render.js"));
-    let svg: String = context
+    let camera = include_str!("../../web/camera-render.js");
+    let camera = match last {
+        Some(last) => {
+            let (rest, end) = camera.trim_end().rsplit_once('\n').ok_or("empty camera script")?;
+            if end != DRAW {
+                return Err(format!("camera-render.js must end with {DRAW}"));
+            }
+            format!("{rest}\n{last}")
+        }
+        None => camera.to_string(),
+    };
+    let script = format!("{art}\n{camera}");
+    context
         .with(|ctx| {
             ctx.globals().set("__camera_scene", scene.to_string())?;
             ctx.eval::<String, _>(script)
         })
-        .map_err(|e| format!("camera drawing failed: {e}"))?;
+        .map_err(|e| format!("camera drawing failed: {e}"))
+}
+
+pub fn png(scene: &Value) -> Result<Photo, String> {
+    let drawn: Drawn = serde_json::from_str(&run(scene, None)?).map_err(|e| e.to_string())?;
+    let svg = drawn.svg;
     if svg.len() > 4 * 1024 * 1024 {
         return Err("camera SVG is too large".into());
     }
@@ -37,12 +70,112 @@ pub fn png(scene: &Value) -> Result<Vec<u8>, String> {
     if bytes.len() > 512 * 1024 {
         return Err("camera PNG is too large".into());
     }
-    Ok(bytes)
+    Ok(Photo { png: bytes, at_items: drawn.at })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// Where each figure ends up, in scene order: [name, x, y, pose].
+    fn places(scene: &Value) -> Vec<(String, f64, f64, String)> {
+        let out = run(scene, Some("const s=JSON.parse(__camera_scene);JSON.stringify(cameraFigures(s,cameraPlaced(s)).map(f=>[f.name,f.x,f.y,f.pose]))")).unwrap();
+        serde_json::from_str(&out).unwrap()
+    }
+    fn room(items: Value, bots: Value, frame: Value) -> Value {
+        json!({"look":{"paint":"dusk","flooring":"oak","hidden":[],"outdoors":false,"table":null},
+               "items":items,"bots":bots,"people":[],"frame":frame})
+    }
+    fn whole() -> Value {
+        json!({"x":0,"y":0,"width":480,"height":252})
+    }
+    fn bot(name: &str, using: Option<&str>) -> Value {
+        json!({"id":name,"name":name,"color":"#8866cc","look":{},"using":using})
+    }
+
+    #[test]
+    fn a_bot_using_an_item_is_drawn_at_it_and_the_rest_stand_in_the_grid() {
+        let items = json!([{"id":"p","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":0}]);
+        let alone = places(&room(items.clone(), json!([bot("b", None)]), whole()));
+        let scene = room(items, json!([bot("a", Some("p")), bot("b", None)]), whole());
+        let both = places(&scene);
+        assert_eq!(both[0].3, "sit");
+        assert!(both[0].1 > 30.0 * 12.0 && both[0].1 < 34.0 * 12.0, "{both:?}");
+        // The bot at the piano isn't in the grid, so the other one stands where it would alone.
+        assert_eq!((both[1].1, both[1].2, &both[1].3), (alone[0].1, alone[0].2, &alone[0].3));
+        // The same scene always gives the same places.
+        assert_eq!(places(&scene), both);
+        assert_eq!(png(&scene).unwrap().at_items, ["a"]);
+    }
+
+    #[test]
+    fn missing_full_or_out_of_frame_items_leave_a_bot_standing() {
+        let items = json!([{"id":"p","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":0},
+                           {"id":"rock","item":"no_such_kind","x":3,"y":3,"w":1,"h":1,"facing":0}]);
+        // Moved or deleted (no such id), a kind the page doesn't draw, and a second bot at a
+        // one-seat piano all stand in the grid with a neutral pose.
+        let bots = json!([
+            bot("a", Some("p")),
+            bot("b", Some("p")),
+            bot("c", Some("gone")),
+            bot("d", Some("rock"))
+        ]);
+        let all = places(&room(items.clone(), bots, whole()));
+        assert_eq!(all[0].3, "sit");
+        assert!(all[1..].iter().all(|f| f.3 == "stand"), "{all:?}");
+        // Framed away from the piano, its user stands in the grid too.
+        let left = json!({"x":0,"y":84,"width":320,"height":168});
+        let framed = places(&room(items.clone(), json!([bot("a", Some("p"))]), left.clone()));
+        assert_eq!(framed[0].3, "stand");
+        assert!(framed[0].1 < 320.0);
+        assert!(png(&room(items, json!([bot("a", Some("p"))]), left)).unwrap().at_items.is_empty());
+    }
+
+    #[test]
+    fn a_sofa_seats_as_many_as_it_has_room_for_without_overlap() {
+        let items = json!([{"id":"s","item":"sofa","x":10,"y":6,"w":4,"h":2,"facing":0}]);
+        let bots = json!([
+            bot("a", Some("s")),
+            bot("b", Some("s")),
+            bot("c", Some("s")),
+            bot("d", Some("s"))
+        ]);
+        let scene = room(items, bots, whole());
+        let all = places(&scene);
+        let seated: Vec<_> = all.iter().filter(|f| f.3 == "sit").collect();
+        assert_eq!(seated.len(), 3, "{all:?}");
+        for (i, a) in seated.iter().enumerate() {
+            assert!(seated[i + 1..].iter().all(|b| (a.1, a.2) != (b.1, b.2)), "{all:?}");
+        }
+        assert_eq!(all[3].3, "stand");
+        png(&scene).unwrap();
+    }
+
+    #[test]
+    fn the_test_helper_refuses_a_script_with_a_different_last_line() {
+        let camera = include_str!("../../web/camera-render.js");
+        assert_eq!(camera.trim_end().rsplit_once('\n').unwrap().1, DRAW);
+    }
+
+    #[test]
+    fn a_spot_on_the_frame_edge_is_out_of_frame() {
+        // Framed so the stool's spot is just inside the frame's left edge.
+        let items = json!([{"id":"s","item":"stool","x":20,"y":6,"w":1,"h":1,"facing":0}]);
+        let spot = places(&room(items.clone(), json!([bot("a", Some("s"))]), whole()));
+        assert_eq!(spot[0].3, "sit");
+        let x = spot[0].1;
+        let edge = json!({"x":x - 4.0,"y":84,"width":320,"height":168});
+        assert_eq!(places(&room(items, json!([bot("a", Some("s"))]), edge))[0].3, "stand");
+    }
+
+    #[test]
+    fn busy_items_draw_their_users_in_a_photo() {
+        for kind in ["piano", "jukebox", "easel", "game_table", "fireplace", "armchair"] {
+            let items = json!([{"id":"i","item":kind,"x":12,"y":6,"w":3,"h":2,"facing":0}]);
+            png(&room(items, json!([bot("a", Some("i"))]), whole())).unwrap();
+        }
+    }
     #[test]
     fn room_art_renders_as_a_bounded_png() {
         let image = png(&serde_json::json!({
@@ -50,7 +183,8 @@ mod tests {
             "items":[], "bots":[{"id":"bot","name":"Dotliver Tree","color":"#8866cc","look":{}}],
             "frame":{"x":0,"y":0,"width":480,"height":252}
         }))
-        .unwrap();
+        .unwrap()
+        .png;
         assert_eq!(&image[..8], b"\x89PNG\r\n\x1a\n");
         assert!(image.len() < 512 * 1024);
     }
@@ -60,12 +194,12 @@ mod tests {
             "look":{"paint":"sage","flooring":"grass","hidden":["bar"],"outdoors":true,"table":{"x":10,"y":1,"style":"round"}},
             "items":[{"id":"table","item":"coffee_table","x":3,"y":7,"w":3,"h":2,"facing":1},
                      {"id":"piano","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":2}],
-            "bots":[{"id":"one","name":"Bot\u{1} <&\" Ω","color":"#8866cc","look":{}},
+            "bots":[{"id":"one","name":"Bot\u{1} <&\" Ω","color":"#8866cc","look":{},"using":"piano"},
                     {"id":"two","name":"morgbot 2.0","color":"#44aaff","look":{}},
                     {"id":"three","name":"AgentsHangout PR","color":"#ff8866","look":{}}],
             "frame":{"x":80,"y":60,"width":320,"height":168}
         });
-        let bytes = png(&scene).unwrap();
+        let bytes = png(&scene).unwrap().png;
         let pixels = resvg::tiny_skia::Pixmap::decode_png(&bytes).unwrap();
         assert_eq!((pixels.width(), pixels.height()), (960, 504));
         let colors: std::collections::HashSet<_> =

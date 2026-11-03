@@ -25,9 +25,14 @@ pub fn routes() -> Router<AppState> {
         .route("/api/hangouts/{id}/room-mentions/bots/{agent_id}", put(put_subscription))
 }
 
-/// I86: whether a line says `@room`, by the same whole-word rule as a name.
+/// I86: whether a line says `@room`, as a whole word in any case. Unlike a name (E5), the `@` is
+/// needed: "the room" is just words.
 pub fn tags_room(body: &str) -> bool {
-    crate::doorbell::mentions(body, "room")
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '@';
+    let text = body.to_lowercase();
+    text.match_indices("@room").any(|(start, tag)| {
+        !text[..start].ends_with(is_word) && !text[start + tag.len()..].starts_with(is_word)
+    })
 }
 
 fn as_person(person_id: &str) -> Caller {
@@ -190,4 +195,27 @@ async fn put_subscription(
     }
     state.db.set_room_mention_subscription(&id, &bot.id, body.subscribed, now)?;
     Ok(Json(json!({ "ok": true, "subscribed": body.subscribed })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tags_room;
+
+    #[test]
+    fn room_needs_its_at_sign() {
+        for text in ["@room standup", "hey @Room!", "(@ROOM)", "lunch? @room"] {
+            assert!(tags_room(text), "{text}");
+        }
+        for text in [
+            "visible to the whole room",
+            "Room photos are on",
+            "@roomba",
+            "@@room",
+            "me@room",
+            "mail team@room.example",
+            "@room_service",
+        ] {
+            assert!(!tags_room(text), "{text}");
+        }
+    }
 }

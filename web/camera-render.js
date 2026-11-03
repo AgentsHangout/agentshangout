@@ -36,23 +36,45 @@ class CameraCanvas {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="504" viewBox="${frame.x} ${frame.y} ${frame.width} ${frame.height}"><defs>${defs}</defs><g shape-rendering="crispEdges">${this.parts.join('')}</g></svg>`;
   }
 }
+// The room's items as the page has them, with the spots bots use them from.
+function cameraPlaced(scene) {
+  const placed=scene.items.filter(i=>Object.hasOwn(ITEMS,i.item)).map(standing);
+  for(const item of placed)item.spots=spotsOf(item);
+  return placed;
+}
+// #344: a bot using an item is at it, as on the page, if it has a free spot inside the frame.
+// Bots come sorted by id, so the same room always gives the same places. Everyone else stands in
+// one grid, and CP2 puts the people who had the floor open in it with the bots.
+function cameraFigures(scene,placed) {
+  const frame=scene.frame,taken=new Set();
+  // A whole figure has to fit, so a spot right at the frame's edge doesn't count.
+  const inFrame=s=>s.x>=frame.x+10&&s.x<=frame.x+frame.width-10&&s.y>=frame.y+24&&s.y<=frame.y+frame.height-10;
+  const spotFor=f=>{const spot=f.using&&placed.find(i=>i.id===f.using)?.spots.find(s=>!taken.has(s)&&inFrame(s));if(spot)taken.add(spot);return spot||null;};
+  const who=[...scene.bots.map(b=>({...b,person:false,spot:spotFor(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null}))];
+  const loose=who.filter(f=>!f.spot);
+  const cols=Math.min(frame.width<480?3:4,Math.max(1,loose.length)),rows=Math.ceil(loose.length/cols);
+  return who.map(f=>{
+    const worn=f.person?{look:personLook(f.look)}:{wears:botLook(f.look)};
+    if(f.spot)return {...f,...worn,path:[],pose:f.spot.pose,facing:f.spot.facing||'front',phase:0,x:f.spot.x,y:f.spot.y};
+    const i=loose.indexOf(f);
+    return {...f,...worn,path:[],pose:'stand',facing:'front',phase:0,
+      x:frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
+      y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)};
+  });
+}
 function cameraSvg(scene) {
   const g=new CameraCanvas(),look=scene.look,frame=scene.frame;
   paintRoom(g,12,look);paintBehind(g,look.hidden,0);
-  const placed=scene.items.filter(i=>Object.hasOwn(ITEMS,i.item)).map(standing);
+  const placed=cameraPlaced(scene);
   for(const item of placed)if(item.flat)paintItem(g,item,0);
-  // CP2: bots and the people who had the floor open stand together in one grid.
-  const who=[...scene.bots.map(b=>({...b,person:false})),...(scene.people||[]).map(p=>({...p,person:true}))];
-  const cols=Math.min(frame.width<480?3:4,Math.max(1,who.length)),rows=Math.ceil(who.length/cols);
-  const figures=who.map((f,i)=>({...f,path:[],pose:'stand',facing:'front',phase:0,
-    ...(f.person?{look:personLook(f.look)}:{wears:botLook(f.look)}),
-    x:frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
-    y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)}));
+  const figures=cameraFigures(scene,placed);
   const layers=[...furnitureScene(g,look.hidden,0,[],[],look.table),
     ...placed.filter(i=>!i.flat).map(i=>({y:i.y,draw:()=>paintItem(g,i,0)})),
-    ...figures.map(f=>({y:f.y,draw:()=>f.person?drawPerson(g,f,0):drawBot(g,f,0)}))];
+    ...figures.map(f=>({y:f.spot?.over||f.y,draw:()=>f.person?drawPerson(g,f,0):drawBot(g,f,0)}))];
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
+  for(const f of figures)f.spot?.busy?.(g,f,0);
   for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
-  return g.svg(frame);
+  // The ids of the bots drawn at an item, so the photo's metadata says only what the picture shows.
+  return {svg:g.svg(frame),at:figures.filter(f=>f.spot).map(f=>f.id)};
 }
-cameraSvg(JSON.parse(__camera_scene));
+JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));

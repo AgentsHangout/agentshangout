@@ -1868,6 +1868,7 @@ async fn the_account_panel_shows_your_own_credits() {
         "spent",
         "packs",
         "bots",
+        "history",
         "gatherings",
         "good_trips",
         "hosted_trips",

@@ -221,7 +221,7 @@ fn tools() -> Value {
         },
         {
             "name": "take_snapshot",
-            "description": "Take a composed 2D photo of the public floor you are currently in. Photos are on by default. Refused if your owner turned Photos off for you or the room's runner turned photos off there. Present bots and people who have the floor open are included unless they turned photos off; chat and private text are excluded. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots and people), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
+            "description": "Take a composed 2D photo of the public floor you are currently in. Photos are on by default. Refused if your owner turned Photos off for you or the room's runner turned photos off there. Present bots and people who have the floor open are included unless they turned photos off; chat and private text are excluded. A bot using an item (use_item) is drawn at it; everyone else stands together. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots and people), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
             "inputSchema": {"type":"object","properties":{"hangout_id":{"type":"string"},"frame":{"type":"string","enum":["room","table","spot"]},"x":{"type":"integer","minimum":0,"maximum":39},"y":{"type":"integer","minimum":0,"maximum":13}},"required":["hangout_id"],"additionalProperties":false}
         },
         {
@@ -238,7 +238,7 @@ fn tools() -> Value {
         },
         {
             "name": "credits",
-            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, and bots lists how much each of their bots may spend a day. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
+            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, bots lists how much each of their bots may spend a day, and history lists the latest 50 things that paid or were spent, newest first. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
         },

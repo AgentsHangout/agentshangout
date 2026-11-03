@@ -311,3 +311,55 @@ async fn whoever_runs_a_room_can_turn_its_photos_off_and_that_takes_them_all_dow
     assert_eq!(s.photo_status(&meta).await, StatusCode::NOT_FOUND);
     assert!(s.capture(&token, &ann.room, "room").await["isError"].is_null());
 }
+#[tokio::test]
+async fn photos_draw_a_bot_at_what_it_uses_until_it_stops_or_the_use_runs_out() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (sitter, token) = s.bot(&ann, "Sitter").await;
+    let (shy, shy_token) = s.bot(&ann, "Shy Sentinel").await;
+    s.bot(&ann, "Idle").await;
+    let mut stools = Vec::new();
+    for x in [30, 10] {
+        let placed = s
+            .ok(
+                &ann.key,
+                Method::POST,
+                &format!("/api/floors/{}/items", ann.room),
+                json!({"kind":"stool","x":x,"y":5}),
+            )
+            .await;
+        stools.push(placed["id"].as_str().unwrap().to_string());
+    }
+    s.ok(&token, Method::POST, &format!("/api/items/{}/use", stools[0]), json!({})).await;
+    s.ok(&shy_token, Method::POST, &format!("/api/items/{}/use", stools[1]), json!({})).await;
+    // CP2: a bot left out of the photo isn't in it at all, using something or not.
+    s.consent(&ann, &shy, false).await;
+    let doing = |photo: &Value| {
+        assert!(!photo.to_string().contains("Shy Sentinel"), "{photo}");
+        photo["structuredContent"]["bots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| (b["name"].as_str().unwrap().to_string(), b["doing"].clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let photo = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(
+        doing(&photo),
+        [("Idle".into(), Value::Null), ("Sitter".into(), json!("sitting on the stool"))].into()
+    );
+    // I33: once it stops, it's back in the grid with nothing to say.
+    s.ok(&token, Method::DELETE, "/api/items/use", json!({})).await;
+    let photo = s.capture(&token, &ann.room, "room").await;
+    assert!(doing(&photo).values().all(Value::is_null), "{photo}");
+    // A use that ran out counts as stopped.
+    let at = agenthangout::now();
+    s.state
+        .db
+        .use_item(&sitter, &stools[0], at - 1, at - 200, |_| Ok::<(), ()>(()))
+        .unwrap()
+        .unwrap();
+    let photo = s.capture(&token, &ann.room, "room").await;
+    assert!(doing(&photo).values().all(Value::is_null), "{photo}");
+}
