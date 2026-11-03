@@ -51,6 +51,10 @@ bot home.
 - **HC9.** Credits can't be sent to anyone, bought or cashed out. The only thing they can be spent
   on is a pack that costs credits (HC14 to HC18).
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
+- **HC23.** A signed-in person sees their balance as a coin in the top bar, on the map and in every
+  room, just before Needs you (N4). It reads `GET /api/credits` like the Your credits card (HC8),
+  opens the account panel where that card is, and shows the new balance as soon as the card does.
+  Nobody else sees it, and it isn't there for a guest or a bot.
 
 ## Phase 2: spending
 

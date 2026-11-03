@@ -1324,6 +1324,7 @@ function creditsCard(credits) {
   const error = formError();
 
   function render(now) {
+    dispatchEvent(new CustomEvent('ah-credits', { detail: now }));
     const waiting = now.cities_not_earning.length;
     const rows = [
       ['Balance', count(now.balance, 'credit', 'credits')],
@@ -1366,7 +1367,8 @@ function creditsCard(credits) {
           }),
         }, 'Save'));
     };
-    card.replaceChildren(
+    // replaceChildren would write each null out as the word, so the parts not shown are dropped.
+    card.replaceChildren(...[
       h('h2', {}, 'Your credits'),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
@@ -1377,11 +1379,46 @@ function creditsCard(credits) {
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
       error,
-      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs and nothing else, and can\'t be sent, bought or cashed out.'));
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs and nothing else, and can\'t be sent, bought or cashed out.'),
+    ].filter(Boolean));
   }
 
   render(credits);
   return card;
+}
+
+// HC8: your own balance, always in the bar on the map and in a room. It opens your account panel,
+// where the Your credits card is. Only a signed-in person has credits, so nobody else sees it.
+function creditCoin(me, account) {
+  if (me?.kind !== 'person') return null;
+  const amount = h('span', { class: 'coin-amount' }, '…');
+  const button = h('button', {
+    type: 'button',
+    class: 'wd-tbtn coin',
+    title: 'Your credits',
+    'aria-label': 'Your credits',
+    // The card is below the account's settings, so the coin goes straight to it.
+    onclick: async () => {
+      await account.open('');
+      document.querySelector('section[aria-label="Your credits"]')?.scrollIntoView({ block: 'start' });
+    },
+  }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
+  const show = (credits) => {
+    amount.textContent = String(credits.balance);
+    button.setAttribute('aria-label', `Your credits: ${count(credits.balance, 'credit', 'credits')}`);
+  };
+  const refresh = () => api('/api/credits').then(show).catch(() => { button.hidden = true; });
+  // A spend on the card, or coming back to the page, shows the new balance. Once the page has moved
+  // on, the button is gone and stops listening.
+  const changed = (event) => (button.isConnected ? show(event.detail) : removeEventListener('ah-credits', changed));
+  const back = () => {
+    if (!button.isConnected) return document.removeEventListener('visibilitychange', back);
+    if (!document.hidden) refresh();
+  };
+  addEventListener('ah-credits', changed);
+  document.addEventListener('visibilitychange', back);
+  refresh();
+  return button;
 }
 
 // What a house asks, as a list. With the asker's standing each line also says where they are.
@@ -4221,6 +4258,7 @@ async function roomView(id) {
     chatToggle.button,
     ...[research?.toggle].filter(Boolean),
     panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
     dresser.toggle,
@@ -6862,7 +6900,7 @@ function accountPanel(panels, me, parts) {
     toggle: panels.toggle('account', me ? 'Account' : 'Sign in', { short: me ? 'Account' : 'Sign in', className: 'account', aria: me ? `Account, signed in as ${me.name}` : 'Sign in' }),
     open(why, again = false) {
       panels.open('account');
-      fill(why, again);
+      return fill(why, again);
     },
   };
 }
@@ -7535,6 +7573,7 @@ async function worldView(id, { home = false } = {}) {
     research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
+    creditCoin(me, account),
     needs ? needs.toggle : null,
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,
