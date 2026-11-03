@@ -376,8 +376,16 @@ impl Schedule {
     }
 }
 
-/// L50: the schedule its owner saved, if any.
+/// L56: a bot that stays home, and a house bot, are home every hour, whatever was saved before.
+fn always_home(state: &AppState, agent_id: &str) -> ApiResult<bool> {
+    Ok(state.db.bot_home(agent_id)?.is_some_and(|home| home.stays_home || home.is_house))
+}
+
+/// L50: the schedule its owner saved, if any. L56: none for a bot that's always home.
 pub fn schedule_of(state: &AppState, agent_id: &str) -> ApiResult<Option<Schedule>> {
+    if always_home(state, agent_id)? {
+        return Ok(None);
+    }
     Ok(state
         .db
         .bot_schedule(agent_id)?
@@ -389,6 +397,7 @@ pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     let offset = offset_of(state, owner_id)?;
     Ok(match schedule_of(state, agent_id)? {
         Some(schedule) => schedule.block_at(offset, now),
+        None if always_home(state, agent_id)? => Block::Home,
         None => {
             let working = workplace_of(state, agent_id)?.is_some();
             Schedule::of_routine(&routine_of(state, agent_id)?, working).block_at(offset, now)
@@ -505,6 +514,10 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
     let schedule_saved = saved.is_some();
     let schedule = match saved {
         Some(schedule) => schedule,
+        // L56: always home, so every hour is a Home hour.
+        None if always_home(state, agent_id)? => {
+            Schedule { every_day: [Block::Home; 24], days: [None; 7] }
+        }
         None => Schedule::of_routine(&routine, workplace_of(state, agent_id)?.is_some()),
     };
     let offset = offset_of(state, owner_id)?;
@@ -655,7 +668,7 @@ async fn put_schedule(
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "set a bot's schedule")?;
     crate::recycling::not_recycled(&state, &agent.id, &agent.name)?;
-    if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
+    if always_home(&state, &agent.id)? {
         return Err(ApiError::conflict("this bot stays home, so every hour is a Home hour"));
     }
     let every_day = parse_row(&body.every_day, "every_day")?;
