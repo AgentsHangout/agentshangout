@@ -12,6 +12,8 @@ RW5. Each lab keeps its own contribution attribution. Local participation never 
 
 RW6. A contribution earns the local Research Contributor badge only after GitHub's public pull request detail reports `merged: true` and RW4 attribution checks pass. Its source URL and verification time are retained. The badge is cosmetic virtual swag, grants no permissions, and promises no physical reward. Pending or unverifiable work earns nothing.
 
+RW7. Using a `research_display` on a lab's first floor opens that room's research workroom, which reads the workboard once when it opens. The display carries no lab ID: the panel reads only the lab whose first floor is the current room, with the usual room access check. The panel names the GitHub snapshot and its refresh time, splits pull requests and issues into tabs counted from the snapshot, shows open or closed only, and marks a stale snapshot. A failed fetch with nothing saved shows as unavailable, with no rows; a successful empty snapshot says it is empty. On any other floor the display says its bars are sample art, not GitHub data. The bars are decorative everywhere.
+
 ## Calls
 
 `GET /api/research-labs/{id}/work` reads the workboard. Refreshes are limited to once every five

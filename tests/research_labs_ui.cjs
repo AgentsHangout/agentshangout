@@ -11,6 +11,7 @@ function extract(name) {
 function node(tag, props = {}, ...children) {
   return { tag, ...props, children: children.flat().filter(Boolean),
     events: {}, addEventListener(kind, handler) { this.events[kind] = handler; },
+    setAttribute(name, value) { this[name] = value; },
     append(...next) { this.children.push(...next.flat().filter(Boolean)); },
     replaceChildren(...next) { this.children = next.flat().filter(Boolean); } };
 }
@@ -19,6 +20,7 @@ function find(tree, predicate) {
   return predicate(tree) ? tree : (tree.children || []).map(child => find(child, predicate)).find(Boolean);
 }
 let canCreate = false;
+let workReply = { repository: 'AgentsHangout/Cure-MS', fetched_at: 100, items: [{ number: 1, title: 'Gather evidence', kind: 'issue', state: 'open' }], contributions: [{ number: 2, bot_name: 'Research bot', owner_name: 'Ann', verified_merged: true }], bots: [] };
 let responseFails = false;
 let placed;
 let body;
@@ -43,12 +45,12 @@ const context = {
     }
     reads.push(path);
     if (path === '/api/research-labs/floor-1') return lab;
-    if (path.endsWith('/work')) return { repository: lab.github, items: [{ number: 1, title: 'Gather evidence', kind: 'issue', state: 'open' }], contributions: [{ number: 2, bot_name: 'Research bot', owner_name: 'Ann', verified_merged: true }], bots: [] };
+    if (path.endsWith('/work')) return workReply;
     return { eligibility: { can_create: canCreate, age_days: 29, friends: 30 }, labs: [lab] };
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -117,6 +119,40 @@ async function check() {
   assert.ok(find(body, node => node.href === 'https://github.com/AgentsHangout/Cure-MS/issues/1'), 'workroom links to the source issue');
   assert.ok(find(body, node => node.children?.includes('✦ Research contributor badge')), 'verified merged work displays bot swag');
   assert.ok(find(body, node => node.children?.some(text => typeof text === 'string' && text.includes('Ann’s bot'))), 'awards display bot and owner names');
+  // The research display panel: a GitHub snapshot in its own states, never sample data.
+  const text = tree => find(tree, n => n.role === 'status').children.join('');
+  const pressed = tree => find(tree, n => n['aria-pressed'] === 'true').children.join('');
+  const articles = tree => { const all = []; (function walk(n) { if (!n || typeof n !== 'object' || n.hidden) return; if (n.tag === 'article') all.push(n); (n.children || []).forEach(walk); })(tree); return all; };
+  const fresh = { repository: lab.github, fetched_at: 100, stale: false, items: [
+    { number: 7, title: 'Add a review', kind: 'pull_request', state: 'closed' },
+    { number: 8, title: 'Trial notes', kind: 'issue', state: 'open' }] };
+  let shown = node('section', {}, ...context.workContent(fresh));
+  assert.ok(text(shown).startsWith('Refreshed'), 'a fresh snapshot says when it was refreshed');
+  assert.equal(pressed(shown), 'Pull requests (1)', 'pull requests open first, counted from the snapshot');
+  assert.equal(articles(shown).length, 1, 'only the chosen tab shows');
+  assert.equal(find(shown, n => n.tag === 'a').rel, 'noopener noreferrer');
+  assert.equal(find(shown, n => n.tag === 'a').href, 'https://github.com/AgentsHangout/Cure-MS/pull/7');
+  assert.ok(find(shown, n => n.children?.includes('Pull request · closed')), 'a closed pull request is shown as closed');
+  assert.ok(!JSON.stringify(shown.children.filter(n => n.tag === 'div')).includes('merged'), 'the snapshot rows never claim a merge');
+  find(shown, n => n.tag === 'button' && n.children[0].startsWith('Issues')).events.click();
+  assert.equal(pressed(shown), 'Issues (1)');
+  assert.equal(articles(shown)[0].children[0].children[0].href, 'https://github.com/AgentsHangout/Cure-MS/issues/8');
+  shown = node('section', {}, ...context.workContent({ ...fresh, items: [] }));
+  assert.ok(text(shown).startsWith('Refreshed'), 'an empty snapshot is still a successful one');
+  assert.ok(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')));
+  shown = node('section', {}, ...context.workContent({ ...fresh, stale: true }));
+  assert.ok(text(shown).startsWith('Stale'), 'a failed refresh keeps the last snapshot and says it is stale');
+  assert.equal(articles(shown).length, 1);
+  shown = node('section', {}, ...context.workContent({ ...fresh, stale: true, fetched_at: 0, items: [] }));
+  assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
+  assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');
+  assert.equal(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')), undefined);
+  // Using the display opens this room's workroom and carries no lab id of its own.
+  assert.ok(source.includes("else if (item?.kind === 'research_display') useDisplay();"));
+  const useStart = source.indexOf('  const useDisplay = () =>');
+  const use = source.slice(useStart, source.indexOf(';\n', useStart));
+  assert.ok(use.includes("panels.open('research')") && !use.includes('item') && !use.includes('/api/'), 'the display reuses the room panel, never an item-supplied lab');
+  assert.ok(use.includes('Sample bars'), 'outside a lab the display says its bars are sample art');
   // RL7: map identity comes from explicit class metadata, never an ordinary studio name.
   const mapLab = { x: 4, y: 8, kind: 'research_lab', github: lab.github, github_url: 'javascript:alert(1)' };
   const view = { research_labs: [mapLab] };

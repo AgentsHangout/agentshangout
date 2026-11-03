@@ -2102,6 +2102,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .board-block h3, .board-card h4 { margin: 0; }
 .board-card { margin: .2em 0 .4em; }
 .board-card p { margin: .2em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.research-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: .4em 0; }
+.research-tabs button { min-height: 44px; }
+.research-tabs button[aria-pressed="true"] { outline: 2px solid #8e2f18; outline-offset: -2px; font-weight: 600; }
+.research-stale { margin: .3em 0; padding: 4px 8px; border-left: 0; background: #fbe7b0; color: #4a3008; }
 .board-list form.stack { gap: .35em; }
 
 @media (max-width: 840px) {
