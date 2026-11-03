@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
+        .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
         .route(
             "/api/research-labs/{id}/work/{number}/claim",
             axum::routing::put(research_claim).delete(research_unclaim),
@@ -147,6 +148,15 @@ async fn research_work(
 struct ResearchClaim {
     #[serde(default)]
     pairing: bool,
+}
+
+// RW9
+async fn research_pr_status(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::pr_status(&state, &caller, &id, number).await?))
 }
 
 // RW8

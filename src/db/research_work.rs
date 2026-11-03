@@ -184,4 +184,74 @@ impl Db {
         )?;
         Ok(())
     }
+    /// RW9: what GitHub last said about a pull request's CI and reviews, if it was ever read.
+    pub fn research_work_pr_state(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> rusqlite::Result<Option<crate::research_work::PrState>> {
+        self.conn()
+            .query_row(
+                "SELECT ci, review, checked_at, attempted_at, stale FROM research_work_pr_state
+                 WHERE repo = ? AND number = ?",
+                params![repo, number as i64],
+                |r| {
+                    Ok(crate::research_work::PrState {
+                        ci: r.get(0)?,
+                        review: r.get(1)?,
+                        checked_at: r.get(2)?,
+                        attempted_at: r.get(3)?,
+                        stale: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// RW9: claims the next read of a pull request's state, at most once every five minutes.
+    pub fn reserve_research_work_pr_check(
+        &self,
+        repo: &str,
+        number: u64,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "INSERT INTO research_work_pr_state (repo, number, attempted_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (repo, number) DO UPDATE SET attempted_at = excluded.attempted_at
+             WHERE research_work_pr_state.attempted_at <= ?3 - 300",
+            params![repo, number as i64, at],
+        )? == 1)
+    }
+
+    /// RW9: stores what a read found, or marks the old state stale when it failed.
+    pub fn finish_research_work_pr_check(
+        &self,
+        repo: &str,
+        number: u64,
+        found: Option<(&str, &str)>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match found {
+            Some((ci, review)) => conn.execute(
+                "UPDATE research_work_pr_state SET ci = ?3, review = ?4, checked_at = ?5, stale = 0
+                 WHERE repo = ?1 AND number = ?2 AND attempted_at = ?5",
+                params![repo, number as i64, ci, review, at],
+            )?,
+            None => conn.execute(
+                "UPDATE research_work_pr_state SET stale = 1
+                 WHERE repo = ?1 AND number = ?2 AND attempted_at = ?3",
+                params![repo, number as i64, at],
+            )?,
+        };
+        Ok(())
+    }
+    /// Moves a repo's last pull request reads back in time, for tests of the five-minute limit (RW9).
+    pub fn age_research_work_pr_checks(&self, repo: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE research_work_pr_state SET attempted_at = attempted_at - ?2 WHERE repo = ?1",
+            params![repo, by],
+        )?;
+        Ok(())
+    }
 }
