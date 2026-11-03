@@ -1616,3 +1616,32 @@ async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
     assert_eq!(status["activity"]["kind"], "coding");
     assert_eq!(status["activity"]["via"], "Claude Code");
 }
+
+// RC7, RC8: the recycling plant is god mode's to put up, once a world, with no rooms, and the bots
+// waiting there stand at it by name, with no owner.
+#[tokio::test]
+async fn the_recycling_plant_is_gods_and_shows_whos_waiting() {
+    let (server, justin, _) = Server::start().await;
+    let (room, bo) = server.someone("Bo").await;
+    // Not anyone else's to place, even someone signed in.
+    let spot = server.free_spots()[0];
+    server.place(&bo, "plant", spot).await.refused(StatusCode::FORBIDDEN);
+
+    server.switch(&justin, true).await;
+    let plant = server.build(&justin, "plant").await;
+    assert_eq!(server.tile(plant), Some(Kind::Plant));
+    let again = server.free_spots()[0];
+    server.place(&justin, "plant", again).await.refused(StatusCode::CONFLICT);
+    // Nobody goes in, its builder included.
+    server.go_in(&justin.key, plant).await.refused(StatusCode::CONFLICT);
+
+    // A bot sent there stands at it on the map, by name, with nobody's name beside it.
+    let (rover_id, _) = server.bot(&bo, &room, "Rover").await;
+    server.post(&bo.key, &format!("/api/agents/{rover_id}/recycle"), json!({})).await.ok();
+    let view = server.view().await;
+    let rows = view["bots_out"].as_array().unwrap();
+    let row = rows.iter().find(|row| row[0] == "Rover").unwrap_or_else(|| panic!("{view}"));
+    assert_eq!(row[8], json!([plant.0, plant.1]), "{row}");
+    assert!(row[7].as_str().is_none_or(str::is_empty), "no owner: {row}");
+    assert!(!view.to_string().contains("Bo's") && !view.to_string().contains(&bo.id));
+}

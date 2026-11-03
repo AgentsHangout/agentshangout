@@ -2308,6 +2308,34 @@ async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
     );
 }
 
+// S79
+#[tokio::test]
+async fn a_bot_that_takes_itself_onto_a_private_floor_is_announced_once_by_name_only() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let secret = text(&server.third_space(&ann, "Secret Lab").await.ok()["hangout"]["id"]);
+    let before = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+
+    let went = server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    let lines = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    let new: Vec<&String> = lines.iter().skip(before.len()).collect();
+    assert_eq!(new, ["Fern came in."], "{lines:?}");
+    // It names no other room.
+    assert!(!lines.iter().any(|line| line.contains("Secret Lab") || line.contains(&home)));
+
+    // Doing it again, or acting there, says nothing more.
+    server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    let again = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    assert_eq!(again.iter().filter(|line| line.contains("came in")).count(), 1, "{again:?}");
+
+    // The room it didn't go to hears nothing.
+    let other = Server::lines(&server.snapshot(&ann.key, &secret).await.ok());
+    assert!(!other.iter().any(|line| line.contains("Fern")), "{other:?}");
+}
+
 // S67
 #[tokio::test]
 async fn where_is_is_capped_at_thirty_lookups_a_minute() {
@@ -4265,4 +4293,15 @@ async fn a_floor_chooses_when_bots_come_in_by_themselves() {
     // Back to any time.
     server.put(&ann.key, &path, json!({ "come_in": "anyone" })).await.ok();
     assert_eq!(server.get(&ann.key, &path).await.ok()["come_in"], "anyone");
+
+    // It's about members' bots: on a public floor set to never, a stranger can still send their bot
+    // in as a visitor (S18, S24), while a member's bot still can't take itself in.
+    server.open(&ann, &room).await;
+    server.put(&ann.key, &path, json!({ "come_in": "nobody" })).await.ok();
+    let (cy_room, cy) = server.someone("Cy").await;
+    let (cy_bot, _) = server.bot(&cy, &cy_room, "Pip").await;
+    let walk = format!("/api/floors/{room}/walk-in");
+    server.post(&cy.key, &walk, json!({ "agent_id": cy_bot })).await.ok();
+    server.state.db.remove_agent_from_room(&room, &rover_id).unwrap();
+    assert!(go().await.to_string().contains("ask your owner to bring you in"));
 }

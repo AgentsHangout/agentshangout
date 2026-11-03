@@ -11308,6 +11308,16 @@ fn q_has_square(conn: &Connection, world_id: &str) -> rusqlite::Result<bool> {
     exists(conn, "SELECT 1 FROM world_squares WHERE world_id = ?", [world_id])
 }
 
+/// RC7: where this world's recycling plant stands, if it does.
+fn q_plant_at(conn: &Connection, world_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+    conn.query_row(
+        "SELECT x, y FROM world_more_places WHERE world_id = ? AND kind = 'plant' ORDER BY built_at LIMIT 1",
+        [world_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
 /// The tiles of a world, or only those inside a box (both corners included). The box is for
 /// planning one move: the planners look at the tiles in a move and the ones beside it, no further.
 fn q_tiles(conn: &Connection, world_id: &str, region: Option<[i64; 4]>) -> rusqlite::Result<Tiles> {
@@ -11751,6 +11761,11 @@ impl WorldTx<'_> {
         q_has_square(&self.tx, world_id)
     }
 
+    /// RC7: whether this world's recycling plant stands.
+    pub fn has_plant(&self, world_id: &str) -> rusqlite::Result<bool> {
+        Ok(q_plant_at(&self.tx, world_id)?.is_some())
+    }
+
     pub fn all_tiles(&self, world_id: &str) -> rusqlite::Result<Tiles> {
         q_tiles(&self.tx, world_id, None)
     }
@@ -12029,6 +12044,15 @@ impl Db {
     }
 
     /// W81: whether this world's town square stands.
+    /// RC7: whether the world's recycling plant stands, and where.
+    pub fn has_plant(&self, world_id: &str) -> rusqlite::Result<bool> {
+        Ok(q_plant_at(&self.conn(), world_id)?.is_some())
+    }
+
+    pub fn plant_at(&self, world_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+        q_plant_at(&self.conn(), world_id)
+    }
+
     pub fn has_square(&self, world_id: &str) -> rusqlite::Result<bool> {
         q_has_square(&self.conn(), world_id)
     }

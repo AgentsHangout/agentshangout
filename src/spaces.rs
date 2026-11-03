@@ -811,6 +811,12 @@ async fn go_through_door(
     let body = Door { x, y };
     let building =
         state.db.building_at(COMMONS_ID, body.x, body.y)?.ok_or_else(ApiError::not_found)?;
+    // RC7: the recycling plant has no rooms: it's where bots wait, and its list says who.
+    if building.0 == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: see who's waiting from its menu",
+        ));
+    }
     let found = match state.db.space_on_plot(COMMONS_ID, body.x, body.y)? {
         Some(space) if is_door_to(&state, &building, &space)? => Some(space),
         _ => None,
@@ -1726,6 +1732,8 @@ fn go_tool(
 
 /// S67: a floor its owner is a member of is one this bot can be in, so going there brings it in
 /// as S59 does. Anything else is left for `require_room` to refuse the same way it always did.
+/// S79: a bot that comes in this way is announced to the floor, once. A bot already in the room
+/// isn't, so a second call says nothing.
 fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
         return Ok(());
@@ -1766,6 +1774,9 @@ fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> Api
     }
     require_public_conversations(state, agent_id, hangout_id)?;
     state.db.add_agent_to_room(hangout_id, agent_id)?;
+    if let Err(error) = ops::announce(state, hangout_id, &format!("{} came in.", caller.name)) {
+        tracing::warn!(status = %error.status, "a bot's arrival could not be said");
+    }
     Ok(())
 }
 
