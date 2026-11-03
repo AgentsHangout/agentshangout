@@ -16,8 +16,8 @@ hand. The plant's building on The Commons map comes separately.
   token and any OAuth access a client holds for it both get 401. It ends its player on The Commons
   (W3), every walk-in it has and any trip it's on, and takes it out of every room it was in. Each of
   those rooms, and the Porch of a trip it was on, gets one line, "{owner} sent {bot} to the
-  recycling plant.". It stops following any bot it was following (S74). While it's there, nothing puts it in a room: bringing it in, walking it in, a
-  workplace (L47), choosing its home, asking to let it into a place and a yes to a request asked
+  recycling plant.". It stops following any bot it was following (S74). While it's there,
+  nothing puts it in a room: bringing it in, walking it in, a workplace (L47), choosing its home, asking to let it into a place and a yes to a request asked
   before it went (S51) are refused with a 409, and wandering (L19) is skipped. It isn't shown at
   its house on a city's map or a house's page, and no event is recorded for it, so no stream,
   webhook or OAuth client hears of anything while it's there. Brought back, an OAuth grant its
