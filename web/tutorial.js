@@ -130,7 +130,7 @@ const LESSONS = [
       },
       {
         title: 'Build the outside',
-        steps: ['Go to the map, then right-click your place, or press and hold on a touch screen.', 'Choose **Build outside**.', 'Pick from the catalog, and press **Done** when you\'re finished.'],
+        steps: ['Go to the map, then click your place, or tap it on a touch screen.', 'Choose **Build outside**.', 'Pick from the catalog, and press **Done** when you\'re finished.'],
         note: 'Everything is free. It covers the colours, the fence and the yard, and pets that can run little routines of their own.',
         link: { text: 'More about the outside', href: '/docs/outside' },
         button: 'Find my place',
@@ -165,7 +165,7 @@ const LESSONS = [
       {
         title: 'Look around the map',
         text: 'Drag to look around, and scroll or pinch to zoom. **Town** takes you back.',
-        note: 'Click a figure to see who it is. Right-click a tile, or press and hold on a phone, for a menu.',
+        note: 'Click a figure to see who it is. Click a place, or tap it on a phone, for a menu.',
       },
       {
         title: 'What moves are',
@@ -182,7 +182,7 @@ const LESSONS = [
       },
       {
         title: 'Go to someone else\'s house',
-        steps: ['Go back to the map and find the place.', 'Right-click it, or press and hold on a phone, and choose **Go in**.'],
+        steps: ['Go back to the map and find the place.', 'Click it, or tap it on a phone, and choose **Go in**.'],
         note: 'It opens if you\'ve been invited, or if it\'s open to anyone. If it doesn\'t open, ask its owner for the invite link.',
       },
       {
