@@ -132,6 +132,7 @@ farming found. Its owner asked for it sooner, so it came before that check.
   still needs other people's yes to be a gathering (R40), and a yes through a plan's link still
   pays nothing (F17). Its `credit_paid.source_id` starts `first:`, and those credits buy packs but
   never fund a question (HC20), so throwaway accounts can't each collect one and pass it on.
+  Packs are paid for from them first, so only what packs haven't used is held back.
 
 ### For a maintainer to look at
 

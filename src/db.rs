@@ -10677,13 +10677,17 @@ impl Db {
             return Ok(Some("not enough credits"));
         }
         // HC25: a first gathering's credits never fund a question, or throwaway accounts could each
-        // collect one and pass it all to one person.
-        let first: i64 = tx.query_row(
-            "SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND source_id LIKE ?2",
+        // collect one and pass it all to one person. Packs are paid for from them first, so only
+        // what packs haven't used is held back.
+        let held: i64 = tx.query_row(
+            "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
+                            WHERE person_id=?1 AND source_id LIKE ?2)
+                         - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
+                            WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
             params![sponsor, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
-        if balance - first < amount {
+        if balance - held < amount {
             return Ok(Some(
                 "credits from your first gathering buy packs but can't fund a question",
             ));
@@ -15639,6 +15643,29 @@ mod tests {
         let after =
             crate::economy::spend(&db, &ann(None), pack.pack, None, GATE + CREDIT_DAY).unwrap();
         assert_eq!(after.balance, 20 - pack.cost);
+    }
+
+    // HC25: packs are paid for from a first gathering's credits first, so spending them on a pack
+    // doesn't keep holding back what pays later
+    #[test]
+    fn a_pack_uses_up_a_first_gatherings_credits_before_later_ones() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Question','','p1',0,0)", []).unwrap();
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        assert_eq!(credits_of(&db, "p1", 3 * CREDIT_DAY).balance, 20);
+        let pack = a_pack_for_sale();
+        crate::economy::spend(&db, &ann(None), pack.pack, None, 3 * CREDIT_DAY).unwrap();
+
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        let now = GATE + CREDIT_DAY;
+        assert_eq!(credits_of(&db, "p1", now).balance, 40 - pack.cost);
+        // What's left of the first 20 is still held back, and all of the later 20 can fund one.
+        let held = 20 - pack.cost;
+        assert!(db.fund_question("b1", "q1", "p1", 21, now).unwrap().is_some());
+        assert_eq!(db.fund_question("b2", "q1", "p1", 20, now).unwrap(), None);
+        assert_eq!(credits_of(&db, "p1", now).balance, held);
     }
 
     // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make
