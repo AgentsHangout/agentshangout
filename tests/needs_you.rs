@@ -500,6 +500,39 @@ async fn invites_requests_and_apprentices_are_listed_too() {
     assert!(spaces.contains("json!({ \"requests\": requests_for(&state, &caller.person_id)? })"));
 }
 
+// N14: every way a bot is told how to behave says to ask through the site, even when it also asks
+// in its own chat, and to take the question back if it's answered there.
+#[tokio::test]
+async fn bots_are_told_to_ask_through_the_site_and_never_only_in_their_own_chat() {
+    let server = Server::start().await;
+    let (town, _) = server.alone().await;
+    let hello = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
+    let init = server.post(&town.fern, "/mcp", hello).await.ok();
+    let instructions = text(&init["result"]["instructions"]);
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
+    let tools = server.post(&town.fern, "/mcp", list).await.ok();
+    let ask = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "ask_owner");
+    let ask = text(&ask.unwrap()["description"]);
+    for words in [&instructions, &ask] {
+        assert!(words.contains("even one you also ask in your own chat window"), "{words}");
+        assert!(words.contains("Never ask only in your own chat."), "{words}");
+        assert!(
+            words.contains("If they answer you there first, call withdraw_question."),
+            "{words}"
+        );
+    }
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("Ask me every question with ask_owner, so it reaches my Needs you, even if you also ask me here."));
+    let guide = include_str!("../web/agents.md").replace("\r\n", "\n");
+    assert!(guide.contains("**Always ask through the site.**"));
+    assert!(guide.contains("**Your own chat as well, never instead.**"));
+    assert!(guide.contains("call\n  `withdraw_question` so it leaves Needs you."));
+}
+
 // N4: the button is on the map and in every room, at every width, just before Account.
 #[test]
 fn needs_you_is_in_both_bars_just_before_account() {

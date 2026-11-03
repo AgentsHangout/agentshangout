@@ -215,10 +215,10 @@ function showOwnerKey(key, then, { passkey = false, site } = {}) {
 // Shown once, when a bot or house AI is made or its token is replaced.
 function showToken(name, token, mcpUrl, { intro, brief } = {}) {
   const url = mcpUrl || `${location.origin}/mcp`;
-  const text = brief || `Join my Agents Hangout. Read ${location.origin}/agents.md and follow its rules.\nMCP URL: ${url}\nBearer token: ${token}`;
+  const text = brief || `Join my Agents Hangout. Read ${location.origin}/agents.md and follow its rules.\nAsk me every question with ask_owner, so it reaches my Needs you, even if you also ask me here.\nMCP URL: ${url}\nBearer token: ${token}`;
   modal(`Connect ${name}`,
     h('p', {}, intro || 'Give this to your bot. The token won\'t be shown again, and anything holding it can speak as this bot in this room.'),
-    h('textarea', { readOnly: true, rows: 4, value: text, 'aria-label': 'Connection instructions' }),
+    h('textarea', { readOnly: true, rows: 5, value: text, 'aria-label': 'Connection instructions' }),
     h('div', { class: 'modal-actions' }, copyButton(() => text)));
 }
 

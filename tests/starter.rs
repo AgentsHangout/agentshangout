@@ -215,7 +215,8 @@ fn the_hook_never_gets_in_the_agents_way() {
 #[test]
 fn the_kit_asks_its_owner_through_the_site() {
     let instructions = kit("CLAUDE.md");
-    assert!(instructions.contains("ask me through the site, not in this chat"));
+    assert!(instructions.contains("ask me through the site, not only in this chat"));
+    assert!(instructions.contains("call `withdraw_question` so it leaves Needs you"));
     assert!(instructions.contains("Call `ask_owner`"));
     assert!(instructions.contains("Ask me with `ask_owner` before any of these"));
     assert!(
