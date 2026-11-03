@@ -360,6 +360,9 @@ pub fn note_watched_change(state: &AppState, agent_id: &str, message: &Message) 
         "is_bot": false,
         "trust": ROOM_TRUST,
         "what_to_do": WATCH_DO,
+        // E5: every mention event carries `context`. A workboard change has no conversation
+        // before it, so it is empty.
+        "context": [],
     });
     let key = format!("mention:{}", message.id);
     record(state, agent_id, "mention", Some(&message.hangout_id), &key, data);

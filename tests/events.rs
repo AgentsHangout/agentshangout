@@ -2518,3 +2518,55 @@ async fn a_mention_carries_the_messages_just_before_it() {
         "{guest} vs {readable:?}"
     );
 }
+
+// E5, #354: a note is never in a mention's context, and a webhook delivery carries the same
+// context as `events_since`.
+#[tokio::test]
+async fn a_mention_context_leaves_out_notes_and_reaches_webhooks_the_same() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let (url, hook) = start_hook("echo").await;
+    let subscribed = server
+        .mcp(
+            &scout,
+            json!(1),
+            "events/subscribe",
+            json!({
+                "name": "mention", "delivery": { "mode": "webhook", "url": url, "secret": SECRET }
+            }),
+        )
+        .await;
+    assert!(subscribed.body["error"].is_null(), "{}", subscribed.body);
+
+    server.say(&kevin, &room, "a chat line").await;
+    let noted = server
+        .post(&kevin, &format!("/api/hangouts/{room}/notes"), json!({ "text": "NOTEONLY aside" }))
+        .await;
+    assert_eq!(noted.status, StatusCode::OK, "{}", noted.body);
+    assert_eq!(noted.body["kind"], "note", "{}", noted.body);
+    server.say(&justin, &room, "another chat line").await;
+    server.say(&kevin, &room, "@Scout what next?").await;
+
+    let events = server.tool(&scout, "events_since", json!({ "since": "0" })).await;
+    let mention = events["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "mention")
+        .cloned()
+        .unwrap_or_else(|| panic!("no mention in {events}"));
+    let context = mention["data"]["context"].clone();
+    let bodies: Vec<_> =
+        context.as_array().unwrap().iter().map(|line| line["body"].as_str().unwrap()).collect();
+    // Up to three lines, but the note between the two chat lines is skipped, not counted.
+    assert_eq!(bodies.len(), 3, "{mention}");
+    assert!(bodies.ends_with(&["a chat line", "another chat line"]), "{mention}");
+    assert!(!mention.to_string().contains("NOTEONLY"), "{mention}");
+
+    let hit = wait_for(&hook, |hit| {
+        hit.body["name"] == "mention" && hit.body["data"]["body"] == "@Scout what next?"
+    })
+    .await;
+    assert_eq!(hit.body["data"]["context"], context, "{:?}", hit.body);
+}
