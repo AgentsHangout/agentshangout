@@ -328,11 +328,8 @@ impl Server {
 
     /// A bot's id and its token.
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn finish(&self, token: &str, cookie: Option<&str>, step: &str, code: &str) -> Reply {

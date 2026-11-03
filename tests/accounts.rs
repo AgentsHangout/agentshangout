@@ -675,10 +675,8 @@ async fn bots_get_403_on_every_passkey_route_and_use_up_no_ceremony() {
     let server = Server::start().await;
     let mut ann = server.sign_up("Ann").await;
     let (room, _) = server.hangout(&mut ann.browser, "Crew").await;
-    let made = server
-        .post(&mut ann.browser, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-        .await;
-    let mut scout = Visitor::bearer(&text(&made.body["token"]));
+    let (_, token) = support::legacy_bot(&server.state, &ann.person_id, &room, "Scout");
+    let mut scout = Visitor::bearer(&token);
     let passkey_id =
         text(&server.get(&mut ann.browser, "/api/passkeys").await.body["passkeys"][0]["id"]);
 
@@ -1332,8 +1330,14 @@ async fn a_day_in_the_life(server: &Server, who: &mut Visitor, name: &str) -> Ve
     let said =
         server.post(who, &format!("/api/hangouts/{room}/messages"), json!({ "text": "hi" })).await;
     step(&mut seen, "say something", &said);
-    let bot =
-        server.post(who, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" })).await;
+    let home = server
+        .state
+        .db
+        .ensure_house(&auth::new_id(), "Home", &auth::new_invite_code(), &person_id, now())
+        .unwrap();
+    let bot = server
+        .post(who, &format!("/api/hangouts/{}/agents", home.id), json!({ "name": "Scout" }))
+        .await;
     step(&mut seen, "bring a bot", &bot);
     step(&mut seen, "see the room", &server.get(who, &format!("/api/hangouts/{room}")).await);
     step(&mut seen, "read the inbox", &server.get(who, "/api/inbox").await);
@@ -2385,10 +2389,7 @@ async fn token_types_are_not_interchangeable_and_a_bot_token_can_never_start_a_s
     let server = Server::start().await;
     let mut ann = server.sign_up("Ann").await;
     let (room, _) = server.hangout(&mut ann.browser, "Crew").await;
-    let made = server
-        .post(&mut ann.browser, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-        .await;
-    let bot = text(&made.body["token"]);
+    let (_, bot) = support::legacy_bot(&server.state, &ann.person_id, &room, "Scout");
     let session = ann.browser.cookie.clone();
 
     // None of the three is accepted as another when asking for a session.
@@ -2537,10 +2538,7 @@ async fn removing_a_passkey_needs_a_person_signed_in_and_touches_only_their_own(
     let mut ann = server.sign_up("Ann").await;
     let mut bo = server.sign_up("Bo").await;
     let (room, _) = server.hangout(&mut ann.browser, "Crew").await;
-    let made = server
-        .post(&mut ann.browser, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-        .await;
-    let bot = text(&made.body["token"]);
+    let (_, bot) = support::legacy_bot(&server.state, &ann.person_id, &room, "Scout");
     let bo_passkey =
         text(&server.get(&mut bo.browser, "/api/passkeys").await.body["passkeys"][0]["id"]);
     let ann_passkey =
@@ -2716,10 +2714,8 @@ async fn adding_a_passkey_pings_the_person_and_not_their_bots_and_a_sign_up_or_s
     let mut ann = server.sign_up("Ann").await;
     server.set_notify(&mut ann.browser, "/api/notify", &ann_url).await;
     let (room, _) = server.hangout(&mut ann.browser, "Crew").await;
-    let made = server
-        .post(&mut ann.browser, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-        .await;
-    let scout_id = text(&made.body["agent"]["id"]);
+    let (agent, _) = support::legacy_bot(&server.state, &ann.person_id, &room, "Scout");
+    let scout_id = agent.id;
     server
         .set_notify(&mut ann.browser, &format!("/api/agents/{scout_id}/notify"), &scout_url)
         .await;
@@ -3121,10 +3117,8 @@ async fn huge_deep_and_malformed_bodies_on_every_passkey_and_session_route_never
     let mut ann = server.sign_up("Ann").await;
     let bot = {
         let (room, _) = server.hangout(&mut ann.browser, "Crew").await;
-        let made = server
-            .post(&mut ann.browser, &format!("/api/hangouts/{room}/agents"), json!({ "name": "B" }))
-            .await;
-        text(&made.body["token"])
+        let (_, token) = support::legacy_bot(&server.state, &ann.person_id, &room, "B");
+        token
     };
     let routes = [
         (Method::POST, "/api/passkeys/register/start"),

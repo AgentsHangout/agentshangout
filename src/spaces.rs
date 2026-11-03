@@ -45,9 +45,10 @@ const DEFAULT_CAPACITY: i64 = 50;
 const TOWN_SQUARE: &str = "Town Square";
 const TOWN_SQUARE_SIZE: &str = "big";
 /// S14: listed words, so nothing typed reaches the page's drawing.
-pub const PAINTS: [&str; 9] =
-    ["dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest"];
-pub const FLOORINGS: [&str; 7] = ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves"];
+pub const PAINTS: [&str; 10] =
+    ["dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost"];
+pub const FLOORINGS: [&str; 8] =
+    ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow"];
 /// The look every floor starts with, as the table's defaults have it. I30 goes back to these.
 pub const PLAIN_PAINT: &str = "dusk";
 pub const PLAIN_FLOORING: &str = "oak";
@@ -1118,9 +1119,11 @@ async fn change_floor(
     }
     if let Some(paint) = &body.paint {
         one_of(paint, "paint", &PAINTS)?;
+        crate::items::may_use_paid(&state, &caller.person_id, paint)?;
     }
     if let Some(flooring) = &body.flooring {
         one_of(flooring, "flooring", &FLOORINGS)?;
+        crate::items::may_use_paid(&state, &caller.person_id, flooring)?;
     }
     if let Some(words) = &body.hidden {
         for word in words {

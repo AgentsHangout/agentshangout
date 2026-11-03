@@ -1,4 +1,6 @@
 //! MCP OAuth is an independent, revocable grant to one explicitly selected bot.
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
@@ -704,17 +706,9 @@ async fn oauth_webhook_lifecycle_is_grant_owned_and_refresh_preserves_pending_cu
     let foreign: Value = s.exchange(&foreign_client, &code, VERIFIER).await.json().await.unwrap();
     s.event_rpc(foreign["access_token"].as_str().unwrap(), "events/unsubscribe", params.clone())
         .await;
-    let other_bot: Value = s
-        .client
-        .post(format!("{}/api/hangouts/{room}/agents", s.base))
-        .bearer_auth(&session)
-        .json(&json!({"name":"Other bot"}))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let owner = s.state.authenticate(&agenthangout::auth::hash_secret(&session)).unwrap().unwrap();
+    let (other_agent, _) = support::legacy_bot(&s.state, &owner.person_id, &room, "Other bot");
+    let other_bot = json!({ "agent": other_agent });
     let code = s.code(&session, &client, other_bot["agent"]["id"].as_str().unwrap()).await;
     let foreign: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
     s.event_rpc(foreign["access_token"].as_str().unwrap(), "events/unsubscribe", params.clone())
@@ -834,19 +828,11 @@ impl Server {
             .unwrap();
         let owner = r["owner_key"].as_str().unwrap().to_string();
         let room = r["hangout"]["id"].as_str().unwrap().to_string();
-        let b: Value = self
-            .client
-            .post(format!("{}/api/hangouts/{room}/agents", self.base))
-            .bearer_auth(&owner)
-            .json(&json!({"name":"Dedicated bot"}))
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
         let person =
             self.state.authenticate(&agenthangout::auth::hash_secret(&owner)).unwrap().unwrap();
+        let (agent, token) =
+            support::legacy_bot(&self.state, &person.person_id, &room, "Dedicated bot");
+        let b = json!({ "agent": agent, "token": token });
         let session = self.state.start_session(&person.person_id).unwrap();
         (
             session,

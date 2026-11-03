@@ -453,6 +453,60 @@ function newAccountView({ step, name: site, account }, back) {
     h('p', { class: 'muted note' }, `Already have an account here? Sign in to it, then link ${site} under Account at the top of the map.`)));
 }
 
+function apprenticeCard(me, crewRoom = null) {
+  // K16 to K19: apprentices two bots proposed, waiting on this person. The other bot's owner answers
+  // first; the adopting person finishes registration in their own house Crew.
+  return me?.apprentices?.length ? h('section', { class: 'card', 'aria-label': 'Apprentices' },
+    h('h2', {}, 'Apprentices'),
+    h('ul', { class: 'room-list' }, me.apprentices.map((ask) => {
+      const error = h('p', { class: 'error', role: 'alert' });
+      const answer = async (path, body) => {
+        error.textContent = '';
+        try {
+          return await api(`/api/apprentices/${encodeURIComponent(ask.id)}/${path}`, { method: 'POST', body });
+        } catch (err) {
+          error.textContent = err.message;
+          return null;
+        }
+      };
+      const no = h('button', {
+        type: 'button',
+        class: 'link',
+        onclick: async () => { if (await answer('decline', {})) row.remove(); },
+      }, 'No');
+      const yes = ask.you_take_it_on
+        ? (ask.waiting_for_other_owner
+          ? h('small', { class: 'muted' }, `Waiting for ${ask.partner}'s owner.`)
+          : !crewRoom ? link('/#bring', 'Open your house crew', { class: 'button' }) : h('button', {
+            type: 'button',
+            class: 'primary',
+            onclick: async () => {
+              const made = await answer('approve', { hangout_id: crewRoom });
+              if (!made) return;
+              row.remove();
+              showToken(made.agent.name, made.token, made.mcp_url, {
+                intro: `${made.agent.name} is your bot now. You run it, as with any bot of yours. The token won't be shown again.`,
+              });
+            },
+          }, 'Take it on'))
+        : h('button', {
+          type: 'button',
+          class: 'primary',
+          onclick: async () => { if (await answer('approve', {})) row.remove(); },
+        }, 'Say yes');
+      const row = h('li', {},
+        h('p', {}, `${ask.proposer} and ${ask.partner} would like to make an apprentice: `, h('strong', {}, ask.name), '.'),
+        h('p', { class: 'muted' }, ask.about),
+        ask.projects.length ? h('small', { class: 'muted' }, `Built together: ${ask.projects.map((project) => project.name).join(', ')}`) : null,
+        h('p', {}, ask.you_take_it_on
+          ? 'If you say yes, it\'s your bot: you run it and pay for it.'
+          : `If you say yes, it can name ${ask.partner} as a parent. ${ask.proposer}'s owner takes it on.`),
+        h('div', {}, yes, ' ', no),
+        error);
+      return row;
+    }))) : null;
+}
+
 // A56: this is the only place a link shows, and only to its own person.
 function signInCard(me) {
   if (!me.sign_in.length) return null;
@@ -631,7 +685,7 @@ async function homeParts(me) {
 
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
-    h('p', { class: 'muted' }, 'You\'re signed in. Build in any world, claim bots, and start private rooms and cities.'),
+    h('p', { class: 'muted' }, 'You\'re signed in. Build in any world, add bots through your house crew, and start private rooms and cities.'),
     freeTimesField(me),
     housePlansField(me),
     photosField(),
@@ -707,60 +761,7 @@ async function homeParts(me) {
       return row;
     }))) : null;
 
-  // K16 to K19: apprentices two bots proposed, waiting on this person. The other bot's owner answers
-  // first; then whoever takes it on picks one of their rooms, and gets its token once.
-  const apprenticesCard = me?.apprentices?.length ? h('section', { class: 'card', 'aria-label': 'Apprentices' },
-    h('h2', {}, 'Apprentices'),
-    h('ul', { class: 'room-list' }, me.apprentices.map((ask) => {
-      const error = h('p', { class: 'error', role: 'alert' });
-      const answer = async (path, body) => {
-        error.textContent = '';
-        try {
-          return await api(`/api/apprentices/${encodeURIComponent(ask.id)}/${path}`, { method: 'POST', body });
-        } catch (err) {
-          error.textContent = err.message;
-          return null;
-        }
-      };
-      const no = h('button', {
-        type: 'button',
-        class: 'link',
-        onclick: async () => { if (await answer('decline', {})) row.remove(); },
-      }, 'No');
-      const rooms = me.hangouts || [];
-      const room = h('select', { 'aria-label': 'Room it starts in' }, rooms.map((hangout) => h('option', { value: hangout.id }, hangout.name)));
-      const yes = ask.you_take_it_on
-        ? (ask.waiting_for_other_owner
-          ? h('small', { class: 'muted' }, `Waiting for ${ask.partner}'s owner.`)
-          : h('span', {}, room, ' ', h('button', {
-            type: 'button',
-            class: 'primary',
-            disabled: !rooms.length,
-            onclick: async () => {
-              const made = await answer('approve', { hangout_id: room.value });
-              if (!made) return;
-              row.remove();
-              showToken(made.agent.name, made.token, made.mcp_url, {
-                intro: `${made.agent.name} is your bot now. You run it, as with any bot of yours. The token won't be shown again.`,
-              });
-            },
-          }, 'Take it on')))
-        : h('button', {
-          type: 'button',
-          class: 'primary',
-          onclick: async () => { if (await answer('approve', {})) row.remove(); },
-        }, 'Say yes');
-      const row = h('li', {},
-        h('p', {}, `${ask.proposer} and ${ask.partner} would like to make an apprentice: `, h('strong', {}, ask.name), '.'),
-        h('p', { class: 'muted' }, ask.about),
-        ask.projects.length ? h('small', { class: 'muted' }, `Built together: ${ask.projects.map((project) => project.name).join(', ')}`) : null,
-        h('p', {}, ask.you_take_it_on
-          ? 'If you say yes, it\'s your bot: you run it and pay for it.'
-          : `If you say yes, it can name ${ask.partner} as a parent. ${ask.proposer}'s owner takes it on.`),
-        h('div', {}, yes, ' ', no),
-        error);
-      return row;
-    }))) : null;
+  const apprenticesCard = apprenticeCard(me);
 
   const citiesCard = (who) => {
     const homes = who?.houses || [];
@@ -807,7 +808,7 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), playersCard(),passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
@@ -899,7 +900,7 @@ function photosField() {
     select.disabled = false;
   }).catch(() => {});
   return h('div', {},
-    field('Room photos', select, 'Bots can take photos of public rooms while you have one open, with your name and look in them. Leaving yourself out also takes down links to photos you're already in. Copies people downloaded can't be recalled.'),
+    field('Room photos', select, 'Bots can take photos of public rooms while you have one open, with your name and look in them. Leaving yourself out also takes down links to photos you’re already in. Copies people downloaded can’t be recalled.'),
     error);
 }
 
@@ -1316,22 +1317,71 @@ function standingFacts(standing) {
   return h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value))));
 }
 
-// HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown.
+// HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown. HC14 and
+// HC17: packs that cost credits can be bought here, and you set what each of your bots may spend.
 function creditsCard(credits) {
-  const waiting = credits.cities_not_earning.length;
-  const rows = [
-    ['Balance', count(credits.balance, 'credit', 'credits')],
-    ['Earned today', `${credits.earned_today} of ${credits.daily_cap}`],
-    ['Gatherings', String(credits.gatherings)],
-    ['Good trips', String(credits.good_trips)],
-    ['Trips you let in', String(credits.hosted_trips)],
-  ];
-  return h('section', { class: 'card', 'aria-label': 'Your credits' },
-    h('h2', {}, 'Your credits'),
-    h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
-    waiting ? h('p', { class: 'muted' },
-      `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering or a vouch.`) : null,
-    h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. Only you and your bots can see this, and credits can\'t be spent, sent or cashed out yet.'));
+  const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
+  const error = formError();
+
+  function render(now) {
+    const waiting = now.cities_not_earning.length;
+    const rows = [
+      ['Balance', count(now.balance, 'credit', 'credits')],
+      ['Earned today', `${now.earned_today} of ${now.daily_cap}`],
+      ['Gatherings', String(now.gatherings)],
+      ['Good trips', String(now.good_trips)],
+      ['Trips you let in', String(now.hosted_trips)],
+    ];
+    if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
+    const packName = (word) => `${sentence(word)} pack`;
+    const packRow = (offer) => h('li', {},
+      h('strong', {}, packName(offer.pack)),
+      h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
+      offer.bought ? h('span', {}, 'Yours. Put it up from a room\'s build catalog.')
+        : offer.over ? h('span', { class: 'muted' }, 'Its season is over.')
+          : h('button', {
+            type: 'button',
+            disabled: now.balance < offer.cost,
+            onclick: act(error, async () => {
+              if (!confirm(`Buy the ${packName(offer.pack).toLowerCase()} for ${count(offer.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+              render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
+            }),
+          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'));
+    const botRow = (bot) => {
+      const input = h('input', {
+        type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
+        'aria-label': `What ${bot.name} may spend a day`,
+      });
+      return h('li', {},
+        h('strong', {}, bot.name),
+        h('span', { class: 'muted' }, ` · spent ${bot.spent_today} today · may spend `),
+        input,
+        h('span', { class: 'muted' }, ' a day '),
+        h('button', {
+          type: 'button',
+          class: 'ghost',
+          onclick: act(error, async () => {
+            const daily = Number(input.value);
+            render(await api(`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`, { method: 'PUT', body: { daily } }));
+          }),
+        }, 'Save'));
+    };
+    card.replaceChildren(
+      h('h2', {}, 'Your credits'),
+      h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
+      waiting ? h('p', { class: 'muted' },
+        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
+      now.packs.length ? h('h3', {}, 'Packs') : null,
+      now.packs.length ? h('ul', { class: 'room-list' }, now.packs.map(packRow)) : null,
+      now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
+      now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
+      now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
+      error,
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs and nothing else, and can\'t be sent, bought or cashed out.'));
+  }
+
+  render(credits);
+  return card;
 }
 
 // What a house asks, as a list. With the asker's standing each line also says where they are.
@@ -2047,7 +2097,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       picture: itemPicture(kind.kind, kind.w, kind.h),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
-      why: !kind.unlocked ? friendsText(kind.friends_needed)
+      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: buy it in Account`
+        : !kind.unlocked ? friendsText(kind.friends_needed)
         : kind.mood === 'flirty' && isPublic ? 'private floors only'
           : full ? 'this floor is full'
             : null,
@@ -2080,12 +2131,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   // I28, I30: pressing it again takes it down, so a pack that's up is a tile that's pressed. I57: one
   // that's over is only here to come down, so the catalog shows it where it's up and nowhere else.
+  // HC14: a pack that costs credits goes up once it's bought, and comes down whether or not it is.
   function packTile(pack, up) {
+    const locked = pack.cost > 0 && !up && !catalog.look.packs_bought.includes(pack.pack);
     return catalogTile({
       name: `pack-${pack.pack}`,
       whole: roomOf(pack, view().floor.floor.hidden, pack.items),
       label: `${wordName(pack.pack)} pack`,
-      lines: [up ? 'Up now. Press to take it down' : 'Press to put it up'],
+      lines: [up ? 'Up now. Press to take it down' : pack.cost > 0 && !locked ? 'Yours. Press to put it up' : 'Press to put it up'],
+      why: locked ? `${pack.cost} credits: buy it in Account` : null,
       pressed: up,
       onclick: () => restyle(async () => {
         const done = await api(`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack.pack)}`, { method: up ? 'DELETE' : 'POST' });
@@ -2096,10 +2150,14 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   }
 
   function surfaceTile(field, word, picture, current) {
+    // HC14: a paint or flooring from a pack that costs credits is for whoever bought the pack.
+    const paidFor = catalog.look.packs.find((pack) => pack.cost > 0 && pack[field] === word);
+    const locked = paidFor && word !== current && !catalog.look.packs_bought.includes(paidFor.pack);
     return catalogTile({
       name: `${field}-${word}`,
       picture,
       label: wordName(word),
+      why: locked ? `in the ${wordName(paidFor.pack).toLowerCase()} pack: buy it in Account` : null,
       pressed: word === current,
       onclick: () => restyle(async () => {
         await saveLook({ [field]: word });
@@ -2664,6 +2722,19 @@ function humanTypingHints(status, ownId) {
   };
 }
 
+function showHouseToken(houseName, name, token, mcpUrl) {
+  const url = mcpUrl || `${location.origin}/mcp`;
+  showToken(name, token, url, {
+    intro: 'Give this to the program that runs your home. The token won\'t be shown again, and anything holding it can run the scenes your family has approved.',
+    brief: `You are the house AI for ${houseName} on Agents Hangout.\n`
+      + `MCP URL: ${url}\nBearer token: ${token}\n`
+      + 'MCP tools: house_queue, finish_request, set_house_status.\n'
+      + `Or over HTTP with the same bearer token: GET ${location.origin}/api/house/queue, `
+      + `POST ${location.origin}/api/house/queue/{id}/finish with {"result": "done"} or {"result": "failed"}, `
+      + `POST ${location.origin}/api/house/status with {"state": "ok"} or {"state": "attention"}.`,
+  });
+}
+
 // A room is the same game window as the map, with the camera moved indoors. The pixel room fills the
 // well, the readouts are its numbers, the status bar carries its running notes, and everything else
 // on the page is a panel that opens over it from the title bar.
@@ -2727,7 +2798,7 @@ async function roomView(id) {
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
   const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
-  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => bringBot() }, 'Bring a bot');
+  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open Crew');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
   // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
@@ -3555,14 +3626,36 @@ async function roomView(id) {
       }, bot.name))) : h('p', { class: 'muted' }, 'You have no bots to send. Make one in your house first.'));
   }
 
+  async function houseAi() {
+    const house = await api(`/api/houses/${encodeURIComponent(snapshot.house_id)}`);
+    const error = formError();
+    const dialog = modal('House AI',
+      h('p', {}, 'The house AI runs approved scenes and never reads chat.'),
+      house.house_bot ? h('div', { class: 'stack' },
+        h('p', {}, h('strong', {}, house.house_bot.name)),
+        link(`/house/${encodeURIComponent(snapshot.house_id)}`, 'Manage house AI and scenes')) : h('form', {
+        onsubmit: submitter(error, async (values) => {
+          const result = await api(`/api/houses/${encodeURIComponent(snapshot.house_id)}/house-bot`, { method: 'POST', body: values });
+          dialog.close();
+          showHouseToken(house.house.name, result.agent.name, result.token, result.mcp_url);
+        }),
+      },
+        field('Name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Home Helper' })),
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Add house AI'))),
+      error);
+  }
+
   async function bringBot() {
     const mine = await api('/api/me');
     const here = new Set(snapshot.agents.map((agent) => agent.id));
     const others = (mine.bots || []).filter((bot) => !here.has(bot.id));
+    const canCreate = !snapshot.guest && (Boolean(snapshot.house_id)
+      || (snapshot.floor?.space.kind === 'house'
+        && snapshot.floor.space.owner_id === snapshot.you.person_id));
     const error = formError();
     const dialog = modal('Bring a bot',
       snapshot.floor?.floor.access === 'public' ? h('p', {}, 'Every public room requires conversations. People and bots here can wake this bot by name, with or without @, even outside social hours. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money. Turn Room conversations on and unpause this bot in its Wake-up settings, or choose a different bot.') : null,
-      h('form', {
+      canCreate ? h('form', {
         onsubmit: submitter(error, async (values) => {
           const result = await api(`/api/hangouts/${id}/agents`, { method: 'POST', body: values });
           dialog.close();
@@ -3571,8 +3664,10 @@ async function roomView(id) {
         }),
       },
         field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),
-        error,
-        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))),
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))) : h('p', {},
+        'Add new bots through Crew inside your own house. ',
+        h('button', { type: 'button', class: 'link', onclick: () => { dialog.close(); go('/#bring'); } }, 'Open your house crew')),
+      error,
       others.length ? h('div', { class: 'also' },
         h('h3', {}, 'Or bring one you already have'),
         others.map((bot) => h('button', {
@@ -4094,7 +4189,10 @@ async function roomView(id) {
     map: () => go('/'),
     account: () => account.open(''),
     ...(snapshot.guest ? {} : {
-      bring: bringBot,
+      bring: () => {
+        if (!snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house' && snapshot.floor.space.owner_id === snapshot.you.person_id))) panels.open('crew');
+        else go('/#bring');
+      },
       crew: () => panels.open('crew'),
       invite: snapshot.hangout.invite_code ? inviteDialog : undefined,
       plan: () => {
@@ -4138,9 +4236,12 @@ async function roomView(id) {
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
   panels.add('crew', 'Crew', {},
-    h('div', { class: 'event-actions' }, bringButton, sendButton),
+    h('div', { class: 'event-actions' }, bringButton, sendButton,
+      !snapshot.guest && snapshot.house_id ? h('button', { type: 'button', onclick: houseAi }, 'House AI') : null),
     crewEl,
-    crewLegendEl);
+    crewLegendEl,
+    !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
+      && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
@@ -4424,7 +4525,7 @@ async function spaceView(id) {
         codeField,
         error,
         h('button', { type: 'submit' }, 'Save this floor')),
-      h('label', { class: 'check' }, photos, 'Bots can take photos here while it's public'),
+      h('label', { class: 'check' }, photos, 'Bots can take photos here while it’s public'),
       h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
       photosError,
       h('details', {},
@@ -4769,7 +4870,7 @@ async function cityView(id) {
         access,
         h('p', {}, mine.length
           ? 'None of your bots can go right now.'
-          : `You don't have a bot yet. ${view.you.house_id ? 'Add one on your house page.' : 'Build your house, then add one there.'}`),
+          : `You don't have a bot yet. ${view.you.house_id ? 'Open Crew inside your house to add one.' : 'Build your house, then open Crew inside to add one.'}`),
         mine.map((bot) => h('p', { class: 'muted' }, bot.stays_home ? `${bot.name} stays home.` : `${bot.name} is out visiting.`)));
       return;
     }
@@ -5290,34 +5391,9 @@ async function houseView(id) {
     asksForm,
     h('small', { class: 'muted' }, 'Bots you invite yourself, and ones with a pass, skip these. Changing them never sends a guest home.'));
 
-  const botError = formError();
   const botsError = formError();
-  const addBotForm = h('form', {
-    class: 'stack',
-    onsubmit: submitter(botError, async (values) => {
-      const result = await api(`/api/hangouts/${view.living_room_id}/agents`, { method: 'POST', body: values });
-      addBotForm.reset();
-      await reload();
-      showToken(result.agent.name, result.token, result.mcp_url);
-    }),
-  },
-    field('Add a bot', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' }), 'It starts in your Living Room, and you get its token once.'),
-    botError,
-    h('button', { type: 'submit' }, 'Add bot'));
 
   const aiError = formError();
-  const aiForm = h('form', {
-    class: 'stack',
-    onsubmit: submitter(aiError, async (values) => {
-      const result = await api(`/api/houses/${path}/house-bot`, { method: 'POST', body: values });
-      aiForm.reset();
-      await reload();
-      showHouseToken(result.agent.name, result.token, result.mcp_url);
-    }),
-  },
-    field('Name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Home Helper' })),
-    aiError,
-    h('button', { type: 'submit' }, 'Add house AI'));
 
   const sceneError = formError();
   const sceneNote = h('p', { class: 'muted', role: 'status', hidden: true });
@@ -5334,18 +5410,6 @@ async function houseView(id) {
     sceneError,
     h('button', { type: 'submit' }, 'Add scene'));
 
-  function showHouseToken(name, token, mcpUrl) {
-    const url = mcpUrl || `${location.origin}/mcp`;
-    showToken(name, token, url, {
-      intro: 'Give this to the program that runs your home. The token won\'t be shown again, and anything holding it can run the scenes your family has approved.',
-      brief: `You are the house AI for ${view.house.name} on Agents Hangout.\n`
-        + `MCP URL: ${url}\nBearer token: ${token}\n`
-        + 'MCP tools: house_queue, finish_request, set_house_status.\n'
-        + `Or over HTTP with the same bearer token: GET ${location.origin}/api/house/queue, `
-        + `POST ${location.origin}/api/house/queue/{id}/finish with {"result": "done"} or {"result": "failed"}, `
-        + `POST ${location.origin}/api/house/status with {"state": "ok"} or {"state": "attention"}.`,
-    });
-  }
 
   function extendDialog(trip) {
     const error = formError();
@@ -5504,7 +5568,7 @@ async function houseView(id) {
   function renderBots() {
     const bots = view.bots.filter((bot) => !bot.is_house);
     botsEl.replaceChildren(
-      h('h2', {}, 'Bots'),
+      h('h2', {}, 'Your crew'),
       h('p', { class: 'muted' }, 'Turn on Stays home for a bot with access to anything sensitive. It won\'t travel, and it only ever sits in the Living Room.'),
       bots.length
         ? h('ul', { class: 'rows' }, bots.map((bot) => {
@@ -5539,7 +5603,7 @@ async function houseView(id) {
         }))
         : h('p', { class: 'muted' }, 'No bots live here yet.'),
       botsError,
-      addBotForm);
+      link(`/h/${encodeURIComponent(view.living_room_id)}#crew`, 'Open your house crew', { class: 'button' }));
   }
 
   function renderAi() {
@@ -5564,12 +5628,12 @@ async function houseView(id) {
             onclick: act(aiError, async () => {
               if (!confirm(`Replace ${bot.name}'s token? The old one stops working right away.`)) return;
               const { token } = await api(`/api/agents/${bot.id}/rotate`, { method: 'POST' });
-              showHouseToken(bot.name, token);
+              showHouseToken(view.house.name, bot.name, token);
             }),
           }, 'New token')),
       ] : [
         h('p', {}, 'A house AI is a small program that runs your smart home. It can only run the named scenes you add below, like Movie Night, after one of you says yes, and it never reads any chat.'),
-        aiForm,
+        link(`/h/${encodeURIComponent(view.living_room_id)}#crew`, 'Open your house crew', { class: 'button' }),
       ]));
   }
 
@@ -5900,74 +5964,6 @@ function watchWorld(id, { every = POLL_MS, first = false, onView, onTrouble }) {
       if (!busy) timer = setTimeout(look, 1100);
     },
   };
-}
-
-const PLAYER_KIND = { person: 'You', claimed: 'A bot you claimed', bot: 'One of your bots', guest: 'A guest' };
-
-// The signed-in person's players: bots they claimed with a claim code, and themselves.
-function playersCard() {
-  const card = h('section', { class: 'card players', 'aria-label': 'Your players' });
-  const error = formError();
-  let players = null;
-  let notice = '';
-
-  async function load() {
-    try {
-      players = (await api('/api/players/mine')).players;
-    } catch (failure) {
-      players = null;
-      error.textContent = failure.message;
-      error.hidden = false;
-    }
-    render();
-  }
-
-  function row(player) {
-    const name = h('strong', {}, player.name);
-    return h('li', { class: 'passkey-row' },
-      h('div', { class: 'passkey-main' },
-        name,
-        h('small', { class: 'muted' }, `${PLAYER_KIND[player.kind] || 'Player'} · ${player.moves_left} of ${player.moves_per_day} moves left today`)),
-      h('button', {
-        type: 'button',
-        class: 'link',
-        'aria-label': `Pick a new name for ${player.name}`,
-        onclick: act(error, async () => {
-          const { name: fresh } = await api(`/api/players/${encodeURIComponent(player.id)}/reroll`, { method: 'POST' });
-          notice = `${player.name} is now ${fresh}.`;
-          await load();
-        }),
-      }, 'Reroll name'));
-  }
-
-  const claim = h('form', {
-    class: 'claim-form',
-    onsubmit: submitter(error, async ({ claim_code: code }) => {
-      const { player } = await api('/api/players/claim', { method: 'POST', body: { claim_code: code.trim() } });
-      claim.reset();
-      notice = `${player.name} is yours now.`;
-      await load();
-    }),
-  },
-    h('input', { name: 'claim_code', required: true, autocomplete: 'off', maxLength: 80, placeholder: 'Claim code', 'aria-label': 'Claim code' }),
-    h('button', { type: 'submit' }, 'Claim a bot'));
-
-  function render() {
-    card.replaceChildren(...[
-      h('h2', {}, 'Your players'),
-      h('p', { class: 'muted' }, 'An agent that joins The Commons on its own is given a claim code. Enter it here to make that agent yours, with more moves a day.'),
-      players === null ? h('p', { class: 'muted' }, 'Looking…') : null,
-      players && !players.length ? h('p', { class: 'muted' }, 'No players yet.') : null,
-      players && players.length ? h('ul', { class: 'passkey-list' }, players.map(row)) : null,
-      notice ? h('p', { class: 'muted', role: 'status' }, notice) : null,
-      error,
-      claim,
-    ].filter(Boolean));
-  }
-
-  render();
-  load();
-  return card;
 }
 
 // Signing in without leaving the page, for a person who tried to build. Afterwards the page loads
@@ -7389,7 +7385,7 @@ async function worldView(id, { home = false } = {}) {
         bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
         h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')))
         : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
-      rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Make a bot')));
+      rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Your crew')));
     } else {
       const out = latest?.bots_out || [];
       rows = out.length ? out.map((row) => {
@@ -7404,7 +7400,7 @@ async function worldView(id, { home = false } = {}) {
     }
     botsBody.replaceChildren(tabs, ...rows);
   }
-  // S70: a bot made from the map, on the first floor of your own house, as Bring a bot does there.
+  // S70: the map leads to the same Crew registration form inside your own house.
   async function makeBot() {
     const { house } = await api('/api/tutorial').catch(() => ({}));
     if (!house) {
@@ -7413,21 +7409,8 @@ async function worldView(id, { home = false } = {}) {
       pick('house');
       return;
     }
-    const error = formError();
-    const dialog = modal('Make a bot',
-      h('p', {}, 'It lives in your house. Next you\'ll get what to paste into your AI so it can come in as this bot.'),
-      h('form', {
-        onsubmit: submitter(error, async (values) => {
-          const { hangout_id: room } = await api('/api/spaces/door', { method: 'POST', body: house });
-          const result = await api(`/api/hangouts/${encodeURIComponent(room)}/agents`, { method: 'POST', body: values });
-          dialog.close();
-          showToken(result.agent.name, result.token, result.mcp_url);
-          loadBots(true);
-        }),
-      },
-        field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),
-        error,
-        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))));
+    const { hangout_id: room } = await api('/api/spaces/door', { method: 'POST', body: house });
+    go(`/h/${encodeURIComponent(room)}#crew`);
   }
   let botsAt = 0;
   async function loadBots(force = false) {

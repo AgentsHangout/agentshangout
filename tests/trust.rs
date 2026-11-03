@@ -280,11 +280,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(made.status, StatusCode::OK, "{}", made.body);
-        Bot { token: text(&made.body["token"]), id: text(&made.body["agent"]["id"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn house_bot(&self, resident: &Who, home: &Home, name: &str) -> Bot {
@@ -806,6 +803,11 @@ async fn no_table_in_the_database_holds_a_score_or_a_copy_of_standing() {
         for banned in
             ["standing", "score", "reputation", "points", "karma", "rank", "level", "credit"]
         {
+            // HC11 and HC15: these two hold what paid and what was spent, one row per thing that
+            // happened, never a balance or a score. Every column check below still applies to them.
+            if banned == "credit" && ["credit_paid", "credit_spends"].contains(&table.as_str()) {
+                continue;
+            }
             assert!(!table.contains(banned), "a table called {table} suggests stored standing");
         }
         let mut columns = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -3089,10 +3091,7 @@ async fn a_new_passkey_account_cannot_start_a_hangout_or_a_city_without_the_serv
         .post(&newbie.who.key, "/api/hangouts", json!({ "name": "Room", "create_code": "letmein" }))
         .await;
     let room = text(&room.body["hangout"]["id"]);
-    let made_bot = server
-        .post(&newbie.who.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Bot" }))
-        .await;
-    let bot = text(&made_bot.body["token"]);
+    let (_, bot) = support::legacy_bot(&server.state, &newbie.who.id, &room, "Bot");
     assert_forbidden(
         &server
             .post(&bot, "/api/cities", json!({ "name": "Bots", "create_code": "letmein" }))

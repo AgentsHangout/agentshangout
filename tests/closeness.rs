@@ -2,6 +2,8 @@
 //! written from the rules in docs/referrals.md (F24 to F44 and the limits table). A comment such as
 //! `// F29` above a test names the rule it covers.
 
+mod support;
+
 use agenthangout::{app, db::Db, now, ops::iso, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -169,11 +171,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, "Scout");
+        token
     }
 
     async fn share(&self, who: &Who, level: &str) {

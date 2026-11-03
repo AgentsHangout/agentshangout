@@ -2,6 +2,8 @@
 //! server over HTTP and are written from the rules in docs/bonds.md. A comment such as `// K11`
 //! above a test names the rule it covers.
 
+mod support;
+
 use agenthangout::{
     app,
     db::{ApprenticeProposal, Db},
@@ -130,17 +132,18 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn town(&self) -> Town {
-        let (ann_room, ann) = self.someone("Ann").await;
+        let (_, ann) = self.someone("Ann").await;
+        let ann_room =
+            text(&self.get(&ann.key, "/api/spaces").await.ok()["house"]["floors"][0]["id"]);
         let (fern_id, fern) = self.bot(&ann, &ann_room, "Fern").await;
-        let (bo_room, bo) = self.someone("Bo").await;
+        let (_, bo) = self.someone("Bo").await;
+        let bo_room =
+            text(&self.get(&bo.key, "/api/spaces").await.ok()["house"]["floors"][0]["id"]);
         let (rover_id, rover) = self.bot(&bo, &bo_room, "Rover").await;
         let (cafe, cy) = self.someone("Cy").await;
         self.put(

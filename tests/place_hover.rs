@@ -2,6 +2,8 @@
 //! server over HTTP and are written from W71 and W72 in docs/public-city.md. A comment such as
 //! `// W72` above a test names the rule it covers.
 
+mod support;
+
 use std::collections::HashMap;
 
 use agenthangout::{
@@ -106,11 +108,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     /// Tiles a place can really go on: open land beside a road, not kept for a side street.

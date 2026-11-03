@@ -2,6 +2,8 @@
 //! docs/spaces.md. A comment such as `// S3` above a test names the rule it covers. Most of these are
 //! about what a stranger who walks onto a public floor can't do, because that's where the risk is.
 
+mod support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agenthangout::{
@@ -196,11 +198,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn open(&self, owner: &Who, room: &str) -> Value {
@@ -925,21 +924,28 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
 
     // Every word in the rule can be chosen, and the page has a look for every one of them.
     let page = include_str!("../web/room.js");
-    for paint in ["dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest"] {
-        assert_eq!(
-            server.put(&ann.key, &path, json!({ "paint": paint })).await.ok()["paint"],
-            paint
-        );
+    for paint in
+        ["dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost"]
+    {
+        // HC14: a paint from a pack that costs credits waits for the pack to be bought.
+        let chosen = server.put(&ann.key, &path, json!({ "paint": paint })).await;
+        if agenthangout::items::paid_pack_with(paint).is_some() {
+            assert_eq!(chosen.status, StatusCode::FORBIDDEN, "{paint}");
+        } else {
+            assert_eq!(chosen.ok()["paint"], paint);
+        }
         assert!(
             page.contains(&format!("  {paint}: {{ upper")),
             "the room page can't paint {paint}"
         );
     }
-    for flooring in ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves"] {
-        assert_eq!(
-            server.put(&ann.key, &path, json!({ "flooring": flooring })).await.ok()["flooring"],
-            flooring
-        );
+    for flooring in ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow"] {
+        let chosen = server.put(&ann.key, &path, json!({ "flooring": flooring })).await;
+        if agenthangout::items::paid_pack_with(flooring).is_some() {
+            assert_eq!(chosen.status, StatusCode::FORBIDDEN, "{flooring}");
+        } else {
+            assert_eq!(chosen.ok()["flooring"], flooring);
+        }
         assert!(
             page.contains(&format!("  {flooring}: {{ a:")),
             "the room page can't lay {flooring}"
@@ -3635,7 +3641,7 @@ fn town_square_goes_through_the_squares_door() {
 
 // S70
 #[test]
-fn make_a_bot_on_the_map_brings_it_into_your_own_house() {
+fn the_map_opens_your_house_crew_to_add_a_bot() {
     let app = include_str!("../web/app.js");
     let make = app.split_once("async function makeBot() {").unwrap().1;
     let make = make.split_once("\n  }").unwrap().0;
@@ -3645,12 +3651,10 @@ fn make_a_bot_on_the_map_brings_it_into_your_own_house() {
         make.contains("api('/api/spaces/door', { method: 'POST', body: house })"),
         "it doesn't go through your own door (S34)"
     );
-    assert!(
-        make.contains("api(`/api/hangouts/${encodeURIComponent(room)}/agents`, { method: 'POST', body: values })"),
-        "it isn't Bring a bot"
-    );
-    assert!(make.contains("showToken(result.agent.name, result.token, result.mcp_url);"));
-    assert!(app.contains("onclick: makeBot }, 'Make a bot')"), "My bots has no Make a bot");
+    assert!(make.contains("go(`/h/${encodeURIComponent(room)}#crew`);"));
+    assert!(!make.contains("/agents"), "the map must not register bots directly");
+    assert!(!make.contains("showToken"));
+    assert!(app.contains("onclick: makeBot }, 'Your crew')"), "My bots has no route to Your crew");
 }
 
 // S65
