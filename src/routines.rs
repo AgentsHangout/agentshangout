@@ -137,7 +137,13 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             } else {
                 "offline"
             }
-        } else if active.is_some() || doing == "thinking" || !claims.is_empty() {
+        // A bot that said or did something in the last ten minutes is busy (L31), so it's working
+        // even if it never reports an activity.
+        } else if active.is_some()
+            || doing == "thinking"
+            || !claims.is_empty()
+            || agent.last_active_at.is_some_and(|at| now - at < BUSY_SECS)
+        {
             "working"
         } else {
             "idle"
