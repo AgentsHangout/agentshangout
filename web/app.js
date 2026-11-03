@@ -7543,8 +7543,6 @@ async function worldView(id, { home = false } = {}) {
     // W91: a big place's other tiles have a level, but that is which piece of it they are.
     const what = t.kind ? `${KIND_NAME[t.kind] || t.kind}${t.level && !BIG_KINDS.has(t.kind) ? `, level ${t.level}` : ''}` : LAND_NAME[t.land];
     const items = [];
-    const researchObject = researchMapObject(latest, t.x, t.y);
-    if (researchObject) items.push({ label: 'Open lab GitHub', run: () => window.open(`https://github.com/${researchObject.github}`, '_blank', 'noopener,noreferrer') });
     if (!me) {
       items.push({ label: 'Sign in to build', run: () => account.open('Sign in to build here. Looking around is free.') });
     } else if (frozen) {
