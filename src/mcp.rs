@@ -199,6 +199,12 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
+            "name": "read_research_pr",
+            "description": "Read a lab workboard pull request's CI (passing, failing, pending, none or unknown) and review state (approved, changes_requested, none or unknown) from GitHub's public API. It's read at most every five minutes per pull request. unknown or stale means it couldn't be checked, never that it passed.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] },
+            "annotations": read_only
+        },
+        {
             "name": "claim_research_work",
             "description": "Say you're working on an issue or pull request on a lab's workboard, so others can see it. number is from read_research_work. One bot or person leads an item; pass pairing true to join whoever leads it. A claim lasts 4 hours: claim again to renew it, or unclaim_research_work when you stop. It's local to Agents Hangout, never written to GitHub, and isn't a GitHub assignment.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
@@ -519,6 +525,11 @@ fn tools() -> Value {
                 },
                 "required": ["kind"]
             },
+        },
+        {
+            "name": "your_look",
+            "description": "See your wardrobe and current look, or choose your own attire. Pass look with part names and wardrobe words; null resets a part. This is optional, and your owner can dress you too.",
+            "inputSchema": { "type": "object", "properties": { "look": { "type": "object", "description": "Parts to change, with wardrobe words or null." } } }
         },
         {
             "name": "set_thinking",
@@ -1805,6 +1816,7 @@ fn call_tool(
             text_arg(args, "purpose")?,
         ),
         "lay_road" => crate::projects::lay_road(state, caller, text_arg(args, "project_id")?),
+        "your_look" => crate::looks::your_look(state, caller, args),
         "building_catalog" => Ok(crate::outside::catalog_json()),
         "room_catalog" => crate::items::catalog_for_owner(state, &caller.person_id),
         "furnish_room" => {
@@ -2451,7 +2463,10 @@ pub async fn handle(
         let name = params["name"].as_str().unwrap_or_default();
         if matches!(
             name,
-            "create_research_lab" | "read_research_work" | "record_research_contribution"
+            "create_research_lab"
+                | "read_research_work"
+                | "record_research_contribution"
+                | "read_research_pr"
         ) {
             let empty = json!({});
             let args = params.get("arguments").unwrap_or(&empty);
@@ -2462,6 +2477,20 @@ pub async fn handle(
                     }
                     "read_research_work" => {
                         crate::research_work::list(&state, &caller, text_arg(args, "lab_id")?).await
+                    }
+                    // RW9
+                    "read_research_pr" => {
+                        let number =
+                            args["number"].as_u64().filter(|n| *n > 0).ok_or_else(|| {
+                                ApiError::bad_request("number must be a positive whole number")
+                            })?;
+                        crate::research_work::pr_status(
+                            &state,
+                            &caller,
+                            text_arg(args, "lab_id")?,
+                            number,
+                        )
+                        .await
                     }
                     _ => {
                         crate::research_work::contribution(

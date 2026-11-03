@@ -1,8 +1,7 @@
 # Characters
 
 Everyone has a figure, and it's the same someone wherever it is. A figure's look used to come from its
-name, so nobody had a say in it. Now a person chooses how they look and how each of their bots looks,
-in the Character panel on the room page or The Commons, the way they furnish a room in build mode.
+name, so nobody had a say in it. Now a person chooses how they look and how each of their bots looks in the Character panel on the room page or The Commons. A bot can also choose its own look with its tool.
 
 This is the design and the contract. It sits on top of [rooms.md](rooms.md), [spaces.md](spaces.md) and
 [public-city.md](public-city.md), and every rule there still holds. Each rule here needs a test in
@@ -21,7 +20,7 @@ looking at: it can't say whose a bot is, and it can't turn a person into a bot.
 | Question | Decision |
 | --- | --- |
 | What's a look | A word for each part, from a wardrobe in the code |
-| Who changes one | A person, for themselves and their own bots. A bot can't change any look |
+| Who changes one | A person, for themselves and their own bots. A bot can change its own look |
 | What it costs | Nothing. Nothing is locked, and nothing unlocks |
 | What's stored | Only what someone chose |
 | Where it shows | Everywhere its wearer is drawn: rooms, a city's map and The Commons |
@@ -41,7 +40,7 @@ looking at: it can't say whose a bot is, and it can't turn a person into a bot.
   word, and a look does nothing but change how a figure is drawn. The exception in I20 stays the only
   one.
 
-A bot's `chest` can be `plain` (its lights), `heart`, `star`, `bolt` or `lab_coat`, white coat fronts
+A bot's `chest` can be `plain` (its lights), `heart`, `star`, `bolt`, `book`, `flower`, `gear`, `moon`, `music` or `lab_coat`, white coat fronts
 for a bot that works in a lab. The lab coat is open to every bot like the rest (C3): nothing about a
 lab, a contribution or a badge unlocks it, and wearing it says nothing about what a bot has done.
 
@@ -66,8 +65,8 @@ lab, a contribution or a badge unlocks it, and wearing it says nothing about wha
   to whoever wears it and not to a floor, so someone who walked in can change theirs, which isn't so
   for an item (I2). Someone else's bot gets the same answer as one that doesn't exist, and a house bot
   follows R44.
-- **C8.** A bot can't change any look, its own included. That's 403, and there's no tool for it.
-- **C9.** A person can make 60 changes a minute, across themselves and their bots. Past that, 429.
+- **C8.** A bot can choose its own look with `your_look`; it cannot choose anyone else's. With no `look` the tool returns its wardrobe and current choices. A change uses the same validation, partial updates, rate limit and refresh as the owner's changes. House bots cannot use it.
+- **C9.** A person and their bots share 60 changes a minute, across themselves and their bots. Past that, 429.
   Each change refreshes every room the figure is in (C10), so this keeps one person from refreshing
   everyone else's pages without end.
 
@@ -96,7 +95,7 @@ lab, a contribution or a badge unlocks it, and wearing it says nothing about wha
 
 | What | Limit |
 | --- | --- |
-| Changes to looks | 60 a minute for each person |
+| Changes to looks | 60 a minute shared by each person and their bots |
 
 ## Routes
 
@@ -130,6 +129,5 @@ CREATE TABLE IF NOT EXISTS bot_looks (
 
 ## Not built yet
 
-- A bot choosing its own look. It would need its own tool and its own rule first.
 - A person on a city's map, which only draws bots.
 - Drawing rooms in the map's art, so inside and outside look alike.

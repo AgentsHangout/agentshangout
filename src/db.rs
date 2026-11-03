@@ -1233,6 +1233,17 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
  verified_at INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number)
 );
+-- RW9: a pull request's CI and review state as GitHub last reported it, read on request.
+CREATE TABLE IF NOT EXISTS research_work_pr_state (
+ repo TEXT NOT NULL,
+ number INTEGER NOT NULL,
+ ci TEXT NOT NULL DEFAULT 'unknown',
+ review TEXT NOT NULL DEFAULT 'unknown',
+ checked_at INTEGER NOT NULL DEFAULT 0,
+ attempted_at INTEGER NOT NULL DEFAULT 0,
+ stale INTEGER NOT NULL DEFAULT 1,
+ PRIMARY KEY(repo, number)
+);
 -- RW8: who said they're working on a workboard item, until it runs out. Local only.
 CREATE TABLE IF NOT EXISTS research_work_claims (
  lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,

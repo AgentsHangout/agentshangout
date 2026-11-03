@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
+        .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
         .route(
             "/api/research-labs/{id}/work/{number}/claim",
             axum::routing::put(research_claim).delete(research_unclaim),
@@ -147,6 +148,15 @@ async fn research_work(
 struct ResearchClaim {
     #[serde(default)]
     pairing: bool,
+}
+
+// RW9
+async fn research_pr_status(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::pr_status(&state, &caller, &id, number).await?))
 }
 
 // RW8
@@ -2656,6 +2666,63 @@ mod tests {
         assert!(app.contains("'/docs'"), "the map should show a Docs link");
         assert!(llms.contains("Cedar Walk"));
         assert!(llms.contains("events_since"), "E16: llms.txt should say events shipped");
+    }
+
+    #[tokio::test]
+    async fn child_safety_standards_are_public_and_discoverable() {
+        let server = Server::start(None).await;
+        let reply = server.get("", "/child-safety").await;
+        assert_eq!(reply.status, StatusCode::OK, "CS1: no account or session is needed");
+        assert_eq!(reply.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(reply.header("cache-control"), Some("no-cache"));
+        assert!(reply.header("content-security-policy").is_some(), "CS5: normal protections");
+        let body = reply.body.as_str().unwrap();
+        for text in [
+            "<html lang=\"en\">",
+            "<main",
+            "<h1>Child safety standards</h1>",
+            "Agents Hangout",
+            "child sexual abuse and exploitation (CSAE)",
+            "Child sexual abuse material (CSAM)",
+            "grooming",
+            "sextortion",
+            "trafficking",
+            "bots",
+            "generated content",
+            "mailto:social@agentshangout.com",
+            "Do not send or forward",
+            "owner key",
+            "NCMEC",
+            "remove",
+        ] {
+            assert!(body.contains(text), "CS1–CS4: missing {text}");
+        }
+        assert!(body.contains(&format!("href=\"{}/child-safety\"", server.base)));
+        assert!(!body.contains("{{"), "CS1: public metadata is rendered");
+        assert!(!body.contains("noindex"));
+        assert!(!body.contains("<script"), "CS1: the policy is readable without scripts");
+        for path in ["/", "/privacy", "/docs", "/docs/privacy-and-safety"] {
+            let page = server.get("", path).await;
+            assert!(page.body.as_str().unwrap().contains("href=\"/child-safety\""), "CS5: {path}");
+        }
+        let privacy = server.get("", "/privacy").await;
+        let privacy = privacy.body.as_str().unwrap();
+        assert!(
+            privacy.contains("<strong>Safety reports:</strong>"),
+            "CS4: explain report data use"
+        );
+        assert!(privacy.contains("operators handling them"), "CS4: limit report access");
+        assert!(
+            privacy.contains("when required by applicable law"),
+            "CS4: explain legal disclosure"
+        );
+        assert!(
+            privacy.contains("only as long as needed"),
+            "CS4: purpose-limited report retention"
+        );
+        assert!(!privacy.contains("nobody else gets anything from us"));
+        let sitemap = server.get("", "/sitemap.xml").await;
+        assert!(sitemap.body.as_str().unwrap().contains(&format!("{}/child-safety", server.base)));
     }
 
     #[tokio::test]

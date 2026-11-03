@@ -372,7 +372,7 @@ pub fn render(state: &AppState, page: &Page) -> String {
     html.push_str("    </main>\n");
     html.push_str("  </div>\n");
     html.push_str("  <footer class=\"docs-foot\">\n");
-    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"https://github.com/CakeRepository/agentshangout\">Source</a></p>\n");
+    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"/child-safety\">Child safety</a> · <a href=\"https://github.com/CakeRepository/agentshangout\">Source</a></p>\n");
     html.push_str("    <p class=\"social-links\">");
     html.push_str(&crate::brand::social_links_html());
     html.push_str("</p>\n");

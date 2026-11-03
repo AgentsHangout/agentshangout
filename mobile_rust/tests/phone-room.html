@@ -27,7 +27,7 @@ if (!location.search) {
   const loaded = new Promise(resolve => { css.onload = resolve; });
   document.head.append(css); await loaded;
   document.querySelector('#results').remove();
-  const source = await (await fetch('../../web/app.js', {cache: 'no-store'})).text();
+  const source = (await (await fetch('../../web/app.js', {cache: 'no-store'})).text()).replace(/\r\n/g, '\n');
   const hSource = source.slice(source.indexOf('function h('), source.indexOf('\nasync function api('));
   const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('\n// What goes in the panels'));
   const dragSource = source.includes('function installSheetDrag(')
@@ -50,9 +50,12 @@ if (!location.search) {
     h('span', {class: 'room-note'}, 'The buttons along the top…'),
     h('span', {class: 'room-quiet', hidden: true}, 'Quiet sign up'),
     h('span', {class: 'room-guest', hidden: true}, 'Guest access'));
-  const nav = h('nav', {class:'apple-tab-bar'},
-    ...['Room', 'Chat', 'Guests', 'More'].map(label => h('button', {class:'apple-tab-item', onclick:()=>label === 'Chat' ? panels.open('room') : panels.close(false)}, label)));
-  root.append(nav);
+  const navSource = source.slice(source.indexOf('function installAppleHigRoom('), source.indexOf('\n}\n', source.indexOf('function installAppleHigRoom(')) + 2);
+  const noticeSource = source.slice(source.indexOf('function syncRoomNotices('), source.indexOf('\n}\n', source.indexOf('function syncRoomNotices(')) + 2);
+  let destination;
+  const installNav = new Function('h', 'watchPhoneChrome', 'go', `${navSource}; return installAppleHigRoom;`)(h, () => {}, path => { destination = path; });
+  const syncNotices = new Function('h', `${noticeSource}; return syncRoomNotices;`)(h);
+
   document.body.append(root);
   const {Room} = await import('../../web/room.js');
   const room = new Room(host.querySelector('.stage'));
@@ -61,13 +64,30 @@ if (!location.search) {
   const cameraStage = host.querySelector('.stage');
   const stopCamera = installRoomCamera?.(host, cameraStage);
   const panels = createPanels(root);
-  panels.add('room', 'Chat', {}, h('div', {class:'chat-log'}, 'A real message'), h('form', {class:'chat-form'}, h('input', {placeholder:'Message'})));
+  const inlineNotices = h('div', {class:'phone-room-notices'});
+  panels.add('room', 'Chat', {}, inlineNotices, h('div', {class:'chat-log'}, 'A real message'), h('form', {class:'chat-form'}, h('input', {placeholder:'Message'})));
+  installNav({frame, panels});
   panels.open('room');
   await new Promise(resolve => setTimeout(resolve, 400));
   const panel = root.querySelector('.game-panel');
   const grabber = panel.querySelector('.sheet-grabber');
   const lines = [];
   const check = (ok, text) => lines.push(`${ok ? 'PASS' : 'FAIL'}: ${text}`);
+  root.querySelector('[data-tab=world]').click();
+  check(destination === '/world/commons', 'M8: World returns directly to the outside map');
+  root.querySelector('[data-tab=room]').click();
+  check(panels.current === null, 'M8: Room returns to the interior');
+  panels.open('room');
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const guestNotice = status.querySelector('.room-guest');
+  guestNotice.hidden = false;
+  guestNotice.textContent = 'Guest access until tomorrow. Only new messages are visible.';
+  syncNotices([inlineNotices], [guestNotice]);
+  check(inlineNotices.textContent === guestNotice.textContent && panel.contains(inlineNotices), 'M8: guest expiry belongs inside the Chat sheet');
+  check(getComputedStyle(inlineNotices).position === 'static', 'M8: notices take up space without overlaying the composer');
+  guestNotice.hidden = true;
+  syncNotices([inlineNotices], [guestNotice]);
+  check(inlineNotices.hidden && !inlineNotices.childElementCount, 'M8: stale guest notices disappear');
   const visible = el => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0;
   check(grabber.getBoundingClientRect().height >= 44, 'M3: grabber has a 44px or larger touch target');
   function pointer(type, y, target = grabber) {
@@ -87,7 +107,7 @@ if (!location.search) {
   panels.close(false);
   check(!visible(status), 'M4: desktop room readouts do not cover the phone scene');
   status.querySelector('.room-quiet').hidden = false;
-  check(visible(status) && visible(status.querySelector('.room-quiet')), 'M4: quiet-room warning remains visible');
+  check(!visible(status), 'M8: quiet-room warning never creates a floating phone status strip');
   check(!visible(status.querySelector('.floors')), 'M4: warnings do not restore redundant floor readouts');
   const stage = host.querySelector('.stage').getBoundingClientRect();
   const hostRect = host.getBoundingClientRect();
