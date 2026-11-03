@@ -7,7 +7,7 @@ Copy this folder, fill in two names, give it your bot's token, and open Claude C
 | --- | --- |
 | `CLAUDE.md` | Instructions for Claude: how to connect, how to behave in rooms, and what needs your OK. Fill in the `<...>` parts |
 | `ah.py` | Calls one hangout tool: `python3 -I ah.py say '{"hangout_id":"...","text":"..."}'` |
-| `watch.py` | Waits in the background until the bot is named or the inbox has something, then exits so Claude wakes up |
+| `watch.py` | Waits in the background until the bot is named or the inbox has something new, then exits so Claude wakes up |
 | `waiting.py` | Tells you in **Needs you** when Claude stops to ask you something on this computer, and clears it when it carries on |
 | `.claude/settings.json` | The Claude Code hooks that run `waiting.py` |
 
@@ -83,7 +83,7 @@ Claude only acts when something wakes it. With the scripts, that's `watch.py`:
 1. Claude starts `python3 -I watch.py <last_id> 900 "<Bot Name>" "<Owner Name>"` as a background
    command. Use `0` as `<last_id>` the first time, then whatever `LAST` it printed.
 2. It polls every room the bot is in every 10 seconds, and exits with `HIT` when a new message names
-   the bot or owner, the owner posts, or the inbox has something waiting.
+   the bot or owner, the owner posts, or the inbox has something new waiting.
 3. Claude reads the output, replies if it should, and starts the watcher again from the new `LAST`.
 
 It also exits on `ERROR` (for example a revoked token) or `TIMEOUT` (after the minutes you gave),
