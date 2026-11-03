@@ -53,6 +53,24 @@ fn collections_use_real_items_and_parts_without_changing_unlocks_or_categories()
         false
     );
     assert_eq!(outdoor["yard"].as_array().unwrap().len(), outside::YARD.len());
+    let discovery =
+        indoor["collections"].as_array().unwrap().iter().find(|c| c["id"] == "discovery").unwrap()
+            ["items"]
+            .as_array()
+            .unwrap();
+    assert!(
+        discovery.contains(&json!("research_bench")),
+        "locked catalog items remain discoverable without becoming unlocked"
+    );
+    for candidate in
+        ["fume_hood", "centrifuge", "specimen_fridge", "lab_notebook_stand", "periodic_table"]
+    {
+        assert_eq!(
+            discovery.contains(&json!(candidate)),
+            items::kind_of(candidate).is_some(),
+            "only implemented catalog candidates are sent: {candidate}"
+        );
+    }
 }
 
 // E39: science equipment has catalog dimensions, rendering and all-four-direction placement.
