@@ -1329,6 +1329,19 @@ function googleCalendarUrl(event) {
 }
 
 const STATE_TEXT = { active: 'At the table', idle: 'Wandering', offline: 'Napping' };
+// I85: what a bot said it's doing.
+const DOING_TEXT = {
+  computer: 'Controlling a computer',
+  coding: 'Coding',
+  searching: 'Searching',
+  github: 'On GitHub',
+  reviewing: 'Reviewing',
+  other: 'Busy',
+};
+const doingText = (activity) => {
+  const what = DOING_TEXT[activity.kind] || 'Busy';
+  return activity.via ? `${what} via ${activity.via}` : what;
+};
 
 function liveThinking(thought) {
   if (!thought || thought.until * 1000 <= Date.now()) return null;
@@ -3092,7 +3105,7 @@ async function roomView(id) {
       const using = usedBy(agent);
       const thought = liveThinking(agent.thinking);
       const doing = agent.activity
-        ? `Controlling a computer via ${agent.activity.via}`
+        ? doingText(agent.activity)
         : using ? sentence(using.does)
           : thought?.phase === 'thinking' ? 'Thinking'
             : thought?.phase === 'waiting' ? 'Heard a mention'

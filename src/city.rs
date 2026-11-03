@@ -2189,7 +2189,7 @@ mod tests {
 
         assert_eq!(status(ops::set_status(&w.state, &home, Some("hi"))), StatusCode::FORBIDDEN);
         assert_eq!(
-            status(ops::report_activity(&w.state, &home, "computer", "x")),
+            status(ops::report_activity(&w.state, &home, "computer", Some("x"))),
             StatusCode::FORBIDDEN
         );
         assert_eq!(status(ops::doorbell_check(&w.state, &home)), StatusCode::FORBIDDEN);

@@ -27,7 +27,9 @@ const MAX_WHITEBOARD_CHARS: usize = 2000;
 /// E22, E31: three minutes. An unread accepted ring holds the owner's next one. A non-owner
 /// person's accepted ring holds the next person in that room even after a read. 20 an hour at most.
 const MENTION_RING_SECS: i64 = 3 * 60;
-const ACTIVITY_KINDS: [&str; 1] = ["computer"];
+/// I85: what a bot can say it's doing. `none` isn't one: it ends what's shown.
+const ACTIVITY_KINDS: [&str; 6] =
+    ["computer", "coding", "searching", "github", "reviewing", "other"];
 const MAX_ACTIVITY_VIA_CHARS: usize = 40;
 /// Reports expire instead of being cleared, so an agent that crashes doesn't stay at the desk.
 const ACTIVITY_SECS: i64 = 60;
@@ -700,15 +702,38 @@ pub fn set_status(state: &AppState, caller: &Caller, status: Option<&str>) -> Ap
 /// Shows a bot working through another tool, like a remote-control server. The whole room sees
 /// this, so it takes a fixed kind and a bare tool name, with no room for what's being done or to
 /// whose machine. It doesn't count against the write limit because hooks fire on every tool call.
-pub fn report_activity(state: &AppState, caller: &Caller, kind: &str, via: &str) -> ApiResult<()> {
+pub fn report_activity(
+    state: &AppState,
+    caller: &Caller,
+    kind: &str,
+    via: Option<&str>,
+) -> ApiResult<()> {
     no_house_bot(caller)?;
     let Some(agent_id) = &caller.agent_id else {
         return Err(ApiError::forbidden("only bots report activity"));
     };
-    if !ACTIVITY_KINDS.contains(&kind) {
-        return Err(ApiError::bad_request("kind must be computer"));
+    // I85: `none` ends what's shown straight away, rather than waiting for it to run out.
+    if kind == "none" {
+        if state.db.clear_activity(agent_id)? {
+            for hangout in state.db.hangouts_for_agent(agent_id, now())? {
+                refresh(state, &hangout.id);
+            }
+        }
+        return Ok(());
     }
-    let via = clean(via, "via", MAX_ACTIVITY_VIA_CHARS)?;
+    if !ACTIVITY_KINDS.contains(&kind) {
+        return Err(ApiError::bad_request(
+            "kind must be computer, coding, searching, github, reviewing, other or none",
+        ));
+    }
+    // I85: the label is optional, except for a computer, where it's the tool being used.
+    let via = match via.map(str::trim).filter(|via| !via.is_empty()) {
+        None if kind == "computer" => {
+            return Err(ApiError::bad_request("via is required for computer"));
+        }
+        None => String::new(),
+        Some(via) => clean(via, "via", MAX_ACTIVITY_VIA_CHARS)?,
+    };
     if !via.chars().all(|ch| ch.is_alphanumeric() || " -_.".contains(ch)) {
         return Err(ApiError::bad_request(
             "via is only the tool's name, with letters, numbers, spaces, - _ and .",

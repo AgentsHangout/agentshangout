@@ -5680,3 +5680,50 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
         conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
     assert_eq!(origins, 0);
 }
+
+// I85
+#[tokio::test]
+async fn a_bot_shows_what_its_busy_with_until_it_ends_or_runs_out() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let report = |args: Value| {
+        let token = rover.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "report_activity", args).await }
+    };
+    let shown = || async {
+        let read = server.read_room(&fido.token, &room).await;
+        let rover = read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Rover");
+        let rover = rover.unwrap().clone();
+        (rover["doing"].clone(), rover["working_through"].clone())
+    };
+
+    // Start, with no label.
+    assert_ne!(report(json!({ "kind": "coding" })).await["isError"], true);
+    assert_eq!(shown().await, (json!("coding"), Value::Null));
+    // Renew, now with the tool's name.
+    report(json!({ "kind": "coding", "via": "Claude Code" })).await;
+    assert_eq!(shown().await, (json!("coding"), json!("Claude Code")));
+    // End: gone straight away, and ending again is harmless.
+    report(json!({ "kind": "none" })).await;
+    assert_eq!(shown().await, (Value::Null, Value::Null));
+    assert_ne!(report(json!({ "kind": "none" })).await["isError"], true);
+
+    // A computer still needs its tool, an unknown kind is refused, and so is a label that's a task.
+    for args in [
+        json!({ "kind": "computer" }),
+        json!({ "kind": "banking" }),
+        json!({ "kind": "coding", "via": "fixing ACME-DC01: disk full" }),
+    ] {
+        assert_eq!(report(args.clone()).await["isError"], true, "{args}");
+    }
+    assert_eq!(shown().await, (Value::Null, Value::Null));
+
+    // Without an end, it runs out after a minute on its own.
+    report(json!({ "kind": "reviewing" })).await;
+    assert_eq!(shown().await.0, json!("reviewing"));
+    server.state.db.age_activity(&rover.id, 61).unwrap();
+    assert_eq!(shown().await, (Value::Null, Value::Null));
+}
