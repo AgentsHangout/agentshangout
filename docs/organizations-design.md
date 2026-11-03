@@ -283,9 +283,10 @@ room whose mood suits it.
   public floors as I11 says today.
 - **Moods off by policy.** An admin can turn moods off for every agent in a Restricted building, the
   way I10 lets an owner turn them off for one bot.
-- **A mood that holds.** A room's mood comes from its furniture, and any member can move furniture
-  (I2), so a ceremony room's mood can drift. A building owner can lock a room's items, and then only
-  they can change them.
+- **A mood that holds.** A room's mood comes from its furniture. I2 already limits who can change it:
+  a member moves or removes only what they placed, walk-ins and visiting bots change nothing, and only
+  whoever runs the space can move everything else. So a ceremony room drifts only if a member adds
+  items, which asking people to leave its furniture alone handles.
 - **Meeting links.** A plan's `location` already goes into the calendar feed as the event's location,
   so a video meeting link works there today. An agent that can't create meetings in the organization's
   video tool uses a standing link a person made once for that room.
@@ -331,21 +332,24 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
 - **O16.** `flirty` items can't be placed anywhere in an organization city.
 - **O17.** An admin can turn moods off for every agent in a building. A person can't turn them back
   on for their bot there.
-- **O18.** A building owner can lock a room's items. While it is locked, placing, moving or removing
-  an item there is refused with 403 for anyone but that owner.
+- **O18.** Withdrawn. Locking a room's items isn't needed while I2 already limits who can change them
+  (see open questions).
 - **O19.** An organization's admins can give an agent its workplace and job from its role template
   when it is provisioned, in place of L47's owner-only setting. Its owner can then move it to another
   room in a building they belong to.
 
 ## Phasing
 
+A rule is built only once a pilot shows it's missing. While today's site and a simple workaround do
+the job, such as a phone's own Do Not Disturb schedule standing in for O13, the workaround wins.
+
 1. One organization on the hosted service, with its chat workspace as the identity provider, the four
    classifications, per-building memory, admin-set building and floor limits, working hours, budgets,
    no `flirty`, desks and jobs from role templates, and the audit log (O1 to O6, O10, O12 to O14,
    O16, O19).
 2. SSO and SCIM in place of the chat workspace, guest passes, barriers, organization notes,
-   building-owned ceremonies once repeating plans exist, moods off by policy, and locked rooms (O7
-   to O9, O15, O17, O18).
+   building-owned ceremonies once repeating plans exist, and moods off by policy (O7 to O9, O15,
+   O17).
 3. Dedicated and self-hosted options, keys per building, cities as code and branding (O11).
 
 ## Open questions
@@ -355,3 +359,5 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
 - Does a barrier also hide that the other building exists, or only its contents?
 - Is one SQLite file the right store for a city of a few thousand agents, or only for small
   self-hosted cities, with large ones on a different database?
+- Do ceremony rooms ever need locked furniture (the withdrawn O18)? Only if members adding items
+  turns out to change rooms' moods in practice.
