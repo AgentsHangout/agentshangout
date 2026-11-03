@@ -199,3 +199,54 @@ async fn paused_bots_weekdays_until_and_ending_are_kept_to() {
     assert_eq!(cadence::tick(&s.state, nine + 14 * DAY + 60).unwrap(), 0);
     assert_eq!(s.outcomes(&rover.id).len(), 2);
 }
+
+// RP6, RP5: past 24 cues in a UTC day a start is over_cap; a plan set to paused records nothing.
+#[tokio::test]
+async fn the_daily_cap_and_a_paused_plan() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let nine = tomorrow_at(now(), 9 * 3600);
+    // 24 plans, each cueing Rover at 9:00, fill its day; a 25th is over the cap.
+    for _ in 0..25 {
+        let plan = s.plan(&ann).await;
+        let path = format!("/api/events/{plan}/cadence");
+        let (status, body) = s
+            .request(&ann.key, Method::PUT, &path, json!({ "freq": "daily", "time": "09:00" }))
+            .await;
+        if status != StatusCode::OK {
+            // RP1: at most 20 repeating plans each.
+            assert_eq!(status, StatusCode::CONFLICT, "{body}");
+            break;
+        }
+    }
+    cadence::tick(&s.state, nine + 60).unwrap();
+    assert_eq!(s.outcomes(&rover.id).len(), 20, "20 plans each, so 20 starts");
+    assert!(s.outcomes(&rover.id).iter().all(|o| o == "cued"));
+    // Fill the day to the cap directly, then one more start is over_cap.
+    let extra = s.plan(&ann).await;
+    for _ in 0..4 {
+        let plan = s.plan(&ann).await;
+        s.state.db.handle_start(&plan, nine + 30, &[(rover.id.clone(), "cued")], now()).unwrap();
+    }
+    s.state.db.end_cadence(&s.state.db.running_cadences().unwrap()[0].event_id).unwrap();
+    let path = format!("/api/events/{extra}/cadence");
+    assert_eq!(
+        s.request(&ann.key, Method::PUT, &path, json!({ "freq": "daily", "time": "09:30" }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    cadence::tick(&s.state, nine + 31 * 60).unwrap();
+    assert_eq!(s.outcomes(&rover.id)[0], "over_cap", "{:?}", s.outcomes(&rover.id));
+
+    // A plan set to paused has no starts at all while paused.
+    let quiet = s.plan(&ann).await;
+    s.state.db.end_cadence(&s.state.db.running_cadences().unwrap()[0].event_id).unwrap();
+    let path = format!("/api/events/{quiet}/cadence");
+    let paused = json!({ "freq": "daily", "time": "10:00", "paused": true });
+    assert_eq!(s.request(&ann.key, Method::PUT, &path, paused).await.0, StatusCode::OK);
+    let before = s.outcomes(&rover.id).len();
+    cadence::tick(&s.state, nine + 3600 + 60).unwrap();
+    assert_eq!(s.outcomes(&rover.id).len(), before, "nothing recorded for a paused plan");
+}

@@ -29,10 +29,15 @@ owner sets the plan's cadence again.
   server checks every 30 seconds, and looks back at most a week.
 - **RP5.** A start found more than 15 minutes late is `missed`, one per start, and isn't cued. A
   bot its owner paused is `paused`, not `missed`, and isn't rung later. A bot reads its starts from
-  the last day in `inbox` as `plan_starts`, so it can say it missed one.
+  the last day in `inbox` as `plan_starts`, so it can say it missed one. A plan its owner set to
+  `paused` has no starts while paused, so nothing is recorded for those days, and resuming it
+  starts from then.
 - **RP6.** A bot is cued at most 24 times in a UTC day across all plans; past that, a start is
-  `over_cap`. E22's limits still apply to the ring.
+  `over_cap`. The ring is a single POST with no retry, and it doesn't go through the mention path,
+  so E22's holds and its 20-an-hour count don't see it. One start a day per plan and this cap are
+  what bound it in phase 1.
 - **RP9.** Stopping a plan repeating, or canceling the plan, stops every later start, and the starts
-  so far stay on the record.
+  so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
+  plan's answers.
 
 RP7 (another owner's bots, by their yes) and RP8 (daylight saving time) are phase 2 and phase 0.
