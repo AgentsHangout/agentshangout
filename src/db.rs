@@ -580,6 +580,13 @@ CREATE TABLE IF NOT EXISTS bot_routines (
     public_places   INTEGER NOT NULL DEFAULT 0,
     updated_at      INTEGER NOT NULL
 );
+-- L47: the room its owner gave a bot to work in, and what its job there is.
+CREATE TABLE IF NOT EXISTS bot_workplaces (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    job        TEXT NOT NULL,
+    set_at     INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS projects (
     space_id    TEXT PRIMARY KEY REFERENCES spaces(id) ON DELETE CASCADE,
     agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
@@ -1257,6 +1264,25 @@ CREATE TABLE IF NOT EXISTS research_work_claims (
  until INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, claimer)
 );
+-- RW11: who watches a workboard item, to hear when it changes. Local only.
+CREATE TABLE IF NOT EXISTS research_work_watches (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ watcher TEXT NOT NULL,
+ person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ since INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number, watcher)
+);
+-- RW10: a lab owner's names for GitHub labels. Local, never written to GitHub.
+CREATE TABLE IF NOT EXISTS research_work_areas (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ label TEXT NOT NULL COLLATE NOCASE,
+ area TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, label)
+);
 
 
 
@@ -1385,6 +1411,44 @@ CREATE TABLE IF NOT EXISTS look_marks (
     name        TEXT PRIMARY KEY,
     at          INTEGER NOT NULL
 );
+-- HC20: the debit is also in credit_spends, so older binaries keep it reserved.
+CREATE TABLE IF NOT EXISTS question_bounties (
+    id TEXT PRIMARY KEY,
+    card_id TEXT UNIQUE REFERENCES board_cards(id) ON DELETE SET NULL,
+    sponsor_id TEXT NOT NULL,
+    amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 100),
+    status TEXT NOT NULL CHECK(status IN ('open','paid','refunded')),
+    recipient_id TEXT,
+    accepted_submission TEXT,
+    -- HC22: when it was refunded or paid, for the credit history.
+    settled_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS question_answers (
+    id TEXT PRIMARY KEY,
+    bounty_id TEXT NOT NULL REFERENCES question_bounties(id),
+    bot_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS question_card_refund AFTER UPDATE OF card_id ON question_bounties
+WHEN NEW.card_id IS NULL AND OLD.card_id IS NOT NULL
+BEGIN
+    UPDATE question_bounties SET status='refunded', settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=NEW.id AND status='open';
+    DELETE FROM question_answers WHERE bounty_id=NEW.id;
+END;
+-- HC21/A27: account deletion never leaves identifying answer text or redistributes a reserve.
+CREATE TRIGGER IF NOT EXISTS question_person_deleted AFTER DELETE ON people
+BEGIN
+    UPDATE question_bounties SET status='refunded', settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE sponsor_id=OLD.id AND status='open';
+    UPDATE question_bounties SET sponsor_id='' WHERE sponsor_id=OLD.id;
+    UPDATE question_bounties SET recipient_id=NULL WHERE recipient_id=OLD.id;
+    UPDATE question_answers SET owner_id='', bot_id='', text='[removed]' WHERE owner_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS question_bot_deleted AFTER DELETE ON agents
+BEGIN
+    UPDATE question_answers SET bot_id='', owner_id='', text='[removed]' WHERE bot_id=OLD.id;
+END;
 "#;
 
 #[derive(Debug, Serialize)]
@@ -2469,10 +2533,55 @@ pub struct CreditTotals {
     pub hosted_trips: i64,
 }
 
-/// HC22: one line of someone's credit history, from `credit_paid` or `credit_spends`.
+/// HC20: the open bounty on `card` that `bot` may answer, or why it can't. One answer per bot, so
+/// one bot can't fill a question's 20 answers by itself.
+fn answer_refusal(
+    conn: &Connection,
+    card: &str,
+    bot: &str,
+    owner: &str,
+) -> rusqlite::Result<Result<String, &'static str>> {
+    let bounty: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id,sponsor_id FROM question_bounties WHERE card_id=? AND status='open'",
+            [card],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((bounty, sponsor)) = bounty else {
+        return Ok(Err("question is not open"));
+    };
+    if sponsor == owner {
+        return Ok(Err("the sponsor's own bot cannot answer for a reward"));
+    }
+    if !exists(conn, "SELECT 1 FROM agents WHERE id=?1 AND owner_id=?2", params![bot, owner])? {
+        return Ok(Err("bot is no longer available"));
+    }
+    if exists(
+        conn,
+        "SELECT 1 FROM question_answers WHERE bounty_id=?1 AND bot_id=?2",
+        params![bounty, bot],
+    )? {
+        return Ok(Err("this bot has already answered this question"));
+    }
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM question_answers WHERE bounty_id=?",
+        [&bounty],
+        |r| r.get(0),
+    )?;
+    if count >= 20 {
+        return Ok(Err("question has 20 answers"));
+    }
+    Ok(Ok(bounty))
+}
+
+/// HC22: one line of someone's credit history, from `credit_paid`, `credit_spends` or a funded
+/// question that came back or paid (HC20).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CreditLine {
-    /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought.
+    /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought,
+    /// `question` for credits reserved on a funded question, and `question_refund` or
+    /// `question_award` for one that came back or was paid to you (HC20).
     pub kind: String,
     /// What it added, or what a spend took away as less than 0.
     pub amount: i64,
@@ -5755,6 +5864,37 @@ impl Db {
     }
 
     // Routines (L1 to L10)
+
+    /// L47: the room a bot's owner gave it to work in, and its job there.
+    pub fn bot_workplace(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, job FROM bot_workplaces WHERE agent_id = ?",
+                [agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// L47: sets a bot's workplace, or with `None` clears it.
+    pub fn set_bot_workplace(
+        &self,
+        agent_id: &str,
+        workplace: Option<(&str, &str)>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match workplace {
+            Some((hangout_id, job)) => conn.execute(
+                "INSERT INTO bot_workplaces (agent_id, hangout_id, job, set_at) VALUES (?, ?, ?, ?)
+                 ON CONFLICT (agent_id) DO UPDATE SET hangout_id = excluded.hangout_id,
+                     job = excluded.job, set_at = excluded.set_at",
+                params![agent_id, hangout_id, job, now],
+            )?,
+            None => conn.execute("DELETE FROM bot_workplaces WHERE agent_id = ?", [agent_id])?,
+        };
+        Ok(())
+    }
 
     pub fn bot_routine(&self, agent_id: &str) -> rusqlite::Result<Option<RoutineRow>> {
         self.conn()
@@ -10176,6 +10316,10 @@ impl Db {
                 })
             },
         )?;
+        totals.paid += conn.query_row(
+            "SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded') OR (recipient_id=?1 AND status='paid')",
+            [person_id], |row| row.get::<_, i64>(0),
+        )?;
         totals.spent = conn.query_row(
             "SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?",
             [person_id],
@@ -10192,9 +10336,17 @@ impl Db {
                FROM credit_paid p LEFT JOIN cities c ON c.id = p.city_id
               WHERE p.person_id = ?1
              UNION ALL
-             SELECT 'spend', -s.amount, s.created_at, s.created_at, NULL, s.pack, a.name
+             SELECT CASE WHEN s.pack LIKE 'question:%' THEN 'question' ELSE 'spend' END, -s.amount,
+                    s.created_at, s.created_at, NULL,
+                    CASE WHEN s.pack LIKE 'question:%' THEN NULL ELSE s.pack END, a.name
                FROM credit_spends s LEFT JOIN agents a ON a.id = s.agent_id
               WHERE s.person_id = ?1
+             UNION ALL
+             SELECT CASE WHEN q.status = 'paid' THEN 'question_award' ELSE 'question_refund' END,
+                    q.amount, COALESCE(q.settled_at, 0), COALESCE(q.settled_at, 0), NULL, NULL, NULL
+               FROM question_bounties q
+              WHERE (q.sponsor_id = ?1 AND q.status = 'refunded')
+                 OR (q.recipient_id = ?1 AND q.status = 'paid')
              ORDER BY 3 DESC, 4 DESC, 1, 2
              LIMIT ?3",
         )?;
@@ -10228,6 +10380,124 @@ impl Db {
         )
     }
 
+    pub fn open_questions(&self, person_id: &str) -> rusqlite::Result<Vec<serde_json::Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT card_id,amount FROM question_bounties WHERE sponsor_id=? AND status='open' AND card_id IS NOT NULL ORDER BY id")?;
+        let rows = stmt.query_map([person_id], |r| {
+            Ok(serde_json::json!({"card_id":r.get::<_,String>(0)?,"amount":r.get::<_,i64>(1)?}))
+        })?;
+        rows.collect()
+    }
+
+    /// HC20: reserve and debit in one transaction, shared with pack spending.
+    pub fn fund_question(
+        &self,
+        id: &str,
+        card: &str,
+        sponsor: &str,
+        amount: i64,
+        now: i64,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
+            return Ok(Some("already funded"));
+        }
+        let balance: i64 = tx.query_row("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded') OR (recipient_id=?1 AND status='paid'))", [sponsor], |r| r.get(0))?;
+        if balance < amount {
+            return Ok(Some("not enough credits"));
+        }
+        tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
+        tx.execute(
+            "INSERT INTO credit_spends(person_id,pack,amount,created_at) VALUES(?1,?2,?3,?4)",
+            params![sponsor, format!("question:{id}"), amount, now],
+        )?;
+        tx.commit()?;
+        Ok(None)
+    }
+
+    pub fn answer_question(
+        &self,
+        id: &str,
+        card: &str,
+        bot: &str,
+        owner: &str,
+        text: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let bounty = match answer_refusal(&tx, card, bot, owner)? {
+            Ok(bounty) => bounty,
+            Err(reason) => return Ok(Some(reason)),
+        };
+        tx.execute("INSERT INTO question_answers(id,bounty_id,bot_id,owner_id,text,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![id,bounty,bot,owner,text,now])?;
+        tx.commit()?;
+        Ok(None)
+    }
+
+    /// HC20: why `bot` can't answer the funded question on `card` now, if it can't. A check before
+    /// anything is counted (K14); answering checks again in its own transaction.
+    pub fn question_answer_refusal(
+        &self,
+        card: &str,
+        bot: &str,
+        owner: &str,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        Ok(answer_refusal(&self.conn(), card, bot, owner)?.err())
+    }
+
+    pub fn resolve_question(
+        &self,
+        card: &str,
+        sponsor: &str,
+        answer: Option<&str>,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let bounty: Option<String> = tx.query_row("SELECT id FROM question_bounties WHERE card_id=?1 AND sponsor_id=?2 AND status='open'",params![card,sponsor],|r| r.get(0)).optional()?;
+        let Some(bounty) = bounty else {
+            return Ok(Some("question is not open or you are not its sponsor"));
+        };
+        if let Some(answer) = answer {
+            let recipient: Option<String> = tx.query_row("SELECT a.owner_id FROM question_answers a JOIN agents b ON b.id=a.bot_id AND b.owner_id=a.owner_id JOIN people p ON p.id=a.owner_id WHERE a.id=?1 AND a.bounty_id=?2 AND a.owner_id<>?3",params![answer,bounty,sponsor],|r| r.get(0)).optional()?;
+            let Some(recipient) = recipient else {
+                return Ok(Some("answer is unavailable"));
+            };
+            tx.execute("UPDATE question_bounties SET status='paid',recipient_id=?1,accepted_submission=?2,settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=?3 AND status='open'",params![recipient,answer,bounty])?;
+        } else {
+            tx.execute(
+                "UPDATE question_bounties SET status='refunded',settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=? AND status='open'",
+                [bounty],
+            )?;
+        }
+        tx.commit()?;
+        Ok(None)
+    }
+
+    pub fn question_bounty(&self, card: &str) -> rusqlite::Result<Option<serde_json::Value>> {
+        let conn = self.conn();
+        let bounty: Option<(String, String, i64, String, Option<String>)> = conn
+            .query_row(
+                "SELECT id,sponsor_id,amount,status,accepted_submission FROM question_bounties WHERE card_id=?",
+                [card],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .optional()?;
+        let Some((id, sponsor, amount, status, accepted)) = bounty else {
+            return Ok(None);
+        };
+        let sponsor_name: String = conn
+            .query_row("SELECT name FROM people WHERE id=?", [&sponsor], |r| r.get(0))
+            .optional()?
+            .unwrap_or_else(|| "Someone who left".into());
+        let mut stmt = conn.prepare("SELECT a.id,a.bot_id,a.owner_id,a.text,COALESCE(b.name,'Bot who left'),COALESCE(p.name,'Someone who left'),(b.owner_id=a.owner_id AND p.id IS NOT NULL) FROM question_answers a LEFT JOIN agents b ON b.id=a.bot_id LEFT JOIN people p ON p.id=a.owner_id WHERE a.bounty_id=? ORDER BY a.created_at,a.id")?;
+        let answers = stmt.query_map([&id],|r| Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"bot_id":r.get::<_,String>(1)?,"owner_id":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"bot_name":r.get::<_,String>(4)?,"owner_name":r.get::<_,String>(5)?,"eligible":r.get::<_,Option<bool>>(6)?.unwrap_or(false)})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(Some(
+            serde_json::json!({"amount":amount,"status":status,"sponsor_id":sponsor,"sponsor_name":sponsor_name,"accepted_submission_id":accepted,"submissions":answers}),
+        ))
+    }
+
     /// HC15 and HC17: buys `pack` for `amount`, if the balance covers it and, for a bot, its daily
     /// limit does too. The checks and the spend are one transaction, so two at once can't both pass.
     pub fn spend_credits(
@@ -10249,7 +10519,8 @@ impl Db {
         }
         let balance: i64 = tx.query_row(
             "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
-                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)",
+                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded') OR (recipient_id = ?1 AND status = 'paid'))",
             [person_id],
             |row| row.get(0),
         )?;
@@ -16261,5 +16532,100 @@ mod tests {
 
         line("system");
         assert_eq!(seen(), ["f2", "s1"]);
+    }
+    // HC20/HC21: reserves, awards and refunds conserve the same credits as pack spends.
+    fn funded_question_fixture() -> Db {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        {
+            let conn = db.conn();
+            conn.execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+            for card in ["q1", "q2"] {
+                conn.execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES(?,'board','Question','','p1',0,0)", [card]).unwrap();
+            }
+            conn.execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p1','gathering','seed','c1',20,0,0)", []).unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn funded_question_pays_once_and_refunds_on_card_deletion() {
+        let db = funded_question_fixture();
+        assert_eq!(db.fund_question("bq1", "q1", "p1", 12, 1).unwrap(), None);
+        assert_eq!(
+            db.credit_totals("p1", 0).unwrap().paid - db.credit_totals("p1", 0).unwrap().spent,
+            8
+        );
+        assert!(db.fund_question("bq2", "q2", "p1", 9, 1).unwrap().is_some());
+        assert!(db.answer_question("self", "q1", "b1", "p1", "answer", 1).unwrap().is_some());
+        assert_eq!(db.answer_question("answer", "q1", "b2", "p2", "evidence", 1).unwrap(), None);
+        assert!(db.resolve_question("q1", "p2", Some("answer")).unwrap().is_some());
+        assert_eq!(db.resolve_question("q1", "p1", Some("answer")).unwrap(), None);
+        assert!(db.resolve_question("q1", "p1", Some("answer")).unwrap().is_some());
+        assert_eq!(db.credit_totals("p2", 0).unwrap().paid, 12);
+        db.conn().execute("DELETE FROM board_cards WHERE id='q1'", []).unwrap();
+        let answers: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM question_answers WHERE bounty_id='bq1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(answers, 0);
+        assert_eq!(db.credit_totals("p2", 0).unwrap().paid, 12);
+        assert_eq!(db.fund_question("bq2", "q2", "p1", 8, 1).unwrap(), None);
+        db.conn().execute("DELETE FROM boards WHERE id='board'", []).unwrap();
+        let totals = db.credit_totals("p1", 0).unwrap();
+        assert_eq!(totals.paid - totals.spent, 8);
+    }
+
+    #[test]
+    fn competing_funding_and_resolution_cannot_duplicate_credits() {
+        let db = std::sync::Arc::new(funded_question_fixture());
+        let a = db.clone();
+        let b = db.clone();
+        let x = std::thread::spawn(move || a.fund_question("a", "q1", "p1", 15, 1).unwrap());
+        let y = std::thread::spawn(move || b.fund_question("b", "q2", "p1", 15, 1).unwrap());
+        let results = [x.join().unwrap(), y.join().unwrap()];
+        assert_eq!(results.iter().filter(|r| r.is_none()).count(), 1);
+        let card = if db.question_bounty("q1").unwrap().is_some() { "q1" } else { "q2" };
+        db.answer_question("answer", card, "b2", "p2", "evidence", 1).unwrap();
+        let a = db.clone();
+        let b = db.clone();
+        let x = std::thread::spawn(move || a.resolve_question(card, "p1", Some("answer")).unwrap());
+        let y = std::thread::spawn(move || b.resolve_question(card, "p1", None).unwrap());
+        let results = [x.join().unwrap(), y.join().unwrap()];
+        assert_eq!(results.iter().filter(|r| r.is_none()).count(), 1);
+        let p1 = db.credit_totals("p1", 0).unwrap();
+        let p2 = db.credit_totals("p2", 0).unwrap();
+        assert_eq!(p1.paid - p1.spent + p2.paid - p2.spent, 20);
+    }
+
+    #[test]
+    fn a_pack_and_a_question_cannot_spend_the_same_credits() {
+        let db = std::sync::Arc::new(funded_question_fixture());
+        let a = db.clone();
+        let b = db.clone();
+        let x = std::thread::spawn(move || {
+            a.fund_question("reserve", "q1", "p1", 15, 1).unwrap().is_none()
+        });
+        let y = std::thread::spawn(move || {
+            matches!(b.spend_credits("p1", "test-pack", 15, None, 1).unwrap(), Spend::Spent { .. })
+        });
+        assert_ne!(x.join().unwrap(), y.join().unwrap());
+        let total = db.credit_totals("p1", 0).unwrap();
+        assert_eq!(total.paid - total.spent, 5);
+    }
+    #[test]
+    fn deleting_a_contributor_redacts_their_answer_without_paying_twice() {
+        let db = funded_question_fixture();
+        db.fund_question("bq", "q1", "p1", 10, 1).unwrap();
+        db.answer_question("answer", "q1", "b2", "p2", "private words", 1).unwrap();
+        db.resolve_question("q1", "p1", Some("answer")).unwrap();
+        db.delete_person("p2", "Bo").unwrap();
+        let bounty = db.question_bounty("q1").unwrap().unwrap();
+        assert_eq!(bounty["status"], "paid");
+        assert!(!bounty.to_string().contains("private words"));
+        assert!(!bounty.to_string().contains("p2"));
+        assert!(db.resolve_question("q1", "p1", Some("answer")).unwrap().is_some());
     }
 }

@@ -1793,26 +1793,13 @@ async fn spending_and_bot_limits_are_the_callers_own() {
     assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.body);
 }
 
-// HC8: the site shows your own credits in your account panel, read from your own endpoint, and
-// every field the card shows is one the endpoint returns.
 // HC23: the coin in the top bar is only ever the signed-in person's own balance, in both bars,
 // just before Needs you, and it opens the account panel.
 #[test]
 fn the_top_bar_shows_your_own_balance_as_a_coin() {
-    let app = include_str!("../web/app.js").replace(
-        "
-", "
-",
-    );
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
     let coin = app.split_once("function creditCoin(me, account) {").unwrap().1;
-    let coin = coin
-        .split_once(
-            "
-}
-",
-        )
-        .unwrap()
-        .0;
+    let coin = coin.split_once("\n}\n").unwrap().0;
     assert!(
         coin.contains("if (me?.kind !== 'person') return null;"),
         "the coin isn't only for a person"
@@ -1832,6 +1819,8 @@ fn the_top_bar_shows_your_own_balance_as_a_coin() {
     }
 }
 
+// HC8: the site shows your own credits in your account panel, read from your own endpoint, and
+// every field the card shows is one the endpoint returns.
 #[tokio::test]
 async fn the_account_panel_shows_your_own_credits() {
     let app = include_str!("../web/app.js").replace("\r\n", "\n");
@@ -1848,13 +1837,34 @@ async fn the_account_panel_shows_your_own_credits() {
     let card = card.split_once("\n}\n").unwrap().0;
     // A part the card leaves out is dropped, not written out as "null".
     assert!(card.contains("].filter(Boolean));"), "the card can show null");
-    // HC8, HC14 and HC17: the card only ever calls the caller's own credit endpoints, none of which
-    // takes anyone's id but one of the caller's own bots.
-    let calls: Vec<&str> =
-        card.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
+    // HC22: every kind of line the history can hold has its own words on the card.
+    for kind in ["question:", "question_refund:", "question_award:", "gathering:", "good_trip:"] {
+        assert!(card.contains(kind), "the history has no words for {kind}");
+    }
+    // HC8, HC14, HC17 and HC21: the card and its refund helper only call the owner's
+    // credit endpoints and cancellation for the owner's own reserved questions.
+    let escrow =
+        app.split_once("function questionEscrowRows(questions, error, afterCancel) {").unwrap().1;
+    let escrow = escrow.split_once("\n}\n").unwrap().0;
+    let calls: Vec<String> = card
+        .split("api(")
+        .skip(1)
+        .chain(escrow.split("api(").skip(1))
+        .map(|call| {
+            let quote = call.chars().next().unwrap();
+            assert!(quote == '\'' || quote == '`', "expected an explicit endpoint");
+            let path = call[1..].split(quote).next().unwrap();
+            format!("{quote}{path}{quote}")
+        })
+        .collect();
     assert_eq!(
         calls,
-        ["'/api/credits/spend'", "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`"],
+        [
+            "'/api/credits/spend'",
+            "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
+            "'/api/credits'",
+            "`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`",
+        ],
         "the card calls something other than its own credits"
     );
 
@@ -1873,6 +1883,7 @@ async fn the_account_panel_shows_your_own_credits() {
         "good_trips",
         "hosted_trips",
         "cities_not_earning",
+        "open_questions",
     ] {
         assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
         assert!(credits.get(field).is_some(), "/api/credits has no {field}");

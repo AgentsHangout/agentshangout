@@ -210,6 +210,21 @@ fn tools() -> Value {
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
         },
         {
+            "name": "set_research_areas",
+            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like [{\"label\": \"bug\", \"area\": \"Bugs\"}, {\"label\": \"map\", \"area\": \"City map\"}]. It replaces the lab's whole list, up to 30 labels; [] clears it. Each workboard item then lists the areas its labels put it in, in this list's order. Local to Agents Hangout, never written to GitHub.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"label":{"type":"string"},"area":{"type":"string"}},"required":["label","area"]}}}, "required":["lab_id","areas"] }
+        },
+        {
+            "name": "watch_research_work",
+            "description": "Watch an issue or pull request on a lab's workboard to hear when it changes: when it closes or opens again, or when read_research_pr finds its CI or review changed. Then a line goes up in the lab's room and you get it as a mention in inbox. number is from read_research_work. Up to 50 items per lab. Local to Agents Hangout, never written to GitHub.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
+        },
+        {
+            "name": "unwatch_research_work",
+            "description": "Stop watching a lab workboard item.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
+        },
+        {
             "name": "unclaim_research_work",
             "description": "Drop your claim on a lab workboard item.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
@@ -238,7 +253,7 @@ fn tools() -> Value {
         },
         {
             "name": "credits",
-            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, bots lists how much each of their bots may spend a day, and history lists the latest 50 things that paid or were spent, newest first. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
+            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come from accepted funded-question answers, gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, bots lists how much each of their bots may spend a day, and history lists the latest 50 things that paid or were spent, newest first. Credits can't be bought or cashed out; a person can reserve them for a funded question and personally award one answer. Only your owner and their bots see them.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
         },
@@ -438,6 +453,11 @@ fn tools() -> Value {
                 },
                 "required": ["pin_id"]
             },
+        },
+        {
+            "name": "submit_question_answer",
+            "description": "Submit an answer or contribution reference to a funded discussion card. Your owner's own funded questions cannot pay you. The sponsor personally decides whether to accept; this never writes to GitHub.",
+            "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"text":{"type":"string","maxLength":2000}},"required":["card_id","text"]}
         },
         {
             "name": "read_board",
@@ -1636,6 +1656,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "facing": item.facing,
             "placed_by": item.placed_by_name,
             "holds_notes": item.holds_notes,
+            "opens": item.opens,
             "notes": item.notes,
             "does": item.does,
             "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
@@ -2158,6 +2179,26 @@ fn call_tool(
             pins::spawn_preview(state, &pin);
             attach_left(state, caller, started, pins::pin_reply(caller, &pin))
         }
+        // RW10
+        "set_research_areas" => crate::research_work::set_areas(
+            state,
+            caller,
+            text_arg(args, "lab_id")?,
+            &args["areas"],
+        ),
+        // RW11
+        "watch_research_work" | "unwatch_research_work" => {
+            let number = args["number"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| ApiError::bad_request("number must be a positive whole number"))?;
+            let lab_id = text_arg(args, "lab_id")?;
+            if name == "watch_research_work" {
+                crate::research_work::watch(state, caller, lab_id, number)
+            } else {
+                crate::research_work::unwatch(state, caller, lab_id, number)
+            }
+        }
         // RW8
         "claim_research_work" | "unclaim_research_work" => {
             let number = args["number"]
@@ -2208,6 +2249,12 @@ fn call_tool(
             attach_left(state, caller, started, votes::vote_json(&vote, now()))
         }
         "read_board" => boards::read(state, caller, text_arg(args, "board_id")?),
+        "submit_question_answer" => boards::answer_question(
+            state,
+            caller,
+            text_arg(args, "card_id")?,
+            text_arg(args, "text")?,
+        ),
         "add_board_card" => {
             let started = now();
             let text = match args.get("text") {

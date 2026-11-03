@@ -61,6 +61,7 @@ const PAINTS = {
   haunted: { upper: '#2c2042', stripe: '#33264c', lower: '#20172f', panel: '#2b1a2e', webs: true },
   harvest: { upper: '#9a4a24', stripe: '#a65528', lower: '#4a2e1e', panel: '#3c2418', turned: true },
   frost: { upper: '#5f7f9e', stripe: '#6889a8', lower: '#3e5670', panel: '#344a61', snowy: true },
+  nebula: { upper: '#1e1a3c', stripe: '#221d43', lower: '#17132e', panel: '#1f1838', starry: true },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -71,6 +72,7 @@ const FLOORINGS = {
   crypt: { a: '#57545f', b: '#4e4b56', line: '#34323c', style: 'flagstones' },
   leaves: { a: '#5a3c26', b: '#533621', line: '#3f2a1a', style: 'leaves' },
   snow: { a: '#e8eef5', b: '#d6e0eb', line: '#b9c8d9', style: 'snow' },
+  starfield: { a: '#141832', b: '#191e3c', line: '#2a3160', style: 'starfield' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -378,6 +380,31 @@ function paintFlake(g, color, x, y, small) {
   r(g, shade(color, -0.18), x, y, 1, 1);
 }
 
+// A night sky on the upper wall: faint clouds of nebula, small stars that don't line up and a few
+// brighter ones with a glint either side. It's all kept dim, so whatever stands in front still reads.
+function paintNebula(g) {
+  const clouds = [
+    [150, 22, 64, 15, 'rgba(150,90,200,.10)'],
+    [214, 14, 40, 9, 'rgba(210,110,180,.08)'],
+    [300, 26, 56, 13, 'rgba(90,120,220,.10)'],
+    [474, 16, 34, 12, 'rgba(150,90,200,.08)'],
+    [6, 30, 30, 10, 'rgba(90,120,220,.08)'],
+  ];
+  for (const [cx, cy, hw, hh, color] of clouds) {
+    for (const k of [1, 0.66, 0.36]) paintLump(g, color, cx, cy, Math.round(hw * k), Math.round(hh * k));
+  }
+  for (let i = 0; i < 56; i++) {
+    const one = Math.imul(i + 5, 2654435761) >>> 0;
+    const two = Math.imul(i + 19, 2246822519) >>> 0;
+    r(g, i % 4 ? 'rgba(214,222,255,.45)' : 'rgba(255,246,216,.75)', (one >>> 8) % W, 2 + ((two >>> 8) % 41), 1, 1);
+  }
+  for (const [x, y] of [[22, 6], [128, 34], [178, 8], [262, 38], [322, 6], [458, 40]]) {
+    r(g, 'rgba(255,246,216,.4)', x - 1, y, 3, 1);
+    r(g, 'rgba(255,246,216,.4)', x, y - 1, 1, 3);
+    r(g, '#fff6d8', x, y, 1, 1);
+  }
+}
+
 // Cobwebs in the top corners, and bats asleep on the wall in the gaps either side of the whiteboard.
 function paintWebs(g) {
   const silk = 'rgba(226,222,240,.34)';
@@ -492,9 +519,43 @@ function paintSnowFloor(g, a, b, line) {
   }
 }
 
+// A floor of night sky: faint drifts of dust that don't line up, sparse tiny stars and here and
+// there a brighter one with a glint. Two small mixers place them, as with the snow.
+function paintStarfieldFloor(g, a, b, line) {
+  r(g, a, 0, WALL + 1, W, H - WALL - 1);
+  for (let i = 0; i < 40; i++) {
+    const one = Math.imul(i + 7, 2654435761) >>> 0;
+    const two = Math.imul(i + 23, 2246822519) >>> 0;
+    const x = (one >>> 8) % W;
+    const y = WALL + 6 + ((two >>> 8) % (H - WALL - 10));
+    const len = 10 + ((one >>> 4) % 22);
+    r(g, b, x, y, len, 1);
+    r(g, b, x + 3, y + 1, Math.max(1, len - 7), 1);
+  }
+  r(g, line, 0, WALL + 1, W, 1);
+  for (let i = 0; i < 90; i++) {
+    const one = Math.imul(i + 13, 2654435761) >>> 0;
+    const two = Math.imul(i + 31, 2246822519) >>> 0;
+    r(g, i % 3 ? '#3e4782' : '#8a94c8', (one >>> 8) % W, WALL + 4 + ((two >>> 8) % (H - WALL - 6)), 1, 1);
+  }
+  for (let i = 0; i < 9; i++) {
+    const one = Math.imul(i + 41, 2654435761) >>> 0;
+    const two = Math.imul(i + 53, 2246822519) >>> 0;
+    const x = 2 + ((one >>> 8) % (W - 4));
+    const y = WALL + 6 + ((two >>> 8) % (H - WALL - 10));
+    r(g, line, x - 1, y, 3, 1);
+    r(g, line, x, y - 1, 1, 3);
+    r(g, '#d6deff', x, y, 1, 1);
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
   if (style === 'snow') {
     paintSnowFloor(g, a, b, line);
+    return;
+  }
+  if (style === 'starfield') {
+    paintStarfieldFloor(g, a, b, line);
     return;
   }
   if (style === 'flagstones') {
@@ -565,6 +626,7 @@ const RUGS = {
   haunted: ['#3b2a4a', '#9be36a', '#4a3560'],
   harvest: ['#7a4a1e', '#f2c45a', '#8f5a26'],
   frost: ['#8c2a2e', '#f4f1e8', '#a8343a'],
+  nebula: ['#2a2f6b', '#d9b25a', '#343a80'],
 };
 
 // Under the table.
@@ -622,6 +684,7 @@ function paintRoom(g, hour, look) {
     for (let x = 6; x < W; x += 24) r(g, paint.panel, x, 48, 18, 14);
     r(g, '#c9a86a', 0, 45, W, 1);
     r(g, '#1b2236', 0, 64, W, 3);
+    if (paint.starry) paintNebula(g);
 
     paintWindow(g, 36, 10, 72, 32, sky, paint.turned, paint.snowy);
     paintWindow(g, 372, 10, 72, 32, sky, paint.turned, paint.snowy);
@@ -928,6 +991,84 @@ function paintWhiteboard(g, x, y) {
   r(g, '#f4f1e8', x + 10, y - 27, 12, 8);
   r(g, '#ffb454', x + 12, y - 25, 5, 1);
   r(g, '#ffb454', x + 12, y - 22, 8, 1);
+}
+
+// A small freestanding board that opens the room's discussion, jobs and issues boards.
+function paintBoardStation(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#4a3120', x - 12, y - 31, 24, 23);
+  r(g, '#c9a86a', x - 11, y - 30, 22, 21);
+  r(g, '#f4f1e8', x - 9, y - 28, 18, 17);
+  r(g, '#4f9dff', x - 7, y - 26, 11, 1);
+  r(g, '#4f9dff', x - 7, y - 23, 14, 1);
+  r(g, '#ffb454', x - 7, y - 19, 8, 1);
+  r(g, '#ffb454', x - 7, y - 16, 11, 1);
+  r(g, '#3ddc97', x + 5, y - 27, 2, 2);
+  r(g, '#3ddc97', x + 7, y - 24, 2, 2);
+}
+
+// A little rack of labeled papers, an entry point to notes shared across the room.
+function paintSharedNotesStation(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, '#6b4628', x - 6, y - 8, 12, 6);
+  r(g, '#8a5c37', x - 7, y - 9, 14, 2);
+  r(g, '#f4f1e8', x - 5, y - 17, 5, 8);
+  r(g, '#fff8dc', x - 1, y - 19, 6, 10);
+  r(g, '#4f9dff', x - 4, y - 15, 3, 1);
+  r(g, '#4f9dff', x - 4, y - 12, 3, 1);
+  r(g, '#ff6f8c', x, y - 16, 4, 1);
+  r(g, '#ff6f8c', x, y - 13, 3, 1);
+  r(g, '#d6453f', x - 3, y - 18, 1, 2);
+}
+
+// A desktop flip calendar, with a marked day and a foot that reads clearly at room scale.
+function paintCalendarStand(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 9, y - 5, 18, 4);
+  r(g, '#8a5c37', x - 10, y - 7, 20, 2);
+  r(g, '#f4f1e8', x - 9, y - 24, 18, 17);
+  r(g, '#c8342c', x - 9, y - 24, 18, 5);
+  r(g, '#f4f1e8', x - 6, y - 26, 2, 4);
+  r(g, '#f4f1e8', x + 4, y - 26, 2, 4);
+  for (let row = 0; row < 3; row++) for (let col = 0; col < 4; col++) {
+    r(g, row === 1 && col === 2 ? '#ff6f8c' : '#65708a', x - 6 + col * 3, y - 17 + row * 3, 1, 1);
+  }
+}
+
+// A corkboard covered in colorful pins; the Pins panel keeps the actual links and notes.
+function paintCorkboard(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#4a3120', x - 12, y - 31, 24, 23);
+  r(g, '#b9784f', x - 10, y - 29, 20, 19);
+  r(g, '#d89a6c', x - 9, y - 28, 18, 17);
+  r(g, '#f4f1e8', x - 7, y - 26, 6, 5);
+  r(g, '#cce8f4', x + 1, y - 26, 6, 5);
+  r(g, '#fff1a8', x - 5, y - 19, 7, 6);
+  r(g, '#f6d3de', x + 3, y - 19, 5, 6);
+  for (const [dx, dy, color] of [[-5, -26, '#c8342c'], [3, -26, '#3f8fc4'], [-2, -19, '#3ddc97'], [5, -19, '#d6453f']]) {
+    r(g, color, x + dx, y + dy, 1, 1);
+  }
+}
+
+// The research board is a physical summary of the lab's linked GitHub work, never a second data store.
+function paintResearchBoard(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#27354c', x - 12, y - 31, 24, 23);
+  r(g, '#16243a', x - 10, y - 29, 20, 19);
+  r(g, '#4f9dff', x - 8, y - 27, 11, 2);
+  r(g, '#3ddc97', x + 6, y - 27, 2, 2);
+  r(g, '#8e9bb2', x - 8, y - 22, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 22, 10, 2);
+  r(g, '#8e9bb2', x - 8, y - 18, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 18, 10, 2);
+  r(g, '#8e9bb2', x - 8, y - 14, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 14, 10, 2);
 }
 
 function paintEasel(g, x, y) {
@@ -3626,6 +3767,312 @@ function paintLogPileEnd(g, x, y) {
   r(g, WINTER_SNOW[1], x - 3, y - 19, 4, 1);
 }
 
+// The Stargazer pack, for nights looking up. Planets go round, lights glow and twinkle and the
+// mobile sways with `t`, and for someone who asked for less motion everything holds a still pose.
+
+const STAR_BRASS = ['#7a5a22', '#b08a3a', '#e3c46a'];
+const STAR_NIGHT = ['#141a3a', '#243066', '#3a4a8c'];
+const STAR_LIGHT = ['#fff6d8', '#9bd0ff', '#ff9ad5'];
+
+// A little round planet four pixels across, lit from the upper left.
+function starPlanet(g, color, cx, cy) {
+  const dark = shade(color, -0.3);
+  r(g, dark, cx - 2, cy - 1, 4, 2);
+  r(g, dark, cx - 1, cy - 2, 2, 4);
+  r(g, color, cx - 1, cy - 2, 2, 1);
+  r(g, color, cx - 2, cy - 1, 3, 1);
+  r(g, color, cx - 2, cy, 1, 1);
+  r(g, shade(color, 0.35), cx - 1, cy - 1, 1, 1);
+}
+
+// A brass orrery on a wooden foot: the sun on a column, two rings round it seen a little from above,
+// and a planet on each that goes round with `t`.
+function paintOrrery(g, x, y, t) {
+  const [dark, brass, shine] = STAR_BRASS;
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  r(g, FALL_WOOD[1], x - 6, y - 4, 12, 3);
+  r(g, FALL_WOOD[2], x - 6, y - 4, 12, 1);
+  r(g, FALL_WOOD[0], x - 5, y - 1, 10, 1);
+  r(g, brass, x - 3, y - 6, 6, 2);
+  r(g, shine, x - 3, y - 6, 2, 1);
+  r(g, dark, x - 1, y - 18, 2, 12);
+  r(g, shine, x - 1, y - 18, 1, 12);
+  const sun = y - 22;
+  const rings = [[9, 3, 0.0004, '#5d8fd0'], [6, 2, 0.0007, '#d4502a']];
+  // Each ring and its planet, the far half before the sun and the near half after it.
+  const half = (near) => {
+    for (const [rx, ry, speed, color] of rings) {
+      for (let a = 0; a < 48; a++) {
+        const angle = (a / 48) * Math.PI * 2;
+        if (Math.sin(angle) > 0 !== near) continue;
+        r(g, a % 3 ? brass : dark, x + Math.round(Math.cos(angle) * rx), sun + Math.round(Math.sin(angle) * ry), 1, 1);
+      }
+      const at = t * speed + rx;
+      if (Math.sin(at) > 0 !== near) continue;
+      const px = x + Math.round(Math.cos(at) * rx);
+      const py = sun + Math.round(Math.sin(at) * ry);
+      r(g, shade(color, -0.3), px - 1, py - 2, 2, 2);
+      r(g, color, px - 1, py - 2, 1, 1);
+    }
+  };
+  half(false);
+  r(g, 'rgba(255,210,77,.18)', x - 5, sun - 4, 10, 9);
+  feastBall(g, '#ffb454', x, sun, 3, 3);
+  r(g, '#fff0b8', x - 2, sun - 2, 1, 1);
+  half(true);
+}
+
+// A celestial globe, dark blue with gold stars that turn with `t`, a brass horizon ring across it
+// and a meridian half round it, on a wooden stand with two legs.
+function paintStarGlobe(g, x, y, t) {
+  const [dark, brass, shine] = STAR_BRASS;
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, FALL_WOOD[1], x - 6, y - 6, 2, 5);
+  r(g, FALL_WOOD[1], x + 4, y - 6, 2, 5);
+  r(g, FALL_WOOD[0], x - 1, y - 6, 2, 5);
+  r(g, FALL_WOOD[2], x - 7, y - 8, 14, 2);
+  r(g, FALL_WOOD[3], x - 7, y - 8, 14, 1);
+  r(g, FALL_WOOD[1], x - 1, y - 11, 2, 3);
+  const cy = y - 18;
+  feastBall(g, STAR_NIGHT[1], x, cy, 6, 6);
+  const turn = t ? Math.floor(t / 700) : 0;
+  const stars = [[-4, -3], [-1, -1], [2, -4], [3, 2], [-3, 3], [0, 4], [5, 0], [-5, 0], [1, 1]];
+  for (const [i, [dx, dy]] of stars.entries()) {
+    const across = Math.round(6 * Math.sqrt(1 - (dy / 6.5) ** 2)) - 1;
+    const span = across * 2 + 1;
+    const sx = ((((dx + across + turn) % span) + span) % span) - across;
+    r(g, i % 3 ? shine : '#fff6d8', x + sx, cy + dy, 1, 1);
+  }
+  for (let a = 0; a <= 20; a++) {
+    const angle = Math.PI / 2 + (a / 20) * Math.PI;
+    r(g, a % 4 ? brass : dark, x + Math.round(Math.cos(angle) * 8), cy + Math.round(Math.sin(angle) * 8), 1, 1);
+  }
+  r(g, brass, x - 8, cy, 17, 1);
+  r(g, dark, x - 8, cy + 1, 17, 1);
+  r(g, shine, x - 8, cy, 3, 1);
+  r(g, shine, x - 1, cy - 9, 2, 1);
+}
+
+// A red and white model rocket standing on its fins on a small launch base, with a porthole.
+function paintRocketModel(g, x, y) {
+  const [dark, red, bright] = WINTER_RED;
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, WINTER_IRON[1], x - 6, y - 4, 12, 3);
+  r(g, WINTER_IRON[2], x - 6, y - 4, 12, 1);
+  r(g, WINTER_IRON[0], x - 1, y - 7, 2, 3);
+  r(g, '#7c8699', x - 2, y - 9, 4, 2);
+  // The body, white and lit from the left.
+  r(g, '#c9d3df', x - 3, y - 26, 6, 17);
+  r(g, '#eef1f6', x - 3, y - 26, 4, 17);
+  r(g, '#ffffff', x - 2, y - 26, 1, 17);
+  r(g, red, x - 3, y - 11, 6, 1);
+  r(g, red, x - 3, y - 25, 6, 1);
+  r(g, '#3b4158', x - 1, y - 22, 3, 3);
+  r(g, '#3a4a8c', x - 1, y - 21, 2, 2);
+  r(g, '#9bd0ff', x - 1, y - 21, 1, 1);
+  // The nose cone.
+  for (let row = 0; row < 6; row++) {
+    const half = Math.ceil((row + 1) / 2);
+    r(g, red, x - half, y - 32 + row, half * 2, 1);
+    r(g, dark, x + half - 1, y - 32 + row, 1, 1);
+    if (half > 1) r(g, bright, x - half + 1, y - 32 + row, 1, 1);
+  }
+  // Fins either side and one coming at you.
+  r(g, red, x - 5, y - 14, 2, 5);
+  r(g, red, x - 6, y - 11, 1, 3);
+  r(g, bright, x - 5, y - 14, 1, 2);
+  r(g, dark, x + 3, y - 14, 2, 5);
+  r(g, dark, x + 5, y - 11, 1, 3);
+  r(g, red, x, y - 14, 1, 6);
+  r(g, bright, x, y - 14, 1, 2);
+}
+
+// A brass stand with a crossbar and a few planets hanging from it on threads, one of them ringed.
+// They sway a little with `t`. It's the same from its end, as with the string of lights.
+function paintPlanetMobile(g, x, y, t, wide) {
+  const half = Math.max(10, wide / 2 - 2);
+  const [dark, brass, shine] = STAR_BRASS;
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, WINTER_IRON[1], x - 5, y - 4, 10, 3);
+  r(g, WINTER_IRON[2], x - 5, y - 4, 10, 1);
+  r(g, dark, x - 1, y - 36, 2, 32);
+  r(g, shine, x - 1, y - 36, 1, 32);
+  r(g, brass, x - half, y - 36, half * 2, 1);
+  r(g, dark, x - half, y - 35, half * 2, 1);
+  r(g, shine, x - half - 1, y - 37, 2, 2);
+  r(g, shine, x + half - 1, y - 37, 2, 2);
+  r(g, '#ffd24d', x - 1, y - 39, 2, 2);
+  r(g, '#fff0b8', x - 1, y - 39, 1, 1);
+  // Each is how far along the bar, how far it hangs, how big, its color and whether it's ringed.
+  const planets = [[-0.95, 9, 2, '#d4502a', false], [-0.55, 15, 3, '#5d8fd0', false], [0.65, 9, 3, '#e3c46a', true], [0.95, 19, 2, '#7ee0c0', false]];
+  planets.forEach(([along, drop, size, color, ringed], i) => {
+    const px = Math.round(x + along * half);
+    const cy = y - 35 + drop + size;
+    const bx = px + (t ? Math.round(Math.sin(t / 900 + i * 1.7)) : 0);
+    r(g, '#aeb9c9', px, y - 34, 1, drop - 1);
+    if (ringed) r(g, shade('#e8dfb8', -0.35), bx - 4, cy - 1, 9, 1);
+    if (size > 2) feastBall(g, color, bx, cy, size, size);
+    else starPlanet(g, color, bx, cy);
+    if (ringed) {
+      r(g, '#e8dfb8', bx - 5, cy + 1, 11, 1);
+      r(g, '#e8dfb8', bx - 5, cy, 1, 1);
+      r(g, '#e8dfb8', bx + 5, cy, 1, 1);
+    }
+  });
+}
+
+// A round moon on a little wooden stand, its craters picked out and its glow breathing with `t`.
+function paintMoonLamp(g, x, y, t) {
+  const glow = t ? 0.1 + 0.04 * Math.sin(t / 900) : 0.12;
+  const cy = y - 15;
+  r(g, `rgba(255,240,184,${glow.toFixed(2)})`, x - 10, y - 3, 20, 2);
+  paintLump(g, `rgba(255,240,184,${(glow * 0.7).toFixed(2)})`, x, cy, 10, 10);
+  paintLump(g, `rgba(255,240,184,${glow.toFixed(2)})`, x, cy, 8, 8);
+  r(g, SHADOW, x - 6, y - 2, 12, 2);
+  r(g, FALL_WOOD[1], x - 5, y - 4, 10, 3);
+  r(g, FALL_WOOD[2], x - 5, y - 4, 10, 1);
+  r(g, FALL_WOOD[0], x - 4, y - 1, 8, 1);
+  r(g, STAR_BRASS[1], x - 1, y - 9, 2, 5);
+  r(g, STAR_BRASS[2], x - 1, y - 9, 1, 5);
+  feastBall(g, '#e8dfb8', x, cy, 6, 6);
+  r(g, '#c9bf94', x + 1, cy - 2, 2, 2);
+  r(g, '#c9bf94', x - 3, cy + 1, 2, 1);
+  r(g, '#d6cca4', x + 2, cy + 2, 1, 1);
+  r(g, '#d6cca4', x - 1, cy + 3, 2, 1);
+  r(g, '#fffbe8', x - 3, cy - 3, 2, 1);
+}
+
+// A star map in a wooden frame on an easel: two constellations joined up, a dotted grid, and the
+// easel's legs splayed below the ledge it sits on.
+function paintStarChart(g, x, y) {
+  const [deep, mid, light] = STAR_NIGHT;
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, FALL_WOOD[0], x - 1, y - 30, 2, 26);
+  for (let k = 0; k < 32; k++) {
+    const out = Math.round((k * 6) / 31);
+    r(g, FALL_WOOD[1], x - 4 - out, y - 33 + k, 2, 1);
+    r(g, FALL_WOOD[2], x + 2 + out, y - 33 + k, 2, 1);
+  }
+  r(g, FALL_WOOD[2], x - 2, y - 35, 4, 2);
+  // The frame and the chart.
+  r(g, FALL_WOOD[2], x - 11, y - 31, 22, 17);
+  r(g, FALL_WOOD[3], x - 11, y - 31, 22, 1);
+  r(g, FALL_WOOD[1], x - 11, y - 15, 22, 1);
+  r(g, STAR_BRASS[1], x - 10, y - 30, 20, 15);
+  r(g, deep, x - 9, y - 29, 18, 13);
+  for (let i = 0; i < 18; i += 2) r(g, mid, x - 9 + i, y - 23, 1, 1);
+  for (let i = 0; i < 13; i += 2) r(g, mid, x, y - 29 + i, 1, 1);
+  const join = (points) => {
+    for (let p = 1; p < points.length; p++) {
+      const [x0, y0] = points[p - 1];
+      const [x1, y1] = points[p];
+      const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      for (let i = 0; i <= n; i++) r(g, light, x + Math.round(x0 + ((x1 - x0) * i) / n), y + Math.round(y0 + ((y1 - y0) * i) / n), 1, 1);
+    }
+    for (const [dx, dy] of points) r(g, STAR_BRASS[2], x + dx, y + dy, 1, 1);
+  };
+  join([[-7, -27], [-4, -25], [-1, -26], [2, -24], [3, -21], [7, -20], [7, -24]]);
+  join([[-7, -19], [-5, -21], [-2, -18]]);
+  for (const [dx, dy] of [[5, -28], [-3, -22], [1, -18], [-8, -23]]) r(g, '#fff6d8', x + dx, y + dy, 1, 1);
+  // The ledge.
+  r(g, FALL_WOOD[2], x - 12, y - 14, 24, 2);
+  r(g, FALL_WOOD[3], x - 12, y - 14, 24, 1);
+  r(g, FALL_WOOD[0], x - 12, y - 12, 24, 1);
+}
+
+// A white astronaut helmet resting on its neck ring on a low stand, its gold visor down with a shine
+// across it, a lamp on top and a patch on the side.
+function paintSpaceHelmet(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, WINTER_IRON[1], x - 7, y - 4, 14, 3);
+  r(g, WINTER_IRON[2], x - 7, y - 4, 14, 1);
+  feastBall(g, '#e8ecf4', x, y - 14, 7, 7);
+  r(g, '#7c8699', x - 6, y - 7, 12, 3);
+  r(g, '#9aa3b8', x - 6, y - 7, 12, 1);
+  r(g, '#5d667a', x + 3, y - 6, 3, 2);
+  // The visor, dark at its rim and gold where it catches the light.
+  paintLump(g, '#c9d3df', x + 1, y - 13, 6, 5);
+  paintLump(g, '#3a2c14', x + 1, y - 13, 5, 4);
+  paintLump(g, '#8a6a2a', x + 1, y - 14, 4, 3);
+  paintLump(g, STAR_BRASS[1], x, y - 15, 2, 1);
+  r(g, 'rgba(255,255,255,.6)', x - 2, y - 16, 2, 1);
+  r(g, 'rgba(255,255,255,.6)', x - 3, y - 15, 1, 1);
+  r(g, '#9aa3b8', x - 2, y - 22, 4, 1);
+  r(g, '#fff0b8', x - 1, y - 22, 2, 1);
+  r(g, WINTER_RED[1], x - 6, y - 13, 1, 2);
+  r(g, '#5d8fd0', x - 6, y - 11, 1, 1);
+}
+
+// A dark pitted rock on a stone plinth, a glint of iron in it and a brass plate on the front.
+function paintMeteorite(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#3b4158', x - 6, y - 8, 12, 6);
+  r(g, '#4a5066', x - 6, y - 8, 10, 6);
+  r(g, '#6d7890', x - 7, y - 9, 14, 1);
+  r(g, '#2b3045', x - 7, y - 3, 14, 1);
+  r(g, STAR_BRASS[1], x - 2, y - 6, 4, 2);
+  r(g, STAR_BRASS[2], x - 2, y - 6, 4, 1);
+  paintLump(g, '#1f1d24', x, y - 13, 6, 4, 3);
+  paintLump(g, '#34313a', x - 1, y - 14, 5, 3, 2);
+  paintLump(g, '#4a4650', x - 2, y - 15, 2, 1);
+  for (const [dx, dy] of [[2, -13], [-3, -12], [0, -15], [3, -11], [-1, -11]]) {
+    r(g, '#141218', x + dx, y + dy, 1, 1);
+    r(g, '#5a5660', x + dx - 1, y + dy - 1, 1, 1);
+  }
+  r(g, '#c9d3df', x + 4, y - 14, 1, 1);
+}
+
+// A small dome projector on a round foot, its pierced dome lit from inside, casting a few dots of
+// light above it. They twinkle with `t`, and every one is lit for someone who asked for less motion.
+function paintStarProjector(g, x, y, t) {
+  const [deep, mid, light] = STAR_NIGHT;
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, WINTER_IRON[0], x - 6, y - 4, 12, 3);
+  r(g, WINTER_IRON[2], x - 6, y - 4, 12, 1);
+  r(g, WINTER_IRON[1], x - 5, y - 6, 10, 2);
+  paintLump(g, deep, x, y - 7, 6, 6, 0);
+  paintLump(g, mid, x - 1, y - 8, 4, 4, 0);
+  r(g, light, x - 3, y - 11, 2, 1);
+  for (const [dx, dy] of [[-3, -9], [0, -11], [3, -9], [1, -8], [-1, -12], [4, -7]]) r(g, '#ffe9a8', x + dx, y + dy, 1, 1);
+  const dots = [[-9, -19], [-4, -24], [3, -22], [8, -18], [-11, -13], [0, -28], [6, -27], [10, -24]];
+  dots.forEach(([dx, dy], i) => {
+    const color = STAR_LIGHT[i % STAR_LIGHT.length];
+    const dim = t && (Math.floor(t / 600) + i) % 3 === 0;
+    r(g, dim ? shade(color, -0.55) : color, x + dx, y + dy, 1, 1);
+    if (!dim && i % 3 === 1) r(g, `${color}66`, x + dx + 1, y + dy, 1, 1);
+  });
+}
+
+// A dark blue rug with a gold edge, a scatter of stars and a comet streaking across it, its tail
+// fading as it goes. Flat, as with the other rugs: `x` is its middle and `y` its front edge.
+function paintCometRug(g, x, y, t, wide, deep) {
+  const left = Math.round(x - wide / 2) + 1;
+  const top = y - deep + 1;
+  const w = wide - 2;
+  const h = deep - 2;
+  r(g, STAR_BRASS[1], left, top, w, h);
+  r(g, STAR_NIGHT[0], left + 2, top + 2, w - 4, h - 4);
+  r(g, STAR_NIGHT[1], left + 4, top + 4, w - 8, 1);
+  r(g, STAR_NIGHT[1], left + 4, top + h - 5, w - 8, 1);
+  r(g, STAR_NIGHT[1], left + 4, top + 4, 1, h - 8);
+  r(g, STAR_NIGHT[1], left + w - 5, top + 4, 1, h - 8);
+  for (let i = 0; i < (w * h) / 40; i++) {
+    r(g, i % 3 ? '#8a94c8' : '#fff6d8', left + 6 + ((i * 37) % Math.max(1, w - 12)), top + 6 + ((i * 23) % Math.max(1, h - 12)), 1, 1);
+  }
+  const hx = left + Math.round(w * 0.74);
+  const hy = top + Math.round(h * 0.36);
+  const len = Math.round(w * 0.56);
+  const tail = ['#fff6d8', '#9bd0ff', '#5d8fd0', STAR_NIGHT[2]];
+  for (let k = len; k > 0; k--) {
+    const thick = k < len * 0.25 ? 3 : k < len * 0.6 ? 2 : 1;
+    const ty = hy + Math.round((k * h * 0.3) / len);
+    r(g, tail[Math.min(3, Math.floor((k / len) * 4))], hx - k, ty - Math.floor(thick / 2), 1, thick);
+  }
+  r(g, 'rgba(255,246,216,.35)', hx - 2, hy - 2, 5, 5);
+  r(g, '#fff6d8', hx - 1, hy - 1, 3, 3);
+  r(g, '#ffffff', hx, hy, 1, 1);
+}
+
 // These are listed words on the server. A word this page doesn't know is left out, so a newer
 // server can't break an older page. `rise` is how far up from its front edge it's painted, and a
 // `sign` changes what bots can do, so it's painted over everything else.
@@ -3706,6 +4153,11 @@ const ITEMS = {
     rise: 26,
   },
   whiteboard: { paint: paintWhiteboard, side: edgeOf(30, '#f4f1e8', '#20283e'), rise: 32 },
+  board_station: { paint: paintBoardStation, side: edgeOf(25, '#c9a86a', '#4a3120'), rise: 31 },
+  shared_notes_station: { paint: paintSharedNotesStation, side: edgeOf(16, '#fff8dc', '#6b4628'), rise: 19 },
+  calendar_stand: { paint: paintCalendarStand, side: edgeOf(17, '#f4f1e8', '#6b4628'), rise: 26 },
+  corkboard: { paint: paintCorkboard, side: edgeOf(25, '#d89a6c', '#4a3120'), rise: 31 },
+  research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },
   armchair: {
@@ -3889,6 +4341,16 @@ const ITEMS = {
   knit_blanket: { paint: paintKnitBlanket, rise: 21 },
   wood_stove: { paint: paintWoodStove, side: paintWoodStoveEnd, rise: 47 },
   log_pile: { paint: paintLogPile, side: paintLogPileEnd, rise: 23 },
+  orrery: { paint: paintOrrery, rise: 26 },
+  star_globe: { paint: paintStarGlobe, rise: 27 },
+  rocket_model: { paint: paintRocketModel, rise: 32 },
+  planet_mobile: { paint: paintPlanetMobile, side: paintPlanetMobile, rise: 39 },
+  moon_lamp: { paint: paintMoonLamp, rise: 25 },
+  star_chart: { paint: paintStarChart, side: edgeOf(33, '#a0703f', '#6b4628'), rise: 35 },
+  space_helmet: { paint: paintSpaceHelmet, rise: 22 },
+  meteorite: { paint: paintMeteorite, rise: 17 },
+  star_projector: { paint: paintStarProjector, rise: 28 },
+  comet_rug: { paint: paintCometRug, rise: 0, flat: true },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.
@@ -3930,6 +4392,11 @@ const USES = {
   microscope: { spots: 1, pose: 'stand', hands: true },
   fume_hood: { spots: 1, pose: 'stand', hands: true },
   centrifuge: { spots: 1, pose: 'stand', hands: true },
+  board_station: { spots: 1, pose: 'stand', hands: true },
+  shared_notes_station: { spots: 1, pose: 'stand', hands: true },
+  calendar_stand: { spots: 1, pose: 'stand', hands: true },
+  corkboard: { spots: 1, pose: 'stand', hands: true },
+  research_board: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },

@@ -16,6 +16,9 @@ pub struct Card {
     pub kind: String,
     pub state: String,
     pub source: String,
+    /// RW10: GitHub's label names. A snapshot from before labels were read has none.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 /// RW8: someone saying they're working on an item. A local fact, never written to GitHub.
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +32,22 @@ pub struct Claim {
     pub since: i64,
     pub until: i64,
 }
+/// RW11: someone watching an item to hear when it changes. A local fact, never written to GitHub.
+#[derive(Clone, Debug, Serialize)]
+pub struct Watcher {
+    pub number: u64,
+    #[serde(skip)]
+    pub watcher: String,
+    #[serde(skip)]
+    pub person_id: String,
+    #[serde(skip)]
+    pub agent_id: Option<String>,
+    pub is_bot: bool,
+    pub name: String,
+    pub since: i64,
+}
+/// RW11: how many items one person or bot may watch in a lab.
+pub const MAX_WATCHES: i64 = 50;
 /// RW9: a pull request's CI and review state. `unknown` until GitHub has said otherwise.
 #[derive(Clone, Debug, Serialize)]
 pub struct PrState {
@@ -93,6 +112,65 @@ pub fn review_of(reviews: &Value) -> Option<&'static str> {
     } else {
         "none"
     })
+}
+/// RW10: how many labels a card keeps, how long each may be, and how many a lab may name.
+const MAX_LABELS: usize = 10;
+const LABEL_CHARS: usize = 50;
+pub const MAX_AREAS: usize = 30;
+const AREA_CHARS: usize = 40;
+/// RW10: the areas a card's labels put it in, each once, in the order the owner named them.
+fn areas_of(card: &Card, areas: &[(String, String)]) -> Vec<String> {
+    let mut found: Vec<String> = vec![];
+    for (label, area) in areas {
+        if card.labels.iter().any(|l| l.to_lowercase() == label.to_lowercase())
+            && !found.contains(area)
+        {
+            found.push(area.clone());
+        }
+    }
+    found
+}
+/// RW10: the lab owner, or their bot, names areas for GitHub labels. The whole map is replaced.
+pub fn set_areas(state: &AppState, caller: &Caller, id: &str, areas: &Value) -> ApiResult<Value> {
+    crate::ops::no_house_bot(caller)?;
+    let lab = lab(state, caller, id)?;
+    if lab.owner_id != caller.person_id {
+        return Err(ApiError::forbidden("only the lab owner or their bot names its areas"));
+    }
+    // A list, not an object: the owner's order decides the order of an item's areas.
+    let bad = || ApiError::bad_request("areas must be a list of { label, area }");
+    let given = areas.as_array().ok_or_else(bad)?;
+    if given.len() > MAX_AREAS {
+        return Err(ApiError::bad_request(format!("name at most {MAX_AREAS} labels")));
+    }
+    let mut pairs: Vec<(String, String)> = vec![];
+    for pair in given {
+        let label = pair["label"].as_str().ok_or_else(bad)?.trim();
+        let area = pair["area"].as_str().ok_or_else(bad)?.trim();
+        let fits = |text: &str, most: usize| {
+            !text.is_empty() && text.chars().count() <= most && !text.chars().any(char::is_control)
+        };
+        if !fits(label, LABEL_CHARS) {
+            return Err(ApiError::bad_request(format!("a label is 1 to {LABEL_CHARS} characters")));
+        }
+        if !fits(area, AREA_CHARS) {
+            return Err(ApiError::bad_request(format!(
+                "an area name is 1 to {AREA_CHARS} characters"
+            )));
+        }
+        if pairs.iter().any(|(l, _)| l.to_lowercase() == label.to_lowercase()) {
+            return Err(ApiError::bad_request(format!("{label} is named twice")));
+        }
+        pairs.push((label.to_string(), area.to_string()));
+    }
+    state.db.set_research_work_areas(id, &pairs)?;
+    Ok(json!({ "ok": true, "areas": area_map(&pairs) }))
+}
+fn area_map(areas: &[(String, String)]) -> Value {
+    json!(areas
+        .iter()
+        .map(|(label, area)| json!({ "label": label, "area": area }))
+        .collect::<Vec<_>>())
 }
 /// RW8: how long a claim lasts unless it's renewed.
 pub const CLAIM_SECS: i64 = 4 * 60 * 60;
@@ -170,6 +248,19 @@ pub fn cards(repo: &str, items: &Value) -> Option<Vec<Card>> {
         }
         let kind = if item.get("pull_request").is_some() { "pull_request" } else { "issue" };
         let title: String = item["title"].as_str()?.chars().take(300).collect();
+        // RW10: names only, as GitHub gives them; anything else about a label is left behind.
+        let labels = item["labels"]
+            .as_array()
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(|label| label["name"].as_str())
+                    .filter(|name| !name.is_empty())
+                    .take(MAX_LABELS)
+                    .map(|name| name.chars().take(LABEL_CHARS).collect())
+                    .collect()
+            })
+            .unwrap_or_default();
         result.insert(
             number,
             Card {
@@ -181,6 +272,7 @@ pub fn cards(repo: &str, items: &Value) -> Option<Vec<Card>> {
                     "https://github.com/{repo}/{}/{number}",
                     if kind == "issue" { "issues" } else { "pull" }
                 ),
+                labels,
             },
         );
     }
@@ -240,6 +332,16 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
                 None
             };
             state.db.finish_research_work_refresh(&repo, items.as_deref(), at)?;
+            // RW11: an item that closed or opened again since the last good read.
+            if let (Some(old), Some(new)) = (snapshot.as_ref(), items.as_ref()) {
+                for card in new {
+                    let was = old.cards.iter().find(|c| c.number == card.number);
+                    if was.is_some_and(|was| was.state != card.state) {
+                        let what = format!("is now {}", card.state);
+                        tell_watchers(state, id, card, &what)?;
+                    }
+                }
+            }
         }
         snapshot = state.db.research_work_snapshot(&repo)?;
     }
@@ -267,11 +369,19 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     };
     // RW8: claims are for the room's members; a guest sees the items but not who has them.
     let claims = if since.is_none() { state.db.research_work_claims(id, at)? } else { vec![] };
+    let areas = state.db.research_work_areas(id)?;
+    // RW11: like claims, watchers are for the room's members.
+    let watches = if since.is_none() { state.db.research_work_watches(id)? } else { vec![] };
     let items: Vec<Value> = s
         .cards
         .iter()
         .map(|card| {
             let mut item = json!(card);
+            item["areas"] = json!(areas_of(card, &areas));
+            let watching: Vec<&Watcher> =
+                watches.iter().filter(|w| w.number == card.number).collect();
+            item["you_watch"] = json!(watching.iter().any(|w| w.watcher == claimer(caller)));
+            item["watchers"] = json!(watching);
             item["claims"] =
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
             // RW9: only what was already read; reading the board never asks GitHub about a PR.
@@ -292,7 +402,7 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         })
         .transpose()?;
     Ok(
-        json!({"repository":repo,"github_url":lab.github_url,"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
+        json!({"repository":repo,"github_url":lab.github_url,"areas":area_map(&areas),"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
     )
 }
 pub fn assign(
@@ -454,7 +564,25 @@ pub async fn pr_status(
             }
             None => None,
         };
+        let was = state.db.research_work_pr_state(&repo, number)?;
         state.db.finish_research_work_pr_check(&repo, number, found, at)?;
+        // RW11: a change from something already known. A first read, or one that failed, tells
+        // nobody anything.
+        if let (Some(was), Some((ci, review))) = (was, found) {
+            let card = state
+                .db
+                .research_work_snapshot(&repo)?
+                .and_then(|s| s.cards.into_iter().find(|c| c.number == number));
+            if let Some(card) = card {
+                if was.ci != "unknown" && was.ci != ci {
+                    tell_watchers(state, id, &card, &format!("has CI {ci} now, was {}", was.ci))?;
+                }
+                if was.review != "unknown" && was.review != review {
+                    let what = format!("has review {review} now, was {}", was.review);
+                    tell_watchers(state, id, &card, &what)?;
+                }
+            }
+        }
     }
     crate::ops::require_room(state, caller, id)?;
     let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
@@ -503,6 +631,84 @@ pub fn claim(
     crate::ops::refresh(state, id);
     Ok(json!({"lab_id":id,"number":number,"pairing":pairing,"until":crate::ops::iso(until),
         "note":"A local claim: it isn't written to GitHub and runs out unless you claim again."}))
+}
+/// RW11: one line in the lab's room saying what changed, and for each watcher who still belongs to
+/// the room, that line as a mention to read: a bot's in `inbox` and its event log, a person's in
+/// Needs you. It rings nobody. The line holds the item's kind and number, nothing GitHub's users wrote and nobody's
+/// name.
+fn tell_watchers(state: &AppState, lab_id: &str, card: &Card, what: &str) -> ApiResult<()> {
+    let watchers: Vec<Watcher> = state
+        .db
+        .research_work_watches(lab_id)?
+        .into_iter()
+        .filter(|w| w.number == card.number)
+        .collect();
+    let mut here = vec![];
+    for watcher in watchers {
+        let belongs = match &watcher.agent_id {
+            Some(agent) => state.db.belongs_to_room(lab_id, agent)?,
+            None => state.db.is_member(lab_id, &watcher.person_id)?,
+        };
+        if belongs {
+            here.push(watcher);
+        }
+    }
+    if here.is_empty() {
+        return Ok(());
+    }
+    let kind = if card.kind == "pull_request" { "Pull request" } else { "Issue" };
+    // Not who's watching: guests don't see that (RW8), and a lab can be a public floor.
+    let body = format!("{kind} #{} {what}.", card.number);
+    let line = crate::ops::announced(state, lab_id, &body)?;
+    for watcher in &here {
+        match &watcher.agent_id {
+            Some(agent) => {
+                state.db.add_mention(agent, lab_id, line.id, line.created_at)?;
+                crate::events::note_watched_change(state, agent, &line);
+            }
+            None => {
+                state.db.add_person_mention(&watcher.person_id, lab_id, line.id, line.created_at)?
+            }
+        }
+    }
+    Ok(())
+}
+/// RW11: watch an item to hear when it closes or opens again, or its CI or review changes.
+pub fn watch(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "watch work")?;
+    crate::items::no_quiet(state, caller, id)?;
+    on_workboard(state, &canonical_repo(&lab.github)?, number)?;
+    let watching = state.db.watch_research_work(
+        id,
+        number,
+        claimer(caller),
+        &caller.person_id,
+        caller.agent_id.as_deref(),
+        &caller.name,
+        MAX_WATCHES,
+        crate::now(),
+    )?;
+    if !watching {
+        return Err(ApiError::conflict(format!(
+            "you already watch {MAX_WATCHES} items here; unwatch one first"
+        )));
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"watching":true,
+        "note":"When it closes or opens again, or read_research_pr finds its CI or review changed, a line goes up in the lab's room and you get it as a mention. Local only: nothing is written to GitHub."}))
+}
+/// RW11: stop watching an item.
+pub fn unwatch(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "watch work")?;
+    if !state.db.unwatch_research_work(id, number, claimer(caller))? {
+        return Err(ApiError::not_found());
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"watching":false}))
 }
 /// RW8: drop your own claim on an item.
 pub fn unclaim(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
