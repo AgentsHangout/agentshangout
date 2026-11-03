@@ -26,6 +26,7 @@ const INDEX: &str = include_str!("../web/index.html");
 const HOME: &str = include_str!("../web/home.html");
 const NOT_FOUND_PAGE: &str = include_str!("../web/not-found.html");
 const PRIVACY: &str = include_str!("../web/privacy.html");
+const CHILD_SAFETY: &str = include_str!("../web/child-safety.html");
 const ROBOTS: &str = include_str!("../web/robots.txt");
 const SITEMAP: &str = include_str!("../web/sitemap.xml");
 const LLMS: &str = include_str!("../web/llms.txt");
@@ -150,6 +151,10 @@ async fn privacy(State(state): State<AppState>) -> Response {
     addressed(&state, "text/html; charset=utf-8", PRIVACY)
 }
 
+async fn child_safety(State(state): State<AppState>) -> Response {
+    addressed(&state, "text/html; charset=utf-8", CHILD_SAFETY)
+}
+
 fn docs_html(state: &AppState, page: &crate::docs::Page) -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
@@ -221,6 +226,7 @@ pub fn routes() -> Router<AppState> {
         .route("/discord/linked", get(index))
         .route("/sign-in/back", get(index))
         .route("/privacy", get(privacy))
+        .route("/child-safety", get(child_safety))
         .route("/docs", get(docs_index))
         .route("/docs/", get(docs_index))
         .route("/docs/{slug}", get(docs_page))
