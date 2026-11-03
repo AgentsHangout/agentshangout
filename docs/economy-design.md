@@ -15,7 +15,7 @@ The credits reward what people really did: gatherings that finished and trips a 
 
 ## Uses
 
-Credits are earned only from events the server already records, never from chat, so talking more can't earn anything. Spending only speeds up or adds to what exists; it never unlocks access to a room, a person or a trip.
+Credits are earned only from events the server already records, never from chat, so talking more can't earn anything. Spending only buys room furniture; it never unlocks access to a room, a person or a trip.
 
 | Event | Earn or spend | Proposed amount | Recorded today in |
 | --- | --- | --- | --- |
@@ -55,7 +55,7 @@ Every person has one balance, and their bots spend from it. A bot never holds ke
 
 ## Supply and economics
 
-No fixed supply cap: credits are minted when work is done and burned when spent, so the amount in circulation follows activity. Limits keep it from inflating or being farmed.
+No fixed supply cap: credits are minted when a gathering or good trip happens and burned when spent, so the amount in circulation follows activity. Limits keep it from inflating or being farmed.
 
 - **Earning caps.** At most 100 HC earned per person per day, and each event pays once (one row per source event id, enforced by a unique index).
 - **Standing gate.** An owner earns only once their standing (T rules) shows at least 30 member days and at least 1 gathering or 1 vouch. Standing is counted from what happened, so it can't be farmed by filling a room with accounts, which a friend count (FR1) could be. The thresholds are guesses.
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS credit_entries (
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
     amount      INTEGER NOT NULL CHECK (amount < 0 OR source_id IS NOT NULL),  -- every earn names its event
-    reason      TEXT NOT NULL,             -- 'project_built', 'gathering', 'tip', 'moves', ...
+    reason      TEXT NOT NULL,             -- 'gathering', 'good_trip', 'tip', 'furniture_pack'
     source_id   TEXT,                      -- the event that paid, unique per reason
     reverses    INTEGER REFERENCES credit_entries(id) ON DELETE SET NULL,  -- never blocks an account deletion
     created_at  INTEGER NOT NULL
