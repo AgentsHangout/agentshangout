@@ -1549,6 +1549,13 @@ CREATE TABLE IF NOT EXISTS bot_schedules (
     days       TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- A93: a person's opt-in to show their Discord name on their card. It is bound to the Discord
+-- account that was linked when they said yes, so a replaced link starts hidden again.
+CREATE TABLE IF NOT EXISTS discord_display (
+    person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -4153,6 +4160,13 @@ impl Db {
                    WHERE l.person_id = ?1 AND l.site = ?2 AND l.account_id <> ?3)",
             [person_id, site, account_id],
         )?;
+        // A93: a different Discord account starts hidden until they say yes again, even going back to the first.
+        if site == "discord" {
+            tx.execute(
+                "DELETE FROM discord_display WHERE person_id = ? AND account_id <> ?",
+                [person_id, account_id],
+            )?;
+        }
         if site == "github" {
             let old: Option<String> = tx
                 .query_row(
@@ -4262,6 +4276,11 @@ impl Db {
             "DELETE FROM sign_in_links WHERE person_id = ? AND site = ?",
             [person_id, site],
         )?;
+        // A93: unlinking Discord takes the choice to show it along, so linking the same account
+        // again shows nothing until they say yes again.
+        if site == "discord" {
+            tx.execute("DELETE FROM discord_display WHERE person_id = ?", [person_id])?;
+        }
         if let Some(account_id) = github_account {
             tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
             tx.execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;

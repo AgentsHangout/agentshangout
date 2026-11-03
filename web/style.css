@@ -2837,3 +2837,55 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .bot-status.working { color: var(--good); }
 .bot-status.idle { color: var(--accent); }
 .bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }
+
+/* Choices in Settings: a row with what it does, and a switch (A88). */
+.pref-group { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pref-group h3 { margin: 0; font-size: 15px; }
+.pref-group > p { margin: 0; font-size: 13px; }
+.pref-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
+.pref-text { display: grid; gap: 1px; min-width: 0; }
+.pref-text small { overflow-wrap: anywhere; }
+input.switch-input {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 40px;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #cdbd9b;
+  cursor: pointer;
+  transition: background .15s;
+}
+input.switch-input::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  transition: transform .15s;
+}
+input.switch-input:checked { background: var(--accent); }
+input.switch-input:checked::before { transform: translateX(18px); }
+input.switch-input:disabled { opacity: .55; cursor: progress; }
+input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, #cdbd9b, #cdbd9b 4px, #e6dbc0 4px, #e6dbc0 8px); }
+@media (prefers-reduced-motion: reduce) { input.switch-input, input.switch-input::before { transition: none; } }
+
+/* The card for a person in a room, and its preview in Settings (A88, A89). */
+.person-card { position: fixed; z-index: 41; width: min(280px, calc(100vw - 16px)); max-width: none; pointer-events: auto; }
+.person-card.person-card-preview { position: static; width: auto; max-width: 300px; }
+.person-card-body, .person-card-foot, .person-card-preview > .person-card-note, .person-card-preview > .person-card-rows { padding: 6px 9px; }
+.person-card-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: 13px; }
+.person-card-rows dt { color: var(--muted); }
+.person-card-rows dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.person-card-note { margin: 0; color: var(--muted); font-size: 12px; }
+.person-card-foot { display: grid; gap: 2px; padding: 3px; }
+.person-card-foot .person-card-note { padding: 3px 6px; }
+.stage.over-person { cursor: pointer; }
