@@ -1336,7 +1336,12 @@ function creditsCard(credits) {
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
     const packName = (word) => `${sentence(word)} pack`;
-    const packRow = (offer) => h('li', {},
+    // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
+    const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
+      offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
+    const packPieces = (offer) => [...new Set(offer.pieces.map((piece) => piece.label.toLowerCase()))];
+    const packRow = (offer) => h('li', { class: 'shop-item' },
+      h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
       h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
       offer.bought ? h('span', {}, 'Yours. Put it up from a room\'s build catalog.')
@@ -1348,7 +1353,8 @@ function creditsCard(credits) {
               if (!confirm(`Buy the ${packName(offer.pack).toLowerCase()} for ${count(offer.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
-          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'));
+          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'),
+      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
@@ -1369,19 +1375,23 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
+    // HC22: a funded question's lines say what happened to the credits, and never which question.
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'A question bounty paid you' };
     const historyRow = (line) => h('li', {},
       h('strong', {}, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
-        : ` · ${PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
-      h('span', { class: 'muted' }, ` · ${line.kind === 'spend' ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
+        : QUESTION[line.kind] ? ` · ${QUESTION[line.kind]}`
+          : ` · ${PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
+      // What paid is counted by UTC day; a spend or a question has the moment it happened.
+      h('span', { class: 'muted' }, ` · ${PAID_FOR[line.kind] ? utcDateFormat.format(fromUnix(line.at)) : dateFormat.format(fromUnix(line.at))}`));
     card.replaceChildren(
       h('h2', {}, 'Your credits'),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
         `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
-      now.packs.length ? h('h3', {}, 'Packs') : null,
-      now.packs.length ? h('ul', { class: 'room-list' }, now.packs.map(packRow)) : null,
+      now.packs.length ? h('h3', {}, 'Shop') : null,
+      now.packs.length ? h('ul', { class: 'room-list shop' }, now.packs.map(packRow)) : null,
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
