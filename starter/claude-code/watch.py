@@ -6,6 +6,7 @@
 # Polls every room the bot is in. Exits (so Claude wakes up) when a new message names the bot or
 # its owner, when the owner posts, when the inbox has something new
 # waiting (not what was already there when it started), or when a call errors.
+# Anything already waiting on the bot when it started is printed as a PENDING line on exit.
 # The last lines are always "LAST <id>" and one of HIT / NOHIT / TIMEOUT / ERROR. Start the next
 # watch from that LAST id so nothing is read twice or missed.
 #
@@ -21,6 +22,11 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 POLL_SECONDS = 10
 RETRY_SECONDS = 30  # after a server or network hiccup
+# Waiting on the bot to act. Ones already there when the watcher starts don't wake it again, but they
+# are printed as PENDING whenever it exits, so a run that stopped before handling one can't lose it.
+ACTION_KEYS = ('waiting_on_you', 'plans_to_answer', 'mentions')
+# For the bot to know. These stay listed after they're read, so only new ones wake it (ST6).
+INFO_KEYS = ('owner_answers', 'owner_notes')
 INBOX_KEYS = ('waiting_on_you', 'plans_to_answer', 'owner_answers', 'owner_notes', 'mentions')
 
 
@@ -32,14 +38,16 @@ def tool(name, args=None):
 
 
 def waiting_now(inbox):
-    """What the inbox lists for the bot, one key per item, so what was there before can be told
-    apart from what's new. Owner notes and answers stay listed, so only new ones may wake it (ST6)."""
-    keys = set()
+    """What the inbox lists for the bot, keyed by what stays the same while an item is there: its id,
+    or a mention's room and message. Nothing that changes between polls goes into a key (ST6)."""
+    items = {}
     for key in INBOX_KEYS:
         for item in inbox.get(key) or []:
-            ident = item.get('id') if isinstance(item, dict) else None
-            keys.add(f'{key}:{ident or json.dumps(item, sort_keys=True)}')
-    return keys
+            if not isinstance(item, dict):
+                continue
+            ident = item.get('id') or f"{item.get('hangout_id')}/{item.get('message_id')}"
+            items[f'{key}:{ident}'] = (key, item)
+    return items
 
 
 def check(after, bot, owner, seen):
@@ -63,12 +71,18 @@ def check(after, bot, owner, seen):
             text = m['text'].lower()
             if any(n in text for n in names) or (owner and m['from'] == owner):
                 hit = True
-    inbox = tool('inbox')
-    if waiting_now(inbox) - seen:
-        waiting = {k: inbox[k] for k in INBOX_KEYS if inbox.get(k)}
-        lines.append('INBOX ' + json.dumps(waiting))
+    now = waiting_now(tool('inbox'))
+    new = [now[k] for k in now if k not in seen]
+    if new:
+        # Only what's new, so Claude can see what woke it.
+        lines.append('INBOX ' + json.dumps([{key: item} for key, item in new]))
         hit = True
     return lines, last, hit
+
+
+def pending(seen):
+    """What was already waiting on the bot when the watcher started, one PENDING line each."""
+    return ['PENDING ' + json.dumps({key: item}) for key, item in seen.values() if key in ACTION_KEYS]
 
 
 def main():
@@ -88,15 +102,17 @@ def main():
             time.sleep(RETRY_SECONDS)
             continue
         except RuntimeError as error:
+            print('\n'.join(pending(seen or {})))
             print('ERROR', error)
             print('LAST', last)
             return
         if hit:
-            print('\n'.join(lines))
+            print('\n'.join(lines + pending(seen)))
             print('LAST', last)
             print('HIT')
             return
         time.sleep(POLL_SECONDS)
+    print('\n'.join(pending(seen or {})))
     print('LAST', last)
     print('TIMEOUT')
 

@@ -299,13 +299,13 @@ async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
 
 /// Runs the kit's `watch.py` against the test server for less than a second of watching, and
 /// returns what it printed. Its last line is HIT, TIMEOUT or ERROR.
-async fn watch(server: &Server, token: &str, bot: &str) -> String {
+async fn watch(server: &Server, token: &str, bot: &str, after: i64) -> String {
     let (base, token, bot) = (server.base.clone(), token.to_string(), bot.to_string());
     tokio::task::spawn_blocking(move || {
         let out = std::process::Command::new("python3")
             .arg("-I")
             .arg(Path::new(KIT).join("watch.py"))
-            .args(["0", "0.01", &bot])
+            .args([&after.to_string(), "0.01", &bot])
             .env("AGENTSHANGOUT_TOKEN", &token)
             .env("AGENTSHANGOUT_URL", &base)
             .output()
@@ -336,14 +336,40 @@ async fn the_watcher_wakes_only_for_what_is_new() {
     server.post(ann, "/api/owner-notes", json!({ "kind": "fact", "text": "I'm vegetarian" })).await;
     let inbox = server.tool(&token, "inbox", json!({})).await;
     assert!(inbox["owner_notes"].as_array().is_some_and(|notes| !notes.is_empty()), "{inbox}");
-    let quiet = watch(&server, &token, "Mac").await;
+    let quiet = watch(&server, &token, "Mac", 0).await;
     assert!(
         quiet.trim_end().ends_with("TIMEOUT"),
         "the watcher woke for what was already there:\n{quiet}"
     );
+    assert!(!quiet.contains("PENDING"), "a note isn't something to act on:\n{quiet}");
 
-    // Something new still wakes it.
+    // Something new still wakes it, and it says what.
     server.post(ann, &format!("/api/hangouts/{room}/messages"), json!({ "text": "@Mac hi" })).await;
-    let woke = watch(&server, &token, "Mac").await;
+    let woke = watch(&server, &token, "Mac", 0).await;
     assert!(woke.trim_end().ends_with("HIT"), "a mention didn't wake the watcher:\n{woke}");
+    let inbox_line = woke.lines().find(|l| l.starts_with("INBOX ")).unwrap_or("");
+    assert!(!inbox_line.contains("vegetarian"), "it reported an old note as new:\n{woke}");
+
+    // A check-in still waiting from before, which a run that stopped never handled, isn't lost: it
+    // doesn't wake the watcher again, but it is printed as PENDING when the watcher exits.
+    let bo = server
+        .post(
+            "",
+            "/api/hangouts",
+            json!({ "name": "Bo's room", "your_name": "Bo", "create_code": CODE }),
+        )
+        .await;
+    let (_, wren) =
+        support::legacy_bot(&server.state, bo["person"]["id"].as_str().unwrap(), room, "Wren");
+    server.tool(&wren, "check_in", json!({ "hangout_id": room, "about": "Moving the demo" })).await;
+    let inbox = server.tool(&token, "inbox", json!({})).await;
+    assert!(inbox["waiting_on_you"].as_array().is_some_and(|w| !w.is_empty()), "{inbox}");
+    let read = server.tool(&token, "read_room", json!({ "hangout_id": room })).await;
+    let after = read["last_message_id"].as_i64().unwrap();
+    let later = watch(&server, &token, "Mac", after).await;
+    assert!(later.trim_end().ends_with("TIMEOUT"), "{later}");
+    assert!(
+        later.lines().any(|l| l.starts_with("PENDING ") && l.contains("Moving the demo")),
+        "a check-in waiting from before was dropped:\n{later}"
+    );
 }
