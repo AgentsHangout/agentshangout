@@ -2469,6 +2469,26 @@ pub struct CreditTotals {
     pub hosted_trips: i64,
 }
 
+/// HC22: one line of someone's credit history, from `credit_paid` or `credit_spends`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CreditLine {
+    /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought.
+    pub kind: String,
+    /// What it added, or what a spend took away as less than 0.
+    pub amount: i64,
+    /// For what paid, the start of the UTC day it happened, which is what HC6 counts. For a spend,
+    /// when it was bought.
+    pub at: i64,
+    /// The city that paid. None once that city is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+    /// The bot that bought it, if one did and it still exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
+}
+
 /// How a spend went (HC15, HC17).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spend {
@@ -10164,6 +10184,33 @@ impl Db {
         Ok(totals)
     }
 
+    /// HC22: the latest `limit` things that paid this person or that they spent, newest first.
+    pub fn credit_history(&self, person_id: &str, limit: i64) -> rusqlite::Result<Vec<CreditLine>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT p.kind, p.amount, p.day * ?2, p.created_at, c.name, NULL, NULL
+               FROM credit_paid p LEFT JOIN cities c ON c.id = p.city_id
+              WHERE p.person_id = ?1
+             UNION ALL
+             SELECT 'spend', -s.amount, s.created_at, s.created_at, NULL, s.pack, a.name
+               FROM credit_spends s LEFT JOIN agents a ON a.id = s.agent_id
+              WHERE s.person_id = ?1
+             ORDER BY 3 DESC, 4 DESC, 1, 2
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![person_id, crate::ops::DAY_SECS, limit], |row| {
+            Ok(CreditLine {
+                kind: row.get(0)?,
+                amount: row.get(1)?,
+                at: row.get(2)?,
+                city: row.get(4)?,
+                pack: row.get(5)?,
+                bot: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// HC14: the packs this person has bought, in the order they bought them.
     pub fn bought_packs(&self, person_id: &str) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
@@ -15154,6 +15201,30 @@ mod tests {
         let refused = db.spend_credits("p1", pack.pack, pack.cost, None, GATE).unwrap();
         assert_eq!(refused, Spend::TooFew { balance: 0 });
         assert!(db.bought_packs("p1").unwrap().is_empty());
+    }
+
+    // HC22: the history lists what paid and what was spent, newest first, and only the person's own
+    #[test]
+    fn credit_history_lists_what_paid_and_what_was_spent_newest_first() {
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 2);
+        let pack = a_pack_for_sale();
+        let after = crate::economy::spend(&db, &ann(None), pack.pack, None, now).unwrap();
+
+        let lines: Vec<_> =
+            after.history.iter().map(|line| (line.kind.as_str(), line.amount)).collect();
+        assert_eq!(lines, [("spend", -pack.cost), ("gathering", 20), ("gathering", 20)]);
+        assert_eq!(after.history[0].pack.as_deref(), Some(pack.pack));
+        assert_eq!(after.history[0].bot, None);
+        assert_eq!(after.history[0].at, now);
+        assert!(after.history[1].at > after.history[2].at);
+        assert!(after.history[1..].iter().all(|line| line.city.as_deref() == Some("c1")));
+        assert_eq!(after.history.iter().map(|line| line.amount).sum::<i64>(), after.balance);
+        // Bo went to the same gatherings, and sees what paid them but not what Ann spent.
+        let bo = credits_of(&db, "p2", now);
+        assert!(!bo.history.is_empty());
+        assert!(bo.history.iter().all(|line| line.kind == "gathering"));
+        assert_eq!(bo.history.iter().map(|line| line.amount).sum::<i64>(), bo.balance);
     }
 
     // HC17: a bot spends only on its owner's yes, and within the limit they set, which starts at 0
