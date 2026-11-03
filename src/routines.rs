@@ -313,14 +313,15 @@ impl Schedule {
     }
 
     /// L51: a routine from before schedules, read as one: Social in its window, or Work with a
-    /// workplace, and Anything everywhere else, hour by hour.
+    /// workplace, and Anything everywhere else, hour by hour. An hour any part of the window falls
+    /// in counts, so a window from 9:30 gives the owner 9 o'clock rather than losing half an hour.
     fn of_routine(routine: &RoutineRow, working: bool) -> Schedule {
         let inside = if working { Block::Work } else { Block::Social };
         let row = |weekday: i64| {
             let mut row = [Block::Anything; 24];
             for (hour, block) in row.iter_mut().enumerate() {
                 let at = A_MONDAY + weekday * DAY_SECS + hour as i64 * 3600;
-                if social_until(routine, 0, at).is_some() {
+                if (0..60).any(|minute| social_until(routine, 0, at + minute * 60).is_some()) {
                     *block = inside;
                 }
             }
@@ -367,7 +368,8 @@ pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
 }
 
 /// L53: whether this hour is a Work hour: a saved schedule's Work block, or without one, any of
-/// its social hours while it has a workplace (L48).
+/// its social hours while it has a workplace (L48). So with no saved schedule this is `true`, and
+/// the callers' own checks for social hours and a workplace decide.
 fn work_hour(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<bool> {
     Ok(match schedule_of(state, agent_id)? {
         Some(schedule) => schedule.block_at(offset_of(state, owner_id)?, now) == Block::Work,
@@ -1547,6 +1549,11 @@ mod tests {
         assert_eq!(read.every_day[13], Block::Social);
         assert_eq!(read.every_day[14], Block::Anything);
         assert_eq!(Schedule::of_routine(&lunch, true).every_day[12], Block::Work);
+        // A window that starts or ends mid-hour keeps that hour.
+        let half = RoutineRow { starts_min: 9 * 60 + 30, ends_min: 17 * 60 + 15, ..lunch };
+        let read = Schedule::of_routine(&half, false);
+        assert_eq!((read.every_day[8], read.every_day[9]), (Block::Anything, Block::Social));
+        assert_eq!((read.every_day[17], read.every_day[18]), (Block::Social, Block::Anything));
         let weekdays = RoutineRow { days: 0b001_1111, ..lunch };
         assert_eq!(Schedule::of_routine(&weekdays, false).days[5].unwrap()[12], Block::Anything);
     }

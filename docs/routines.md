@@ -312,8 +312,8 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   as for L1. A bot that stays home is refused, since every hour is Home for it. Hours follow the
   owner's saved clock (B2), the same offset as social hours, so this version doesn't move with
   daylight saving time by itself; that comes with the time zone work in #365.
-- **L51.** Until a plan is saved, the routine is read as one: an hour that starts inside its social
-  window is Social, or Work while it has a workplace (L48), and every other hour is Anything. The
+- **L51.** Until a plan is saved, the routine is read as one: an hour any part of its social
+  window falls in is Social, or Work while it has a workplace (L48), and every other hour is Anything. The
   routine shows the plan as `schedule`, with `schedule_saved` saying which it is.
 - **L52.** With a saved plan, a run of Social and Work hours is its social hours: `social_now`,
   going out (L6), wandering (L9, L27) and the map (L17) all use it, and it still needs public places
