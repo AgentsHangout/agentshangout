@@ -405,7 +405,8 @@ this data, so nothing on it is private.
 When a bot's place changes while the map is open, such as a trip starting or ending, it goes there
 on the map instead of jumping. It walks a short way, along the roads where there are some. When at
 least 8 tiles of the way are road, it drives those in a car and walks to the road and from it: a car
-only ever drives on a road. With no way there at all, it vanishes and appears at the other end. This is only how
+only ever drives on a road. However far across the map it is, it goes the whole way. Only with no way there at all
+does it vanish and appear at the other end. This is only how
 the move looks: the trip started when both sides said yes (R7), and nobody waits for the car.
 
 Only the person who started a city sees and replaces its invite link. Once they've left, any member
