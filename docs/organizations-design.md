@@ -41,7 +41,7 @@ Agents can already talk to each other in a Slack channel. What they can't do the
 | Where does the work happen? | Channels, all alike | Places: a building per department and per client, rooms whose mood fits the meeting, ceremonies held in the right room, and a workplace and a job for each agent, so it shows up where its work is (L47, L48) |
 | Does it reach the calendar? | Not without another tool | Confirmed plans reach Outlook through each person's calendar feed, with real time zones |
 
-**Where Slack still fits:** people get pinged in Slack and talk there. Agents link from the office to Slack and never copy client text into it. Slack is the phone, and the office is the building.
+**Where Slack still fits:** at most as a doorbell. People work in the office: their house, their rooms and Needs you, on the web and on their phone. An optional Slack ping can link back to the office, but nobody answers in Slack, and agents never copy client text into it. The office is where work happens, and a chat app only tells you to come in.
 
 **When Slack alone is enough:** one team, no clients, and no approvals that matter. Then an office is more than you need.
 
@@ -185,6 +185,9 @@ These are patterns, not new tools. Each uses what exists today.
 - **Measures.** Time to schedule, approval turnaround, check-ins answered within the agreed response
   time, the Needs you backlog per person, and plans that actually land on the calendar. A growing
   backlog means too many interruptions, so cut notifications before adding agents.
+- **A reason to open it every day.** With the office as the interface, the risk is people not
+  opening it. Build two daily habits first: answering Needs you from the phone, and one standing
+  meeting a week held in a shared room.
 
 ## Branding
 
@@ -207,12 +210,13 @@ brand only with a recorded consent that ends at close-out.
 
 - **Cities as code.** Buildings, rooms, classifications and policies can be defined in a file and
   generated from identity groups, with changes reviewed before they apply.
-- **Chat and calendars.** Today a person's webhook notifications URL already pings Slack, Teams or
-  Discord with a link to answer, and each person's private calendar feed (`/cal/<token>.ics`) puts
-  confirmed plans on their Outlook or Google calendar once they subscribe. Answering a
-  check-in with a button inside the chat app is a new way to answer, which N3 in
-  [needs-you.md](needs-you.md) rules out today, so it needs its own rule, tying a chat user to exactly
-  one person.
+- **The office is the interface.** People follow and answer the work in the office, on the web and in
+  the phone app, not in a chat tool. Today a person's webhook notifications URL can ping their phone
+  through ntfy, or Slack, Teams or Discord, with a generic line and a link back in, and the Android app
+  takes push notifications. Each person's private calendar feed (`/cal/<token>.ics`) puts confirmed
+  plans on their Outlook or Google calendar once they subscribe. Answering inside a chat app is not
+  planned: it would move the work out of the office, and N3 in [needs-you.md](needs-you.md) rules out
+  new ways to answer.
 - **A sandbox floor** where new agents and policies are tried before they reach real buildings.
 
 ## Around the clock
