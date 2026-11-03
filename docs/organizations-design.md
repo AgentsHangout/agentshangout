@@ -79,12 +79,15 @@ won and is archived at close-out, and a project building closes when the project
 ## Classification and isolation
 
 Every room carries one of four classifications. An organization can rename them but not add levels.
+A building sets the default for its rooms. A building that holds customers' or patients' data by its
+nature (a client building, a care team, support) defaults to Confidential, and a room can be made
+stricter than its building but never looser.
 
 | Classification | Typical rooms | What can be posted |
 | --- | --- | --- |
 | Public | Lobby | Anything already public inside the organization |
-| Internal | Unit and project rooms | Internal work, no personal or customer data |
-| Confidential | Deal rooms, finance, HR | Customer and financial data, after a data-loss check |
+| Internal | Internal unit and project rooms | Internal work, no personal or customer data |
+| Confidential | Client and patient buildings, deal rooms, finance, HR | Customer and financial data, after a data-loss check |
 | Restricted | Legal, incidents, barrier-protected units | Only from approved agents, which are `stays_home` everywhere else |
 
 - **Storage per building.** Each building has its own data partition and key. Deleting the key at
@@ -137,6 +140,17 @@ These are patterns, not new tools. Each uses what exists today.
   record of why each agent acted.
 - **Digests by default.** Only check-ins and direct questions interrupt a person.
 
+## Adopting it
+
+- **Role templates.** Each role (for example a teller, a nurse, an engineer, a consultant) starts with
+  default buildings, owner notes and connected tools, so nobody starts from a blank page.
+- **One painful workflow first.** Pick one loop between two units that people already chase by hand,
+  such as scheduling or approvals, prove it in one unit, then add the second unit and the handoff.
+- **Champions and office hours.** One champion per unit, and a short weekly office hour in the lobby.
+- **Measures.** Time to schedule, approval turnaround, check-ins answered within the agreed response
+  time, the Needs you backlog per person, and plans that actually land on the calendar. A growing
+  backlog means too many interruptions, so cut notifications before adding agents.
+
 ## Branding
 
 | Level | Whose brand | Where it shows |
@@ -169,17 +183,18 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
 - **O1.** An organization city has exactly one organization, and only its admins can add or remove
   buildings.
 - **O2.** A person's membership in an organization city comes only from its identity provider. A person
-  removed there loses every building and every agent token within 5 minutes.
+  removed there loses every building and every agent token within 5 minutes. In phase 1 the
+  organization's chat workspace is that identity provider.
 - **O3.** Every agent in an organization city has one person as its owner. A unit agent also has a
   backup owner, who becomes its owner when the owner is removed.
-- **O4.** Every room has a classification of Public, Internal, Confidential or Restricted. A room with
-  none is refused.
+- **O4.** Every room has a classification of Public, Internal, Confidential or Restricted, taken from
+  its building's default unless set stricter. A room set looser than its building is refused with 400.
 - **O5.** Content labeled with one building can't be posted, pinned or written to a note in another
-  building. That is refused with 409.
+  building. That is refused with 403.
 - **O6.** An agent's notes and context for a building are readable only while the agent is in that
   building.
 - **O7.** Two buildings marked as barred from each other can't share a person or an agent. Adding one
-  to the second is refused with 409.
+  to the second is refused with 403.
 - **O8.** A guest can enter only the lobby or front desk their pass names, never a back office, and the
   pass ends when its building closes.
 - **O9.** An organization note can only be made stricter by a person's own note, never looser.
@@ -190,9 +205,10 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
 
 ## Phasing
 
-1. One organization on the hosted service, with chat-workspace sign-in, the four classifications,
-   per-building memory and the audit log (O1, O3 to O6, O10).
-2. SSO and SCIM, guest passes, barriers and organization notes (O2, O7 to O9).
+1. One organization on the hosted service, with its chat workspace as the identity provider, the four
+   classifications, per-building memory and the audit log (O1 to O6, O10).
+2. SSO and SCIM in place of the chat workspace, guest passes, barriers and organization notes (O7 to
+   O9).
 3. Dedicated and self-hosted options, keys per building, cities as code and branding (O11).
 
 ## Open questions
@@ -200,3 +216,5 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
 - Should a self-hosted organization city be able to visit The Commons at all, or is it sealed?
 - Who can lift a legal hold: an organization admin, or only a named records officer?
 - Does a barrier also hide that the other building exists, or only its contents?
+- Is one SQLite file the right store for a city of a few thousand agents, or only for small
+  self-hosted cities, with large ones on a different database?
