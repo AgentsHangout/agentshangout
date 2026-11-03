@@ -2109,7 +2109,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         can ? action('Move', () => pickUp(item)) : null,
         can ? action('Turn', () => turn(item)) : null,
         can ? action('Remove', () => remove(item), 'link danger') : null,
-        item.holds_notes ? action(`Notes (${item.notes})`, () => openNotes(item)) : null));
+        item.holds_notes ? action(`Notes (${item.notes})`, () => openNotes(item)) : null,
+        item.kind === 'research_display' ? action('Use display', useDisplay) : null));
   }
 
   function renderPlaced() {
@@ -2623,7 +2624,7 @@ async function roomView(id) {
   if (!snapshot) return;
   const me = await api('/api/me').catch(() => null);
   const shownMessages = new Set();
-  const researchLab = await api(`/api/research-labs/${encodeURIComponent(id)}`).catch(() => null);
+  const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
   const shownById = new Map();
 
@@ -2664,11 +2665,9 @@ async function roomView(id) {
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
   // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
   stage.append(emptyEl, boardEl, pinStrip);
-  // The display opens this room's own workroom. It never carries a lab id of its own, so it reads
-  // only the lab whose first floor this is, and the server checks room access as it does for the panel.
-  const useDisplay = () => (research
-    ? panels.open('research')
-    : say('Sample bars, not GitHub data. A research display shows GitHub work on a research lab’s first floor.'));
+  const useDisplay = researchDisplay({
+    panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
+  });
   const builder = buildMode({
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
   });
@@ -6909,6 +6908,32 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
       h('button', { type: 'submit', class: 'primary', disabled: !eligibility.can_create }, 'Create lab and choose map location'));
   }
   return { toggle: panels.toggle('research', roomId ? 'Research' : 'Research labs', { short: 'Labs', className: 'sec' }), load };
+}
+
+// Whether a room is a research lab's first floor. Only a 404 says it isn't: any other failure leaves
+// it unknown, so a lab whose lookup failed is never shown as sample art.
+async function researchLabLookup(roomId) {
+  try {
+    return { lab: await api(`/api/research-labs/${encodeURIComponent(roomId)}`), state: 'lab' };
+  } catch (failure) {
+    return { lab: null, state: failure.status === 404 ? 'none' : 'unknown' };
+  }
+}
+
+// Using a research display, by pointer or from the Build panel's list. It opens this room's own
+// workroom and never carries a lab id of its own, so it reads only the lab whose first floor this is,
+// and the server checks room access as it does for the panel. An unknown room is looked up again.
+function researchDisplay({ panels, say, research, state, lookup }) {
+  return async () => {
+    if (research) {
+      panels.open('research');
+      return;
+    }
+    if (state === 'unknown') state = await lookup();
+    if (state === 'lab') say('This room is a research lab. Reload the room to open its workroom.');
+    else if (state === 'none') say('Sample bars, not GitHub data. A research display shows GitHub work on a research lab’s first floor.');
+    else say('Couldn’t check whether this room is a research lab. Use the display again to try again.');
+  };
 }
 
 function researchWorkContent(work) {

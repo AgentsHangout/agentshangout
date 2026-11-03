@@ -4,8 +4,9 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 function extract(name) {
-  const start = source.indexOf(`function ${name}(`);
+  let start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing ${name}`);
+  if (source.slice(start - 6, start) === 'async ') start -= 6;
   return source.slice(start, source.indexOf('\n}\n', start) + 2);
 }
 function node(tag, props = {}, ...children) {
@@ -50,7 +51,9 @@ const context = {
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}
+${extract('researchLabLookup')}
+${extract('researchDisplay')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -149,10 +152,31 @@ async function check() {
   assert.equal(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')), undefined);
   // Using the display opens this room's workroom and carries no lab id of its own.
   assert.ok(source.includes("else if (item?.kind === 'research_display') useDisplay();"));
-  const useStart = source.indexOf('  const useDisplay = () =>');
-  const use = source.slice(useStart, source.indexOf(';\n', useStart));
-  assert.ok(use.includes("panels.open('research')") && !use.includes('item') && !use.includes('/api/'), 'the display reuses the room panel, never an item-supplied lab');
-  assert.ok(use.includes('Sample bars'), 'outside a lab the display says its bars are sample art');
+  assert.ok(source.includes("item.kind === 'research_display' ? action('Use display', useDisplay) : null"), 'the Build list gives keyboard users a way to use the display');
+  const said = [];
+  const opened = [];
+  const displayPanels = { open(name) { opened.push(name); } };
+  await context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: {}, state: 'lab', lookup() { throw Error('no lookup in a lab'); } })();
+  assert.deepEqual(opened, ['research'], 'in a lab the display opens the room workroom');
+  await context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: null, state: 'none', lookup() { throw Error('a known non-lab is not looked up again'); } })();
+  assert.ok(said.at(-1).startsWith('Sample bars'), 'a confirmed non-lab says its bars are sample art');
+  let lookups = 0;
+  const retrying = context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: null, state: 'unknown', lookup: async () => (++lookups === 1 ? 'unknown' : 'none') });
+  await retrying();
+  assert.ok(said.at(-1).startsWith('Couldn’t check'), 'a failed lookup is never called sample art');
+  await retrying();
+  assert.equal(lookups, 2, 'each use retries an unknown room');
+  assert.ok(said.at(-1).startsWith('Sample bars'), 'a retry that confirms a non-lab says so');
+  const realApi = context.api;
+  const failing = status => async () => { const e = Error('no'); e.status = status; throw e; };
+  context.api = failing(404);
+  assert.equal((await context.lookup('room-1')).state, 'none', 'only a 404 means not a lab');
+  context.api = failing(500);
+  assert.equal((await context.lookup('room-1')).state, 'unknown', 'a server error leaves the room unknown');
+  context.api = async () => { throw Error('offline'); };
+  assert.equal((await context.lookup('room-1')).state, 'unknown', 'a network error leaves the room unknown');
+  context.api = realApi;
+  assert.equal((await context.lookup('floor-1')).state, 'lab');
   // RL7: map identity comes from explicit class metadata, never an ordinary studio name.
   const mapLab = { x: 4, y: 8, kind: 'research_lab', github: lab.github, github_url: 'javascript:alert(1)' };
   const view = { research_labs: [mapLab] };
