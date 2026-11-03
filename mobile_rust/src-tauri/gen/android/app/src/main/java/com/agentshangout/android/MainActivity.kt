@@ -31,7 +31,7 @@ class MainActivity : TauriActivity() {
     }
   }
 
-  override fun onResume() { super.onResume(); pushSettings.resume() }
+  override fun onResume() { super.onResume(); pushSettings.resume(); LocalClient.resume() }
   override fun onDestroy() { pushSettings.destroy(); phoneWebView = null; super.onDestroy() }
   override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); openNotification(intent) }
   private fun openNotification(intent: Intent) {
