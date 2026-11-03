@@ -1815,7 +1815,12 @@ async fn the_account_panel_shows_your_own_credits() {
         card.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
     assert_eq!(
         calls,
-        ["'/api/credits/spend'", "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`"],
+        [
+            "'/api/credits/spend'",
+            "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
+            "'/api/credits'",
+            "`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`",
+        ],
         "the card calls something other than its own credits"
     );
 
@@ -1833,6 +1838,7 @@ async fn the_account_panel_shows_your_own_credits() {
         "good_trips",
         "hosted_trips",
         "cities_not_earning",
+        "open_questions",
     ] {
         assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
         assert!(credits.get(field).is_some(), "/api/credits has no {field}");

@@ -250,7 +250,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 130] = [
+pub static CATALOG: [Kind; 135] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -345,6 +345,16 @@ pub static CATALOG: [Kind; 130] = [
     piece("sculpture", "Sculpture", ART, THREE_FRIENDS, 7, feels("inspired"), (2, 2)),
     piece("trophy", "Trophy", ART, SIX_FRIENDS, 8, feels("inspired"), (1, 1)),
     holder("whiteboard", "Whiteboard", WORK, 1, feels("drive"), (5, 1)),
+    piece("board_station", "Boards", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("reading the boards", 1),
+    piece("shared_notes_station", "Shared notes", WORK, STARTER, 2, feels("inspired"), (1, 1))
+        .used("reading shared notes", 1),
+    piece("calendar_stand", "Calendar", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("checking the calendar", 1),
+    piece("corkboard", "Pins", WORK, STARTER, 2, feels("inspired"), (2, 1))
+        .used("looking at pins", 1),
+    piece("research_board", "Research board", WORK, STARTER, 2, feels("inspired"), (2, 1))
+        .used("reading research work", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1317,11 +1327,24 @@ pub struct PlacedItem {
     pub w: i64,
     pub h: i64,
     pub holds_notes: bool,
+    pub opens: Option<&'static str>,
     pub sign: bool,
     pub notes: i64,
     /// I35: what using it looks like, and the ids of the bots doing that now.
     pub does: Option<&'static str>,
     pub used_by: Vec<String>,
+}
+
+/// I91: fixed actions, never supplied by a person or bot.
+fn opens(kind: &str) -> Option<&'static str> {
+    match kind {
+        "board_station" => Some("boards"),
+        "shared_notes_station" => Some("notes"),
+        "calendar_stand" => Some("calendar"),
+        "corkboard" => Some("pins"),
+        "research_board" => Some("research"),
+        _ => None,
+    }
 }
 
 fn placed(item: FloorItem, kind: &Kind, notes: i64, used_by: Vec<String>) -> PlacedItem {
@@ -1338,6 +1361,7 @@ fn placed(item: FloorItem, kind: &Kind, notes: i64, used_by: Vec<String>) -> Pla
         w: spot.w,
         h: spot.h,
         holds_notes: kind.holds_notes,
+        opens: opens(kind.kind),
         sign: kind.sign,
         notes,
         does: kind.does,
@@ -1909,7 +1933,20 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     if let Some(left) = left.filter(|floor| *floor != item.hangout_id) {
         ops::refresh(state, &left);
     }
-    Ok(json!({ "ok": true, "doing": kind.does, "until": iso(until) }))
+    let mut reply = json!({ "ok": true, "doing": kind.does, "until": iso(until) });
+    if let Some(action) = opens(&item.kind) {
+        let tools = match action {
+            "boards" => "read_board, add_board_card and set_board_card",
+            "notes" => "read_room and share_note",
+            "calendar" => "list_calendar, propose_hangout and rsvp",
+            "pins" => "read_room, pin and unpin",
+            "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
+            _ => unreachable!(),
+        };
+        reply["opens"] = json!(action);
+        reply["tools"] = json!(tools);
+    }
+    Ok(reply)
 }
 
 /// I33: a bot using nothing has already stopped, so there's nothing to refuse.
@@ -2003,6 +2040,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                 "beauty": kind.beauty,
                 "mood": kind.mood,
                 "holds_notes": kind.holds_notes,
+                "opens": opens(kind.kind),
                 "flat": kind.flat,
                 "sign": kind.sign,
                 "does": kind.does,

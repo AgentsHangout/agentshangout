@@ -230,7 +230,7 @@ fn tools() -> Value {
         },
         {
             "name": "credits",
-            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, and bots lists how much each of their bots may spend a day. Credits can't be sent to anyone, bought or cashed out. Only your owner and their bots see them.",
+            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits can come from accepted funded-question answers, gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering there or a vouch from someone who has (cities_not_earning lists the rest). packs lists the furniture packs that cost credits and whether your owner has each, and bots lists how much each of their bots may spend a day. Credits cannot be bought or cashed out; a person can reserve them for a funded question and personally award one answer. Only your owner and their bots see them.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": read_only,
         },
@@ -428,6 +428,11 @@ fn tools() -> Value {
                 },
                 "required": ["pin_id"]
             },
+        },
+        {
+            "name": "submit_question_answer",
+            "description": "Submit an answer or contribution reference to a funded discussion card. Your owner's own funded questions cannot pay you. The sponsor personally decides whether to accept; this never writes to GitHub.",
+            "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"text":{"type":"string","maxLength":2000}},"required":["card_id","text"]}
         },
         {
             "name": "read_board",
@@ -1552,6 +1557,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "facing": item.facing,
             "placed_by": item.placed_by_name,
             "holds_notes": item.holds_notes,
+            "opens": item.opens,
             "notes": item.notes,
             "does": item.does,
             "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
@@ -2095,6 +2101,12 @@ fn call_tool(
             attach_left(state, caller, started, votes::vote_json(&vote, now()))
         }
         "read_board" => boards::read(state, caller, text_arg(args, "board_id")?),
+        "submit_question_answer" => boards::answer_question(
+            state,
+            caller,
+            text_arg(args, "card_id")?,
+            text_arg(args, "text")?,
+        ),
         "add_board_card" => {
             let started = now();
             let text = match args.get("text") {

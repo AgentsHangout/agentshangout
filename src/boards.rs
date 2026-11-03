@@ -39,6 +39,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/boards/{id}", put(change_board).delete(delete_board))
         .route("/api/boards/{id}/cards", post(create_card))
         .route("/api/cards/{id}", put(change_card).delete(delete_card))
+        .route("/api/cards/{id}/bounty", post(fund_bounty))
+        .route("/api/cards/{id}/bounty/cancel", post(cancel_bounty))
+        .route("/api/cards/{id}/bounty/accept", post(accept_bounty))
 }
 
 // Who may
@@ -141,6 +144,42 @@ fn card_json(caller: &Caller, card: &BoardCard, marks: &[(String, String)]) -> V
     read
 }
 
+fn bounty_json(
+    state: &AppState,
+    caller: &Caller,
+    card: &BoardCard,
+    read: &mut Value,
+) -> ApiResult<()> {
+    let guest = state.guest_visit(caller, &card.hangout_id)?.is_some();
+    let mut bounty = state.db.question_bounty(&card.id)?;
+    read["can_fund"] =
+        json!(!caller.is_agent() && !guest && card.kind == "discussion" && bounty.is_none());
+    read["can_submit"] = json!(
+        caller.is_agent()
+            && !caller.is_house
+            && !guest
+            && bounty
+                .as_ref()
+                .is_some_and(|b| b["status"] == "open" && b["sponsor_id"] != caller.person_id)
+    );
+    if let Some(b) = bounty.as_mut() {
+        let can = !caller.is_agent()
+            && !guest
+            && b["status"] == "open"
+            && b["sponsor_id"] == caller.person_id;
+        b["can_cancel"] = json!(can);
+        if let Some(answers) = b["submissions"].as_array_mut() {
+            for answer in answers {
+                answer["can_accept"] = json!(
+                    can && answer["owner_id"] != caller.person_id && answer["eligible"] == true
+                );
+            }
+        }
+    }
+    read["bounty"] = json!(bounty);
+    Ok(())
+}
+
 fn marks(state: &AppState, caller: &Caller) -> ApiResult<Vec<(String, String)>> {
     Ok(households::marks_for(state, caller)?
         .into_iter()
@@ -175,11 +214,15 @@ pub fn list(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Va
             let cards = cards
                 .iter()
                 .filter(|card| card.board_id == board.id)
-                .map(|card| card_json(caller, card, &marked))
-                .collect::<Vec<_>>();
-            board_json(board, &cards)
+                .map(|card| {
+                    let mut value = card_json(caller, card, &marked);
+                    bounty_json(state, caller, card, &mut value)?;
+                    Ok(value)
+                })
+                .collect::<ApiResult<Vec<_>>>()?;
+            Ok(board_json(board, &cards))
         })
-        .collect::<Vec<_>>();
+        .collect::<ApiResult<Vec<_>>>()?;
     Ok(json!({ "trust_note": TRUST_NOTE, "boards": listed }))
 }
 
@@ -197,9 +240,10 @@ pub fn read(state: &AppState, caller: &Caller, board_id: &str) -> ApiResult<Valu
             let mut read = card_json(caller, &card, &marked);
             read["created_at"] = json!(iso(card.created_at));
             read["updated_at"] = json!(iso(card.updated_at));
-            read
+            bounty_json(state, caller, &card, &mut read)?;
+            Ok(read)
         })
-        .collect::<Vec<_>>();
+        .collect::<ApiResult<Vec<_>>>()?;
     Ok(json!({
         "trust_note": TRUST_NOTE,
         "board": {
@@ -541,6 +585,109 @@ pub fn remove_card(state: &AppState, caller: &Caller, card_id: &str) -> ApiResul
     state.db.remove_board_card(&card.id)?;
     ops::refresh(state, &card.hangout_id);
     Ok(())
+}
+
+fn question_access(state: &AppState, caller: &Caller, card_id: &str) -> ApiResult<BoardCard> {
+    let card = card_in_room(state, caller, card_id)?;
+    ops::no_guests(state, caller, &card.hangout_id, "change a funded question")?;
+    items::no_quiet(state, caller, &card.hangout_id)?;
+    if card.kind != "discussion" {
+        return Err(ApiError::bad_request("fund a discussion card"));
+    }
+    Ok(card)
+}
+
+pub fn fund_question(
+    state: &AppState,
+    caller: &Caller,
+    card_id: &str,
+    amount: i64,
+) -> ApiResult<Value> {
+    let card = question_access(state, caller, card_id)?;
+    ops::require_human(caller, "fund a question")?;
+    if !(1..=100).contains(&amount) {
+        return Err(ApiError::bad_request("amount must be 1 to 100 credits"));
+    }
+    crate::economy::credits(&state.db, &caller.person_id, now())?;
+    if let Some(reason) =
+        state.db.fund_question(&auth::new_id(), card_id, &caller.person_id, amount, now())?
+    {
+        return Err(ApiError::conflict(reason));
+    }
+    ops::refresh(state, &card.hangout_id);
+    Ok(json!({"ok":true}))
+}
+
+pub fn answer_question(
+    state: &AppState,
+    caller: &Caller,
+    card_id: &str,
+    text: &str,
+) -> ApiResult<Value> {
+    let card = question_access(state, caller, card_id)?;
+    let bot = caller
+        .agent_id
+        .as_deref()
+        .ok_or_else(|| ApiError::forbidden("only a bot can submit an answer"))?;
+    let text = ops::clean(text, "answer", MAX_TEXT)?;
+    let id = auth::new_id();
+    commit_write(state, caller, &card.hangout_id)?;
+    if let Some(reason) =
+        state.db.answer_question(&id, card_id, bot, &caller.person_id, &text, now())?
+    {
+        return Err(ApiError::conflict(reason));
+    }
+    ops::refresh(state, &card.hangout_id);
+    Ok(json!({"id":id}))
+}
+
+pub fn resolve_question(
+    state: &AppState,
+    caller: &Caller,
+    card_id: &str,
+    answer: Option<&str>,
+) -> ApiResult<Value> {
+    ops::require_human(caller, "resolve a funded question")?;
+    let card = if answer.is_some() { Some(question_access(state, caller, card_id)?) } else { None };
+    if let Some(reason) = state.db.resolve_question(card_id, &caller.person_id, answer)? {
+        return Err(ApiError::conflict(reason));
+    }
+    if let Some(card) = card.or(state.db.board_card(card_id)?) {
+        ops::refresh(state, &card.hangout_id);
+    }
+    Ok(json!({"ok":true}))
+}
+
+#[derive(Deserialize)]
+struct Funding {
+    amount: i64,
+}
+#[derive(Deserialize)]
+struct Acceptance {
+    submission_id: String,
+}
+async fn fund_bounty(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<Funding>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(fund_question(&state, &caller, &id, body.amount)?))
+}
+async fn cancel_bounty(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(resolve_question(&state, &caller, &id, None)?))
+}
+async fn accept_bounty(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<Acceptance>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(resolve_question(&state, &caller, &id, Some(&body.submission_id))?))
 }
 
 // Routes

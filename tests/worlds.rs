@@ -2735,6 +2735,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
         "answer_project_change",
         "decorate_house",
         "furnish_house",
+        "your_look",
+        "submit_question_answer",
     ] {
         assert!(!names.contains(&private));
         server.tool_refused(private, json!({})).await;
@@ -2811,7 +2813,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"spend_credits")
             && private_names.contains(&"take_snapshot")
             && private_names.contains(&"your_look")
-            && private_names.len() == 78,
+            && private_names.contains(&"submit_question_answer")
+            && private_names.len() == 79,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

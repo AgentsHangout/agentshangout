@@ -2,8 +2,7 @@
 
 Hangout Credits (HC) reward what people really did together: gatherings that finished and trips a
 resident let in. Phases 1 and 2 of [economy-design.md](economy-design.md) are in force: credits are
-earned and shown, and can be spent on some furniture packs and nothing else. They can't be sent,
-bought or cashed out.
+earned and shown, and can be spent on furniture packs or reserved for funded questions. They cannot be bought or cashed out.
 
 What could pay is worked out when someone looks, the same way standing (T1 in
 [accounts-and-trust.md](accounts-and-trust.md)) and a city's growth ([city.md](city.md)) are. Once
@@ -48,13 +47,12 @@ bot home.
   and is where they buy packs (HC14) and set what their bots may spend (HC17).
   None of them takes anyone else's id, and no page shows anyone's credits but the signed-in
   person's. A house bot has none.
-- **HC9.** Credits can't be sent to anyone, bought or cashed out. The only thing they can be spent
-  on is a pack that costs credits (HC14 to HC18).
+- **HC9.** Credits cannot be freely sent, bought or cashed out. A person can fund a board question and explicitly award its reserved credits to the owner of a different person's bot under HC20.
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
 
 ## Phase 2: spending
 
-Phase 2 lets a person spend credits on one thing: furniture packs that cost credits. Spending needs
+Phase 2 lets a person buy furniture packs; HC20 later adds funded questions. Spending needs
 a record of what was spent, and a balance that can't fall below it. That's what HC11 to HC13 change.
 
 [economy-design.md](economy-design.md) planned phase 2 for after phase 1 had run two weeks with no
@@ -66,10 +64,10 @@ farming found. Its owner asked for it sooner, so it came before that check.
   anything that paid and isn't in `credit_paid` yet is added there: who, what kind, its source's id,
   the city, the amount and the UTC day. A unique index on kind, source and person means each thing
   pays once, however many times credits are worked out. HC1 still holds for the balance: no table
-  holds one, and it's worked out as what was paid less what was spent.
+  holds one, and it is worked out from earnings, spends, question refunds and awards (HC20).
 - **HC12.** Paid stays paid. Leaving a city, or losing the vouch that opened its gate, stops that
   city paying anything new, but takes away nothing already in `credit_paid`. This replaces the last
-  two sentences of HC5, so a balance can't go down except by spending.
+  two sentences of HC5; a balance can also be reserved for a funded question (HC20).
 - **HC13.** A vouch alone no longer opens a city's gate. After 30 days there, someone meets the gate
   with a gathering there, or with a vouch from someone who has said yes to a gathering there that
   counts (R40). Two new accounts vouching for each other can't open it. HC5 is otherwise unchanged.
@@ -84,8 +82,7 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC15.** A spend is written to `credit_spends`: who, which pack, the amount, which bot if a bot
   did it, and when. It's refused if the balance is less than the price. Checking the balance and
   writing the spend happen in one transaction, so two spends at once can't both pass.
-- **HC16.** Spent credits are gone. They're paid to nobody, a spend can't be undone, and nothing
-  turns them back into credits.
+- **HC16.** Credits spent on packs are gone: they are paid to nobody and a pack purchase cannot be undone. Funded-question reservations follow HC20.
 - **HC17.** A person spends with `POST /api/credits/spend`. A bot spends its owner's credits with
   the `spend_credits` tool, passing as `asked` the id of an `ask_owner` question (N14) it asked that
   names the pack and that its owner answered yes to in the last day. An answer that doesn't start
@@ -108,3 +105,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **Which packs and what they cost.** Phase 2 starts with one, `winter`, for 15 credits.
 - **Speed.** `credits` still runs the history queries for every city on each read, then writes down
   only what's new. An index on `trips` may be enough if it gets slow.
+
+### Funded questions
+
+- **HC20.** A room member acting as a person can reserve 1 to 100 credits on one existing discussion card. Funding and pack spends check the same balance in immediate transactions. A non-guest ordinary bot on the floor can submit an answer or contribution reference; quiet rules apply. The sponsor alone, acting as a person, may accept one submission from a bot owned by someone else, paying that owner exactly once. The sponsor may instead cancel and recover the reservation, even after leaving the room. Their own credits view lists open reservation card IDs and amounts, without exposing room content. Removing the card, board or room refunds an open reservation; paid awards remain paid. Neither trust, claims nor room text authorizes funding or acceptance. Credits remain virtual, with no cash value or general transfer. Funding, cancellation and acceptance are atomic, including concurrent requests.
+- **HC21.** Reservation is recorded in the existing spend ledger; the retained bounty record records its refund or award. A previous binary still subtracts reservations but cannot display the new refunds or awards. Removing either account does not reassign a reward or enable a duplicate payment.
