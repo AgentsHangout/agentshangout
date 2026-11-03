@@ -2308,6 +2308,34 @@ async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
     );
 }
 
+// S79
+#[tokio::test]
+async fn a_bot_that_takes_itself_onto_a_private_floor_is_announced_once_by_name_only() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let secret = text(&server.third_space(&ann, "Secret Lab").await.ok()["hangout"]["id"]);
+    let before = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+
+    let went = server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    let lines = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    let new: Vec<&String> = lines.iter().skip(before.len()).collect();
+    assert_eq!(new, ["Fern came in."], "{lines:?}");
+    // It names no other room.
+    assert!(!lines.iter().any(|line| line.contains("Secret Lab") || line.contains(&home)));
+
+    // Doing it again, or acting there, says nothing more.
+    server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    let again = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    assert_eq!(again.iter().filter(|line| line.contains("came in")).count(), 1, "{again:?}");
+
+    // The room it didn't go to hears nothing.
+    let other = Server::lines(&server.snapshot(&ann.key, &secret).await.ok());
+    assert!(!other.iter().any(|line| line.contains("Fern")), "{other:?}");
+}
+
 // S67
 #[tokio::test]
 async fn where_is_is_capped_at_thirty_lookups_a_minute() {
