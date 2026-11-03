@@ -227,7 +227,16 @@ async fn the_daily_cap_and_a_paused_plan() {
     let extra = s.plan(&ann).await;
     for _ in 0..4 {
         let plan = s.plan(&ann).await;
-        s.state.db.handle_start(&plan, nine + 30, &[(rover.id.clone(), "cued")], now()).unwrap();
+        s.state
+            .db
+            .handle_start(
+                &plan,
+                nine + 30,
+                &[(rover.id.clone(), "cued")],
+                cadence::DAILY_CUES,
+                now(),
+            )
+            .unwrap();
     }
     s.state.db.end_cadence(&s.state.db.running_cadences().unwrap()[0].event_id).unwrap();
     let path = format!("/api/events/{extra}/cadence");

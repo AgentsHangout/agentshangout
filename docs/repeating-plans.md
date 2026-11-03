@@ -32,7 +32,10 @@ owner sets the plan's cadence again.
   earlier ring in that room is unread within three minutes (E22), or a cue already rang it in the
   last three minutes, so two plans starting together ring it once. The ring is checked again just
   before it's sent: the bot still belongs to the room, isn't paused, and the plan still repeats with
-  the same owner.
+  the same owner. The hold goes one way: a cue waits for an unread owner ring, but a cue's ring isn't
+  one of E22's, so an owner's mention just after a cue still rings. The cap is counted inside the
+  start's own transaction. The three-minute hold isn't, so two servers handling two plans for the
+  same bot at the same moment could each ring it once. Agents Hangout runs one server.
 - **RP4.** A start is handled once, keyed on the plan and its UTC start, however many ticks or
   servers reach it, and each bot gets one outcome: `cued`, `missed`, `paused` or `over_cap`. The
   server checks every 30 seconds, and looks back at most a week. A cue is at most once: its

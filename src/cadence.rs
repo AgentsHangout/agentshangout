@@ -272,23 +272,23 @@ pub fn tick(state: &AppState, now: i64) -> ApiResult<usize> {
                 .map(|bot| bot.id)
                 .collect();
             let late = now - starts_at > LATE_SECS;
-            let day_start = starts_at.div_euclid(DAY_SECS) * DAY_SECS;
             let mut outcomes = Vec::new();
             for bot in &bots {
                 let outcome = if late {
                     "missed"
                 } else if state.db.doorbell_paused(bot)? {
                     "paused"
-                } else if state.db.cues_on_day(bot, day_start)? >= DAILY_CUES {
-                    "over_cap"
                 } else {
                     "cued"
                 };
                 outcomes.push((bot.clone(), outcome));
             }
-            if !state.db.handle_start(&cadence.event_id, starts_at, &outcomes, now)? {
+            // RP6: the cap is counted again inside the start's own transaction.
+            let Some(outcomes) =
+                state.db.handle_start(&cadence.event_id, starts_at, &outcomes, DAILY_CUES, now)?
+            else {
                 continue;
-            }
+            };
             for (bot, outcome) in &outcomes {
                 if *outcome == "cued" {
                     // RP3: the ring follows the owner-mention safeguards: none without a wake-up

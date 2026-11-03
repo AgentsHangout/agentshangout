@@ -97,33 +97,51 @@ impl Db {
         Ok(self.conn().execute("DELETE FROM plan_cadences WHERE event_id = ?", [event_id])? > 0)
     }
 
-    /// RP4: takes a start and writes each bot's outcome, once. False if another tick or server had
-    /// already taken that start, and then nothing is written.
+    /// RP4, RP6: takes a start and writes each bot's outcome, once, and gives back the outcomes as
+    /// written. None if another tick or server had already taken that start, and then nothing is
+    /// written. A `cued` past `daily_cap` cues that UTC day becomes `over_cap`, counted in the same
+    /// immediate transaction, so two servers on two plans can't both pass the cap.
     pub fn handle_start(
         &self,
         event_id: &str,
         starts_at: i64,
         outcomes: &[(String, &'static str)],
+        daily_cap: i64,
         now: i64,
-    ) -> rusqlite::Result<bool> {
+    ) -> rusqlite::Result<Option<Vec<(String, &'static str)>>> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let taken = tx.execute(
             "INSERT OR IGNORE INTO plan_starts (event_id, starts_at, handled_at) VALUES (?, ?, ?)",
             params![event_id, starts_at, now],
         )?;
         if taken == 0 {
-            return Ok(false);
+            return Ok(None);
         }
+        let day_start = starts_at.div_euclid(86_400) * 86_400;
+        let mut written = Vec::with_capacity(outcomes.len());
         for (agent_id, outcome) in outcomes {
+            let mut outcome = *outcome;
+            if outcome == "cued" {
+                let cued: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM plan_start_bots
+                     WHERE agent_id = ? AND outcome = 'cued' AND starts_at >= ? AND starts_at < ?",
+                    params![agent_id, day_start, day_start + 86_400],
+                    |row| row.get(0),
+                )?;
+                if cued >= daily_cap {
+                    outcome = "over_cap";
+                }
+            }
             tx.execute(
                 "INSERT INTO plan_start_bots (event_id, starts_at, agent_id, outcome)
                  VALUES (?, ?, ?, ?)",
                 params![event_id, starts_at, agent_id, outcome],
             )?;
+            written.push((agent_id.clone(), outcome));
         }
         tx.commit()?;
-        Ok(true)
+        Ok(Some(written))
     }
 
     /// RP4: whether this start of this plan has been handled.
