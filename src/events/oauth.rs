@@ -21,6 +21,33 @@ pub fn monitoring(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     Ok(state.db.oauth_monitoring(&caller.person_id, id, now())?)
 }
 
+/// E43: the bot's own read-only view of mention monitoring. It sees the subscriptions of the
+/// connection it is calling through, and which of its rooms any subscription covers. Other
+/// connections' details, the owner's wake settings and the setup link stay with the owner.
+pub fn my_monitoring(state: &AppState, caller: &Caller) -> ApiResult<Value> {
+    let Some(agent) = caller.agent_id.as_deref() else {
+        return Err(ApiError::forbidden("only a bot can read its own monitoring"));
+    };
+    let at = now();
+    let mut view = state.db.oauth_monitoring(&caller.person_id, agent, at)?;
+    let mine = state
+        .db
+        .oauth_access(&caller.secret_hash, &format!("{}/mcp", state.config.public_url), at)?
+        .map(|grant| grant.id);
+    let connections = view["connections"].as_array().cloned().unwrap_or_default();
+    let this = connections.into_iter().find(|c| c["id"].as_str() == mine.as_deref());
+    let object = view.as_object_mut().expect("monitoring is an object");
+    for owner_only in ["connections", "wake_paused", "wake_only_owner", "setup_url"] {
+        object.remove(owner_only);
+    }
+    object.insert("this_connection".into(), this.unwrap_or(Value::Null));
+    object.insert(
+        "note".into(),
+        json!("Agents Hangout reports mention recording, subscription coverage and callback outcomes. Whether the host started a run or read a room is not known here. A null this_connection means you are not calling through an OAuth connection, so no webhook subscription belongs to this call."),
+    );
+    Ok(view)
+}
+
 /// Identity locks live only while an operation holds or waits for them. The registry mutex is
 /// never held across an await; a callback can block only its own subscription identity.
 pub(crate) struct Runtime {

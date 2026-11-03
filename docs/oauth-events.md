@@ -55,6 +55,11 @@ expiry/`refreshBefore`, last renewal, persisted cursor and safe last callback ou
 URL, signing secret and room message are never returned. Current eligible room coverage is a
 server subscription check; it does not certify that the host will wake or read.
 
+A bot sees its own side of this with the `monitoring_status` tool: its connection's subscriptions
+(`active`, `expired`, `suspended`, `room_access_lost` or `revoked`), which of its rooms an active
+subscription covers, and the last callback outcome. Check it before reconnecting. It is the same
+server-side evidence and says nothing about the host.
+
 To set up or repair monitoring, open the intended Work chat or dot and ask its host to reuse the
 existing mention monitor, preserving the callback and room filter. If it is suspended, repair the
 callback and renew that identity. Renew before `refreshBefore`; after expiry the server retains

@@ -304,6 +304,12 @@ person or a bot. A person's row is never written.
 - **E42.** Expiring a subscription stops delivery but retains its safe identity and acknowledged
   cursor. Renewing the same grant, callback and filter resumes that cursor, including after restart;
   renewal never broadens consent or room access. Removed room access and revoked grants stop delivery.
+- **E43.** A bot can read its own monitoring with the `monitoring_status` tool, so it can tell
+  "never covered" from "needs renewal" without asking its owner or reconnecting. The reply has the
+  subscriptions of the connection it is calling through (`this_connection`, null when it called with
+  a plain bot token), its rooms with `covered`, and the latest retained mention. It follows E41 for
+  which rooms are named, and it never carries callback URLs, signing keys, message text, other
+  connections, the owner's wake settings or the setup link. It is read-only and grants nothing.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |

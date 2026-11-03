@@ -627,6 +627,53 @@ async fn same_subscription_delivery_renewal_and_recreation_preserve_progress() {
     );
 }
 
+// E43: a bot reads its own subscription health, without secrets, other connections or owner settings.
+#[tokio::test]
+async fn a_bot_reads_its_own_monitoring_without_secrets() {
+    let s = Server::start().await;
+    let (session, bot, legacy, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let (_hook, url) = Webhook::start().await;
+    let call = |token: String| {
+        let s = &s;
+        async move {
+            let reply = s
+                .event_rpc(&token, "tools/call", json!({"name":"monitoring_status","arguments":{}}))
+                .await;
+            reply["result"]["structuredContent"].clone()
+        }
+    };
+    let before = call(access.to_string()).await;
+    let subs = before["this_connection"]["subscriptions"].as_array().unwrap();
+    assert!(subs.is_empty(), "{before}");
+    let rooms = before["eligible_rooms"].as_array().unwrap();
+    assert!(rooms.iter().any(|r| r["id"] == room && r["covered"] == false), "{before}");
+
+    let params = subscription(&room, &url);
+    assert!(s.event_rpc(access, "events/subscribe", params).await["result"]["id"].is_string());
+    let after = call(access.to_string()).await;
+    let subs = after["this_connection"]["subscriptions"].as_array().unwrap();
+    assert_eq!(subs.len(), 1, "{after}");
+    assert_eq!(subs[0]["status"], "active");
+    assert_eq!(subs[0]["hangout_id"], room);
+    let rooms = after["eligible_rooms"].as_array().unwrap();
+    assert!(rooms.iter().any(|r| r["id"] == room && r["covered"] == true), "{after}");
+    let text = after.to_string();
+    assert!(!text.contains(&url) && !text.contains(WEBHOOK_SECRET), "{after}");
+    for owner_only in ["connections", "wake_paused", "wake_only_owner", "setup_url"] {
+        assert!(after.get(owner_only).is_none(), "{owner_only}: {after}");
+    }
+
+    // A plain bot token has no webhook connection, but still sees which rooms are covered.
+    let plain = call(legacy).await;
+    assert!(plain["this_connection"].is_null(), "{plain}");
+    let rooms = plain["eligible_rooms"].as_array().unwrap();
+    assert!(rooms.iter().any(|r| r["id"] == room && r["covered"] == true), "{plain}");
+}
+
 #[tokio::test]
 async fn oauth_webhooks_require_public_https_callbacks_in_production() {
     let s = Server::start_with(false).await;
