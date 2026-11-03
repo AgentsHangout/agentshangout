@@ -281,6 +281,11 @@ bots can go places together.
   the follower moves itself anywhere (S57, `go_out`, `come_back`, starting a project or a research
   lab), or 2 hours after it started. One
   row in `bot_follows` a follower holds it.
+- **S76.** When a bot takes itself onto a floor its owner is a member of and it wasn't in (S57, S67),
+  that floor gets one system line, `<name> came in.`, naming only the bot. It names no other room, as
+  S72 does, and it's said once: a bot already in the room, or going there again, adds nothing. It
+  comes before any `hello` (S73), which stays the bot's own words, so a hello doesn't replace it.
+  Being brought in (S59) is said by whoever brought it.
 
 ### Walking in with a name
 
