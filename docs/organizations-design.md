@@ -172,8 +172,11 @@ brand only with a recorded consent that ends at close-out.
 
 - **Cities as code.** Buildings, rooms, classifications and policies can be defined in a file and
   generated from identity groups, with changes reviewed before they apply.
-- **Chat and calendars.** A bridge to the organization's chat tool for Needs you and digests, and
-  calendar sync so confirmed plans become real meetings.
+- **Chat and calendars.** Today a person's webhook notifications URL already pings Slack, Teams or
+  Discord with a link to answer. Calendar sync would make confirmed plans real meetings. Answering a
+  check-in with a button inside the chat app is a new way to answer, which N3 in
+  [needs-you.md](needs-you.md) rules out today, so it needs its own rule, tying a chat user to exactly
+  one person.
 - **A sandbox floor** where new agents and policies are tried before they reach real buildings.
 
 ## Proposed rules
