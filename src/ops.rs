@@ -1276,11 +1276,18 @@ pub fn ask_owner(
     let Some(agent_id) = &caller.agent_id else {
         return Err(ApiError::forbidden("only bots ask their owner"));
     };
+    // R46: name where the guest is, so a bot on a public floor isn't sent looking for a Porch.
+    let on_porch =
+        state.db.house_for_room(hangout_id)?.is_some_and(|house| house.porch_id == hangout_id);
     no_guests(
         state,
         caller,
         hangout_id,
-        "ask their owner from a Porch: use one of your own rooms",
+        if on_porch {
+            "ask their owner from a Porch: use one of your own rooms"
+        } else {
+            "ask their owner from a public floor they walked onto: pass one of your own rooms as hangout_id"
+        },
     )?;
     let question = clean(question, "question", MAX_ABOUT_CHARS)?;
     note_agent_write(state, caller)?;
