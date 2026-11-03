@@ -106,13 +106,16 @@ being in a room doesn't mean it is awake.
 
 - Only a person sets a cadence on a plan they own, in a room they can propose plans in. Bots, guests
   and walk-ins can't.
-- A series can invite the owner's own bots without asking anyone. Inviting another person's bot sends
-  that person an owner question; the bot is cued only after they say yes, and they can withdraw at
-  any time. A bot's owner can always stop cues to their bot from their Wake up settings.
+- A series can invite the owner's own bots without asking anyone. Inviting another person's bot uses
+  the plan invite and RSVP path that plans already have: the series shows in that person's Needs you
+  under plans to answer, and their bot is cued only after they answer yes for it. Owner questions
+  (R45 to R52) are a bot asking its own owner, so they are not used here. The person can change the
+  answer to no at any time, and can always stop cues to their bot from its Wake up settings.
 - At most 20 active series per person. At most 24 cues a day per bot across all series; past that, the
   rest of the day's cues are recorded as skipped with the reason.
 - Cues follow the existing mention caps: the 20-per-hour room ring limit, coalescing, `only_me`, pause
-  and blocks still apply. A paused bot is not cued.
+  and blocks still apply. A paused bot is not rung (E22), so a cue that starts while it is paused is
+  recorded as skipped with the reason, and is not delivered when the bot resumes.
 - Deleting a room deletes its series. Removing a bot from a household or a room drops it from every
   series there.
 - Nothing about a series leaves the room it lives in: guests see none of it (R15, R19), and growth
@@ -128,7 +131,32 @@ their page.
 Proposal: add a time zone database dependency (for example `jiff` with its bundled tzdb, or
 `chrono-tz`) used only to work out repeat starts, and keep B2's saved offset for display. A person
 with no saved zone can only make UTC cadences, and the reply says so. This is the one new dependency
-in the design and the main thing for a maintainer to decide.
+in the design and the main thing for a maintainer to decide. Following CONTRIBUTING's one change per
+pull request, it lands first in its own small pull request, with B4 updated and its own tests,
+before any cadence code.
+
+Edge times follow RFC 5545 and `jiff`'s defaults: a local time that falls in a spring-forward gap
+(2:30 am on the change day) moves forward by the gap's length, to 3:30 am. A local time that repeats
+in the fall-back hour uses its first occurrence, so it is cued once.
+
+## Routines and repeating plans
+
+A bot's routine (L1 to L5 in [routines.md](routines.md)) and a repeating plan both mention days and
+times, but they answer different questions:
+
+| | Routine | Repeating plan |
+| --- | --- | --- |
+| Answers | When may this bot go out on its own? | When should these bots be woken, and where? |
+| Belongs to | One bot | A plan in one room, with any number of invited bots |
+| Wakes anything | No. It is a permission window, worked out on read (L3) | Yes, each repeat's start cues each invited bot |
+| Has a record | No | The calendar, RSVPs and cancel, like any plan |
+
+So a cadence is not an extension of routine: routine has no room, no invitees and no calendar
+record, and making it wake bots would turn a permission window into a timer. The two never decide
+the same thing, so neither overrides the other. A cue wakes the bot even outside its social hours,
+because a person asked for it in their own plan, the same way a person's mention does (E31). It
+never sends a bot out: going out still needs social hours and `public_places` (L2, L6). A cue for a
+plan on a public floor wakes the bot, but walking there still follows the routine's rules.
 
 ## Proposed rules
 
@@ -142,12 +170,26 @@ These would become numbered rules (proposed prefix `RP`, which no doc uses yet) 
 4. A start is cued at most once, keyed on series and start time.
 5. A start found more than 15 minutes late is recorded as missed, not cued, and shows in `inbox`.
 6. One cue an hour per series and 24 cues a day per bot at most; existing mention caps also apply.
-7. Another owner's bot is cued only after that owner's yes, which they can withdraw.
+7. Another owner's bot is cued only after that owner answers yes for it through the plan RSVP path, which they can change to no.
 8. Repeat starts use the owner's IANA zone and follow daylight saving time.
 9. Canceling a series stops every future cue and keeps past repeats on the record.
 
+## Edge cases the tests must cover
+
+- A bot paused when a repeat starts and resumed a minute later: the cue is skipped, not held.
+- A local time in a daylight saving gap or repeated hour (see Time zones).
+- An `until` date already in the past: refused when set; a series whose `until` passes simply ends.
+- Editing a cadence on a day whose cue already fired: the key `(series_id, starts_at)` keeps that
+  cue from firing again, and the next start comes from the new cadence after now. A new time later
+  the same day is cued.
+- Two ticks, or two servers, reaching the same start: only one cue per bot.
+- A start found more than 15 minutes late: recorded as missed, not cued.
+- A bot removed from the room, or its owner answering no, between two repeats: no further cues.
+- The 24-a-day cap reached: later cues that day are skipped with the reason.
+
 ## Rollout and open questions
 
+- **Phase 0:** the time zone database, in its own pull request.
 - **Phase 1:** daily and weekly cadences, own bots only, one time a day. That covers the 9 am
   check-in and proves the loop, keys and caps.
 - **Phase 2:** hourly windows, monthly days, several times a day, and other owners' bots with their
