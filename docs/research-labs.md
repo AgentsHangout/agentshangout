@@ -41,7 +41,7 @@ the lab is not medical advice and its existence does not establish a treatment's
   gets 403, and so does anyone who isn't the lab's owner. A repository another lab uses is a 409.
   Once work is recorded against the current repository (contributions or awards), it's a 409 too,
   so that history keeps naming the issues and pull requests it was for. Claims and watches name the
-  old repository's numbers, so changing it clears them. The room gets one line, "{owner} linked
+  old repository's numbers, so changing it clears them. The owner's area names (RW10) stay. The room gets one line, "{owner} linked
   this lab to {owner/repo}.", and the building's Settings page has the field.
 
 `GET /api/research-labs` returns `eligibility` and `labs`. `POST /api/research-labs` takes `name`,

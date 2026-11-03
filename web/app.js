@@ -4619,7 +4619,8 @@ async function spaceView(id) {
   function labPanel() {
     const lab = view.research_lab;
     const error = formError();
-    const current = h('p', { class: 'muted' }, 'Linked to ', link(lab.github_url, lab.github), '.');
+    // An external link, not the in-app router: github.com isn't a page of this app.
+    const current = h('p', { class: 'muted' }, 'Linked to ', researchRepositoryLink(lab.github) || lab.github, '.');
     if (!lab.can_change) return sheet('GitHub repository', 'GitHub repository', current, h('p', { class: 'muted' }, 'Only the lab\'s owner can change it.'));
     return sheet('GitHub repository', 'GitHub repository', current,
       h('form', {
