@@ -49,6 +49,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
+        .route("/api/credits", get(credits))
         .route("/api/me/github-display", put(set_github_display))
         .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
@@ -352,6 +353,11 @@ fn person_for(
 }
 
 // Session
+
+/// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
+async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
+}
 
 async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     if let Some(agent_id) = &caller.agent_id {

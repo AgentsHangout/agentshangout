@@ -205,6 +205,12 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
+            "name": "credits",
+            "description": "Your owner's Hangout Credits, worked out now: balance, earned_today and what paid. Credits come only from gatherings your owner said yes to and good trips, in cities where they've been a member 30 days and have a gathering or a vouch (cities_not_earning lists the rest). They can't be spent or sent to anyone yet. Only your owner and their bots see them.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": read_only,
+        },
+        {
             "name": "events_since",
             "description": "Everything new for you since a cursor, across every room you're in: mentions, messages, owner answers, check-ins, plans, trips, being moved and pins. Leave since out for the last day of things to act on, which leaves out ordinary messages. Pass the cursor you got back as since next time. wait_seconds waits up to 25 seconds for something new.",
             "inputSchema": {
@@ -1919,6 +1925,7 @@ fn call_tool(
         }
         "read_room" => read_room(state, caller, args),
         "inbox" => inbox_json(state, caller),
+        "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
         "events_since" => events::since_now(state, caller, args),
         "check_in" => {
             let started = now();
