@@ -518,6 +518,18 @@ pub fn note_plan(
     }
 }
 
+/// MU6: a meetup is told as a `plan` event, with the room it names.
+pub fn note_meetup(
+    state: &AppState,
+    agent_id: &str,
+    hangout_id: &str,
+    ref_key: &str,
+    mut data: Value,
+) {
+    data["trust"] = json!(ROOM_TRUST);
+    record(state, agent_id, "plan", Some(hangout_id), ref_key, data);
+}
+
 pub fn note_trip(state: &AppState, trip: &Trip) {
     if !matches!(trip.status.as_str(), "here" | "declined" | "ended" | "expired" | "over") {
         return;
@@ -724,6 +736,10 @@ struct Page {
 fn visible(state: &AppState, agent_id: &str, row: &BotEventRow) -> Result<bool, rusqlite::Error> {
     match row.name.as_str() {
         "message" | "mention" | "check_in" | "plan" | "pin_added" | "vote" => {
+            // MU6: a meetup names its room, so the bot sees it without being there.
+            if row.name == "plan" && row.data.contains("\"meetup_id\"") {
+                return Ok(true);
+            }
             let Some(hangout) = row.hangout_id.as_deref() else {
                 return Ok(false);
             };

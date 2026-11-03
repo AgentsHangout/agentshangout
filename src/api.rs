@@ -110,6 +110,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/agents/{id}/delete", post(delete_agent))
         .route("/api/agents/{id}/notify", get(agent_notify).put(set_agent_notify))
         .route("/api/agents/{id}/monitoring", get(agent_monitoring))
+        .route("/api/agents/{id}/meetups", get(agent_meetups))
+        .route("/api/agents/{id}/meetups/{meetup_id}", delete(agent_meetup_cancel))
         .route("/api/agents/{id}/notify/test", post(test_agent_notify))
         .route("/api/agents/{id}/doorbell", put(set_doorbell))
         .route("/api/events/{id}/rsvp", post(rsvp))
@@ -145,6 +147,22 @@ pub fn routes() -> Router<AppState> {
         .merge(routines::routes())
         .merge(city_routes())
         .merge(world_routes())
+}
+
+async fn agent_meetups(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::meetups::for_owner(&state, &caller, &id)?))
+}
+
+async fn agent_meetup_cancel(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, meetup_id)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::meetups::owner_cancel(&state, &caller, &id, &meetup_id)?))
 }
 
 async fn agent_monitoring(

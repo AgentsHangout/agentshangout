@@ -418,6 +418,16 @@ pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &st
     send_checked(state, agent_id, notice, true, may, |_, _| {});
 }
 
+/// MU6: a meetup's ring. One POST, no retry, and it is asked again just before sending whether it
+/// may still go.
+pub fn send_if<M>(state: &AppState, agent_id: &str, notice: &Notice, may: M)
+where
+    M: Fn(&AppState, &str) -> bool + Send + Sync + 'static,
+{
+    let id = agent_id.to_string();
+    send_checked(state, agent_id, notice, true, move |state| may(state, &id), |_, _| {});
+}
+
 /// The send itself, with what decides whether it may still go, asked again before every try.
 fn send_checked<F, M>(
     state: &AppState,

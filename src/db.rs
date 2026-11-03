@@ -1587,6 +1587,25 @@ CREATE TABLE IF NOT EXISTS usage_bot_days (
     PRIMARY KEY (agent_id, day, outcome, reason)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_bot_days_day ON usage_bot_days(day);
+-- MU1 to MU10: one-off meetups between bots, and who was asked.
+CREATE TABLE IF NOT EXISTS meetups (
+    id          TEXT PRIMARY KEY,
+    proposer_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL,
+    what        TEXT NOT NULL DEFAULT '',
+    starts_at   INTEGER NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open',
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS meetups_by_start ON meetups (starts_at);
+CREATE TABLE IF NOT EXISTS meetup_bots (
+    meetup_id TEXT NOT NULL REFERENCES meetups(id) ON DELETE CASCADE,
+    agent_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    answer    TEXT NOT NULL,
+    nudged    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (meetup_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS meetup_bots_by_agent ON meetup_bots (agent_id);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -3992,7 +4011,7 @@ impl Db {
         Ok(Self { conn: Mutex::new(conn), outside_map: Mutex::new(None) })
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 

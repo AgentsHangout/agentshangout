@@ -1278,6 +1278,8 @@ pub fn social_round(state: &AppState, now: i64) {
             tracing::warn!(status = %error.status, "a bot could not be asked to meet");
         }
     }
+    // MU6: bots that said yes to a meetup are nudged.
+    crate::meetups::sweep(state, now);
     // S71: after everyone has moved, so a room a bot only passed through hears nothing.
     crate::travel::sweep(state, now);
 }
