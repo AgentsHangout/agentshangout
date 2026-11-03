@@ -1807,7 +1807,10 @@ fn the_top_bar_shows_your_own_balance_as_a_coin() {
     let calls: Vec<&str> =
         coin.split("api(").skip(1).map(|call| call.split(')').next().unwrap()).collect();
     assert_eq!(calls, ["'/api/credits'"], "the coin calls something other than your own credits");
-    assert!(coin.contains("await account.open('');"), "the coin doesn't open the account panel");
+    assert!(coin.contains("onclick: () => showShop(account),"), "the coin doesn't open the shop");
+    let shop = app.split_once("async function showShop(account, pack = null) {").unwrap().1;
+    let shop = shop.split_once("\n}\n").unwrap().0;
+    assert!(shop.contains("await account.open('');"), "the shop isn't in the account panel");
     // The card tells the coin about a spend, so the two never disagree.
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     assert!(card.contains("dispatchEvent(new CustomEvent('ah-credits'"));
@@ -1817,6 +1820,31 @@ fn the_top_bar_shows_your_own_balance_as_a_coin() {
         let at = bar.find("creditCoin(me, account)").unwrap_or_else(|| panic!("no coin in {view}"));
         assert!(at < bar.find("needs").unwrap(), "the coin isn't before Needs you in {view}");
     }
+}
+
+// HC24: a tile in the build catalog that's locked only until a pack is bought stays pressable, and
+// pressing it opens the shop at that pack. Every other locked tile stays disabled.
+#[test]
+fn a_tile_waiting_on_a_pack_opens_the_shop_at_it() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let build = app.split_once("function buildMode({").unwrap().1;
+    let tile = build.split_once("function catalogTile({").unwrap().1;
+    let tile = tile.split_once("\n  }\n").unwrap().0;
+    assert!(tile.contains("disabled: Boolean((why && !shop) || stays),"));
+    assert!(tile.contains("onclick: shop ? () => openShop(shop) : onclick,"));
+    for shop in [
+        "shop: kind.pack_needed || null,",
+        "shop: locked ? pack.pack : null,",
+        "shop: locked ? paidFor.pack : null,",
+    ] {
+        assert!(build.contains(shop), "{shop} is missing");
+    }
+    assert!(!app.contains("buy it in Account"), "a tile still sends you to find the shop yourself");
+    assert!(build.contains("lines: locked ? [] : ["), "a locked pack says pressing puts it up");
+    let room = app.split_once("async function roomView(").unwrap().1;
+    assert!(room.contains("openShop: (pack) => showShop(account, pack),"));
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    assert!(card.contains("h('li', { class: 'shop-item', 'data-pack': offer.pack },"));
 }
 
 // HC8: the site shows your own credits in your account panel, read from your own endpoint, and

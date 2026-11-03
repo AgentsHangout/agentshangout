@@ -121,6 +121,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   fixed in the code, the same for everyone, and none of it is anyone's room, so showing it gives
   nothing away (HC8). The account panel's Shop draws each pack as it comes, on its own paint and
   flooring, and lists what's in it, so a person can see a pack before buying it.
+  A room's build catalog shows a piece, paint, flooring or pack that's waiting on a pack still to
+  buy as locked but pressable, and pressing it opens the shop at that pack. The coin opens the shop
+  too (HC23).
 
 ### For a maintainer to look at
 
