@@ -6,7 +6,7 @@ use crate::{
 };
 use axum::{
     extract::{Path, State},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::Serialize;
@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/research-labs", get(index).post(make))
         .route("/api/research-labs/{id}", get(detail))
         .route("/api/research-labs/{id}/place", post(place_route))
+        .route("/api/research-labs/{id}/github", put(change_repo_route))
 }
 pub fn eligibility(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     let age = now()
@@ -171,6 +172,45 @@ pub async fn create(state: &AppState, caller: &Caller, args: &Value) -> ApiResul
         crate::spaces::went_itself(state, agent, was.as_deref(), &id)?;
     }
     read(state, caller, &id)
+}
+/// RL9: the lab's owner, as a person, points it at another public repository, until work is
+/// recorded against the current one.
+pub async fn change_repo(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    args: &Value,
+) -> ApiResult<Value> {
+    ops::require_human(caller, "change a lab's repository")?;
+    let lab = state.db.research_lab(id)?.ok_or_else(ApiError::not_found)?;
+    if lab.owner_id != caller.person_id {
+        return Err(ApiError::forbidden("only the lab's owner changes its repository"));
+    }
+    let (owner, repo) = repository(text(args, "github")?)?;
+    if format!("{owner}/{repo}").eq_ignore_ascii_case(&lab.github) {
+        return read(state, caller, id);
+    }
+    crate::research_work::verify_public_repo(state, &owner, &repo).await?;
+    match state.db.change_research_lab_repo(id, &owner, &repo)? {
+        Some("recorded") => {
+            return Err(ApiError::conflict(
+                "work is already recorded against this lab's repository, so it stays linked to it",
+            ))
+        }
+        Some(_) => return Err(ApiError::conflict("another lab already uses that repository")),
+        None => {}
+    }
+    ops::announce(state, id, &format!("{} linked this lab to {owner}/{repo}.", caller.name))?;
+    ops::refresh(state, id);
+    read(state, caller, id)
+}
+async fn change_repo_route(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(args): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(change_repo(&state, &caller, &id, &args).await?))
 }
 pub fn place(state: &AppState, caller: &Caller, id: &str, args: &Value) -> ApiResult<Value> {
     let lab = state.db.research_lab(id)?.ok_or_else(ApiError::not_found)?;

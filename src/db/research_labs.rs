@@ -59,6 +59,44 @@ impl Db {
         let rows = stmt.query_map([], lab_from_row)?;
         rows.collect()
     }
+    /// RL9: points a lab at another repository, while nothing is recorded against the current one's
+    /// issue and pull request numbers. Claims and watches name those numbers, so they go.
+    pub fn change_research_lab_repo(
+        &self,
+        lab_id: &str,
+        owner: &str,
+        repo: &str,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let recorded: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM research_work_contributions WHERE lab_id=?1)
+                 OR EXISTS(SELECT 1 FROM research_work_awards WHERE lab_id=?1)",
+            [lab_id],
+            |r| r.get(0),
+        )?;
+        if recorded {
+            return Ok(Some("recorded"));
+        }
+        let taken: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM research_labs WHERE space_id != ?1
+                 AND github_owner = ?2 COLLATE NOCASE AND github_repo = ?3 COLLATE NOCASE)",
+            params![lab_id, owner, repo],
+            |r| r.get(0),
+        )?;
+        if taken {
+            return Ok(Some("repository"));
+        }
+        tx.execute(
+            "UPDATE research_labs SET github_owner = ?2, github_repo = ?3 WHERE space_id = ?1",
+            params![lab_id, owner, repo],
+        )?;
+        tx.execute("DELETE FROM research_work_claims WHERE lab_id = ?", [lab_id])?;
+        tx.execute("DELETE FROM research_work_watches WHERE lab_id = ?", [lab_id])?;
+        tx.commit()?;
+        Ok(None)
+    }
+
     /// Eligibility, quota and provisioning share one transaction: no partial room on refusal.
     pub fn create_research_lab(&self, new: &NewLab<'_>) -> rusqlite::Result<Option<&'static str>> {
         let mut conn = self.conn();

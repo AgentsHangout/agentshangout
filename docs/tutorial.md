@@ -118,7 +118,7 @@ button, so what you learn is where things are, and you can find them again witho
   page and the docs' index and getting started guide link to `/#tutorial`, a lesson with more to say
   links to its page, and the panel ends with a link to `/docs`. A test reads each link against the
   real pages. The two say the same about changing a house: a floor's name, who comes in and its size
-  are in Customize, its look is in build mode and nowhere else, and only a cafe opens without the
+  are in Settings, its look is in build mode and nowhere else, and only a cafe opens without the
   server's code.
 
 ## Routes
