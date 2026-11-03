@@ -741,25 +741,36 @@ async fn a_busy_bot_isnt_taken_off_a_floor_when_its_half_hour_ends() {
     let server = Server::start().await;
     let town = server.town().await;
     server.always_out(&town).await;
-    server.minute();
-    assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str(), "it wandered out");
+    // Rover is out on Bo's own room, opened to the public. The next wander never picks a room it
+    // belongs to (L41), so only being busy can keep it here.
+    let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
+    let open = json!({ "access": "public", "create_code": CODE });
+    server.put(&town.bo.key, &format!("/api/floors/{home}"), open).await.ok();
+    let walk = async || {
+        server.tool(&town.rover, "go_out", json!({ "floor_id": home })).await;
+        let ends = now() + 60;
+        assert!(server.state.db.set_visit_times(&home, &town.rover_id, now() - 600, ends).unwrap());
+        ends
+    };
 
-    // Its walk-in is about to end, and it's talking.
-    let ends = now() + 60;
-    assert!(server
-        .state
-        .db
-        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends)
-        .unwrap());
+    // Not busy: nothing done for an hour. It lapses as before.
+    let ends = walk().await;
+    server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
+    server.minute();
+    let (_, until) = server.state.db.visit_times(&home, &town.rover_id).unwrap().unwrap();
+    assert_eq!(until, ends, "nothing keeps a bot that isn't busy here");
+
+    // Talking: its walk-in is about to end, and it's kept going.
+    let ends = walk().await;
     server.state.db.touch_agent_active(&town.rover_id, now()).unwrap();
     server.minute();
-    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
+    let until = server.state.db.visit_until(&home, &town.rover_id, now()).unwrap().unwrap();
     assert!(until > ends, "kept going: {until} vs {ends}");
     assert_eq!(until.rem_euclid(WANDER_SECS), 0, "to the end of a half hour: {until}");
     assert_eq!(
-        server.state.db.bot_place(&town.rover_id, ends + 30).unwrap().as_deref(),
-        Some(town.cafe.as_str()),
-        "still there once the old end has passed"
+        server.state.db.walked_onto(&town.rover_id, ends + 30).unwrap(),
+        std::slice::from_ref(&home),
+        "still out there once the old end has passed"
     );
     assert!(until <= (now() / DAY + 1) * DAY, "never past its social hours");
 }
@@ -794,17 +805,20 @@ async fn a_bot_the_next_wander_would_bring_back_stays_without_a_gap() {
     server.always_out(&town).await;
     server.minute();
     assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());
-    // Not busy: nothing done for an hour, and the café is the only public floor there is.
+    // Not busy: nothing done for an hour, so only the next wander's pick can keep it. The café is
+    // the only public floor there is, so that's where the next half hour would take it.
     server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
-    let ends = now() + 60;
-    assert!(server
-        .state
-        .db
-        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends)
-        .unwrap());
+    let (arrived, ends) = (now() - 600, now() + 60);
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, arrived, ends).unwrap());
     server.minute();
-    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
-    assert!(until > ends, "{until} vs {ends}");
+    let (since, until) = server.state.db.visit_times(&town.cafe, &town.rover_id).unwrap().unwrap();
+    assert!(until > ends, "kept going: {until} vs {ends}");
+    assert_eq!(since, arrived, "what it can read still starts when it arrived (S19)");
+    assert_eq!(
+        server.state.db.walked_onto(&town.rover_id, ends + 30).unwrap(),
+        std::slice::from_ref(&town.cafe),
+        "no gap at the old end"
+    );
 }
 
 // L46, S71, E11: wandering records where the bot went and tells it, and each room it leaves hears
@@ -998,6 +1012,124 @@ async fn a_bot_says_goodbye_before_it_goes_and_hello_when_it_arrives() {
     assert_eq!(refused, "not found");
     let at_home = server.lines(&town.bo.key, &home).await;
     assert!(!at_home.iter().any(|(_, _, body)| body == "Never said"), "{at_home:?}");
+
+    // A floor that's full refuses it before anything is said, and nothing about its leaving is
+    // noted, so its real leaving later is still heard.
+    let small = json!({ "size": "small" });
+    server.put(&town.ann.key, &format!("/api/floors/{}", town.cafe), small).await.ok();
+    for n in 0..6 {
+        let (_, who) = server.someone(&format!("Guest{n}")).await;
+        server.post(&who.key, &format!("/api/floors/{}/walk-in", town.cafe), json!({})).await.ok();
+    }
+    let before = server.state.db.seen_place(&town.rover_id).unwrap();
+    let args = json!({ "floor_id": town.cafe, "goodbye": "Off to a full café" });
+    let full = server.refused(&town.rover, "go_out", args).await;
+    assert!(full.contains("full"), "{full}");
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(!at_home.iter().any(|(_, _, body)| body == "Off to a full café"), "{at_home:?}");
+    let after = server.state.db.seen_place(&town.rover_id).unwrap();
+    assert_eq!(after, before, "a refused move notes nothing");
+}
+
+// S71: a bot that said goodbye and came back before the next look hasn't left, so when it really
+// leaves later the room hears it.
+#[tokio::test]
+async fn coming_back_before_the_look_forgets_the_goodbye() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
+    server.minute();
+    let args = json!({ "hangout_id": home, "goodbye": "Back soon" });
+    server.tool(&town.rover, "go_to_room", args).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    server.minute();
+    let seen = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    assert_eq!(seen.hangout_id, town.cafe, "{seen:?}");
+    assert!(seen.said_from.is_none() && seen.told_to.is_none(), "{seen:?}");
+
+    server.tool(&town.rover, "come_back", json!({})).await;
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+}
+
+// S71: a look that read a row before the bot moved can't write over what the move noted.
+#[tokio::test]
+async fn a_look_that_raced_a_move_changes_nothing() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let read = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    // The bot moves and is told while the look is between reading and writing.
+    server.tool(&town.rover, "come_back", json!({})).await;
+    let home = server.state.db.bot_place(&town.rover_id, now()).unwrap();
+    assert!(!server
+        .state
+        .db
+        .move_seen_place(&town.rover_id, &read, home.as_deref(), now())
+        .unwrap());
+    let seen = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    assert_eq!(seen.told_to, home, "what the move noted stays: {seen:?}");
+}
+
+// S71: after a long gap in the look, such as an older release running in between, the next one
+// catches up without saying anything days late. A short gap is said as usual.
+#[tokio::test]
+async fn after_a_long_gap_the_look_catches_up_without_a_word() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let stale = now() - agenthangout::travel::LOOK_GAP_SECS - 60;
+    server.state.db.note_look(stale).unwrap();
+    // While the look wasn't running, the walk-in ran out.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 60, now() - 1)
+        .unwrap());
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 0);
+    assert!(server.places(&town.rover).await.is_empty(), "nothing told days late");
+
+    // The look has run now, so the next leaving is said.
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 60, now() - 1)
+        .unwrap());
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+}
+
+// S71: the look only looks at bots it has seen move that something could still move, so a dormant
+// bot costs nothing.
+#[tokio::test]
+async fn the_look_leaves_out_bots_that_never_moved_or_are_long_dormant() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let fern_id = server.state.db.agents_named("Fern", now()).unwrap()[0].id.clone();
+    let listed = |since: i64| -> Vec<String> {
+        server.state.db.bots_to_look_at(since).unwrap().into_iter().map(|(id, _)| id).collect()
+    };
+    assert!(listed(now() - DAY).is_empty(), "nobody has moved yet");
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    assert_eq!(listed(now() - DAY), std::slice::from_ref(&town.rover_id));
+    assert!(!listed(now() - DAY).contains(&fern_id));
+    assert!(
+        listed(now() + 2 * DAY).is_empty(),
+        "two days on, with nothing due, it isn't looked at"
+    );
 }
 
 // S74, S75: a bot follows another of its own accord, goes where it may, and is told when it can't.

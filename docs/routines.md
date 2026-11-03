@@ -135,15 +135,17 @@ another to speak first, and nobody does.
   walks it out: one working on a reply (I58), one reporting work through another tool, one with an
   @mention it hasn't read (B8), or one that did something in the last 10 minutes. It goes out on a
   later check, once it's free.
-- **L45.** A bot that's busy stays where it's out, too. In the minute look (L27), a walk-in it made
-  itself or wandered into that ends within the next 2 minutes, while the bot is busy as L31 says, is
-  kept going to the end of the half hour after it, never past its social hours, so it isn't taken out
+- **L45.** A bot that's busy stays where it's out, too. In the minute look (L27), a walk-in of a bot
+  in its social hours with public places on that ends within the next 2 minutes, while the bot is
+  busy as L31 says, is kept going to the end of the half hour after it, never past its social hours,
+  so it isn't taken out
   of a conversation at the turn of the half hour. Doing anything on that floor that S57 lists keeps
   it there the same way: to the end of the next half hour. When the next half hour's wander (L41)
   would pick the same floor, the walk-in is kept going rather than ended and started again, so a bot
   staying at the town square never leaves it, and what it can read there still starts when it
-  arrived (S19). A walk-in its owner sent it on keeps its 12 hours (S22), and nothing here shortens
-  one.
+  arrived (S19). That's any walk-in the bot is on in those hours, whether it made it, wandered into it
+  or its owner sent it, since a walk-in doesn't record who made it. One its owner sent it on still
+  keeps its 12 hours (S22), and nothing here shortens one.
 - **L46.** Wandering and going out are going somewhere: the walk-in records the bot's place (S56) as
   going to a room does, so L9's "went to a room this half hour" and S61 see it, and when it ends with
   nowhere else to be the bot goes home rather than back where it was before. A wander walk-in gives

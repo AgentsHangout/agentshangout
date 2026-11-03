@@ -376,18 +376,14 @@ pub fn go_out(
     ops::note_agent_write(state, caller)?;
     let until = ends.min(now + WALK_IN_SECS);
     let was = state.db.bot_place(agent_id, now)?;
-    // S73: a goodbye only for a move that can happen, so a refused one leaves nothing said.
+    // S73: a goodbye only for a move that will happen. Everything that can refuse it is checked
+    // first, so a refused one leaves nothing said.
     let goodbye = match parting.goodbye {
         Some(text) => {
-            let floor = state
-                .db
-                .floor(floor_id)?
-                .filter(|floor| floor.access == "public")
-                .ok_or_else(ApiError::not_found)?;
-            if state.db.is_turned_out(&floor.space_id, &caller.person_id)? {
-                return Err(ApiError::not_found());
+            let fits = would_walk_in(state, agent_id, &caller.person_id, floor_id, until)?;
+            if fits != WalkedIn::In {
+                return Err(walk_in_refused(fits));
             }
-            crate::spaces::require_public_conversations(state, agent_id, floor_id)?;
             let moving = was.as_deref() != Some(floor_id);
             Some(crate::travel::say_goodbye(state, caller, was.as_deref(), moving, text))
         }
@@ -421,12 +417,49 @@ pub fn go_out(
             }
             Ok(reply)
         }
-        WalkedIn::Full => Err(ApiError::conflict("that floor is full")),
-        WalkedIn::TooManyBots => Err(ApiError::conflict(format!(
-            "your owner has {MAX_BOTS_WALKED_IN} bots on that floor already"
-        ))),
-        WalkedIn::OnTrip => Err(ApiError::conflict("you're on a trip: go home first")),
+        refused => Err(walk_in_refused(refused)),
     }
+}
+
+/// Why a bot's own walk-in was refused.
+fn walk_in_refused(walked: WalkedIn) -> ApiError {
+    match walked {
+        WalkedIn::Full => ApiError::conflict("that floor is full"),
+        WalkedIn::TooManyBots => ApiError::conflict(format!(
+            "your owner has {MAX_BOTS_WALKED_IN} bots on that floor already"
+        )),
+        WalkedIn::OnTrip | WalkedIn::In => ApiError::conflict("you're on a trip: go home first"),
+    }
+}
+
+/// S73: what `walk_bot_in` would come to now, changing nothing. A floor it can't go to at all is
+/// the same refusal `walk_bot_in` gives.
+fn would_walk_in(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    floor_id: &str,
+    until: i64,
+) -> ApiResult<WalkedIn> {
+    let now = now();
+    let floor = state
+        .db
+        .floor(floor_id)?
+        .filter(|floor| floor.access == "public")
+        .ok_or_else(ApiError::not_found)?;
+    if state.db.is_turned_out(&floor.space_id, owner_id)? {
+        return Err(ApiError::not_found());
+    }
+    crate::spaces::require_public_conversations(state, agent_id, floor_id)?;
+    let visit = NewVisit {
+        hangout_id: &floor.id,
+        who: agent_id,
+        person_id: owner_id,
+        agent_id: Some(agent_id),
+        until,
+        now,
+    };
+    Ok(state.db.would_walk_in(&visit, capacity(&floor.size), MAX_BOTS_WALKED_IN)?)
 }
 
 fn come_back_now(state: &AppState, agent_id: &str, reason: &str) -> ApiResult<Vec<String>> {

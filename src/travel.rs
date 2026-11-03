@@ -64,7 +64,7 @@ pub fn say_goodbye(
     let said = posted(state, caller, from, text);
     if said["posted"] == true {
         if let Some(agent_id) = caller.agent_id.as_deref() {
-            if let Err(error) = state.db.note_said_leaving(agent_id, from) {
+            if let Err(error) = state.db.note_said_leaving(agent_id, from, now()) {
                 tracing::warn!(%error, "a goodbye could not be noted");
             }
         }
@@ -119,40 +119,69 @@ fn room_ref(state: &AppState, room: Option<&str>) -> ApiResult<Value> {
 /// the last look is said to have left the room it was in, once, and is told where it is now if
 /// nothing else told it. A bot that fails is skipped.
 pub fn sweep(state: &AppState, now: i64) {
-    let bots = match state.db.bots_to_look_at() {
+    let bots = match state.db.bots_to_look_at(now - LOOK_BACK_SECS) {
         Ok(bots) => bots,
         Err(error) => {
             tracing::error!(%error, "the bots to look at could not be listed");
             return;
         }
     };
-    for (agent_id, name, _) in bots {
+    for (agent_id, name) in bots {
         if let Err(error) = look_at(state, &agent_id, &name, now) {
             tracing::warn!(status = %error.status, "a bot's leaving could not be said");
         }
     }
 }
 
+/// S71: how long after a bot or its row last changed it's still looked at.
+const LOOK_BACK_SECS: i64 = 24 * 3600;
+/// S71: a gap in the look longer than this is caught up on without saying anything.
+pub const LOOK_GAP_SECS: i64 = 2 * 3600;
+
+/// S71: the running server's minute, before its look. When the look hasn't run for
+/// `LOOK_GAP_SECS`, as after going back to an older release and forward again, every row is brought
+/// up to where its bot is now, saying nothing, so no room hears days late about a bot that left it.
+pub fn catch_up(state: &AppState, now: i64) {
+    let caught = (|| -> ApiResult<()> {
+        let stale = state.db.last_look()?.is_none_or(|at| now - at > LOOK_GAP_SECS);
+        if stale {
+            for agent_id in state.db.seen_bots()? {
+                let place = state.db.bot_place(&agent_id, now)?;
+                state.db.reset_seen_place(&agent_id, place.as_deref(), now)?;
+            }
+        }
+        state.db.note_look(now)?;
+        Ok(())
+    })();
+    if let Err(error) = caught {
+        tracing::warn!(status = %error.status, "the look could not catch up");
+    }
+}
+
 fn look_at(state: &AppState, agent_id: &str, name: &str, now: i64) -> ApiResult<()> {
+    // The row first: anything that changes it after this makes the write below change nothing.
+    let Some(seen) = state.db.seen_place(agent_id)? else {
+        return Ok(());
+    };
     let place = state.db.bot_place(agent_id, now)?;
-    let seen = state.db.seen_place(agent_id)?;
-    let was = seen.as_ref().map(|seen| seen.hangout_id.clone());
-    if was == place {
+    let left = seen.hangout_id.as_str();
+    if place.as_deref() == Some(left) {
+        // Back where it was, or never gone: what a move or a goodbye noted no longer applies.
+        if seen.told_to.is_some() || seen.said_from.is_some() {
+            state.db.clear_seen_notes(agent_id, &seen, now)?;
+        }
         return Ok(());
     }
     // Only the look that moves the row on says anything, so nothing is said twice.
-    if !state.db.move_seen_place(agent_id, was.as_deref(), place.as_deref(), now)? {
+    if !state.db.move_seen_place(agent_id, &seen, place.as_deref(), now)? {
         return Ok(());
     }
-    // A bot seen for the first time came from nowhere anyone knows.
-    let Some(seen) = seen else {
-        return Ok(());
-    };
-    let left = seen.hangout_id.as_str();
     if seen.said_from.as_deref() != Some(left) && hears_leaving(state, left)? {
         ops::announce(state, left, &went_line(state, name, agent_id, place.as_deref())?)?;
     }
-    let told = seen.told_to.as_deref() == Some(place.as_deref().unwrap_or(""));
+    let told = seen.told_to.as_deref() == Some(place.as_deref().unwrap_or(""))
+        // E10, E11: leaving a house it was only visiting is a trip ending, and the trip says so.
+        || trip_room(state, agent_id, left)?;
     if !told {
         let home = state.db.bot_home_room(agent_id)?;
         let extra = json!({ "left": room_ref(state, Some(left))?, "you_are_in": room_ref(state, place.as_deref())? });
@@ -164,6 +193,11 @@ fn look_at(state: &AppState, agent_id: &str, name: &str, now: i64) -> ApiResult<
         }
     }
     Ok(())
+}
+
+/// A Porch or Living Room the bot was only in as a guest on a trip.
+fn trip_room(state: &AppState, agent_id: &str, room: &str) -> ApiResult<bool> {
+    Ok(state.db.house_for_room(room)?.is_some() && !state.db.belongs_to_room(room, agent_id)?)
 }
 
 fn bot_of(caller: &Caller) -> ApiResult<&str> {

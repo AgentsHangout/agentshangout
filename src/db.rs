@@ -1379,6 +1379,12 @@ CREATE TABLE IF NOT EXISTS bot_follows (
     until       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_follows_by_leader ON bot_follows (leader_id);
+-- S71: when the running server's minute look last ran, so after a long gap, such as an older
+-- release running in between, it catches up without saying days-old things.
+CREATE TABLE IF NOT EXISTS look_marks (
+    name        TEXT PRIMARY KEY,
+    at          INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -1866,6 +1872,8 @@ pub struct SeenPlace {
     pub hangout_id: String,
     pub told_to: Option<String>,
     pub said_from: Option<String>,
+    /// Goes up with every change to the row, so a look can tell nothing touched it meanwhile.
+    pub seen_at: i64,
 }
 
 /// A floor a bot left, and why. S62.
@@ -6616,36 +6624,9 @@ impl Db {
     ) -> rusqlite::Result<WalkedIn> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        if let Some(agent_id) = visit.agent_id {
-            let on_trip = exists(
-                &tx,
-                "SELECT 1 FROM trips WHERE agent_id = ? AND status = 'here' AND ends_at > ?",
-                params![agent_id, visit.now],
-            )?;
-            if on_trip {
-                return Ok(WalkedIn::OnTrip);
-            }
-        }
-        let here = exists(
-            &tx,
-            "SELECT 1 FROM floor_visits WHERE hangout_id = ? AND who = ? AND until > ?",
-            params![visit.hangout_id, visit.who, visit.now],
-        )?;
-        if !here {
-            if count_on_floor(&tx, visit.hangout_id, visit.now)? >= capacity {
-                return Ok(WalkedIn::Full);
-            }
-            if visit.agent_id.is_some() {
-                let bots: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM floor_visits
-                     WHERE hangout_id = ? AND person_id = ? AND agent_id IS NOT NULL AND until > ?",
-                    params![visit.hangout_id, visit.person_id, visit.now],
-                    |row| row.get(0),
-                )?;
-                if bots >= max_bots {
-                    return Ok(WalkedIn::TooManyBots);
-                }
-            }
+        let checked = walk_in_check(&tx, visit, capacity, max_bots)?;
+        if checked != WalkedIn::In {
+            return Ok(checked);
         }
         tx.execute(
             "DELETE FROM floor_visits WHERE who = ? AND hangout_id != ?",
@@ -6661,6 +6642,17 @@ impl Db {
         )?;
         tx.commit()?;
         Ok(WalkedIn::In)
+    }
+
+    /// S73: what walking in would come to now, changing nothing, so a move that would be refused
+    /// says no goodbye first.
+    pub fn would_walk_in(
+        &self,
+        visit: &NewVisit,
+        capacity: i64,
+        max_bots: i64,
+    ) -> rusqlite::Result<WalkedIn> {
+        walk_in_check(&self.conn(), visit, capacity, max_bots)
     }
 
     /// S56: the one room a bot is in now, whatever else it belongs to. A trip comes first, because
@@ -6713,15 +6705,23 @@ impl Db {
         staying_or_home(&self.conn(), agent_id, None)
     }
 
-    /// S71: every bot that isn't a house bot, with its owner, for the minute look.
-    pub fn bots_to_look_at(&self) -> rusqlite::Result<Vec<(String, String, String)>> {
+    /// S71: the bots the minute look looks at: those it has seen move, and only while something
+    /// could still move them without their doing anything, so a dormant bot costs nothing.
+    /// `since` is a day ago: nothing that moves a bot by time (S61's 30 minutes, a walk-in, social
+    /// hours, a trip) is still due a day after the bot or its row last changed.
+    pub fn bots_to_look_at(&self, since: i64) -> rusqlite::Result<Vec<(String, String)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT a.id, a.name, a.owner_id FROM agents a
+            "SELECT a.id, a.name FROM bot_seen_places s JOIN agents a ON a.id = s.agent_id
              WHERE NOT EXISTS (SELECT 1 FROM bot_homes b WHERE b.agent_id = a.id AND b.is_house = 1)
+               AND (s.seen_at > ?1
+                    OR COALESCE(a.last_active_at, 0) > ?1
+                    OR EXISTS (SELECT 1 FROM bot_places p WHERE p.agent_id = a.id AND p.since > ?1)
+                    OR EXISTS (SELECT 1 FROM floor_visits v WHERE v.agent_id = a.id AND v.until > ?1)
+                    OR EXISTS (SELECT 1 FROM trips t WHERE t.agent_id = a.id AND t.ends_at > ?1))
              ORDER BY a.id",
         )?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        let rows = stmt.query_map([since], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     }
 
@@ -6730,45 +6730,121 @@ impl Db {
     pub fn seen_place(&self, agent_id: &str) -> rusqlite::Result<Option<SeenPlace>> {
         self.conn()
             .query_row(
-                "SELECT hangout_id, told_to, said_from FROM bot_seen_places WHERE agent_id = ?",
+                "SELECT hangout_id, told_to, said_from, seen_at FROM bot_seen_places
+                 WHERE agent_id = ?",
                 [agent_id],
                 |row| {
                     Ok(SeenPlace {
                         hangout_id: row.get(0)?,
                         told_to: row.get(1)?,
                         said_from: row.get(2)?,
+                        seen_at: row.get(3)?,
                     })
                 },
             )
             .optional()
     }
 
-    /// S71: the minute look moves a bot on from `was` to `now_in`, once. Two looks at the same
-    /// time can't both say it: only the one that finds `was` still there changes the row.
+    /// S71: the minute look moves a bot's row on from what it read to `now_in`, once. It changes
+    /// nothing if anything touched the row since the look read it, such as the bot moving and
+    /// being told (`seen_at` goes up with every change), so two looks, or a look and a move, can't
+    /// both say it.
     pub fn move_seen_place(
         &self,
         agent_id: &str,
-        was: Option<&str>,
+        seen: &SeenPlace,
         now_in: Option<&str>,
         at: i64,
     ) -> rusqlite::Result<bool> {
         let conn = self.conn();
-        let changed = match (was, now_in) {
-            (Some(was), Some(now_in)) => conn.execute(
-                "UPDATE bot_seen_places SET hangout_id = ?3, told_to = NULL, said_from = NULL,
-                    seen_at = ?4
-                 WHERE agent_id = ?1 AND hangout_id = ?2",
-                params![agent_id, was, now_in, at],
+        let same = "agent_id = ?1 AND hangout_id = ?2 AND told_to IS ?3 AND said_from IS ?4
+                    AND seen_at = ?5";
+        let changed = match now_in {
+            Some(now_in) => conn.execute(
+                &format!(
+                    "UPDATE bot_seen_places SET hangout_id = ?6, told_to = NULL, said_from = NULL,
+                        seen_at = MAX(seen_at + 1, ?7)
+                     WHERE {same}"
+                ),
+                params![
+                    agent_id,
+                    seen.hangout_id,
+                    seen.told_to,
+                    seen.said_from,
+                    seen.seen_at,
+                    now_in,
+                    at
+                ],
             )?,
-            (Some(was), None) => conn.execute(
-                "DELETE FROM bot_seen_places WHERE agent_id = ?1 AND hangout_id = ?2",
-                params![agent_id, was],
+            None => conn.execute(
+                &format!("DELETE FROM bot_seen_places WHERE {same}"),
+                params![agent_id, seen.hangout_id, seen.told_to, seen.said_from, seen.seen_at],
             )?,
-            // A row starts only with a move (`note_told_place`), never with a look, so the look
-            // writes nothing for a bot that hasn't moved.
-            (None, _) => 0,
         };
         Ok(changed > 0)
+    }
+
+    /// S71: back where it was seen before the look came round, so what a move or a goodbye noted
+    /// no longer applies. Only if nothing touched the row since it was read.
+    pub fn clear_seen_notes(
+        &self,
+        agent_id: &str,
+        seen: &SeenPlace,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_seen_places SET told_to = NULL, said_from = NULL,
+                seen_at = MAX(seen_at + 1, ?6)
+             WHERE agent_id = ?1 AND hangout_id = ?2 AND told_to IS ?3 AND said_from IS ?4
+               AND seen_at = ?5",
+            params![agent_id, seen.hangout_id, seen.told_to, seen.said_from, seen.seen_at, at],
+        )?;
+        Ok(())
+    }
+
+    /// S71: after the look hasn't run for a long while, such as an older release running in
+    /// between, each row is brought up to where the bot is now, saying nothing.
+    pub fn reset_seen_place(
+        &self,
+        agent_id: &str,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match now_in {
+            Some(room) => conn.execute(
+                "UPDATE bot_seen_places SET hangout_id = ?2, told_to = NULL, said_from = NULL,
+                    seen_at = MAX(seen_at + 1, ?3)
+                 WHERE agent_id = ?1",
+                params![agent_id, room, at],
+            )?,
+            None => conn.execute("DELETE FROM bot_seen_places WHERE agent_id = ?", [agent_id])?,
+        };
+        Ok(())
+    }
+
+    /// S71: every bot the look has a row for.
+    pub fn seen_bots(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT agent_id FROM bot_seen_places ORDER BY agent_id")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// S71: when the minute look last ran on the server, as the running server records it.
+    pub fn last_look(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row("SELECT at FROM look_marks WHERE name = 'leaving'", [], |row| row.get(0))
+            .optional()
+    }
+
+    pub fn note_look(&self, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO look_marks (name, at) VALUES ('leaving', ?1)
+             ON CONFLICT (name) DO UPDATE SET at = excluded.at",
+            [at],
+        )?;
+        Ok(())
     }
 
     /// E11, S71: the bot already knows where this move took it (`None` is no room), so the minute
@@ -6782,8 +6858,9 @@ impl Db {
     ) -> rusqlite::Result<()> {
         let conn = self.conn();
         conn.execute(
-            "UPDATE bot_seen_places SET told_to = ?2 WHERE agent_id = ?1",
-            params![agent_id, now_in.unwrap_or("")],
+            "UPDATE bot_seen_places SET told_to = ?2, seen_at = MAX(seen_at + 1, ?3)
+             WHERE agent_id = ?1",
+            params![agent_id, now_in.unwrap_or(""), at],
         )?;
         if let Some(room) = now_in {
             conn.execute(
@@ -6797,10 +6874,16 @@ impl Db {
 
     /// S73: the bot said goodbye to this room itself, or the room was told, so the minute look
     /// says nothing more there.
-    pub fn note_said_leaving(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+    pub fn note_said_leaving(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "UPDATE bot_seen_places SET said_from = ?2 WHERE agent_id = ?1 AND hangout_id = ?2",
-            params![agent_id, hangout_id],
+            "UPDATE bot_seen_places SET said_from = ?2, seen_at = MAX(seen_at + 1, ?3)
+             WHERE agent_id = ?1 AND hangout_id = ?2",
+            params![agent_id, hangout_id, at],
         )?;
         Ok(())
     }
@@ -6903,6 +6986,47 @@ impl Db {
         let rows = stmt.query_map(params![leader_id, now], |row| row.get(0))?;
         rows.collect()
     }
+}
+
+/// S13, S24, S39: whether a walk-in fits: `In` when it does, or why not.
+fn walk_in_check(
+    conn: &Connection,
+    visit: &NewVisit,
+    capacity: i64,
+    max_bots: i64,
+) -> rusqlite::Result<WalkedIn> {
+    if let Some(agent_id) = visit.agent_id {
+        let on_trip = exists(
+            conn,
+            "SELECT 1 FROM trips WHERE agent_id = ? AND status = 'here' AND ends_at > ?",
+            params![agent_id, visit.now],
+        )?;
+        if on_trip {
+            return Ok(WalkedIn::OnTrip);
+        }
+    }
+    let here = exists(
+        conn,
+        "SELECT 1 FROM floor_visits WHERE hangout_id = ? AND who = ? AND until > ?",
+        params![visit.hangout_id, visit.who, visit.now],
+    )?;
+    if !here {
+        if count_on_floor(conn, visit.hangout_id, visit.now)? >= capacity {
+            return Ok(WalkedIn::Full);
+        }
+        if visit.agent_id.is_some() {
+            let bots: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM floor_visits
+                 WHERE hangout_id = ? AND person_id = ? AND agent_id IS NOT NULL AND until > ?",
+                params![visit.hangout_id, visit.person_id, visit.now],
+                |row| row.get(0),
+            )?;
+            if bots >= max_bots {
+                return Ok(WalkedIn::TooManyBots);
+            }
+        }
+    }
+    Ok(WalkedIn::In)
 }
 
 /// S56, S61: the room a bot is staying in if it still belongs there, or else its home.
@@ -7805,6 +7929,21 @@ impl Db {
             out.insert(agent_id, Thinking { phase: "waiting", until: at + window });
         }
         Ok(out)
+    }
+
+    /// A bot's walk-in on a floor: when it started (S19) and when it ends, ended or not.
+    pub fn visit_times(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+    ) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT since, until FROM floor_visits WHERE hangout_id = ? AND agent_id = ?",
+                params![hangout_id, agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
     }
 
     /// Moves a walk-in's times, which is how a test makes one run out. False if there's none.

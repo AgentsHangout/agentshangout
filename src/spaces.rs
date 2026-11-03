@@ -1199,7 +1199,7 @@ async fn change_floor(
             ops::announce(&state, &floor.id, &line)?;
             // S71: the room was told, so the minute look says nothing more.
             for agent_id in &removed {
-                state.db.note_said_leaving(agent_id, &floor.id)?;
+                state.db.note_said_leaving(agent_id, &floor.id, at)?;
             }
         }
     } else if body.access.as_deref() == Some("private") && floor.access == "public" {
@@ -1677,9 +1677,22 @@ fn go_to_with(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<
         return Err(ApiError::conflict("you're on a trip: go home first"));
     }
     place_bot(state, agent_id, hangout_id)?;
-    // S75: doing something in another room ends following. S74: its own followers come along.
-    state.db.unfollow(agent_id, now)?;
-    crate::travel::move_followers(state, agent_id, was.as_deref(), hangout_id)
+    went_itself(state, agent_id, was.as_deref(), hangout_id)
+}
+
+/// S74, S75: a bot that took itself from `was` to `to` stops following anyone, and the bots
+/// following it come along if they may. Says what became of them.
+pub fn went_itself(
+    state: &AppState,
+    agent_id: &str,
+    was: Option<&str>,
+    to: &str,
+) -> ApiResult<Vec<Value>> {
+    if was == Some(to) {
+        return Ok(Vec::new());
+    }
+    state.db.unfollow(agent_id, now())?;
+    crate::travel::move_followers(state, agent_id, was, to)
 }
 
 /// S57, S67: `go_to_room`, for a bot going somewhere with nothing to do there yet. A floor its
