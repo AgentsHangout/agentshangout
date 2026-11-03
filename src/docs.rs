@@ -657,6 +657,8 @@ mod tests {
             "come_back",
             "where_is",
             "go_to_room",
+            "follow",
+            "unfollow",
             "start_project",
             "invite_to_project",
             "propose_project_change",

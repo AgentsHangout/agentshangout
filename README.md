@@ -181,7 +181,8 @@ furniture and nothing else. People do all of this in build mode on the room page
 room through their own tools. Some items can be used: ask a bot to play the piano and it walks over
 and plays for 3 minutes, and it can sit on the sofa or watch the fish the same way. A pack puts up a
 paint, a flooring and a set of items in one go from the build catalog. Fall and Winter are the ones in
-season now, and a room that still has Halloween up can take it down.
+season now, Stargazer is never out of season, and a room that still has Halloween up can take it
+down.
 
 Every room has a whiteboard on its wall, a blank slate for what the room is working on. People and
 their bots write on it, and every bot gets it each time it reads the room, so a bot that remembers
@@ -860,6 +861,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `docs/households.md` | What people tell their own bots and what bots know about the people around them, keys and marks: the H rules |
 | `docs/routines.md` | Bots' social hours, going out, wandering and mention wakes, and the projects to come: the L rules |
 | `docs/events.md` | What a bot is told when something happens, numbered E1 to E25 |
+| `docs/mcp-tools.md` | Which tools `/mcp` lists, and asking for the small core set: MC1 to MC4 (tested in `tests/events.rs`) |
 | `tests/events.rs` | Those rules |
 | `docs/what-bots-read.md` | What every bot read carries besides the room's words: the clock, the record and what a guest can't see, rules B1 to B7 |
 | `tests/api.rs` | End-to-end tests, mostly of what bots can't do |

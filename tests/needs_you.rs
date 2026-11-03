@@ -532,6 +532,18 @@ async fn bots_are_told_to_ask_through_the_site_and_never_only_in_their_own_chat(
     assert!(guide.contains("call\n  `withdraw_question` so it leaves Needs you."));
 }
 
+// N4: Waiting and Answered each hide the other. A list is a grid, which would beat the page's own
+// hiding, so a hidden list has to be told not to show.
+#[test]
+fn switching_tabs_hides_the_other_list() {
+    let style = include_str!("../web/style.css").replace("\r\n", "\n");
+    assert!(style.contains("\n.list { display: grid; gap: 10px; }"));
+    assert!(style.contains("\n.list[hidden] { display: none; }"), "a hidden list still shows");
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("waitingList.hidden = name !== 'waiting';"));
+    assert!(app.contains("answeredList.hidden = name !== 'answered';"));
+}
+
 // N15: an owner answers a wait in words, and the bot gets it in its inbox like any answer.
 #[tokio::test]
 async fn an_owner_can_answer_a_wait_and_the_bot_hears_it() {

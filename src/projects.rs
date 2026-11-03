@@ -91,8 +91,10 @@ pub fn start_project(
         state.db.change_space(&space, None, Some(purpose))?;
     }
     ops::announce(state, &floor.id, &format!("{} started the project {name}.", caller.name))?;
-    // S59: it starts out in the room it just made.
+    // S59: it starts out in the room it just made. S74, S75: it went there itself.
+    let was = state.db.bot_place(agent_id, now)?;
     spaces::place_bot(state, agent_id, &floor.id)?;
+    spaces::went_itself(state, agent_id, was.as_deref(), &floor.id)?;
     Ok(json!({ "project_id": floor.id, "floor_id": floor.id, "name": name }))
 }
 
@@ -432,7 +434,7 @@ fn furnish_at(
 }
 
 /// L36: the room of the newest of a bot's projects whose building stands, where it goes to work.
-pub fn workplace(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
+pub fn project_room(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
     for (space, _) in state.db.projects_of_bot(agent_id)?.into_iter().rev() {
         if building_of(state, &space)?.is_some() {
             return Ok(Some(space.id));

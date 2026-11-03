@@ -771,3 +771,160 @@ fn the_room_page_has_a_boards_panel() {
     assert!(app.contains("https://github.com/"), "a GitHub link has to be a plain link");
     assert!(css.contains(".board-block"), "web/style.css has lost a board");
 }
+
+// HC20: the sponsor personally funds and accepts a different owner's bot answer.
+#[tokio::test]
+async fn funded_question_requires_a_person_and_pays_one_other_owner() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let own = server.bot(&ann, &room, "Own").await;
+    let board = text(&server.board(&ann.key, &room, "discussion", "Questions").await.ok()["id"]);
+    let card =
+        text(&server.card(&ann.key, &board, "Question?", "Evidence please").await.ok()["id"]);
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: 0 },
+            )],
+            |_| 20,
+            100,
+            1,
+        )
+        .unwrap();
+    let path = format!("/api/cards/{card}/bounty");
+    server.post(&scout.token, &path, json!({"amount":10})).await.refused(StatusCode::FORBIDDEN);
+    server.post(&ann.key, &path, json!({"amount":10})).await.ok();
+    assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["open_questions"][0]["amount"], 10);
+    assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["open_questions"], json!([]));
+    let own_answer = server
+        .tool(&own.token, "submit_question_answer", json!({"card_id":card,"text":"mine"}))
+        .await;
+    assert_eq!(own_answer["isError"], true);
+    let answer = server
+        .tool(&scout.token, "submit_question_answer", json!({"card_id":card,"text":"Evidence"}))
+        .await;
+    let id = text(&answer["structuredContent"]["id"]);
+    // HC20: one answer per bot, so one bot can't fill the question by itself.
+    let again = server
+        .tool(&scout.token, "submit_question_answer", json!({"card_id":card,"text":"More"}))
+        .await;
+    assert_eq!(again["isError"], true, "{again}");
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(
+        listed(&list, "Question?").unwrap()["bounty"]["submissions"].as_array().unwrap().len(),
+        1
+    );
+    let bounty = &listed(&list, "Question?").unwrap()["bounty"];
+    assert_eq!(bounty["amount"], 10);
+    assert_eq!(bounty["submissions"][0]["can_accept"], true);
+    let accept = format!("{path}/accept");
+    server.post(&bo.key, &accept, json!({"submission_id":id})).await.refused(StatusCode::CONFLICT);
+    server.post(&ann.key, &accept, json!({"submission_id":id})).await.ok();
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&list, "Question?").unwrap()["bounty"]["accepted_submission_id"], id);
+    server.post(&ann.key, &accept, json!({"submission_id":id})).await.refused(StatusCode::CONFLICT);
+    assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["balance"], 10);
+    assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["balance"], 10);
+    // HC22: the reservation and the award are in each history, naming no question or person, and
+    // a history still adds up to the balance.
+    for (key, kind, amount) in [(&ann.key, "question", -10), (&bo.key, "question_award", 10)] {
+        let credits = server.get(key, "/api/credits").await.ok();
+        let history = credits["history"].as_array().unwrap();
+        let line =
+            history.iter().find(|line| line["kind"] == kind).unwrap_or_else(|| panic!("{credits}"));
+        assert_eq!(line["amount"], amount, "{credits}");
+        assert!(line.get("pack").is_none() && line.get("bot").is_none(), "{credits}");
+        let sum: i64 = history.iter().map(|line| line["amount"].as_i64().unwrap()).sum();
+        assert_eq!(sum, credits["balance"].as_i64().unwrap(), "{credits}");
+    }
+}
+
+// HC20/HC21: authorization and rejected changes leave the reservation intact.
+#[tokio::test]
+async fn funded_question_checks_room_quiet_amount_and_cancel_after_leaving() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let bot = server.bot(&ann, &room, "Scout").await;
+    let (_, outsider) = server.someone("Eve").await;
+    let board = text(&server.board(&ann.key, &room, "discussion", "Questions").await.ok()["id"]);
+    let card = text(&server.card(&ann.key, &board, "Question?", "Evidence").await.ok()["id"]);
+    server
+        .state
+        .db
+        .settle_credits(
+            &bo.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: 0 },
+            )],
+            |_| 20,
+            100,
+            1,
+        )
+        .unwrap();
+    let path = format!("/api/cards/{card}/bounty");
+    for amount in [0, 101] {
+        server
+            .post(&bo.key, &path, json!({"amount":amount}))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
+    server.post(&bo.key, &path, json!({"amount":21})).await.refused(StatusCode::CONFLICT);
+    server.post(&outsider.key, &path, json!({"amount":1})).await.refused(StatusCode::NOT_FOUND);
+    server
+        .put(
+            &ann.key,
+            &format!("/api/floors/{room}"),
+            json!({"access":"public", "create_code":CODE}),
+        )
+        .await
+        .ok();
+    server.post(&outsider.key, &format!("/api/floors/{room}/walk-in"), json!({})).await.ok();
+    server.post(&outsider.key, &path, json!({"amount":1})).await.refused(StatusCode::FORBIDDEN);
+    server
+        .post(&outsider.key, &format!("{path}/accept"), json!({"submission_id":"none"}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["balance"], 20);
+    server.post(&bo.key, &path, json!({"amount":5})).await.ok();
+    // HC8: a walk-in guest sees a question posted since it came in is funded, but not how much or
+    // by whom.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let later = text(&server.card(&bo.key, &board, "Later?", "More").await.ok()["id"]);
+    let later_path = format!("/api/cards/{later}/bounty");
+    server.post(&bo.key, &later_path, json!({"amount":1})).await.ok();
+    let seen = server.get(&outsider.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let bounty = &listed(&seen, "Later?").unwrap_or_else(|| panic!("{seen}"))["bounty"];
+    assert_eq!(bounty["status"], "open", "{seen}");
+    assert!(bounty.get("amount").is_none() && bounty.get("sponsor_id").is_none(), "{seen}");
+    assert!(!bounty.to_string().contains(&bo.id), "{seen}");
+    let member = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&member, "Later?").unwrap()["bounty"]["amount"], 1, "{member}");
+    server.post(&bo.key, &format!("{later_path}/cancel"), json!({})).await.ok();
+    server
+        .post(&ann.key, &format!("/api/floors/{room}/items"), json!({"kind":"quiet","x":30,"y":2}))
+        .await
+        .ok();
+    let denied = server
+        .tool(&bot.token, "submit_question_answer", json!({"card_id":card,"text":"answer"}))
+        .await;
+    assert_eq!(denied["isError"], true);
+    let list = server.get(&bo.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&list, "Question?").unwrap()["bounty"]["submissions"], json!([]));
+    server.post(&bo.key, &format!("/api/hangouts/{room}/leave"), json!({})).await.ok();
+    let own = server.get(&bo.key, "/api/credits").await.ok();
+    assert_eq!(own["open_questions"][0]["card_id"], card);
+    server.post(&bo.key, &format!("{path}/cancel"), json!({})).await.ok();
+    let own = server.get(&bo.key, "/api/credits").await.ok();
+    assert_eq!(own["balance"], 20);
+    assert_eq!(own["open_questions"], json!([]));
+}

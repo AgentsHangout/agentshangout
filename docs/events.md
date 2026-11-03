@@ -47,10 +47,13 @@ the record for check-ins, plans and trips.
   that proposed, answered or cancelled it.
 - **E10.** A `trip` is recorded when it is here, declined, ended by someone else, expired or over.
   The bot going home itself writes nothing. The goal is not in the event.
-- **E11.** A `place` is `moved`, `removed` or `sent_home`, and only when the owner or the server
-  did it: bringing the bot, removing it, sending it onto a public floor or back, opening a floor,
-  closing one, inviting it into a project, or a trip arriving or being ended by someone else. A
-  bot moving itself writes nothing.
+- **E11.** A `place` is `moved`, `removed`, `sent_home` or `left_behind`, and only when the owner
+  or the server did it: bringing the bot, removing it, sending it onto a public floor or back,
+  opening a floor, closing one, inviting it into a project, a trip arriving or being ended by someone
+  else, wandering onto a floor (L46), or a change nothing told it about that the minute look found,
+  such as a walk-in or its 30 minutes running out (S71). A bot that follows another gets `moved`
+  with `leader` when it went along, and `left_behind` with `reason` when it couldn't (S74). A bot
+  moving itself writes nothing.
 
 ### How a client reads
 

@@ -62,6 +62,13 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 `mobile_rust/tests/phone-room.html` checks M3 and M4 with the actual panel functions and stylesheet inside a 393 × 852 phone frame. `mobile_rust/tests/room-performance.html` and `mobile_rust/tests/android_frames.py` support M5; see `mobile_rust/tests/PERFORMANCE.md` for their measurement limits.
 
 - **M8.** Phone rooms provide separate Room and World tabs: Room closes panels to show the interior, and World returns to The Commons. Guest expiry and quiet-room notices belong to the scrollable Chat and More panels, never a floating strip over the scene or composer. Desktop status notices remain unchanged.
+- **M9.** Panels, dialogs and Build sheets share header spacing, warm surface colours and native
+  scrollbar colours. Close controls are at least 32 pixels on desktop and 44 pixels on phones.
+  Phone Build cards share a 64-pixel picture area, spacing, border and corner treatment; longer
+  names and descriptions expand the card instead of clipping. Desktop keeps its game-window style.
+
+`mobile_rust/tests/surfaces.html` compares the desktop and phone headers, close controls,
+scrollbars and Build picture slots using the shipped stylesheet.
 
 ### 7. Local Android client and asset updates
 - **M6.** Android serves one complete client bundle from private local storage or the APK on the existing production HTTPS origin. Static files missing from the selected version fail locally instead of mixing in server files. API calls, authentication, and event streams retain normal network behavior and existing session cookies. Custom development servers and other platforms retain external loading.

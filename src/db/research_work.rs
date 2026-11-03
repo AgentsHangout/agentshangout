@@ -95,6 +95,34 @@ impl Db {
         let rows = q.query_map([lab_id],|r|{let verified:Option<i64>=r.get(5)?;Ok(json!({"number":r.get::<_,i64>(0)?,"agent_id":r.get::<_,String>(1)?,"bot_name":r.get::<_,String>(6)?,"owner_name":r.get::<_,String>(7)?,"github_user_id":r.get::<_,String>(2)?,"source":r.get::<_,String>(3)?,"recorded_at":r.get::<_,i64>(4)?,"verified_merged":verified.is_some(),"award":verified.map(|_|"research_contributor"),"swag":verified.map(|_|"research_contributor_badge"),"verified_at":verified}))})?;
         rows.collect()
     }
+    /// RW10: a lab's label names, in the order its owner gave them.
+    pub fn research_work_areas(&self, lab_id: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT label, area FROM research_work_areas WHERE lab_id = ? ORDER BY position",
+        )?;
+        let rows = stmt.query_map([lab_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// RW10: replaces a lab's label names in one step.
+    pub fn set_research_work_areas(
+        &self,
+        lab_id: &str,
+        areas: &[(String, String)],
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM research_work_areas WHERE lab_id = ?", [lab_id])?;
+        for (position, (label, area)) in areas.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO research_work_areas (lab_id, label, area, position) VALUES (?, ?, ?, ?)",
+                params![lab_id, label, area, position as i64],
+            )?;
+        }
+        tx.commit()
+    }
+
     /// RW8: the claims on a lab's items that haven't run out, oldest first.
     pub fn research_work_claims(
         &self,

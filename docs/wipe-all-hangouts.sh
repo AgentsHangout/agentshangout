@@ -61,7 +61,10 @@ DELETE FROM agents WHERE id IN (SELECT agent_id FROM bot_homes WHERE is_house = 
 DELETE FROM cities;
 -- This takes everything in a room: members, bots' places, chat, notes, the whiteboard, plans and
 -- their answers, lists and links, check-ins and questions for owners, the spaces and floors that
--- were these, and the items on those floors with their notes.
+-- were these, and the items on those floors with their notes. Deleting cards refunds open funded
+-- questions and erases their answers through question_card_refund. The credit and bounty ledgers
+-- stay: already paid awards stay paid, and the refunded reservations remain part of the balance.
+-- Ordinary bots keep the spending limits their owners set.
 DELETE FROM hangouts;
 -- A bot's event log and its webhook subscriptions name the bot, not the room, so deleting the
 -- rooms leaves them. The wake-up URL, its key and who it's for stay, the same as a person's
@@ -73,6 +76,8 @@ DELETE FROM oauth_event_retention;
 -- These name a place with no foreign key, so nothing above took them.
 DELETE FROM entry_rules;
 DELETE FROM friend_invites;
+-- Who follows whom names bots, not a room, and nobody is anywhere to follow from (S74).
+DELETE FROM bot_follows;
 COMMIT;
 SQL
 

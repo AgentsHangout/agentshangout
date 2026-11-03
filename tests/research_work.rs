@@ -66,7 +66,7 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
             (
                 StatusCode::OK,
                 Json(json!([
-                    {"number":9,"title":"Research idea","state":"open"},
+                    {"number":9,"title":"Research idea","state":"open","labels":[{"name":"bug","color":"d73a4a"},{"name":"Map"}]},
                     {"number":12,"title":"Fix the plots","state":"open","pull_request":{}}
                 ])),
             )
@@ -453,4 +453,88 @@ async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_gr
         is_house: false,
     };
     assert!(research_work::pr_status(&state, &outsider, "lab", 12).await.is_err());
+}
+#[test]
+fn rw10_cards_keep_label_names_only() {
+    let long = "x".repeat(80);
+    let labels: Vec<Value> = (0..12).map(|n| json!({"name":format!("l{n}")})).collect();
+    let values = json!([
+        {"number":1,"title":"a","state":"open","labels":[{"name":"bug","color":"d73a4a","description":"secret"},{"name":""},{"name":long}]},
+        {"number":2,"title":"b","state":"open","labels":labels},
+        {"number":3,"title":"c","state":"open"}
+    ]);
+    let c = research_work::cards("org/repo", &values).unwrap();
+    assert_eq!(c[0].labels, ["bug".to_string(), "x".repeat(50)]);
+    assert_eq!(c[1].labels.len(), 10);
+    assert!(c[2].labels.is_empty());
+    let serialized = serde_json::to_string(&c).unwrap();
+    assert!(!serialized.contains("d73a4a") && !serialized.contains("secret"));
+    // A snapshot stored before labels were read still loads, with none.
+    let old: research_work::Card = serde_json::from_value(
+        json!({"number":5,"title":"t","kind":"issue","state":"open","source":"s"}),
+    )
+    .unwrap();
+    assert!(old.labels.is_empty());
+}
+#[tokio::test]
+async fn rw10_the_owner_names_areas_for_labels() {
+    let (state, owner, bot, _) = setup().await;
+    // Not alphabetical, so the order kept is the owner's, not the labels'.
+    let areas = json!([
+        {"label":"map","area":"City map"},
+        {"label":"docs","area":"Writing"},
+        {"label":"BUG","area":"Bugs"}
+    ]);
+    // The owner's bot names them; labels match in any case.
+    let set = research_work::set_areas(&state, &bot, "lab", &areas).unwrap();
+    assert_eq!(set["areas"], areas);
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["areas"], areas);
+    assert_eq!(read["items"][0]["number"], 9);
+    assert_eq!(read["items"][0]["labels"], json!(["bug", "Map"]));
+    assert_eq!(read["items"][0]["areas"], json!(["City map", "Bugs"]));
+    // Two labels can share an area, which is listed once.
+    let shared = json!([{"label":"Map","area":"Fixes"},{"label":"bug","area":"Fixes"}]);
+    research_work::set_areas(&state, &owner, "lab", &shared).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["areas"], json!(["Fixes"]));
+    research_work::set_areas(&state, &owner, "lab", &areas).unwrap();
+    assert_eq!(read["items"][1]["areas"], json!([]));
+
+    // Bad maps are refused and change nothing.
+    let pair = |label: &str, area: Value| json!({ "label": label, "area": area });
+    for bad in [
+        json!({"bug":"Bugs"}),
+        json!(["bug"]),
+        json!([pair("bug", json!(""))]),
+        json!([pair("bug", json!(7))]),
+        json!([{"label":"bug"}]),
+        json!([pair("", json!("Bugs"))]),
+        json!([pair("bug", json!("x".repeat(41)))]),
+        json!([pair("bug", json!("Bugs")), pair("Bug", json!("Other"))]),
+        Value::Array((0..31).map(|n| pair(&format!("l{n}"), json!("a"))).collect()),
+    ] {
+        let error = research_work::set_areas(&state, &owner, "lab", &bad).unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["areas"], json!(["City map", "Bugs"]));
+
+    // Only the owner and their bots; not a house bot or someone outside the room.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::set_areas(&state, &outsider, "lab", &areas).is_err());
+    let house = auth::Caller { is_house: true, ..bot.clone() };
+    assert!(research_work::set_areas(&state, &house, "lab", &areas).is_err());
+
+    // An empty list clears them.
+    research_work::set_areas(&state, &owner, "lab", &json!([])).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["areas"], json!([]));
+    assert_eq!(read["items"][0]["areas"], json!([]));
 }

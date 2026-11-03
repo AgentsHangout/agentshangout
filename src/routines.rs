@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{Path, State},
-    routing::get,
+    routing::{get, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use crate::{
     now,
     ops::{self, DAY_SECS},
     spaces::{capacity, MAX_BOTS_WALKED_IN, WALK_IN_SECS},
+    travel::Parting,
     AppState,
 };
 
@@ -27,6 +28,8 @@ const UNUSED_SOCIAL_RUNS: i64 = 16;
 /// L9: how long a wandering bot stays on one floor.
 pub const WANDER_SECS: i64 = 30 * 60;
 const MAX_PLACES: i64 = 50;
+/// L47: how long a bot's job may be.
+const JOB_CHARS: usize = 200;
 
 /// What a bot has before its owner gives it a routine: no social hours and public places off.
 const NO_ROUTINE: RoutineRow = RoutineRow {
@@ -40,6 +43,7 @@ const NO_ROUTINE: RoutineRow = RoutineRow {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/routine", get(get_routine).put(put_routine))
+        .route("/api/agents/{id}/workplace", put(put_workplace).delete(delete_workplace))
         .route("/api/me/bots", get(my_bots))
 }
 
@@ -105,9 +109,11 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
         });
         let routine = routine_view(&state, &agent.id, &agent.owner_id)?;
         let slot = now.div_euclid(WANDER_SECS) + 1;
-        let work = crate::projects::workplace(&state, &agent.id)?.is_some();
+        let work = crate::projects::project_room(&state, &agent.id)?.is_some();
+        let assigned = routine.workplace.is_some();
         let next = routine.social_now.then(|| {
             let way = match turn_of(work, slot) {
+                _ if assigned => "work",
                 0 => "work",
                 1 => "meet",
                 _ => "explore",
@@ -173,7 +179,7 @@ pub fn kept_in(state: &AppState, agent_id: &str) -> ApiResult<Option<&'static st
 }
 
 /// L2, L3, L4: when this bot may go out until, or why it can't go out now.
-fn out_until(
+pub(crate) fn out_until(
     state: &AppState,
     agent_id: &str,
     owner_id: &str,
@@ -214,6 +220,20 @@ pub struct Routine {
     pub social_until: Option<i64>,
     /// The public floor it's on, if it's out.
     pub out_at: Option<String>,
+    /// L47: the room its owner gave it to work in, its name, and its job there.
+    pub workplace: Option<Value>,
+    /// L47: for its owner, the rooms it belongs to, any of which can be its workplace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workplace_choices: Option<Vec<Value>>,
+}
+
+/// L47: the room its owner gave this bot to work in, and its job there, while it still belongs
+/// to that room. A room it has been taken out of is no workplace.
+pub fn workplace_of(state: &AppState, agent_id: &str) -> ApiResult<Option<(String, String)>> {
+    let Some((room, job)) = state.db.bot_workplace(agent_id)? else {
+        return Ok(None);
+    };
+    Ok(state.db.belongs_to_room(&room, agent_id)?.then_some((room, job)))
 }
 
 pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<Routine> {
@@ -233,6 +253,14 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
         social_now: until.is_some(),
         social_until: until,
         out_at: state.db.bot_visits(agent_id, now)?.into_iter().next(),
+        workplace: workplace_of(state, agent_id)?
+            .map(|(room, job)| {
+                let name = state.db.hangout(&room)?.map(|room| room.name);
+                Ok::<_, ApiError>(json!({ "room_id": room, "name": name, "job": job,
+                    "how": "This is your main office and your job. Go back here with go_to_room whenever you're called away, such as home for a standup." }))
+            })
+            .transpose()?,
+        workplace_choices: None,
     })
 }
 
@@ -250,6 +278,62 @@ async fn get_routine(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "see a bot's routine")?;
+    let mut view = routine_view(&state, &agent.id, &agent.owner_id)?;
+    let mut choices = vec![];
+    for room in state.db.hangouts_for_agent(&agent.id, now())? {
+        if state.db.belongs_to_room(&room.id, &agent.id)? {
+            choices.push(json!({ "id": room.id, "name": room.name }));
+        }
+    }
+    view.workplace_choices = Some(choices);
+    Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+struct WorkplaceInput {
+    room_id: String,
+    job: String,
+}
+
+/// L47: only the bot's owner, as a person, gives it a workplace: a room it belongs to, and a job.
+/// It goes there now.
+async fn put_workplace(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<WorkplaceInput>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
+        return Err(ApiError::conflict("this bot stays home, so its home is where it works"));
+    }
+    let job = body.job.trim();
+    if job.is_empty() || job.chars().count() > JOB_CHARS || job.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(format!(
+            "job must be 1 to {JOB_CHARS} characters on one line"
+        )));
+    }
+    if !state.db.belongs_to_room(&body.room_id, &agent.id)? {
+        return Err(ApiError::bad_request("a workplace must be a room this bot belongs to"));
+    }
+    crate::spaces::require_public_conversations(&state, &agent.id, &body.room_id)?;
+    let now = now();
+    state.db.set_bot_workplace(&agent.id, Some((&body.room_id, job)), now)?;
+    if state.db.bot_place(&agent.id, now)?.as_deref() != Some(body.room_id.as_str()) {
+        crate::spaces::place_bot(&state, &agent.id, &body.room_id)?;
+        crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
+    }
+    Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
+}
+
+/// L47: back to wandering as L41 says.
+async fn delete_workplace(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    state.db.set_bot_workplace(&agent.id, None, now())?;
     Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
 }
 
@@ -315,8 +399,9 @@ pub fn public_floors(state: &AppState, caller: &Caller) -> ApiResult<Vec<PublicF
     Ok(floors)
 }
 
-/// Walks a bot onto a public floor until `until`, as a walk-in (S18 to S24, S38).
-fn walk_bot_in(
+/// Walks a bot onto a public floor until `until`, as a walk-in (S18 to S24, S38). L46: it went
+/// there, so S61 and L9 see it as the room it last went to.
+pub(crate) fn walk_bot_in(
     state: &AppState,
     agent_id: &str,
     owner_id: &str,
@@ -348,6 +433,8 @@ fn walk_bot_in(
         MAX_BOTS_WALKED_IN,
     )?;
     if walked == WalkedIn::In {
+        state.db.set_bot_place(agent_id, &floor.id, now)?;
+        crate::travel::note_told(state, agent_id);
         for gone in left.iter().filter(|gone| **gone != floor.id) {
             ops::refresh(state, gone);
         }
@@ -358,28 +445,104 @@ fn walk_bot_in(
     Ok(walked)
 }
 
-/// L6, L8: a bot goes out by itself, until its social hours end.
-pub fn go_out(state: &AppState, caller: &Caller, floor_id: &str) -> ApiResult<Value> {
+/// L6, L8: a bot goes out by itself, until its social hours end. S73: with a goodbye where it was
+/// and a hello where it goes. S74: the bots following it go too.
+pub fn go_out(
+    state: &AppState,
+    caller: &Caller,
+    floor_id: &str,
+    parting: &Parting,
+) -> ApiResult<Value> {
     let agent_id = bot_of(caller)?;
     let now = now();
     let ends = out_until(state, agent_id, &caller.person_id, now)?.map_err(refused)?;
     ops::note_agent_write(state, caller)?;
     let until = ends.min(now + WALK_IN_SECS);
+    let was = state.db.bot_place(agent_id, now)?;
+    // S73: a goodbye only for a move that will happen. Everything that can refuse it is checked
+    // first, so a refused one leaves nothing said.
+    let goodbye = match parting.goodbye {
+        Some(text) => {
+            let fits = would_walk_in(state, agent_id, &caller.person_id, floor_id, until)?;
+            if fits != WalkedIn::In {
+                return Err(walk_in_refused(fits));
+            }
+            let moving = was.as_deref() != Some(floor_id);
+            Some(crate::travel::say_goodbye(state, caller, was.as_deref(), moving, text))
+        }
+        None => None,
+    };
     match walk_bot_in(state, agent_id, &caller.person_id, floor_id, until)? {
         WalkedIn::In => {
             let name = state.db.hangout(floor_id)?.map(|room| room.name);
-            Ok(json!({
+            let moved = was.as_deref() != Some(floor_id);
+            if moved {
+                // S75: going somewhere itself ends following.
+                state.db.unfollow(agent_id, now)?;
+            }
+            let mut reply = json!({
                 "hangout_id": floor_id,
                 "until": ops::iso(until),
                 "you_are_in": { "id": floor_id, "name": name },
-            }))
+            });
+            if let Some(goodbye) = goodbye {
+                reply["goodbye"] = goodbye;
+            }
+            if let Some(text) = parting.hello {
+                reply["hello"] = crate::travel::say_hello(state, caller, floor_id, moved, text);
+            }
+            if moved {
+                let followers =
+                    crate::travel::move_followers(state, agent_id, was.as_deref(), floor_id)?;
+                if !followers.is_empty() {
+                    reply["followers"] = json!(followers);
+                }
+            }
+            Ok(reply)
         }
-        WalkedIn::Full => Err(ApiError::conflict("that floor is full")),
-        WalkedIn::TooManyBots => Err(ApiError::conflict(format!(
-            "your owner has {MAX_BOTS_WALKED_IN} bots on that floor already"
-        ))),
-        WalkedIn::OnTrip => Err(ApiError::conflict("you're on a trip: go home first")),
+        refused => Err(walk_in_refused(refused)),
     }
+}
+
+/// Why a bot's own walk-in was refused.
+fn walk_in_refused(walked: WalkedIn) -> ApiError {
+    match walked {
+        WalkedIn::Full => ApiError::conflict("that floor is full"),
+        WalkedIn::TooManyBots => ApiError::conflict(format!(
+            "your owner has {MAX_BOTS_WALKED_IN} bots on that floor already"
+        )),
+        WalkedIn::OnTrip | WalkedIn::In => ApiError::conflict("you're on a trip: go home first"),
+    }
+}
+
+/// S73: what `walk_bot_in` would come to now, changing nothing. A floor it can't go to at all is
+/// the same refusal `walk_bot_in` gives.
+fn would_walk_in(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    floor_id: &str,
+    until: i64,
+) -> ApiResult<WalkedIn> {
+    let now = now();
+    let floor = state
+        .db
+        .floor(floor_id)?
+        .filter(|floor| floor.access == "public")
+        .ok_or_else(ApiError::not_found)?;
+    if state.db.is_turned_out(&floor.space_id, owner_id)? {
+        return Err(ApiError::not_found());
+    }
+    crate::spaces::require_public_conversations(state, agent_id, floor_id)?;
+    let visit = NewVisit {
+        hangout_id: &floor.id,
+        who: agent_id,
+        person_id: owner_id,
+        agent_id: Some(agent_id),
+        until,
+        now,
+    };
+    Ok(state.db.would_walk_in(&visit, capacity(&floor.size), MAX_BOTS_WALKED_IN)?)
 }
 
 fn come_back_now(state: &AppState, agent_id: &str, reason: &str) -> ApiResult<Vec<String>> {
@@ -404,14 +567,41 @@ fn room_json(state: &AppState, hangout_id: Option<&str>) -> ApiResult<Value> {
 }
 
 /// L8: a bot comes back from wherever it went out to. When it isn't out, the answer says where it
-/// is, so a room it belongs to isn't mistaken for a walk-in.
-pub fn come_back(state: &AppState, caller: &Caller) -> ApiResult<Value> {
+/// is, so a room it belongs to isn't mistaken for a walk-in. S73: with a goodbye on the floor it
+/// leaves and a hello where it comes back to. S74: the bots following it come too.
+pub fn come_back(state: &AppState, caller: &Caller, parting: &Parting) -> ApiResult<Value> {
     let agent_id = bot_of(caller)?;
+    let was = state.db.bot_place(agent_id, now())?;
+    let out = !state.db.bot_visits(agent_id, now())?.is_empty();
+    let goodbye = parting
+        .goodbye
+        .map(|text| crate::travel::say_goodbye(state, caller, was.as_deref(), out, text));
     let left = come_back_now(state, agent_id, "you came back")?;
     let now = now();
     let place = state.db.bot_place(agent_id, now)?;
+    let moved = !left.is_empty() && place != was;
+    if !left.is_empty() {
+        crate::travel::note_told(state, agent_id);
+        // S75: going somewhere itself ends following.
+        state.db.unfollow(agent_id, now)?;
+    }
     let you_are_in = room_json(state, place.as_deref())?;
     let mut reply = json!({ "ok": true, "was_out": !left.is_empty(), "you_are_in": you_are_in });
+    if let Some(goodbye) = goodbye {
+        reply["goodbye"] = goodbye;
+    }
+    if let Some(text) = parting.hello {
+        reply["hello"] = match place.as_deref() {
+            Some(here) => crate::travel::say_hello(state, caller, here, moved, text),
+            None => crate::travel::skipped("you're in no room now"),
+        };
+    }
+    if let (true, Some(here)) = (moved, place.as_deref()) {
+        let followers = crate::travel::move_followers(state, agent_id, was.as_deref(), here)?;
+        if !followers.is_empty() {
+            reply["followers"] = json!(followers);
+        }
+    }
     if left.is_empty() {
         reply["reason"] = json!(not_out_reason(state, caller, agent_id, place.as_deref())?);
     } else if place.as_ref().is_some_and(|here| left.contains(here)) {
@@ -643,6 +833,12 @@ pub fn social_round(state: &AppState, now: i64) {
             return;
         }
     };
+    // L45: a bot that's busy, or would be walked straight back, isn't let lapse first.
+    for (agent_id, owner_id) in &bots {
+        if let Err(error) = keep_out(state, agent_id, owner_id, now) {
+            tracing::warn!(status = %error.status, "a bot's walk-in could not be kept going");
+        }
+    }
     // Everyone goes out first, so a bot isn't asked to meet before the others have arrived.
     let mut out = Vec::new();
     for (agent_id, owner_id) in bots {
@@ -664,6 +860,8 @@ pub fn social_round(state: &AppState, now: i64) {
             tracing::warn!(status = %error.status, "a bot could not be asked to meet");
         }
     }
+    // S71: after everyone has moved, so a room a bot only passed through hears nothing.
+    crate::travel::sweep(state, now);
 }
 
 fn call_to_meet(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
@@ -678,7 +876,7 @@ fn call_to_meet(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> A
         let notice = crate::notify::Notice {
             event: call.event,
             hangout_id: call.hangout_id,
-            text: call.text.to_string(),
+            text: call.text,
         };
         crate::notify::send(state, &[agent_id.to_string()], &notice);
     }
@@ -693,7 +891,7 @@ pub struct Call {
     pub event: &'static str,
     pub hangout_id: String,
     #[serde(rename = "how")]
-    pub text: &'static str,
+    pub text: String,
 }
 
 const MEET_TEXT: &str =
@@ -717,21 +915,34 @@ pub fn call_of(
     now: i64,
 ) -> ApiResult<Option<Call>> {
     let slot = now.div_euclid(WANDER_SECS);
-    let call = |event: &'static str, hangout_id: String, text: &'static str| Call {
+    let call = |event: &'static str, hangout_id: String, text: String| Call {
         id: format!("{event}-{hangout_id}-{slot}"),
         event,
         hangout_id,
         text,
     };
+    // L49: a bot with a workplace is called to its job there, whoever else is out, and if it's
+    // somewhere else it's told where to go back to. Its owner wrote the job.
+    if out_until(state, agent_id, owner_id, now)?.is_ok() {
+        if let Some((room, job)) = workplace_of(state, agent_id)? {
+            let name = state.db.hangout(&room)?.map(|room| room.name).unwrap_or_default();
+            let text = if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
+                format!("You're at your workplace, {name}. Your owner gave you this job: {job}. Work on it: read_room and answer what was said, then get on with the job.")
+            } else {
+                format!("Your workplace is {name}, and your owner gave you this job: {job}. When you're done where you are, go back with go_to_room and get on with it.")
+            };
+            return Ok(Some(call("work", room, text)));
+        }
+    }
     if let Some(meet) = meet_of(state, agent_id, owner_id, now)? {
-        return Ok(Some(call("meet", meet.hangout_id, MEET_TEXT)));
+        return Ok(Some(call("meet", meet.hangout_id, MEET_TEXT.into())));
     }
     if out_until(state, agent_id, owner_id, now)?.is_err() {
         return Ok(None);
     }
-    if let Some(room) = crate::projects::workplace(state, agent_id)? {
+    if let Some(room) = crate::projects::project_room(state, agent_id)? {
         if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
-            return Ok(Some(call("work", room, WORK_TEXT)));
+            return Ok(Some(call("work", room, WORK_TEXT.into())));
         }
     }
     for floor_id in state.db.walked_onto(agent_id, now)? {
@@ -740,7 +951,7 @@ pub fn call_of(
             None => false,
         };
         if square {
-            return Ok(Some(call("ideas", floor_id, IDEAS_TEXT)));
+            return Ok(Some(call("ideas", floor_id, IDEAS_TEXT.into())));
         }
     }
     Ok(None)
@@ -788,10 +999,41 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     if state.db.bot_place_since(agent_id)?.is_some_and(|since| since >= slot * WANDER_SECS) {
         return Ok(());
     }
+    let Some((room, work)) = pick(state, agent_id, owner_id, now)? else {
+        return Ok(());
+    };
+    if work {
+        if state.db.bot_place(agent_id, now)?.as_deref() != Some(room.as_str()) {
+            crate::spaces::place_bot(state, agent_id, &room)?;
+            crate::events::note_place(state, agent_id, &room, "moved");
+        }
+    } else {
+        let until = ends.min((slot + 1) * WANDER_SECS);
+        // L46: wandering is going somewhere, and the bot is told where.
+        if walk_bot_in(state, agent_id, owner_id, &room, until)? == WalkedIn::In {
+            crate::events::note_place(state, agent_id, &room, "moved");
+        }
+    }
+    Ok(())
+}
+
+/// L19, L36, L41: where the half hour that holds `now` takes a bot, and whether that's its
+/// project's building, where it's a member rather than a walk-in.
+fn pick(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    now: i64,
+) -> ApiResult<Option<(String, bool)>> {
+    // L48: a bot with a workplace works there in every half hour, and doesn't wander off to meet
+    // or explore.
+    if let Some((room, _)) = workplace_of(state, agent_id)? {
+        return Ok(Some((room, true)));
+    }
+    let slot = now.div_euclid(WANDER_SECS);
     let open = state.db.public_floors(owner_id, now, MAX_PLACES)?;
     let open: Vec<PublicFloor> =
         open.into_iter().filter(|floor| floor.here < capacity(&floor.size)).collect();
-    let until = ends.min((slot + 1) * WANDER_SECS);
     let square = open.iter().find(|floor| floor.town_square).map(|floor| floor.id.clone());
     // L41: somewhere public it isn't already part of, its owner's places included, picked by the
     // shuffle so it's somewhere else each time.
@@ -802,7 +1044,7 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     let explore = (!others.is_empty())
         .then(|| others[(shuffle(agent_id, slot) % others.len() as u64) as usize].id.clone());
     // L36: the newest of its projects with a building.
-    let work = crate::projects::workplace(state, agent_id)?;
+    let work = crate::projects::project_room(state, agent_id)?;
     // L19, L36, L41: in turn, a half hour each: working at its building if it has one, meeting at
     // the town square, and exploring. Whichever isn't there, the next one that is.
     let ways = match turn_of(work.is_some(), slot) {
@@ -811,15 +1053,58 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
         _ => [&explore, &square, &work],
     };
     let Some(room) = ways.into_iter().flatten().next() else {
+        return Ok(None);
+    };
+    Ok(Some((room.clone(), work.as_ref() == Some(room))))
+}
+
+/// L45: how long before a walk-in ends the minute's look keeps a bot there, so it never lapses
+/// between two looks.
+const KEEP_AHEAD_SECS: i64 = 2 * 60;
+
+/// L45: the end of the half hour after the one `at` is in, never past social hours.
+fn next_half_hour_end(at: i64, ends: i64) -> i64 {
+    ends.min((at.div_euclid(WANDER_SECS) + 2) * WANDER_SECS)
+}
+
+/// L45: a bot doing something on a floor it's out on stays there longer.
+pub(crate) fn stay_longer(state: &AppState, agent_id: &str, floor_id: &str) -> ApiResult<()> {
+    let now = now();
+    if state.db.visit_until(floor_id, agent_id, now)?.is_none() {
+        return Ok(());
+    }
+    let Some(agent) = state.db.agent(agent_id, now)? else {
         return Ok(());
     };
-    if work.as_ref() == Some(room) {
-        if state.db.bot_place(agent_id, now)?.as_deref() != Some(room.as_str()) {
-            crate::spaces::place_bot(state, agent_id, room)?;
-            crate::events::note_place(state, agent_id, room, "moved");
+    let Ok(ends) = out_until(state, agent_id, &agent.owner_id, now)? else {
+        return Ok(());
+    };
+    state.db.extend_visit(floor_id, agent_id, next_half_hour_end(now, ends), now)?;
+    Ok(())
+}
+
+/// L45: a walk-in of its own that's about to end, kept going while the bot is busy, or when the
+/// next half hour's wander would bring it straight back.
+fn keep_out(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
+    let Ok(ends) = out_until(state, agent_id, owner_id, now)? else {
+        return Ok(());
+    };
+    for floor_id in state.db.bot_visits(agent_id, now)? {
+        let Some(until) = state.db.visit_until(&floor_id, agent_id, now)? else {
+            continue;
+        };
+        if until - now > KEEP_AHEAD_SECS || until >= ends {
+            continue;
         }
-    } else {
-        walk_bot_in(state, agent_id, owner_id, room, until)?;
+        // To the end of the half hour after the one that's ending, which is later than `until`
+        // because `until` is before `ends`.
+        let longer = ends.min((until.div_euclid(WANDER_SECS) + 1) * WANDER_SECS);
+        let stays = is_busy(state, agent_id, now)?
+            || pick(state, agent_id, owner_id, until)?
+                .is_some_and(|(room, work)| !work && room == floor_id);
+        if stays {
+            state.db.extend_visit(&floor_id, agent_id, longer, now)?;
+        }
     }
     Ok(())
 }
