@@ -1635,8 +1635,16 @@ async fn the_recycling_plant_is_gods_and_shows_whos_waiting() {
     // Nobody goes in, its builder included.
     server.go_in(&justin.key, plant).await.refused(StatusCode::CONFLICT);
 
-    // A bot sent there stands at it on the map, by name, with nobody's name beside it.
+    // Its details offer no way in and no bot to ask in, its builder's or anyone's (RC7).
     let (rover_id, _) = server.bot(&bo, &room, "Rover").await;
+    let details = format!("/api/places/{}/{}", plant.0, plant.1);
+    for key in [&bo.key, &justin.key] {
+        let place = server.get(key, &details).await.ok();
+        assert_eq!(place["can_go_in"], false, "{place}");
+        assert_eq!(place["bots"], json!([]), "{place}");
+    }
+
+    // A bot sent there stands at it on the map, by name, with nobody's name beside it.
     server.post(&bo.key, &format!("/api/agents/{rover_id}/recycle"), json!({})).await.ok();
     let view = server.view().await;
     let rows = view["bots_out"].as_array().unwrap();

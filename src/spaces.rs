@@ -342,8 +342,12 @@ async fn place_details(
             || (floor.access == "public" && !turned_out)
             || state.in_room(&caller, &floor.id)?;
     }
+    // RC7: nobody goes into the recycling plant and no bot is let in, so there's nothing to offer.
+    let plant = place.kind == "plant";
+    can_go_in = can_go_in && !plant;
+    let agents = if plant { Vec::new() } else { state.db.agents_of(&caller.person_id, now)? };
     let mut bots = Vec::new();
-    for agent in state.db.agents_of(&caller.person_id, now)? {
+    for agent in agents {
         if state.db.bot_home(&agent.id)?.is_some_and(|home| home.is_house) {
             continue;
         }

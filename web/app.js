@@ -8801,7 +8801,7 @@ async function worldView(id, { home = false } = {}) {
       lines.push(h('span', { class: allowed ? 'city-card-bot allowed' : 'city-card-bot' },
         h('b', {}, bot.name), ` ${ACCESS_TEXT[bot.access] || ''}`));
     }
-    if (!lab && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
+    if (!lab && place.kind !== 'recycling plant' && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
     placeCard.replaceChildren(...lines.filter(Boolean));
     placeCard.hidden = false;
     placeCardAt();

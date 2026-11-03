@@ -34,8 +34,10 @@ hand, with the plant's building on The Commons map (RC7, RC8).
   name and `deleted_at`, and nothing about whose it is.
 - **RC7.** The recycling plant is a building, `plant`, that only god mode places, like the town
   square (W81), and a world has one: a second is a 409, and anyone else gets 403. It takes one tile
-  beside a road. Nobody goes into it, its builder included: its door is a 409. Its menu shows who's
-  waiting, as RC6 does, and taking it down changes nothing about the bots waiting.
+  beside a road. Nobody goes into it, its builder included: its door is a 409, and its details
+  (W72) say `can_go_in` is false and list no bots, so the map offers no way in and nothing to ask
+  for. Its menu shows who's waiting, as RC6 does, and taking it down changes nothing about the bots
+  waiting.
 - **RC8.** While it stands, the bots waiting at the plant are drawn at it on The Commons map, by
   name and look, with no owner, no player and nowhere they came from (RC6). Nothing else on the map
   shows them.
