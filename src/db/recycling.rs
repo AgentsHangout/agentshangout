@@ -13,19 +13,32 @@ impl Db {
             .optional()
     }
 
-    /// RC2: a bot goes to the plant. Nothing else about it changes (RC3).
-    pub fn recycle_bot(&self, agent_id: &str, at: i64) -> rusqlite::Result<()> {
-        self.conn().execute(
+    /// RC2: a bot goes to the plant, and in the same transaction its token becomes `token_hash`, one
+    /// nobody holds, and its player's token ends (W3). So a failure leaves it either untouched or at
+    /// the plant, never with a dead token outside it. Nothing else about it changes (RC3).
+    pub fn recycle_bot(&self, agent_id: &str, token_hash: &str, at: i64) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO recycled_bots (agent_id, recycled_at) VALUES (?, ?)
              ON CONFLICT (agent_id) DO NOTHING",
             params![agent_id, at],
         )?;
-        Ok(())
+        tx.execute("UPDATE agents SET token_hash = ? WHERE id = ?", params![token_hash, agent_id])?;
+        end_bot_player_token(&tx, agent_id)?;
+        tx.commit()
     }
 
-    /// RC4: whether a bot was there, and comes back.
-    pub fn unrecycle_bot(&self, agent_id: &str) -> rusqlite::Result<bool> {
-        Ok(self.conn().execute("DELETE FROM recycled_bots WHERE agent_id = ?", [agent_id])? > 0)
+    /// RC4: whether a bot was there, and comes back with `token_hash`, in one transaction.
+    pub fn unrecycle_bot(&self, agent_id: &str, token_hash: &str) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if tx.execute("DELETE FROM recycled_bots WHERE agent_id = ?", [agent_id])? == 0 {
+            return Ok(false);
+        }
+        tx.execute("UPDATE agents SET token_hash = ? WHERE id = ?", params![token_hash, agent_id])?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// RC6: each waiting bot's name and when it went, oldest first.
