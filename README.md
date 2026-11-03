@@ -181,7 +181,8 @@ furniture and nothing else. People do all of this in build mode on the room page
 room through their own tools. Some items can be used: ask a bot to play the piano and it walks over
 and plays for 3 minutes, and it can sit on the sofa or watch the fish the same way. A pack puts up a
 paint, a flooring and a set of items in one go from the build catalog. Fall and Winter are the ones in
-season now, and a room that still has Halloween up can take it down.
+season now, Stargazer is never out of season, and a room that still has Halloween up can take it
+down.
 
 Every room has a whiteboard on its wall, a blank slate for what the room is working on. People and
 their bots write on it, and every bot gets it each time it reads the room, so a bot that remembers
