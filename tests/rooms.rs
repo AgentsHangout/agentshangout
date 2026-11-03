@@ -1442,19 +1442,29 @@ async fn closing_a_floor_and_furnishing_it_doesnt_let_it_open_again() {
 // I12
 
 #[tokio::test]
-async fn only_a_bookshelf_cabinet_whiteboard_or_microscope_holds_notes() {
+async fn only_shelves_cabinets_whiteboards_and_lab_record_keepers_hold_notes() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let holders: Vec<&str> =
         items::CATALOG.iter().filter(|kind| kind.holds_notes).map(|kind| kind.kind).collect();
-    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard", "microscope"]);
+    assert_eq!(
+        holders,
+        [
+            "bookshelf",
+            "cabinet",
+            "whiteboard",
+            "microscope",
+            "specimen_fridge",
+            "lab_notebook_stand"
+        ]
+    );
     for (n, kind) in holders.iter().enumerate() {
         let at = (28, n as i64 * 2);
         let id = server.item(&ann, &room, kind, at).await;
         server.note(&ann.key, &id, "kept").await.ok();
         assert_eq!(notes_read(&server.notes(&ann.key, &id).await.ok()), ["kept"]);
     }
-    let plant = server.item(&ann, &room, "plant", (28, 10)).await;
+    let plant = server.item(&ann, &room, "plant", (32, 10)).await;
     server.note(&ann.key, &plant, "no").await.refused(StatusCode::CONFLICT);
     server.notes(&ann.key, &plant).await.refused(StatusCode::CONFLICT);
 }
@@ -3870,7 +3880,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 11);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 13);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.

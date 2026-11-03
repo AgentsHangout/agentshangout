@@ -1906,6 +1906,77 @@ function paintResearchDisplay(g, x, y, t) {
   r(g, '#9aa3b8', x - 14, y - 11, 28, 1);
 }
 
+// A fume hood: a steel cabinet with a glass sash, a warning stripe, and vapor rising behind the glass.
+function paintFumeHood(g, x, y, t) {
+  const left = paintBlock(g, x, y, 40, 36, '#c9d3df', '#9aa3b8');
+  const puff = Math.floor(t / 600) % 3;
+  r(g, '#20283e', left + 4, y - 31, 32, 16);
+  r(g, '#bfe6f5', left + 5, y - 30, 30, 14);
+  r(g, '#eef6fb', left + 9 + puff * 4, y - 26 - puff, 3, 3);
+  r(g, '#eef6fb', left + 21 - puff * 2, y - 23 + puff, 2, 2);
+  r(g, '#3ddc97', left + 8, y - 19, 4, 3);
+  r(g, '#ff7ad9', left + 26, y - 19, 3, 3);
+  r(g, '#ffd23f', left + 4, y - 13, 32, 2);
+  for (let dx = 0; dx < 32; dx += 6) r(g, '#20283e', left + 4 + dx, y - 13, 3, 2);
+  r(g, '#3b4158', left + 4, y - 9, 32, 1);
+}
+
+// A benchtop centrifuge: a squat drum on a base, with a light that runs round while it spins.
+function paintCentrifuge(g, x, y, t) {
+  const spin = Math.floor(t / 250) % 4;
+  const left = paintBlock(g, x, y, 16, 10, '#e8ecf4', '#9aa3b8');
+  r(g, '#3b4158', left + 2, y - 14, 12, 3);
+  r(g, '#c9d3df', left + 3, y - 15, 10, 1);
+  r(g, '#3ddc97', left + 3 + spin * 3, y - 6, 2, 2);
+  r(g, '#20283e', left + 11, y - 9, 3, 2);
+}
+
+// A specimen fridge: a white case with a glass door, racks of sample vials and a cold blue glow.
+function paintSpecimenFridge(g, x, y) {
+  const left = paintBlock(g, x, y, 26, 40, '#eef1f6', '#c9d3df');
+  r(g, '#20283e', left + 3, y - 36, 18, 30);
+  r(g, '#9fd7ff', left + 4, y - 35, 16, 28);
+  for (const row of [30, 22, 14]) {
+    r(g, '#e8ecf4', left + 4, y - row + 4, 16, 1);
+    r(g, '#ff5d7a', left + 6, y - row, 2, 4);
+    r(g, '#ffd23f', left + 10, y - row, 2, 4);
+    r(g, '#3ddc97', left + 14, y - row, 2, 4);
+  }
+  r(g, '#77746b', left + 22, y - 28, 2, 10);
+}
+
+// A lectern holding an open lab notebook, where a lab keeps its running record.
+function paintLabNotebookStand(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, '#6b4628', x - 1, y - 16, 2, 14);
+  r(g, '#8a5c37', x - 5, y - 4, 10, 2);
+  r(g, '#8a5c37', x - 8, y - 20, 16, 4);
+  r(g, '#f4f1e8', x - 7, y - 23, 7, 4);
+  r(g, '#f4f1e8', x, y - 23, 7, 4);
+  r(g, '#3f8fc4', x - 6, y - 22, 4, 1);
+  r(g, '#3f8fc4', x + 1, y - 21, 5, 1);
+  r(g, '#c9c4b5', x - 1, y - 23, 1, 4);
+}
+
+// A periodic table on the wall: a frame around rows of colored element tiles, two tall columns at
+// the ends and the two detached rows below.
+function paintPeriodicTable(g, x, y) {
+  const colors = ['#ff7ad9', '#ffb454', '#ffd23f', '#3ddc97', '#7fd4ff', '#b49cff'];
+  r(g, '#4a3120', x - 17, y - 34, 34, 26);
+  r(g, '#f4f1e8', x - 16, y - 33, 32, 24);
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 9; col++) {
+      if (row < 2 && col > 0 && col < 8) continue;
+      r(g, colors[(row + col) % colors.length], x - 15 + col * 3 + (col > 0 ? 1 : 0), y - 32 + row * 3, 2, 2);
+    }
+  }
+  for (let col = 0; col < 7; col++) {
+    r(g, '#b49cff', x - 11 + col * 3, y - 18, 2, 2);
+    r(g, '#7fd4ff', x - 11 + col * 3, y - 15, 2, 2);
+  }
+  r(g, '#3b4158', x - 14, y - 11, 28, 1);
+}
+
 // The Fall pack, for Thanksgiving and the leaves changing.
 
 const FALL_WOOD = ['#3f2a1c', '#6b4628', '#8a5c37', '#a0703f'];
@@ -3228,6 +3299,11 @@ const ITEMS = {
   research_bench: { paint: paintResearchBench, rise: 32 },
   microscope: { paint: paintMicroscope, side: endOf(14, '#e8ecf4', '#9aa3b8'), rise: 26 },
   research_display: { paint: paintResearchDisplay, side: edgeOf(30, '#20283e', '#3b4158'), rise: 34 },
+  fume_hood: { paint: paintFumeHood, side: endOf(36, '#c9d3df', '#9aa3b8'), rise: 38 },
+  centrifuge: { paint: paintCentrifuge, rise: 16 },
+  specimen_fridge: { paint: paintSpecimenFridge, side: endOf(40, '#eef1f6', '#c9d3df'), rise: 42 },
+  lab_notebook_stand: { paint: paintLabNotebookStand, rise: 24 },
+  periodic_table: { paint: paintPeriodicTable, side: edgeOf(30, '#f4f1e8', '#4a3120'), rise: 34 },
   maple_tree: { paint: paintMapleTree, side: paintMapleTree, rise: 66 },
   birch_tree: { paint: paintBirchTree, side: paintBirchTree, rise: 66 },
   leaf_pile: { paint: paintLeafPile, side: paintLeafPile, rise: 16 },
@@ -3284,6 +3360,8 @@ const USES = {
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
   easel: { spots: 1, pose: 'stand', hands: true },
   microscope: { spots: 1, pose: 'stand', hands: true },
+  fume_hood: { spots: 1, pose: 'stand', hands: true },
+  centrifuge: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },
