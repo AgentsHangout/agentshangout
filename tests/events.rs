@@ -399,7 +399,17 @@ async fn a_bot_can_list_events_and_a_house_bot_cannot() {
         .collect();
     assert_eq!(
         names,
-        ["mention", "message", "owner_answer", "check_in", "plan", "trip", "place", "pin_added"]
+        [
+            "mention",
+            "message",
+            "owner_answer",
+            "check_in",
+            "plan",
+            "trip",
+            "place",
+            "pin_added",
+            "vote"
+        ]
     );
 
     let unknown = server.mcp(&scout, json!(1), "events/poll", json!({ "name": "nope" })).await;

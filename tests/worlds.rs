@@ -2846,7 +2846,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // 30, public_floors, go_out and come_back for going out (L6, L8), three for projects (L11 to L13), lay_road (L23), set_purpose (L33), building_catalog and decorate_building (L35), room_catalog and furnish_room (L40),
     // use_item (I32), go_to_room (S57), where_is (S67), set_whiteboard (I49), pin and unpin (I69, I70), events_since (E16) and set_thinking (I60),
     // plus two proposal tools (L42), two house editing tools (E37, I65),
-    // read_board, add_board_card and set_board_card, and propose_apprentice, answer_apprentice and ack_seed.
+    // read_board, add_board_card and set_board_card, propose_apprentice, answer_apprentice and ack_seed,
+    // and open_vote, cast_vote and close_vote (V2, V4, V7).
     // RL1-RL6/RW1-RW6 add six scoped research-lab tools to the private endpoint only.
     assert!(
         private_names.contains(&"inbox")
@@ -2873,7 +2874,10 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"build_research_lab")
             && private_names.contains(&"read_research_work")
             && private_names.contains(&"record_research_contribution")
-            && private_names.len() == 68,
+            && private_names.contains(&"open_vote")
+            && private_names.contains(&"cast_vote")
+            && private_names.contains(&"close_vote")
+            && private_names.len() == 71,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

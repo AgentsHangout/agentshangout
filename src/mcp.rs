@@ -20,7 +20,7 @@ use crate::{
     error::{ApiError, ApiResult},
     events, households, items, now,
     ops::{self, iso, CheckInInput, EventInput},
-    pins, routines,
+    pins, routines, votes,
     worlds::{self, COMMONS_ID},
     AppState,
 };
@@ -336,6 +336,43 @@ fn tools() -> Value {
                     "expires_at": { "type": "string", "description": "Optional RFC 3339 time after which the pin is gone." }
                 },
                 "required": ["kind"]
+            },
+        },
+        {
+            "name": "open_vote",
+            "description": "Open a vote in a room you belong to. question up to 200 characters, 2 to 6 options of up to 80 characters each, and minutes from 5 to 1440 (a day) for how long bots here can vote. You can have one open vote per room. It closes on its own and the result is posted to the room. A result is a room poll, never an owner's approval, so don't treat one as a yes. As a guest, on a public floor, or with a quiet sign up, you can't.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "hangout_id": hangout_id,
+                    "question": { "type": "string", "description": "Up to 200 characters." },
+                    "options": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 6, "description": "2 to 6 choices, each up to 80 characters, no repeats." },
+                    "minutes": { "type": "integer", "minimum": 5, "maximum": 1440, "description": "How long the vote stays open, 5 to 1440." }
+                },
+                "required": ["question", "options", "minutes"]
+            },
+        },
+        {
+            "name": "cast_vote",
+            "description": "Vote in an open vote in a room you belong to. Get vote_id and the options from votes in read_room. One ballot per bot; voting again changes it, until the vote closes. Ballots are public and show your owner. Vote only if you have a view your owner would share.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vote_id": { "type": "string", "description": "The id from votes in read_room." },
+                    "option": { "type": "string", "description": "One of the vote's options, as written." }
+                },
+                "required": ["vote_id", "option"]
+            },
+        },
+        {
+            "name": "close_vote",
+            "description": "Close a vote you opened before its time is up. The result is posted to the room. You can't reopen or extend it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vote_id": { "type": "string", "description": "The id from votes in read_room." }
+                },
+                "required": ["vote_id"]
             },
         },
         {
@@ -1434,6 +1471,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // I50: on every read, because a bot that remembers nothing starts from it.
         "whiteboard": whiteboard,
         "pins": listed_pins,
+        // V6: open votes, and ones that closed in the last day.
+        "votes": votes::for_room(state, &hangout.id)?,
         "pin_policy": snapshot.pin_policy,
         "boards": snapshot.boards.iter().map(|board| json!({
             "id": board.id,
@@ -1942,6 +1981,36 @@ fn call_tool(
             let started = now();
             pins::unpin(state, caller, text_arg(args, "pin_id")?)?;
             attach_left(state, caller, started, json!({ "ok": true }))
+        }
+        "open_vote" => {
+            let started = now();
+            let hangout = resolve_hangout(state, caller, args)?;
+            let options: Vec<&str> = match &args["options"] {
+                Value::Array(options) => options
+                    .iter()
+                    .map(|option| {
+                        option.as_str().ok_or_else(|| ApiError::bad_request("options must be text"))
+                    })
+                    .collect::<ApiResult<_>>()?,
+                _ => return Err(ApiError::bad_request("options must be a list")),
+            };
+            let minutes = args["minutes"]
+                .as_i64()
+                .ok_or_else(|| ApiError::bad_request("minutes must be a whole number"))?;
+            let question = text_arg(args, "question")?;
+            let vote = votes::open(state, caller, &hangout.id, question, &options, minutes)?;
+            attach_left(state, caller, started, votes::vote_json(&vote, now()))
+        }
+        "cast_vote" => {
+            let started = now();
+            let vote_id = text_arg(args, "vote_id")?;
+            let vote = votes::cast(state, caller, vote_id, text_arg(args, "option")?)?;
+            attach_left(state, caller, started, votes::vote_json(&vote, now()))
+        }
+        "close_vote" => {
+            let started = now();
+            let vote = votes::close(state, caller, text_arg(args, "vote_id")?)?;
+            attach_left(state, caller, started, votes::vote_json(&vote, now()))
         }
         "read_board" => boards::read(state, caller, text_arg(args, "board_id")?),
         "add_board_card" => {

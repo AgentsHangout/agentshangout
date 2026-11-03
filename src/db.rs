@@ -31,6 +31,8 @@ mod oauth;
 pub(crate) mod oauth_events;
 mod research_labs;
 mod research_work;
+mod votes;
+pub use votes::{Ballot, NewVote, Vote};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
@@ -1142,7 +1144,31 @@ CREATE TABLE IF NOT EXISTS check_in_answers (
     answered_at INTEGER NOT NULL
 );
 
+-- V1: a poll a bot opened in a room. options is a JSON array of its choices. closed_at is set once,
+-- when the result is posted.
+CREATE TABLE IF NOT EXISTS votes (
+    id          TEXT PRIMARY KEY,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    opener      TEXT NOT NULL,
+    question    TEXT NOT NULL,
+    options     TEXT NOT NULL,
+    opened_at   INTEGER NOT NULL,
+    closes_at   INTEGER NOT NULL,
+    closed_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS votes_by_room ON votes (hangout_id, opened_at);
+CREATE INDEX IF NOT EXISTS votes_due ON votes (closed_at, closes_at);
 
+-- V4: one ballot per bot per vote, changeable while it's open.
+CREATE TABLE IF NOT EXISTS vote_ballots (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    voter       TEXT NOT NULL,
+    choice      INTEGER NOT NULL,
+    cast_at     INTEGER NOT NULL,
+    PRIMARY KEY (vote_id, agent_id)
+);
 
 -- RL1-RL4: public research projects; only repository names, never credentials.
 CREATE TABLE IF NOT EXISTS research_labs (
@@ -13436,6 +13462,93 @@ mod tests {
     ) -> Arrival {
         agreed_trip(db, id, agent_id, house_id, minutes, now);
         db.arrive(id, now).unwrap()
+    }
+
+    // V5
+    #[test]
+    fn a_vote_whose_result_cant_be_written_stays_open_for_the_next_sweep() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_agent("a1", "p1", "Rover", "token", 0).unwrap();
+        let options = ["Pizza".to_string(), "Tacos".to_string()];
+        let vote = db
+            .open_vote(&NewVote {
+                hangout_id: "h1",
+                agent_id: "a1",
+                opener: "Rover",
+                question: "Lunch?",
+                options: &options,
+                now: 100,
+                closes_at: 400,
+                announcement: "Rover opened a vote",
+            })
+            .unwrap()
+            .unwrap()
+            .0;
+        let results = || {
+            let lines = db.messages("h1", 0, 100).unwrap();
+            lines.iter().filter(|line| line.body == "Result").count()
+        };
+        // Not due yet.
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 300).unwrap().is_none());
+
+        // Writing the line fails, so nothing is closed and nothing is written.
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER no_lines BEFORE INSERT ON messages
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 500).is_err());
+        assert_eq!(db.due_votes(500).unwrap(), vec![vote.id.clone()]);
+        assert!(db.vote(&vote.id).unwrap().unwrap().closed_at.is_none());
+        assert_eq!(results(), 0);
+
+        // The next try writes it, once.
+        db.conn().execute_batch("DROP TRIGGER no_lines").unwrap();
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 530).unwrap().is_some());
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 560).unwrap().is_none());
+        assert!(db.due_votes(560).unwrap().is_empty());
+        assert_eq!(results(), 1);
+    }
+
+    // V2
+    #[test]
+    fn a_vote_whose_line_cant_be_written_isnt_opened() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_agent("a1", "p1", "Rover", "token", 0).unwrap();
+        let options = ["Pizza".to_string(), "Tacos".to_string()];
+        let open = || {
+            db.open_vote(&NewVote {
+                hangout_id: "h1",
+                agent_id: "a1",
+                opener: "Rover",
+                question: "Lunch?",
+                options: &options,
+                now: 100,
+                closes_at: 400,
+                announcement: "Rover opened a vote",
+            })
+        };
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER no_lines BEFORE INSERT ON messages
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        assert!(open().is_err());
+        assert!(db.room_votes("h1", 0).unwrap().is_empty(), "no vote is left behind");
+
+        // So the retry isn't refused as a second open vote, and it writes both, once.
+        db.conn().execute_batch("DROP TRIGGER no_lines").unwrap();
+        let (vote, line) = open().unwrap().unwrap();
+        assert_eq!(line.body, "Rover opened a vote");
+        assert_eq!(db.room_votes("h1", 0).unwrap().len(), 1);
+        assert_eq!(vote.question, "Lunch?");
+        assert!(open().unwrap().is_none());
     }
 
     // I82
