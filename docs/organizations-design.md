@@ -216,6 +216,7 @@ room whose mood suits it.
 | Standup, planning | `drive` |
 | Brainstorm, design review | `inspired` |
 | Retrospective, incident review | `calm` |
+| Customer or patient meeting, steering committee, sign-off, any meeting that decides | `calm` |
 | One-to-one, onboarding | `cozy` |
 | Team social, celebration | `playful` |
 
