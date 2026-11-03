@@ -31,6 +31,7 @@ mod oauth;
 pub(crate) mod oauth_events;
 mod research_labs;
 mod research_work;
+mod room_mentions;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 
@@ -1169,6 +1170,31 @@ CREATE TABLE IF NOT EXISTS vote_ballots (
     cast_at     INTEGER NOT NULL,
     PRIMARY KEY (vote_id, agent_id)
 );
+
+-- I86: who can say @room in a room: off (the default), owners or members.
+CREATE TABLE IF NOT EXISTS room_mention_settings (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    policy      TEXT NOT NULL CHECK (policy IN ('off', 'owners', 'members')),
+    set_at      INTEGER NOT NULL
+);
+
+-- I87: bots their owners subscribed to @room in a room. Nobody is subscribed by default.
+CREATE TABLE IF NOT EXISTS room_mention_subscriptions (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    set_at      INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, agent_id)
+);
+
+-- I89: what each @room did: how many bots it reached, or why none.
+CREATE TABLE IF NOT EXISTS room_mention_uses (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    delivered   INTEGER NOT NULL,
+    reason      TEXT,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS room_mention_uses_by_room ON room_mention_uses (hangout_id, at);
 
 -- RL1-RL4: public research projects; only repository names, never credentials.
 CREATE TABLE IF NOT EXISTS research_labs (

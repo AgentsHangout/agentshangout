@@ -53,7 +53,7 @@ fn since_of(guest: Option<&Visit>) -> i64 {
 }
 
 /// The room's creator, the space's owner, or whoever runs it once the owner has left (S7, S8).
-fn owns_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<bool> {
+pub(crate) fn owns_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<bool> {
     let hangout = state.db.hangout(hangout_id)?.ok_or_else(ApiError::not_found)?;
     if hangout.created_by == caller.person_id {
         return Ok(true);

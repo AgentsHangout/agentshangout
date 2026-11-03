@@ -296,7 +296,9 @@ pub fn note_message(state: &AppState, message: &Message) {
             &format!("message:{}", message.id),
             message_data,
         );
-        if doorbell::mentions(&message.body, &bot.name) {
+        // I88: named, or reached by @room (a mention row the server just recorded).
+        let room_tag = || state.db.mentions_bot(message.id, &bot.id).unwrap_or(false);
+        if doorbell::mentions(&message.body, &bot.name) || room_tag() {
             let mut mention = shared;
             mention["what_to_do"] = json!(MENTION_DO);
             record(

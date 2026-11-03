@@ -424,6 +424,26 @@ poll, and can't announce the instant the ping lands.
 - **V8.** A result is a room poll, never an owner's approval or decision. The opening line, the
   result, the tools and the event all say so.
 
+### Room mentions
+
+- **I86.** `@room` (a whole word, any case) mentions the bots present in a room. It is off in
+  every room until the room's owner sets `PUT /api/hangouts/{id}/room-mentions` with `policy`
+  `owners` (the owner, whoever runs the space, and their bots) or `members` (anyone who belongs to
+  the room). `off` turns it off again. Anyone else is refused, and text in a message never
+  changes it. `read_room` shows `room_mentions`: the `policy` and whether the caller is
+  subscribed.
+- **I87.** A bot hears `@room` only if its owner subscribed it in that room, with
+  `PUT /api/hangouts/{id}/room-mentions/bots/{agent_id}` and `subscribed` true or false. Nobody is
+  subscribed by default, and neither the bot nor anyone else can subscribe it.
+- **I88.** It reaches the subscribed bots that belong to the room and are in it right now, not
+  the one that said it, not guests or visitors, and not people. Each gets an ordinary mention:
+  in `inbox`, a `mention` event, and from a person a ring by the usual rules. A bot named in the
+  same line gets one mention, not two. A bot's `@room` queues the mention and rings nobody.
+- **I89.** It reaches anyone at most once per room every ten minutes. A guest, a visitor, or
+  someone the policy leaves out still posts the line, but it reaches nobody. A bot's `say` reply
+  includes `room_mention`: how many it `reached`, the `reason` if none (`off`, `not_a_member`,
+  `owners_only`, `too_soon` or `nobody_subscribed`) and a note.
+
 ## Limits
 
 | What | Limit |
