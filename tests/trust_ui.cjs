@@ -27,7 +27,8 @@ const findButton = (node, label) => all(node).find(n => n.tag === 'button' && te
 const node = name => all(body).find(n=>n.tag==='g'&&n.props['aria-label']?.startsWith(`${name}, `));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const policy = () => Object.fromEntries(['wake','invite_public','invite_private'].map(k => [k,{mode:'participants',people:[],bots:[]} ]));
-const data = {owner_id:'owner', people:[{id:'owner',name:'You'},{id:'friend',name:'<img src=x onerror=alert(1)>'}], bots:[{id:'one',name:'Fern',owner_id:'owner'},{id:'two',name:'Moss',owner_id:'owner'},{id:'other',name:'Pine',owner_id:'friend'}], agents:[{id:'one',name:'Fern',doorbell:{paused:false},trust:policy()},{id:'two',name:'Moss',trust:policy()}], friendships:[{kind:'person',from_id:'friend',to_id:'owner',status:'pending'}]};
+const data = {owner_id:'owner', people:[{id:'owner',name:'You'},{id:'friend',name:'<img src=x onerror=alert(1)>'}], bots:[{id:'one',name:'Fern',owner_id:'owner'},{id:'two',name:'Moss',owner_id:'owner'},{id:'other',name:'Pine',owner_id:'friend'}], agents:[{id:'one',name:'Fern',doorbell:{paused:false},trust:policy()},{id:'two',name:'Moss',trust:policy()}], friendships:[{kind:'person',from_id:'friend',to_id:'owner',status:'pending'}],looks:{people:{owner:{skin:'peach',hair:'red'}},bots:{one:{head:'twin'},two:{head:'wide'}}}};
+let crowd = false;
 let body, options, requests = [], rejectSave = false, deferred = [];
 const api = async (path, options = {}) => {
   requests.push({path,...options});
@@ -36,16 +37,19 @@ const api = async (path, options = {}) => {
   if (path.includes('/friendships')) return {};
   if (path.endsWith('/monitoring')) return new Promise((resolve,reject) => deferred.push({path,resolve,reject}));
   if (path.endsWith('/doorbell')) return {};
-  if (path.endsWith('/bonds')) return {bonds:[]};
+  if (path.endsWith('/bonds')) return {bonds: crowd ? ['Mac','Chainy','Victor Sausage','Axiom','Ron','Morgkorg','A very long bot name indeed','Aionoro','Kyle’s Agent'].map((name,i)=>({agent:{id:`x${i}`,name},strength:i+1,built:0})) : []};
   if (path.endsWith('/notify')) { if (options.method === 'PUT') return {}; if (path.includes('/two/')) throw Error('Notify temporarily unavailable'); return {only_me:false,url:null}; }
   if (path.endsWith('/routine')) return options.method === 'PUT' ? {} : {days:['mon'],starts:'09:00',ends:'24:00',public_places:true};
   throw Error(`Unexpected ${path}`);
 };
 const panels = { add: (_name,_title,opts) => { options = opts; body = h('div'); return body; }, toggle: () => h('button'), open: () => options.onOpen() };
-const context = {h,api,panels,document:{activeElement:null,body:h('body')},console};
+const pictures = [];
+const canvas = () => ({width:0,height:0,getContext:()=>({imageSmoothingEnabled:true,drawImage(){}}),toDataURL:()=>'data:image/png;base64,HEAD'});
+const figure = worn => { pictures.push(worn); return {width:26,height:36,getContext:()=>({getImageData:()=>({data:Uint8ClampedArray.from({length:26*36*4},(_,i)=>i%4===3&&i>=4*26*5?255:0)})})}; };
+const context = {h,api,panels,document:{activeElement:null,body:h('body'),createElement:canvas},console};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('web/trust.js','utf8').replace('export function trustPanel','function trustPanel'),context);
-function build() { return context.trustPanel({h,api,panels,me:{name:'You',kind:'person'},crew:()=>{}}); }
+function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'You',kind:'person'},crew:()=>{},...extra}); }
 (async () => {
   const panel = build(); await panel.open(); await tick();
   assert.ok(text(body).includes('Fern')); assert.ok(findButton(body,'Wake-up settings'));
@@ -127,6 +131,41 @@ function build() { return context.trustPanel({h,api,panels,me:{name:'You',kind:'
   // Opening again refreshes an outside friendship change; no-bot accounts retain friendships.
   const loads = requests.filter(r=>r.path==='/api/trust').length;
   await panel.open(); await tick(); assert.ok(requests.filter(r=>r.path==='/api/trust').length>loads);
+  // BT7: with a way to draw figures, each node is its head; a node with no look keeps its letter.
+  const heady = build({figure}); await heady.open(); await tick();
+  const images = all(body).filter(n=>n.tag==='image');
+  assert.ok(images.length>=3,'heads for you and both bots'); assert.ok(images.every(n=>n.props.href.startsWith('data:image/png')));
+  assert.ok(pictures.some(w=>w.worn.head==='twin')); assert.ok(pictures.some(w=>w.worn.hair==='red'));
+  const has = name => all(node(name)).some(n=>n.tag==='image');
+  assert.ok(has('Fern')&&has('Moss')&&has('You'));
+  assert.equal(has('<img src=x onerror=alert(1)>'),false);
+  assert.ok(all(node('<img src=x onerror=alert(1)>')).some(n=>n.tag==='text'&&n.props.class==='initial'));
+  assert.equal(all(node('Fern')).some(n=>n.tag==='text'&&n.props.class==='initial'),false);
+  assert.equal(all(body).some(n=>n.tag==='img'),false);
+  // BT8: nothing depends on the stylesheet: a background, and a fill and stroke on every shape and line.
+  assert.ok(all(body).some(n=>n.tag==='rect'&&n.props.class==='trust-ground'&&n.props.fill));
+  for (const n of all(body).filter(n=>n.tag==='path'&&n.props.class?.includes('trust-edge'))) assert.ok(n.props.stroke&&n.props['stroke-width'],n.props.class);
+  for (const n of all(body).filter(n=>['circle','rect'].includes(n.tag)&&n.props.class!=='trust-ground')) assert.ok(n.props.fill,n.props.class||n.tag);
+  for (const n of all(body).filter(n=>n.tag==='circle'&&n.props.class!=='ring'||n.tag==='rect'&&n.props.class!=='trust-ground')) assert.ok(n.props.stroke);
+  assert.ok(text(body).includes('Round is a person, square is a bot'));
+  // BT8: in a crowded graph no name overlaps another name or a node.
+  crowd = true; data.friendships.push({kind:'bot',from_id:'one',to_id:'other',status:'accepted'});
+  const busy = build({figure}); await busy.open(); await tick(); await tick();
+  const placed = all(body).filter(n=>n.tag==='g'&&n.props.class?.includes('trust-node')).map(g=>{
+    const [x,y] = g.props.transform.match(/-?[\d.]+/g).map(Number);
+    const label = all(g).find(n=>n.props.class==='label'); const w = [...text(label).replace(/\s+/g,' ').trim()].length*6.4+6;
+    const half = g.props.class.includes(' you')?22:g.props.class.includes(' person')?17:g.props.class.includes(' mine')?19:16;
+    const cx = x+Number(label.props.x), cy = y+Number(label.props.y);
+    return {name:g.props['aria-label'], x, y, half, box:{x:cx-w/2,y:cy-10,w,h:13}};
+  });
+  assert.ok(placed.length>=10,'a crowded graph');
+  const meet = (a,b) => a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
+  for (const a of placed) for (const b of placed) {
+    if (a===b) continue;
+    if (a.name<b.name) assert.equal(meet(a.box,b.box),false,`names ${a.name} and ${b.name} overlap`);
+    assert.equal(meet(a.box,{x:b.x-b.half,y:b.y-b.half,w:b.half*2,h:b.half*2}),false,`name of ${a.name} sits on ${b.name}`);
+  }
+  crowd = false;
   data.agents=[]; const empty=build(); await empty.open(); await tick();
   assert.ok(text(body).includes('Your people friendships')); assert.ok(findButton(body,'Accept')); assert.ok(findButton(body,'Open your crew'));
   console.log('Trust UI selection, stale requests, permissions, friendship consent and empty states passed');

@@ -4,7 +4,7 @@ mod support;
 use agenthangout::{
     app, auth,
     bot_trust::{self, Permission, Trust},
-    db::{Db, Message},
+    db::{Db, Message, Wearer},
     now, ops, AppState, Config,
 };
 use reqwest::{Client, Method, StatusCode};
@@ -542,4 +542,21 @@ async fn monitoring_never_names_a_private_room_its_owner_isnt_in() {
     assert_eq!(names, [json!("Shared")], "{body}");
     assert_eq!(body["other_rooms"], 1, "{body}");
     assert!(!body.to_string().contains("Secret") && !body.to_string().contains("secret"), "{body}");
+}
+
+// BT6: the view carries what each person and bot in it wears, chosen or not, and nobody outside it.
+#[tokio::test]
+async fn the_trust_view_says_what_its_people_and_bots_wear() {
+    let f = Fixture::new().await;
+    f.state.db.change_look(Wearer::Bot, "a", &[("head", Some("wide"))]).unwrap();
+    let (status, view) = f.call("alice", Method::GET, "/api/trust", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["looks"]["bots"]["a"]["head"], "wide", "{view}");
+    assert!(view["looks"]["people"]["alice"].is_object(), "{view}");
+    let bots = view["looks"]["bots"].as_object().unwrap();
+    assert!(!bots.contains_key("e"), "{view}");
+    assert!(!view["looks"]["people"].as_object().unwrap().contains_key("eve"), "{view}");
+    for id in bots.keys() {
+        assert!(view["bots"].as_array().unwrap().iter().any(|b| &b["id"] == id), "{id}");
+    }
 }
