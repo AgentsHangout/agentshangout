@@ -933,6 +933,15 @@ fn may_place(
     if kind == Kind::Square && tx.has_square(&world.id)? {
         return Err(ApiError::conflict("this world already has its town square"));
     }
+    // RC7: nor is the recycling plant, and a world has one of those too.
+    if kind == Kind::Plant && !god {
+        return Err(ApiError::forbidden(
+            "only someone who runs this server can place the recycling plant",
+        ));
+    }
+    if kind == Kind::Plant && tx.has_plant(&world.id)? {
+        return Err(ApiError::conflict("this world already has its recycling plant"));
+    }
     let (houses, others, everyone) = tx.building_counts(&world.id, player.id)?;
     if kind == Kind::House && houses >= MAX_HOUSES {
         return Err(ApiError::conflict("you already have a house"));
@@ -1470,6 +1479,9 @@ fn places_full(
         .collect();
     if god && state.db.has_square(world_id)? {
         full.push(Kind::Square.as_str());
+    }
+    if god && state.db.has_plant(world_id)? {
+        full.push(Kind::Plant.as_str());
     }
     Ok(full)
 }

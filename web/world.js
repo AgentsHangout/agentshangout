@@ -62,7 +62,8 @@ const K_BAR = 14;
 const K_OFFICE = 15;
 const K_WORKSHOP = 16;
 const K_LIBRARY = 17;
-const KIND_NAME = ['', 'road', 'homes', 'shops', 'workshops', 'park', 'cleared', 'house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library'];
+const K_PLANT = 18;
+const KIND_NAME = ['', 'road', 'homes', 'shops', 'workshops', 'park', 'cleared', 'house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant'];
 const KIND_ID = Object.fromEntries(KIND_NAME.map((name, id) => [name, id]).slice(1));
 const KIND_LABEL = ['', 'Road', 'Homes', 'Shops', 'Workshops', 'Park', 'Cleared land', 'House', 'Cafe', 'Club', 'Studio', 'Town square', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library'];
 // W91: places that take 2 by 2 tiles, drawn a piece a tile.
@@ -2759,6 +2760,27 @@ function placedWorkshop(S, c) {
   brickChimney(S, 22, 11, H + 2, H + 10, 3, true);
 }
 
+// RC7: the recycling plant: a long steel shed in recycling green with a roll-up bay door, a row
+// of high windows and a smokestack, on a concrete yard.
+function placedPlant(S, c) {
+  const R = [4, 9, 28, 25];
+  const H = 13;
+  const mat = { k: 'steel', c: '#5e8a5a' };
+  paving(S, [2, 7, 30, 29], '#bdbab0', '#99968c');
+  shadow(S, R, H + 10);
+  box(S, R, 0, H, mat, (side, len) => {
+    if (side === S.door) {
+      rr(S.g, '#3f4a3c', 3, -9, len / 2 - 1, 9);
+      for (let y = -8; y < 0; y += 1.5) line(S.g, 'rgba(10,20,10,.35)', 0.5, 3, y, 2 + len / 2, y);
+      door(S, len - 7, 4.4, 8, c.door, {});
+    } else {
+      for (let k = 0; k < 4; k++) win(S, 3 + k * 5.5, 9, 3.2, 2.6, { frame: '#3a3f38', lit: 60 });
+    }
+  });
+  flatRoof(S, R, H, { k: 'steel', c: '#7c9a76' });
+  brickChimney(S, 23, 12, H + 1, H + 13, 2.4, true);
+}
+
 // W90: a library: pale stone, tall windows, a pitched roof and steps up to the door.
 function placedLibrary(S, c) {
   const R = [6, 8, 26, 24];
@@ -2792,6 +2814,7 @@ const BUILDERS = {
   [K_OFFICE]: [placedOffice],
   [K_WORKSHOP]: [placedWorkshop],
   [K_LIBRARY]: [placedLibrary],
+  [K_PLANT]: [placedPlant],
 };
 
 // A building as a sprite, with its lit-windows twin, its shadow, and the places smoke rises.
@@ -4251,6 +4274,7 @@ const PLACE_ICONS = {
   office: placedOffice,
   workshop: placedWorkshop,
   library: placedLibrary,
+  plant: placedPlant,
 };
 
 // W101: draw the complete object first, then fit its painted bounds into the picker tile.
@@ -4311,6 +4335,8 @@ const TOOL_COLOR = {
   workshop: '#e0b07a',
   library: '#d8cfa0',
   green: '#9be07a',
+  // RC7: god mode's, like the square.
+  plant: '#7fbf6a',
   bulldoze: '#ff6b6b',
 };
 const TOOLS = new Set(Object.keys(TOOL_COLOR));

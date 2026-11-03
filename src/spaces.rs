@@ -7,8 +7,6 @@ use std::{collections::HashMap, sync::Mutex};
 
 use axum::{
     extract::{rejection::JsonRejection, Path, Query, State},
-    http::HeaderMap,
-    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
@@ -17,8 +15,8 @@ use serde_json::{json, Value};
 
 use crate::{
     api,
-    auth::{self, Caller, MaybeCaller},
-    db::{Agent, Floor, FloorChange, NewFloor, NewVisit, Person, PublicFloor, Space, WalkedIn},
+    auth::{self, Caller},
+    db::{Floor, FloorChange, NewFloor, NewVisit, Person, PublicFloor, Space, WalkedIn},
     error::{ApiError, ApiResult},
     god_mode, items, now,
     ops::{self, MAX_ABOUT_CHARS, MAX_NAME_CHARS},
@@ -89,7 +87,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/spaces/{id}/people/{person_id}/turn-out", post(turn_out).delete(let_back))
         .route("/api/floors/{id}", put(change_floor).delete(remove_floor))
         .route("/api/floors/{id}/move", post(move_floor))
-        .route("/api/floors/{id}/door", get(floor_door))
         .route("/api/floors/{id}/walk-in", post(walk_in))
         .route("/api/floors/{id}/walk-out", post(walk_out))
         .route("/api/floors/{id}/close", post(keeper_close))
@@ -810,6 +807,12 @@ async fn go_through_door(
     let body = Door { x, y };
     let building =
         state.db.building_at(COMMONS_ID, body.x, body.y)?.ok_or_else(ApiError::not_found)?;
+    // RC7: the recycling plant has no rooms: it's where bots wait, and its list says who.
+    if building.0 == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: see who's waiting from its menu",
+        ));
+    }
     let found = match state.db.space_on_plot(COMMONS_ID, body.x, body.y)? {
         Some(space) if is_door_to(&state, &building, &space)? => Some(space),
         _ => None,
@@ -1321,62 +1324,37 @@ async fn let_back(
 
 // Walking in
 
-/// An open public floor, or the 404 of one that doesn't exist (S11, S76).
-fn public_floor(state: &AppState, floor_id: &str) -> ApiResult<Floor> {
-    state
+/// The floor, if this person can walk onto it. Any other floor is one that doesn't exist.
+fn open_floor(state: &AppState, caller: &Caller, floor_id: &str) -> ApiResult<Floor> {
+    let floor = state
         .db
         .floor(floor_id)?
         .filter(|floor| floor.access == "public")
-        .ok_or_else(ApiError::not_found)
-}
-
-/// The floor, if this person can walk onto it. Any other floor is one that doesn't exist.
-fn open_floor(state: &AppState, caller: &Caller, floor_id: &str) -> ApiResult<Floor> {
-    let floor = public_floor(state, floor_id)?;
+        .ok_or_else(ApiError::not_found)?;
     if state.db.is_turned_out(&floor.space_id, &caller.person_id)? {
         return Err(ApiError::not_found());
     }
     Ok(floor)
 }
 
-/// S76: where a link to a floor goes, for anyone, signed in or not.
-async fn floor_door(
-    State(state): State<AppState>,
-    MaybeCaller(caller): MaybeCaller,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let floor = match &caller {
-        Some(caller) => open_floor(&state, caller, &id)?,
-        None => public_floor(&state, &id)?,
-    };
-    let space_name = state.db.space(&floor.space_id)?.map(|space| space.name);
-    Ok(Json(json!({ "id": floor.id, "name": floor.name, "space_name": space_name })))
-}
-
 #[derive(Default, Deserialize)]
 struct Walker {
     agent_id: Option<String>,
-    /// S77: signed out, the name of the account made at the door. Signed in, it's ignored.
-    your_name: Option<String>,
 }
 
-/// S18, S24: a person walks in, or sends their own bot. A bot can't send itself. S77: someone signed
-/// out who gives a name gets an account at the door and walks in with it.
+/// S18, S24: a person walks in, or sends their own bot. A bot can't send itself.
 async fn walk_in(
     State(state): State<AppState>,
-    MaybeCaller(caller): MaybeCaller,
-    headers: HeaderMap,
+    caller: Caller,
     Path(id): Path<String>,
     body: Result<Json<Walker>, JsonRejection>,
-) -> ApiResult<Response> {
+) -> ApiResult<Json<Value>> {
     let body = optional(body)?;
-    let Some(caller) = caller else {
-        return walk_in_with_a_name(&state, &headers, &id, &body);
-    };
     ops::no_house_bot(&caller)?;
     ops::require_human(&caller, "walk in: your owner sends you")?;
     let floor = open_floor(&state, &caller, &id)?;
     let is_member = state.db.is_member(&floor.id, &caller.person_id)?;
+    let now = now();
     let agent = match &body.agent_id {
         Some(agent_id) => {
             let agent = ops::own_agent(&state, &caller, agent_id, "send a bot in")?;
@@ -1391,76 +1369,21 @@ async fn walk_in(
             Some(agent)
         }
         // Someone on the floor already has no walking in to do.
-        None if is_member => {
-            return Ok(Json(json!({ "hangout_id": floor.id, "until": null })).into_response())
-        }
+        None if is_member => return Ok(Json(json!({ "hangout_id": floor.id, "until": null }))),
         None => None,
     };
-    Ok(Json(walk_onto(&state, &floor, &caller.person_id, agent.as_ref())?).into_response())
-}
-
-/// S77: a name-only account made at the door of an open public floor, signed in and walked in. A
-/// door that's refused makes nobody.
-fn walk_in_with_a_name(
-    state: &AppState,
-    headers: &HeaderMap,
-    id: &str,
-    body: &Walker,
-) -> ApiResult<Response> {
-    let Some(your_name) = body.your_name.as_deref() else {
-        return Err(ApiError::unauthorized());
-    };
-    if body.agent_id.is_some() {
-        return Err(ApiError::unauthorized());
-    }
-    ops::clean(your_name, "your name", MAX_NAME_CHARS)?;
-    let floor = public_floor(state, id)?;
-    let now = now();
-    // Nobody has this id, so this is whether the floor has room for one more.
-    let room = state.db.would_walk_in(
-        &NewVisit {
-            hangout_id: &floor.id,
-            who: "",
-            person_id: "",
-            agent_id: None,
-            until: now + WALK_IN_SECS,
-            now,
-        },
-        capacity(&floor.size),
-        MAX_BOTS_WALKED_IN,
-    )?;
-    if room == WalkedIn::Full {
-        return Err(ApiError::conflict("this floor is full"));
-    }
-    crate::referrals::allow_new_person(state, headers)?;
-    let (person, key) = api::new_person(state, your_name)?;
-    let mut walked = walk_onto(state, &floor, &person.id, None)?;
-    let owner_key = Some(key);
-    walked["person"] = json!(person);
-    walked["owner_key"] = json!(owner_key);
-    api::reply_with_session(state, &person, &owner_key, Json(walked))
-}
-
-/// S18 to S23: the walk-in itself, for a person or one of their bots, once they may.
-fn walk_onto(
-    state: &AppState,
-    floor: &Floor,
-    person_id: &str,
-    agent: Option<&Agent>,
-) -> ApiResult<Value> {
-    let now = now();
-    let who = agent.map_or(person_id, |agent| agent.id.as_str());
+    let who = agent.as_ref().map_or(caller.person_id.as_str(), |agent| agent.id.as_str());
     // Read first: once they've walked in, nothing says which floor they left, or which room a bot.
     let mut left = state.db.walked_onto(who, now)?;
-    if let Some(agent) = agent {
+    if let Some(agent) = &agent {
         left.extend(state.db.bot_place(&agent.id, now)?);
     }
     let walked = state.db.walk_in(
         &NewVisit {
             hangout_id: &floor.id,
             who,
-            person_id,
-            agent_id: agent.map(|agent| agent.id.as_str()),
+            person_id: &caller.person_id,
+            agent_id: agent.as_ref().map(|agent| agent.id.as_str()),
             until: now + WALK_IN_SECS,
             now,
         },
@@ -1480,15 +1403,15 @@ fn walk_onto(
         }
     }
     for gone in left.iter().filter(|gone| **gone != floor.id) {
-        ops::refresh(state, gone);
+        ops::refresh(&state, gone);
     }
-    ops::refresh(state, &floor.id);
+    ops::refresh(&state, &floor.id);
     // L17: a bot with public places on shows at the place it walked into.
-    if let Some(agent) = agent {
-        crate::events::note_place(state, &agent.id, &floor.id, "moved");
+    if let Some(agent) = &agent {
+        crate::events::note_place(&state, &agent.id, &floor.id, "moved");
         state.worlds.mark_stale(COMMONS_ID);
     }
-    Ok(json!({ "hangout_id": floor.id, "until": now + WALK_IN_SECS }))
+    Ok(Json(json!({ "hangout_id": floor.id, "until": now + WALK_IN_SECS })))
 }
 
 async fn walk_out(
