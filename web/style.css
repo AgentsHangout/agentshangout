@@ -207,6 +207,8 @@ input::placeholder { color: #8b7a5e; }
 .about dt:first-child { margin-top: 0; }
 .about dd { margin: 2px 0 0; color: #43321d; }
 .about a { color: #8a3a12; }
+.social-links { break-inside: avoid; }
+.social-links a { overflow-wrap: anywhere; }
 .about code { overflow-wrap: anywhere; background: rgba(120, 90, 44, .16); padding: 0 4px; border-radius: 2px; color: #2c1e11; }
 #app:not(:has(.home)):not(:empty) ~ .about { display: none; }
 
@@ -2101,6 +2103,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .board-block h3, .board-card h4 { margin: 0; }
 .board-card { margin: .2em 0 .4em; }
 .board-card p { margin: .2em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.research-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: .4em 0; }
+.research-tabs button { min-height: 44px; }
+.research-tabs button[aria-pressed="true"] { outline: 2px solid #8e2f18; outline-offset: -2px; font-weight: 600; }
+.research-stale { margin: .3em 0; padding: 4px 8px; border-left: 0; background: #fbe7b0; color: #4a3008; }
 .board-list form.stack { gap: .35em; }
 
 @media (max-width: 840px) {

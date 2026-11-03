@@ -4,8 +4,9 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 function extract(name) {
-  const start = source.indexOf(`function ${name}(`);
+  let start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing ${name}`);
+  if (source.slice(start - 6, start) === 'async ') start -= 6;
   return source.slice(start, source.indexOf('\n}\n', start) + 2);
 }
 function node(tag, props = {}, ...children) {
@@ -20,6 +21,7 @@ function find(tree, predicate) {
   return predicate(tree) ? tree : (tree.children || []).map(child => find(child, predicate)).find(Boolean);
 }
 let canCreate = false;
+let workReply = { repository: 'AgentsHangout/Cure-MS', fetched_at: 100, items: [{ number: 1, title: 'Gather evidence', kind: 'issue', state: 'open' }], contributions: [{ number: 2, bot_name: 'Research bot', owner_name: 'Ann', verified_merged: true }], bots: [] };
 let responseFails = false;
 let placed;
 let body;
@@ -44,12 +46,14 @@ const context = {
     }
     reads.push(path);
     if (path === '/api/research-labs/floor-1') return lab;
-    if (path.endsWith('/work')) return { repository: lab.github, items: [{ number: 1, title: 'Gather evidence', kind: 'issue', state: 'open' }], contributions: [{ number: 2, bot_name: 'Research bot', owner_name: 'Ann', verified_merged: true }], bots: [] };
+    if (path.endsWith('/work')) return workReply;
     return { eligibility: { can_create: canCreate, age_days: 29, friends: 30 }, labs: [lab] };
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}
+${extract('researchLabLookup')}
+${extract('researchDisplay')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -118,6 +122,68 @@ async function check() {
   assert.ok(find(body, node => node.href === 'https://github.com/AgentsHangout/Cure-MS/issues/1'), 'workroom links to the source issue');
   assert.ok(find(body, node => node.children?.includes('✦ Research contributor badge')), 'verified merged work displays bot swag');
   assert.ok(find(body, node => node.children?.some(text => typeof text === 'string' && text.includes('Ann’s bot'))), 'awards display bot and owner names');
+  // The research display panel: a GitHub snapshot in its own states, never sample data.
+  const text = tree => find(tree, n => n.role === 'status').children.join('');
+  const pressed = tree => find(tree, n => n['aria-pressed'] === 'true').children.join('');
+  const articles = tree => { const all = []; (function walk(n) { if (!n || typeof n !== 'object' || n.hidden) return; if (n.tag === 'article') all.push(n); (n.children || []).forEach(walk); })(tree); return all; };
+  const fresh = { repository: lab.github, fetched_at: 100, stale: false, items: [
+    { number: 7, title: 'Add a review', kind: 'pull_request', state: 'closed' },
+    { number: 8, title: 'Trial notes', kind: 'issue', state: 'open' }] };
+  let shown = node('section', {}, ...context.workContent(fresh));
+  assert.ok(text(shown).startsWith('Refreshed'), 'a fresh snapshot says when it was refreshed');
+  assert.equal(pressed(shown), 'Pull requests (1)', 'pull requests open first, counted from the snapshot');
+  assert.equal(articles(shown).length, 1, 'only the chosen tab shows');
+  assert.equal(find(shown, n => n.tag === 'a').rel, 'noopener noreferrer');
+  assert.equal(find(shown, n => n.tag === 'a').href, 'https://github.com/AgentsHangout/Cure-MS/pull/7');
+  assert.ok(find(shown, n => n.children?.includes('Pull request · closed')), 'a closed pull request is shown as closed');
+  assert.ok(!JSON.stringify(shown.children.filter(n => n.tag === 'div')).includes('merged'), 'the snapshot rows never claim a merge');
+  find(shown, n => n.tag === 'button' && n.children[0].startsWith('Issues')).events.click();
+  assert.equal(pressed(shown), 'Issues (1)');
+  assert.equal(articles(shown)[0].children[0].children[0].href, 'https://github.com/AgentsHangout/Cure-MS/issues/8');
+  shown = node('section', {}, ...context.workContent({ ...fresh, items: [] }));
+  assert.ok(text(shown).startsWith('Refreshed'), 'an empty snapshot is still a successful one');
+  assert.ok(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')));
+  shown = node('section', {}, ...context.workContent({ ...fresh, stale: true }));
+  assert.ok(text(shown).startsWith('Stale'), 'a failed refresh keeps the last snapshot and says it is stale');
+  assert.equal(articles(shown).length, 1);
+  shown = node('section', {}, ...context.workContent({ ...fresh, stale: true, fetched_at: 0, items: [] }));
+  assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
+  assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');
+  assert.equal(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')), undefined);
+  // Using the display opens this room's workroom and carries no lab id of its own.
+  assert.ok(source.includes("else if (item?.kind === 'research_display') useDisplay();"));
+  assert.ok(source.includes("item.kind === 'research_display' ? action('Use display', useDisplay) : null"), 'the Build list gives keyboard users a way to use the display');
+  // A walk-in can't open Build, so the room's More panel has the same action for everyone here.
+  const roomStart = source.indexOf('async function roomView(id)');
+  const roomCode = source.slice(roomStart, source.indexOf('\n}\n', roomStart));
+  assert.ok(roomCode.includes("const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');"), 'More has a keyboard button for the display');
+  assert.ok(roomCode.includes("displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');"), 'it shows only while the room has a display');
+  const moreList = roomCode.slice(roomCode.indexOf("panels.add('more'"), roomCode.indexOf('].filter(Boolean)));', roomCode.indexOf("panels.add('more'")));
+  assert.ok(/\n      displayMore,\n/.test(moreList), 'the button sits in More unconditionally, not behind build rights or membership');
+  const said = [];
+  const opened = [];
+  const displayPanels = { open(name) { opened.push(name); } };
+  await context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: {}, state: 'lab', lookup() { throw Error('no lookup in a lab'); } })();
+  assert.deepEqual(opened, ['research'], 'in a lab the display opens the room workroom');
+  await context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: null, state: 'none', lookup() { throw Error('a known non-lab is not looked up again'); } })();
+  assert.ok(said.at(-1).startsWith('Sample bars'), 'a confirmed non-lab says its bars are sample art');
+  let lookups = 0;
+  const retrying = context.researchDisplay({ panels: displayPanels, say: t => said.push(t), research: null, state: 'unknown', lookup: async () => (++lookups === 1 ? 'unknown' : 'none') });
+  await retrying();
+  assert.ok(said.at(-1).startsWith('Couldn’t check'), 'a failed lookup is never called sample art');
+  await retrying();
+  assert.equal(lookups, 2, 'each use retries an unknown room');
+  assert.ok(said.at(-1).startsWith('Sample bars'), 'a retry that confirms a non-lab says so');
+  const realApi = context.api;
+  const failing = status => async () => { const e = Error('no'); e.status = status; throw e; };
+  context.api = failing(404);
+  assert.equal((await context.lookup('room-1')).state, 'none', 'only a 404 means not a lab');
+  context.api = failing(500);
+  assert.equal((await context.lookup('room-1')).state, 'unknown', 'a server error leaves the room unknown');
+  context.api = async () => { throw Error('offline'); };
+  assert.equal((await context.lookup('room-1')).state, 'unknown', 'a network error leaves the room unknown');
+  context.api = realApi;
+  assert.equal((await context.lookup('floor-1')).state, 'lab');
   // RL7: map identity comes from explicit class metadata, never an ordinary studio name.
   const mapLab = { x: 4, y: 8, kind: 'research_lab', github: lab.github, github_url: 'javascript:alert(1)' };
   const view = { research_labs: [mapLab] };

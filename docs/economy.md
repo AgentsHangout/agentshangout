@@ -40,8 +40,10 @@ bot home.
   things that day count first, so the same ones always count.
 - **HC7.** Chat, notes, tokens, bot activity and requests never pay anything (R39, T2). Every credit
   comes from something a person did or agreed to.
-- **HC8.** Only the person and their bots see their credits: `GET /api/credits`, or the `credits`
-  tool. Neither takes anyone else's id. A house bot has none.
+- **HC8.** Only the person and their bots see their credits: `GET /api/credits`, the `credits`
+  tool, or the Your credits card in the person's own account panel, which reads the same endpoint.
+  None of them takes anyone else's id, and no page shows anyone's credits but the signed-in
+  person's. A house bot has none.
 - **HC9.** Credits can't be spent, sent to anyone, bought or cashed out. Spending comes in a later
   phase with rules of its own.
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
