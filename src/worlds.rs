@@ -1830,6 +1830,9 @@ struct ViewOut<'a> {
     /// W71, W73: `[x, y, owner, name]`, whose each place is and what it's called.
     #[serde(skip_serializing_if = "Option::is_none")]
     owners: Option<Vec<(u16, u16, String, String)>>,
+    /// RL7: public research objects, with no room or participation information.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    research_labs: Option<Vec<ResearchLabOut>>,
     /// L17: `[name, x, y, look]` of the bots out at The Commons' places, by their own names (C14).
     #[serde(skip_serializing_if = "Option::is_none")]
     /// L18: and `fx, fy`, where it comes from, or nulls.
@@ -1840,6 +1843,15 @@ struct ViewOut<'a> {
     /// nothing else, so a place is still only a tile here (W59).
     #[serde(skip_serializing_if = "Option::is_none")]
     outsides: Option<(i64, i64)>,
+}
+
+#[derive(Serialize)]
+struct ResearchLabOut {
+    x: u16,
+    y: u16,
+    kind: &'static str,
+    github: String,
+    github_url: String,
 }
 
 /// W52: someone with the page open. C14: a fourth field only for someone signed in, so nobody else's
@@ -2047,6 +2059,29 @@ fn build_view(state: &AppState, world_id: &str, now: i64) -> ApiResult<Cached> {
                 .collect()
         }),
         owners,
+        research_labs: if world.id == COMMONS_ID {
+            Some(
+                state
+                    .db
+                    .mapped_research_labs(&world.id)?
+                    .into_iter()
+                    .filter_map(|(x, y, owner, repo)| {
+                        let (owner, repo) =
+                            crate::research_labs::repository(&format!("{owner}/{repo}")).ok()?;
+                        let github = format!("{owner}/{repo}");
+                        Some(ResearchLabOut {
+                            x: u16::try_from(x).ok()?,
+                            y: u16::try_from(y).ok()?,
+                            kind: "research_lab",
+                            github_url: format!("https://github.com/{github}"),
+                            github,
+                        })
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        },
         bots_out,
         disaster,
         outsides: if world.id == COMMONS_ID {

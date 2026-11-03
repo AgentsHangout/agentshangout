@@ -698,6 +698,12 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 }
 .city-card[hidden] { display: none; }
 .city-card-name { font-size: 14px; }
+.city-card.research-object { pointer-events: auto; border: 2px solid #72dec9; background: linear-gradient(135deg, #123b42, #182a37); box-shadow: 0 0 0 3px rgba(101, 222, 200, .15), 0 8px 24px rgba(0, 0, 0, .4); }
+.city-card-research { display: grid; gap: 4px; padding-bottom: 7px; margin-bottom: 3px; border-bottom: 1px solid #427b7c; }
+.city-card-research strong { color: #8affdc; font-size: 15px; }
+.city-card-research span { color: #c7e8e4; }
+.city-card-research a { color: #b8fff0; text-decoration: underline; overflow-wrap: anywhere; }
+.city-card-research a:focus-visible { outline: 2px solid #ffd27a; outline-offset: 3px; }
 .city-card-home { color: #ffd27a; font-weight: 600; }
 .city-card-bot { color: #c9cfdc; }
 .city-card-bot.allowed { color: #8ee6b0; }

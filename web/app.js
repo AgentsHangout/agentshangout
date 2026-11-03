@@ -5870,6 +5870,7 @@ const BUILD_TOOLS = [
   ['road', 'Road', 'Road: drag a straight line of up to 16 tiles. It has to touch a road. 1 move a tile.'],
   ['house', 'House', 'House: click a tile beside a road. Private: people come in when you invite them. 1 move.'],
   ['studio', 'Studio', 'Studio: click a tile beside a road. A place away from home, open unless you close it. 1 move.'],
+  ['research_lab', 'Research lab', 'Research lab: choose a public GitHub repository, then a tile. Requires God mode, or 30 days and 30 friends.'],
   ['club', 'Club', 'Club: click a tile beside a road. Open to anyone unless you close it. 1 move.'],
   ['cafe', 'Cafe', 'Cafe: click a tile beside a road. Open to anyone unless you close it. 1 move.'],
   ['lounge', 'Lounge', 'Lounge: click a tile beside a road. Somewhere for long conversations. 1 move.'],
@@ -6076,7 +6077,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
 
   const updatePlacement = (currentTool) => {
     if (currentTool && frame.root.classList.contains('apple-hig')) {
-      const toolName = currentTool.charAt(0).toUpperCase() + currentTool.slice(1);
+      const toolName = currentTool === 'research_lab' ? 'research lab' : currentTool.charAt(0).toUpperCase() + currentTool.slice(1);
       placementBanner.querySelector('.apple-tool-msg').textContent = `Tap tile to place ${toolName}`;
       placementBanner.hidden = false;
     } else {
@@ -6807,8 +6808,19 @@ const menuIcon = (tool) => toolIcon(tool, 22);
 // it, and every button on the site is a button in its title bar, which opens a panel over the map.
 // Public research spaces use the same doors and boards as other places on the map.
 function researchRepositoryLink(repository) {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')) return null;
-  return h('a', { href: `https://github.com/${repository}`, target: '_blank', rel: 'noreferrer' }, repository);
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}$/.test(repository || '')) return null;
+  return h('a', { href: `https://github.com/${repository}`, target: '_blank', rel: 'noopener noreferrer' }, repository);
+}
+
+function researchMapObject(view, x, y) {
+  return (view?.research_labs || []).find((lab) => lab.x === x && lab.y === y && lab.kind === 'research_lab' && researchRepositoryLink(lab.github)) || null;
+}
+
+function researchMapCard(lab) {
+  return h('section', { class: 'city-card-research' },
+    h('strong', {}, h('span', { 'aria-hidden': 'true' }, '⚗ '), 'Research lab'),
+    h('span', {}, 'Public GitHub repository'),
+    researchRepositoryLink(lab.github));
 }
 
 function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
@@ -7127,8 +7139,8 @@ async function worldView(id, { home = false } = {}) {
     place: (lab) => {
       pendingResearchLab = lab;
       panels.close(false);
-      choose('studio');
-      say(`Choose open land beside a road for ${lab.name}. Click the map to place its studio; Escape cancels.`);
+      choose('research_lab');
+      say(`Choose open land beside a road for ${lab.name}. Click the map to place its research lab; Escape cancels.`);
     },
     show: ([x, y]) => { panels.close(false); world.focus(x, y, { zoom: 1.5 }); },
   }) : null;
@@ -7368,7 +7380,7 @@ async function worldView(id, { home = false } = {}) {
   // --- The tools -------------------------------------------------------------------------------
 
   function choose(name) {
-    if (name !== 'studio') pendingResearchLab = null;
+    if (name !== 'research_lab') pendingResearchLab = null;
     tool = name;
     for (const [key, button] of buttons) button.setAttribute('aria-pressed', String(key === name));
     world.setTool(name);
@@ -7379,6 +7391,11 @@ async function worldView(id, { home = false } = {}) {
     if (name && !me) {
       say('Sign in to build here. Looking around is free.');
       account.open('You need an account to build. Make one in a few seconds, and you\'ll be right back on this map.');
+      return;
+    }
+    if (name === 'research_lab' && !pendingResearchLab) {
+      choose(null);
+      panels.open('research');
       return;
     }
     // W61: a place that hasn't come yet stays in the toolbar, so people can see what's ahead.
@@ -7553,6 +7570,8 @@ async function worldView(id, { home = false } = {}) {
         .finally(() => { placingResearchLab = false; });
       return;
     }
+    // RL8: this tool can only place a lab already created through the gated endpoint.
+    if (tool === 'research_lab') { panels.open('research'); return; }
     if (tool === 'road') send({ action: 'road', x: tile.x, y: tile.y, x2: tile.x2, y2: tile.y2 });
     else if (BUILDING_KINDS.has(tool)) send({ action: 'place', kind: tool, x: tile.x, y: tile.y });
     else send({ action: 'bulldoze', x: tile.x, y: tile.y });
@@ -7731,6 +7750,28 @@ async function worldView(id, { home = false } = {}) {
     needs_invite: 'needs an invite from the owner',
   };
   const placeCard = h('div', { class: 'city-card', hidden: true, 'aria-hidden': 'true' });
+  let placeCardTimer;
+  const hidePlaceCard = () => {
+    clearTimeout(placeCardTimer);
+    placeCard.hidden = true;
+    delete placeCard.dataset.anchored;
+    pointer = null;
+    hoveredPlace = null;
+  };
+  const hidePlaceCardSoon = () => {
+    clearTimeout(placeCardTimer);
+    placeCardTimer = setTimeout(() => {
+      if (placeCard.matches(':hover') || placeCard.contains(document.activeElement)) return;
+      hidePlaceCard();
+    }, 300);
+  };
+  placeCard.addEventListener('pointerenter', () => clearTimeout(placeCardTimer));
+  placeCard.addEventListener('focusin', () => clearTimeout(placeCardTimer));
+  placeCard.addEventListener('pointerleave', hidePlaceCardSoon);
+  placeCard.addEventListener('focusout', hidePlaceCardSoon);
+  placeCard.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { hidePlaceCard(); world.canvas.focus({ preventScroll: true }); }
+  });
   const placeDetails = new Map();
   let hoveredPlace = null;
   let pointer = null;
@@ -7754,6 +7795,8 @@ async function worldView(id, { home = false } = {}) {
 
   function placeCardAt() {
     if (!pointer || placeCard.hidden) return;
+    // A link must stay put while the pointer crosses from the canvas into its card.
+    if (placeCard.classList.contains('research-object') && placeCard.dataset.anchored) return;
     const box = placeCard.parentElement.getBoundingClientRect();
     const x = pointer.x - box.left;
     const y = pointer.y - box.top;
@@ -7761,20 +7804,30 @@ async function worldView(id, { home = false } = {}) {
     const hgt = placeCard.offsetHeight;
     placeCard.style.left = `${Math.max(4, x + 16 + w > box.width ? x - w - 16 : x + 16)}px`;
     placeCard.style.top = `${Math.max(4, y + 16 + hgt > box.height ? y - hgt - 16 : y + 16)}px`;
+    if (placeCard.classList.contains('research-object')) placeCard.dataset.anchored = '1';
   }
 
   function showPlace(place) {
     if (!place || !pointer) {
-      placeCard.hidden = true;
+      if (placeCard.classList.contains('research-object') && !placeCard.hidden) hidePlaceCardSoon();
+      else placeCard.hidden = true;
       return;
     }
+    clearTimeout(placeCardTimer);
     const key = `${place.x},${place.y}`;
+    if (placeCard.dataset.place !== key) delete placeCard.dataset.anchored;
+    placeCard.dataset.place = key;
     const owner = ownerAt(place.x, place.y);
     const name = nameAt(place.x, place.y);
     const details = placeDetails.get(key)?.body;
+    const lab = researchMapObject(latest, place.x, place.y);
+    placeCard.classList.toggle('research-object', Boolean(lab));
+    placeCard.setAttribute('aria-hidden', lab ? 'false' : 'true');
+    const kind = lab ? 'research lab' : place.kind;
     const lines = [
+      lab ? researchMapCard(lab) : null,
       h('strong', { class: 'city-card-name' }, name || `A ${place.kind}`),
-      h('span', { class: 'city-card-home' }, details?.yours ? `Your ${place.kind}` : owner ? `${owner}\u2019s ${place.kind}` : `A ${place.kind}`),
+      h('span', { class: 'city-card-home' }, details?.yours ? `Your ${kind}` : owner ? `${owner}\u2019s ${kind}` : `A ${kind}`),
       hoodAt(place.x, place.y) ? h('small', { class: 'city-card-hint' }, `In ${hoodAt(place.x, place.y)[0]}`) : null,
       // L34: what it's for, as plain text.
       details?.purpose ? h('span', { class: 'city-card-purpose' }, details.purpose) : null,
@@ -7786,12 +7839,12 @@ async function worldView(id, { home = false } = {}) {
     if (inside.length) {
       lines.push(h('small', { class: 'city-card-hint' }, `Inside: ${inside.map((row) => (row[7] ? `${row[0]} (${row[7]}\u2019s)` : row[0])).join(', ')}`));
     }
-    for (const bot of details?.bots || []) {
+    for (const bot of lab ? [] : details?.bots || []) {
       const allowed = bot.access !== 'needs_invite';
       lines.push(h('span', { class: allowed ? 'city-card-bot allowed' : 'city-card-bot' },
         h('b', {}, bot.name), ` ${ACCESS_TEXT[bot.access] || ''}`));
     }
-    if (!me || me.kind !== 'person') lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
+    if (!lab && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
     placeCard.replaceChildren(...lines.filter(Boolean));
     placeCard.hidden = false;
     placeCardAt();
@@ -7826,7 +7879,7 @@ async function worldView(id, { home = false } = {}) {
     else if (hoveredPlace) {
       const owner = ownerAt(hover.x, hover.y);
       const name = nameAt(hover.x, hover.y);
-      const word = hoveredPlace.kind;
+      const word = researchMapObject(latest, hover.x, hover.y) ? 'research lab' : hoveredPlace.kind;
       text = `${name || word}${owner ? ` · ${owner}\u2019s ${word}` : ''}`;
     } else if (hover && hover.x !== null) text = `${hover.x}, ${hover.y}${kind ? ` · ${kind}` : ''}`;
     const hood = hover && hover.x !== null ? hoodAt(hover.x, hover.y) : null;
@@ -7845,9 +7898,8 @@ async function worldView(id, { home = false } = {}) {
     else placeCardAt();
   });
   world.canvas.addEventListener('pointerleave', () => {
-    pointer = null;
-    hoveredPlace = null;
-    placeCard.hidden = true;
+    if (placeCard.classList.contains('research-object') && !placeCard.hidden) hidePlaceCardSoon();
+    else hidePlaceCard();
   });
   world.canvas.addEventListener('wheel', () => menu.close(), { passive: true });
   world.canvas.addEventListener('keydown', (event) => {
@@ -8044,6 +8096,7 @@ async function worldView(id, { home = false } = {}) {
   document.documentElement.classList.add('in-game');
   leaveRoom = () => {
     watch.stop();
+    clearTimeout(placeCardTimer);
     clearTimeout(outsidesTimer);
     outsideBuild.destroy();
     world.destroy();

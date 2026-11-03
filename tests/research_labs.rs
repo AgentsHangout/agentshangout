@@ -337,4 +337,67 @@ async fn http_creation_checks_public_repo_and_human_owner_can_place() {
     assert_eq!(status, StatusCode::OK, "{placed}");
     assert_eq!(placed["ok"], true);
     assert_eq!(state.db.plot_of(lab["id"].as_str().unwrap(), "commons").unwrap(), Some(spot));
+    // RL7: anonymous map viewers get a lab class and safe public repository, never room data.
+    let mapped = state.db.mapped_research_labs("commons").unwrap();
+    assert_eq!(mapped, vec![(spot.0, spot.1, "AgentsHangout".into(), "Cure-MS".into())]);
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let map: Value = client
+        .get(format!("{base}/api/worlds/commons"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let object = &map["research_labs"][0];
+    assert_eq!(object["x"], spot.0);
+    assert_eq!(object["y"], spot.1);
+    assert_eq!(object["kind"], "research_lab");
+    assert_eq!(object["github_url"], "https://github.com/AgentsHangout/Cure-MS");
+    assert_eq!(object.as_object().unwrap().len(), 5);
+    let closed = client
+        .put(format!("{base}/api/floors/{}", lab["id"].as_str().unwrap()))
+        .bearer_auth("owner-key")
+        .json(&json!({"access":"private"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(closed.status(), StatusCode::OK);
+    assert!(
+        state.db.mapped_research_labs("commons").unwrap().is_empty(),
+        "private lab metadata must not leak onto the map"
+    );
+    // Check the anonymous cached response after the normal five-second freshness bound.
+    tokio::time::sleep(std::time::Duration::from_millis(5100)).await;
+    let private_map: Value = client
+        .get(format!("{base}/api/worlds/commons"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        private_map["research_labs"],
+        json!([]),
+        "closed labs disappear from anonymous HTTP map metadata after cache refresh"
+    );
+    state
+        .db
+        .change_floor(&FloorChange {
+            id: lab["id"].as_str().unwrap(),
+            name: None,
+            access: Some("public"),
+            size: None,
+            paint: None,
+            flooring: None,
+            keep_bots_of: "owner",
+            private_only: &[],
+        })
+        .unwrap();
+    state.db.set_plot("commons", i64::MAX, i64::MAX, lab["id"].as_str().unwrap()).unwrap();
+    assert!(
+        state.db.mapped_research_labs("commons").unwrap().is_empty(),
+        "a dangling plot without a standing building is not a map object"
+    );
 }

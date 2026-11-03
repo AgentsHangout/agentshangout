@@ -170,6 +170,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 
 - **W29.** World views are built at most once a second and served from memory, so a thousand
   visitors cost the same as one. Anonymous pages poll rather than hold a stream open.
+  The Commons view also includes `research_labs`, the public map object metadata defined in RL7
+  of [Research labs](research-labs.md); private lab details and bot participation are excluded.
 - **W30.** Moves are capped at 300 a minute. World views are capped per IP at 240 a minute, which is room for an
   office behind one address to poll, because views are served from memory. `look`,
   `how_am_i_doing`, `GET /api/worlds/{id}/me`, `GET /api/worlds/{id}/look` and `list_city` showing The

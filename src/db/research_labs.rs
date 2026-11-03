@@ -20,6 +20,27 @@ fn lab_from_row(row: &Row) -> rusqlite::Result<Lab> {
 const LAB_SELECT: &str = "SELECT l.space_id,s.name,s.about,s.owner_id,l.github_owner,l.github_repo,l.created_at FROM research_labs l JOIN spaces s ON s.id=l.space_id JOIN floors f ON f.hangout_id=l.space_id";
 
 impl Db {
+    /// RL7: standing public lab doors only. Plot records alone can outlive a building.
+    pub fn mapped_research_labs(
+        &self,
+        world_id: &str,
+    ) -> rusqlite::Result<Vec<(i64, i64, String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT d.x,d.y,l.github_owner,l.github_repo FROM research_labs l
+             JOIN spaces s ON s.id=l.space_id JOIN floors f ON f.hangout_id=l.space_id
+             JOIN space_plots d ON d.space_id=l.space_id
+             JOIN world_every_place b ON b.world_id=d.world_id AND b.x=d.x AND b.y=d.y
+             JOIN players p ON p.id=b.player_id
+             WHERE d.world_id=? AND f.access='public' AND s.kind='third'
+               AND p.person_id=s.owner_id AND b.kind!='house' ORDER BY d.y,d.x",
+        )?;
+        let rows = stmt.query_map([world_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn person_created_at(&self, person: &str) -> rusqlite::Result<Option<i64>> {
         self.conn()
             .query_row("SELECT created_at FROM people WHERE id=?", [person], |r| r.get(0))

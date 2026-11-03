@@ -2546,6 +2546,32 @@ function placedClub(S, c) {
   flatRoof(S, R, H, mat);
 }
 
+// RL7: a science house with glass windows and a flask beacon, also used in the build palette.
+function researchEmblem(S, height = 33) {
+  const g = S.g;
+  const [x, y] = P(16, 16, height);
+  const [bx, by] = P(16, 16, height - 12);
+  line(g, '#327a83', 1.6, bx, by, x, y + 7);
+  rfill(g, S.day ? '#edfefa' : '#b1fff1', x - 8, y - 8, 16, 17, 3, '#185f70');
+  // A flask, with a narrow neck, cyan solution and a white bubble.
+  fp(g, '#236979', [[x - 2, y - 5], [x + 2, y - 5], [x + 2, y - 1], [x + 5, y + 5], [x - 5, y + 5], [x - 2, y - 1]]);
+  fp(g, '#54e1cf', [[x - 3, y + 1], [x + 3, y + 1], [x + 4, y + 4], [x - 4, y + 4]]);
+  ell(g, '#fff7dc', x + 1, y + 2, 0.8, 0.8);
+}
+
+function placedResearchLab(S) {
+  const R = [5, 7, 27, 25];
+  const mat = { k: 'siding', c: '#e1eee8' };
+  paving(S, [3, 5, 29, 29], '#9bcac1', '#497b7a');
+  shadow(S, R, 23);
+  box(S, R, 0, 18, mat, (side, len) => {
+    if (side === S.door) door(S, 3, 4.4, 9, '#287a84', {});
+    for (let at = side === S.door ? 11 : 3; at + 4 < len; at += 6) win(S, at, 6, 4.5, 8, { curtain: '#a1f2e4' });
+    sign(S, 2, 15, len - 4, 1.7, '#3d9d9a');
+  });
+  flatRoof(S, R, 18, { k: 'siding', c: '#357b82' });
+}
+
 function placedStudio(S, c) {
   const R = [6, 8, 26, 24];
   const H = 15;
@@ -2763,11 +2789,11 @@ const BUILDERS = {
 
 // A building as a sprite, with its lit-windows twin, its shadow, and the places smoke rises.
 // `outside` is what its owner has made of it (E4), or nothing, and then it looks as it always has.
-function buildingObject(kind, level, variant, door, pal, outside = null) {
-  const key = `b:${kind}:${level}:${variant}:${door}:${pal}${outside ? `:${outside.key}` : ''}`;
+function buildingObject(kind, level, variant, door, pal, outside = null, research = false) {
+  const key = `b:${kind}:${level}:${variant}:${door}:${pal}${outside ? `:${outside.key}` : ''}${research ? ':research_lab' : ''}`;
   let s = sprites.get(`${LOD}|${key}`);
   if (s) return s;
-  const build = outside ? (S, c) => paintOutsideStanding(S, KIND_NAME[kind], outside.outside, c) : BUILDERS[kind][level];
+  const build = outside ? (S, c) => paintOutsideStanding(S, KIND_NAME[kind], outside.outside, c) : research ? placedResearchLab : BUILDERS[kind][level];
   // E36: a big place spreads one yard over its four tiles, so its picture is twice the size.
   const big = Boolean(outside) && isBig(kind);
   const stand = big ? (k, draw) => sprite(k, OW * 2, OH * 2, OAX * 2, OAY * 2, draw, true) : object;
@@ -2786,7 +2812,9 @@ function buildingObject(kind, level, variant, door, pal, outside = null) {
     }
     g.save();
     if (big) g.scale(2, 2);
-    build({ g, day, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: day ? info : null }, colors);
+    const scene = { g, day, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: day ? info : null };
+    build(scene, colors);
+    if (research) researchEmblem(scene, 33 + (clamp(Number(outside?.outside?.body?.floors) || 1, 1, 3) - 1) * 18);
     g.restore();
   };
   s = stand(key, run(true));
@@ -4109,6 +4137,7 @@ function drawSky(g, w, h, dpr, sky, t) {
 // Icons for the toolbar, painted the same way. Returns a canvas of the given size.
 
 const PLACE_ICONS = {
+  research_lab: (S) => { placedResearchLab(S); researchEmblem(S); },
   lounge: placedLounge,
   bar: placedBar,
   office: placedOffice,
@@ -4243,6 +4272,7 @@ const TOOL_COLOR = {
   road: '#ffe27a',
   house: '#ffd27a',
   studio: '#9ad0ff',
+  research_lab: '#69e6d3',
   club: '#c9a6ff',
   cafe: '#ffb04d',
   square: '#8fe3c0',
@@ -4345,6 +4375,7 @@ export class World {
     this.anims = new Map();
     // E27: what owners have made of their tiles, by tile, and the pets that live on them.
     this.outsides = new Map();
+    this.researchLabs = new Set();
     this.outsideRows = [];
     this.pets = new Map();
     this.puffs = [];
@@ -4637,6 +4668,7 @@ export class World {
     if (fresh) this.reset(view, n, rows, landKey);
     const animate = !fresh && !this.calm && this.inView && !document.hidden;
     this.applyTiles(view.tiles, animate);
+    this.applyResearchLabs(view.research_labs);
     this.applyPlayers(view.players, animate);
     this.applyCrawlers(view.crawlers, animate);
     this.applyPeople(view.people, animate);
@@ -4646,6 +4678,21 @@ export class World {
     this.describe(view);
     if (fresh) this.frameTown();
     this.kick();
+  }
+
+  // RL7: repaint only when a public lab's map class appears or disappears.
+  applyResearchLabs(rows) {
+    const next = new Set();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const { x, y } = row || {};
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= this.n || y >= this.n) continue;
+      const i = y * this.n + x;
+      if (this.kind[i] >= K_HOUSE) next.add(i);
+    }
+    for (const i of new Set([...this.researchLabs, ...next])) {
+      if (i < this.n * this.n && this.researchLabs.has(i) !== next.has(i)) this.markDirty(i % this.n, Math.floor(i / this.n));
+    }
+    this.researchLabs = next;
   }
 
   // E27: `[x, y, outside]` for every place that has one. Only the tiles whose outside changed are
@@ -5633,7 +5680,7 @@ export class World {
   buildingAt(x, y, k, lv) {
     const { door, variant, pal } = this.placeLook(x, y);
     const outside = this.outsides.get(y * this.n + x) || null;
-    return buildingObject(k, lv, variant, doorSideOf(outside?.outside) || door, pal, outside);
+    return buildingObject(k, lv, variant, doorSideOf(outside?.outside) || door, pal, outside, this.researchLabs.has(y * this.n + x));
   }
 
   faceSegments(code, h, hn) {
