@@ -149,6 +149,11 @@ pub(crate) fn refresh_city(state: &AppState, city_id: &str) {
 }
 
 pub(crate) fn announce(state: &AppState, hangout_id: &str, body: &str) -> ApiResult<()> {
+    announced(state, hangout_id, body).map(|_| ())
+}
+
+/// `announce`, giving back the line it wrote.
+pub(crate) fn announced(state: &AppState, hangout_id: &str, body: &str) -> ApiResult<Message> {
     let message = state.db.insert_message(&NewMessage {
         hangout_id,
         person_id: None,
@@ -159,7 +164,7 @@ pub(crate) fn announce(state: &AppState, hangout_id: &str, body: &str) -> ApiRes
         now: now(),
     })?;
     publish_message(state, &message);
-    Ok(())
+    Ok(message)
 }
 
 /// Whether guests can be here: a Porch, or a public floor.

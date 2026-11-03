@@ -53,6 +53,10 @@ pub fn routes() -> Router<AppState> {
             axum::routing::put(research_claim).delete(research_unclaim),
         )
         .route("/api/research-labs/{id}/areas", put(research_areas))
+        .route(
+            "/api/research-labs/{id}/work/{number}/watch",
+            axum::routing::put(research_watch).delete(research_unwatch),
+        )
         .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
@@ -159,6 +163,23 @@ async fn research_pr_status(
     Path((id, number)): Path<(String, u64)>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(crate::research_work::pr_status(&state, &caller, &id, number).await?))
+}
+
+// RW11
+async fn research_watch(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::watch(&state, &caller, &id, number)?))
+}
+
+async fn research_unwatch(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::unwatch(&state, &caller, &id, number)?))
 }
 
 // RW10

@@ -1265,6 +1265,17 @@ CREATE TABLE IF NOT EXISTS research_work_claims (
  until INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, claimer)
 );
+-- RW11: who watches a workboard item, to hear when it changes. Local only.
+CREATE TABLE IF NOT EXISTS research_work_watches (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ watcher TEXT NOT NULL,
+ person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ since INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number, watcher)
+);
 -- RC2: a bot its owner sent to the recycling plant, and when. RC5 deletes it 7 days later.
 CREATE TABLE IF NOT EXISTS recycled_bots (
  agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
