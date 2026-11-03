@@ -11,6 +11,7 @@ function extract(name) {
 function node(tag, props = {}, ...children) {
   return { tag, ...props, children: children.flat().filter(Boolean),
     events: {}, addEventListener(kind, handler) { this.events[kind] = handler; },
+    setAttribute(name, value) { this[name] = value; },
     append(...next) { this.children.push(...next.flat().filter(Boolean)); },
     replaceChildren(...next) { this.children = next.flat().filter(Boolean); } };
 }
@@ -48,7 +49,7 @@ const context = {
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -123,6 +124,25 @@ async function check() {
   assert.equal(context.mapObject(view, 4, 8), mapLab);
   assert.equal(context.mapObject(view, 4, 9), null);
   const card = context.mapCard(mapLab);
+  assert.equal(card.tag, 'span', 'repository belongs in one ordinary card row');
+  assert.equal(card.class, 'city-card-hint', 'use the existing hover-card row style');
+  const css = fs.readFileSync('web/style.css', 'utf8');
+  assert.equal(css.includes('.city-card-research'), false, 'no separate research hover layout');
+  assert.equal(css.includes('.city-card.research-object'), false, 'no special research box styling');
+  const menuLink = context.menuLink(mapLab.github);
+  assert.equal(menuLink.className, 'game-menu-item', 'the repository uses the established menu style');
+  assert.equal(menuLink.role, 'menuitem');
+  assert.equal(context.menuLink('javascript:alert(1)'), null);
+  const tileMenuStart = source.indexOf('  function tileMenu(t)');
+  const tileMenu = source.slice(tileMenuStart, source.indexOf('\n  }\n', tileMenuStart) + 4);
+  Object.assign(context, { latest: view, me: null, BIG_KINDS: new Set(), KIND_NAME: { studio: 'Studio' } });
+  vm.runInContext(`${tileMenu}\nthis.tileMenu = tileMenu;`, context);
+  const tile = { x: 4, y: 8, kind: 'studio', level: 0 };
+  assert.equal(context.tileMenu(tile).sub, 'Research lab');
+  assert.equal(context.tileMenu(tile).items[0].repository, lab.github);
+  context.latest = { research_labs: [] };
+  assert.equal(context.tileMenu(tile).sub, 'Studio', 'ordinary studios keep their established identity');
+  context.me = { kind: 'person' };
   assert.equal(find(card, n => n.tag === 'a').href, 'https://github.com/AgentsHangout/Cure-MS', 'hover links are constructed from a validated repository, never an arbitrary supplied URL');
   assert.equal(context.mapObject({ research_labs: [{ ...mapLab, github: 'owner/../../bad' }] }, 4, 8), null);
   assert.equal(context.repositoryLink('../bad'), null);
@@ -132,7 +152,7 @@ async function check() {
   const cardAt = source.slice(cardAtStart, source.indexOf('\n  }\n', cardAtStart) + 4);
   context.pointer = { x: 100, y: 100 };
   context.placeCard = { hidden: false, dataset: {}, style: {}, offsetWidth: 200, offsetHeight: 130,
-    classList: { contains: name => name === 'research-object' },
+    classList: { contains: name => name === 'has-repository' },
     parentElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) } };
   vm.runInContext(`${cardAt}\nthis.placeCardAt = placeCardAt;`, context);
   context.placeCardAt();

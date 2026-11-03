@@ -576,3 +576,11 @@ the cascades still run.
 - The page throttles updates, stops on idle/blur/hidden/send/navigation, and expires displayed
   hints locally. The existing room stream rechecks access on delivery. This does not change S42's
   general presence policy or the meaning of a bot's thinking indicator.
+
+### Build-menu collections
+
+- **I90.** Build-menu collections are additive discovery filters over real catalog items. All
+  restores the full catalog and its existing categories, templates and packs. Discovery & evidence,
+  Welcome & recharge, and Work together collect related items across categories. Selecting a
+  collection changes only the displayed catalog: it places nothing, stores nothing, grants no
+  permissions and bypasses no friendship unlock, room privacy, placement or item-limit check.

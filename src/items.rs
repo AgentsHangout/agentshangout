@@ -1900,6 +1900,12 @@ fn catalog_json(friends: i64, god: bool) -> Value {
         "categories": CATEGORIES.iter().map(|(category, label)| {
             json!({ "category": category, "label": label })
         }).collect::<Vec<_>>(),
+        // I90: discovery filters only; the ordinary catalog remains authoritative.
+        "collections": [
+            { "id":"discovery", "label":"Discovery & evidence", "description":"Observe, compare and share findings.", "items":["microscope","research_bench","research_display","telescope","globe","bookshelf","whiteboard"] },
+            { "id":"welcome", "label":"Welcome & recharge", "description":"A comfortable place to meet and take a break.", "items":["armchair","bench","coffee_table","lamp","plant","coffee_machine"] },
+            { "id":"together", "label":"Work together", "description":"Make room for shared ideas and making things.", "items":["whiteboard","workbench","computer","monitor","standing_desk","research_display","bookshelf"] },
+        ],
         // I45: what the catalog also offers whoever runs the space.
         "look": {
             "paints": spaces::PAINTS,
