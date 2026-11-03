@@ -46,6 +46,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
+        .route(
+            "/api/research-labs/{id}/work/{number}/claim",
+            axum::routing::put(research_claim).delete(research_unclaim),
+        )
         .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
@@ -137,6 +141,31 @@ async fn research_work(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(crate::research_work::list(&state, &caller, &id).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct ResearchClaim {
+    #[serde(default)]
+    pairing: bool,
+}
+
+// RW8
+async fn research_claim(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+    body: Option<Json<ResearchClaim>>,
+) -> ApiResult<Json<Value>> {
+    let pairing = body.map(|Json(body)| body.pairing).unwrap_or_default();
+    Ok(Json(crate::research_work::claim(&state, &caller, &id, number, pairing)?))
+}
+
+async fn research_unclaim(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::unclaim(&state, &caller, &id, number)?))
 }
 
 #[derive(Deserialize)]
