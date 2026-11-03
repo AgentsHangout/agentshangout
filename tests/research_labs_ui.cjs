@@ -241,6 +241,30 @@ async function check() {
   assert.ok(source.includes("['research_lab', 'Research lab',"), 'the lab is a regular build-menu choice');
   // RL7: renderer class changes invalidate only affected standing buildings, including removal.
   const world = fs.readFileSync('web/world.js', 'utf8').replace(/\r\n/g, '\n');
+  // A saved studio exterior must not hide a lab's dedicated building (day or night).
+  const buildingStart = world.indexOf('function buildingObject(');
+  const building = world.slice(buildingStart, world.indexOf('\n}\n', buildingStart) + 2);
+  const painted = [];
+  const graphics = { save() {}, restore() {}, scale() {} };
+  const renderContext = vm.createContext({
+    sprites: new Map(), LOD: 1, SIDING: ['wall'], ROOFS: [], DOORC: [], AWN: [],
+    KIND_NAME: { 10: 'studio' }, BUILDERS: { 10: [() => painted.push('studio')] },
+    isBig: () => false, ih: () => 0, clamp: (n, a, b) => Math.max(a, Math.min(b, n)),
+    placedResearchLab: () => painted.push('lab'), researchEmblem: () => painted.push('emblem'),
+    paintOutsideStanding: () => painted.push('custom studio'),
+    paintOutsideGround: () => painted.push('yard'),
+    object(key, draw) { draw(graphics); return {}; },
+    sprite(key, w, h, ax, ay, draw) { draw(graphics); return {}; },
+  });
+  vm.runInContext(`${building}\nthis.buildingObject = buildingObject;`, renderContext);
+  const exterior = { key: 'saved', outside: { body: { floors: 3 } } };
+  const labSprite = renderContext.buildingObject(10, 0, 0, 0, 0, exterior, true);
+  labSprite.lit();
+  labSprite.ground();
+  assert.deepEqual(painted, ['lab', 'emblem', 'lab', 'emblem', 'yard']);
+  painted.length = 0;
+  renderContext.buildingObject(10, 0, 0, 0, 0, exterior, false);
+  assert.deepEqual(painted, ['custom studio'], 'non-lab outside customizations still render');
   const applyStart = world.indexOf('  applyResearchLabs(rows)');
   const apply = world.slice(applyStart, world.indexOf('\n  }\n', applyStart) + 4);
   context.K_HOUSE = 7;

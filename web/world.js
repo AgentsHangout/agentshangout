@@ -10,7 +10,7 @@
 // cars when they go far), frogs and smoke live on top. Sprites for tiles just off screen are made in spare moments, offscreen
 // things aren't drawn, and the loop stops when the page is hidden or scrolled out of view.
 
-import { EYES, FABRICS, HAIRS, LEGS, SKINS, hash, skyFor } from './room.js';
+import { EYES, FABRICS, HAIRS, LEGS, SKINS, fitPicture, hash, skyFor } from './room.js';
 import { paintOutsideGround, paintOutsideStanding } from './outside-art.js';
 import { doorPoint } from './outside-building.js';
 import { doorSideOf, keyOf } from './outside-spec.js';
@@ -2546,7 +2546,7 @@ function placedClub(S, c) {
   flatRoof(S, R, H, mat);
 }
 
-// RL7: a science house with glass windows and a flask beacon, also used in the build palette.
+// RL7: a dedicated laboratory with glass windows and a flask beacon, also used in the build palette.
 function researchEmblem(S, height = 33) {
   const g = S.g;
   const [x, y] = P(16, 16, height);
@@ -2563,13 +2563,21 @@ function placedResearchLab(S) {
   const R = [5, 7, 27, 25];
   const mat = { k: 'siding', c: '#e1eee8' };
   paving(S, [3, 5, 29, 29], '#9bcac1', '#497b7a');
-  shadow(S, R, 23);
+  shadow(S, R, 25);
   box(S, R, 0, 18, mat, (side, len) => {
     if (side === S.door) door(S, 3, 4.4, 9, '#287a84', {});
     for (let at = side === S.door ? 11 : 3; at + 4 < len; at += 6) win(S, at, 6, 4.5, 8, { curtain: '#a1f2e4' });
     sign(S, 2, 15, len - 4, 1.7, '#3d9d9a');
   });
   flatRoof(S, R, 18, { k: 'siding', c: '#357b82' });
+  // Rooftop plant and a raised glass research wing make the silhouette distinct from a studio.
+  const wing = [17, 9, 25, 21];
+  box(S, wing, 18, 25, { k: 'siding', c: '#b4dedc' }, (side, len) => {
+    win(S, 1.5, 19, len - 3, 4.5, { curtain: '#8fe4de' });
+  });
+  flatRoof(S, wing, 25, { k: 'siding', c: '#2b6878' });
+  box(S, [7, 10, 12, 15], 18, 22, { k: 'siding', c: '#748f9b' });
+  flatRoof(S, [7, 10, 12, 15], 22, { k: 'siding', c: '#b6c8ce' });
 }
 
 function placedStudio(S, c) {
@@ -2712,22 +2720,21 @@ function placedBar(S, c) {
   flatRoof(S, R, H, mat);
 }
 
-// W90: an office: tall, with rows of windows and a flat roof.
+// W90, W101: a compact office with two rows of windows and a flat roof.
 function placedOffice(S, c) {
   const R = [7, 8, 25, 24];
-  const H = 30;
+  const H = 22;
   const mat = { k: 'concrete', c: '#c9ccd2' };
   paving(S, [5, 6, 27, 26], '#d1d4d9', '#aeb2b9');
   shadow(S, R, H + 4);
   box(S, R, 0, H, mat, (side, len) => {
     if (side === S.door) door(S, len / 2 - 2.6, 4.4, 9, '#3a5a7a', {});
-    for (let row = 0; row < 3; row++) {
+    for (let row = 0; row < 2; row++) {
       if (row === 0 && side === S.door) continue;
       const lay = layout(len, 3.6, 2.2, 1.8);
       for (let k = 0; k < lay.count; k++) win(S, lay.start + k * lay.step, 3.5 + row * 8.5, 3.6, 5.5, { frame: '#5a6a80', lit: 55 });
     }
     ledge(S, 0, 11.5, len, '#a9adb5');
-    ledge(S, 0, 20, len, '#a9adb5');
   });
   flatRoof(S, R, H, mat, { coping: '#9aa0aa', parapet: 1.5 });
 }
@@ -2749,7 +2756,7 @@ function placedWorkshop(S, c) {
     }
   });
   gable(S, R, H, 6, '#6a6f78', 1.2, 'u', mat);
-  brickChimney(S, 22, 11, H + 2, H + 16, 3, true);
+  brickChimney(S, 22, 11, H + 2, H + 10, 3, true);
 }
 
 // W90: a library: pale stone, tall windows, a pitched roof and steps up to the door.
@@ -2793,7 +2800,7 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
   const key = `b:${kind}:${level}:${variant}:${door}:${pal}${outside ? `:${outside.key}` : ''}${research ? ':research_lab' : ''}`;
   let s = sprites.get(`${LOD}|${key}`);
   if (s) return s;
-  const build = outside ? (S, c) => paintOutsideStanding(S, KIND_NAME[kind], outside.outside, c) : research ? placedResearchLab : BUILDERS[kind][level];
+  const build = research ? placedResearchLab : outside ? (S, c) => paintOutsideStanding(S, KIND_NAME[kind], outside.outside, c) : BUILDERS[kind][level];
   // E36: a big place spreads one yard over its four tiles, so its picture is twice the size.
   const big = Boolean(outside) && isBig(kind);
   const stand = big ? (k, draw) => sprite(k, OW * 2, OH * 2, OAX * 2, OAY * 2, draw, true) : object;
@@ -2814,7 +2821,7 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
     if (big) g.scale(2, 2);
     const scene = { g, day, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: day ? info : null };
     build(scene, colors);
-    if (research) researchEmblem(scene, 33 + (clamp(Number(outside?.outside?.body?.floors) || 1, 1, 3) - 1) * 18);
+    if (research) researchEmblem(scene);
     g.restore();
   };
   s = stand(key, run(true));
@@ -4142,6 +4149,10 @@ function drawSky(g, w, h, dpr, sky, t) {
 // Icons for the toolbar, painted the same way. Returns a canvas of the given size.
 
 const PLACE_ICONS = {
+  house: placedHouse,
+  cafe: placedCafe,
+  club: placedClub,
+  studio: placedStudio,
   research_lab: (S) => { placedResearchLab(S); researchEmblem(S); },
   lounge: placedLounge,
   bar: placedBar,
@@ -4150,122 +4161,42 @@ const PLACE_ICONS = {
   library: placedLibrary,
 };
 
+// W101: draw the complete object first, then fit its painted bounds into the picker tile.
+// This is one camera for every object, with no per-building scale or offset to drift from the map.
 export function toolIcon(tool, size = 32) {
-  const c = makeCanvas(size * 2, size * 2);
-  const g = c.getContext('2d');
-  g.scale((size * 2) / 32, (size * 2) / 32);
-  g.translate(16, 20);
-  const S = { g, day: true, seed: 1, n: 0, info: null };
+  const source = makeCanvas(512, 512);
+  const g = source.getContext('2d');
+  g.translate(256, 256);
+  g.scale(tool === 'square' || tool === 'green' ? 2 : 4, tool === 'square' || tool === 'green' ? 2 : 4);
+  const S = { g, day: true, seed: 1, n: 0, info: null, door: 'L', pal: 0, v: 0 };
+  const colors = { wall: SIDING[0], roof: ROOFS[1], door: DOORC[0], awn: AWN[4], hue: 0 };
   g.lineJoin = 'round';
-  if (tool === 'road') {
-    fp3(g, '#bcb6a6', [-5, -5], [37, -5], [37, 37], [-5, 37]);
-    const K = (c2, lo, hi) => {
-      fp3(g, c2, [lo, -6], [hi, -6], [hi, 38], [lo, 38]);
-      fp3(g, c2, [-6, lo], [38, lo], [38, hi], [-6, hi]);
-    };
-    g.save();
-    g.scale(0.62, 0.62);
-    g.translate(-16, -22);
-    fp3(g, '#d6d1c3', [-8, -8], [40, -8], [40, 40], [-8, 40]);
-    K('#4a4d57', 9, 23);
-    for (let a = 0; a < 40; a += 8) fp3(g, LANE, [a - 4, 15.5], [a, 15.5], [a, 16.5], [a - 4, 16.5]);
-    for (let a = 0; a < 40; a += 8) fp3(g, LANE, [15.5, a - 4], [16.5, a - 4], [16.5, a], [15.5, a]);
-    g.restore();
-  } else if (tool === 'house') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    const R = [7, 9, 25, 23];
-    const mat = { k: 'siding', c: '#f2d3a0' };
-    box(S, R, 0, 11, mat, (side, len) => {
-      win(S, 3, 4, 4, 5, {});
-      if (side === 'L') door(S, len - 8, 4.4, 8, '#3f7a6b', { lamp: false });
-    });
-    gable(S, R, 11, 9, '#b4533c', 1.8, 'u', mat);
-    g.restore();
-  } else if (tool === 'cafe') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    const R = [6, 8, 26, 24];
-    const mat = { k: 'siding', c: '#e8d9b8' };
-    box(S, R, 0, 13, mat, (side, len) => {
-      if (side === 'L') {
-        door(S, len / 2 - 2.2, 4.4, 8.5, '#7b4a2a', { lamp: false });
-        win(S, 2.5, 4, 5, 6, {});
-        win(S, len - 7.5, 4, 5, 6, {});
-      }
-    });
-    flatRoof(S, R, 13, mat);
-    awning(S, R, 10, 5, AWN[0]);
-    g.restore();
-  } else if (tool === 'club') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    const R = [6, 7, 26, 25];
-    const mat = { k: 'brick', c: '#5a4668' };
-    box(S, R, 0, 17, mat, (side, len) => {
-      if (side === 'L') door(S, len / 2 - 2.2, 4.4, 8.5, '#2a2436', { lamp: false });
-    });
-    flatRoof(S, R, 17, mat);
-    g.restore();
-  } else if (tool === 'studio') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    const R = [6, 8, 26, 24];
-    const mat = { k: 'brick', c: '#a9573f' };
-    box(S, R, 0, 15, mat, (side) => {
-      if (side === 'L') door(S, 3, 4.4, 8.5, '#2f5c8a', { lamp: false });
-      win(S, 11, 5, 4.4, 7, {});
-    });
-    flatRoof(S, R, 15, mat);
-    for (let k = 0; k < 3; k++) {
-      const ua = 7 + k * 6.3;
-      slope(g, '#8fb7d0', [[ua, 9, 21], [ua + 5.6, 9, 21]], [[ua, 23, 15], [ua + 5.6, 23, 15]], 6, 2.4);
-    }
-    g.restore();
+  if (PLACE_ICONS[tool]) {
+    PLACE_ICONS[tool](S, colors);
   } else if (tool === 'square') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    paving(S, [1, 1, 31, 31], '#d6ccb1', '#b3a887');
-    fountain(g);
-    g.restore();
-  } else if (tool === 'green') {
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    fp3(g, '#7fb25a', [1, 1], [31, 1], [31, 31], [1, 31]);
-    fountain(g);
-    for (const [u, v, type] of [[5, 5, 'oak'], [27, 6, 'blossom'], [6, 27, 'bush']]) {
-      const [x, y] = P(u, v);
-      drawTree(g, x, y, type, u);
+    for (let corner = 0; corner < 4; corner++) {
+      g.save();
+      g.translate(...P((corner % 2) * 32, Math.floor(corner / 2) * 32));
+      squarePiece(corner)(S);
+      g.restore();
     }
-    g.restore();
-  } else if (PLACE_ICONS[tool]) {
-    // W90: the newer places, as the map draws them.
-    g.save();
-    g.scale(0.72, 0.72);
-    g.translate(-16, -14);
-    Object.assign(S, { door: 'L', pal: 0, v: 0 });
-    PLACE_ICONS[tool](S, { wall: SIDING[0], roof: ROOFS[1], door: DOORC[0], awn: AWN[4], hue: 0 });
-    g.restore();
+  } else if (tool === 'green') {
+    paintOutsideGround(S, 'green', null);
+    paintOutsideStanding(S, 'green', null, colors);
+  } else if (tool === 'road') {
+    fp3(g, '#d6d1c3', [0, 0], [32, 0], [32, 32], [0, 32]);
+    fp3(g, '#4a4d57', [0, 9], [32, 9], [32, 23], [0, 23]);
+    for (let at = 2; at < 32; at += 8) fp3(g, LANE, [at, 15.5], [at + 4, 15.5], [at + 4, 16.5], [at, 16.5]);
   } else {
-    // A bulldozer blade and a cross.
-    g.save();
-    g.translate(-16, -22);
+    // Clear is a tool, rather than a placed object.
     rfill(g, grad(g, 0, 8, 0, 28, '#f6b630', '#c07a10'), 2, 14, 22, 10, 2, '#5a3a08');
     rfill(g, '#3a3f4f', 4, 24, 18, 4, 2);
     for (let k = 0; k < 4; k++) ell(g, '#1a1d28', 6 + k * 5, 27.5, 2.3, 2.3);
     rfill(g, '#f9cb58', 12, 8, 10, 8, 1.5, '#5a3a08');
     rfill(g, '#8fcbec', 14, 10, 6, 4, 1);
     rfill(g, grad(g, 26, 10, 30, 30, '#cfd4de', '#7a8294'), 25, 12, 5, 16, 1.5, '#3a4050');
-    g.restore();
   }
-  void S;
-  return c;
+  return fitPicture(source, size * 2, size * 2);
 }
 
 // ---------------------------------------------------------------------------------------------

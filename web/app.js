@@ -1,4 +1,4 @@
-import { LOOK_COLOURS, Room, figurePicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
+import { LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
@@ -2094,7 +2094,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   function tile(kind, { isPublic, full }) {
     const button = catalogTile({
       name: `item-${kind.kind}`,
-      picture: itemPicture(kind.kind, kind.w, kind.h),
+      picture: fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
       why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: buy it in Account`
