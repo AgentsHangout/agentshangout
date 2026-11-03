@@ -153,6 +153,13 @@ async function check() {
   // Using the display opens this room's workroom and carries no lab id of its own.
   assert.ok(source.includes("else if (item?.kind === 'research_display') useDisplay();"));
   assert.ok(source.includes("item.kind === 'research_display' ? action('Use display', useDisplay) : null"), 'the Build list gives keyboard users a way to use the display');
+  // A walk-in can't open Build, so the room's More panel has the same action for everyone here.
+  const roomStart = source.indexOf('async function roomView(id)');
+  const roomCode = source.slice(roomStart, source.indexOf('\n}\n', roomStart));
+  assert.ok(roomCode.includes("const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');"), 'More has a keyboard button for the display');
+  assert.ok(roomCode.includes("displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');"), 'it shows only while the room has a display');
+  const moreList = roomCode.slice(roomCode.indexOf("panels.add('more'"), roomCode.indexOf('].filter(Boolean)));', roomCode.indexOf("panels.add('more'")));
+  assert.ok(/\n      displayMore,\n/.test(moreList), 'the button sits in More unconditionally, not behind build rights or membership');
   const said = [];
   const opened = [];
   const displayPanels = { open(name) { opened.push(name); } };

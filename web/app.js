@@ -2668,6 +2668,8 @@ async function roomView(id) {
   const useDisplay = researchDisplay({
     panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
   });
+  // The same action without a pointer or build rights, so anyone here, walk-ins too, can use it.
+  const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');
   const builder = buildMode({
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
   });
@@ -3393,6 +3395,7 @@ async function roomView(id) {
     // W98: an open-air place is out of doors.
     room.setLook(snapshot.floor?.floor && { ...snapshot.floor.floor, outdoors: Boolean(snapshot.floor.outdoors), table: snapshot.floor.table ?? null });
     room.setItems(snapshot.items);
+    displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
     room.setBots(inRoom.map((agent) => ({
@@ -4069,6 +4072,7 @@ async function roomView(id) {
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
       research ? moreButton('research', 'Research workroom', '') : null,
+      displayMore,
       moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
       ...notificationActions(me),
