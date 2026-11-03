@@ -2713,6 +2713,10 @@ fn answer_refusal(
     Ok(Ok(bounty))
 }
 
+/// HC25: how `credit_paid.source_id` marks a first gathering that paid without the city's gate.
+/// Those credits buy packs, but a funded question can't be paid for with them.
+pub const FIRST_GATHERING: &str = "first:";
+
 /// HC22: one line of someone's credit history, from `credit_paid`, `credit_spends` or a funded
 /// question that came back or paid (HC20).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -10672,6 +10676,18 @@ impl Db {
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
+        // HC25: a first gathering's credits never fund a question, or throwaway accounts could each
+        // collect one and pass it all to one person.
+        let first: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND source_id LIKE ?2",
+            params![sponsor, format!("{FIRST_GATHERING}%")],
+            |r| r.get(0),
+        )?;
+        if balance - first < amount {
+            return Ok(Some(
+                "credits from your first gathering buy packs but can't fund a question",
+            ));
+        }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
         tx.execute(
             "INSERT INTO credit_spends(person_id,pack,amount,created_at) VALUES(?1,?2,?3,?4)",
@@ -15590,6 +15606,39 @@ mod tests {
         plan(&db, "after", "sq", GATE + 100, "confirmed");
         let later = credits_of(&db, "p1", GATE + CREDIT_DAY);
         assert_eq!((later.balance, later.gatherings), (40, 2));
+    }
+
+    // HC25: a first gathering's credits buy packs, but throwaway accounts can't pass them on through a
+    // funded question (HC20). What paid once the gate was met can.
+    #[test]
+    fn a_first_gatherings_credits_buy_packs_but_never_fund_a_question() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Question','','p1',0,0)", []).unwrap();
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        let paid = credits_of(&db, "p1", 3 * CREDIT_DAY);
+        assert_eq!(paid.balance, 20);
+        assert_eq!(
+            db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
+            Some("credits from your first gathering buy packs but can't fund a question")
+        );
+        assert!(db.open_questions("p1").unwrap().is_empty());
+
+        // Once the gate is met, what pays from then on can fund one, and the first still can't.
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
+        assert_eq!(
+            db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
+            Some("credits from your first gathering buy packs but can't fund a question")
+        );
+        assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
+
+        // And they still buy a pack.
+        let pack = a_pack_for_sale();
+        let after =
+            crate::economy::spend(&db, &ann(None), pack.pack, None, GATE + CREDIT_DAY).unwrap();
+        assert_eq!(after.balance, 20 - pack.cost);
     }
 
     // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make

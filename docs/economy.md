@@ -130,7 +130,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
   leaving a city or joining another doesn't make a new first. Without it nobody could start, since
   a gate takes 30 days and a funded question needs someone who already has credits (HC20). A plan
   still needs other people's yes to be a gathering (R40), and a yes through a plan's link still
-  pays nothing (F17).
+  pays nothing (F17). Its `credit_paid.source_id` starts `first:`, and those credits buy packs but
+  never fund a question (HC20), so throwaway accounts can't each collect one and pass it on.
 
 ### For a maintainer to look at
 

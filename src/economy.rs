@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     auth::Caller,
-    db::{CreditKind, CreditLine, CreditSource, Db, Spend},
+    db::{CreditKind, CreditLine, CreditSource, Db, Spend, FIRST_GATHERING},
     error::{ApiError, ApiResult},
     items::{kind_of, pack_of, PACKS},
     ops::DAY_SECS,
@@ -135,12 +135,14 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             }
         }
     }
-    if let Some(first) = first_gathering {
+    if let Some((city_id, first)) = first_gathering {
         if !sources
             .iter()
-            .any(|(_, source)| source.kind == first.1.kind && source.source == first.1.source)
+            .any(|(_, source)| source.kind == first.kind && source.source == first.source)
         {
-            sources.push(first);
+            // HC25: written down as a first, so it can buy packs but never fund a question.
+            let source = format!("{FIRST_GATHERING}{}", first.source);
+            sources.push((city_id, CreditSource { source, ..first }));
         }
     }
     db.settle_credits(person_id, &sources, worth, DAILY_CAP_HC, now)?;
