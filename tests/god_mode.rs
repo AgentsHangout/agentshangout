@@ -1383,6 +1383,146 @@ async fn a_public_floor_can_be_a_workplace_and_the_bot_walks_in_there() {
     agenthangout::routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
 }
 
+/// L50: a day of blocks, written as each hour's name.
+fn strip(hours: &[(std::ops::Range<usize>, &str)]) -> Vec<&'static str> {
+    let mut day = vec!["anything"; 24];
+    for (range, block) in hours {
+        let block: &'static str = match *block {
+            "work" => "work",
+            "social" => "social",
+            "home" => "home",
+            _ => "anything",
+        };
+        for hour in range.clone() {
+            day[hour] = block;
+        }
+    }
+    day
+}
+
+// L50 to L56
+#[tokio::test]
+async fn a_bots_schedule_paints_its_day_with_work_social_home_and_anything() {
+    let (server, justin, _) = Server::start().await;
+    let (_, square) = server.town_square(&justin).await;
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Elm", "your_name": "Bo", "create_code": CODE }))
+        .await
+        .ok();
+    let city = text(&made["city"]["id"]);
+    let bo = Who { key: text(&made["owner_key"]), id: text(&made["person"]["id"]) };
+    let house = server
+        .post(&bo.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Bo House" }))
+        .await
+        .ok();
+    let living = text(&house["living_room_id"]);
+    let (rover_id, rover) = server.bot(&bo, &living, "Rover").await;
+    server.all_day(&bo, &rover_id, true).await;
+    let office = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Office", "create_code": CODE }))
+        .await
+        .ok();
+    let office = text(&office["hangout"]["id"]);
+    server.state.db.add_agent_to_room(&office, &rover_id).unwrap();
+    let job = json!({ "room_id": office, "job": "Building Agents Hangout" });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/workplace"), job).await.ok();
+    let routine_path = format!("/api/agents/{rover_id}/routine");
+    let path = format!("/api/agents/{rover_id}/schedule");
+
+    // L51: before one is saved, it's read off the routine: all day with a workplace is all Work.
+    let read = server.get(&bo.key, &routine_path).await.ok();
+    assert_eq!(read["schedule_saved"], false, "{read}");
+    assert_eq!(read["schedule"]["every_day"], json!(vec!["work"; 24]));
+    assert_eq!(read["block"], "work");
+
+    // L50: only its owner, as a person, and only 24 known blocks per row.
+    let day = strip(&[
+        (0..8, "home"),
+        (8..12, "work"),
+        (12..13, "social"),
+        (13..17, "work"),
+        (17..19, "social"),
+        (19..24, "home"),
+    ]);
+    for bad in [
+        json!({ "every_day": vec!["work"; 23] }),
+        json!({ "every_day": vec!["nap"; 24] }),
+        json!({ "every_day": day, "days": { "someday": day } }),
+        json!({ "every_day": day, "days": { "sat": vec!["work"; 2] } }),
+    ] {
+        server.put(&bo.key, &path, bad.clone()).await.refused(StatusCode::BAD_REQUEST);
+    }
+    let body = json!({ "every_day": day, "days": { "sat": vec!["anything"; 24] } });
+    server.put(&rover, &path, body.clone()).await.refused(StatusCode::FORBIDDEN);
+    let cy = server.person("Cy").await;
+    server.put(&cy.key, &path, body.clone()).await.refused(StatusCode::NOT_FOUND);
+    let saved = server.put(&bo.key, &path, body).await.ok();
+    assert_eq!(saved["schedule_saved"], true, "{saved}");
+    assert_eq!(saved["schedule"]["every_day"], json!(day));
+    assert_eq!(saved["schedule"]["days"]["sat"], json!(vec!["anything"; 24]));
+    // The bot reads its block and what it asks of it, with no clock saved for Bo, so in UTC.
+    let me = server.get(&rover, "/api/me").await.ok();
+    assert!(me["routine"]["block_how"].is_string(), "{me}");
+    assert!(me["routine"]["next_block_at"].as_i64().unwrap() > now());
+
+    // L53: a weekday that isn't a Saturday, 11 minutes into each hour, in the future.
+    let mut day0 = (now() / DAY + 1) * DAY;
+    while (day0 / DAY + 3).rem_euclid(7) == 5 {
+        day0 += DAY;
+    }
+    let at = |hour: i64| day0 + hour * 3600 + 11 * 60;
+    let place = || server.state.db.bot_place(&rover_id, now()).unwrap();
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(9)).unwrap();
+    assert_eq!(place().as_deref(), Some(office.as_str()), "Work: its workplace");
+    let call = routines::call_of(&server.state, &rover_id, &bo.id, at(9)).unwrap().unwrap();
+    assert_eq!(call.event, "work");
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(12)).unwrap();
+    assert_eq!(
+        server.out_at(&rover).await,
+        square.as_str(),
+        "Social: out, though it has a workplace"
+    );
+    let call = routines::call_of(&server.state, &rover_id, &bo.id, at(12)).unwrap();
+    assert!(call.is_none_or(|call| call.event != "work"), "a Social hour isn't called to work");
+    // Still out there when the Home hour comes, as a walk-in kept going would be (L45).
+    server.state.db.extend_visit(&square, &rover_id, at(21), now()).unwrap();
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(20)).unwrap();
+    assert_eq!(place().as_deref(), Some(living.as_str()), "Home: its Living Room");
+    assert!(server.out_at(&rover).await.is_null(), "and off the floor it was out on");
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(27)).unwrap();
+    assert_eq!(place().as_deref(), Some(living.as_str()), "the next morning is still Home");
+
+    // Anything: the Saturday override moves it nowhere, even in what's a Work hour on weekdays.
+    let mut saturday = day0;
+    while (saturday / DAY + 3).rem_euclid(7) != 5 {
+        saturday += DAY;
+    }
+    routines::wander_at(&server.state, &rover_id, &bo.id, saturday + 9 * 3600 + 660).unwrap();
+    assert_eq!(place().as_deref(), Some(living.as_str()), "Anything: it stays where it is");
+
+    // L55: all day at work, another bot it follows doesn't take it away.
+    let all_work = json!({ "every_day": vec!["work"; 24] });
+    server.put(&bo.key, &path, all_work).await.ok();
+    server.state.db.set_bot_place(&rover_id, &office, now()).unwrap();
+    let (scout_id, scout) = server.bot(&bo, &office, "Scout").await;
+    server.state.db.add_agent_to_room(&living, &scout_id).unwrap();
+    server.tool(&rover, "follow", json!({ "bot": "Scout" })).await;
+    server.tool(&scout, "go_to_room", json!({ "hangout_id": living })).await;
+    assert_eq!(place().as_deref(), Some(office.as_str()), "at work, it stays");
+
+    // L51: deleting it goes back to the routine's window.
+    let cleared = server.send(&bo.key, Method::DELETE, &path, None).await.ok();
+    assert_eq!(cleared["schedule_saved"], false, "{cleared}");
+
+    // RC2: at the recycling plant, a Home hour doesn't put it back in its Living Room.
+    let all_home = json!({ "every_day": vec!["home"; 24] });
+    server.put(&bo.key, &path, all_home.clone()).await.ok();
+    server.post(&bo.key, &format!("/api/agents/{rover_id}/recycle"), json!({})).await.ok();
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(30)).unwrap();
+    assert_ne!(place().as_deref(), Some(living.as_str()), "a recycled bot goes nowhere");
+    server.put(&bo.key, &path, all_home).await.refused(StatusCode::CONFLICT);
+}
+
 // L44: the Bots panel gives each of its owner's bots one status: working on something, idle, or
 // offline when it hasn't called the server in ten minutes.
 #[tokio::test]

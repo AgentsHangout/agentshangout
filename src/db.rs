@@ -583,6 +583,14 @@ CREATE TABLE IF NOT EXISTS bot_routines (
     public_places   INTEGER NOT NULL DEFAULT 0,
     updated_at      INTEGER NOT NULL
 );
+-- L50: a bot's day, hour by hour: 24 letters (w, s, h, a) for every day, and for each weekday
+-- from Monday either 24 more or nothing, joined by commas.
+CREATE TABLE IF NOT EXISTS bot_schedules (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    every_day  TEXT NOT NULL,
+    days       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 -- L47: the room its owner gave a bot to work in, and what its job there is.
 CREATE TABLE IF NOT EXISTS bot_workplaces (
     agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -5943,6 +5951,37 @@ impl Db {
 
     // Routines (L1 to L10)
 
+    /// L50: a bot's stored schedule, as `every_day` and `days`, if its owner saved one.
+    pub fn bot_schedule(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT every_day, days FROM bot_schedules WHERE agent_id = ?",
+                [agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// L50: saves a bot's schedule, or with `None` goes back to its routine's window.
+    pub fn set_bot_schedule(
+        &self,
+        agent_id: &str,
+        schedule: Option<(&str, &str)>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match schedule {
+            Some((every_day, days)) => conn.execute(
+                "INSERT INTO bot_schedules (agent_id, every_day, days, updated_at) VALUES (?, ?, ?, ?)
+                 ON CONFLICT (agent_id) DO UPDATE SET every_day = excluded.every_day,
+                     days = excluded.days, updated_at = excluded.updated_at",
+                params![agent_id, every_day, days, now],
+            )?,
+            None => conn.execute("DELETE FROM bot_schedules WHERE agent_id = ?", [agent_id])?,
+        };
+        Ok(())
+    }
+
     /// L47: the room a bot's owner gave it to work in, and its job there.
     pub fn bot_workplace(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
         self.conn()
@@ -7845,8 +7884,10 @@ impl Db {
     pub fn bots_going_out(&self) -> rusqlite::Result<Vec<(String, String)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT a.id, a.owner_id FROM bot_routines r JOIN agents a ON a.id = r.agent_id
-             WHERE r.public_places = 1 ORDER BY a.id",
+            "SELECT a.id, a.owner_id FROM agents a
+             WHERE a.id IN (SELECT agent_id FROM bot_routines WHERE public_places = 1)
+                OR a.id IN (SELECT agent_id FROM bot_schedules)
+             ORDER BY a.id",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()

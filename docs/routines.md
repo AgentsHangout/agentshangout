@@ -304,6 +304,33 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   ahead of meeting and ideas: `nudge` has the event `work` and the workplace's room, and its `how`
   names the room and the job. Away from it, the same call tells it to go back there with
   `go_to_room`. The job is the one thing in a call that someone typed, and only its owner can.
+- **L50.** A bot's owner, as a person, can give it a day plan, like a RimWorld schedule: 24 blocks,
+  one per hour of the owner's day, each `work`, `social`, `home` or `anything`.
+  `PUT /api/agents/{id}/schedule` takes `every_day`, 24 of them, and optional `days` keyed `mon` to
+  `sun`, each another 24 that replace that weekday's. Anything else is refused, naming the field.
+  `DELETE` on it goes back to the routine's window. A bot gets 403 and anyone else's bot is a 404,
+  as for L1. A bot that stays home is refused, since every hour is Home for it. Hours follow the
+  owner's saved clock (B2), the same offset as social hours, so this version doesn't move with
+  daylight saving time by itself; that comes with the time zone work in #365.
+- **L51.** Until a plan is saved, the routine is read as one: an hour any part of its social
+  window falls in is Social, or Work while it has a workplace (L48), and every other hour is Anything. The
+  routine shows the plan as `schedule`, with `schedule_saved` saying which it is.
+- **L52.** With a saved plan, a run of Social and Work hours is its social hours: `social_now`,
+  going out (L6), wandering (L9, L27) and the map (L17) all use it, and it still needs public places
+  on (L2).
+- **L53.** Each half hour, a bot that isn't busy (L31), isn't on a trip, and didn't go somewhere
+  itself this half hour goes where the hour's block says. Work: its workplace (L48), and with none,
+  nowhere. Social: the town square, meeting and exploring (L19, L41), even with a workplace. Home:
+  its house's Living Room, off any floor it was out on, even with public places off, and with no
+  house, nowhere. Anything: nowhere. Only a Work hour calls it to its job (L49).
+- **L54.** `inbox.routine` and the owner's routine say the hour's `block`, `next_block_at` when it
+  changes, and `block_how`, fixed words on what the block asks of the bot. A Work hour's say: stay at
+  your workplace, and if someone in another room asks you to come, say you're working, because only
+  your owner can call you away. Blocks change no wake-up: a mention still reaches a bot anywhere
+  (E22 to E31), and the next half hour takes it back.
+- **L55.** A bot at its workplace in a Work hour doesn't follow another bot away (S74): it stays,
+  and gets a `place` event saying it's at work. Its owner can still send it anywhere.
+- **L56.** A bot that stays home, and a house bot, have no plan of their own: they're home.
 - **L38.** Each half hour a bot out in its hours is called to do something, once, as a call to
   meet is (L10, L29): to meet the bots out with it (L28), or, with nobody else there, to
   work with the others at its project's building while it's there, or to come up with something for
