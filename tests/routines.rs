@@ -669,3 +669,580 @@ async fn writing_on_a_whiteboard_takes_a_bot_off_a_floor_and_says_which() {
     let inbox = server.tool(&town.rover, "inbox", json!({})).await;
     assert_eq!(inbox["you_are_in"]["id"], home.as_str(), "{inbox}");
 }
+
+// Leaving and arriving: L45, L46, and S71 to S75 in docs/spaces.md.
+
+impl Server {
+    /// Every line in a room, as its owner reads it: `(kind, speaker, body)`.
+    async fn lines(&self, key: &str, room: &str) -> Vec<(String, String, String)> {
+        let read = self.get(key, &format!("/api/hangouts/{room}/messages?after=0")).await.ok();
+        read["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| (text(&line["kind"]), text(&line["speaker"]), text(&line["body"])))
+            .collect()
+    }
+
+    /// How many system lines in a room say exactly this.
+    async fn said(&self, key: &str, room: &str, line: &str) -> usize {
+        self.lines(key, room)
+            .await
+            .iter()
+            .filter(|(kind, _, body)| kind == "system" && body == line)
+            .count()
+    }
+
+    /// The `place` events a bot has had, oldest first.
+    async fn places(&self, token: &str) -> Vec<Value> {
+        let heard = self.call(token, "events_since", json!({ "since": "0" })).await;
+        heard["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "place")
+            .map(|event| event["data"].clone())
+            .collect()
+    }
+
+    /// The minute's routine, as the server runs it.
+    fn minute(&self) {
+        agenthangout::worlds::housekeeping(&self.state, now());
+    }
+
+    /// A public floor of someone new, and who they are.
+    async fn public_floor(&self, name: &str) -> (String, Who) {
+        let (floor, who) = self.someone(name).await;
+        self.put(
+            &who.key,
+            &format!("/api/floors/{floor}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+        (floor, who)
+    }
+
+    /// Someone new whose bot may go out all day.
+    async fn bot_out_all_day(&self, name: &str, bot: &str) -> (String, String, Who) {
+        let (room, who) = self.someone(name).await;
+        let (id, token) = self.bot(&who, &room, bot).await;
+        let hours = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "public_places": true });
+        self.set_routine(&who.key, &id, hours).await.ok();
+        (id, token, who)
+    }
+}
+
+// L45: a bot in the middle of a conversation isn't taken out of it at the turn of the half hour.
+#[tokio::test]
+async fn a_busy_bot_isnt_taken_off_a_floor_when_its_half_hour_ends() {
+    start_early_in(DAY, 600).await;
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    // Rover is out on Bo's own room, opened to the public. The next wander never picks a room it
+    // belongs to (L41), so only being busy can keep it here.
+    let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
+    let open = json!({ "access": "public", "create_code": CODE });
+    server.put(&town.bo.key, &format!("/api/floors/{home}"), open).await.ok();
+    let walk = async || {
+        server.tool(&town.rover, "go_out", json!({ "floor_id": home })).await;
+        let ends = now() + 60;
+        assert!(server.state.db.set_visit_times(&home, &town.rover_id, now() - 600, ends).unwrap());
+        ends
+    };
+
+    // Not busy: nothing done for an hour. It lapses as before.
+    let ends = walk().await;
+    server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
+    server.minute();
+    let (_, until) = server.state.db.visit_times(&home, &town.rover_id).unwrap().unwrap();
+    assert_eq!(until, ends, "nothing keeps a bot that isn't busy here");
+
+    // Talking: its walk-in is about to end, and it's kept going.
+    let ends = walk().await;
+    server.state.db.touch_agent_active(&town.rover_id, now()).unwrap();
+    server.minute();
+    let until = server.state.db.visit_until(&home, &town.rover_id, now()).unwrap().unwrap();
+    assert!(until > ends, "kept going: {until} vs {ends}");
+    assert_eq!(until.rem_euclid(WANDER_SECS), 0, "to the end of a half hour: {until}");
+    assert_eq!(
+        server.state.db.walked_onto(&town.rover_id, ends + 30).unwrap(),
+        std::slice::from_ref(&home),
+        "still out there once the old end has passed"
+    );
+    assert!(until <= (now() / DAY + 1) * DAY, "never past its social hours");
+}
+
+// L45: doing something on the floor keeps it there the same way.
+#[tokio::test]
+async fn acting_on_a_floor_keeps_a_bot_there_for_the_next_half_hour() {
+    start_early_in(DAY, 600).await;
+    start_early_in(WANDER_SECS, 60).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let ends = now() + 60;
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, now() - 60, ends).unwrap());
+
+    let args = json!({ "hangout_id": town.cafe, "text": "still here" });
+    server.tool(&town.rover, "say", args).await;
+    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
+    let expected = ((now() / WANDER_SECS + 2) * WANDER_SECS).min((now() / DAY + 1) * DAY);
+    assert_eq!(until, expected, "to the end of the next half hour");
+}
+
+// L45: when the next half hour would bring it straight back, it isn't taken out and brought back,
+// so what it can read still starts when it arrived (S19).
+#[tokio::test]
+async fn a_bot_the_next_wander_would_bring_back_stays_without_a_gap() {
+    start_early_in(DAY, 600).await;
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.minute();
+    assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());
+    // Not busy: nothing done for an hour, so only the next wander's pick can keep it. The café is
+    // the only public floor there is, so that's where the next half hour would take it.
+    server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
+    let (arrived, ends) = (now() - 600, now() + 60);
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, arrived, ends).unwrap());
+    server.minute();
+    let (since, until) = server.state.db.visit_times(&town.cafe, &town.rover_id).unwrap().unwrap();
+    assert!(until > ends, "kept going: {until} vs {ends}");
+    assert_eq!(since, arrived, "what it can read still starts when it arrived (S19)");
+    assert_eq!(
+        server.state.db.walked_onto(&town.rover_id, ends + 30).unwrap(),
+        std::slice::from_ref(&town.cafe),
+        "no gap at the old end"
+    );
+}
+
+// L46, S71, E11: wandering records where the bot went and tells it, and each room it leaves hears
+// where it went, once.
+#[tokio::test]
+async fn wandering_records_the_place_and_every_room_hears_once_where_the_bot_went() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
+    // Its owner calls it over at home, so the server has seen it move there (S71).
+    let call_over = format!("/api/hangouts/{home}/agents/{}", town.rover_id);
+    server.put(&town.bo.key, &call_over, json!({})).await.ok();
+    agenthangout::travel::sweep(&server.state, now());
+    // That was last half hour, so L9 lets it wander now.
+    server.state.db.set_bot_place(&town.rover_id, &home, now() - WANDER_SECS).unwrap();
+    server.always_out(&town).await;
+    let before = now();
+
+    server.minute();
+    assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());
+    let since = server.state.db.bot_place_since(&town.rover_id).unwrap();
+    assert!(since.is_some_and(|since| since >= before), "L9 and S61 see it: {since:?}");
+    let places = server.places(&town.rover).await;
+    assert_eq!(places.len(), 1, "{places:?}");
+    assert_eq!(places[0]["change"], "moved", "{places:?}");
+    assert_eq!(places[0]["hangout_id"], town.cafe.as_str(), "{places:?}");
+    assert_eq!(server.said(&town.bo.key, &home, "Rover went to Ann's Cafe.").await, 1);
+
+    // The walk-in runs out: it's home, not walked straight back out (L9), and the café hears it.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, before, now() - 1)
+        .unwrap());
+    server.minute();
+    assert!(server.out_at(&town.rover).await.is_null());
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+    let places = server.places(&town.rover).await;
+    assert_eq!(places.len(), 2, "{places:?}");
+    assert_eq!(places[1]["change"], "sent_home", "{places:?}");
+    assert_eq!(places[1]["hangout_id"], town.cafe.as_str(), "{places:?}");
+    assert_eq!(places[1]["you_are_in"]["id"], home.as_str(), "{places:?}");
+
+    // Looking again, or after a restart, which reads the same table, says nothing more.
+    server.minute();
+    agenthangout::travel::sweep(&server.state, now());
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+    assert_eq!(server.places(&town.rover).await.len(), 2);
+
+    // A room it only passed through between two looks hears nothing.
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    server.tool(&town.rover, "come_back", json!({})).await;
+    server.minute();
+    let lines = server.lines(&town.ann.key, &town.cafe).await;
+    let about: Vec<_> = lines.iter().filter(|(_, _, body)| body.starts_with("Rover ")).collect();
+    assert_eq!(about.len(), 1, "{lines:?}");
+    assert_eq!(server.said(&town.bo.key, &home, "Rover went to Ann's Cafe.").await, 1);
+    assert_eq!(server.places(&town.rover).await.len(), 2, "it moved itself");
+}
+
+// S72: the line names no private room, and a Town Square, Living Room or Porch hears nothing.
+#[tokio::test]
+async fn a_room_hears_where_a_bot_went_without_naming_a_private_room() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    agenthangout::travel::sweep(&server.state, now());
+    let den = server
+        .post(&town.bo.key, "/api/hangouts", json!({ "name": "Bo's Den", "create_code": CODE }))
+        .await
+        .ok();
+    let den = text(&den["hangout"]["id"]);
+    server
+        .put(&town.bo.key, &format!("/api/hangouts/{den}/agents/{}", town.rover_id), json!({}))
+        .await
+        .ok();
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover left.").await, 1);
+    let lines = server.lines(&town.ann.key, &town.cafe).await;
+    assert!(!lines.iter().any(|(_, _, body)| body.contains("Den")), "{lines:?}");
+    let changes: Vec<Value> =
+        server.places(&town.rover).await.iter().map(|place| place["change"].clone()).collect();
+    assert_eq!(changes, [json!("moved")], "its owner's move told it, once");
+
+    // A bot that lives in a city's house leaves its Living Room without a word there.
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Elm", "your_name": "Cy", "create_code": CODE }))
+        .await
+        .ok();
+    let cy = Who { key: text(&made["owner_key"]) };
+    let city = text(&made["city"]["id"]);
+    let house = server
+        .post(&cy.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Cy House" }))
+        .await
+        .ok();
+    let living_room = text(&house["living_room_id"]);
+    let (keeper_id, keeper) = server.bot(&cy, &living_room, "Keeper").await;
+    let hours = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "public_places": true });
+    server.set_routine(&cy.key, &keeper_id, hours).await.ok();
+    let call_over = format!("/api/hangouts/{living_room}/agents/{keeper_id}");
+    server.put(&cy.key, &call_over, json!({})).await.ok();
+    assert!(server.state.db.seen_place(&keeper_id).unwrap().is_some(), "seen in its Living Room");
+    server.state.db.set_bot_place(&keeper_id, &living_room, now() - WANDER_SECS).unwrap();
+    server.minute();
+    assert_eq!(server.out_at(&keeper).await, town.cafe.as_str());
+    let lines = server.lines(&cy.key, &living_room).await;
+    assert!(!lines.iter().any(|(_, _, body)| body.contains("Keeper went")), "{lines:?}");
+
+    // Going home from a floor says so, without saying where home is.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &keeper_id, now() - 60, now() - 1)
+        .unwrap());
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Keeper went home.").await, 1);
+}
+
+// S73: a goodbye is said where the bot was before it goes, and a hello where it arrives.
+#[tokio::test]
+async fn a_bot_says_goodbye_before_it_goes_and_hello_when_it_arrives() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let home = text(&server.tool(&town.rover, "inbox", json!({})).await["you_are_in"]["id"]);
+    let call_over = format!("/api/hangouts/{home}/agents/{}", town.rover_id);
+    server.put(&town.bo.key, &call_over, json!({})).await.ok();
+
+    let went = server
+        .tool(
+            &town.rover,
+            "go_out",
+            json!({ "floor_id": town.cafe, "goodbye": "Off to the café", "hello": "Hi all" }),
+        )
+        .await;
+    assert_eq!(went["goodbye"]["posted"], true, "{went}");
+    assert_eq!(went["hello"]["posted"], true, "{went}");
+    assert!(
+        went["goodbye"]["message_id"].as_i64() < went["hello"]["message_id"].as_i64(),
+        "goodbye first: {went}"
+    );
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(
+        at_home.contains(&("chat".into(), "Rover".into(), "Off to the café".into())),
+        "{at_home:?}"
+    );
+    let at_cafe = server.lines(&town.ann.key, &town.cafe).await;
+    assert!(at_cafe.contains(&("chat".into(), "Rover".into(), "Hi all".into())), "{at_cafe:?}");
+    // It said goodbye itself, so home hears nothing more about it.
+    server.minute();
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(!at_home.iter().any(|(kind, _, _)| kind == "system"), "{at_home:?}");
+
+    // A hello that can't be posted is skipped with the reason, and the bot still goes.
+    let long = "x".repeat(5000);
+    let back =
+        server.tool(&town.rover, "come_back", json!({ "goodbye": "Bye", "hello": long })).await;
+    assert_eq!(back["was_out"], true, "{back}");
+    assert_eq!(back["goodbye"]["posted"], true, "{back}");
+    assert_eq!(back["hello"]["posted"], false, "{back}");
+    assert!(back["hello"]["skipped"].is_string(), "{back}");
+    assert_eq!(back["you_are_in"]["id"], home.as_str(), "{back}");
+    // Not out, so nothing moves and nothing is said.
+    let again = server.tool(&town.rover, "come_back", json!({ "goodbye": "Bye again" })).await;
+    assert_eq!(again["goodbye"]["posted"], false, "{again}");
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(!at_home.iter().any(|(_, _, body)| body == "Bye again"), "{at_home:?}");
+
+    // go_to_room says them too, and a refused move says no goodbye.
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let gone = server
+        .tool(
+            &town.rover,
+            "go_to_room",
+            json!({ "hangout_id": home, "goodbye": "Heading home", "hello": "Home again" }),
+        )
+        .await;
+    assert_eq!(gone["goodbye"]["posted"], true, "{gone}");
+    assert_eq!(gone["hello"]["posted"], true, "{gone}");
+    let refused = server
+        .refused(
+            &town.rover,
+            "go_out",
+            json!({ "floor_id": "no-such-floor", "goodbye": "Never said" }),
+        )
+        .await;
+    assert_eq!(refused, "not found");
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(!at_home.iter().any(|(_, _, body)| body == "Never said"), "{at_home:?}");
+
+    // A floor that's full refuses it before anything is said, and nothing about its leaving is
+    // noted, so its real leaving later is still heard.
+    let small = json!({ "size": "small" });
+    server.put(&town.ann.key, &format!("/api/floors/{}", town.cafe), small).await.ok();
+    for n in 0..6 {
+        let (_, who) = server.someone(&format!("Guest{n}")).await;
+        server.post(&who.key, &format!("/api/floors/{}/walk-in", town.cafe), json!({})).await.ok();
+    }
+    let before = server.state.db.seen_place(&town.rover_id).unwrap();
+    let args = json!({ "floor_id": town.cafe, "goodbye": "Off to a full café" });
+    let full = server.refused(&town.rover, "go_out", args).await;
+    assert!(full.contains("full"), "{full}");
+    let at_home = server.lines(&town.bo.key, &home).await;
+    assert!(!at_home.iter().any(|(_, _, body)| body == "Off to a full café"), "{at_home:?}");
+    let after = server.state.db.seen_place(&town.rover_id).unwrap();
+    assert_eq!(after, before, "a refused move notes nothing");
+}
+
+// S71: a bot that said goodbye and came back before the next look hasn't left, so when it really
+// leaves later the room hears it.
+#[tokio::test]
+async fn coming_back_before_the_look_forgets_the_goodbye() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let home = text(&server.get(&town.rover, "/api/me").await.ok()["hangouts"][0]["id"]);
+    server.minute();
+    let args = json!({ "hangout_id": home, "goodbye": "Back soon" });
+    server.tool(&town.rover, "go_to_room", args).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    server.minute();
+    let seen = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    assert_eq!(seen.hangout_id, town.cafe, "{seen:?}");
+    assert!(seen.said_from.is_none() && seen.told_to.is_none(), "{seen:?}");
+
+    server.tool(&town.rover, "come_back", json!({})).await;
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+}
+
+// S71: a look that read a row before the bot moved can't write over what the move noted.
+#[tokio::test]
+async fn a_look_that_raced_a_move_changes_nothing() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let read = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    // The bot moves and is told while the look is between reading and writing.
+    server.tool(&town.rover, "come_back", json!({})).await;
+    let home = server.state.db.bot_place(&town.rover_id, now()).unwrap();
+    assert!(!server
+        .state
+        .db
+        .move_seen_place(&town.rover_id, &read, home.as_deref(), now())
+        .unwrap());
+    let seen = server.state.db.seen_place(&town.rover_id).unwrap().unwrap();
+    assert_eq!(seen.told_to, home, "what the move noted stays: {seen:?}");
+}
+
+// S71: after a long gap in the look, such as an older release running in between, the next one
+// catches up without saying anything days late. A short gap is said as usual.
+#[tokio::test]
+async fn after_a_long_gap_the_look_catches_up_without_a_word() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let stale = now() - agenthangout::travel::LOOK_GAP_SECS - 60;
+    server.state.db.note_look(stale).unwrap();
+    // While the look wasn't running, the walk-in ran out.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 60, now() - 1)
+        .unwrap());
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 0);
+    assert!(server.places(&town.rover).await.is_empty(), "nothing told days late");
+
+    // The look has run now, so the next leaving is said.
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 60, now() - 1)
+        .unwrap());
+    agenthangout::travel::catch_up(&server.state, now());
+    server.minute();
+    assert_eq!(server.said(&town.ann.key, &town.cafe, "Rover went home.").await, 1);
+}
+
+// S71: the look only looks at bots it has seen move that something could still move, so a dormant
+// bot costs nothing.
+#[tokio::test]
+async fn the_look_leaves_out_bots_that_never_moved_or_are_long_dormant() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let fern_id = server.state.db.agents_named("Fern", now()).unwrap()[0].id.clone();
+    let listed = |since: i64| -> Vec<String> {
+        server.state.db.bots_to_look_at(since).unwrap().into_iter().map(|(id, _)| id).collect()
+    };
+    assert!(listed(now() - DAY).is_empty(), "nobody has moved yet");
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    assert_eq!(listed(now() - DAY), std::slice::from_ref(&town.rover_id));
+    assert!(!listed(now() - DAY).contains(&fern_id));
+    assert!(
+        listed(now() + 2 * DAY).is_empty(),
+        "two days on, with nothing due, it isn't looked at"
+    );
+}
+
+// S74, S75: a bot follows another of its own accord, goes where it may, and is told when it can't.
+#[tokio::test]
+async fn a_bot_follows_another_where_it_may_go_and_is_told_where_it_cant() {
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let (pip_id, pip, _) = server.bot_out_all_day("Cy", "Pip").await;
+    let (dee_floor, _) = server.public_floor("Dee").await;
+
+    // Only a bot in the same room, and not itself.
+    let message = server.refused(&pip, "follow", json!({ "bot": "Rover" })).await;
+    assert!(message.contains("in this room with you"), "{message}");
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    server.tool(&pip, "go_out", json!({ "floor_id": town.cafe })).await;
+    let message = server.refused(&pip, "follow", json!({ "bot": "Pip" })).await;
+    assert!(message.contains("yourself"), "{message}");
+    let following = server.tool(&pip, "follow", json!({ "bot": "rover" })).await;
+    assert_eq!(following["following"], "Rover", "{following}");
+    assert_eq!(following["hangout_id"], town.cafe.as_str(), "{following}");
+
+    // Fern follows Pip, but following doesn't cascade.
+    let hours = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "starts": "00:00", "ends": "24:00", "public_places": true });
+    let fern_id = server.state.db.agents_named("Fern", now()).unwrap()[0].id.clone();
+    server.set_routine(&town.ann.key, &fern_id, hours).await.ok();
+    server.tool(&town.fern, "follow", json!({ "bot": "Pip" })).await;
+
+    // Rover goes out somewhere else: Pip comes, in its own hours, and Fern stays.
+    let went = server.tool(&town.rover, "go_out", json!({ "floor_id": dee_floor })).await;
+    assert_eq!(went["followers"], json!([{ "name": "Pip", "came": true }]), "{went}");
+    assert_eq!(server.out_at(&pip).await, dee_floor.as_str());
+    assert_eq!(
+        server.state.db.bot_place(&fern_id, now()).unwrap().as_deref(),
+        Some(town.cafe.as_str())
+    );
+    let told = server.places(&pip).await;
+    let moved = told.last().unwrap();
+    assert_eq!(moved["change"], "moved", "{told:?}");
+    assert_eq!(moved["leader"], "Rover", "{told:?}");
+    assert_eq!(moved["hangout_id"], dee_floor.as_str(), "{told:?}");
+
+    // Home is Bo's own room, which Pip doesn't belong to: it's left behind and told why.
+    let back = server.tool(&town.rover, "come_back", json!({})).await;
+    assert_eq!(back["followers"][0]["came"], false, "{back}");
+    assert_eq!(server.out_at(&pip).await, dee_floor.as_str());
+    let told = server.places(&pip).await;
+    let behind = told.last().unwrap();
+    assert_eq!(behind["change"], "left_behind", "{told:?}");
+    assert!(behind["reason"].as_str().unwrap().contains("doesn't belong"), "{told:?}");
+    assert_eq!(server.state.db.leader_of(&pip_id, now()).unwrap().unwrap().0, town.rover_id);
+
+    // Going somewhere itself ends it.
+    server.tool(&town.rover, "go_out", json!({ "floor_id": dee_floor })).await;
+    server.tool(&pip, "go_out", json!({ "floor_id": town.cafe })).await;
+    assert!(server.state.db.leader_of(&pip_id, now()).unwrap().is_none());
+    server.tool(&pip, "go_out", json!({ "floor_id": dee_floor })).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    assert_eq!(server.out_at(&pip).await, dee_floor.as_str(), "no longer following");
+
+    // unfollow says whom it followed, and two hours end it anyway.
+    server.tool(&pip, "go_out", json!({ "floor_id": town.cafe })).await;
+    server.tool(&pip, "follow", json!({ "bot": "Rover" })).await;
+    let until = server.state.db.leader_of(&pip_id, now()).unwrap().unwrap().1;
+    assert!((until - now() - 2 * 3600).abs() <= 2, "{until}");
+    assert!(server.state.db.leader_of(&pip_id, until).unwrap().is_none());
+    let stopped = server.tool(&pip, "unfollow", json!({})).await;
+    assert_eq!(stopped["was_following"], "Rover", "{stopped}");
+    assert!(server.tool(&pip, "unfollow", json!({})).await["was_following"].is_null());
+
+    // Nobody makes another bot follow: the tool names only the leader, and it's the caller who
+    // follows.
+    let listed = server
+        .post(&pip, "/mcp", json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }))
+        .await
+        .ok();
+    let follow = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "follow")
+        .unwrap()
+        .clone();
+    let fields: Vec<&String> =
+        follow["inputSchema"]["properties"].as_object().unwrap().keys().collect();
+    assert_eq!(fields, ["bot"], "{follow}");
+}
+
+// I92
+#[tokio::test]
+async fn public_floors_can_be_limited_or_brief() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let full = server.tool(&town.rover, "public_floors", json!({})).await;
+    let floor = &full["places"][0];
+    assert!(floor["about"].is_string() && floor["space_name"].is_string());
+
+    let brief = server.tool(&town.rover, "public_floors", json!({ "brief": true })).await;
+    let short = brief["places"][0].as_object().unwrap();
+    let mut keys: Vec<&str> = short.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["here", "id", "name", "town_square"]);
+    assert_eq!(short["id"], floor["id"]);
+    assert_eq!(short["name"], floor["name"]);
+    assert!(brief["trust_note"].is_string());
+    assert!(brief.to_string().len() < full.to_string().len());
+
+    let one = server.tool(&town.rover, "public_floors", json!({ "limit": 1 })).await;
+    assert_eq!(one["places"], full["places"]);
+    for bad in [json!(0), json!(51), json!("1")] {
+        let message = server.refused(&town.rover, "public_floors", json!({ "limit": bad })).await;
+        assert!(message.contains("limit must be"), "{message}");
+    }
+}

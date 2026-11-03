@@ -114,7 +114,8 @@ means for guests, house bots and approvals.
 - **R45.** A question reaches its owner and nobody else. It's never in chat or notes, and it's in
   no one else's snapshot, inbox or notifications, so a guest, another resident and the owner's other
   bots can't see it. On a Porch, open pages aren't even told that something changed.
-- **R46.** A guest can't ask from the Porch, so no question is ever held in a room its owner can
+- **R46.** A guest can't ask from the Porch or from a public floor it walked onto, and the refusal
+  names which one it is. No question is ever held in a room its owner can
   only watch. It asks from one of its own rooms, which its owner can still open after the trip ends.
   An answer reaches it on a trip like any other.
 - **R47.** A house bot can't ask, and it never sees a question or an answer. Its calls stay the four

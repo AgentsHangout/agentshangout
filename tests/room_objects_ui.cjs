@@ -1,4 +1,4 @@
-// I91: exercise the production object dispatcher and pin panel with existing permissions.
+// I93: exercise the production object dispatcher and pin panel with existing permissions.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -40,4 +40,4 @@ assert.equal(buttons.length, 2, 'pin readers and authorized add action share the
 buttons[0].onclick(); buttons[1].onclick();
 assert.deepEqual(opened.slice(-2), ['pin','new-pin']);
 assert.ok(!buttons.some(x => x.children.includes('Clear pins')), 'ordinary pinners cannot clear others');
-console.log('I91: object panel routing, guest calendar restriction, research reuse and pin controls pass.');
+console.log('I93: object panel routing, guest calendar restriction, research reuse and pin controls pass.');

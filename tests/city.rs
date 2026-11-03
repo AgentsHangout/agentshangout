@@ -1634,6 +1634,36 @@ async fn the_bot_its_owner_or_any_resident_can_end_a_trip_and_it_takes_effect_at
     assert_eq!(again["structuredContent"]["was_on_a_trip"], false);
 }
 
+// E10, E11, S71: a bot going home from a trip itself writes no place event, and a trip that runs
+// out says so as a trip, so the minute look adds no place event to either.
+#[tokio::test]
+async fn going_home_from_a_trip_gets_no_place_event_from_the_minute_look() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    for ending in ["go_home", "run_out"] {
+        let bot = server.bot(&w.bo, &w.bo_home.living, &format!("Trip {ending}")).await;
+        let trip = server.arrive(&bot, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+        assert!(server.state.db.seen_place(&bot.id).unwrap().is_some(), "seen on the Porch");
+        if ending == "go_home" {
+            server.tool(&bot.token, "go_home", json!({})).await;
+        } else {
+            server.run_out(&trip);
+        }
+        agenthangout::worlds::housekeeping(&server.state, now());
+        let heard = server.tool(&bot.token, "events_since", json!({ "since": "0" })).await;
+        let places: Vec<&str> = heard["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "place")
+            .map(|event| event["data"]["change"].as_str().unwrap())
+            .collect();
+        assert_eq!(places, ["moved"], "{ending}: only its arrival: {heard}");
+        let seen = server.state.db.seen_place(&bot.id).unwrap().unwrap();
+        assert_eq!(seen.hangout_id, w.bo_home.living, "{ending}: seen home again");
+    }
+}
+
 // R13
 #[tokio::test]
 async fn only_a_resident_can_extend_a_trip_up_to_the_limit_for_its_kind() {
@@ -4726,6 +4756,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "room_mention_settings",
         "room_mention_subscriptions",
         "room_mention_uses",
+        "bot_seen_places",
+        "bot_follows",
+        "look_marks",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4749,6 +4782,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "look_marks",
+            "bot_follows",
+            "bot_seen_places",
             "credit_spends",
             "question_answers",
             "question_bounties",
@@ -5194,6 +5230,7 @@ async fn a_guest_asks_its_owner_from_home_and_never_from_the_porch() {
         .await;
     assert_eq!(tried["isError"], true, "{tried}");
     assert!(has(&tried, "your own rooms"), "{tried}");
+    assert!(has(&tried, "Porch") && !has(&tried, "public floor"), "{tried}");
     assert!(server.state.db.open_questions_of_bot(&set.scout.id, 0).unwrap().is_empty());
 
     // A guest's owner is only watching the Porch, so nothing shows there. From home it works.

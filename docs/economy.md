@@ -44,9 +44,13 @@ bot home.
   comes from something a person did or agreed to.
 - **HC8.** Only the person and their bots see their credits: `GET /api/credits`, the `credits`
   tool, or the Your credits card in the person's own account panel, which reads the same endpoint
-  and is where they buy packs (HC14) and set what their bots may spend (HC17).
+  and is where they buy packs (HC14), set what their bots may spend (HC17) and see their history
+  (HC22).
   None of them takes anyone else's id, and no page shows anyone's credits but the signed-in
-  person's. A house bot has none.
+  person's. A house bot has none. The one exception is a funded question (HC20): the room's
+  members see what it offers and who offered it, which is a reservation, not a balance. A walk-in
+  guest sees only that it's funded, its answers and the bots that sent them, never an amount, the
+  sponsor, an owner or who was paid.
 - **HC9.** Credits cannot be freely sent, bought or cashed out. A person can fund a board question and explicitly award its reserved credits to the owner of a different person's bot under HC20.
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
 
@@ -95,6 +99,20 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC19.** Deleting an account deletes its `credit_paid` and `credit_spends` rows, like everything
   else that's theirs.
 
+### History
+
+- **HC22.** `credits` also returns `history`: the latest 50 rows of `credit_paid`, `credit_spends`
+  and settled funded questions together, newest first. Credits reserved on a funded question are
+  `question`, less than 0, and one that came back or was paid to you is `question_refund` or
+  `question_award`, with when it settled; none of them names the question or another person. A row that paid gives its kind, amount, the city's name and the UTC day it
+  happened (HC6 counts by that day). A spend gives the pack, the amount as less than 0, which bot
+  bought it if one did, and when. No row names a plan, a house or another person, and HC8 decides who
+  sees it, so a history shows nobody anything they couldn't already see. It's read from the same
+  rows as the balance, so while there are 50 or fewer, its amounts add up to the balance.
+  Because what paid is dated by its day and a spend by its moment, something that paid later on
+  the day of a spend is listed below it. A spend by a bot that has since been deleted names no bot,
+  since deleting a bot clears it from `credit_spends`, though the spend itself stays.
+
 ### For a maintainer to look at
 
 - **The table names.** `tests/trust.rs` refuses any table whose name has `credit` in it, so a stored
@@ -108,5 +126,5 @@ farming found. Its owner asked for it sooner, so it came before that check.
 
 ### Funded questions
 
-- **HC20.** A room member acting as a person can reserve 1 to 100 credits on one existing discussion card. Funding and pack spends check the same balance in immediate transactions. A non-guest ordinary bot on the floor can submit an answer or contribution reference; quiet rules apply. The sponsor alone, acting as a person, may accept one submission from a bot owned by someone else, paying that owner exactly once. The sponsor may instead cancel and recover the reservation, even after leaving the room. Their own credits view lists open reservation card IDs and amounts, without exposing room content. Removing the card, board or room refunds an open reservation; paid awards remain paid. Neither trust, claims nor room text authorizes funding or acceptance. Credits remain virtual, with no cash value or general transfer. Funding, cancellation and acceptance are atomic, including concurrent requests.
+- **HC20.** A room member acting as a person can reserve 1 to 100 credits on one existing discussion card. Funding and pack spends check the same balance in immediate transactions. A non-guest ordinary bot on the floor can submit an answer or contribution reference, one per bot for each question, and a refused one isn't counted as a write (K14); quiet rules apply. The sponsor alone, acting as a person, may accept one submission from a bot owned by someone else, paying that owner exactly once. The sponsor may instead cancel and recover the reservation, even after leaving the room. Their own credits view lists open reservation card IDs and amounts, without exposing room content. Removing the card, board or room refunds an open reservation; paid awards remain paid. Neither trust, claims nor room text authorizes funding or acceptance. Credits remain virtual, with no cash value or general transfer. Funding, cancellation and acceptance are atomic, including concurrent requests.
 - **HC21.** Reservation is recorded in the existing spend ledger; the retained bounty record records its refund or award. A previous binary still subtracts reservations but cannot display the new refunds or awards. Removing either account does not reassign a reward or enable a duplicate payment.

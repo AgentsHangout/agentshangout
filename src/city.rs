@@ -1158,6 +1158,9 @@ pub fn end_trip(state: &AppState, caller: &Caller, trip_id: &str) -> ApiResult<T
         if was_here {
             crate::events::note_place(state, &traveller, &house.porch_id, "sent_home");
         }
+    } else {
+        // E11, S71: going home itself, it knows where it is.
+        crate::travel::note_told(state, &traveller);
     }
     Ok(ended)
 }

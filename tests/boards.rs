@@ -811,7 +811,16 @@ async fn funded_question_requires_a_person_and_pays_one_other_owner() {
         .tool(&scout.token, "submit_question_answer", json!({"card_id":card,"text":"Evidence"}))
         .await;
     let id = text(&answer["structuredContent"]["id"]);
+    // HC20: one answer per bot, so one bot can't fill the question by itself.
+    let again = server
+        .tool(&scout.token, "submit_question_answer", json!({"card_id":card,"text":"More"}))
+        .await;
+    assert_eq!(again["isError"], true, "{again}");
     let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(
+        listed(&list, "Question?").unwrap()["bounty"]["submissions"].as_array().unwrap().len(),
+        1
+    );
     let bounty = &listed(&list, "Question?").unwrap()["bounty"];
     assert_eq!(bounty["amount"], 10);
     assert_eq!(bounty["submissions"][0]["can_accept"], true);
@@ -823,6 +832,18 @@ async fn funded_question_requires_a_person_and_pays_one_other_owner() {
     server.post(&ann.key, &accept, json!({"submission_id":id})).await.refused(StatusCode::CONFLICT);
     assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["balance"], 10);
     assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["balance"], 10);
+    // HC22: the reservation and the award are in each history, naming no question or person, and
+    // a history still adds up to the balance.
+    for (key, kind, amount) in [(&ann.key, "question", -10), (&bo.key, "question_award", 10)] {
+        let credits = server.get(key, "/api/credits").await.ok();
+        let history = credits["history"].as_array().unwrap();
+        let line =
+            history.iter().find(|line| line["kind"] == kind).unwrap_or_else(|| panic!("{credits}"));
+        assert_eq!(line["amount"], amount, "{credits}");
+        assert!(line.get("pack").is_none() && line.get("bot").is_none(), "{credits}");
+        let sum: i64 = history.iter().map(|line| line["amount"].as_i64().unwrap()).sum();
+        assert_eq!(sum, credits["balance"].as_i64().unwrap(), "{credits}");
+    }
 }
 
 // HC20/HC21: authorization and rejected changes leave the reservation intact.
@@ -875,6 +896,20 @@ async fn funded_question_checks_room_quiet_amount_and_cancel_after_leaving() {
         .refused(StatusCode::FORBIDDEN);
     assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["balance"], 20);
     server.post(&bo.key, &path, json!({"amount":5})).await.ok();
+    // HC8: a walk-in guest sees a question posted since it came in is funded, but not how much or
+    // by whom.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let later = text(&server.card(&bo.key, &board, "Later?", "More").await.ok()["id"]);
+    let later_path = format!("/api/cards/{later}/bounty");
+    server.post(&bo.key, &later_path, json!({"amount":1})).await.ok();
+    let seen = server.get(&outsider.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let bounty = &listed(&seen, "Later?").unwrap_or_else(|| panic!("{seen}"))["bounty"];
+    assert_eq!(bounty["status"], "open", "{seen}");
+    assert!(bounty.get("amount").is_none() && bounty.get("sponsor_id").is_none(), "{seen}");
+    assert!(!bounty.to_string().contains(&bo.id), "{seen}");
+    let member = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&member, "Later?").unwrap()["bounty"]["amount"], 1, "{member}");
+    server.post(&bo.key, &format!("{later_path}/cancel"), json!({})).await.ok();
     server
         .post(&ann.key, &format!("/api/floors/{room}/items"), json!({"kind":"quiet","x":30,"y":2}))
         .await

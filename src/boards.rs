@@ -175,6 +175,17 @@ fn bounty_json(
                 );
             }
         }
+        // HC8: a walk-in guest sees that a question is funded, never how much, by whom or who was
+        // paid.
+        if guest {
+            let answers: Vec<Value> = b["submissions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|a| json!({"id":a["id"],"text":a["text"],"bot_name":a["bot_name"]}))
+                .collect();
+            *b = json!({"status":b["status"],"submissions":answers,"can_cancel":false});
+        }
     }
     read["bounty"] = json!(bounty);
     Ok(())
@@ -631,6 +642,10 @@ pub fn answer_question(
         .ok_or_else(|| ApiError::forbidden("only a bot can submit an answer"))?;
     let text = ops::clean(text, "answer", MAX_TEXT)?;
     let id = auth::new_id();
+    // K14: a refused answer isn't counted and doesn't move the bot.
+    if let Some(reason) = state.db.question_answer_refusal(card_id, bot, &caller.person_id)? {
+        return Err(ApiError::conflict(reason));
+    }
     commit_write(state, caller, &card.hangout_id)?;
     if let Some(reason) =
         state.db.answer_question(&id, card_id, bot, &caller.person_id, &text, now())?

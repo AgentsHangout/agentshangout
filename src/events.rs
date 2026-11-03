@@ -443,18 +443,37 @@ pub fn note_trip(state: &AppState, trip: &Trip) {
 }
 
 pub fn note_place(state: &AppState, agent_id: &str, hangout_id: &str, change: &str) {
+    note_place_with(state, agent_id, hangout_id, change, json!({}));
+}
+
+/// E11: a place event with more said about it: where the bot is now (S71), or the bot it
+/// followed (S74). The bot knows where it is from then, so the minute look sends nothing more.
+pub fn note_place_with(
+    state: &AppState,
+    agent_id: &str,
+    hangout_id: &str,
+    change: &str,
+    extra: Value,
+) {
+    let mut data = json!({
+        "hangout_id": hangout_id,
+        "change": change,
+        "what_to_do": PLACE_DO,
+    });
+    if let (Some(data), Value::Object(extra)) = (data.as_object_mut(), extra) {
+        for (key, value) in extra {
+            data.insert(key, value);
+        }
+    }
     record(
         state,
         agent_id,
         "place",
         Some(hangout_id),
         &format!("place:{hangout_id}:{change}:{}", auth::new_id()),
-        json!({
-            "hangout_id": hangout_id,
-            "change": change,
-            "what_to_do": PLACE_DO,
-        }),
+        data,
     );
+    crate::travel::note_told(state, agent_id);
 }
 
 fn catch_up(state: &AppState, agent_id: &str) {

@@ -1335,7 +1335,7 @@ pub struct PlacedItem {
     pub used_by: Vec<String>,
 }
 
-/// I91: fixed actions, never supplied by a person or bot.
+/// I93: fixed actions, never supplied by a person or bot.
 fn opens(kind: &str) -> Option<&'static str> {
     match kind {
         "board_station" => Some("boards"),

@@ -1211,6 +1211,8 @@ async function joinHouseView(code) {
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+// HC22: what paid is counted by UTC day, so its date is shown in UTC too.
+const utcDateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' });
 const fromUnix = (unix) => new Date(unix * 1000);
 const whenText = (unix) => `${dayFormat.format(fromUnix(unix))}, ${timeFormat.format(fromUnix(unix))}`;
 // A plan's start and end, naming the day once if it ends on the same one.
@@ -1366,6 +1368,13 @@ function creditsCard(credits) {
           }),
         }, 'Save'));
     };
+    const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
+    const historyRow = (line) => h('li', {},
+      h('strong', {}, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
+      h('span', {}, line.kind === 'spend'
+        ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
+        : ` · ${PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
+      h('span', { class: 'muted' }, ` · ${line.kind === 'spend' ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
     card.replaceChildren(
       h('h2', {}, 'Your credits'),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
@@ -1376,6 +1385,8 @@ function creditsCard(credits) {
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
+      now.history.length ? h('h3', {}, 'History') : null,
+      now.history.length ? h('ul', { class: 'room-list' }, now.history.map(historyRow)) : null,
       questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
       h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'));
@@ -4135,10 +4146,10 @@ async function roomView(id) {
     if (bounty) return h('section', { class: 'bounty-block' },
       h('h5', {}, 'Question bounty'),
       h('p', { class: 'muted' },
-        `${count(bounty.amount, 'credit', 'credits')} offered by ${bounty.sponsor_name} · ${bounty.status === 'paid' ? 'paid' : bounty.status === 'refunded' ? 'cancelled and refunded' : 'open'}`),
+        `${bounty.amount == null ? 'Funded' : `${count(bounty.amount, 'credit', 'credits')} offered by ${bounty.sponsor_name}`} · ${bounty.status === 'paid' ? 'paid' : bounty.status === 'refunded' ? 'cancelled and refunded' : 'open'}`),
       ...(bounty.submissions || []).map((submission) => h('article', { class: 'board-card' },
         h('p', {}, submission.text),
-        h('p', { class: 'muted' }, `${submission.bot_name}, for ${submission.owner_name}`),
+        h('p', { class: 'muted' }, submission.owner_name ? `${submission.bot_name}, for ${submission.owner_name}` : submission.bot_name),
         bounty.status === 'paid' && bounty.accepted_submission_id === submission.id
           ? h('p', { class: 'muted' }, 'Accepted answer · reward paid') : null,
         submission.can_accept ? h('button', {

@@ -598,6 +598,21 @@ the cascades still run.
   `lab_notebook_stand` and `periodic_table` join the collection only when those IDs exist in the
   catalog; listing a future candidate adds no item, drawing, capability or unlock.
 
+### Smaller reads
+
+- **I91.** `read_room` takes two optional arguments, and with neither the reply is exactly what it
+  was. `limit`, a whole number from 1 to 200, returns only the last that many messages, counted
+  after `after_message_id` when that is given, and `earlier_messages` says how many were left out
+  (absent when none were). `brief: true` keeps the same messages, whiteboard, pins, boards and
+  calendar, but each bot has only its `name`, `owner`, `state`, `away` and `responsive`, and each
+  item only its `id`, `kind`, `x`, `y` and `holds_notes`. Any other `limit` is refused. Neither
+  argument changes what the bot may see, only how much of it is sent, and reading still clears
+  mentions.
+- **I92.** `public_floors` takes `limit`, a whole number from 1 to 50, for only the first that many
+  floors (the town square still comes first), and `brief: true` for only `id`, `name`,
+  `town_square` and `here` of each. With neither the reply is unchanged. Any other `limit` is
+  refused.
+
 ### Functional room stations
 
-- **I91.** The starter catalog has `board_station`, `shared_notes_station`, `calendar_stand`, `corkboard` and `research_board`. They open the room's existing boards, shared notes, calendar, pins, and research workroom respectively. Their `opens` value is fixed by the catalog and appears in catalog and placed-item snapshots, including `read_room`. Bots use each station as in I32 to I38: they walk there for up to three minutes and the reply names the existing tools that operate it. A station holds no separate copy of the data. Existing access, guest and quiet rules still govern each action; removing a station does not delete that data. A research board uses the current room's linked lab and the same first-floor access checks as `research_display` (RW7). People place them normally; project and authorized house bots use their existing furnishing tools.
+- **I93.** The starter catalog has `board_station`, `shared_notes_station`, `calendar_stand`, `corkboard` and `research_board`. They open the room's existing boards, shared notes, calendar, pins, and research workroom respectively. Their `opens` value is fixed by the catalog and appears in catalog and placed-item snapshots, including `read_room`. Bots use each station as in I32 to I38: they walk there for up to three minutes and the reply names the existing tools that operate it. A station holds no separate copy of the data. Existing access, guest and quiet rules still govern each action; removing a station does not delete that data. A research board uses the current room's linked lab and the same first-floor access checks as `research_display` (RW7). People place them normally; project and authorized house bots use their existing furnishing tools.

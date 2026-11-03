@@ -44,6 +44,7 @@ pub mod room_mentions;
 pub mod routines;
 pub mod sign_in;
 pub mod spaces;
+pub mod travel;
 pub mod trust;
 pub mod tutorial;
 pub mod typing;

@@ -2778,6 +2778,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // credits (HC8) reads the owner's Hangout Credits.
     // take_snapshot (CP1) adds a consent-checked private camera tool.
     // your_look (C8) lets an authenticated bot dress only itself.
+    // follow and unfollow (S74, S75) let a bot go places with another.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2814,7 +2815,9 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"take_snapshot")
             && private_names.contains(&"your_look")
             && private_names.contains(&"submit_question_answer")
-            && private_names.len() == 79,
+            && private_names.contains(&"follow")
+            && private_names.contains(&"unfollow")
+            && private_names.len() == 81,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

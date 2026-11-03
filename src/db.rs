@@ -1361,6 +1361,30 @@ CREATE TABLE IF NOT EXISTS spend_limits (
     agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     daily       INTEGER NOT NULL CHECK (daily >= 0)
 );
+-- S71: where the minute look last saw each bot, so leaving a room is said there once, restarts
+-- included. No row is a bot in no room, or one not seen yet. `told_to` is where a move the bot
+-- already knows about took it (E11), and `said_from` a room whose leaving was already said (S73).
+CREATE TABLE IF NOT EXISTS bot_seen_places (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    told_to     TEXT,
+    said_from   TEXT,
+    seen_at     INTEGER NOT NULL
+);
+-- S74, S75: one leader a follower, for 2 hours at most.
+CREATE TABLE IF NOT EXISTS bot_follows (
+    follower_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    leader_id   TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    since       INTEGER NOT NULL,
+    until       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_follows_by_leader ON bot_follows (leader_id);
+-- S71: when the running server's minute look last ran, so after a long gap, such as an older
+-- release running in between, it catches up without saying days-old things.
+CREATE TABLE IF NOT EXISTS look_marks (
+    name        TEXT PRIMARY KEY,
+    at          INTEGER NOT NULL
+);
 -- HC20: the debit is also in credit_spends, so older binaries keep it reserved.
 CREATE TABLE IF NOT EXISTS question_bounties (
     id TEXT PRIMARY KEY,
@@ -1369,7 +1393,9 @@ CREATE TABLE IF NOT EXISTS question_bounties (
     amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 100),
     status TEXT NOT NULL CHECK(status IN ('open','paid','refunded')),
     recipient_id TEXT,
-    accepted_submission TEXT
+    accepted_submission TEXT,
+    -- HC22: when it was refunded or paid, for the credit history.
+    settled_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS question_answers (
     id TEXT PRIMARY KEY,
@@ -1382,13 +1408,13 @@ CREATE TABLE IF NOT EXISTS question_answers (
 CREATE TRIGGER IF NOT EXISTS question_card_refund AFTER UPDATE OF card_id ON question_bounties
 WHEN NEW.card_id IS NULL AND OLD.card_id IS NOT NULL
 BEGIN
-    UPDATE question_bounties SET status='refunded' WHERE id=NEW.id AND status='open';
+    UPDATE question_bounties SET status='refunded', settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=NEW.id AND status='open';
     DELETE FROM question_answers WHERE bounty_id=NEW.id;
 END;
 -- HC21/A27: account deletion never leaves identifying answer text or redistributes a reserve.
 CREATE TRIGGER IF NOT EXISTS question_person_deleted AFTER DELETE ON people
 BEGIN
-    UPDATE question_bounties SET status='refunded' WHERE sponsor_id=OLD.id AND status='open';
+    UPDATE question_bounties SET status='refunded', settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE sponsor_id=OLD.id AND status='open';
     UPDATE question_bounties SET sponsor_id='' WHERE sponsor_id=OLD.id;
     UPDATE question_bounties SET recipient_id=NULL WHERE recipient_id=OLD.id;
     UPDATE question_answers SET owner_id='', bot_id='', text='[removed]' WHERE owner_id=OLD.id;
@@ -1876,6 +1902,16 @@ pub enum WalkedIn {
     TooManyBots,
     /// A trip doesn't give way to a walk-in (S39).
     OnTrip,
+}
+
+/// S71: where the minute look last saw a bot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenPlace {
+    pub hangout_id: String,
+    pub told_to: Option<String>,
+    pub said_from: Option<String>,
+    /// Goes up with every change to the row, so a look can tell nothing touched it meanwhile.
+    pub seen_at: i64,
 }
 
 /// A floor a bot left, and why. S62.
@@ -2469,6 +2505,71 @@ pub struct CreditTotals {
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
+}
+
+/// HC20: the open bounty on `card` that `bot` may answer, or why it can't. One answer per bot, so
+/// one bot can't fill a question's 20 answers by itself.
+fn answer_refusal(
+    conn: &Connection,
+    card: &str,
+    bot: &str,
+    owner: &str,
+) -> rusqlite::Result<Result<String, &'static str>> {
+    let bounty: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id,sponsor_id FROM question_bounties WHERE card_id=? AND status='open'",
+            [card],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((bounty, sponsor)) = bounty else {
+        return Ok(Err("question is not open"));
+    };
+    if sponsor == owner {
+        return Ok(Err("the sponsor's own bot cannot answer for a reward"));
+    }
+    if !exists(conn, "SELECT 1 FROM agents WHERE id=?1 AND owner_id=?2", params![bot, owner])? {
+        return Ok(Err("bot is no longer available"));
+    }
+    if exists(
+        conn,
+        "SELECT 1 FROM question_answers WHERE bounty_id=?1 AND bot_id=?2",
+        params![bounty, bot],
+    )? {
+        return Ok(Err("this bot has already answered this question"));
+    }
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM question_answers WHERE bounty_id=?",
+        [&bounty],
+        |r| r.get(0),
+    )?;
+    if count >= 20 {
+        return Ok(Err("question has 20 answers"));
+    }
+    Ok(Ok(bounty))
+}
+
+/// HC22: one line of someone's credit history, from `credit_paid`, `credit_spends` or a funded
+/// question that came back or paid (HC20).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CreditLine {
+    /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought,
+    /// `question` for credits reserved on a funded question, and `question_refund` or
+    /// `question_award` for one that came back or was paid to you (HC20).
+    pub kind: String,
+    /// What it added, or what a spend took away as less than 0.
+    pub amount: i64,
+    /// For what paid, the start of the UTC day it happened, which is what HC6 counts. For a spend,
+    /// when it was bought.
+    pub at: i64,
+    /// The city that paid. None once that city is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+    /// The bot that bought it, if one did and it still exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
 }
 
 /// How a spend went (HC15, HC17).
@@ -6626,36 +6727,9 @@ impl Db {
     ) -> rusqlite::Result<WalkedIn> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        if let Some(agent_id) = visit.agent_id {
-            let on_trip = exists(
-                &tx,
-                "SELECT 1 FROM trips WHERE agent_id = ? AND status = 'here' AND ends_at > ?",
-                params![agent_id, visit.now],
-            )?;
-            if on_trip {
-                return Ok(WalkedIn::OnTrip);
-            }
-        }
-        let here = exists(
-            &tx,
-            "SELECT 1 FROM floor_visits WHERE hangout_id = ? AND who = ? AND until > ?",
-            params![visit.hangout_id, visit.who, visit.now],
-        )?;
-        if !here {
-            if count_on_floor(&tx, visit.hangout_id, visit.now)? >= capacity {
-                return Ok(WalkedIn::Full);
-            }
-            if visit.agent_id.is_some() {
-                let bots: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM floor_visits
-                     WHERE hangout_id = ? AND person_id = ? AND agent_id IS NOT NULL AND until > ?",
-                    params![visit.hangout_id, visit.person_id, visit.now],
-                    |row| row.get(0),
-                )?;
-                if bots >= max_bots {
-                    return Ok(WalkedIn::TooManyBots);
-                }
-            }
+        let checked = walk_in_check(&tx, visit, capacity, max_bots)?;
+        if checked != WalkedIn::In {
+            return Ok(checked);
         }
         tx.execute(
             "DELETE FROM floor_visits WHERE who = ? AND hangout_id != ?",
@@ -6671,6 +6745,17 @@ impl Db {
         )?;
         tx.commit()?;
         Ok(WalkedIn::In)
+    }
+
+    /// S73: what walking in would come to now, changing nothing, so a move that would be refused
+    /// says no goodbye first.
+    pub fn would_walk_in(
+        &self,
+        visit: &NewVisit,
+        capacity: i64,
+        max_bots: i64,
+    ) -> rusqlite::Result<WalkedIn> {
+        walk_in_check(&self.conn(), visit, capacity, max_bots)
     }
 
     /// S56: the one room a bot is in now, whatever else it belongs to. A trip comes first, because
@@ -6715,8 +6800,346 @@ impl Db {
         // S61: the room it's doing something in, or else home: the house it lives in, its owner's
         // house, or the first room it was brought into that its owner runs.
         let staying = went.filter(|(_, since)| now - since < BOT_STAY_SECS).map(|(room, _)| room);
-        conn.query_row(
-            "SELECT r.hangout_id FROM room_agents r
+        staying_or_home(&conn, agent_id, staying.as_deref())
+    }
+
+    /// S61: where a bot goes home to, if it has a home: the room S56 ends at with nothing else.
+    pub fn bot_home_room(&self, agent_id: &str) -> rusqlite::Result<Option<String>> {
+        staying_or_home(&self.conn(), agent_id, None)
+    }
+
+    /// S71: the bots the minute look looks at: those it has seen move, and only while something
+    /// could still move them without their doing anything, so a dormant bot costs nothing.
+    /// `since` is a day ago: nothing that moves a bot by time (S61's 30 minutes, a walk-in, social
+    /// hours, a trip) is still due a day after the bot or its row last changed.
+    pub fn bots_to_look_at(&self, since: i64) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.name FROM bot_seen_places s JOIN agents a ON a.id = s.agent_id
+             WHERE NOT EXISTS (SELECT 1 FROM bot_homes b WHERE b.agent_id = a.id AND b.is_house = 1)
+               AND (s.seen_at > ?1
+                    OR COALESCE(a.last_active_at, 0) > ?1
+                    OR EXISTS (SELECT 1 FROM bot_places p WHERE p.agent_id = a.id AND p.since > ?1)
+                    OR EXISTS (SELECT 1 FROM floor_visits v WHERE v.agent_id = a.id AND v.until > ?1)
+                    OR EXISTS (SELECT 1 FROM trips t WHERE t.agent_id = a.id AND t.ends_at > ?1))
+             ORDER BY a.id",
+        )?;
+        let rows = stmt.query_map([since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// S71: where the minute look last saw a bot, where a move it already knows about took it,
+    /// and a room whose leaving was already said.
+    pub fn seen_place(&self, agent_id: &str) -> rusqlite::Result<Option<SeenPlace>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, told_to, said_from, seen_at FROM bot_seen_places
+                 WHERE agent_id = ?",
+                [agent_id],
+                |row| {
+                    Ok(SeenPlace {
+                        hangout_id: row.get(0)?,
+                        told_to: row.get(1)?,
+                        said_from: row.get(2)?,
+                        seen_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// S71: the minute look moves a bot's row on from what it read to `now_in`, once. It changes
+    /// nothing if anything touched the row since the look read it, such as the bot moving and
+    /// being told (`seen_at` goes up with every change), so two looks, or a look and a move, can't
+    /// both say it.
+    pub fn move_seen_place(
+        &self,
+        agent_id: &str,
+        seen: &SeenPlace,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let same = "agent_id = ?1 AND hangout_id = ?2 AND told_to IS ?3 AND said_from IS ?4
+                    AND seen_at = ?5";
+        let changed = match now_in {
+            Some(now_in) => conn.execute(
+                &format!(
+                    "UPDATE bot_seen_places SET hangout_id = ?6, told_to = NULL, said_from = NULL,
+                        seen_at = MAX(seen_at + 1, ?7)
+                     WHERE {same}"
+                ),
+                params![
+                    agent_id,
+                    seen.hangout_id,
+                    seen.told_to,
+                    seen.said_from,
+                    seen.seen_at,
+                    now_in,
+                    at
+                ],
+            )?,
+            None => conn.execute(
+                &format!("DELETE FROM bot_seen_places WHERE {same}"),
+                params![agent_id, seen.hangout_id, seen.told_to, seen.said_from, seen.seen_at],
+            )?,
+        };
+        Ok(changed > 0)
+    }
+
+    /// S71: back where it was seen before the look came round, so what a move or a goodbye noted
+    /// no longer applies. Only if nothing touched the row since it was read.
+    pub fn clear_seen_notes(
+        &self,
+        agent_id: &str,
+        seen: &SeenPlace,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_seen_places SET told_to = NULL, said_from = NULL,
+                seen_at = MAX(seen_at + 1, ?6)
+             WHERE agent_id = ?1 AND hangout_id = ?2 AND told_to IS ?3 AND said_from IS ?4
+               AND seen_at = ?5",
+            params![agent_id, seen.hangout_id, seen.told_to, seen.said_from, seen.seen_at, at],
+        )?;
+        Ok(())
+    }
+
+    /// S71: after the look hasn't run for a long while, such as an older release running in
+    /// between, each row is brought up to where the bot is now, saying nothing.
+    pub fn reset_seen_place(
+        &self,
+        agent_id: &str,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match now_in {
+            Some(room) => conn.execute(
+                "UPDATE bot_seen_places SET hangout_id = ?2, told_to = NULL, said_from = NULL,
+                    seen_at = MAX(seen_at + 1, ?3)
+                 WHERE agent_id = ?1",
+                params![agent_id, room, at],
+            )?,
+            None => conn.execute("DELETE FROM bot_seen_places WHERE agent_id = ?", [agent_id])?,
+        };
+        Ok(())
+    }
+
+    /// S71: every bot the look has a row for.
+    pub fn seen_bots(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT agent_id FROM bot_seen_places ORDER BY agent_id")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// S71: when the minute look last ran on the server, as the running server records it.
+    pub fn last_look(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row("SELECT at FROM look_marks WHERE name = 'leaving'", [], |row| row.get(0))
+            .optional()
+    }
+
+    pub fn note_look(&self, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO look_marks (name, at) VALUES ('leaving', ?1)
+             ON CONFLICT (name) DO UPDATE SET at = excluded.at",
+            [at],
+        )?;
+        Ok(())
+    }
+
+    /// E11, S71: the bot already knows where this move took it (`None` is no room), so the minute
+    /// look sends no event. A bot moving for the first time since this came in is seen from where
+    /// it went.
+    pub fn note_told_place(
+        &self,
+        agent_id: &str,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE bot_seen_places SET told_to = ?2, seen_at = MAX(seen_at + 1, ?3)
+             WHERE agent_id = ?1",
+            params![agent_id, now_in.unwrap_or(""), at],
+        )?;
+        if let Some(room) = now_in {
+            conn.execute(
+                "INSERT OR IGNORE INTO bot_seen_places (agent_id, hangout_id, told_to, seen_at)
+                 SELECT ?1, id, id, ?3 FROM hangouts WHERE id = ?2",
+                params![agent_id, room, at],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// S73: the bot said goodbye to this room itself, or the room was told, so the minute look
+    /// says nothing more there.
+    pub fn note_said_leaving(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_seen_places SET said_from = ?2, seen_at = MAX(seen_at + 1, ?3)
+             WHERE agent_id = ?1 AND hangout_id = ?2",
+            params![agent_id, hangout_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// Whether a bot belongs to a room: brought in, not a guest and not a walk-in.
+    pub fn belongs_to_room(&self, hangout_id: &str, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM room_agents WHERE hangout_id = ? AND agent_id = ?",
+            params![hangout_id, agent_id],
+        )
+    }
+
+    /// L45: a bot's walk-in on a floor, still going, and when it ends.
+    pub fn visit_until(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT until FROM floor_visits
+                 WHERE hangout_id = ?1 AND agent_id = ?2 AND until > ?3",
+                params![hangout_id, agent_id, now],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// L45: a walk-in that's still going lasts until `until`, if that's later. It keeps its start
+    /// (S19), so the bot sees nothing it hadn't.
+    pub fn extend_visit(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        until: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE floor_visits SET until = ?3
+             WHERE hangout_id = ?1 AND agent_id = ?2 AND until > ?4 AND until < ?3",
+            params![hangout_id, agent_id, until, now],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// S74: this bot follows `leader_id` until `until`, in place of anyone it followed before.
+    pub fn follow(
+        &self,
+        follower_id: &str,
+        leader_id: &str,
+        now: i64,
+        until: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_follows (follower_id, leader_id, since, until) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (follower_id) DO UPDATE SET
+                leader_id = excluded.leader_id, since = excluded.since, until = excluded.until",
+            params![follower_id, leader_id, now, until],
+        )?;
+        Ok(())
+    }
+
+    /// S75: following ends. Whom it followed, if it still did.
+    pub fn unfollow(&self, follower_id: &str, now: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn();
+        let leader: Option<String> = conn
+            .query_row(
+                "SELECT leader_id FROM bot_follows WHERE follower_id = ? AND until > ?",
+                params![follower_id, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+        conn.execute("DELETE FROM bot_follows WHERE follower_id = ?", [follower_id])?;
+        Ok(leader)
+    }
+
+    /// S74: whom a bot follows now, and until when.
+    pub fn leader_of(
+        &self,
+        follower_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT leader_id, until FROM bot_follows WHERE follower_id = ? AND until > ?",
+                params![follower_id, now],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// S74: the bots following this one now.
+    pub fn followers_of(&self, leader_id: &str, now: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT follower_id FROM bot_follows WHERE leader_id = ? AND until > ? ORDER BY since",
+        )?;
+        let rows = stmt.query_map(params![leader_id, now], |row| row.get(0))?;
+        rows.collect()
+    }
+}
+
+/// S13, S24, S39: whether a walk-in fits: `In` when it does, or why not.
+fn walk_in_check(
+    conn: &Connection,
+    visit: &NewVisit,
+    capacity: i64,
+    max_bots: i64,
+) -> rusqlite::Result<WalkedIn> {
+    if let Some(agent_id) = visit.agent_id {
+        let on_trip = exists(
+            conn,
+            "SELECT 1 FROM trips WHERE agent_id = ? AND status = 'here' AND ends_at > ?",
+            params![agent_id, visit.now],
+        )?;
+        if on_trip {
+            return Ok(WalkedIn::OnTrip);
+        }
+    }
+    let here = exists(
+        conn,
+        "SELECT 1 FROM floor_visits WHERE hangout_id = ? AND who = ? AND until > ?",
+        params![visit.hangout_id, visit.who, visit.now],
+    )?;
+    if !here {
+        if count_on_floor(conn, visit.hangout_id, visit.now)? >= capacity {
+            return Ok(WalkedIn::Full);
+        }
+        if visit.agent_id.is_some() {
+            let bots: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM floor_visits
+                 WHERE hangout_id = ? AND person_id = ? AND agent_id IS NOT NULL AND until > ?",
+                params![visit.hangout_id, visit.person_id, visit.now],
+                |row| row.get(0),
+            )?;
+            if bots >= max_bots {
+                return Ok(WalkedIn::TooManyBots);
+            }
+        }
+    }
+    Ok(WalkedIn::In)
+}
+
+/// S56, S61: the room a bot is staying in if it still belongs there, or else its home.
+fn staying_or_home(
+    conn: &Connection,
+    agent_id: &str,
+    staying: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT r.hangout_id FROM room_agents r
              JOIN agents a ON a.id = r.agent_id
              JOIN hangouts h ON h.id = r.hangout_id
              LEFT JOIN floors f ON f.hangout_id = r.hangout_id
@@ -6730,12 +7153,13 @@ impl Db {
              ORDER BY r.hangout_id = ?2 DESC, r.hangout_id = ho.living_room DESC,
                       ho.id IS NOT NULL DESC, s.kind = 'house' DESC, r.rowid
              LIMIT 1",
-            params![agent_id, staying],
-            |row| row.get(0),
-        )
-        .optional()
-    }
+        params![agent_id, staying],
+        |row| row.get(0),
+    )
+    .optional()
+}
 
+impl Db {
     /// S56: the room a bot went to, in place of the last one.
     pub fn set_bot_place(
         &self,
@@ -7608,6 +8032,21 @@ impl Db {
             out.insert(agent_id, Thinking { phase: "waiting", until: at + window });
         }
         Ok(out)
+    }
+
+    /// A bot's walk-in on a floor: when it started (S19) and when it ends, ended or not.
+    pub fn visit_times(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+    ) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT since, until FROM floor_visits WHERE hangout_id = ? AND agent_id = ?",
+                params![hangout_id, agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
     }
 
     /// Moves a walk-in's times, which is how a test makes one run out. False if there's none.
@@ -9832,6 +10271,41 @@ impl Db {
         Ok(totals)
     }
 
+    /// HC22: the latest `limit` things that paid this person or that they spent, newest first.
+    pub fn credit_history(&self, person_id: &str, limit: i64) -> rusqlite::Result<Vec<CreditLine>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT p.kind, p.amount, p.day * ?2, p.created_at, c.name, NULL, NULL
+               FROM credit_paid p LEFT JOIN cities c ON c.id = p.city_id
+              WHERE p.person_id = ?1
+             UNION ALL
+             SELECT CASE WHEN s.pack LIKE 'question:%' THEN 'question' ELSE 'spend' END, -s.amount,
+                    s.created_at, s.created_at, NULL,
+                    CASE WHEN s.pack LIKE 'question:%' THEN NULL ELSE s.pack END, a.name
+               FROM credit_spends s LEFT JOIN agents a ON a.id = s.agent_id
+              WHERE s.person_id = ?1
+             UNION ALL
+             SELECT CASE WHEN q.status = 'paid' THEN 'question_award' ELSE 'question_refund' END,
+                    q.amount, COALESCE(q.settled_at, 0), COALESCE(q.settled_at, 0), NULL, NULL, NULL
+               FROM question_bounties q
+              WHERE (q.sponsor_id = ?1 AND q.status = 'refunded')
+                 OR (q.recipient_id = ?1 AND q.status = 'paid')
+             ORDER BY 3 DESC, 4 DESC, 1, 2
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![person_id, crate::ops::DAY_SECS, limit], |row| {
+            Ok(CreditLine {
+                kind: row.get(0)?,
+                amount: row.get(1)?,
+                at: row.get(2)?,
+                city: row.get(4)?,
+                pack: row.get(5)?,
+                bot: row.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// HC14: the packs this person has bought, in the order they bought them.
     pub fn bought_packs(&self, person_id: &str) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
@@ -9896,33 +10370,24 @@ impl Db {
     ) -> rusqlite::Result<Option<&'static str>> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let bounty: Option<(String, String)> = tx
-            .query_row(
-                "SELECT id,sponsor_id FROM question_bounties WHERE card_id=? AND status='open'",
-                [card],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let Some((bounty, sponsor)) = bounty else {
-            return Ok(Some("question is not open"));
+        let bounty = match answer_refusal(&tx, card, bot, owner)? {
+            Ok(bounty) => bounty,
+            Err(reason) => return Ok(Some(reason)),
         };
-        if sponsor == owner {
-            return Ok(Some("the sponsor's own bot cannot answer for a reward"));
-        }
-        if !exists(&tx, "SELECT 1 FROM agents WHERE id=?1 AND owner_id=?2", params![bot, owner])? {
-            return Ok(Some("bot is no longer available"));
-        }
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM question_answers WHERE bounty_id=?",
-            [&bounty],
-            |r| r.get(0),
-        )?;
-        if count >= 20 {
-            return Ok(Some("question has 20 answers"));
-        }
         tx.execute("INSERT INTO question_answers(id,bounty_id,bot_id,owner_id,text,created_at) VALUES(?1,?2,?3,?4,?5,?6)",params![id,bounty,bot,owner,text,now])?;
         tx.commit()?;
         Ok(None)
+    }
+
+    /// HC20: why `bot` can't answer the funded question on `card` now, if it can't. A check before
+    /// anything is counted (K14); answering checks again in its own transaction.
+    pub fn question_answer_refusal(
+        &self,
+        card: &str,
+        bot: &str,
+        owner: &str,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        Ok(answer_refusal(&self.conn(), card, bot, owner)?.err())
     }
 
     pub fn resolve_question(
@@ -9942,10 +10407,10 @@ impl Db {
             let Some(recipient) = recipient else {
                 return Ok(Some("answer is unavailable"));
             };
-            tx.execute("UPDATE question_bounties SET status='paid',recipient_id=?1,accepted_submission=?2 WHERE id=?3 AND status='open'",params![recipient,answer,bounty])?;
+            tx.execute("UPDATE question_bounties SET status='paid',recipient_id=?1,accepted_submission=?2,settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=?3 AND status='open'",params![recipient,answer,bounty])?;
         } else {
             tx.execute(
-                "UPDATE question_bounties SET status='refunded' WHERE id=? AND status='open'",
+                "UPDATE question_bounties SET status='refunded',settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=? AND status='open'",
                 [bounty],
             )?;
         }
@@ -14950,6 +15415,30 @@ mod tests {
         let refused = db.spend_credits("p1", pack.pack, pack.cost, None, GATE).unwrap();
         assert_eq!(refused, Spend::TooFew { balance: 0 });
         assert!(db.bought_packs("p1").unwrap().is_empty());
+    }
+
+    // HC22: the history lists what paid and what was spent, newest first, and only the person's own
+    #[test]
+    fn credit_history_lists_what_paid_and_what_was_spent_newest_first() {
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 2);
+        let pack = a_pack_for_sale();
+        let after = crate::economy::spend(&db, &ann(None), pack.pack, None, now).unwrap();
+
+        let lines: Vec<_> =
+            after.history.iter().map(|line| (line.kind.as_str(), line.amount)).collect();
+        assert_eq!(lines, [("spend", -pack.cost), ("gathering", 20), ("gathering", 20)]);
+        assert_eq!(after.history[0].pack.as_deref(), Some(pack.pack));
+        assert_eq!(after.history[0].bot, None);
+        assert_eq!(after.history[0].at, now);
+        assert!(after.history[1].at > after.history[2].at);
+        assert!(after.history[1..].iter().all(|line| line.city.as_deref() == Some("c1")));
+        assert_eq!(after.history.iter().map(|line| line.amount).sum::<i64>(), after.balance);
+        // Bo went to the same gatherings, and sees what paid them but not what Ann spent.
+        let bo = credits_of(&db, "p2", now);
+        assert!(!bo.history.is_empty());
+        assert!(bo.history.iter().all(|line| line.kind == "gathering"));
+        assert_eq!(bo.history.iter().map(|line| line.amount).sum::<i64>(), bo.balance);
     }
 
     // HC17: a bot spends only on its owner's yes, and within the limit they set, which starts at 0
