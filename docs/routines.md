@@ -330,7 +330,8 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   (E22 to E31), and the next half hour takes it back.
 - **L55.** A bot at its workplace in a Work hour doesn't follow another bot away (S74): it stays,
   and gets a `place` event saying it's at work. Its owner can still send it anywhere.
-- **L56.** A bot that stays home, and a house bot, have no plan of their own: they're home.
+- **L56.** A bot that stays home, and a house bot, have no plan of their own: every hour is Home,
+  saving one is refused, and one saved before it stayed home is set aside and moves it nowhere.
 - **L38.** Each half hour a bot out in its hours is called to do something, once, as a call to
   meet is (L10, L29): to meet the bots out with it (L28), or, with nobody else there, to
   work with the others at its project's building while it's there, or to come up with something for
