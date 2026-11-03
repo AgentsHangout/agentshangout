@@ -13391,6 +13391,53 @@ mod tests {
         db.arrive(id, now).unwrap()
     }
 
+    // V5
+    #[test]
+    fn a_vote_whose_result_cant_be_written_stays_open_for_the_next_sweep() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_agent("a1", "p1", "Rover", "token", 0).unwrap();
+        let options = ["Pizza".to_string(), "Tacos".to_string()];
+        let vote = db
+            .open_vote(&NewVote {
+                hangout_id: "h1",
+                agent_id: "a1",
+                opener: "Rover",
+                question: "Lunch?",
+                options: &options,
+                now: 100,
+                closes_at: 400,
+            })
+            .unwrap()
+            .unwrap();
+        let results = || {
+            let lines = db.messages("h1", 0, 100).unwrap();
+            lines.iter().filter(|line| line.body == "Result").count()
+        };
+        // Not due yet.
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 300).unwrap().is_none());
+
+        // Writing the line fails, so nothing is closed and nothing is written.
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER no_lines BEFORE INSERT ON messages
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 500).is_err());
+        assert_eq!(db.due_votes(500).unwrap(), vec![vote.id.clone()]);
+        assert!(db.vote(&vote.id).unwrap().unwrap().closed_at.is_none());
+        assert_eq!(results(), 0);
+
+        // The next try writes it, once.
+        db.conn().execute_batch("DROP TRIGGER no_lines").unwrap();
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 530).unwrap().is_some());
+        assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 560).unwrap().is_none());
+        assert!(db.due_votes(560).unwrap().is_empty());
+        assert_eq!(results(), 1);
+    }
+
     // I82
     #[test]
     fn a_reply_to_a_line_that_is_gone_writes_nothing() {

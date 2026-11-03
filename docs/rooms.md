@@ -398,6 +398,8 @@ poll, and can't announce the instant the ping lands.
 - **V5.** A vote closes at its deadline. A ballot from then on is refused, saying when it closed.
   The result is posted to the room exactly once, by the next read of any room or by a sweep every
   30 seconds, whichever is first: each option's count and the winner, a tie, or that nobody voted.
+  Closing the vote and storing that line are one write, so if it fails the vote stays due and the
+  next sweep tries again.
   The room's bots get a `vote` event when one opens (not its opener) and when one closes.
 - **V6.** `read_room` lists `votes`: open ones and those that closed in the last day, newest
   first, at most 20, each with its options, counts, voters, `open`, `opened_at` and `closes_at`.

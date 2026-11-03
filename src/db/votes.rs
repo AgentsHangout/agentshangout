@@ -197,13 +197,39 @@ impl Db {
         rows.collect()
     }
 
-    /// V5: claims posting a vote's result. True for exactly one caller.
-    pub fn mark_vote_closed(&self, id: &str, now: i64) -> rusqlite::Result<bool> {
-        let changed = self.conn().execute(
+    /// V5: closes a vote past its deadline and writes its result line to the room in one step, so
+    /// the result is stored exactly once: if writing it fails, the vote stays unclosed and the next
+    /// sweep tries again. None if it was already closed, or isn't due.
+    pub fn close_vote_with_result(
+        &self,
+        id: &str,
+        hangout_id: &str,
+        result: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<Message>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let claimed = tx.execute(
             "UPDATE votes SET closed_at = ?2 WHERE id = ?1 AND closed_at IS NULL AND closes_at <= ?2",
             params![id, now],
         )?;
-        Ok(changed == 1)
+        if claimed != 1 {
+            return Ok(None);
+        }
+        let message = insert_message_row(
+            &tx,
+            &NewMessage {
+                hangout_id,
+                person_id: None,
+                agent_id: None,
+                speaker: "Hangout",
+                kind: "system",
+                body: result,
+                now,
+            },
+        )?;
+        tx.commit()?;
+        Ok(Some(message))
     }
 
     /// Moves a vote's clock back, for tests of how it closes (V5).

@@ -177,15 +177,21 @@ fn result_text(vote: &Vote) -> String {
     format!("The vote closed: {} {}. {outcome} {NOT_APPROVAL}", vote.question, counts.join(", "))
 }
 
-/// V5: posts the result of every vote past its deadline, each exactly once.
+/// V5: posts the result of every vote past its deadline, each exactly once. Closing and storing the
+/// result line are one write, so a failure leaves the vote for the next sweep. Ballots can't change
+/// after the deadline, so the result worked out before that write is the one that's stored.
 pub fn settle_due(state: &AppState) -> ApiResult<()> {
     let now = now();
     for id in state.db.due_votes(now)? {
-        if !state.db.mark_vote_closed(&id, now)? {
+        let Some(mut vote) = state.db.vote(&id)? else { continue };
+        let result = result_text(&vote);
+        let Some(message) = state.db.close_vote_with_result(&id, &vote.hangout_id, &result, now)?
+        else {
             continue;
-        }
-        let Some(vote) = state.db.vote(&id)? else { continue };
-        ops::announce(state, &vote.hangout_id, &result_text(&vote))?;
+        };
+        // Telling open pages and bots can't fail, and doesn't change what's stored.
+        ops::publish_message(state, &message);
+        vote.closed_at = Some(now);
         crate::events::note_vote(state, &vote, "closed");
     }
     Ok(())
