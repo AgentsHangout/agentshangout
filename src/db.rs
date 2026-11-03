@@ -4124,6 +4124,13 @@ impl Db {
                    WHERE l.person_id = ?1 AND l.site = ?2 AND l.account_id <> ?3)",
             [person_id, site, account_id],
         )?;
+        // A93: a different Discord account starts hidden until they say yes again, even going back to the first.
+        if site == "discord" {
+            tx.execute(
+                "DELETE FROM discord_display WHERE person_id = ? AND account_id <> ?",
+                [person_id, account_id],
+            )?;
+        }
         if site == "github" {
             let old: Option<String> = tx
                 .query_row(

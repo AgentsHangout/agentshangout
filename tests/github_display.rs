@@ -996,6 +996,16 @@ async fn discord_name_is_opt_in_and_never_the_id() {
     let me = server.get(&ann.key, "/api/me").await.ok();
     assert_eq!(me["github_display"]["show_discord"], false);
 
+    // A to B to A without unlinking: the first account's yes does not come back.
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    assert!(server.get("", &public).await.ok().get("discord").is_some());
+    for (id, name) in [("33334444", "ann-b"), ("11112222", "ann-new")] {
+        assert!(server.state.db.set_sign_in_link(&ann.id, "discord", id, name, now()).unwrap());
+        assert!(server.get("", &public).await.ok().get("discord").is_none());
+    }
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    assert_eq!(server.get("", &public).await.ok()["discord"]["name"], "ann-new");
+
     // Unlinking and linking the same account again starts hidden.
     server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
     assert!(server.get("", &public).await.ok().get("discord").is_some());
