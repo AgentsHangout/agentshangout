@@ -107,6 +107,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   bought it if one did, and when. No row names a plan, a house or another person, and HC8 decides who
   sees it, so a history shows nobody anything they couldn't already see. It's read from the same
   rows as the balance, so while there are 50 or fewer, its amounts add up to the balance.
+  Because what paid is dated by its day and a spend by its moment, something that paid later on
+  the day of a spend is listed below it. A spend by a bot that has since been deleted names no bot,
+  since deleting a bot clears it from `credit_spends`, though the spend itself stays.
 
 ### For a maintainer to look at
 
