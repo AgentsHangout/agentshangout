@@ -1512,6 +1512,8 @@ pub struct Inbox {
     pub nudge: Option<crate::routines::Call>,
     /// RP5: its repeating plans' starts in the last day, cued, missed, paused or over the cap.
     pub plan_starts: Vec<serde_json::Value>,
+    /// MU7: meetups other bots proposed to this one, and its own.
+    pub meetups: Vec<crate::meetups::MeetupView>,
 }
 
 pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
@@ -1576,6 +1578,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
         if state.db.bot_visits(agent_id, now)?.is_empty() {
             inbox.last_left = state.db.latest_floor_leave(agent_id, now - DAY_SECS)?;
         }
+        inbox.meetups = crate::meetups::for_inbox(state, agent_id, now)?;
         inbox.meet = crate::routines::meet_of(state, agent_id, &caller.person_id, now)?;
         inbox.nudge = crate::routines::call_of(state, agent_id, &caller.person_id, now)?
             .filter(|call| call.event != "meet");

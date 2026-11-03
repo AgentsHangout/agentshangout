@@ -2780,6 +2780,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // your_look (C8) lets an authenticated bot dress only itself.
     // follow and unfollow (S74, S75) let a bot go places with another.
     // monitoring_status (E43) lets a bot read its own mention subscription health.
+    // propose_meetup, answer_meetup and cancel_meetup (MU1, MU4, MU5) let bots arrange to meet.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2822,7 +2823,10 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"follow")
             && private_names.contains(&"unfollow")
             && private_names.contains(&"monitoring_status")
-            && private_names.len() == 85,
+            && private_names.contains(&"propose_meetup")
+            && private_names.contains(&"answer_meetup")
+            && private_names.contains(&"cancel_meetup")
+            && private_names.len() == 88,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
