@@ -4723,6 +4723,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "room_mention_settings",
         "room_mention_subscriptions",
         "room_mention_uses",
+        "bot_seen_places",
+        "bot_follows",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4746,6 +4748,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "bot_follows",
+            "bot_seen_places",
             "credit_spends",
             "credit_paid",
             "spend_limits",

@@ -2775,6 +2775,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // RL1-RL6/RW1-RW6 add six scoped research-lab tools to the private endpoint only.
     // credits (HC8) reads the owner's Hangout Credits.
     // take_snapshot (CP1) adds a consent-checked private camera tool.
+    // follow and unfollow (S74, S75) let a bot go places with another.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2808,7 +2809,9 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"credits")
             && private_names.contains(&"spend_credits")
             && private_names.contains(&"take_snapshot")
-            && private_names.len() == 76,
+            && private_names.contains(&"follow")
+            && private_names.contains(&"unfollow")
+            && private_names.len() == 78,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

@@ -1350,6 +1350,24 @@ CREATE TABLE IF NOT EXISTS spend_limits (
     agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     daily       INTEGER NOT NULL CHECK (daily >= 0)
 );
+-- S71: where the minute look last saw each bot, so leaving a room is said there once, restarts
+-- included. No row is a bot in no room, or one not seen yet. `told_to` is where a move the bot
+-- already knows about took it (E11), and `said_from` a room whose leaving was already said (S73).
+CREATE TABLE IF NOT EXISTS bot_seen_places (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    told_to     TEXT,
+    said_from   TEXT,
+    seen_at     INTEGER NOT NULL
+);
+-- S74, S75: one leader a follower, for 2 hours at most.
+CREATE TABLE IF NOT EXISTS bot_follows (
+    follower_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    leader_id   TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    since       INTEGER NOT NULL,
+    until       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_follows_by_leader ON bot_follows (leader_id);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -1829,6 +1847,14 @@ pub enum WalkedIn {
     TooManyBots,
     /// A trip doesn't give way to a walk-in (S39).
     OnTrip,
+}
+
+/// S71: where the minute look last saw a bot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeenPlace {
+    pub hangout_id: String,
+    pub told_to: Option<String>,
+    pub said_from: Option<String>,
 }
 
 /// A floor a bot left, and why. S62.
@@ -6668,8 +6694,214 @@ impl Db {
         // S61: the room it's doing something in, or else home: the house it lives in, its owner's
         // house, or the first room it was brought into that its owner runs.
         let staying = went.filter(|(_, since)| now - since < BOT_STAY_SECS).map(|(room, _)| room);
-        conn.query_row(
-            "SELECT r.hangout_id FROM room_agents r
+        staying_or_home(&conn, agent_id, staying.as_deref())
+    }
+
+    /// S61: where a bot goes home to, if it has a home: the room S56 ends at with nothing else.
+    pub fn bot_home_room(&self, agent_id: &str) -> rusqlite::Result<Option<String>> {
+        staying_or_home(&self.conn(), agent_id, None)
+    }
+
+    /// S71: every bot that isn't a house bot, with its owner, for the minute look.
+    pub fn bots_to_look_at(&self) -> rusqlite::Result<Vec<(String, String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.name, a.owner_id FROM agents a
+             WHERE NOT EXISTS (SELECT 1 FROM bot_homes b WHERE b.agent_id = a.id AND b.is_house = 1)
+             ORDER BY a.id",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// S71: where the minute look last saw a bot, where a move it already knows about took it,
+    /// and a room whose leaving was already said.
+    pub fn seen_place(&self, agent_id: &str) -> rusqlite::Result<Option<SeenPlace>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, told_to, said_from FROM bot_seen_places WHERE agent_id = ?",
+                [agent_id],
+                |row| {
+                    Ok(SeenPlace {
+                        hangout_id: row.get(0)?,
+                        told_to: row.get(1)?,
+                        said_from: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// S71: the minute look moves a bot on from `was` to `now_in`, once. Two looks at the same
+    /// time can't both say it: only the one that finds `was` still there changes the row.
+    pub fn move_seen_place(
+        &self,
+        agent_id: &str,
+        was: Option<&str>,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let changed = match (was, now_in) {
+            (Some(was), Some(now_in)) => conn.execute(
+                "UPDATE bot_seen_places SET hangout_id = ?3, told_to = NULL, said_from = NULL,
+                    seen_at = ?4
+                 WHERE agent_id = ?1 AND hangout_id = ?2",
+                params![agent_id, was, now_in, at],
+            )?,
+            (Some(was), None) => conn.execute(
+                "DELETE FROM bot_seen_places WHERE agent_id = ?1 AND hangout_id = ?2",
+                params![agent_id, was],
+            )?,
+            // A row starts only with a move (`note_told_place`), never with a look, so the look
+            // writes nothing for a bot that hasn't moved.
+            (None, _) => 0,
+        };
+        Ok(changed > 0)
+    }
+
+    /// E11, S71: the bot already knows where this move took it (`None` is no room), so the minute
+    /// look sends no event. A bot moving for the first time since this came in is seen from where
+    /// it went.
+    pub fn note_told_place(
+        &self,
+        agent_id: &str,
+        now_in: Option<&str>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE bot_seen_places SET told_to = ?2 WHERE agent_id = ?1",
+            params![agent_id, now_in.unwrap_or("")],
+        )?;
+        if let Some(room) = now_in {
+            conn.execute(
+                "INSERT OR IGNORE INTO bot_seen_places (agent_id, hangout_id, told_to, seen_at)
+                 SELECT ?1, id, id, ?3 FROM hangouts WHERE id = ?2",
+                params![agent_id, room, at],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// S73: the bot said goodbye to this room itself, or the room was told, so the minute look
+    /// says nothing more there.
+    pub fn note_said_leaving(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_seen_places SET said_from = ?2 WHERE agent_id = ?1 AND hangout_id = ?2",
+            params![agent_id, hangout_id],
+        )?;
+        Ok(())
+    }
+
+    /// Whether a bot belongs to a room: brought in, not a guest and not a walk-in.
+    pub fn belongs_to_room(&self, hangout_id: &str, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM room_agents WHERE hangout_id = ? AND agent_id = ?",
+            params![hangout_id, agent_id],
+        )
+    }
+
+    /// L45: a bot's walk-in on a floor, still going, and when it ends.
+    pub fn visit_until(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT until FROM floor_visits
+                 WHERE hangout_id = ?1 AND agent_id = ?2 AND until > ?3",
+                params![hangout_id, agent_id, now],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// L45: a walk-in that's still going lasts until `until`, if that's later. It keeps its start
+    /// (S19), so the bot sees nothing it hadn't.
+    pub fn extend_visit(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        until: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE floor_visits SET until = ?3
+             WHERE hangout_id = ?1 AND agent_id = ?2 AND until > ?4 AND until < ?3",
+            params![hangout_id, agent_id, until, now],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// S74: this bot follows `leader_id` until `until`, in place of anyone it followed before.
+    pub fn follow(
+        &self,
+        follower_id: &str,
+        leader_id: &str,
+        now: i64,
+        until: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_follows (follower_id, leader_id, since, until) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (follower_id) DO UPDATE SET
+                leader_id = excluded.leader_id, since = excluded.since, until = excluded.until",
+            params![follower_id, leader_id, now, until],
+        )?;
+        Ok(())
+    }
+
+    /// S75: following ends. Whom it followed, if it still did.
+    pub fn unfollow(&self, follower_id: &str, now: i64) -> rusqlite::Result<Option<String>> {
+        let conn = self.conn();
+        let leader: Option<String> = conn
+            .query_row(
+                "SELECT leader_id FROM bot_follows WHERE follower_id = ? AND until > ?",
+                params![follower_id, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+        conn.execute("DELETE FROM bot_follows WHERE follower_id = ?", [follower_id])?;
+        Ok(leader)
+    }
+
+    /// S74: whom a bot follows now, and until when.
+    pub fn leader_of(
+        &self,
+        follower_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT leader_id, until FROM bot_follows WHERE follower_id = ? AND until > ?",
+                params![follower_id, now],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// S74: the bots following this one now.
+    pub fn followers_of(&self, leader_id: &str, now: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT follower_id FROM bot_follows WHERE leader_id = ? AND until > ? ORDER BY since",
+        )?;
+        let rows = stmt.query_map(params![leader_id, now], |row| row.get(0))?;
+        rows.collect()
+    }
+}
+
+/// S56, S61: the room a bot is staying in if it still belongs there, or else its home.
+fn staying_or_home(
+    conn: &Connection,
+    agent_id: &str,
+    staying: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT r.hangout_id FROM room_agents r
              JOIN agents a ON a.id = r.agent_id
              JOIN hangouts h ON h.id = r.hangout_id
              LEFT JOIN floors f ON f.hangout_id = r.hangout_id
@@ -6683,12 +6915,13 @@ impl Db {
              ORDER BY r.hangout_id = ?2 DESC, r.hangout_id = ho.living_room DESC,
                       ho.id IS NOT NULL DESC, s.kind = 'house' DESC, r.rowid
              LIMIT 1",
-            params![agent_id, staying],
-            |row| row.get(0),
-        )
-        .optional()
-    }
+        params![agent_id, staying],
+        |row| row.get(0),
+    )
+    .optional()
+}
 
+impl Db {
     /// S56: the room a bot went to, in place of the last one.
     pub fn set_bot_place(
         &self,

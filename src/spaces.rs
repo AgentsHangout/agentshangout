@@ -1197,6 +1197,10 @@ async fn change_floor(
                 taken_off.join(", ")
             );
             ops::announce(&state, &floor.id, &line)?;
+            // S71: the room was told, so the minute look says nothing more.
+            for agent_id in &removed {
+                state.db.note_said_leaving(agent_id, &floor.id)?;
+            }
         }
     } else if body.access.as_deref() == Some("private") && floor.access == "public" {
         ops::announce(&state, &floor.id, "This floor is private again.")?;
@@ -1454,6 +1458,8 @@ pub fn place_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResul
         }
     }
     state.db.set_bot_place(agent_id, hangout_id, now)?;
+    // E11: whoever moved it, the bot itself or its owner, it knows where it is.
+    crate::travel::note_told(state, agent_id);
     for room in was.iter().map(String::as_str).chain([hangout_id]) {
         ops::refresh(state, room);
     }
@@ -1650,34 +1656,69 @@ fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> Api
 /// S57, S58: a bot takes itself to a room it can be in, before it does something there. A person
 /// has nowhere to go, and neither has a bot that's already there.
 pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+    go_to_with(state, caller, hangout_id).map(|_| ())
+}
+
+/// `go_to`, saying what became of the bots following this one (S74).
+fn go_to_with(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Vec<Value>> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     require_public_conversations(state, agent_id, hangout_id)?;
     let now = now();
-    if state.db.bot_place(agent_id, now)?.as_deref() == Some(hangout_id) {
-        // S61: it's doing something here, so it stays.
+    let was = state.db.bot_place(agent_id, now)?;
+    if was.as_deref() == Some(hangout_id) {
+        // S61: it's doing something here, so it stays. L45: out on a floor, for longer.
         state.db.note_bot_here(agent_id, hangout_id, now)?;
-        return Ok(());
+        crate::routines::stay_longer(state, agent_id, hangout_id)?;
+        return Ok(Vec::new());
     }
     if state.db.on_trip_away_from(hangout_id, agent_id, now)? {
         return Err(ApiError::conflict("you're on a trip: go home first"));
     }
-    place_bot(state, agent_id, hangout_id)
+    place_bot(state, agent_id, hangout_id)?;
+    // S75: doing something in another room ends following. S74: its own followers come along.
+    state.db.unfollow(agent_id, now)?;
+    crate::travel::move_followers(state, agent_id, was.as_deref(), hangout_id)
 }
 
 /// S57, S67: `go_to_room`, for a bot going somewhere with nothing to do there yet. A floor its
-/// owner is a member of is one it can be in.
-pub fn go_to_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
+/// owner is a member of is one it can be in. S73: with a goodbye where it was and a hello there.
+pub fn go_to_room(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    parting: &crate::travel::Parting,
+) -> ApiResult<Value> {
     ops::no_house_bot(caller)?;
-    if !caller.is_agent() {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
         return Err(ApiError::forbidden("only bots go to rooms"));
-    }
+    };
     join_owners_floor(state, caller, hangout_id)?;
     let hangout = ops::require_room(state, caller, hangout_id)?;
     ops::note_agent_write(state, caller)?;
-    go_to(state, caller, &hangout.id)?;
-    Ok(json!({ "hangout_id": hangout.id, "name": hangout.name }))
+    let was = state.db.bot_place(agent_id, now())?;
+    let moving = was.as_deref() != Some(hangout.id.as_str());
+    // A move that will be refused says no goodbye.
+    if moving && state.db.on_trip_away_from(&hangout.id, agent_id, now())? {
+        return Err(ApiError::conflict("you're on a trip: go home first"));
+    }
+    require_public_conversations(state, agent_id, &hangout.id)?;
+    let goodbye = parting
+        .goodbye
+        .map(|text| crate::travel::say_goodbye(state, caller, was.as_deref(), moving, text));
+    let followers = go_to_with(state, caller, &hangout.id)?;
+    let mut reply = json!({ "hangout_id": hangout.id, "name": hangout.name });
+    if let Some(goodbye) = goodbye {
+        reply["goodbye"] = goodbye;
+    }
+    if let Some(text) = parting.hello {
+        reply["hello"] = crate::travel::say_hello(state, caller, &hangout.id, moving, text);
+    }
+    if !followers.is_empty() {
+        reply["followers"] = json!(followers);
+    }
+    Ok(reply)
 }
 
 /// S29: anyone but the keeper finds no such floor.
