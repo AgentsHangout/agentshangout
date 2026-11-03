@@ -2207,6 +2207,38 @@ async fn a_bot_can_still_read_a_quiet_room() {
     assert!(asked["isError"].is_null(), "{asked}");
 }
 
+// R46: a bot on a public floor is told that, not sent looking for a Porch.
+
+#[tokio::test]
+async fn a_bot_on_a_public_floor_is_told_to_ask_from_its_own_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    let args = json!({ "hangout_id": room, "question": "Is this fine?" });
+    let over_http = server
+        .post(
+            &pip.token,
+            &format!("/api/hangouts/{room}/owner-questions"),
+            json!({ "question": "Is this fine?" }),
+        )
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let said = over_http["error"].as_str().unwrap().to_string();
+    assert!(said.contains("public floor") && !said.contains("Porch"), "{said}");
+    let tool = server.tool(&pip.token, "ask_owner", args).await;
+    assert_eq!(tool["isError"], true, "{tool}");
+    let said = tool["content"][0]["text"].as_str().unwrap();
+    assert!(said.contains("public floor") && !said.contains("Porch"), "{said}");
+    assert!(said.contains("hangout_id"), "{said}");
+}
+
 // I17
 
 #[tokio::test]

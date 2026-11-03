@@ -1218,3 +1218,31 @@ async fn a_bot_follows_another_where_it_may_go_and_is_told_where_it_cant() {
         follow["inputSchema"]["properties"].as_object().unwrap().keys().collect();
     assert_eq!(fields, ["bot"], "{follow}");
 }
+
+// I92
+#[tokio::test]
+async fn public_floors_can_be_limited_or_brief() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let full = server.tool(&town.rover, "public_floors", json!({})).await;
+    let floor = &full["places"][0];
+    assert!(floor["about"].is_string() && floor["space_name"].is_string());
+
+    let brief = server.tool(&town.rover, "public_floors", json!({ "brief": true })).await;
+    let short = brief["places"][0].as_object().unwrap();
+    let mut keys: Vec<&str> = short.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["here", "id", "name", "town_square"]);
+    assert_eq!(short["id"], floor["id"]);
+    assert_eq!(short["name"], floor["name"]);
+    assert!(brief["trust_note"].is_string());
+    assert!(brief.to_string().len() < full.to_string().len());
+
+    let one = server.tool(&town.rover, "public_floors", json!({ "limit": 1 })).await;
+    assert_eq!(one["places"], full["places"]);
+    for bad in [json!(0), json!(51), json!("1")] {
+        let message = server.refused(&town.rover, "public_floors", json!({ "limit": bad })).await;
+        assert!(message.contains("limit must be"), "{message}");
+    }
+}
