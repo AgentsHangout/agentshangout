@@ -53,7 +53,7 @@ const context = {
 vm.createContext(context);
 vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}
 ${extract('researchLabLookup')}
-${extract('researchDisplay')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
+${extract('researchDisplay')}\n${extract('researchParticipation')}\n${extract('researchItemDetails')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -146,6 +146,43 @@ async function check() {
   shown = node('section', {}, ...context.workContent({ ...fresh, stale: true }));
   assert.ok(text(shown).startsWith('Stale'), 'a failed refresh keeps the last snapshot and says it is stale');
   assert.equal(articles(shown).length, 1);
+  // RW8 to RW11: areas, the last CI read, claims and watchers, and a watch button with a lab id.
+  const rich = { repository: lab.github, fetched_at: 100, stale: false, items: [
+    { number: 9, title: 'Fix the plots', kind: 'pull_request', state: 'open', labels: ['bug'], areas: ['Bugs'],
+      pr_state: { ci: 'failing', review: 'changes_requested', stale: false },
+      claims: [{ name: 'Rover', pairing: false }, { name: 'Ann', pairing: true }],
+      watchers: [{ name: 'Rover', is_bot: true }], you_watch: false },
+    { number: 10, title: 'Never read', kind: 'pull_request', state: 'open', labels: ['docs'], areas: [] }] };
+  const says = (tree, words) => find(tree, n => n.children?.some(t => typeof t === 'string' && t.includes(words)));
+  shown = node('section', {}, ...context.workContent(rich, 'lab-1'));
+  assert.ok(says(shown, 'Areas: Bugs'), 'areas show when the owner named some');
+  assert.ok(says(shown, 'Labels: docs'), 'labels show when no area matches');
+  assert.ok(says(shown, 'CI failing · review changes requested'), 'the last CI and review read shows');
+  assert.ok(says(shown, 'CI and review not checked yet'), 'a pull request never read is not shown as passing');
+  assert.ok(says(shown, 'Working on it: Rover (leading), Ann (pairing)'), 'claims show who leads and who pairs');
+  const watchButton = find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch');
+  assert.ok(says(shown, 'Watching: 1'));
+  await watchButton.events.click();
+  assert.equal(writes.at(-1).path, '/api/research-labs/lab-1/work/9/watch');
+  assert.equal(writes.at(-1).method, 'PUT');
+  assert.equal(watchButton.children[0], 'Stop watching');
+  assert.ok(says(shown, 'Watching: 2'));
+  responseFails = true;
+  await watchButton.events.click();
+  assert.equal(watchButton.children[0], 'Stop watching', 'a failed unwatch keeps showing it as watched');
+  responseFails = false;
+  await watchButton.events.click();
+  assert.equal(writes.at(-1).method, 'DELETE');
+  assert.equal(watchButton.children[0], 'Watch');
+  shown = node('section', {}, ...context.workContent(rich));
+  assert.equal(find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch'), undefined, 'no lab id, no watch button');
+  // A guest's read has no watchers, so it gets no button and nothing about watching.
+  const guestItem = { number: 11, title: 'Guest view', kind: 'pull_request', state: 'open', pr_state: { ci: 'unknown', review: 'unknown', stale: true } };
+  shown = node('section', {}, ...context.workContent({ ...rich, items: [guestItem] }, 'lab-1'));
+  assert.equal(find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch'), undefined, 'a guest gets no watch button');
+  assert.equal(says(shown, 'Watching'), undefined);
+  assert.equal(says(shown, 'Nobody is watching'), undefined);
+  assert.ok(says(shown, 'CI and review couldn’t be read · stale'), 'an unknown read says it could not be read');
   shown = node('section', {}, ...context.workContent({ ...fresh, stale: true, fetched_at: 0, items: [] }));
   assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
   assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');

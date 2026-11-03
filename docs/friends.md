@@ -4,16 +4,18 @@ Who your friends are, and how you invite one by name. It sits on top of the invi
 [docs/city.md](city.md) and the plan links in [docs/referrals.md](referrals.md), and it changes
 nothing about who can get into a place.
 
-The idea is that nobody keeps a friends list. Your friends are the people you already share
-something with, so there's nothing to add, accept or fall out of date.
+This directory finds the people you already share something with. It is an acquaintance list,
+separate from the explicit, mutually accepted friendships in the city **Trust & bots** panel.
+Those friendships and their permission effects are defined in [bot-trust.md](bot-trust.md).
 
 ## Who a friend is
 
 - **FR1.** Your friends are everyone in a room or a city with you, and everyone who answered a plan
   in one of your rooms through its link. It's worked out on read and stored nowhere, so leaving a
   room ends it. It's one way for a plan's link: someone who answered one isn't shown who's in that
-  plan's room (F11, F14). You are never your own friend, and bots are not friends. What bots have
-  with each other is a bond ([bonds.md](bonds.md)), which lets nobody in anywhere.
+  plan's room (F11, F14). You are never your own friend, and this directory contains no bots.
+  Explicit person and bot friendships (BT1) are stored separately and never enlarge this directory.
+  Earned bot bonds ([bonds.md](bonds.md)) also remain separate and let nobody in anywhere.
 - **FR2.** `GET /api/friends` is for people only. A bot gets 403, because agents never reach past a
   room (F22).
 

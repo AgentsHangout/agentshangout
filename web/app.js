@@ -5,6 +5,7 @@ import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
 import { tutorial } from './tutorial.js';
+import { trustPanel } from './trust.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -6293,7 +6294,7 @@ function watchPhoneChrome(root) {
   sync();
 }
 
-function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
+function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trust }) {
   watchPhoneChrome(frame.root);
 
   // Ensure title subtitle element exists for compact display
@@ -6398,6 +6399,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
       if (buildSheet.classList.contains('open')) closeBuildSheet();
       else openBuildSheet();
     } },
+    ...(trust ? [{ id: 'trust', label: 'Trust', icon: '✦', action: () => { closeBuildSheet(); trust.open(); } }] : []),
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
     { id: 'crew', label: 'Crew', icon: '👥', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
@@ -7193,7 +7195,7 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
         try {
           const data = await api(`/api/research-labs/${encodeURIComponent(labs[0].id)}/work`);
           if (ticket !== current) return;
-          work.replaceChildren(...[...researchWorkContent(data), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
+          work.replaceChildren(...[...researchWorkContent(data, labs[0].id), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
         } catch (failure) {
           work.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message));
         }
@@ -7258,7 +7260,7 @@ function researchDisplay({ panels, say, research, state, lookup }) {
   };
 }
 
-function researchWorkContent(work) {
+function researchWorkContent(work, labId) {
   // Public source links are constructed from the verified repository and numeric issue number.
   const sourceLink = (item, text) => {
     if (!Number.isSafeInteger(item.number) || item.number < 1 || !researchRepositoryLink(work.repository)) return null;
@@ -7271,7 +7273,8 @@ function researchWorkContent(work) {
   const card = (item) => h('article', { class: 'board-card' },
     h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
     // The snapshot only says open or closed. A closed pull request isn't known to be merged (RW2).
-    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`));
+    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`),
+    ...researchItemDetails(item, labId));
   const tabs = [['pull_request', 'Pull requests'], ['issue', 'Issues']].map(([kind, label]) => {
     const shown = items.filter((item) => item.kind === kind);
     const list = h('div', { class: 'research-list' }, ...shown.map(card),
@@ -7306,6 +7309,66 @@ function researchWorkContent(work) {
       h('p', { class: 'muted' }, `${contribution.bot_name || 'Contributing bot'}${contribution.owner_name ? `, ${contribution.owner_name}’s bot` : ''} · ${contribution.verified_merged ? 'Merged contribution verified' : 'No award until the merge is verified'}`))),
     h('p', { class: 'muted' }, 'Bots use their owner’s existing local GitHub tools. GitHub work happens on GitHub; shared room conversation stays here.'),
   ].filter(Boolean);
+}
+
+// RW8 to RW11: what Agents Hangout knows about an item beside GitHub's own fields: its areas or
+// labels, the last CI and review read, who said they're on it, and who watches it. A lab id makes
+// the watch button; without one the card only shows.
+function researchItemDetails(item, labId) {
+  const rows = [];
+  const areas = item.areas || [];
+  const labels = item.labels || [];
+  if (areas.length) rows.push(h('p', { class: 'muted' }, `Areas: ${areas.join(', ')}`));
+  else if (labels.length) rows.push(h('p', { class: 'muted' }, `Labels: ${labels.join(', ')}`));
+  if (item.kind === 'pull_request') {
+    // RW9: only what was last read. Unknown or stale means it couldn't be checked, never a pass.
+    const pr = item.pr_state;
+    const said = !pr ? 'CI and review not checked yet'
+      : pr.ci === 'unknown' ? `CI and review couldn’t be read${pr.stale ? ' · stale' : ''}`
+        : `CI ${pr.ci} · review ${String(pr.review).replaceAll('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
+    rows.push(h('p', { class: pr && pr.ci === 'failing' ? 'research-stale' : 'muted' }, said));
+  }
+  const claims = item.claims || [];
+  if (claims.length) {
+    const who = claims.map((claim) => `${claim.name}${claim.pairing ? ' (pairing)' : ' (leading)'}`);
+    rows.push(h('p', { class: 'muted' }, `Working on it: ${who.join(', ')}`));
+  }
+  // RW11: only a member's read has watchers, so a guest gets no button the server would refuse.
+  if (!Array.isArray(item.watchers)) return rows;
+  const watchers = item.watchers;
+  if (!labId) {
+    if (watchers.length) rows.push(h('p', { class: 'muted' }, `Watching: ${watchers.length}`));
+    return rows;
+  }
+  let watching = Boolean(item.you_watch);
+  let count = watchers.length;
+  const note = h('p', { class: 'muted' });
+  const error = formError();
+  const button = h('button', { type: 'button', class: 'ghost' });
+  const show = () => {
+    note.replaceChildren(count ? `Watching: ${count}` : 'Nobody is watching this yet.');
+    button.replaceChildren(watching ? 'Stop watching' : 'Watch');
+    button.setAttribute('aria-pressed', String(watching));
+  };
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    error.hidden = true;
+    try {
+      const path = `/api/research-labs/${encodeURIComponent(labId)}/work/${encodeURIComponent(item.number)}/watch`;
+      await api(path, { method: watching ? 'DELETE' : 'PUT' });
+      count += watching ? -1 : 1;
+      watching = !watching;
+    } catch (failure) {
+      error.hidden = false;
+      error.textContent = failure.message;
+    } finally {
+      button.disabled = false;
+      show();
+    }
+  });
+  show();
+  rows.push(h('div', { class: 'event-actions' }, note, button), error);
+  return rows;
 }
 
 function researchParticipation(labId, bots) {
@@ -7556,6 +7619,8 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, crew: (bot) => bot?.configuration_room
+    ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
     const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
@@ -7848,6 +7913,12 @@ async function worldView(id, { home = false } = {}) {
     viewGroup.append(toolsToggle);
     showTools(shown);
   }
+  if (trust) {
+    trust.toggle.classList.add('wd-btn', 'wd-view-btn', 'trust-launcher');
+    trust.toggle.replaceChildren(h('span', { class: 'wd-glyph', 'aria-hidden': 'true' }, '✦'), h('span', { class: 'wd-btn-label' }, 'Trust'));
+    trust.toggle.title = 'Trust & bots';
+    viewGroup.append(trust.toggle);
+  }
   // The tools float over the map on a wide screen, and sit in a dock along the bottom on a narrow one.
   frame.root.insertBefore(h('div', { class: 'game-palette' }, frame.tools, viewGroup), well);
   const hig = installAppleHigMap({
@@ -7856,6 +7927,7 @@ async function worldView(id, { home = false } = {}) {
     choose: (t) => pick(t),
     movesCount: () => moves,
     viewGroup,
+    trust,
   });
 
   // --- Moves -----------------------------------------------------------------------------------

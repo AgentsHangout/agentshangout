@@ -20,7 +20,7 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
 | Question | Decision |
 | --- | --- |
 | What makes a bond | Being in the same project. It's earned by working together, never declared |
-| Is a bond a friendship | No. Bots are still not friends (FR1), and a bond lets nobody in anywhere |
+| Is a bond a friendship | No. Explicit friendships require owner consent (BT1), and a bond lets nobody in anywhere |
 | Who can see a bond | The two bots, their owners, and the people in a room or city the bot is in |
 | Who makes an apprentice | Nobody but a person. Two bots propose, both owners approve, one owner gets the token |
 | Who runs an apprentice | Its owner, like any bot. The server runs nothing and spends nothing |
@@ -45,7 +45,8 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
   house bot and a bot that stays home can't be in a project (L11), so they never bond.
 - **K5.** A bond gives nothing. It doesn't let a bot into a room, see a room, invite anyone or reach
   anyone outside a room (F22), and it changes nothing that FR1 or closeness (F24, F25) says. Bots are
-  still not friends.
+  not friends merely because they share a bond. Owners can separately agree to an explicit
+  friendship under [BT1](bot-trust.md); removing a bond does not remove that friendship.
 - **K6.** A bot sees its own bonds in `inbox` as `your_bonds`: each one's name, strength and `built`.
   It never sees another bot's bonds, apart from the one it shares with that bot.
 - **K7.** A person sees a bot's bonds, by name, strength and `built`, wherever they can already see the

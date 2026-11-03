@@ -973,8 +973,6 @@ lines",
     }
     let long = json!({ "room_id": office, "job": "x".repeat(201) });
     server.put(&bo.key, &path, long).await.refused(StatusCode::BAD_REQUEST);
-    let square_job = json!({ "room_id": square, "job": "Meeting people" });
-    server.put(&bo.key, &path, square_job).await.refused(StatusCode::BAD_REQUEST);
     server.put(&rover, &path, job.clone()).await.refused(StatusCode::FORBIDDEN);
     let cy = server.person("Cy").await;
     server.put(&cy.key, &path, job.clone()).await.refused(StatusCode::NOT_FOUND);
@@ -1322,4 +1320,65 @@ async fn god_mode_still_cant_lay_a_road_right_alongside_another() {
     let refused = server.act(&justin.key, road_move((x + 1, y + 1))).await;
     refused.refused(StatusCode::BAD_REQUEST);
     assert_eq!(server.tile((x + 1, y + 1)), None);
+}
+
+// L47, L48: a public floor it isn't part of can be its workplace too. It walks in there as a guest,
+// and stays at work there in its hours.
+#[tokio::test]
+async fn a_public_floor_can_be_a_workplace_and_the_bot_walks_in_there() {
+    let (server, justin, _) = Server::start().await;
+    let (_, square) = server.town_square(&justin).await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, _) = server.bot(&bo, &home, "Rover").await;
+    server.all_day(&bo, &rover_id, true).await;
+    let path = format!("/api/agents/{rover_id}/workplace");
+    assert!(!server.state.db.belongs_to_room(&square, &rover_id).unwrap());
+
+    // Its owner can pick a public floor from the choices, as well as its own rooms.
+    let routine = server.get(&bo.key, &format!("/api/agents/{rover_id}/routine")).await.ok();
+    let choices = routine["workplace_choices"].as_array().unwrap();
+    assert!(choices.iter().any(|c| c["id"] == square.as_str() && c["public"] == true), "{routine}");
+
+    let set = server.put(&bo.key, &path, json!({ "room_id": square, "job": "Greeting people" }));
+    let set = set.await.ok();
+    assert_eq!(set["workplace"]["room_id"], square.as_str(), "{set}");
+    // It walked in as a guest, not as a member.
+    assert_eq!(
+        server.state.db.bot_place(&rover_id, now()).unwrap().as_deref(),
+        Some(square.as_str())
+    );
+    assert!(!server.state.db.belongs_to_room(&square, &rover_id).unwrap());
+    assert!(server.state.db.bot_visits(&rover_id, now()).unwrap().contains(&square));
+
+    // Sent home, the next half hour walks it back to work there rather than anywhere else.
+    server.state.db.end_visit(&square, &rover_id).unwrap();
+    for slot in 1..=3 {
+        let at = now() + slot * agenthangout::routines::WANDER_SECS;
+        agenthangout::routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
+        assert!(
+            server.state.db.bot_visits(&rover_id, now()).unwrap().contains(&square),
+            "slot {slot}"
+        );
+        server.state.db.end_visit(&square, &rover_id).unwrap();
+    }
+
+    // A private room it isn't part of still can't be.
+    let office = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Office", "create_code": CODE }))
+        .await
+        .ok();
+    let office = text(&office["hangout"]["id"]);
+    let refused = json!({ "room_id": office, "job": "Building" });
+    server.put(&bo.key, &path, refused).await.refused(StatusCode::BAD_REQUEST);
+
+    // Turned out of the square's space, its owner can't make it a workplace, and the one set
+    // there stops counting, so the bot wanders as before rather than failing every minute.
+    let space = server.state.db.floor(&square).unwrap().unwrap().space_id;
+    server.state.db.turn_out(&space, &bo.id, &home, now()).unwrap();
+    let routine = server.get(&bo.key, &format!("/api/agents/{rover_id}/routine")).await.ok();
+    assert!(routine["workplace"].is_null(), "{routine}");
+    let again = json!({ "room_id": square, "job": "Greeting people" });
+    server.put(&bo.key, &path, again).await.refused(StatusCode::BAD_REQUEST);
+    let at = now() + agenthangout::routines::WANDER_SECS;
+    agenthangout::routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
 }

@@ -233,7 +233,22 @@ pub fn workplace_of(state: &AppState, agent_id: &str) -> ApiResult<Option<(Strin
     let Some((room, job)) = state.db.bot_workplace(agent_id)? else {
         return Ok(None);
     };
-    Ok(state.db.belongs_to_room(&room, agent_id)?.then_some((room, job)))
+    Ok(can_work_at(state, agent_id, &room)?.then_some((room, job)))
+}
+
+/// L47: a room this bot belongs to, or a public floor it can walk in on as a guest: one whose
+/// space hasn't turned its owner out, as `walk_bot_in` and `public_floors` require.
+fn can_work_at(state: &AppState, agent_id: &str, room: &str) -> ApiResult<bool> {
+    if state.db.belongs_to_room(room, agent_id)? {
+        return Ok(true);
+    }
+    let Some(floor) = state.db.floor(room)?.filter(|floor| floor.access == "public") else {
+        return Ok(false);
+    };
+    let Some(agent) = state.db.agent(agent_id, now())? else {
+        return Ok(false);
+    };
+    Ok(!state.db.is_turned_out(&floor.space_id, &agent.owner_id)?)
 }
 
 pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<Routine> {
@@ -285,6 +300,12 @@ async fn get_routine(
             choices.push(json!({ "id": room.id, "name": room.name }));
         }
     }
+    // L47: and the public floors it can walk in on, which its owner can see too.
+    for floor in state.db.public_floors(&agent.owner_id, now(), MAX_PLACES)? {
+        if !choices.iter().any(|choice| choice["id"] == floor.id) {
+            choices.push(json!({ "id": floor.id, "name": floor.name, "public": true }));
+        }
+    }
     view.workplace_choices = Some(choices);
     Ok(Json(view))
 }
@@ -314,15 +335,30 @@ async fn put_workplace(
             "job must be 1 to {JOB_CHARS} characters on one line"
         )));
     }
-    if !state.db.belongs_to_room(&body.room_id, &agent.id)? {
-        return Err(ApiError::bad_request("a workplace must be a room this bot belongs to"));
+    if !can_work_at(&state, &agent.id, &body.room_id)? {
+        return Err(ApiError::bad_request(
+            "a workplace must be a room this bot belongs to, or a public floor",
+        ));
     }
     crate::spaces::require_public_conversations(&state, &agent.id, &body.room_id)?;
     let now = now();
     state.db.set_bot_workplace(&agent.id, Some((&body.room_id, job)), now)?;
     if state.db.bot_place(&agent.id, now)?.as_deref() != Some(body.room_id.as_str()) {
-        crate::spaces::place_bot(&state, &agent.id, &body.room_id)?;
-        crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
+        if state.db.belongs_to_room(&body.room_id, &agent.id)? {
+            crate::spaces::place_bot(&state, &agent.id, &body.room_id)?;
+            crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
+        // A public floor it isn't part of: it walks in as a guest (L7), and the half hours keep
+        // it there (L45, L48). A full floor takes it at the next half hour instead.
+        } else if walk_bot_in(
+            &state,
+            &agent.id,
+            &agent.owner_id,
+            &body.room_id,
+            now + WALK_IN_SECS,
+        )? == WalkedIn::In
+        {
+            crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
+        }
     }
     Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
 }
@@ -1033,7 +1069,9 @@ fn pick(
     // L48: a bot with a workplace works there in every half hour, and doesn't wander off to meet
     // or explore.
     if let Some((room, _)) = workplace_of(state, agent_id)? {
-        return Ok(Some((room, true)));
+        // On a public floor it isn't part of, it walks in rather than being put there as a member.
+        let member = state.db.belongs_to_room(&room, agent_id)?;
+        return Ok(Some((room, member)));
     }
     let slot = now.div_euclid(WANDER_SECS);
     let open = state.db.public_floors(owner_id, now, MAX_PLACES)?;

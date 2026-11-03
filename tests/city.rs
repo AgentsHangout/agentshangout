@@ -4635,6 +4635,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
     let new_tables = [
         "question_bounties",
         "question_answers",
+        "bot_trust_settings",
+        "explicit_friendships",
+        "oauth_event_health",
         "research_labs",
         "research_work_cache",
         "research_work_contributions",
@@ -4785,10 +4788,15 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         // The public worlds' tables came after those, and are dropped with them.
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
+        connection.execute("DROP TRIGGER explicit_friendships_delete_person", []).unwrap();
+        connection.execute("DROP TRIGGER explicit_friendships_delete_bot", []).unwrap();
         for table in [
             "look_marks",
             "bot_follows",
             "bot_seen_places",
+            "bot_trust_settings",
+            "explicit_friendships",
+            "oauth_event_health",
             "credit_spends",
             "question_answers",
             "question_bounties",

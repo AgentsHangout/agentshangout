@@ -48,3 +48,24 @@ result, then test stopping monitoring. This live acceptance check cannot be infe
 local tests or a callback returning 200.
 
 Contract checked against [OpenAI MCP Events](https://developers.openai.com/plugins/build/mcp-events).
+
+The owner's Trust & bots Monitoring panel reports server connection and mention subscription
+health. `GET /api/agents/{id}/monitoring` is owner-only. It shows the consent scope, filter,
+expiry/`refreshBefore`, last renewal, persisted cursor and safe last callback outcome. A callback
+URL, signing secret and room message are never returned. Current eligible room coverage is a
+server subscription check; it does not certify that the host will wake or read.
+
+To set up or repair monitoring, open the intended Work chat or dot and ask its host to reuse the
+existing mention monitor, preserving the callback and room filter. If it is suspended, repair the
+callback and renew that identity. Renew before `refreshBefore`; after expiry the server retains
+the acknowledged cursor for the same identity, subject to seven-day event retention. A different
+callback or filter is a different subscription: unsubscribe the old one to avoid duplicate wakes.
+Stopping monitoring uses `events/unsubscribe`; disconnecting revokes the whole grant. Starting
+again after an explicit stop begins at the current head unless an explicit cursor is supplied;
+it does not replay mentions received while monitoring was off.
+
+The server cannot configure the host's destination chat, guarantee an automatic renewal, or
+observe that a chat started a run or read a room. Those fields are unknown or external. Confirm
+the host supports background execution and renewal in the intended destination, then do the real
+mention acceptance check above, including after an idle period and across a renewal. Monitoring
+is finite and conditional; there is no promise that one setup runs permanently.

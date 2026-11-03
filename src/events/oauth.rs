@@ -10,6 +10,17 @@ use tokio::sync::{OwnedMutexGuard, Semaphore};
 
 const MAX_OUTBOUND: usize = 8;
 
+pub fn monitoring(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Value> {
+    if caller.agent_id.is_some() {
+        return Err(ApiError::forbidden("only the bot's person can inspect monitoring"));
+    }
+    let agent = state.db.agent(id, now())?.ok_or_else(ApiError::not_found)?;
+    if agent.owner_id != caller.person_id {
+        return Err(ApiError::not_found());
+    }
+    Ok(state.db.oauth_monitoring(&caller.person_id, id, now())?)
+}
+
 /// Identity locks live only while an operation holds or waits for them. The registry mutex is
 /// never held across an await; a callback can block only its own subscription identity.
 pub(crate) struct Runtime {
@@ -180,7 +191,9 @@ pub(crate) async fn subscribe(
     let (g, _, _, _) = identity(state, caller, params)?;
     check_limit(state, &g.id, &id)?;
     let head = state.db.bot_event_head(&g.agent_id).map_err(internal)?;
-    let cursor = existing.map(|s| s.cursor).unwrap_or(requested_cursor.unwrap_or(head));
+    let retained = state.db.oauth_health_cursor(&id).map_err(internal)?;
+    let cursor =
+        existing.map(|s| s.cursor).or(retained).unwrap_or(requested_cursor.unwrap_or(head));
     let changed = existing.filter(|s| s.secret != secret);
     let sub = OAuthSubscription {
         id: id.clone(),
@@ -212,10 +225,12 @@ pub(crate) async fn unsubscribe(
     params: &Value,
 ) -> Result<Value, Fail> {
     count_write(state, caller)?;
-    let (g, id, _, _) = identity(state, caller, params)?;
+    let (_g, id, _, _) = identity(state, caller, params)?;
     let _guard = state.oauth_events.subscription(&id).await;
     live(state, caller)?;
-    state.db.oauth_delete_subscription(&id, &g.id).map_err(internal)?;
+    if let Some(sub) = state.db.oauth_subscription(&id).map_err(internal)? {
+        state.db.oauth_retire_subscription(&sub, "stopped").map_err(internal)?;
+    }
     Ok(json!({}))
 }
 
@@ -233,6 +248,32 @@ fn permitted(state: &AppState, sub: &OAuthSubscription) -> Option<crate::oauth::
         }
     }
     Some(g)
+}
+
+fn wake_permitted(state: &AppState, agent: &str, row: &BotEventRow) -> bool {
+    if state.db.doorbell_paused(agent).unwrap_or(true) {
+        return false;
+    }
+    let data: Value = serde_json::from_str(&row.data).unwrap_or_default();
+    let Some(id) = data["message_id"].as_i64() else {
+        // Legacy rows cannot establish that the sender is the owner.
+        return !state.db.wakes_only_for_owner(agent).unwrap_or(true)
+            && state.db.bot_trust(agent).is_ok_and(|p| p.wake.mode == "participants");
+    };
+    let Some(message) = state.db.trust_message(id).ok().flatten() else {
+        return false;
+    };
+    let Some(bot) = state.db.agent(agent, now()).ok().flatten() else {
+        return false;
+    };
+    let owner = message.agent_id.is_none() && message.person_id.as_deref() == Some(&bot.owner_id);
+    if owner {
+        return true;
+    }
+    if state.db.wakes_only_for_owner(agent).unwrap_or(true) {
+        return false;
+    }
+    crate::bot_trust::may_wake(state, &bot, &message).unwrap_or(false)
 }
 
 /// One bounded pass. Each identity is reloaded under its own lock; overlapping passes skip
@@ -256,7 +297,20 @@ pub async fn deliver(state: &AppState) -> Result<(), rusqlite::Error> {
 
 async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(), rusqlite::Error> {
     if sub.expires_at <= now() || permitted(state, &sub).is_none() {
-        state.db.oauth_delete_subscription(&sub.id, &sub.grant_id)?;
+        let reason = if sub.expires_at <= now() {
+            "expired"
+        } else if let Some(g) = state.db.oauth_live_grant(&sub.grant_id, now())? {
+            if crate::oauth::webhook_scope(&g.scope)
+                && g.resource == format!("{}/mcp", state.config.public_url)
+            {
+                "room_access_lost"
+            } else {
+                "authorization_lost"
+            }
+        } else {
+            "revoked"
+        };
+        state.db.oauth_retire_subscription(&sub, reason)?;
         return Ok(());
     }
     if !sub.active || sub.next_attempt > now() {
@@ -284,6 +338,13 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
         state.db.oauth_subscription_progress(&sub)?;
         return Ok(());
     }
+    if !wake_permitted(state, &g.agent_id, row) {
+        sub.cursor = row.id;
+        sub.attempts = 0;
+        state.db.oauth_subscription_progress(&sub)?;
+        state.db.oauth_record_outcome(&sub, "wake_not_allowed", None)?;
+        return Ok(());
+    }
     let mut event = occurrence(row);
     // Host-facing events carry application data, never embedded behavioral instructions.
     if let Some(data) = event["data"].as_object_mut() {
@@ -294,6 +355,7 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
     if body.len() > 262_144 {
         sub.active = false;
         state.db.oauth_subscription_progress(&sub)?;
+        state.db.oauth_record_outcome(&sub, "payload_too_large", None)?;
         return Ok(());
     }
     let Ok(_permit) = state.oauth_events.outbound.acquire().await else {
@@ -311,7 +373,10 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
         &body,
     );
     // Recheck immediately before every attempt, including a retry after restart.
-    if permitted(state, &sub).is_none() || !visible(state, &g.agent_id, row)? {
+    if permitted(state, &sub).is_none()
+        || !visible(state, &g.agent_id, row)?
+        || !wake_permitted(state, &g.agent_id, row)
+    {
         return Ok(());
     }
     let posted = notify::post_body_checked(
@@ -328,6 +393,7 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
             sub.expires_at > now()
                 && permitted(state, &sub).is_some()
                 && visible(state, &g.agent_id, row).unwrap_or(false)
+                && wake_permitted(state, &g.agent_id, row)
         },
     )
     .await;
@@ -341,6 +407,17 @@ async fn deliver_one(state: &AppState, mut sub: OAuthSubscription) -> Result<(),
         sub.next_attempt = now() + if sub.attempts == 1 { 2 } else { 10 };
     }
     state.db.oauth_subscription_progress(&sub)?;
+    state.db.oauth_record_outcome(
+        &sub,
+        if posted.accepted() {
+            "http_accepted"
+        } else if !sub.active {
+            "callback_suspended"
+        } else {
+            "callback_failed"
+        },
+        posted.status,
+    )?;
     Ok(())
 }
 
@@ -433,6 +510,23 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn missing_origin_cannot_bypass_restrictive_wake_policy() {
+        let (state, _, _) = queued_subscription();
+        let row = state
+            .db
+            .list_bot_events("bot", 0, Some("mention"), None, 0, false, 1)
+            .unwrap()
+            .remove(0);
+        assert!(wake_permitted(&state, "bot", &row));
+        for mode in ["owner", "friends", "selected"] {
+            let mut trust = state.db.bot_trust("bot").unwrap();
+            trust.wake.mode = mode.into();
+            state.db.save_bot_trust("bot", &trust).unwrap();
+            assert!(!wake_permitted(&state, "bot", &row), "{mode}");
+        }
     }
 
     #[tokio::test]

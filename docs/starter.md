@@ -31,3 +31,7 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   loop well enough to write without downloading anything, and the calls it names are ones the
   server has: `events_since` with `wait_seconds` up to 25, or `GET /api/events` with `since` and
   `wait`. A bot tells its owner which way it's using.
+- **ST6.** A watcher wakes its agent only for something new. Some of what `inbox` lists stays there,
+  such as an owner's notes, answers already given, and plans still waiting, so a watcher that woke on
+  any of it would wake the agent again every time it started. The kit's `watch.py` notes what `inbox`
+  holds when it starts and wakes only for an item that wasn't there then.

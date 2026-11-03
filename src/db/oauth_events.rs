@@ -40,6 +40,143 @@ fn subscription(row: &Row<'_>) -> rusqlite::Result<OAuthSubscription> {
 }
 
 impl Db {
+    fn oauth_seed_health(&self, s: &OAuthSubscription) -> rusqlite::Result<()> {
+        let args: serde_json::Value = serde_json::from_str(&s.arguments).unwrap_or_default();
+        self.conn().execute("INSERT OR IGNORE INTO oauth_event_health(subscription_id,grant_id,owner_id,agent_id,client_name,scope,grant_expires_at,hangout_id,expires_at,last_renewed_at,cursor,state) SELECT ?1,g.id,g.owner_id,g.agent_id,c.name,g.scope,g.expires_at,?2,?3,0,?4,?5 FROM mcp_oauth_grants g JOIN mcp_oauth_clients c ON c.id=g.client_id WHERE g.id=?6",params![s.id,args["hangout_id"].as_str(),s.expires_at,s.cursor,if s.active{"active"}else{"suspended"},s.grant_id])?;
+        Ok(())
+    }
+    pub(crate) fn oauth_health_cursor(&self, id: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row("SELECT cursor FROM oauth_event_health WHERE subscription_id=? AND state!='stopped'", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+    }
+
+    pub(crate) fn oauth_record_outcome(
+        &self,
+        s: &OAuthSubscription,
+        reason: &str,
+        status: Option<u16>,
+    ) -> rusqlite::Result<()> {
+        self.oauth_seed_health(s)?;
+        self.conn().execute("UPDATE oauth_event_health SET cursor=?2,state=?3,last_reason=?4,last_at=?5,http_status=?6 WHERE subscription_id=?1",params![s.id,s.cursor,if s.active {"active"}else{"suspended"},reason,crate::now(),status])?;
+        Ok(())
+    }
+
+    pub(crate) fn oauth_retire_subscription(
+        &self,
+        s: &OAuthSubscription,
+        reason: &str,
+    ) -> rusqlite::Result<()> {
+        self.oauth_seed_health(s)?;
+        self.conn().execute(
+            "UPDATE oauth_event_health SET cursor=?2,state=?3 WHERE subscription_id=?1",
+            params![s.id, s.cursor, reason],
+        )?;
+        self.oauth_delete_subscription(&s.id, &s.grant_id)
+    }
+
+    pub(crate) fn oauth_monitoring(
+        &self,
+        owner: &str,
+        agent: &str,
+        at: i64,
+    ) -> rusqlite::Result<serde_json::Value> {
+        use serde_json::{json, Value};
+        let mut connections: Vec<Value>;
+        {
+            let conn = self.conn();
+            // Existing subscriptions have no recorded renewal time; report it as unknown.
+            conn.execute("INSERT OR IGNORE INTO oauth_event_health(subscription_id,grant_id,owner_id,agent_id,client_name,scope,grant_expires_at,hangout_id,expires_at,last_renewed_at,cursor,state) SELECT s.id,g.id,g.owner_id,g.agent_id,c.name,g.scope,g.expires_at,json_extract(s.arguments,'$.hangout_id'),s.expires_at,0,s.cursor,CASE WHEN s.active=1 THEN 'active' ELSE 'suspended' END FROM oauth_event_subscriptions s JOIN mcp_oauth_grants g ON g.id=s.grant_id JOIN mcp_oauth_clients c ON c.id=g.client_id WHERE g.owner_id=?1 AND g.agent_id=?2",params![owner,agent])?;
+            let mut stmt=conn.prepare("SELECT g.id,c.name,g.scope,g.expires_at,g.revoked FROM mcp_oauth_grants g JOIN mcp_oauth_clients c ON c.id=g.client_id WHERE g.owner_id=?1 AND g.agent_id=?2 ORDER BY g.created_at DESC")?;
+            connections=stmt.query_map(params![owner,agent],|r|Ok(json!({"id":r.get::<_,String>(0)?,"client_name":r.get::<_,String>(1)?,"scope":r.get::<_,String>(2)?,"expires_at":crate::ops::iso(r.get(3)?),"status":if r.get::<_,bool>(4)? {"revoked"}else if r.get::<_,i64>(3)?<=at {"expired"}else{"active"},"subscriptions":[]})))?.collect::<Result<_,_>>()?;
+            let mut stmt=conn.prepare("SELECT h.subscription_id,h.grant_id,h.client_name,h.scope,h.grant_expires_at,h.hangout_id,h.expires_at,h.last_renewed_at,COALESCE(s.cursor,h.cursor),h.state,h.last_reason,h.last_at,h.http_status,s.active FROM oauth_event_health h LEFT JOIN oauth_event_subscriptions s ON s.id=h.subscription_id WHERE h.owner_id=?1 AND h.agent_id=?2 ORDER BY h.last_renewed_at DESC")?;
+            let rows=stmt.query_map(params![owner,agent],|r| {
+                let expires:i64=r.get(6)?;
+                let renewed:i64=r.get(7)?;
+                let state:String=r.get(9)?;
+                let active:Option<bool>=r.get(13)?;
+                let reason:Option<String>=r.get(10)?;
+                let last_at:Option<i64>=r.get(11)?;
+                let status:Option<u16>=r.get(12)?;
+                Ok((r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,json!({"id":r.get::<_,String>(0)?,"hangout_id":r.get::<_,Option<String>>(5)?,"expires_at":crate::ops::iso(expires),"refreshBefore":crate::ops::iso(expires),"last_renewed_at":(renewed>0).then(||crate::ops::iso(renewed)),"cursor":r.get::<_,i64>(8)?.to_string(),"status":if expires<=at {"expired"}else if active==Some(false) {"suspended"}else{&state},"last_delivery":reason.map(|reason|json!({"reason":reason,"at":last_at.map(crate::ops::iso),"http_status":status}))})))
+            })?.collect::<Result<Vec<_>,_>>()?;
+            for (grant, client, scope, expires, mut sub) in rows {
+                if !connections.iter().any(|g| g["id"] == grant) {
+                    connections.push(json!({"id":grant,"client_name":client,"scope":scope,"expires_at":crate::ops::iso(expires),"status":if expires<=at {"expired"}else{"revoked"},"subscriptions":[]}));
+                }
+                let g = connections.iter_mut().find(|g| g["id"] == grant).unwrap();
+                if g["status"] != "active" {
+                    sub["status"] = g["status"].clone();
+                }
+                g["subscriptions"].as_array_mut().unwrap().push(sub);
+            }
+        }
+        for g in &mut connections {
+            for s in g["subscriptions"].as_array_mut().unwrap() {
+                if s["status"] == "active" {
+                    if let Some(room) = s["hangout_id"].as_str() {
+                        if !self.agent_in_room(room, agent, at)? {
+                            s["status"] = json!("room_access_lost");
+                        }
+                    }
+                }
+            }
+        }
+        // E41: only rooms the owner may see are named; the rest are only counted.
+        let (mut eligible, mut unseen) = (Vec::new(), 0);
+        for room in self.hangouts_for_agent(agent, at)? {
+            if !self.owner_sees_room(owner, &room.id)? {
+                unseen += 1;
+                continue;
+            }
+            let covered = connections.iter().any(|g| {
+                g["subscriptions"].as_array().unwrap().iter().any(|s| {
+                    s["status"] == "active"
+                        && (s["hangout_id"].is_null() || s["hangout_id"] == room.id)
+                })
+            });
+            eligible.push(json!({"id":room.id,"name":room.name,"covered":covered}));
+        }
+        let latest:Option<(i64,i64,Option<String>)>=self.conn().query_row(
+            "SELECT e.id,e.created_at,e.hangout_id FROM bot_events e JOIN agents a ON a.id=e.agent_id WHERE e.agent_id=?1 AND a.owner_id=?2 AND e.name='mention' AND e.created_at>=?3 ORDER BY e.id DESC LIMIT 1",
+            params![agent,owner,at-7*86400],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+        ).optional()?;
+        let latest_mention = if let Some((id, recorded, room)) = latest {
+            let room = match room {
+                Some(room)
+                    if self.agent_in_room(&room, agent, at)?
+                        && self.owner_sees_room(owner, &room)? =>
+                {
+                    Some(room)
+                }
+                _ => None,
+            };
+            Some(
+                json!({"event_id":format!("evt_{id}"),"recorded_at":crate::ops::iso(recorded),"hangout_id":room}),
+            )
+        } else {
+            None
+        };
+        Ok(
+            json!({"agent_id":agent,"latest_mention":latest_mention,"connections":connections,"eligible_rooms":eligible,"other_rooms":unseen,"wake_paused":self.doorbell_paused(agent)?,"wake_only_owner":self.wakes_only_for_owner(agent)?,"coverage_note":"Active subscription coverage; each sender must also pass current wake permissions.","host":{"destination_chat":"unknown","run_started":"unknown","room_read":"unknown","renewal_automation":"external"},"setup_url":"/oauth/connections"}),
+        )
+    }
+    /// E41: a room the owner may name in their bot's diagnostics: one they belong to, or a public
+    /// floor anyone can see.
+    fn owner_sees_room(&self, owner: &str, room: &str) -> rusqlite::Result<bool> {
+        Ok(self.is_member(room, owner)?
+            || self
+                .conn()
+                .query_row(
+                    "SELECT 1 FROM floors WHERE hangout_id = ? AND access = 'public'",
+                    [room],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+    }
     pub(crate) fn oauth_subscription(
         &self,
         id: &str,
@@ -90,6 +227,8 @@ impl Db {
 
     pub(crate) fn oauth_save_subscription(&self, s: &OAuthSubscription) -> rusqlite::Result<()> {
         self.conn().execute("INSERT INTO oauth_event_subscriptions(id,grant_id,arguments,url,secret,previous_secret,previous_until,expires_at,verified_at,cursor,active,attempts,next_attempt) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(id) DO UPDATE SET secret=excluded.secret,previous_secret=excluded.previous_secret,previous_until=excluded.previous_until,expires_at=excluded.expires_at,verified_at=excluded.verified_at,active=1,attempts=0,next_attempt=0", params![s.id,s.grant_id,s.arguments,s.url,s.secret,s.previous_secret,s.previous_until,s.expires_at,s.verified_at,s.cursor,s.active,s.attempts,s.next_attempt])?;
+        let args: serde_json::Value = serde_json::from_str(&s.arguments).unwrap_or_default();
+        self.conn().execute("INSERT INTO oauth_event_health(subscription_id,grant_id,owner_id,agent_id,client_name,scope,grant_expires_at,hangout_id,expires_at,last_renewed_at,cursor,state) SELECT ?1,g.id,g.owner_id,g.agent_id,c.name,g.scope,g.expires_at,?2,?3,?4,?5,'active' FROM mcp_oauth_grants g JOIN mcp_oauth_clients c ON c.id=g.client_id WHERE g.id=?6 ON CONFLICT(subscription_id) DO UPDATE SET expires_at=excluded.expires_at,last_renewed_at=excluded.last_renewed_at,state='active'",params![s.id,args["hangout_id"].as_str(),s.expires_at,crate::now(),s.cursor,s.grant_id])?;
         Ok(())
     }
 
@@ -106,6 +245,10 @@ impl Db {
         s: &OAuthSubscription,
     ) -> rusqlite::Result<()> {
         self.conn().execute("UPDATE oauth_event_subscriptions SET cursor=?2,active=?3,attempts=?4,next_attempt=?5 WHERE id=?1", params![s.id,s.cursor,s.active,s.attempts,s.next_attempt])?;
+        self.conn().execute(
+            "UPDATE oauth_event_health SET cursor=?2,state=?3 WHERE subscription_id=?1",
+            params![s.id, s.cursor, if s.active { "active" } else { "suspended" }],
+        )?;
         Ok(())
     }
 }
@@ -178,6 +321,108 @@ mod tests {
     }
 
     #[test]
+    fn monitoring_reports_only_safe_retained_mention_source_metadata() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let at = now();
+        assert!(state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"].is_null());
+        state
+            .db
+            .create_hangout("private-source", "Private source", "private-invite", "other", at)
+            .unwrap();
+        let id = state
+            .db
+            .insert_bot_event(
+                "bot",
+                "mention",
+                Some("private-source"),
+                "source",
+                r#"{"body":"DO NOT EXPOSE"}"#,
+                at - 5,
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        let value = state.db.oauth_monitoring("owner", "bot", at).unwrap();
+        assert_eq!(value["latest_mention"]["event_id"], format!("evt_{id}"));
+        assert_eq!(value["latest_mention"]["recorded_at"], crate::ops::iso(at - 5));
+        assert!(value["latest_mention"]["hangout_id"].is_null());
+        assert!(!value.to_string().contains("DO NOT EXPOSE"));
+        assert!(!value.to_string().contains("private-source"));
+        state.db.add_agent_to_room("private-source", "bot").unwrap();
+        // E41: someone else's private room stays unnamed until the owner belongs to it too.
+        assert!(state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"]
+            ["hangout_id"]
+            .is_null());
+        state.db.add_member("private-source", "owner", at).unwrap();
+        assert_eq!(
+            state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"]["hangout_id"],
+            "private-source"
+        );
+        state.db.remove_agent_from_room("private-source", "bot").unwrap();
+        assert!(state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"]
+            ["hangout_id"]
+            .is_null());
+        assert!(state.db.oauth_monitoring("other", "bot", at).unwrap()["latest_mention"].is_null());
+        assert!(state.db.oauth_monitoring("owner", "bot", at + 7 * 86400).unwrap()
+            ["latest_mention"]
+            .is_null());
+    }
+
+    #[test]
+    fn monitoring_is_safe_and_expiry_retains_the_acknowledged_cursor() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let mut sub = state.db.oauth_subscription("sub").unwrap().unwrap();
+        sub.cursor = 42;
+        state.db.oauth_record_outcome(&sub, "http_accepted", Some(200)).unwrap();
+        state.db.oauth_retire_subscription(&sub, "expired").unwrap();
+        assert!(state.db.oauth_subscription("sub").unwrap().is_none());
+        assert_eq!(state.db.oauth_health_cursor("sub").unwrap(), Some(42));
+        let value = state.db.oauth_monitoring("owner", "bot", now()).unwrap();
+        assert_eq!(value["connections"][0]["subscriptions"][0]["status"], "expired");
+        assert_eq!(value["connections"][0]["subscriptions"][0]["cursor"], "42");
+        assert_eq!(
+            value["connections"][0]["subscriptions"][0]["last_delivery"]["reason"],
+            "http_accepted"
+        );
+        assert_eq!(value["host"]["run_started"], "unknown");
+        assert!(!value.to_string().contains("callback.example"));
+        assert!(!value.to_string().contains("whsec_"));
+        assert!(state.db.oauth_monitoring("other", "bot", now()).unwrap()["connections"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let caller = crate::auth::Caller {
+            person_id: "owner".into(),
+            agent_id: None,
+            name: "Owner".into(),
+            secret_hash: "key".into(),
+            is_house: false,
+        };
+        assert!(crate::events::oauth::monitoring(&state, &caller, "bot").is_ok());
+        let mut stranger = caller.clone();
+        stranger.person_id = "other".into();
+        assert_eq!(
+            crate::events::oauth::monitoring(&state, &stranger, "bot").unwrap_err().status,
+            axum::http::StatusCode::NOT_FOUND
+        );
+        let mut bot = caller;
+        bot.agent_id = Some("bot".into());
+        assert_eq!(
+            crate::events::oauth::monitoring(&state, &bot, "bot").unwrap_err().status,
+            axum::http::StatusCode::FORBIDDEN
+        );
+        state.db.create_hangout("private", "Secret room", "invite", "other", now()).unwrap();
+        assert!(!state
+            .db
+            .oauth_monitoring("owner", "bot", now())
+            .unwrap()
+            .to_string()
+            .contains("Secret room"));
+        state.db.conn().execute("DELETE FROM agents WHERE id='bot'", []).unwrap();
+        assert_eq!(state.db.oauth_health_cursor("sub").unwrap(), None);
+    }
+
+    #[test]
     fn restart_keeps_identity_cursor_retry_and_signing_rotation_and_renewal_cannot_skip() {
         let path = std::env::temp_dir().join(format!("oauth-events-{}.db", crate::auth::new_id()));
         let config;
@@ -193,6 +438,8 @@ mod tests {
             sub.cursor = 42;
             sub.attempts = 2;
             state.db.oauth_subscription_progress(&sub).unwrap();
+            // Simulate a database from before safe monitoring snapshots existed.
+            state.db.conn().execute("DELETE FROM oauth_event_health", []).unwrap();
         }
         {
             let state = AppState::new(Db::open(path.to_str().unwrap()).unwrap(), config);
@@ -200,6 +447,9 @@ mod tests {
             assert_eq!(sub.id, "sub");
             assert_eq!(sub.grant_id, "grant");
             assert_eq!(sub.cursor, 42);
+            assert_eq!(state.db.oauth_health_cursor("sub").unwrap(), Some(42));
+            let health = state.db.oauth_monitoring("owner", "bot", now()).unwrap();
+            assert!(health["connections"][0]["subscriptions"][0]["last_renewed_at"].is_null());
             assert_eq!(sub.attempts, 2);
             assert_eq!(sub.previous_secret.as_deref(), Some("old-key"));
             assert!(sub.next_attempt > now());
@@ -285,11 +535,45 @@ mod tests {
             assert_eq!(attempts.lock().unwrap().len(), expected);
         }
         crate::events::oauth::deliver(&state).await.unwrap();
-        let delivered = attempts.lock().unwrap();
-        assert_eq!(delivered.len(), 3);
-        assert!(delivered.iter().all(|e| e["eventId"] == format!("evt_{event_id}")));
+        {
+            let delivered = attempts.lock().unwrap();
+            assert_eq!(delivered.len(), 3);
+            assert!(delivered.iter().all(|e| e["eventId"] == format!("evt_{event_id}")));
+        }
         let sub = state.db.oauth_subscriptions().unwrap().into_iter().find(|s| s.id == id).unwrap();
         assert!(!sub.active);
         assert_eq!(sub.cursor, 0);
+        let health = state.db.oauth_monitoring("owner", "bot", now()).unwrap();
+        let monitored = health["connections"][0]["subscriptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap();
+        assert_eq!(monitored["status"], "suspended");
+        assert_eq!(monitored["last_delivery"]["http_status"], 503);
+        state
+            .db
+            .conn()
+            .execute("UPDATE oauth_event_subscriptions SET expires_at=0 WHERE id=?", [id])
+            .unwrap();
+        crate::events::oauth::deliver(&state).await.unwrap();
+        let renewed = crate::events::oauth::subscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(renewed["id"], result["id"]);
+        assert_eq!(renewed["cursor"], "0");
+        crate::events::oauth::unsubscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(state.db.oauth_health_cursor(id).unwrap(), None);
+        let restarted = crate::events::oauth::subscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(restarted["id"], result["id"]);
+        assert_eq!(restarted["cursor"], event_id.to_string());
+        state.db.oauth_revoke(&g.id, "owner").unwrap();
+        let health = state.db.oauth_monitoring("owner", "bot", now()).unwrap();
+        let monitored = health["connections"][0]["subscriptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap();
+        assert_eq!(monitored["status"], "revoked");
     }
 }

@@ -285,6 +285,19 @@ person or a bot. A person's row is never written.
 
 ## Routes
 
+- **E41.** Only a bot's person may inspect its monitoring connections. Diagnostics contain scopes,
+  room coverage, finite expiry, renewal time, cursor and safe delivery outcomes, never callback URLs,
+  signing keys or room messages. HTTP acceptance does not prove a host started or read the room;
+  destination chat and host automation remain unknown or external. Room coverage names only rooms
+  the person belongs to or public floors; any other room the bot is in, such as a private room
+  another person brought it into, is only counted in `other_rooms`.
+  The latest retained recorded mention exposes only its stable event id and recording time;
+  its room id is included only while the bot still has access and the person may see that room.
+  When no mention is retained, this signal is null.
+- **E42.** Expiring a subscription stops delivery but retains its safe identity and acknowledged
+  cursor. Renewing the same grant, callback and filter resumes that cursor, including after restart;
+  renewal never broadens consent or room access. Removed room access and revoked grants stop delivery.
+
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
 | `GET /api/events?since=&wait=&hangout_id=` | | The `events_since` page | The bot |

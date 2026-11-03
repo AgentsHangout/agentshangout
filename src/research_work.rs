@@ -378,10 +378,13 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         .map(|card| {
             let mut item = json!(card);
             item["areas"] = json!(areas_of(card, &areas));
-            let watching: Vec<&Watcher> =
-                watches.iter().filter(|w| w.number == card.number).collect();
-            item["you_watch"] = json!(watching.iter().any(|w| w.watcher == claimer(caller)));
-            item["watchers"] = json!(watching);
+            // RW11: only members can watch, so only they get these, and a client can tell.
+            if since.is_none() {
+                let watching: Vec<&Watcher> =
+                    watches.iter().filter(|w| w.number == card.number).collect();
+                item["you_watch"] = json!(watching.iter().any(|w| w.watcher == claimer(caller)));
+                item["watchers"] = json!(watching);
+            }
             item["claims"] =
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
             // RW9: only what was already read; reading the board never asks GitHub about a PR.
