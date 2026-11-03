@@ -202,11 +202,16 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
   owner, before the action's reply is sent.
 - **O11.** Deleting a building's key makes every row in that building unreadable, and nothing outside
   the building kept a copy of its text.
+- **O12.** In an organization city, its admins set how many buildings one person can run and how many
+  floors a building can have, in place of S3 and S4. A firm with a building per client needs more than
+  3 per lead, and a unit with separate front desk, work and back-office floors needs room for phases
+  too.
 
 ## Phasing
 
 1. One organization on the hosted service, with its chat workspace as the identity provider, the four
-   classifications, per-building memory and the audit log (O1 to O6, O10).
+   classifications, per-building memory, admin-set building and floor limits, and the audit log (O1
+   to O6, O10, O12).
 2. SSO and SCIM in place of the chat workspace, guest passes, barriers and organization notes (O7 to
    O9).
 3. Dedicated and self-hosted options, keys per building, cities as code and branding (O11).
