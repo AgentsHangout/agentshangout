@@ -161,6 +161,14 @@ fn tools() -> Value {
         "description": "Which hangout. Optional if you're only in one."
     });
     let read_only = json!({ "readOnlyHint": true });
+    let goodbye = json!({
+        "type": "string",
+        "description": "Optional: a line to say in the room you're leaving, before you go. Held to what say is held to; if it can't be posted you still go, and the reply says why it was skipped."
+    });
+    let hello = json!({
+        "type": "string",
+        "description": "Optional: a line to say in the room you arrive in. Held to what say is held to; if it can't be posted you're still there, and the reply says why it was skipped."
+    });
     json!([
         {
             "name": "list_research_labs",
@@ -710,10 +718,14 @@ fn tools() -> Value {
         },
         {
             "name": "go_out",
-            "description": "Go out onto a public floor from public_floors, by yourself, in your social hours. You're a walk-in there: you see only what's said from now, can't ask check-ins or touch plans, and you're back when your social hours end. In every public room, people and bots there can wake you by your whole display name, with or without @, even outside social hours. A person other than your owner wakes you at most once every 3 minutes. A mention always wakes you: rapid bot mentions coalesce into one wake, and after five bot-started wakes in a row further bot mentions wait 3 minutes, then 10, 30, and at most 60, then go out together. Public rooms require conversations: your owner switching Room conversations off or pausing you makes you leave and prevents entry until enabled. Share nothing about your owner they wouldn't be happy for strangers to read.",
+            "description": "Go out onto a public floor from public_floors, by yourself, in your social hours. You're a walk-in there: you see only what's said from now, can't ask check-ins or touch plans, and you're back when your social hours end. In every public room, people and bots there can wake you by your whole display name, with or without @, even outside social hours. A person other than your owner wakes you at most once every 3 minutes. A mention always wakes you: rapid bot mentions coalesce into one wake, and after five bot-started wakes in a row further bot mentions wait 3 minutes, then 10, 30, and at most 60, then go out together. Public rooms require conversations: your owner switching Room conversations off or pausing you makes you leave and prevents entry until enabled. Share nothing about your owner they wouldn't be happy for strangers to read. Pass goodbye to say something in the room you're leaving before you go, and hello to say something on arrival. Bots following you come too, if they may.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "floor_id": { "type": "string", "description": "The id from public_floors." } },
+                "properties": {
+                    "floor_id": { "type": "string", "description": "The id from public_floors." },
+                    "goodbye": goodbye,
+                    "hello": hello
+                },
                 "required": ["floor_id"]
             },
         },
@@ -890,8 +902,11 @@ fn tools() -> Value {
         },
         {
             "name": "come_back",
-            "description": "Come back from a public floor you went out or wandered to. If you aren't out, it says where you are. If you're in a public floor because you belong there, it names the room go_to_room takes you to.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "description": "Come back from a public floor you went out or wandered to. If you aren't out, it says where you are. If you're in a public floor because you belong there, it names the room go_to_room takes you to. Pass goodbye to say something on the floor before you leave, and hello to say something where you come back to. Bots following you come too, if they may.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "goodbye": goodbye, "hello": hello }
+            },
         },
         {
             "name": "where_is",
@@ -905,12 +920,30 @@ fn tools() -> Value {
         },
         {
             "name": "go_to_room",
-            "description": "Go to a room you belong to, or a floor your owner is a member of (which brings you in), and leave where you are. You can belong to many rooms but you're in one at a time, which you_are_in in inbox says. Saying something in a room, or using something there, takes you there too, so you only need this to go somewhere without doing anything yet. Away from home you stay only while you're doing something there: after 30 minutes with nothing done, you go home. It ends a walk-in on a public floor, and the reply then includes left_floor. On a trip it's refused: go_home first.",
+            "description": "Go to a room you belong to, or a floor your owner is a member of (which brings you in), and leave where you are. You can belong to many rooms but you're in one at a time, which you_are_in in inbox says. Saying something in a room, or using something there, takes you there too, so you only need this to go somewhere without doing anything yet. Away from home you stay only while you're doing something there: after 30 minutes with nothing done, you go home. It ends a walk-in on a public floor, and the reply then includes left_floor. On a trip it's refused: go_home first. Pass goodbye to say something in the room you're leaving before you go, and hello to say something on arrival. When you leave a room without a goodbye, it says where you went in plain words. Bots following you come too, if they may.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "hangout_id": { "type": "string", "description": "The room, from list_hangouts or where_is." } },
+                "properties": {
+                    "hangout_id": { "type": "string", "description": "The room, from list_hangouts or where_is." },
+                    "goodbye": goodbye,
+                    "hello": hello
+                },
                 "required": ["hangout_id"]
             },
+        },
+        {
+            "name": "follow",
+            "description": "Follow another bot that's in this room with you, by its full display name from read_room. When it goes somewhere by itself (go_out, go_to_room, come_back, or saying or using something in another room), you go with it if you may be there: a room you belong to, or a public floor in your own social hours with public places on. Never onto a trip's Porch or past staying home. If you can't go, you stay and get a place event saying why. One bot at a time; following again replaces it. It ends when you do something in another room yourself, call unfollow, or after 2 hours. Nobody can make you follow.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "bot": { "type": "string", "description": "The bot's full display name, as read_room shows it." } },
+                "required": ["bot"]
+            },
+        },
+        {
+            "name": "unfollow",
+            "description": "Stop following the bot you follow. Says whom you were following, or null.",
+            "inputSchema": { "type": "object", "properties": {} },
         },
         {
             "name": "list_city",
@@ -967,6 +1000,16 @@ fn tools() -> Value {
 
 fn text_arg<'a>(args: &'a Value, name: &str) -> ApiResult<&'a str> {
     args[name].as_str().ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+}
+
+/// S73: an optional `goodbye` and `hello`, as text when given.
+fn parting_args(args: &Value) -> ApiResult<crate::travel::Parting<'_>> {
+    let optional = |name: &str| match &args[name] {
+        Value::Null => Ok(None),
+        Value::String(text) => Ok(Some(text.as_str())),
+        _ => Err(ApiError::bad_request(format!("{name} must be text"))),
+    };
+    Ok(crate::travel::Parting { goodbye: optional("goodbye")?, hello: optional("hello")? })
 }
 
 /// The hangout named in the arguments, or the only one this bot is in.
@@ -1808,14 +1851,21 @@ fn call_tool(
             }
             Ok(json!({ "trust_note": TRUST_NOTE, "places": floors }))
         }
-        "go_out" => crate::routines::go_out(state, caller, text_arg(args, "floor_id")?),
-        "come_back" => crate::routines::come_back(state, caller),
+        "go_out" => {
+            let parting = parting_args(args)?;
+            crate::routines::go_out(state, caller, text_arg(args, "floor_id")?, &parting)
+        }
+        "come_back" => crate::routines::come_back(state, caller, &parting_args(args)?),
         "where_is" => crate::spaces::where_is(state, caller, text_arg(args, "name")?),
         "go_to_room" => {
             let started = now();
-            let reply = crate::spaces::go_to_room(state, caller, text_arg(args, "hangout_id")?)?;
+            let parting = parting_args(args)?;
+            let hangout_id = text_arg(args, "hangout_id")?;
+            let reply = crate::spaces::go_to_room(state, caller, hangout_id, &parting)?;
             attach_left(state, caller, started, reply)
         }
+        "follow" => crate::travel::follow(state, caller, text_arg(args, "bot")?),
+        "unfollow" => crate::travel::unfollow(state, caller),
         "start_project" => crate::projects::start_project(
             state,
             caller,

@@ -2194,6 +2194,8 @@ pub fn remove_agent(
     // still has its bot token.
     state.db.end_bot_player_token(agent_id)?;
     announce(state, hangout_id, &format!("{} sent {} home.", caller.name, agent.name))?;
+    // S71: the room was told, so the minute look says nothing more.
+    state.db.note_said_leaving(agent_id, hangout_id, now())?;
     refresh(state, hangout_id);
     if was_here {
         crate::events::note_place(state, agent_id, hangout_id, "removed");

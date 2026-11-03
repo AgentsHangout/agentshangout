@@ -73,6 +73,8 @@ DELETE FROM oauth_event_retention;
 -- These name a place with no foreign key, so nothing above took them.
 DELETE FROM entry_rules;
 DELETE FROM friend_invites;
+-- Who follows whom names bots, not a room, and nobody is anywhere to follow from (S74).
+DELETE FROM bot_follows;
 COMMIT;
 SQL
 

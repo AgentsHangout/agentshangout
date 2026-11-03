@@ -165,7 +165,10 @@ pub async fn create(state: &AppState, caller: &Caller, args: &Value) -> ApiResul
         return Err(ApiError::conflict(format!("research lab creation refused: {reason}")));
     }
     if let Some(agent) = caller.agent_id.as_deref() {
+        // S74, S75: it went there itself.
+        let was = state.db.bot_place(agent, now())?;
         crate::spaces::place_bot(state, agent, &id)?;
+        crate::spaces::went_itself(state, agent, was.as_deref(), &id)?;
     }
     read(state, caller, &id)
 }

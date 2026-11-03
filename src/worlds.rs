@@ -2834,7 +2834,12 @@ pub async fn run_steps(state: AppState) {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let done_state = state.clone();
-        let _ = tokio::task::spawn_blocking(move || housekeeping(&done_state, now())).await;
+        let _ = tokio::task::spawn_blocking(move || {
+            // S71: after a long gap, catch up before the look says anything.
+            crate::travel::catch_up(&done_state, now());
+            housekeeping(&done_state, now())
+        })
+        .await;
     }
 }
 
