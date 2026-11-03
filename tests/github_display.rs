@@ -940,7 +940,7 @@ async fn account_identity_changed_during_fetch_is_not_cached() {
     assert!(pending.await.unwrap().get("repos").is_none());
 }
 
-// A87: the Discord name is its own opt-in, off by default, and only the name ever leaves.
+// A93: the Discord name is its own opt-in, off by default, and only the name ever leaves.
 #[tokio::test]
 async fn discord_name_is_opt_in_and_never_the_id() {
     let server = Server::start().await;

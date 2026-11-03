@@ -44,7 +44,7 @@ impl Db {
         tx.commit()
     }
 
-    /// A87: whether this person shows their Discord name now: they said yes, for the account
+    /// A93: whether this person shows their Discord name now: they said yes, for the account
     /// that is still linked.
     pub fn discord_name_shown(&self, person: &str) -> rusqlite::Result<Option<String>> {
         self.conn()

@@ -1513,7 +1513,7 @@ CREATE TABLE IF NOT EXISTS bot_schedules (
     days       TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
--- A87: a person's opt-in to show their Discord name on their card. It is bound to the Discord
+-- A93: a person's opt-in to show their Discord name on their card. It is bound to the Discord
 -- account that was linked when they said yes, so a replaced link starts hidden again.
 CREATE TABLE IF NOT EXISTS discord_display (
     person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
@@ -4233,7 +4233,7 @@ impl Db {
             "DELETE FROM sign_in_links WHERE person_id = ? AND site = ?",
             [person_id, site],
         )?;
-        // A87: unlinking Discord takes the choice to show it along, so linking the same account
+        // A93: unlinking Discord takes the choice to show it along, so linking the same account
         // again shows nothing until they say yes again.
         if site == "discord" {
             tx.execute("DELETE FROM discord_display WHERE person_id = ?", [person_id])?;

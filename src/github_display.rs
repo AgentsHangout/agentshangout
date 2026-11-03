@@ -43,7 +43,7 @@ pub struct DisplayPatch {
     pub show_stars: Option<bool>,
     pub show_languages: Option<bool>,
     pub show_badge: Option<bool>,
-    /// A87: show the linked Discord name on the card. Kept apart from the GitHub switches.
+    /// A93: show the linked Discord name on the card. Kept apart from the GitHub switches.
     pub show_discord: Option<bool>,
 }
 

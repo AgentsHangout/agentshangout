@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/app.js', 'utf8');
+const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 function extract(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing shipped function ${name}`);

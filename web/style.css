@@ -2838,7 +2838,7 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .bot-status.idle { color: var(--accent); }
 .bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }
 
-/* Choices in Settings: a row with what it does, and a switch (A82). */
+/* Choices in Settings: a row with what it does, and a switch (A88). */
 .pref-group { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .pref-group h3 { margin: 0; font-size: 15px; }
 .pref-group > p { margin: 0; font-size: 13px; }
@@ -2878,7 +2878,7 @@ input.switch-input:disabled { opacity: .55; cursor: progress; }
 input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, #cdbd9b, #cdbd9b 4px, #e6dbc0 4px, #e6dbc0 8px); }
 @media (prefers-reduced-motion: reduce) { input.switch-input, input.switch-input::before { transition: none; } }
 
-/* The card for a person in a room, and its preview in Settings (A82, A83). */
+/* The card for a person in a room, and its preview in Settings (A88, A89). */
 .person-card { position: fixed; z-index: 41; width: min(280px, calc(100vw - 16px)); max-width: none; pointer-events: auto; }
 .person-card.person-card-preview { position: static; width: auto; max-width: 300px; }
 .person-card-body, .person-card-foot, .person-card-preview > .person-card-note, .person-card-preview > .person-card-rows { padding: 6px 9px; }

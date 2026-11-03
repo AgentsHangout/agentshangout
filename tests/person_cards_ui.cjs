@@ -1,5 +1,5 @@
 // Run from the repository root: node tests/person_cards_ui.cjs
-// A82 to A86: the person card in a room, and its preview in Settings, driven through the shipped
+// A88 to A92: the person card in a room, and its preview in Settings, driven through the shipped
 // functions of web/app.js with a small DOM stand-in.
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -72,7 +72,7 @@ vm.runInContext([
   'this.githubCardRows = githubCardRows; this.githubProfileUrl = githubProfileUrl; this.personCardBody = personCardBody; this.personCards = personCards;',
 ].join('\n'), context);
 
-// What the card says: only sections the public response carries (A82).
+// What the card says: only sections the public response carries (A88).
 same(context.githubCardRows({ linked: true, login: 'ann' }), [], 'no sections on: nothing');
 same(context.githubCardRows({ linked: false }), []);
 same(context.githubCardRows(null), []);
@@ -86,7 +86,7 @@ const all = context.githubCardRows({
   badge: { merged_prs: 4 },
 });
 same(all.map((r) => r[0]), ['Public repos', 'Stars received', 'Top languages', 'Merged pull requests']);
-assert.ok(!/discord/i.test(JSON.stringify(all)), 'no Discord line unless the person turned it on (A87)');
+assert.ok(!/discord/i.test(JSON.stringify(all)), 'no Discord line unless the person turned it on (A93)');
 const withDiscord = context.githubCardRows({ linked: true, stars: { total: 1 }, discord: { name: 'ann#1', id: '99887766' } });
 same(withDiscord, [['Stars received', '1'], ['Discord', 'ann#1']]);
 same(context.githubCardRows({ linked: false, discord: { name: 'ann#1' } }), [['Discord', 'ann#1']], 'Discord alone, GitHub not shown');

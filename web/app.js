@@ -580,7 +580,7 @@ function signInCard(me) {
   const github = me.sign_in.find((row) => row.site === 'github');
   const discord = me.sign_in.find((row) => row.site === 'discord');
   const display = me.github_display || {};
-  // A82: a small preview of the person card, drawn by the same code a room uses, from the same
+  // A88: a small preview of the person card, drawn by the same code a room uses, from the same
   // public response, so it shows exactly what anyone else is shown.
   const preview = h('div', { class: 'game-menu person-card person-card-preview', 'aria-live': 'polite' }, personCardBody(undefined));
   const refreshPreview = async () => {
@@ -3144,7 +3144,7 @@ async function roomView(id) {
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
   });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
-  // A83, A84: hover a person for their card, press it for the same card with what can be done.
+  // A89, A90: hover a person for their card, press it for the same card with what can be done.
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
     mention: (name) => {
@@ -7403,7 +7403,7 @@ function popupMenu(root, { refocus }) {
   return { open, close, get isOpen() { return Boolean(el); } };
 }
 
-// A82 to A87: what a person's card says about them, from the public response of
+// A88 to A93: what a person's card says about them, from the public response of
 // `GET /api/people/{id}/github`. Only sections that response carries are drawn, so a section the
 // person left off can never appear. Everything is text, never HTML (A71).
 function githubCardRows(data) {
@@ -7421,7 +7421,7 @@ function githubCardRows(data) {
     }
     if (data.badge) rows.push(['Merged pull requests', String(data.badge.merged_prs)]);
   }
-  // A87: only when they turned it on, and only the name. The server never sends the Discord id.
+  // A93: only when they turned it on, and only the name. The server never sends the Discord id.
   if (typeof data.discord?.name === 'string') rows.push(['Discord', data.discord.name]);
   return rows;
 }
@@ -7438,7 +7438,7 @@ function personCardBody(data) {
   return h('dl', { class: 'person-card-rows' }, ...rows.flatMap(([label, text]) => [h('dt', {}, label), h('dd', {}, text)]));
 }
 
-// A83: hover or press a person in a room for their card. What it holds is fetched once per person
+// A89: hover or press a person in a room for their card. What it holds is fetched once per person
 // for five minutes (a failure for one), and only after the pointer has rested on them.
 function personCards({ room, stage, root, view, locked, mention }) {
   const cache = new Map();
@@ -7547,7 +7547,7 @@ function personCards({ room, stage, root, view, locked, mention }) {
     event.stopPropagation();
     show(personId, event.clientX, event.clientY, true);
   };
-  // Left and right press open the same card (A84).
+  // Left and right press open the same card (A90).
   stage.addEventListener('click', open, true);
   stage.addEventListener('contextmenu', open, true);
   stage.addEventListener('keydown', (event) => {

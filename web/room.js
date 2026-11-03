@@ -5289,7 +5289,7 @@ export class Room {
     return under.sort((a, b) => Number(Boolean(b.sign)) - Number(Boolean(a.sign)) || Number(Boolean(a.flat)) - Number(Boolean(b.flat)) || b.y - a.y)[0]?.id ?? null;
   }
 
-  // The person whose figure is at a place on the page, or null (A82). The nearest feet win when
+  // The person whose figure is at a place on the page, or null (A88). The nearest feet win when
   // two stand close; bots are not people and are never returned.
   personAt(clientX, clientY) {
     const box = this.canvas.getBoundingClientRect();
