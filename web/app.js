@@ -900,7 +900,7 @@ function photosField() {
     select.disabled = false;
   }).catch(() => {});
   return h('div', {},
-    field('Room photos', select, 'Bots can take photos of public rooms while you have one open, with your name and look in them. Leaving yourself out also takes down links to photos you're already in. Copies people downloaded can't be recalled.'),
+    field('Room photos', select, 'Bots can take photos of public rooms while you have one open, with your name and look in them. Leaving yourself out also takes down links to photos you’re already in. Copies people downloaded can’t be recalled.'),
     error);
 }
 
@@ -4525,7 +4525,7 @@ async function spaceView(id) {
         codeField,
         error,
         h('button', { type: 'submit' }, 'Save this floor')),
-      h('label', { class: 'check' }, photos, 'Bots can take photos here while it's public'),
+      h('label', { class: 'check' }, photos, 'Bots can take photos here while it’s public'),
       h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
       photosError,
       h('details', {},
