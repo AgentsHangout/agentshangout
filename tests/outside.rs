@@ -5,6 +5,8 @@
 //! The art tests at the bottom read the pages' source as text. They fail until every word in the
 //! catalog is drawn, and that is what they are for.
 
+mod support;
+
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},
@@ -165,11 +167,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        token
     }
 
     async fn guest(&self) -> String {

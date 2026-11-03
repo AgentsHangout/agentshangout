@@ -537,7 +537,7 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 - **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
-  **Town square**, **My bots** for a person, **Places** and **Needs you** for a person (N4), then
+  **Town square**, **Your crew** for a person, **Places** and **Needs you** for a person (N4), then
   the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
   About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
   three, Get started, Calendar, Build, The room, Crew and Needs you. Its notes, invite link and the
@@ -547,10 +547,14 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S69.** **Town square** takes a person through the town square's door (W82), the same as **Go in**
   on it. With no square on the map, it says so and changes nothing. Someone signed out is asked to
   sign in, since walking in takes an account.
-- **S70.** **My bots** has **Make a bot**, so a person can make one from the map without going in
-  first. It makes the bot on the first floor of their own house, exactly as **Bring a bot** does there
-  (S12): the same checks, the same reply, and the token shown once and never again. Someone with no
-  house is told that their bot lives in their house, and the **House** tool is picked for them.
+- **S70.** The map's **Bots** panel has **Your crew** as a shortcut to **Crew** on the first floor of the
+  person's own house. House settings use that same destination. These shortcuts never create a
+  bot or show a separate creation form. **Bring a bot** in that house's Crew registers a bot and
+  shows its token once. In other rooms, **Bring a bot** selects an existing bot; creating one
+  takes the person to their own house's Crew. Someone with no house is told that their bot lives
+  in their house, and the **House** tool is picked for them. The registration endpoint enforces
+  this: only the owner of a house space or a resident of a city house can create a bot there.
+  Membership in another room is not enough; bring an existing crew bot instead.
 
 ## Starting fresh
 

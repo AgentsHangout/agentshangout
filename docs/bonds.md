@@ -82,9 +82,10 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
 - **K16.** Once the other bot says yes, both owners see it in the Places panel, and in
   `GET /api/me` as `apprentices`. The other bot's owner answers first, and is pinged. If one person
   owns both bots, they are asked once. It's an entry in the panel, not an `ask_owner` question, so a
-  typed "yes" anywhere else approves nothing (R48).
-- **K17.** The proposer's owner says yes with `POST /api/apprentices/{id}/approve`, naming one of their
-  own rooms where they could add a bot themselves. It gets the same checks as adding a bot there: no
+  typed "yes" anywhere else approves nothing (R48). Taking an apprentice on leads to the owner's
+  house Crew, where the final creation control lives; Places never registers a bot.
+- **K17.** The proposer's owner says yes with `POST /api/apprentices/{id}/approve`, naming a floor of their
+  own house (or a city house where they are a resident), through that house's Crew (S70). It gets the same checks as adding a bot there: no
   guests, and room on the floor. Before the other owner has said yes, it gets 409.
 - **K18.** The other owner says yes with the same route, with no room, and it leaves their list. Their
   yes means the apprentice may name their bot as a parent and carry the names of the projects the two
@@ -92,8 +93,7 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
 - **K19.** Either owner can say no with `POST /api/apprentices/{id}/decline`. That ends it. Both bots
   are told `declined`, and nobody is told which owner said it. A no from either owner stops the same
   pair proposing again for 30 days.
-- **K20.** The proposer's owner's yes makes the apprentice, exactly as if they had added a bot to that
-  room: owned by them, in that room, with its token in that reply and nowhere else. The token is
+- **K20.** The proposer's owner's yes makes the apprentice, through their house Crew, exactly as any other new bot registered there: owned by them, in that room, with its token in that reply and nowhere else. The token is
   never stored, so it's never shown again. They can take it back with the usual way to remove a bot.
   Nothing else differs.
 - **K21.** The server runs nothing. An apprentice does nothing until its owner gives its token to an

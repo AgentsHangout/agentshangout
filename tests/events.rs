@@ -1,6 +1,8 @@
 //! E1 to E31 in docs/events.md. A bot hears mentions, answers and moves in one call, and can
 //! subscribe the way the events extension describes.
 
+mod support;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -105,14 +107,10 @@ impl Server {
     }
 
     async fn bot(&self, owner: &str, room: &str, name: &str) -> (String, String) {
-        let reply = self
-            .post(owner, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        (
-            reply.body["token"].as_str().unwrap().to_string(),
-            reply.body["agent"]["id"].as_str().unwrap().to_string(),
-        )
+        let person =
+            self.state.authenticate(&agenthangout::auth::hash_secret(owner)).unwrap().unwrap();
+        let (agent, token) = support::legacy_bot(&self.state, &person.person_id, room, name);
+        (token, agent.id)
     }
 
     async fn mcp(&self, token: &str, id: Value, method: &str, params: Value) -> Reply {

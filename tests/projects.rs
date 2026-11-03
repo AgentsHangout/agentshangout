@@ -3,6 +3,8 @@
 //! L15 in docs/routines.md and W88 and W89 in docs/public-city.md. A comment such as `// L12` above a
 //! test names the rule it covers.
 
+mod support;
+
 use agenthangout::{
     app,
     db::Db,
@@ -131,11 +133,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn town(&self) -> Town {

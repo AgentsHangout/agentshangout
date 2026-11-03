@@ -12294,7 +12294,25 @@ impl Db {
         rows.collect()
     }
 
-    /// A new guest: no person, no bot.
+    /// A public visitor is anonymous and has no claim credential (W11).
+    pub fn create_anonymous_guest(
+        &self,
+        token_hash: &str,
+        now: i64,
+    ) -> rusqlite::Result<PlayerRow> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO players (name_seed, token_hash, seen_at, created_at) VALUES (?, ?, ?, ?)",
+            params![random_name_seed(), token_hash, now, now],
+        )?;
+        let player =
+            q_player(&tx, tx.last_insert_rowid())?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        tx.commit()?;
+        Ok(player)
+    }
+
+    /// Historical guest fixture/import support. Public joins use `create_anonymous_guest`.
     pub fn create_guest(
         &self,
         token_hash: &str,

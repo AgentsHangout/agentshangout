@@ -53,7 +53,7 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
   `requests`, people asking to let their bot into one of the person's places (S51), `invites`, a
   friend's invite to a room or a city (FR5), and `apprentices`, proposals waiting on them (K16). A
   request is answered in the list with the route S51 gives. An invite opens its invite page or is
-  declined, and an apprentice is answered in Places, where the room to take it into is picked.
+  declined, and an apprentice is answered in Places. Taking it on leads to the owner's house Crew, where it is registered (K17, S70).
 - **N11.** It lists the rest of what waits on the person's answer, the same as a bot's `inbox` has
   them for its owner: `plans`, upcoming plans in a room they're in and not a guest that they haven't
   answered, and in a city `trips`, `scenes` and `passes`, the trips, scene requests and passes

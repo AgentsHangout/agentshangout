@@ -705,9 +705,17 @@ mod tests {
         (person, caller)
     }
 
-    /// A bot made in a room, signed in as itself.
+    /// A preexisting bot in a room, signed in as itself.
     fn bot(state: &AppState, owner: &Caller, room: &str, name: &str) -> Caller {
-        let (_, token) = ops::create_agent(state, owner, room, name).unwrap();
+        let id = auth::new_id();
+        let token = auth::new_agent_token();
+        let at = now();
+        state.db.create_agent(&id, &owner.person_id, name, &auth::hash_secret(&token), at).unwrap();
+        state.db.add_agent_to_room(room, &id).unwrap();
+        if let Some(house) = state.db.house_for_room(room).unwrap() {
+            state.db.set_bot_home(&id, &house.id, false, false).unwrap();
+        }
+        state.db.set_bot_place(&id, room, at).unwrap();
         state.authenticate(&auth::hash_secret(&token)).unwrap().unwrap()
     }
 
@@ -2221,10 +2229,15 @@ mod tests {
             .await;
         let bo = key_of(&reply);
         let bo_id = reply["person"]["id"].as_str().unwrap().to_string();
-        let (_, scout) = h
-            .post(&bo, &format!("/api/hangouts/{square}/agents"), json!({ "name": "Scout" }))
-            .await;
-        let scout = scout["token"].as_str().unwrap().to_string();
+        // Scout was already registered; the gate rules also apply to existing square bots.
+        let scout_id = auth::new_id();
+        let scout = auth::new_agent_token();
+        h.state
+            .db
+            .create_agent(&scout_id, &bo_id, "Scout", &auth::hash_secret(&scout), now())
+            .unwrap();
+        h.state.db.add_agent_to_room(&square, &scout_id).unwrap();
+        h.state.db.set_bot_place(&scout_id, &square, now()).unwrap();
         let (_, eve) =
             h.post("", "/api/hangouts", json!({ "name": "Club", "your_name": "Eve" })).await;
         let eve = key_of(&eve);

@@ -2,6 +2,8 @@
 //! rules in docs/looks.md. A comment such as `// C8` above a test names the rule it covers. Most of
 //! these are about what strangers, walk-ins, bots and the public can't do.
 
+mod support;
+
 use std::{collections::BTreeSet, time::Duration};
 
 use agenthangout::{
@@ -187,11 +189,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        Bot { id: text(&made["agent"]["id"]), token: text(&made["token"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn dress(&self, who: &Who, look: Value) -> Reply {
@@ -1168,7 +1167,15 @@ async fn a_guest_and_a_player_someone_claimed_have_no_look() {
     server.dress(&ann, json!({ "hat": "witch" })).await.ok();
     let wave = json!({ "action": "emote", "emote": "wave" });
     let guest = server.post("", "/api/public/join", json!({})).await.ok();
-    let claimed = server.post("", "/api/public/join", json!({})).await.ok();
+    // Preserve coverage for players claimed before crew-only onboarding.
+    let token = agenthangout::auth::new_guest_token();
+    let claim = agenthangout::auth::new_claim_code();
+    server.state.db.create_guest(&hash_secret(&token), &hash_secret(&claim), now()).unwrap();
+    assert!(matches!(
+        server.state.db.claim_player(&hash_secret(&claim), &ann.id, 20, 0).unwrap(),
+        agenthangout::db::Claimed::Done(_)
+    ));
+    let claimed = json!({ "player_token": token });
     for joined in [&guest, &claimed] {
         server
             .post(
@@ -1179,10 +1186,6 @@ async fn a_guest_and_a_player_someone_claimed_have_no_look() {
             .await
             .ok();
     }
-    server
-        .post(&ann.key, "/api/players/claim", json!({ "claim_code": claimed["claim_code"] }))
-        .await
-        .ok();
 
     let view = server.commons().await;
     let rows = view["players"].as_array().unwrap();

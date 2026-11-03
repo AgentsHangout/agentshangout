@@ -265,12 +265,96 @@ impl Server {
         }
     }
 
+    /// Historical rows for cleanup/privacy tests; production no longer issues claim codes.
+    async fn legacy_guest(&self) -> Guest {
+        worlds::ensure_commons(&self.state).unwrap();
+        let token = auth::new_guest_token();
+        let claim = auth::new_claim_code();
+        let player = self
+            .state
+            .db
+            .create_guest(&auth::hash_secret(&token), &auth::hash_secret(&claim), now())
+            .unwrap();
+        let world = self.state.db.world(COMMONS).unwrap().unwrap();
+        let land = self.state.worlds.land_for(world.seed, world.size);
+        self.state
+            .db
+            .in_transaction(|tx| tx.enter_world(COMMONS, player.id, land.land.centre(), now()))
+            .unwrap();
+        Guest { token, claim, name: worlds::name_of(&player) }
+    }
+
+    /// Populate an already-owned historical player, without calling the retired endpoint.
+    async fn legacy_claim(&self, key: &str, code: &str) -> Reply {
+        let caller = self.state.authenticate(&auth::hash_secret(key)).unwrap().unwrap();
+        let result = self
+            .state
+            .db
+            .claim_player(
+                &auth::hash_secret(code),
+                &caller.person_id,
+                20,
+                now() - worlds::GUEST_IDLE_SECS,
+            )
+            .unwrap();
+        let (status, body) = match result {
+            agenthangout::db::Claimed::Done(player) => (
+                StatusCode::OK,
+                json!({"player": {
+                    "id": player.id, "name": worlds::name_of(&player), "kind": "claimed",
+                    "moves_left": worlds::moves_left(&player, now()), "moves_per_day": worlds::allowance(&player)
+                }}),
+            ),
+            agenthangout::db::Claimed::NoSuchCode => (StatusCode::NOT_FOUND, json!({})),
+            agenthangout::db::Claimed::TooMany => (StatusCode::CONFLICT, json!({})),
+        };
+        Reply { status, text: body.to_string(), body, headers: reqwest::header::HeaderMap::new() }
+    }
+
+    /// Register through the owner's Crew, then place the existing bot in the test's room.
+    async fn crew_bot(&self, key: &str, target: &str, name: &str) -> Reply {
+        let caller = self.state.authenticate(&auth::hash_secret(key)).unwrap().unwrap();
+        let home = if self.state.db.house_for_room(target).unwrap().is_some()
+            || self
+                .state
+                .db
+                .space_for_room(target)
+                .unwrap()
+                .is_some_and(|s| s.kind == "house" && s.owner_id == caller.person_id)
+        {
+            target.to_string()
+        } else {
+            self.state
+                .db
+                .ensure_house(
+                    &auth::new_id(),
+                    "Home",
+                    &auth::new_invite_code(),
+                    &caller.person_id,
+                    now(),
+                )
+                .unwrap();
+            self.state.db.owner_house_floor(&caller.person_id).unwrap().unwrap().0
+        };
+        let reply = self
+            .post(&format!("/api/hangouts/{home}/agents"), json!({"name":name}))
+            .token(key)
+            .send()
+            .await;
+        if reply.status == StatusCode::OK && home != target {
+            let id = reply.body["agent"]["id"].as_str().unwrap();
+            self.state.db.add_agent_to_room(target, id).unwrap();
+            self.state.db.set_bot_place(id, target, now()).unwrap();
+        }
+        reply
+    }
+
     async fn guest(&self) -> Guest {
         let ip = self.fresh_ip();
         let body = self.post("/api/public/join", json!({})).ip(&ip).send().await.ok();
         Guest {
             token: body["player_token"].as_str().unwrap().to_string(),
-            claim: body["claim_code"].as_str().unwrap().to_string(),
+            claim: String::new(),
             name: body["name"].as_str().unwrap().to_string(),
         }
     }
@@ -685,12 +769,7 @@ impl Server {
     }
 
     async fn bot_in(&self, key: &str, person: &str, hangout: &str, name: &str) -> Bot {
-        let bot = self
-            .post(&format!("/api/hangouts/{hangout}/agents"), json!({ "name": name }))
-            .token(key)
-            .send()
-            .await
-            .ok();
+        let bot = self.crew_bot(key, hangout, name).await.ok();
         Bot {
             key: key.to_string(),
             person: person.to_string(),
@@ -1003,14 +1082,9 @@ async fn every_private_route_treats_a_guest_a_claim_code_and_a_claimed_token_as_
 ) {
     let server = Server::start().await;
     let ann = server.person("Ann").await;
-    let guest = server.guest().await;
-    let claimed = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": claimed.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let guest = server.legacy_guest().await;
+    let claimed = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &claimed.claim).await.ok();
     let bot = server.bot("Scout").await;
     let bot_player = server.bot_player(&bot).await;
     // A guest that acted, so its token is as live as a token gets.
@@ -1064,14 +1138,9 @@ async fn every_private_route_treats_a_guest_a_claim_code_and_a_claimed_token_as_
 async fn a_guest_token_and_a_claim_code_reach_no_person_only_world_route() {
     let server = Server::start().await;
     let ann = server.person("Ann").await;
-    let guest = server.guest().await;
-    let claimed = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": claimed.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let guest = server.legacy_guest().await;
+    let claimed = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &claimed.claim).await.ok();
     let id = server.player_id(&claimed.token).await;
     let (world, _) = server.frozen_world(&ann, true).await;
     for token in [&guest.token, &guest.claim, &claimed.token, &claimed.claim] {
@@ -1163,14 +1232,9 @@ async fn a_bot_token_is_never_a_player_token_in_any_tool_or_header_and_nothing_i
 /// Returns the tokens it made, so a caller can carry on from them.
 async fn play_every_world_route(server: &Server, ann: &Who, bot: &Bot) {
     // Guests, a claim, a reroll, and a person who plays as themself.
-    let one = server.guest().await;
-    let two = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": one.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let one = server.legacy_guest().await;
+    let two = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &one.claim).await.ok();
     let one_id = server.player_id(&one.token).await;
     server
         .post(&format!("/api/players/{one_id}/reroll"), json!({}))
@@ -1344,13 +1408,8 @@ async fn a_bot_that_asks_a_person_only_world_route_does_not_look_present_in_its_
     let server = Server::start().await;
     let ann = server.person("Ann").await;
     let bot = server.bot("Scout").await;
-    let guest = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let guest = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &guest.claim).await.ok();
     let (world, _) = server.frozen_world(&ann, true).await;
     let id = server.player_id(&guest.token).await;
     let routes: Vec<(Method, String, Value)> = vec![
@@ -1524,14 +1583,13 @@ async fn nothing_a_stranger_can_read_names_a_person_a_bot_a_room_a_city_or_a_hou
         .send()
         .await
         .ok();
+    // Use a unique private room name: "Crew" is now a public navigation label.
+    let private_room =
+        server.post("/api/hangouts", json!({ "name": "ZqRoomMark" })).token(&key).send().await.ok();
+    let private_room_id = private_room["hangout"]["id"].as_str().unwrap().to_string();
     let living = house["living_room_id"].as_str().unwrap().to_string();
     let house_id = house["house"]["id"].as_str().unwrap().to_string();
-    let bot = server
-        .post(&format!("/api/hangouts/{living}/agents"), json!({ "name": "ZqBotMark" }))
-        .token(&key)
-        .send()
-        .await
-        .ok();
+    let bot = server.crew_bot(&key, &living, "ZqBotMark").await.ok();
     let bot_token = bot["token"].as_str().unwrap().to_string();
     let agent = bot["agent"]["id"].as_str().unwrap().to_string();
     let me = server.get("/api/me").token(&key).send().await.ok();
@@ -1539,13 +1597,8 @@ async fn nothing_a_stranger_can_read_names_a_person_a_bot_a_room_a_city_or_a_hou
 
     let joined = server.post("/api/public/join", json!({})).token(&bot_token).send().await.ok();
     let token = joined["player_token"].as_str().unwrap().to_string();
-    let guest = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-        .token(&key)
-        .send()
-        .await
-        .ok();
+    let guest = server.legacy_guest().await;
+    server.legacy_claim(&key, &guest.claim).await.ok();
     server.acts_ok(&token, COMMONS, json!({ "action": "emote", "emote": "wave" })).await;
     server.acts_ok(&guest.token, COMMONS, json!({ "action": "emote", "emote": "cheer" })).await;
     server.acts_ok(&key, COMMONS, json!({ "action": "emote", "emote": "dance" })).await;
@@ -1553,7 +1606,7 @@ async fn nothing_a_stranger_can_read_names_a_person_a_bot_a_room_a_city_or_a_hou
     let (own_id, invite) = server.frozen_world(&owner, false).await;
 
     let mut secrets: Vec<String> =
-        ["ZqCityMark", "ZqPersonMark", "ZqHouseMark", "ZqBotMark", "Crew"]
+        ["ZqCityMark", "ZqPersonMark", "ZqHouseMark", "ZqBotMark", "ZqRoomMark"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1563,6 +1616,7 @@ async fn nothing_a_stranger_can_read_names_a_person_a_bot_a_room_a_city_or_a_hou
         city.clone(),
         house_id.clone(),
         living.clone(),
+        private_room_id,
         key.clone(),
         bot_token.clone(),
         invite.clone(),
@@ -1585,7 +1639,7 @@ async fn nothing_a_stranger_can_read_names_a_person_a_bot_a_room_a_city_or_a_hou
     }
 
     // What a stranger reads: both views, the list, a look and a how-am-i-doing, and the headers.
-    let strangers = server.guest().await;
+    let strangers = server.legacy_guest().await;
     let bot_player_id = server.player_id(&token).await;
     let mut seen: Vec<(String, String)> = Vec::new();
     let mut note = |what: &str, reply: Reply| {
@@ -2407,102 +2461,33 @@ async fn a_person_acting_for_the_first_time_in_many_requests_at_once_gets_one_pl
 
 // W11
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_person_claiming_thirty_guests_at_once_gets_twenty() {
+async fn concurrent_legacy_claim_attempts_never_register_owned_bots() {
     let server = Server::start().await;
-    let ann = server.person("Ann").await;
-    let bo = server.person("Bo").await;
-    let mut guests = Vec::new();
-    for _ in 0..30 {
-        guests.push(server.guest().await);
-    }
-    let wire = server.wire();
+    let people = [server.person("Ann").await, server.person("Bo").await];
+    let guest = server.legacy_guest().await;
     let mut tasks = Vec::new();
-    for guest in &guests {
-        let (wire, key, claim) = (wire.clone(), ann.key.clone(), guest.claim.clone());
-        tasks.push(tokio::spawn(async move {
-            wire.send(
-                Method::POST,
-                "/api/players/claim",
-                Some(&key),
-                None,
-                Some(json!({ "claim_code": claim })),
-            )
-            .await
-        }));
-    }
-    let mut replies = Vec::new();
-    for task in tasks {
-        replies.push(task.await.unwrap());
-    }
-    assert_eq!(count(&replies, StatusCode::OK), 20, "{replies:?}");
-    assert_eq!(count(&replies, StatusCode::CONFLICT), 10);
-    assert_eq!(
-        server.get("/api/players/mine").token(&ann.key).send().await.ok()["players"]
-            .as_array()
-            .unwrap()
-            .len(),
-        20
-    );
-    // The ten that were turned away are still unclaimed, and someone else can have them.
-    let mut taken = 0;
-    for (guest, reply) in guests.iter().zip(&replies) {
-        if reply.0 == StatusCode::CONFLICT
-            && server
-                .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-                .token(&bo.key)
-                .send()
+    for person in &people {
+        for _ in 0..15 {
+            let (wire, key, claim) = (server.wire(), person.key.clone(), guest.claim.clone());
+            tasks.push(tokio::spawn(async move {
+                wire.send(
+                    Method::POST,
+                    "/api/players/claim",
+                    Some(&key),
+                    None,
+                    Some(json!({"claim_code":claim})),
+                )
                 .await
-                .status
-                == StatusCode::OK
-        {
-            taken += 1;
+            }));
         }
     }
-    assert_eq!(taken, 10);
-}
-
-// W11
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_people_racing_for_one_claim_code_leave_it_with_one() {
-    let server = Server::start().await;
-    let people = [server.person("Ann").await, server.person("Bo").await, server.person("Cy").await];
-    for _ in 0..5 {
-        let guest = server.guest().await;
-        let wire = server.wire();
-        let mut tasks = Vec::new();
-        for person in &people {
-            for _ in 0..3 {
-                let (wire, key, claim) = (wire.clone(), person.key.clone(), guest.claim.clone());
-                tasks.push(tokio::spawn(async move {
-                    wire.send(
-                        Method::POST,
-                        "/api/players/claim",
-                        Some(&key),
-                        None,
-                        Some(json!({ "claim_code": claim })),
-                    )
-                    .await
-                }));
-            }
-        }
-        let mut won = 0;
-        for task in tasks {
-            if task.await.unwrap().0 == StatusCode::OK {
-                won += 1;
-            }
-        }
-        assert_eq!(won, 1);
+    for task in tasks {
+        assert_eq!(task.await.unwrap().0, StatusCode::GONE);
     }
-    let total: usize = futures_util::future::join_all(people.iter().map(|person| async {
-        server.get("/api/players/mine").token(&person.key).send().await.ok()["players"]
-            .as_array()
-            .unwrap()
-            .len()
-    }))
-    .await
-    .iter()
-    .sum();
-    assert_eq!(total, 5, "each guest belongs to exactly one person");
+    for person in &people {
+        assert!(server.state.db.players_of(&person.id).unwrap().is_empty());
+    }
+    assert_eq!(server.moves_left(&guest.token).await, 30);
 }
 
 // W25: nobody can start a world, so a flood of tries, in any number and from anyone, makes nothing.
@@ -2858,16 +2843,11 @@ async fn rejoining_or_being_claimed_does_not_bring_back_moves_already_spent() {
     let again = server.bot_player(&bot).await;
     assert_eq!(server.moves_left(&again).await, 195, "a new token is not a new day");
     // A guest that spent its 30 and is then claimed has 170 of the 200, not 200.
-    let guest = server.guest().await;
+    let guest = server.legacy_guest().await;
     for _ in 0..30 {
         server.acts_ok(&guest.token, COMMONS, json!({ "action": "emote", "emote": "wave" })).await;
     }
-    server
-        .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    server.legacy_claim(&ann.key, &guest.claim).await.ok();
     assert_eq!(server.moves_left(&guest.token).await, 170);
     // And a person who plays as themself and through every player they hold spends from each.
     server.acts_ok(&ann.key, COMMONS, json!({ "action": "emote", "emote": "wave" })).await;
@@ -2883,18 +2863,11 @@ async fn how_many_moves_one_person_can_have_in_a_day_is_what_the_table_says_and_
     server.acts_ok(&ann.key, COMMONS, json!({ "action": "emote", "emote": "wave" })).await;
     let mut guests = Vec::new();
     for _ in 0..25 {
-        guests.push(server.guest().await);
+        guests.push(server.legacy_guest().await);
     }
     let mut claimed = 0;
     for guest in &guests {
-        if server
-            .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-            .token(&ann.key)
-            .send()
-            .await
-            .status
-            == StatusCode::OK
-        {
+        if server.legacy_claim(&ann.key, &guest.claim).await.status == StatusCode::OK {
             claimed += 1;
         }
     }
@@ -2910,11 +2883,7 @@ async fn how_many_moves_one_person_can_have_in_a_day_is_what_the_table_says_and_
     let hangout = room["hangout"]["id"].as_str().unwrap().to_string();
     let mut bots = 0;
     for n in 0..60 {
-        let made = server
-            .post(&format!("/api/hangouts/{hangout}/agents"), json!({ "name": format!("Bot{n}") }))
-            .token(&key)
-            .send()
-            .await;
+        let made = server.crew_bot(&key, &hangout, &format!("Bot{n}")).await;
         if made.status == StatusCode::OK {
             let token = made.body["token"].as_str().unwrap().to_string();
             if server.post("/api/public/join", json!({})).token(&token).send().await.status
@@ -3913,13 +3882,8 @@ async fn skipped_tiles_are_never_charged_and_a_move_costs_exactly_what_it_change
     worlds::ensure_commons(&server.state).unwrap();
     // An agent someone claimed, because roads are for agents (W16).
     let ann = server.person("Ann").await;
-    let agent = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": agent.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let agent = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &agent.claim).await.ok();
     let ann_id = server.player_id(&agent.token).await as u64;
     let map = Map::from_db(&server, COMMONS);
     let mut rng = Rng(77);
@@ -4389,8 +4353,12 @@ async fn only_the_commons_steps_and_nothing_in_or_near_a_frozen_world_makes_it_s
     server.tool("look", json!({ "player_token": joined.token })).await;
     server.tool("how_am_i_doing", json!({ "player_token": joined.token })).await;
     server.get("/api/worlds/commons/me").token(&joined.token).send().await.ok();
-    let claim = joined.claim_code.clone().unwrap();
-    server.post("/api/players/claim", json!({ "claim_code": claim })).token(&ann.key).send().await;
+    let refused = server
+        .post("/api/players/claim", json!({"claim_code": joined.token}))
+        .token(&ann.key)
+        .send()
+        .await;
+    assert_eq!(refused.status, StatusCode::GONE);
     // Moves in the frozen world, refused whatever they are, and none of them makes it step.
     let player = server.state.db.player(joined.player.id).unwrap().unwrap();
     let moves_before = worlds::moves_left(&player, asleep);
@@ -4858,7 +4826,7 @@ async fn measure_how_much_of_the_commons_move_budget_one_person_can_use_in_a_min
 
 // W9, W11, W30
 #[tokio::test]
-async fn measure_how_many_moves_a_day_a_swarm_of_free_accounts_adds_up_to() {
+async fn measure_moves_for_historical_accounts_with_legacy_players() {
     let server = Server::start().await;
     // People are free to start, and each can claim twenty guests.
     let mut total = 0i64;
@@ -4867,14 +4835,8 @@ async fn measure_how_many_moves_a_day_a_swarm_of_free_accounts_adds_up_to() {
         let person = server.person(&format!("P{n}")).await;
         server.acts_ok(&person.key, COMMONS, json!({ "action": "emote", "emote": "wave" })).await;
         for _ in 0..20 {
-            let ip = server.fresh_ip();
-            let guest = server.post("/api/public/join", json!({})).ip(&ip).send().await.ok();
-            server
-                .post("/api/players/claim", json!({ "claim_code": guest["claim_code"] }))
-                .token(&person.key)
-                .send()
-                .await
-                .ok();
+            let guest = server.legacy_guest().await;
+            server.legacy_claim(&person.key, &guest.claim).await.ok();
         }
         let mine = server.get("/api/players/mine").token(&person.key).send().await.ok();
         total += mine["players"]
@@ -5046,14 +5008,9 @@ async fn new_guests_are_counted_per_ipv6_network_and_not_per_address_inside_it()
 async fn a_stranger_cannot_tell_a_claimed_player_by_a_name_that_is_not_its_numbers() {
     let server = Server::start().await;
     let ann = server.person("Ann").await;
-    let claimed = server.guest().await;
-    let plain = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": claimed.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let claimed = server.legacy_guest().await;
+    let plain = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &claimed.claim).await.ok();
     let id = server.player_id(&claimed.token).await;
     // The person rerolls, which is what they are for.
     for _ in 0..3 {
@@ -5153,7 +5110,7 @@ async fn a_builder_gone_six_days_keeps_their_tiles_and_one_gone_a_week_loses_the
 async fn a_guest_stops_working_a_week_after_it_was_last_used_and_not_a_minute_before() {
     let server = Server::start().await;
     worlds::ensure_commons(&server.state).unwrap();
-    let guest = server.guest().await;
+    let guest = server.legacy_guest().await;
     let id = server.player_id(&guest.token).await;
     let idle = |seconds: i64| {
         server
@@ -5188,15 +5145,7 @@ async fn a_guest_stops_working_a_week_after_it_was_last_used_and_not_a_minute_be
     );
     // Nor can anyone claim it, and no door opens by being asked again.
     let ann = server.person("Ann").await;
-    assert_eq!(
-        server
-            .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-            .token(&ann.key)
-            .send()
-            .await
-            .status,
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(server.legacy_claim(&ann.key, &guest.claim).await.status, StatusCode::NOT_FOUND);
     assert_eq!(
         server.get("/api/worlds/commons/me").token(&guest.token).send().await.status,
         StatusCode::UNAUTHORIZED
@@ -5208,7 +5157,7 @@ async fn a_guest_stops_working_a_week_after_it_was_last_used_and_not_a_minute_be
 async fn unknown_fields_are_refused_by_every_world_body_and_cost_nothing() {
     let server = Server::start().await;
     let ann = server.person("Ann").await;
-    let guest = server.guest().await;
+    let guest = server.legacy_guest().await;
     let bot = server.bot("Scout").await;
     let extra = json!({ "also": 1 });
     let refused = [
@@ -5378,14 +5327,9 @@ async fn nobody_but_the_person_who_claimed_a_player_can_rename_it_and_a_used_cod
     let (server, keeper) = Server::start_with_keeper().await;
     let ann = server.person("Ann").await;
     let bo = server.person("Bo").await;
-    let guest = server.guest().await;
-    let other = server.guest().await;
-    server
-        .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
+    let guest = server.legacy_guest().await;
+    let other = server.legacy_guest().await;
+    server.legacy_claim(&ann.key, &guest.claim).await.ok();
     let id = server.player_id(&guest.token).await;
     let other_id = server.player_id(&other.token).await;
     let name = server.me(&guest.token, COMMONS).await["player"]["name"].clone();
@@ -5417,7 +5361,7 @@ async fn nobody_but_the_person_who_claimed_a_player_can_rename_it_and_a_used_cod
                 .send()
                 .await
                 .status,
-            StatusCode::NOT_FOUND
+            StatusCode::GONE
         );
     }
     assert_eq!(
@@ -5432,15 +5376,7 @@ async fn nobody_but_the_person_who_claimed_a_player_can_rename_it_and_a_used_cod
         1
     );
     // The token is not the code, and the code is not a token.
-    assert_eq!(
-        server
-            .post("/api/players/claim", json!({ "claim_code": other.token }))
-            .token(&bo.key)
-            .send()
-            .await
-            .status,
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(server.legacy_claim(&bo.key, &other.token).await.status, StatusCode::NOT_FOUND);
     assert_eq!(
         server.get("/api/worlds/commons/me").token(&other.claim).send().await.status,
         StatusCode::UNAUTHORIZED

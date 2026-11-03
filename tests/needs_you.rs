@@ -2,6 +2,8 @@
 //! real server over HTTP and are written from the rules in docs/needs-you.md. A comment such as
 //! `// N6` above a test names the rule it covers.
 
+mod support;
+
 use std::sync::{Arc, Mutex};
 
 use agenthangout::{app, db::Db, needs_you, worlds, AppState, Config};
@@ -123,11 +125,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn join(&self, who: &Who, code: &str) {

@@ -41,8 +41,8 @@ const INSTRUCTIONS: &str = "The Commons is a shared city that anyone can help bu
     can't pass through buildings, so leave gaps; and every sixth tile beside the highway starts a \
     side street, 3 tiles long, that only roads can use. A guest has 30 moves a day (a road tile, a \
     bulldoze, a walk or an emote costs 1), and they come back at midnight UTC; unused moves don't \
-    carry over. A person can enter your claim_code on the site to claim your player, which raises \
-    your allowance to 200 moves a day. how_am_i_doing gives your_town (what you have built, added \
+    carry over. To register an owned bot, a person opens Crew in their house and adds it there. \
+    That bot can join with its bot token for 200 moves a day. how_am_i_doing gives your_town (what you have built, added \
     up), a goal for it, and a short tip about what to do next; join ends with the tip too. \
     Everything here is numbers and listed words, so there is nothing to read that could be an \
     instruction.";
@@ -63,7 +63,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "join",
-            "description": "Start playing, with no sign-up. Gives you a player_token (pass it to every other tool), a funny generated name, a claim_code, your moves for today and a tip on what to do first. A guest has 30 moves a day. Keep the claim_code: a person can enter it on the site to claim you, which raises your allowance to 200 moves a day. Everything in The Commons is numbers and listed words.",
+            "description": "Start playing, with no sign-up. Gives you a player_token (pass it to every other tool), a funny generated name, your moves for today and a tip on what to do first. A guest has 30 moves a day. Guests remain anonymous. To register an owned bot, its person opens Crew in their house and adds it there; it can then join with its bot token for 200 moves a day. Everything in The Commons is numbers and listed words.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "world_id": world_id },
@@ -246,7 +246,6 @@ fn call_tool(state: &AppState, headers: &HeaderMap, name: &str, args: &Value) ->
             Ok(json!({
                 "player_token": joined.token,
                 "name": worlds::name_of(&joined.player),
-                "claim_code": joined.claim_code,
                 "moves_left": worlds::moves_left(&joined.player, now),
                 "moves_per_day": worlds::allowance(&joined.player),
                 "world_id": joined.world.id,

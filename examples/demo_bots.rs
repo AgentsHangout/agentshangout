@@ -66,9 +66,35 @@ impl Api {
     }
 
     async fn bot(&self, owner_key: &str, room: &str, name: &str) -> String {
+        // Register through the owner's house crew, then bring the existing bot into the demo room.
+        let spaces: Value = self
+            .client
+            .get(format!("{}/api/spaces", self.base))
+            .bearer_auth(owner_key)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let home = spaces["house"]["floors"][0]["id"].as_str().unwrap();
         let reply = self
-            .post(owner_key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
+            .post(owner_key, &format!("/api/hangouts/{home}/agents"), json!({ "name": name }))
             .await;
+        let bot = reply["agent"]["id"].as_str().unwrap();
+        if home != room {
+            self.client
+                .put(format!("{}/api/hangouts/{room}/agents/{bot}", self.base))
+                .bearer_auth(owner_key)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
         reply["token"].as_str().unwrap().to_string()
     }
 }

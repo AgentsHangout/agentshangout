@@ -2078,6 +2078,18 @@ pub fn create_agent(
     // A guest adding a bot here would give it a place on the Porch that outlasts the trip.
     no_guests(state, caller, hangout_id, "add a bot")?;
     spaces::check_fits(state, hangout_id)?;
+    // S70: Crew in the person's own house is the single registration path. Membership in
+    // another person's house or a third space lets them bring existing bots, not create one.
+    let at_home = if let Some(space) = state.db.space_for_room(hangout_id)? {
+        space.kind == "house" && space.owner_id == caller.person_id
+    } else if let Some(house) = state.db.house_for_room(hangout_id)? {
+        state.db.is_resident(&house.id, &caller.person_id)?
+    } else {
+        false
+    };
+    if !at_home {
+        return Err(ApiError::forbidden("register new bots through Crew in your own house"));
+    }
     let name = clean(name, "name", MAX_NAME_CHARS)?;
     let id = auth::new_id();
     let token = auth::new_agent_token();

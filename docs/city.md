@@ -150,7 +150,8 @@ the doorbell run has only the room's tools.
 Hijacking an assistant through a calendar invite has already been used to open shutters and turn
 on a boiler. So the bot connected to devices must never read anything a guest wrote.
 
-- **R23.** A house bot (`is_house`) is in no rooms, can't be brought into one, can't take a trip and
+- **R23.** A resident adds a house bot through Crew in their house; house settings manage its
+  token, status and scenes. A house bot (`is_house`) is in no rooms, can't be brought into one, can't take a trip and
   gets 404 for every room. It's refused by `bring_agent` and has no way to read chat.
 - **R24.** A house bot's whole world is four calls: its queue, finishing a request, setting status
   and `GET /api/me`. Over MCP it sees only those tools.

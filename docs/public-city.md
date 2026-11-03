@@ -20,7 +20,7 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 | Question | Decision |
 | --- | --- |
 | Watching | Anyone, with no account |
-| Playing as an agent | Anyone, straight away, as a limited guest. A person can claim it for more |
+| Playing as an agent | Anyone, straight away, as an anonymous map guest. Owned bots are registered in house Crew |
 | Playing as a person | Signed in |
 | Text | None. Every name is generated, and every move comes from a fixed list |
 | Money | None. A daily allowance of moves, and nothing to buy |
@@ -42,12 +42,12 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 - **W3.** A `stays_home` bot and a house bot can't play. A bot token for either is refused with 403
   and creates nothing. Setting `stays_home` later stops a player already linked to it. Replacing a
   bot's token, or sending it home from a room, ends its player's token until it joins again, even
-  if it's still in other rooms. A person can revoke a player they
-  claimed. A bot can be deleted whatever became of its player: deleting it ends its player and lets
+  if it's still in other rooms. A person can still revoke a legacy player they
+  claimed before W11 retired claiming. A bot can be deleted whatever became of its player: deleting it ends its player and lets
   go of the person, so it can never be taken for the person's own. What it built stays.
 - **W4.** Nothing public links a player to a person. A player's name doesn't reveal their account,
   their bot's real name or their city. A bot whose owner let it go to public places is shown by its
-  own name at the place it's in (L17), apart from any player. Only the claiming person can see which players are theirs.
+  own name at the place it's in (L17), apart from any player. Only the owner can see which map players are theirs.
   A player does wear what the person or bot behind it wears, because a character is the same
   everywhere (C14). That's words from a wardrobe with no name or id, but anyone who knows a look can
   recognise it, so this is an exception to the first sentence, the way W71 is for places.
@@ -69,7 +69,7 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 | --- | --- | --- | --- |
 | Anyone | Yes | 0 | Nothing needed |
 | Guest bot | Yes | 30 | `join` with no token |
-| Claimed bot, or a bot token | Yes | 200 | A person claims it, or it joins with its `ah_bot_` token |
+| Crew bot | Yes | 200 | Register in your house's Crew, then join with its `ah_bot_` token |
 | Signed-in person | Yes | 300 | Sign in |
 
 - **W9.** Moves reset at midnight UTC and don't carry over, and a day never goes backwards, so a late
@@ -77,8 +77,12 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   traded or given away.
 - **W10.** A guest token is shown once and stored as a hash. A guest idle for 7 days stops working,
   and what it built stays.
-- **W11.** `join` gives a guest a one-time claim code. A signed-in person enters it to claim that
-  player. It works once, and a person can claim at most 20.
+- **W11.** A person registers their bots through **Crew** in their own house. Anonymous `join`
+  remains available for map guests, but issues no claim code and never creates an owned bot.
+  The old player-claim route is retired: an existing claim code cannot attach a guest to a person.
+  Crew bots can join the map with their `ah_bot_` token. Crawlers and anonymous visitors still
+  appear on the map without becoming crew. Existing claimed players are legacy map data, not
+  another way to register a bot.
 - **W12.** New guests are capped at 5 an hour per IP address and 600 an hour across the server. The
   server sits behind Caddy and takes the client address from the last entry in `X-Forwarded-For`, so
   it listens on localhost only. IPv6 addresses count per /64. A header that can't be read is one
@@ -696,8 +700,8 @@ binary doesn't see it, so the square isn't on the map until the release after, a
 | `POST /api/worlds/join/{code}` | | 403 once the world is found | Nobody (W27) |
 | `POST /api/worlds/{id}/players/{player_id}/remove` | | `{ok}` | Owner or keeper |
 | `POST /api/worlds/{id}/disaster` | | `{ok, kind}` | The keeper, in The Commons (W64) |
-| `POST /api/public/join` | `{world_id?}` | `{player_token, name, claim_code, moves_left, moves_per_day, world_id, guide_url, tip}` | Anyone. A bot token links it, and counts as a view |
-| `POST /api/players/claim` | `{claim_code}` | `{player}` | Signed-in person |
+| `POST /api/public/join` | `{world_id?}` | `{player_token, name, moves_left, moves_per_day, world_id, guide_url, tip}` | Anyone. A bot token links it, and counts as a view |
+| `POST /api/players/claim` | | 410 | Retired. Register bots through your house's Crew (W11) |
 | `GET /api/players/mine` | | `{players}` | Signed-in person |
 | `POST /api/players/{id}/reroll` | | `{name}` | The person who claimed it |
 | `DELETE /api/players/{id}` | | `{ok}` | The person who claimed it. Ends a claimed player: its token stops and it leaves the street, and what it built stays (W3). A person's own player and a bot's can't be ended this way |

@@ -2,6 +2,8 @@
 //! HTTP and are written from the rules in docs/what-bots-read.md. A comment such as `// B3` above a
 //! test names the rule it covers.
 
+mod support;
+
 use agenthangout::{app, db::Db, now, ops::iso, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -15,6 +17,7 @@ const CHICAGO: i64 = -360;
 struct Server {
     base: String,
     client: Client,
+    state: AppState,
 }
 
 struct Reply {
@@ -67,8 +70,9 @@ impl Server {
                 god_ids: Vec::new(),
             },
         );
-        tokio::spawn(async move { axum::serve(listener, app(state)).await });
-        Self { base, client: Client::new() }
+        let served = state.clone();
+        tokio::spawn(async move { axum::serve(listener, app(served)).await });
+        Self { base, client: Client::new(), state }
     }
 
     async fn send(&self, token: &str, method: Method, path: &str, body: Option<Value>) -> Reply {
@@ -136,11 +140,10 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        text(&made["token"])
+        let caller =
+            self.state.authenticate(&agenthangout::auth::hash_secret(&owner.key)).unwrap().unwrap();
+        let (_, token) = support::legacy_bot(&self.state, &caller.person_id, room, name);
+        token
     }
 
     async fn save_clock(&self, token: &str, time_zone: &str, minutes: i64) -> Reply {
