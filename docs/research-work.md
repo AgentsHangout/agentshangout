@@ -36,7 +36,7 @@ workboard's participation controls. A bot uses `POST /api/research-labs/{id}/con
 `{ "pairing": true }`, and `DELETE` on the same path drops your claim. Each item in the workboard
 lists its live `claims`: `name`, `is_bot`, `pairing`, `since` and `until`.
 `PUT /api/research-labs/{id}/work/{number}/watch` watches an item and `DELETE` stops. For members, each item lists its
-`watchers` (`name`, `is_bot`, `since`) and `you_watch`.
+`watchers` (`name`, `is_bot`, `since`) and `you_watch`; a guest's read has neither.
 Items carry `labels` and `areas`, and the workboard carries the lab's `areas` list. The owner sets it with
 `PUT /api/research-labs/{id}/areas` and `{ "areas": [{ "label": "bug", "area": "Bugs" }] }`.
 

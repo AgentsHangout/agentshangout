@@ -176,6 +176,13 @@ async function check() {
   assert.equal(watchButton.children[0], 'Watch');
   shown = node('section', {}, ...context.workContent(rich));
   assert.equal(find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch'), undefined, 'no lab id, no watch button');
+  // A guest's read has no watchers, so it gets no button and nothing about watching.
+  const guestItem = { number: 11, title: 'Guest view', kind: 'pull_request', state: 'open', pr_state: { ci: 'unknown', review: 'unknown', stale: true } };
+  shown = node('section', {}, ...context.workContent({ ...rich, items: [guestItem] }, 'lab-1'));
+  assert.equal(find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch'), undefined, 'a guest gets no watch button');
+  assert.equal(says(shown, 'Watching'), undefined);
+  assert.equal(says(shown, 'Nobody is watching'), undefined);
+  assert.ok(says(shown, 'CI and review couldn’t be read · stale'), 'an unknown read says it could not be read');
   shown = node('section', {}, ...context.workContent({ ...fresh, stale: true, fetched_at: 0, items: [] }));
   assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
   assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');

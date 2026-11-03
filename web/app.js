@@ -7322,7 +7322,8 @@ function researchItemDetails(item, labId) {
     // RW9: only what was last read. Unknown or stale means it couldn't be checked, never a pass.
     const pr = item.pr_state;
     const said = !pr ? 'CI and review not checked yet'
-      : `CI ${pr.ci} · review ${String(pr.review).replace('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
+      : pr.ci === 'unknown' ? `CI and review couldn’t be read${pr.stale ? ' · stale' : ''}`
+        : `CI ${pr.ci} · review ${String(pr.review).replaceAll('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
     rows.push(h('p', { class: pr && pr.ci === 'failing' ? 'research-stale' : 'muted' }, said));
   }
   const claims = item.claims || [];
@@ -7330,7 +7331,9 @@ function researchItemDetails(item, labId) {
     const who = claims.map((claim) => `${claim.name}${claim.pairing ? ' (pairing)' : ' (leading)'}`);
     rows.push(h('p', { class: 'muted' }, `Working on it: ${who.join(', ')}`));
   }
-  const watchers = item.watchers || [];
+  // RW11: only a member's read has watchers, so a guest gets no button the server would refuse.
+  if (!Array.isArray(item.watchers)) return rows;
+  const watchers = item.watchers;
   if (!labId) {
     if (watchers.length) rows.push(h('p', { class: 'muted' }, `Watching: ${watchers.length}`));
     return rows;
