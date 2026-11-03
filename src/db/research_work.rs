@@ -95,6 +95,104 @@ impl Db {
         let rows = q.query_map([lab_id],|r|{let verified:Option<i64>=r.get(5)?;Ok(json!({"number":r.get::<_,i64>(0)?,"agent_id":r.get::<_,String>(1)?,"bot_name":r.get::<_,String>(6)?,"owner_name":r.get::<_,String>(7)?,"github_user_id":r.get::<_,String>(2)?,"source":r.get::<_,String>(3)?,"recorded_at":r.get::<_,i64>(4)?,"verified_merged":verified.is_some(),"award":verified.map(|_|"research_contributor"),"swag":verified.map(|_|"research_contributor_badge"),"verified_at":verified}))})?;
         rows.collect()
     }
+    /// RW11: starts watching an item, or keeps watching it. False, and nothing written, when the
+    /// watcher already watches `most` other items in this lab.
+    #[allow(clippy::too_many_arguments)] // Explicit stored fields, like the other insert methods.
+    pub fn watch_research_work(
+        &self,
+        lab_id: &str,
+        number: u64,
+        watcher: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+        name: &str,
+        most: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let watching: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM research_work_watches
+             WHERE lab_id = ?1 AND watcher = ?2 AND number != ?3",
+            params![lab_id, watcher, number as i64],
+            |r| r.get(0),
+        )?;
+        if watching >= most {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO research_work_watches (lab_id, number, watcher, person_id, agent_id, name, since)
+             VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (lab_id, number, watcher) DO NOTHING",
+            params![lab_id, number as i64, watcher, person_id, agent_id, name, now],
+        )?;
+        Ok(true)
+    }
+
+    /// RW11: stops watching; false if they weren't.
+    pub fn unwatch_research_work(
+        &self,
+        lab_id: &str,
+        number: u64,
+        watcher: &str,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "DELETE FROM research_work_watches WHERE lab_id = ? AND number = ? AND watcher = ?",
+            params![lab_id, number as i64, watcher],
+        )? > 0)
+    }
+
+    /// RW11: everyone watching a lab's items, oldest first.
+    pub fn research_work_watches(
+        &self,
+        lab_id: &str,
+    ) -> rusqlite::Result<Vec<crate::research_work::Watcher>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT number, watcher, person_id, agent_id, name, since FROM research_work_watches
+             WHERE lab_id = ? ORDER BY since, watcher",
+        )?;
+        let rows = stmt.query_map([lab_id], |r| {
+            let agent_id: Option<String> = r.get(3)?;
+            Ok(crate::research_work::Watcher {
+                number: r.get::<_, i64>(0)? as u64,
+                watcher: r.get(1)?,
+                person_id: r.get(2)?,
+                is_bot: agent_id.is_some(),
+                agent_id,
+                name: r.get(4)?,
+                since: r.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// RW10: a lab's label names, in the order its owner gave them.
+    pub fn research_work_areas(&self, lab_id: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT label, area FROM research_work_areas WHERE lab_id = ? ORDER BY position",
+        )?;
+        let rows = stmt.query_map([lab_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// RW10: replaces a lab's label names in one step.
+    pub fn set_research_work_areas(
+        &self,
+        lab_id: &str,
+        areas: &[(String, String)],
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM research_work_areas WHERE lab_id = ?", [lab_id])?;
+        for (position, (label, area)) in areas.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO research_work_areas (lab_id, label, area, position) VALUES (?, ?, ?, ?)",
+                params![lab_id, label, area, position as i64],
+            )?;
+        }
+        tx.commit()
+    }
+
     /// RW8: the claims on a lab's items that haven't run out, oldest first.
     pub fn research_work_claims(
         &self,
@@ -247,6 +345,14 @@ impl Db {
         Ok(())
     }
     /// Moves a repo's last pull request reads back in time, for tests of the five-minute limit (RW9).
+    /// RW11: makes the workboard's last refresh look `by` seconds older, so a test can refresh it.
+    pub fn age_research_work_refresh(&self, repo: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE research_work_cache SET attempted_at = attempted_at - ?2 WHERE repo = ?1",
+            params![repo, by],
+        )?;
+        Ok(())
+    }
     pub fn age_research_work_pr_checks(&self, repo: &str, by: i64) -> rusqlite::Result<()> {
         self.conn().execute(
             "UPDATE research_work_pr_state SET attempted_at = attempted_at - ?2 WHERE repo = ?1",

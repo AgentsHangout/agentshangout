@@ -3003,7 +3003,7 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(names, ["fall", "halloween", "winter"]);
+    assert_eq!(names, ["fall", "halloween", "winter", "stargazer"]);
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -3803,6 +3803,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "work",
             "fall",
             "winter",
+            "stargazer",
             "spooky",
             "signs"
         ]
@@ -3996,7 +3997,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 13);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 18);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -6112,4 +6113,55 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
         .await
         .status
         .is_client_error());
+}
+
+// I93: station actions are fixed catalog metadata, including in bot snapshots.
+#[tokio::test]
+async fn functional_stations_open_the_existing_room_features() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    for (n, (kind, opens)) in [
+        ("board_station", "boards"),
+        ("shared_notes_station", "notes"),
+        ("calendar_stand", "calendar"),
+        ("corkboard", "pins"),
+        ("research_board", "research"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let entry =
+            catalog["items"].as_array().unwrap().iter().find(|item| item["kind"] == *kind).unwrap();
+        assert_eq!(entry["opens"], *opens);
+        assert_eq!(entry["unlocked"], true);
+        let id = server.item(&ann, &room, kind, (n as i64 * 3, 0)).await;
+        let snapshot = server.snapshot(&ann.key, &room).await;
+        assert_eq!(
+            snapshot["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap()
+                ["opens"],
+            *opens
+        );
+        let bot = server.read_room(&scout.token, &room).await;
+        assert_eq!(
+            bot["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap()["opens"],
+            *opens
+        );
+        let used = server.use_item(&scout.token, &id).await.ok();
+        assert_eq!(used["opens"], *opens);
+        assert!(used["tools"].as_str().is_some_and(|tools| !tools.is_empty()));
+        assert!(used["doing"].is_string());
+        assert!(used["until"].is_string());
+        let occupied = server.snapshot(&ann.key, &room).await;
+        assert!(occupied["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap()["used_by"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(scout.id)));
+    }
 }

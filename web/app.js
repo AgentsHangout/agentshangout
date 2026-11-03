@@ -1389,8 +1389,9 @@ function creditsCard(credits) {
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
       now.history.length ? h('h3', {}, 'History') : null,
       now.history.length ? h('ul', { class: 'room-list' }, now.history.map(historyRow)) : null,
+      questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
-      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs and nothing else, and can\'t be sent, bought or cashed out.'),
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
     ].filter(Boolean));
   }
 
@@ -1430,6 +1431,26 @@ function creditCoin(me, account) {
   document.addEventListener('visibilitychange', back);
   refresh();
   return button;
+}
+
+// The endpoint deliberately returns only this person's open escrow card ids and amounts. The
+// room may no longer be accessible, so cancellation must work here without exposing card content.
+function questionEscrowRows(questions, error, afterCancel) {
+  if (!questions.length) return null;
+  return h('section', { class: 'question-escrow', 'aria-label': 'Reserved question credits' },
+    h('h3', {}, 'Reserved question credits'),
+    h('ul', { class: 'room-list' }, questions.map((question) => h('li', {},
+      h('strong', {}, count(question.amount, 'credit', 'credits')),
+      h('span', { class: 'muted' }, ' reserved on a question'),
+      h('button', {
+        type: 'button',
+        class: 'ghost',
+        onclick: act(error, async () => {
+          if (!confirm(`Cancel this question bounty? The reserved ${count(question.amount, 'credit', 'credits')} will be returned to you.`)) return;
+          await api(`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`, { method: 'POST', body: {} });
+          await afterCancel();
+        }),
+      }, 'Cancel and refund')))));
 }
 
 // What a house asks, as a list. With the asker's standing each line also says where they are.
@@ -1965,6 +1986,18 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         }, 'Remove it')));
   }
 
+  // Objects that open a room workspace declare the action in the fixed item catalog.
+  function openItemWorkspace(item) {
+    switch (item?.opens) {
+      case 'boards': panels.open('boards'); break;
+      case 'notes': panels.open('notes'); break;
+      case 'calendar': if (!view().guest) panels.open('calendar'); break;
+      case 'pins': panels.open('pins'); break;
+      case 'research': useDisplay(); break;
+      default: break;
+    }
+  }
+
   // In build mode a click on something selects it and offers what this person can do with it.
   function choose(item, event) {
     chosen = item?.id ?? null;
@@ -1972,6 +2005,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     if (!item) return;
     const can = mayChange(item);
     const items = [
+      ...(item.opens ? [{ label: 'Open', run: () => openItemWorkspace(item) }] : []),
       ...(can ? [
         { label: 'Move', run: () => pickUp(item) },
         { label: 'Turn', run: () => turn(item) },
@@ -2090,6 +2124,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const furniture = building && !item ? room.furnitureAt(event.clientX, event.clientY) : null;
     if (furniture) chooseFurniture(furniture, event);
     else if (building) choose(item, event);
+    else if (item?.opens) openItemWorkspace(item);
     else if (item?.holds_notes) openNotes(item);
     else if (item?.kind === 'research_display') useDisplay();
   });
@@ -2283,6 +2318,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         can ? action('Turn', () => turn(item)) : null,
         can ? action('Remove', () => remove(item), 'link danger') : null,
         item.holds_notes ? action(`Notes (${item.notes})`, () => openNotes(item)) : null,
+        item.opens ? action('Open', () => openItemWorkspace(item)) : null,
         item.kind === 'research_display' ? action('Use display', useDisplay) : null));
   }
 
@@ -2879,6 +2915,7 @@ async function roomView(id) {
   const crewEl = h('div', { class: 'list' });
   const crewLegendEl = h('div', { class: 'legend' });
   const notesEl = h('div', { class: 'list' });
+  const pinsPanelEl = h('section', { class: 'stack' });
   const heldEl = h('div', { class: 'stack', hidden: true });
   // Cards stay put across reloads, or the one every 30 seconds would wipe a reply being typed.
   // H1: notes for this person's own bots. Only they and their bots ever see these.
@@ -3110,6 +3147,52 @@ async function roomView(id) {
         h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
         h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')));
     }
+    renderPinsPanel();
+  }
+
+  function renderPinsPanel() {
+    const pins = snapshot.pins || [];
+    const clear = snapshot.can_clear_pins && pins.length
+      ? h('button', { type: 'button', class: 'ghost danger', onclick: async () => {
+        try {
+          await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'DELETE' });
+          await reload();
+        } catch (error) {
+          say(error.message);
+        }
+      } }, 'Clear pins') : null;
+    const policy = snapshot.pin_policy || 'anyone';
+    const publicPolicy = snapshot.can_clear_pins && snapshot.floor?.floor?.access === 'public'
+      ? h('select', {
+        'aria-label': 'Who can pin',
+        onchange: async (event) => {
+          try {
+            await api(`/api/hangouts/${encodeURIComponent(id)}/pin-policy`, {
+              method: 'PUT', body: { policy: event.target.value },
+            });
+            await reload();
+          } catch (error) {
+            say(error.message);
+          }
+        },
+      },
+      h('option', { value: 'anyone', selected: policy === 'anyone' }, 'Anyone can pin'),
+      h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
+      h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')) : null;
+    pinsPanelEl.replaceChildren(
+      h('p', { class: 'muted' }, 'Pins stay with this room. Select one to read it.'),
+      pins.length
+        ? h('div', { class: 'list pin-list' }, pins.map((pin) => h('button', {
+          type: 'button', class: 'pin-card', onclick: () => pinDialog(pin), title: pin.title,
+        },
+        h('span', { class: 'pin-kind' }, pin.kind),
+        h('span', { class: 'pin-title' }, pin.title),
+        h('span', { class: 'pin-by' }, pinBy(pin)))))
+        : h('p', { class: 'muted' }, 'Nothing pinned yet.'),
+      h('div', { class: 'event-actions' },
+        snapshot.can_pin ? h('button', { type: 'button', class: 'primary', onclick: addPinDialog }, 'Pin something') : null,
+        clear,
+        publicPolicy));
   }
 
   // The status bar's copy can be cut short on a small screen, and the one in the Crew panel never is.
@@ -3780,6 +3863,15 @@ async function roomView(id) {
               public_places: Boolean(values.public_places),
             },
           });
+          // L47: a workplace keeps it at its job instead of wandering.
+          const room = values.workplace || '';
+          const job = (values.job || '').trim();
+          const was = routine.workplace;
+          if (!room && was) {
+            await api(`/api/agents/${agent.id}/workplace`, { method: 'DELETE' });
+          } else if (room && (!was || was.room_id !== room || was.job !== job)) {
+            await api(`/api/agents/${agent.id}/workplace`, { method: 'PUT', body: { room_id: room, job } });
+          }
           dialog.close();
           await reload();
         }),
@@ -3790,6 +3882,11 @@ async function roomView(id) {
           h('input', { type: 'checkbox', name: `day_${day}`, checked: routine.days.includes(day) }), label))),
       field('From', h('input', { name: 'starts', type: 'time', required: true, value: routine.starts }), 'In your own time.'),
       field('Until', h('input', { name: 'ends', type: 'time', required: true, value: routine.ends === '24:00' ? '23:59' : routine.ends }), 'Earlier than From runs past midnight.'),
+      field('Workplace', h('select', { name: 'workplace' },
+        h('option', { value: '' }, 'None: it wanders in its social hours'),
+        (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
+        'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
+      field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
       error,
       h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
   }
@@ -4082,6 +4179,69 @@ async function roomView(id) {
   let boardsShown = '';
   const canRunBoards = () => Boolean(snapshot.floor?.runs_it) && !snapshot.guest;
   const canWriteCards = () => Boolean(snapshot.floor) && !snapshot.guest;
+  let bountyCredits = null;
+  let bountyCreditsAt = 0;
+  async function readBountyCredits() {
+    if (snapshot.guest) return null;
+    if (Date.now() - bountyCreditsAt < 30_000) return bountyCredits;
+    try {
+      bountyCredits = (await api('/api/credits')).balance;
+    } catch {
+      bountyCredits = null;
+    }
+    bountyCreditsAt = Date.now();
+    return bountyCredits;
+  }
+  function bountyCardUi(card) {
+    const bounty = card.bounty;
+    if (bounty) return h('section', { class: 'bounty-block' },
+      h('h5', {}, 'Question bounty'),
+      h('p', { class: 'muted' },
+        `${bounty.amount == null ? 'Funded' : `${count(bounty.amount, 'credit', 'credits')} offered by ${bounty.sponsor_name}`} · ${bounty.status === 'paid' ? 'paid' : bounty.status === 'refunded' ? 'cancelled and refunded' : 'open'}`),
+      ...(bounty.submissions || []).map((submission) => h('article', { class: 'board-card' },
+        h('p', {}, submission.text),
+        h('p', { class: 'muted' }, submission.owner_name ? `${submission.bot_name}, for ${submission.owner_name}` : submission.bot_name),
+        bounty.status === 'paid' && bounty.accepted_submission_id === submission.id
+          ? h('p', { class: 'muted' }, 'Accepted answer · reward paid') : null,
+        submission.can_accept ? h('button', {
+          type: 'button', class: 'primary',
+          onclick: act(boardsError, async () => {
+            if (!confirm(`Accept this answer and pay ${count(bounty.amount, 'credit', 'credits')} to ${submission.owner_name}?`)) return;
+            await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/accept`, {
+              method: 'POST', body: { submission_id: submission.id },
+            });
+            bountyCreditsAt = 0;
+            await loadBoards(true);
+          }),
+        }, 'Accept answer and pay') : null)),
+      bounty.can_cancel ? h('button', {
+        type: 'button', class: 'ghost danger',
+        onclick: act(boardsError, async () => {
+          if (!confirm(`Cancel this bounty? The reserved ${count(bounty.amount, 'credit', 'credits')} will be returned to you.`)) return;
+          await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/cancel`, { method: 'POST', body: {} });
+          bountyCreditsAt = 0;
+          await loadBoards(true);
+        }),
+      }, 'Cancel and refund') : null);
+    if (!card.can_fund) return null;
+    return h('form', {
+      class: 'stack',
+      onsubmit: submitter(boardsError, async (values) => {
+        await api(`/api/cards/${encodeURIComponent(card.id)}/bounty`, {
+          method: 'POST', body: { amount: Number(values.amount) },
+        });
+        bountyCreditsAt = 0;
+        await loadBoards(true);
+      }),
+    },
+    h('p', { class: 'muted' }, 'Offer credits for a helpful answer. The amount is reserved until you accept an answer or cancel.'),
+    field('Credits', h('input', {
+      type: 'number', name: 'amount', required: true, min: 1, step: 1,
+      max: Math.min(bountyCredits ?? 100, 100),
+      'aria-label': `Credits for ${card.title}`,
+    })),
+    h('button', { type: 'submit', disabled: bountyCredits === 0 }, 'Offer bounty'));
+  }
   const githubLink = (name, issue) => {
     if (!name || !name.includes('/')) return null;
     const href = issue ? `https://github.com/${name}/issues/${issue}` : `https://github.com/${name}`;
@@ -4095,16 +4255,21 @@ async function roomView(id) {
     if (!force && boardsEl.querySelector(':focus')) return;
     const ticket = ++boardsTicket;
     let data;
+    let creditsData = null;
     try {
-      data = await api(`/api/hangouts/${encodeURIComponent(id)}/boards`);
+      [data, creditsData] = await Promise.all([
+        api(`/api/hangouts/${encodeURIComponent(id)}/boards`),
+        readBountyCredits(),
+      ]);
     } catch (error) {
       if (ticket !== boardsTicket) return;
       boardsError.textContent = error.message;
       return;
     }
     if (ticket !== boardsTicket || (!force && boardsEl.querySelector(':focus'))) return;
+    bountyCredits = creditsData ?? null;
     const boards = data.boards || [];
-    const shown = JSON.stringify(boards);
+    const shown = JSON.stringify({ boards, bountyCredits });
     if (!force && shown === boardsShown && boardsEl.childElementCount) return;
     boardsShown = shown;
     const createBoard = canRunBoards() ? h('form', {
@@ -4124,6 +4289,8 @@ async function roomView(id) {
         field('Name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Board name', 'aria-label': 'Board name' })),
         h('button', { type: 'submit', class: 'primary' }, 'Put up a board')) : null;
     boardsEl.replaceChildren(
+      data.trust_note ? h('p', { class: 'muted' }, data.trust_note) : null,
+      bountyCredits !== null ? h('p', { class: 'muted' }, `Your bounty credits: ${count(bountyCredits, 'credit', 'credits')}`) : null,
       ...[researchLab ? h('aside', { class: 'research-intro' },
         h('h3', {}, `${researchLab.name} workboard`),
         h('p', {}, researchLab.purpose),
@@ -4161,15 +4328,19 @@ async function roomView(id) {
         ...(board.cards || []).map((card) => {
           const rewrite = card.person_id === snapshot.you.person_id || canRunBoards();
           const statuses = board.kind === 'jobs' ? ['open', 'filled'] : board.kind === 'issues' ? ['open', 'closed'] : [];
+          const bountyUi = bountyCardUi(card);
           return h('article', { class: 'board-card' },
             h('h4', {}, card.title),
             card.text ? h('p', {}, card.text) : null,
             h('p', { class: 'muted' },
               card.via_bot ? `${card.written_by}, by ${card.via_bot}` : card.written_by,
+              card.from_your_owner ? ' · from your owner' : '',
+              card.your_owner_marked ? ' · marked by your owner' : '',
               card.status ? ` · ${card.status}` : '',
               ' · ',
               whenText(card.updated_at)),
             board.github && card.github_issue ? h('p', {}, githubLink(board.github, card.github_issue)) : null,
+            bountyUi,
             canWriteCards() && statuses.length ? h('div', { class: 'event-actions' },
               statuses.filter((status) => status !== card.status).map((status) => h('button', {
                 type: 'button',
@@ -4295,6 +4466,7 @@ async function roomView(id) {
     !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
       && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
+  panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: addOwnerNote }, 'Add')),

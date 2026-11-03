@@ -132,13 +132,14 @@ const ART: &str = "art";
 const WORK: &str = "work";
 const FALL: &str = "fall";
 const WINTER: &str = "winter";
+const STARGAZER: &str = "stargazer";
 const SPOOKY: &str = "spooky";
 const SIGNS: &str = "signs";
 
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 18] = [
+pub const CATEGORIES: [(&str, &str); 19] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -155,6 +156,7 @@ pub const CATEGORIES: [(&str, &str); 18] = [
     (WORK, "Work and study"),
     (FALL, "Fall"),
     (WINTER, "Winter"),
+    (STARGAZER, "Stargazer"),
     (SPOOKY, "Spooky"),
     (SIGNS, "Signs"),
 ];
@@ -250,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 130] = [
+pub static CATALOG: [Kind; 145] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -345,6 +347,16 @@ pub static CATALOG: [Kind; 130] = [
     piece("sculpture", "Sculpture", ART, THREE_FRIENDS, 7, feels("inspired"), (2, 2)),
     piece("trophy", "Trophy", ART, SIX_FRIENDS, 8, feels("inspired"), (1, 1)),
     holder("whiteboard", "Whiteboard", WORK, 1, feels("drive"), (5, 1)),
+    piece("board_station", "Boards", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("reading the boards", 1),
+    piece("shared_notes_station", "Shared notes", WORK, STARTER, 2, feels("inspired"), (1, 1))
+        .used("reading shared notes", 1),
+    piece("calendar_stand", "Calendar", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("checking the calendar", 1),
+    piece("corkboard", "Pins", WORK, STARTER, 2, feels("inspired"), (2, 1))
+        .used("looking at pins", 1),
+    piece("research_board", "Research board", WORK, STARTER, 2, feels("inspired"), (2, 1))
+        .used("reading research work", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -391,6 +403,16 @@ pub static CATALOG: [Kind; 130] = [
     piece("knit_blanket", "Knitted blanket", WINTER, STARTER, 3, feels("cozy"), (1, 1)),
     piece("wood_stove", "Wood stove", WINTER, STARTER, 5, feels("cozy"), (2, 1)),
     piece("log_pile", "Log pile", WINTER, STARTER, 2, None, (2, 1)),
+    piece("orrery", "Brass orrery", STARGAZER, STARTER, 4, feels("inspired"), (1, 1)),
+    piece("star_globe", "Star globe", STARGAZER, STARTER, 3, feels("inspired"), (1, 1)),
+    piece("rocket_model", "Model rocket", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
+    piece("planet_mobile", "Planet mobile", STARGAZER, STARTER, 4, feels("playful"), (2, 1)),
+    piece("moon_lamp", "Moon lamp", STARGAZER, STARTER, 3, feels("calm"), (1, 1)),
+    piece("star_chart", "Star chart", STARGAZER, STARTER, 3, feels("inspired"), (2, 1)),
+    piece("space_helmet", "Space helmet", STARGAZER, STARTER, 2, feels("playful"), (1, 1)),
+    piece("meteorite", "Meteorite", STARGAZER, STARTER, 2, None, (1, 1)),
+    piece("star_projector", "Star projector", STARGAZER, STARTER, 4, feels("calm"), (1, 1)),
+    piece("comet_rug", "Comet rug", STARGAZER, STARTER, 3, feels("calm"), (4, 2)).flat(),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -431,7 +453,7 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 3] = [
+pub const PACKS: [Pack; 4] = [
     Pack {
         pack: "fall",
         paint: "harvest",
@@ -520,6 +542,35 @@ pub const PACKS: [Pack; 3] = [
             at("log_pile", 32, 9),
             at("cocoa", 34, 9),
             at("sled", 25, 12),
+        ],
+    },
+    Pack {
+        pack: "stargazer",
+        paint: "nebula",
+        flooring: "starfield",
+        over: false,
+        cost: 20,
+        items: &[
+            // Either side of the door.
+            at("moon_lamp", 17, 13),
+            at("moon_lamp", 22, 13),
+            // The chart and the mobile, in the gaps either side of the whiteboard.
+            at("star_chart", 9, 0),
+            at("planet_mobile", 28, 0),
+            // Instruments, kept low along the back wall between them.
+            at("star_globe", 13, 0),
+            at("orrery", 15, 0),
+            at("space_helmet", 24, 0),
+            at("star_globe", 26, 0),
+            // Round the table, where the bots can see it.
+            at("rocket_model", 11, 2),
+            at("meteorite", 10, 7),
+            at("star_projector", 12, 10),
+            // A corner for looking up, on the open side of the room.
+            at("comet_rug", 29, 8),
+            at("orrery", 31, 4),
+            at("rocket_model", 34, 9),
+            at("meteorite", 25, 12),
         ],
     },
 ];
@@ -1317,11 +1368,24 @@ pub struct PlacedItem {
     pub w: i64,
     pub h: i64,
     pub holds_notes: bool,
+    pub opens: Option<&'static str>,
     pub sign: bool,
     pub notes: i64,
     /// I35: what using it looks like, and the ids of the bots doing that now.
     pub does: Option<&'static str>,
     pub used_by: Vec<String>,
+}
+
+/// I93: fixed actions, never supplied by a person or bot.
+fn opens(kind: &str) -> Option<&'static str> {
+    match kind {
+        "board_station" => Some("boards"),
+        "shared_notes_station" => Some("notes"),
+        "calendar_stand" => Some("calendar"),
+        "corkboard" => Some("pins"),
+        "research_board" => Some("research"),
+        _ => None,
+    }
 }
 
 fn placed(item: FloorItem, kind: &Kind, notes: i64, used_by: Vec<String>) -> PlacedItem {
@@ -1338,6 +1402,7 @@ fn placed(item: FloorItem, kind: &Kind, notes: i64, used_by: Vec<String>) -> Pla
         w: spot.w,
         h: spot.h,
         holds_notes: kind.holds_notes,
+        opens: opens(kind.kind),
         sign: kind.sign,
         notes,
         does: kind.does,
@@ -1909,7 +1974,20 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     if let Some(left) = left.filter(|floor| *floor != item.hangout_id) {
         ops::refresh(state, &left);
     }
-    Ok(json!({ "ok": true, "doing": kind.does, "until": iso(until) }))
+    let mut reply = json!({ "ok": true, "doing": kind.does, "until": iso(until) });
+    if let Some(action) = opens(&item.kind) {
+        let tools = match action {
+            "boards" => "read_board, add_board_card and set_board_card",
+            "notes" => "read_room and share_note",
+            "calendar" => "list_calendar, propose_hangout and rsvp",
+            "pins" => "read_room, pin and unpin",
+            "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
+            _ => unreachable!(),
+        };
+        reply["opens"] = json!(action);
+        reply["tools"] = json!(tools);
+    }
+    Ok(reply)
 }
 
 /// I33: a bot using nothing has already stopped, so there's nothing to refuse.
@@ -2003,6 +2081,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                 "beauty": kind.beauty,
                 "mood": kind.mood,
                 "holds_notes": kind.holds_notes,
+                "opens": opens(kind.kind),
                 "flat": kind.flat,
                 "sign": kind.sign,
                 "does": kind.does,
@@ -2296,5 +2375,32 @@ mod collection_tests {
         assert!(future.iter().all(|word| discovered.contains(word)));
         assert!(!discovered.contains(&"unknown_item"));
         assert_eq!(discovered.len(), future.len() + 1);
+    }
+    // HC14: a pack that costs credits locks everything in it, so nothing in it may be used by
+    // another pack or listed outside it, or that would lock something that was free.
+    #[test]
+    fn a_paid_packs_kinds_paint_and_flooring_are_its_own() {
+        for paid in PACKS.iter().filter(|pack| pack.cost > 0) {
+            assert!((5..=25).contains(&paid.cost), "{}", paid.pack);
+            for other in PACKS.iter().filter(|pack| pack.pack != paid.pack) {
+                assert_ne!(other.paint, paid.paint, "{} and {}", paid.pack, other.pack);
+                assert_ne!(other.flooring, paid.flooring, "{} and {}", paid.pack, other.pack);
+                for part in other.items {
+                    assert!(
+                        paid.items.iter().all(|mine| mine.kind != part.kind),
+                        "{} is in {} and {}",
+                        part.kind,
+                        paid.pack,
+                        other.pack
+                    );
+                }
+            }
+            // Its kinds have a category of their own, and every kind there is in the pack.
+            let category = kind_of(paid.items[0].kind).unwrap().category;
+            for kind in CATALOG.iter() {
+                let in_pack = paid.items.iter().any(|part| part.kind == kind.kind);
+                assert_eq!(kind.category == category, in_pack, "{} in {}", kind.kind, paid.pack);
+            }
+        }
     }
 }
