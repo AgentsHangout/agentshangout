@@ -4920,7 +4920,7 @@ async function spaceView(id) {
       photos.checked = allowed;
       photos.disabled = false;
     }).catch(() => {});
-    // S77: when bots may take themselves onto this floor. Saved on its own, as soon as it changes.
+    // S80: when bots may take themselves onto this floor. Saved on its own, as soon as it changes.
     const botsError = formError();
     let botsSaved = 'anyone';
     const bots = h('select', {
@@ -7915,7 +7915,7 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), crew: (bot) => bot?.configuration_room
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';

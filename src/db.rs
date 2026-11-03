@@ -1505,7 +1505,7 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
--- S77: whether bots may take themselves onto a floor: `anyone`, the default, has no row.
+-- S80: whether bots may take themselves onto a floor: `anyone`, the default, has no row.
 CREATE TABLE IF NOT EXISTS floor_bot_entry (
     hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
     rule       TEXT NOT NULL CHECK (rule IN ('with_owner', 'nobody')),
@@ -5957,7 +5957,7 @@ impl Db {
 
     // Routines (L1 to L10)
 
-    /// S77: when bots may take themselves onto this floor: `anyone`, `with_owner` or `nobody`.
+    /// S80: when bots may take themselves onto this floor: `anyone`, `with_owner` or `nobody`.
     pub fn floor_bot_entry(&self, hangout_id: &str) -> rusqlite::Result<String> {
         Ok(self
             .conn()
@@ -5970,7 +5970,7 @@ impl Db {
             .unwrap_or_else(|| "anyone".to_string()))
     }
 
-    /// S77: sets it; `anyone` is the default, so it's no row.
+    /// S80: sets it; `anyone` is the default, so it's no row.
     pub fn set_floor_bot_entry(
         &self,
         hangout_id: &str,

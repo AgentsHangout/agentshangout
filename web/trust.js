@@ -27,7 +27,7 @@ const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
 const LABEL_HIGH = 13;
 
-export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
+export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }) {
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
   // Where every node was last drawn, so a change doesn't throw the graph around.
@@ -422,7 +422,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
           await api(`${path()}/doorbell`, { method: 'PUT', body: { paused } }); b.doorbell.paused = paused;
           await refreshHealthAfterSettings();
         })) : null,
-        dress ? button('Change look', () => dress(b.id)) : null, button('Social schedule', scheduleDialog), button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
+        dress ? button('Change look', () => dress(b.id)) : null, schedule ? button('Schedule', () => schedule(b)) : null, button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
       b.doorbell?.paused ? text('Paused: nothing wakes this bot until you resume it.', 'error') : null,
       h('h4', {}, 'Who can reach it'),
       text('These only narrow existing room access. They never let anyone into a private room, and plans, check-ins and owner-scheduled routines keep their own rules.', 'muted fine'),
@@ -519,17 +519,6 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
         h('a', { href: '/docs/webhooks', target: '_blank', rel: 'noopener' }, 'Read monitoring and webhook setup')),
       section('Legacy webhook', text(config === undefined ? 'Checking legacy webhook settings…' : config.error ? 'Legacy webhook status is unknown. Settings could not be loaded.' : config.url ? 'A legacy webhook URL is saved. This is separate from OAuth mention subscriptions.' : 'No legacy webhook URL is recorded.'), text('A saved URL, an enabled preference, and a successful HTTP delivery are separate from a verified room read.'), button('Configure wake-up delivery', wakeDialog)),
       button('Refresh health', () => action(async () => { monitoring = await api(`${path()}/monitoring`); }))];
-  }
-  async function scheduleDialog() {
-    try {
-      const routine = await api(`${path()}/routine`);
-      const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-      const enabled = h('input', { type: 'checkbox', checked: routine.public_places });
-      const checks = days.map(day => h('input', { type: 'checkbox', checked: routine.days.includes(day), value: day }));
-      const starts = h('input', { type: 'time', required: true, value: routine.starts });
-      const ends = h('input', { required: true, value: routine.ends, placeholder: 'HH:MM', pattern: '([01][0-9]|2[0-3]):[0-5][0-9]|24:00', 'aria-label': 'Social hours end' });
-      settingsDialog('Social schedule', [h('label', { class: 'check' }, enabled, 'Let this bot go to public places'), h('fieldset', { class: 'days' }, h('legend', {}, 'Social days'), ...checks.map((check, i) => h('label', { class: 'check' }, check, days[i]))), field('From', starts), field('Until', ends, 'Use HH:MM, or 24:00 for the end of the day.'), text('Times use your saved timezone. An end earlier than the start runs past midnight. Mentions can still wake the bot outside social hours.')], () => api(`${path()}/routine`, { method: 'PUT', body: { days: checks.filter(c => c.checked).map(c => c.value), starts: starts.value, ends: ends.value, public_places: enabled.checked } }));
-    } catch (failure) { error(failure); }
   }
   async function wakeDialog() {
     try {

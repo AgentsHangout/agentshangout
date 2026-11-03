@@ -4221,7 +4221,7 @@ fn requests_to_come_in_are_answered_in_needs_you_and_not_a_button_of_their_own()
     ));
 }
 
-// S77: whoever runs a floor chooses whether bots may take themselves onto it: any time, only while
+// S80: whoever runs a floor chooses whether bots may take themselves onto it: any time, only while
 // their owner has the room open, or never. A person can still bring one in.
 #[tokio::test]
 async fn a_floor_chooses_when_bots_come_in_by_themselves() {

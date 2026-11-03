@@ -1750,7 +1750,7 @@ fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> Api
         }
     }
     check_can_join(state, &caller.person_id, hangout_id)?;
-    // S77: the floor's own say on bots coming in by themselves. A person can still bring one in.
+    // S80: the floor's own say on bots coming in by themselves. A person can still bring one in.
     match state.db.floor_bot_entry(hangout_id)?.as_str() {
         "nobody" => {
             return Err(ApiError::conflict(
@@ -1769,7 +1769,7 @@ fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> Api
     Ok(())
 }
 
-/// S77: the ways a floor can let bots take themselves onto it.
+/// S80: the ways a floor can let bots take themselves onto it.
 const BOT_ENTRY: [&str; 3] = ["anyone", "with_owner", "nobody"];
 
 #[derive(Deserialize)]
@@ -1777,7 +1777,7 @@ struct BotEntry {
     come_in: String,
 }
 
-/// S77: whoever runs a floor reads and sets when bots may come in by themselves, as a person.
+/// S80: whoever runs a floor reads and sets when bots may come in by themselves, as a person.
 async fn bot_entry(
     State(state): State<AppState>,
     caller: Caller,
