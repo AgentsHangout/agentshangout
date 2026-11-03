@@ -9421,8 +9421,6 @@ impl Db {
         Ok(since.zip(until).map(|(since, until)| Visit { since, until }))
     }
 
-    /// Chat lines written after `since`: `messages` for a guest. Times are whole seconds, so the
-    /// second they arrived is left out rather than risk showing a line from before they came.
     /// #354: the `limit` messages just before `before_id`, oldest first, leaving out what
     /// `agent_id` said itself (E4), and for a guest only those after it arrived (`since`), as
     /// `messages_since` reads them.
@@ -9450,6 +9448,8 @@ impl Db {
         Ok(messages)
     }
 
+    /// Chat lines written after `since`: `messages` for a guest. Times are whole seconds, so the
+    /// second they arrived is left out rather than risk showing a line from before they came.
     pub fn messages_since(
         &self,
         hangout_id: &str,

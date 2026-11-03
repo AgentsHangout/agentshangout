@@ -321,12 +321,12 @@ const MENTION_CONTEXT: i64 = 3;
 /// alone. Its own lines aren't in it (E4), and a guest sees only what was said after it walked
 /// in, as `read_room` shows it (S19).
 fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<Value> {
-    let since = state
-        .db
-        .bot_visit(&message.hangout_id, agent_id, now())
-        .ok()
-        .flatten()
-        .map(|visit| visit.since);
+    // If it can't be told whether the bot is a guest, it gets no context rather than history it
+    // might not be allowed to read.
+    let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
+        return Vec::new();
+    };
+    let since = visit.map(|visit| visit.since);
     state
         .db
         .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
