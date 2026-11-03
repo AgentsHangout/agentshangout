@@ -236,10 +236,19 @@ pub fn workplace_of(state: &AppState, agent_id: &str) -> ApiResult<Option<(Strin
     Ok(can_work_at(state, agent_id, &room)?.then_some((room, job)))
 }
 
-/// L47: a room this bot belongs to, or a public floor it can walk in on as a guest.
+/// L47: a room this bot belongs to, or a public floor it can walk in on as a guest: one whose
+/// space hasn't turned its owner out, as `walk_bot_in` and `public_floors` require.
 fn can_work_at(state: &AppState, agent_id: &str, room: &str) -> ApiResult<bool> {
-    Ok(state.db.belongs_to_room(room, agent_id)?
-        || state.db.floor(room)?.is_some_and(|floor| floor.access == "public"))
+    if state.db.belongs_to_room(room, agent_id)? {
+        return Ok(true);
+    }
+    let Some(floor) = state.db.floor(room)?.filter(|floor| floor.access == "public") else {
+        return Ok(false);
+    };
+    let Some(agent) = state.db.agent(agent_id, now())? else {
+        return Ok(false);
+    };
+    Ok(!state.db.is_turned_out(&floor.space_id, &agent.owner_id)?)
 }
 
 pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<Routine> {

@@ -287,7 +287,8 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   back. Only its owner's `GET` on the routine lists `workplace_choices`, the rooms it belongs to. On
   a public floor it isn't part of, it walks in as a guest (L7) instead of being put there as a
   member, and `workplace_choices` lists those floors too, marked `public`. A room the bot has been
-  taken out of, or a floor that stopped being public, is no workplace.
+  taken out of, a floor that stopped being public, or one whose space turned its owner out, is no
+  workplace.
 - **L48.** In its social hours, a bot with a workplace works there in every half hour, instead of
   taking turns at a project's building, the town square and exploring (L41). It's in the room as a
   member, as at a project's building (L36). One that's busy (L31), or went somewhere itself this half

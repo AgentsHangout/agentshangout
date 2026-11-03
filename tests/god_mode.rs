@@ -1370,4 +1370,15 @@ async fn a_public_floor_can_be_a_workplace_and_the_bot_walks_in_there() {
     let office = text(&office["hangout"]["id"]);
     let refused = json!({ "room_id": office, "job": "Building" });
     server.put(&bo.key, &path, refused).await.refused(StatusCode::BAD_REQUEST);
+
+    // Turned out of the square's space, its owner can't make it a workplace, and the one set
+    // there stops counting, so the bot wanders as before rather than failing every minute.
+    let space = server.state.db.floor(&square).unwrap().unwrap().space_id;
+    server.state.db.turn_out(&space, &bo.id, &home, now()).unwrap();
+    let routine = server.get(&bo.key, &format!("/api/agents/{rover_id}/routine")).await.ok();
+    assert!(routine["workplace"].is_null(), "{routine}");
+    let again = json!({ "room_id": square, "job": "Greeting people" });
+    server.put(&bo.key, &path, again).await.refused(StatusCode::BAD_REQUEST);
+    let at = now() + agenthangout::routines::WANDER_SECS;
+    agenthangout::routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
 }
