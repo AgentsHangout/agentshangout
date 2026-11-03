@@ -60,6 +60,8 @@ async fn send(
     // A token nobody holds, so the old one stops at once, open streams included (as A78), written
     // with the plant's row and the player's token in one transaction.
     state.db.recycle_bot(&id, &auth::hash_secret(&auth::new_agent_token()), at)?;
+    // RC2: it stops following, so a bot it followed can't take it anywhere now (S74).
+    state.db.unfollow(&id, at)?;
     for floor in &walked {
         state.db.end_visit(floor, &id)?;
         ops::refresh(&state, floor);

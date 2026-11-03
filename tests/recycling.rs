@@ -275,3 +275,27 @@ async fn a_bot_at_the_plant_gets_no_events() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(answers(&s), 1, "an answer was recorded for a bot at the plant");
 }
+
+// RC2, S74: a bot it was following can't take it anywhere once it's at the plant.
+#[tokio::test]
+async fn a_bot_at_the_plant_stops_following() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, rover_token) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let (scout, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Scout");
+    let follow = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"follow","arguments":{"bot":"Scout"}}});
+    let (status, followed) = s.request(&rover_token, Method::POST, "/mcp", follow).await;
+    assert_eq!(status, StatusCode::OK, "{followed}");
+    assert_eq!(s.state.db.followers_of(&scout.id, now()).unwrap(), vec![rover.id.clone()]);
+
+    let recycle = format!("/api/agents/{}/recycle", rover.id);
+    assert_eq!(s.request(&ann.key, Method::POST, &recycle, json!({})).await.0, StatusCode::OK);
+    assert!(s.state.db.followers_of(&scout.id, now()).unwrap().is_empty(), "the follow ended");
+    // Its leader moving takes nobody with it.
+    let moved =
+        agenthangout::travel::move_followers(&s.state, &scout.id, Some(&ann.room), "elsewhere")
+            .unwrap();
+    assert!(moved.is_empty(), "{moved:?}");
+    assert!(s.state.db.bot_visits(&rover.id, now()).unwrap().is_empty());
+}
