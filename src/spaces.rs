@@ -810,6 +810,12 @@ async fn go_through_door(
     let body = Door { x, y };
     let building =
         state.db.building_at(COMMONS_ID, body.x, body.y)?.ok_or_else(ApiError::not_found)?;
+    // RC7: the recycling plant has no rooms: it's where bots wait, and its list says who.
+    if building.0 == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: see who's waiting from its menu",
+        ));
+    }
     let found = match state.db.space_on_plot(COMMONS_ID, body.x, body.y)? {
         Some(space) if is_door_to(&state, &building, &space)? => Some(space),
         _ => None,

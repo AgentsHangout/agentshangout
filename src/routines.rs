@@ -1137,6 +1137,40 @@ pub fn bots_at_places_and_cut(
             agent_id,
         });
     }
+    // RC8: the bots waiting at the recycling plant stand at it, by name and look only: no owner
+    // (RC6), no player and nowhere they came from. Nothing else shows them on the map.
+    if let Some((px, py)) = state.db.plant_at(crate::worlds::COMMONS_ID)? {
+        if let (Ok(px), Ok(py)) = (u16::try_from(px), u16::try_from(py)) {
+            let waiting = state.db.recycled_bots()?;
+            let ids: Vec<String> = waiting.iter().map(|(id, _)| id.clone()).collect();
+            let mut looks = worn(state, Wearer::Bot, &ids)?;
+            let road = [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)].iter().find_map(|(dx, dy)| {
+                let pos = (
+                    u16::try_from(i32::from(px) + dx).ok()?,
+                    u16::try_from(i32::from(py) + dy).ok()?,
+                );
+                tiles
+                    .get(&pos)
+                    .is_some_and(|tile| tile.kind == crate::world::Kind::Road)
+                    .then_some(pos)
+            });
+            let (x, y) = road.unwrap_or((px, py));
+            for (agent_id, name) in waiting.into_iter().take(limit.saturating_sub(list.len())) {
+                list.push(BotAtPlace {
+                    name,
+                    x,
+                    y,
+                    look: looks.remove(&agent_id).unwrap_or_default(),
+                    from: None,
+                    player: None,
+                    open_air: None,
+                    owner: String::new(),
+                    place: (px, py),
+                    agent_id,
+                });
+            }
+        }
+    }
     Ok((list, cut))
 }
 

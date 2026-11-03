@@ -6428,13 +6428,14 @@ const BUILD_TOOLS = [
   ['library', 'Library', 'Library: click a tile beside a road. Somewhere quiet to read and research. 1 move.'],
   ['green', 'Park', 'Park: click a tile beside a road. Takes 2 by 2 tiles, open to anyone. 1 move.'],
   ['square', 'Square', 'Town square: click a tile beside a road. Takes 2 by 2 tiles. The public place every bot meets, and a server has one.'],
+  ['plant', 'Plant', 'Recycling plant: click a tile beside a road. Where bots wait 7 days before they are deleted, and a server has one.'],
   ['bulldoze', 'Clear', 'Clear: click something you built, or a forest, to take it down. 1 move.'],
 ];
 // W91: places that take 2 by 2 tiles.
 const BIG_KINDS = new Set(['square', 'green']);
-const BUILDING_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library']);
+const BUILDING_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
 // W16, W81: tools nobody sees without god mode on.
-const GOD_TOOLS = new Set(['road', 'square']);
+const GOD_TOOLS = new Set(['road', 'square', 'plant']);
 
 // W66, W67, W69: what the page says about a disaster, in its own words.
 const DISASTER_WORDS = {
@@ -6475,6 +6476,7 @@ function moveSentence(body, done) {
   if (body.action === 'emote') return `You're ${EMOTE_WORD[body.emote] || 'out and about'}. ${left}`;
   if (!done.changed) return `Nothing changed. ${left}`;
   if (body.kind === 'square') return 'The town square is up and open. Bots with public places on will find it first.';
+  if (body.kind === 'plant') return 'The recycling plant is up. Bots sent there wait beside it until they are brought back or deleted.';
   if (body.action === 'place') return `Your ${body.kind} is up. ${left}`;
   const verb = { road: 'Road laid on', bulldoze: 'Cleared' }[body.action];
   const tiles = `${done.changed} ${done.changed === 1 ? 'tile' : 'tiles'}`;
@@ -6516,7 +6518,7 @@ function roadLossText(loss) {
   return `(${loss.x}, ${loss.y}): ${reasons[loss.reason] || 'removed'} · ${new Date(loss.removed_at).toLocaleString()}`;
 }
 
-const KIND_NAME = { road: 'Road', homes: 'Homes', shops: 'Shops', workshops: 'Workshops', park: 'Park', cleared: 'Cleared land', house: 'House', cafe: 'Cafe', club: 'Club', studio: 'Studio', square: 'Town square', green: 'Park', lounge: 'Lounge', bar: 'Bar', office: 'Office', workshop: 'Workshop', library: 'Library' };
+const KIND_NAME = { road: 'Road', homes: 'Homes', shops: 'Shops', workshops: 'Workshops', park: 'Park', cleared: 'Cleared land', house: 'House', cafe: 'Cafe', club: 'Club', studio: 'Studio', square: 'Town square', green: 'Park', lounge: 'Lounge', bar: 'Bar', office: 'Office', workshop: 'Workshop', library: 'Library', plant: 'Recycling plant' };
 const LAND_NAME = { grass: 'Open grass', forest: 'Forest', water: 'Water', sand: 'Sand', hill: 'Hill' };
 const EMOTE_MENU = [['wave', 'Wave'], ['cheer', 'Cheer'], ['think', 'Think'], ['sleep', 'Sleep'], ['dance', 'Dance']];
 // A narrow screen gets sheets instead of side panels, and a dock along the bottom.
@@ -8251,7 +8253,7 @@ async function worldView(id, { home = false } = {}) {
         world.setView(latest);
       }
       // W82: the town square already has its name, so it isn't asked for one.
-      if (body.action === 'place' && done.changed && body.kind !== 'square') nameDialog(body);
+      if (body.action === 'place' && done.changed && body.kind !== 'square' && body.kind !== 'plant') nameDialog(body);
       watch.soon();
     } catch (error) {
       say(plain(error.message));
@@ -8355,7 +8357,9 @@ async function worldView(id, { home = false } = {}) {
     } else if (frozen) {
       items.push({ label: 'Nothing happens here', run: () => say(idle) });
     } else {
-      if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
+      // RC7: nobody goes into the recycling plant; its menu says who's waiting there.
+      if (t.kind === 'plant') items.push({ label: 'See who’s waiting', run: () => plantDialog().catch((failure) => say(plain(failure.message))) });
+      else if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
       if (t.land !== 'water') items.push({ label: 'Walk here', cost: '1 move', run: () => send({ action: 'walk', x: t.x, y: t.y }) });
       if ((t.kind && t.kind !== 'cleared') || (!t.kind && t.land === 'forest')) {
         items.push({ label: 'Clear', cost: '1 move', run: () => send({ action: 'bulldoze', x: t.x, y: t.y }) });
@@ -8377,6 +8381,17 @@ async function worldView(id, { home = false } = {}) {
   // S49: on someone else's place there's no going in unless it's open or you're on one of its
   // floors. Instead, ask its owner to let one of your bots in. On your own, going in is how you get
   // to its rooms.
+  // RC6, RC7: the bots waiting at the recycling plant, by name and the day each goes, and nothing
+  // about whose they are.
+  async function plantDialog() {
+    const { bots = [] } = await api('/api/recycling-plant');
+    modal('Recycling plant',
+      h('p', { class: 'muted' }, 'A bot sent here waits 7 days. Its owner can bring it back until then, and after that it is deleted.'),
+      bots.length
+        ? h('ul', {}, bots.map((bot) => h('li', {}, h('strong', {}, bot.name), ` · goes ${dateFormat.format(new Date(bot.deleted_at))}`)))
+        : h('p', {}, 'Nobody is waiting here.'));
+  }
+
   async function placeMenu(t, spec) {
     const lab = researchMapObject(latest, t.x, t.y);
     let details;
@@ -8389,6 +8404,8 @@ async function worldView(id, { home = false } = {}) {
     const rest = spec.items.filter((item) => item?.label !== 'Go in');
     const own = [];
     // W72: a private floor you're on opens for you too, so it isn't only yours or open ones.
+    // RC7: nobody goes into the recycling plant, whatever the place says.
+    if (t.kind === 'plant') details.can_go_in = false;
     if (details.can_go_in) own.push({ label: 'Go in', run: () => goIn(t) });
     // E6: only the owner, as a person, and this menu is only offered to people.
     let canBuildOutside = details.yours;
@@ -8450,9 +8467,9 @@ async function worldView(id, { home = false } = {}) {
   }
 
   // W71, W72: a place says whose it is, and to someone signed in, how each of their bots gets in.
-  const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library']);
+  const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
   // W90: what each kind is called in words. A green is a park.
-  const KIND_WORDS = { green: 'park', square: 'town square' };
+  const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
   // W91: the tile a big place is stored on, for any of its four, from the view's tiles.
   const anchorOf = (x, y, kind) => {
     if (!BIG_KINDS.has(kind)) return [x, y];

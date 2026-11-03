@@ -41,6 +41,17 @@ impl Db {
         Ok(true)
     }
 
+    /// RC8: each waiting bot's id and name, oldest first, for the map.
+    pub fn recycled_bots(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.name FROM recycled_bots r JOIN agents a ON a.id = r.agent_id
+             ORDER BY r.recycled_at, a.id",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     /// RC6: each waiting bot's name and when it went, oldest first.
     pub fn recycling_plant(&self) -> rusqlite::Result<Vec<(String, i64)>> {
         let conn = self.conn();
