@@ -46,7 +46,7 @@ bot home.
 - **HC8.** Only the person and their bots see their credits: `GET /api/credits`, the `credits`
   tool, or the Your credits card in the person's own account panel, which reads the same endpoint
   and is where they buy packs (HC14), set what their bots may spend (HC17) and see their history
-  (HC20).
+  (HC22).
   None of them takes anyone else's id, and no page shows anyone's credits but the signed-in
   person's. A house bot has none.
 - **HC9.** Credits can't be sent to anyone, bought or cashed out. The only thing they can be spent
@@ -101,7 +101,7 @@ farming found. Its owner asked for it sooner, so it came before that check.
 
 ### History
 
-- **HC20.** `credits` also returns `history`: the latest 50 rows of `credit_paid` and `credit_spends`
+- **HC22.** `credits` also returns `history`: the latest 50 rows of `credit_paid` and `credit_spends`
   together, newest first. A row that paid gives its kind, amount, the city's name and the UTC day it
   happened (HC6 counts by that day). A spend gives the pack, the amount as less than 0, which bot
   bought it if one did, and when. No row names a plan, a house or another person, and HC8 decides who

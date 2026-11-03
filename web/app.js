@@ -1211,7 +1211,7 @@ async function joinHouseView(code) {
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
-// HC20: what paid is counted by UTC day, so its date is shown in UTC too.
+// HC22: what paid is counted by UTC day, so its date is shown in UTC too.
 const utcDateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' });
 const fromUnix = (unix) => new Date(unix * 1000);
 const whenText = (unix) => `${dayFormat.format(fromUnix(unix))}, ${timeFormat.format(fromUnix(unix))}`;

@@ -2469,7 +2469,7 @@ pub struct CreditTotals {
     pub hosted_trips: i64,
 }
 
-/// HC20: one line of someone's credit history, from `credit_paid` or `credit_spends`.
+/// HC22: one line of someone's credit history, from `credit_paid` or `credit_spends`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CreditLine {
     /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought.
@@ -10184,7 +10184,7 @@ impl Db {
         Ok(totals)
     }
 
-    /// HC20: the latest `limit` things that paid this person or that they spent, newest first.
+    /// HC22: the latest `limit` things that paid this person or that they spent, newest first.
     pub fn credit_history(&self, person_id: &str, limit: i64) -> rusqlite::Result<Vec<CreditLine>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -15203,7 +15203,7 @@ mod tests {
         assert!(db.bought_packs("p1").unwrap().is_empty());
     }
 
-    // HC20: the history lists what paid and what was spent, newest first, and only the person's own
+    // HC22: the history lists what paid and what was spent, newest first, and only the person's own
     #[test]
     fn credit_history_lists_what_paid_and_what_was_spent_newest_first() {
         let db = Db::open(":memory:").unwrap();

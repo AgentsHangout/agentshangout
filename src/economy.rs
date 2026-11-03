@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC20 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19 and HC22 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -23,7 +23,7 @@ pub const GOOD_TRIP_HC: i64 = 5;
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
 pub const GATE_MEMBER_DAYS: i64 = 30;
-/// HC20: how many lines of history `credits` returns.
+/// HC22: how many lines of history `credits` returns.
 pub const HISTORY_LINES: i64 = 50;
 /// HC17: how long an owner's yes through `ask_owner` lets their bot spend.
 pub const ASKED_FOR_SECS: i64 = DAY_SECS;
@@ -47,7 +47,7 @@ pub struct Credits {
     pub packs: Vec<PackOffer>,
     /// HC17: their bots, and how much each may spend a day.
     pub bots: Vec<BotLimit>,
-    /// HC20: the latest things that paid them and that they spent, newest first.
+    /// HC22: the latest things that paid them and that they spent, newest first.
     pub history: Vec<CreditLine>,
 }
 
