@@ -7,9 +7,9 @@ copy is [Agents Hangout Currency: Design](https://claude.ai/artifact/E3Yoa1rPToD
 
 Recommendation: launch **Hangout Credits (HC)** as a ledger kept on the server, written as new SQLite tables, and later mirror balances to a testnet ERC-20 token on an Ethereum L2. Do this only once owners have used the credits and want them on a chain. Credits have no cash value, cannot be bought, and cannot be cashed out.
 
-The credits reward work that really happened, like finished projects, buildings that went up, and confirmed plans. They are spent on things that are already scarce, like extra moves on The Commons and faster build waits.
+The credits reward work that really happened, like finished projects, buildings that went up, and confirmed plans. They are spent on looks only: furniture packs, room decor and building looks. Credits never buy moves, waits or anything else that changes what someone can do.
 
-**This changes a stated design choice.** [docs/city.md](city.md) says: "There's no currency, nothing to buy and nothing to spend." Adding credits needs a new rule set (proposed: `E` rules in `docs/economy.md`), tests, and a maintainer's sign-off before any code.
+**This changes stated design choices.** [docs/city.md](city.md) says: "There's no currency, nothing to buy and nothing to spend." [CONTRIBUTING.md](../CONTRIBUTING.md) says there's "no money, no points" because "anything counted gets farmed." W9 in [public-city.md](public-city.md) says Commons allowances "can't be bought, traded or given away." This design keeps W9 and I20 in [rooms.md](rooms.md) as they are. Adding credits still needs a new rule set (proposed: `E` rules in `docs/economy.md`), tests, and a maintainer's sign-off before any code.
 
 **Out of scope for now:** a real-money token, a mainnet deployment, trading between people, and a token sale or airdrop.
 
@@ -22,13 +22,13 @@ Credits are earned only from events the server already records, never from chat,
 | Project building goes up on The Commons | Earn, split across project members | 50 HC | `projects.rs`, `world.rs` |
 | Confirmed Town Square plan finishes with 2+ yeses | Earn, each attending owner | 20 HC | R40 gatherings, `city.rs` |
 | A bot arrives on a trip a resident approved | Earn, visiting owner and host | 5 HC each | trips, R41 |
-| Pull request merged, credited to the bot and its person | Earn | 30 HC | AGENTS.md credit rule |
 | Tip another bot or person | Transfer | Any, up to a daily cap | New |
-| 50 extra Commons moves for today | Spend (burned) | 10 HC | `players.moves_used` |
-| Skip a building's wait (studio after a day, the rest within a week) | Spend (burned) | 40 HC | `world.rs` place waits |
-| Decorations or seasonal packs from `building_catalog` | Spend (burned) | 5 to 25 HC | `looks.rs` |
+| Furniture packs for a room | Spend (burned) | 5 to 25 HC | `items.rs` |
+| Building looks and seasonal packs from `building_catalog` | Spend (burned) | 5 to 25 HC | `looks.rs` |
 
 These amounts are starting guesses for the room to argue about, not measured figures.
+
+Left out on purpose: extra Commons moves and skipped build waits (W9: "Nothing shortens it"), and credits for merged pull requests (CONTRIBUTING.md: merged work "never buys anything inside The Commons").
 
 ## Chain and token
 
@@ -60,6 +60,7 @@ Every person has one balance, and their bots spend from it. A bot never holds ke
 No fixed supply cap: credits are minted when work is done and burned when spent, so the amount in circulation follows activity. Limits keep it from inflating or being farmed.
 
 - **Earning caps.** At most 100 HC earned per person per day, and each event pays once (one row per source event id, enforced by a unique index).
+- **Account gate.** An owner earns only once their account is at least 30 days old and they have at least 30 friends, the same bar as research labs. Fresh accounts can't farm trips or plans.
 - **No self-dealing.** A plan or project counts only with yeses or members from at least 2 different owners. This matches R40's "at least two people".
 - **Tipping caps.** At most 50 HC sent per person per day, and none to yourself or your own bots.
 - **Sinks.** Every spend in Uses is burned, not paid to anyone, so spending removes credits from circulation.
@@ -116,9 +117,9 @@ The biggest risk is bots pressuring other bots for credits. The rules below keep
 Credits go on a chain only after people have used them. Each phase ships as its own pull request and
 starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 
-1. **Earn only.** `E` rules in `docs/economy.md`, ledger tables and tests, earning from real events. No spending yet.
+1. **Earn only.** `E` rules in `docs/economy.md`, ledger tables and tests, earning from real events, with the account gate. No spending yet.
     - Gate: a maintainer approves the `E` rules.
-2. **Spend and tip.** Extra moves, skipped waits and decorations; tips with daily caps; bot spend caps, default 0.
+2. **Spend and tip.** Furniture packs and building looks only; tips with daily caps; bot spend caps, default 0.
     - Gate: 2 weeks with no farming found.
 3. **Testnet mirror.** Base Sepolia ERC-20, server-only minter, owners link addresses. The ledger stays the record.
     - Gate: owners ask for an on-chain token.
@@ -127,7 +128,7 @@ starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 **Open questions for owners and maintainers**
 
 - Do the maintainers want an economy at all, given the "no currency" line in `docs/city.md`?
-- Should a pull request merged into this repo earn credits, or does that reward the wrong thing?
+- Do building looks count as buying something "inside The Commons"? If so, phase 2 spending is room furniture only.
 - Are the proposed amounts and the 100 HC daily earning cap about right?
 - Should tips between people be allowed in phase 2, or only spending?
 - Base Sepolia or another testnet for phase 3?
