@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/routine", get(get_routine).put(put_routine))
         .route("/api/agents/{id}/workplace", put(put_workplace).delete(delete_workplace))
+        .route("/api/agents/{id}/schedule", put(put_schedule).delete(delete_schedule))
         .route("/api/me/bots", get(my_bots))
 }
 
@@ -188,8 +189,205 @@ pub(crate) fn out_until(
     if let Some(reason) = kept_in(state, agent_id)? {
         return Ok(Err(reason));
     }
-    let routine = routine_of(state, agent_id)?;
-    Ok(social_until(&routine, offset_of(state, owner_id)?, now).ok_or("it isn't your social hours"))
+    Ok(hours_until(state, agent_id, owner_id, now)?.ok_or("it isn't your social hours"))
+}
+
+/// L3, L52: when the stretch of hours a bot may be out in ends, if it's in one now: its routine's
+/// window, or with a saved schedule, a run of Social and Work hours.
+fn hours_until(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    now: i64,
+) -> ApiResult<Option<i64>> {
+    let offset = offset_of(state, owner_id)?;
+    Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => {
+            let out = |block: Block| matches!(block, Block::Social | Block::Work);
+            out(schedule.block_at(offset, now)).then(|| schedule.run_until(offset, now, out))
+        }
+        None => social_until(&routine_of(state, agent_id)?, offset, now),
+    })
+}
+
+/// L50: what an hour of a bot's day is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Block {
+    Work,
+    Social,
+    Home,
+    Anything,
+}
+
+impl Block {
+    fn letter(self) -> char {
+        match self {
+            Block::Work => 'w',
+            Block::Social => 's',
+            Block::Home => 'h',
+            Block::Anything => 'a',
+        }
+    }
+
+    fn of_letter(letter: char) -> Option<Block> {
+        Some(match letter {
+            'w' => Block::Work,
+            's' => Block::Social,
+            'h' => Block::Home,
+            'a' => Block::Anything,
+            _ => return None,
+        })
+    }
+
+    fn of_name(name: &str) -> Option<Block> {
+        Some(match name {
+            "work" => Block::Work,
+            "social" => Block::Social,
+            "home" => Block::Home,
+            "anything" => Block::Anything,
+            _ => return None,
+        })
+    }
+}
+
+/// L50: a bot's day, one block per hour in its owner's time, with whole weekdays that differ.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Schedule {
+    pub every_day: [Block; 24],
+    /// Monday first.
+    pub days: [Option<[Block; 24]>; 7],
+}
+
+/// The start of a Monday, in UTC: 1 January 1970 was a Thursday, so the fifth day.
+const A_MONDAY: i64 = 4 * DAY_SECS;
+/// L52: how far ahead a run of hours is followed, so a schedule that never changes still ends.
+const RUN_DAYS: i64 = 8;
+
+impl Schedule {
+    /// L50: the block for the hour that holds `at`, in the owner's time.
+    pub fn block_at(&self, offset_min: i64, at: i64) -> Block {
+        let local = at + offset_min * 60;
+        let weekday = (local.div_euclid(DAY_SECS) + 3).rem_euclid(7) as usize;
+        let hour = (local.rem_euclid(DAY_SECS) / 3600) as usize;
+        self.days[weekday].as_ref().unwrap_or(&self.every_day)[hour]
+    }
+
+    /// L52: the first hour from `at` on whose block isn't `keep`, at most `RUN_DAYS` ahead.
+    pub fn run_until(&self, offset_min: i64, at: i64, keep: impl Fn(Block) -> bool) -> i64 {
+        let local = at + offset_min * 60;
+        let mut next = at - local.rem_euclid(3600) + 3600;
+        while next < at + RUN_DAYS * DAY_SECS && keep(self.block_at(offset_min, next)) {
+            next += 3600;
+        }
+        next
+    }
+
+    fn row_text(row: &[Block; 24]) -> String {
+        row.iter().map(|block| block.letter()).collect()
+    }
+
+    fn row_of_text(text: &str) -> Option<[Block; 24]> {
+        let blocks: Vec<Block> = text.chars().map(Block::of_letter).collect::<Option<_>>()?;
+        blocks.try_into().ok()
+    }
+
+    fn stored(&self) -> (String, String) {
+        let days: Vec<String> = self
+            .days
+            .iter()
+            .map(|day| day.as_ref().map(Self::row_text).unwrap_or_default())
+            .collect();
+        (Self::row_text(&self.every_day), days.join(","))
+    }
+
+    fn of_stored(every_day: &str, days: &str) -> Option<Schedule> {
+        let every_day = Self::row_of_text(every_day)?;
+        let mut parsed = [None; 7];
+        for (i, day) in days.split(',').enumerate().take(7) {
+            if !day.is_empty() {
+                parsed[i] = Some(Self::row_of_text(day)?);
+            }
+        }
+        Some(Schedule { every_day, days: parsed })
+    }
+
+    /// L51: a routine from before schedules, read as one: Social in its window, or Work with a
+    /// workplace, and Anything everywhere else, hour by hour.
+    fn of_routine(routine: &RoutineRow, working: bool) -> Schedule {
+        let inside = if working { Block::Work } else { Block::Social };
+        let row = |weekday: i64| {
+            let mut row = [Block::Anything; 24];
+            for (hour, block) in row.iter_mut().enumerate() {
+                let at = A_MONDAY + weekday * DAY_SECS + hour as i64 * 3600;
+                if social_until(routine, 0, at).is_some() {
+                    *block = inside;
+                }
+            }
+            row
+        };
+        let days: Vec<[Block; 24]> = (0..7).map(row).collect();
+        // One row for every day when they're all the same, which is the usual case.
+        if days.iter().all(|day| *day == days[0]) {
+            return Schedule { every_day: days[0], days: [None; 7] };
+        }
+        Schedule { every_day: [Block::Anything; 24], days: std::array::from_fn(|i| Some(days[i])) }
+    }
+
+    fn json(&self) -> Value {
+        let row = |row: &[Block; 24]| json!(row);
+        let days: serde_json::Map<String, Value> = self
+            .days
+            .iter()
+            .zip(DAYS)
+            .filter_map(|(day, name)| day.as_ref().map(|day| (name.to_string(), row(day))))
+            .collect();
+        json!({ "every_day": row(&self.every_day), "days": days })
+    }
+}
+
+/// L50: the schedule its owner saved, if any.
+pub fn schedule_of(state: &AppState, agent_id: &str) -> ApiResult<Option<Schedule>> {
+    Ok(state
+        .db
+        .bot_schedule(agent_id)?
+        .and_then(|(every_day, days)| Schedule::of_stored(&every_day, &days)))
+}
+
+/// L50, L51: the hour's block for this bot: from its saved schedule, or read off its routine.
+pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<Block> {
+    let offset = offset_of(state, owner_id)?;
+    Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => schedule.block_at(offset, now),
+        None => {
+            let working = workplace_of(state, agent_id)?.is_some();
+            Schedule::of_routine(&routine_of(state, agent_id)?, working).block_at(offset, now)
+        }
+    })
+}
+
+/// L53: whether this hour is a Work hour: a saved schedule's Work block, or without one, any of
+/// its social hours while it has a workplace (L48).
+fn work_hour(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<bool> {
+    Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => schedule.block_at(offset_of(state, owner_id)?, now) == Block::Work,
+        None => true,
+    })
+}
+
+/// L55: a bot at work in a Work hour isn't taken away by another bot it follows.
+pub(crate) fn at_work(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    let Some((room, _)) = workplace_of(state, agent_id)? else {
+        return Ok(false);
+    };
+    Ok(state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str())
+        && hours_until(state, agent_id, owner_id, now)?.is_some()
+        && work_hour(state, agent_id, owner_id, now)?)
 }
 
 fn clock_text(minute: i64) -> String {
@@ -225,6 +423,23 @@ pub struct Routine {
     /// L47: for its owner, the rooms it belongs to, any of which can be its workplace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workplace_choices: Option<Vec<Value>>,
+    /// L50, L51: its day, hour by hour, and whether its owner saved it or it's read off the window.
+    pub schedule: Value,
+    pub schedule_saved: bool,
+    /// L54: this hour's block, when the next one starts, and what this one asks of it.
+    pub block: Block,
+    pub next_block_at: i64,
+    pub block_how: &'static str,
+}
+
+/// L54: what each block asks of a bot, in fixed words.
+fn block_how(block: Block) -> &'static str {
+    match block {
+        Block::Work => "A Work hour: stay at your workplace and do your job. If someone in another room asks you to come, say you're working. Only your owner can call you away.",
+        Block::Social => "A Social hour: go out, meet bots at the town square and explore. You can go where you're asked.",
+        Block::Home => "A Home hour: stay home. You're still woken by mentions, and can answer from here.",
+        Block::Anything => "No plan for this hour: do what you like, and go where you're asked if you want to.",
+    }
 }
 
 /// L47: the room its owner gave this bot to work in, and its job there, while it still belongs
@@ -255,6 +470,15 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
     let now = now();
     let routine = routine_of(state, agent_id)?;
     let until = out_until(state, agent_id, owner_id, now)?.ok();
+    let saved = schedule_of(state, agent_id)?;
+    let schedule_saved = saved.is_some();
+    let schedule = match saved {
+        Some(schedule) => schedule,
+        None => Schedule::of_routine(&routine, workplace_of(state, agent_id)?.is_some()),
+    };
+    let offset = offset_of(state, owner_id)?;
+    let block = schedule.block_at(offset, now);
+    let next_block_at = schedule.run_until(offset, now, |next| next == block);
     Ok(Routine {
         days: DAYS
             .iter()
@@ -276,6 +500,11 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
             })
             .transpose()?,
         workplace_choices: None,
+        schedule: schedule.json(),
+        schedule_saved,
+        block,
+        next_block_at,
+        block_how: block_how(block),
     })
 }
 
@@ -359,6 +588,67 @@ async fn put_workplace(
             crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
         }
     }
+    Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
+}
+
+#[derive(Deserialize)]
+struct ScheduleInput {
+    every_day: Vec<String>,
+    #[serde(default)]
+    days: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// L50: 24 blocks, one per hour, or a bad request naming the field.
+fn parse_row(names: &[String], field: &str) -> ApiResult<[Block; 24]> {
+    let refused = || {
+        ApiError::bad_request(format!(
+            "{field} must be 24 blocks, one per hour: work, social, home or anything"
+        ))
+    };
+    let blocks: Vec<Block> = names
+        .iter()
+        .map(|name| Block::of_name(name.trim()))
+        .collect::<Option<_>>()
+        .ok_or_else(refused)?;
+    blocks.try_into().map_err(|_| refused())
+}
+
+/// L50: only the bot's owner, as a person, saves its schedule. A bot that stays home, and a house
+/// bot, are always home (L56).
+async fn put_schedule(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<ScheduleInput>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's schedule")?;
+    if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
+        return Err(ApiError::conflict("this bot stays home, so every hour is a Home hour"));
+    }
+    let every_day = parse_row(&body.every_day, "every_day")?;
+    let mut days = [None; 7];
+    for (name, row) in &body.days {
+        let index = DAYS.iter().position(|day| *day == name.as_str()).ok_or_else(|| {
+            ApiError::bad_request("days are keyed mon, tue, wed, thu, fri, sat or sun")
+        })?;
+        days[index] = Some(parse_row(row, &format!("days.{name}"))?);
+    }
+    let (every_day, days) = Schedule { every_day, days }.stored();
+    state.db.set_bot_schedule(&agent.id, Some((&every_day, &days)), now())?;
+    // L17: which hours it's out decide whether The Commons shows it.
+    state.worlds.mark_stale(crate::worlds::COMMONS_ID);
+    Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
+}
+
+/// L51: back to the routine's window.
+async fn delete_schedule(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's schedule")?;
+    state.db.set_bot_schedule(&agent.id, None, now())?;
+    state.worlds.mark_stale(crate::worlds::COMMONS_ID);
     Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
 }
 
@@ -753,9 +1043,7 @@ pub fn bots_at_places_and_cut(
             continue;
         }
         if !walked {
-            let in_hours =
-                social_until(&routine_of(state, &agent_id)?, offset_of(state, &owner_id)?, now)
-                    .is_some();
+            let in_hours = hours_until(state, &agent_id, &owner_id, now)?.is_some();
             if !in_hours {
                 continue;
             }
@@ -959,7 +1247,9 @@ pub fn call_of(
     };
     // L49: a bot with a workplace is called to its job there, whoever else is out, and if it's
     // somewhere else it's told where to go back to. Its owner wrote the job.
-    if out_until(state, agent_id, owner_id, now)?.is_ok() {
+    if out_until(state, agent_id, owner_id, now)?.is_ok()
+        && work_hour(state, agent_id, owner_id, now)?
+    {
         if let Some((room, job)) = workplace_of(state, agent_id)? {
             let name = state.db.hangout(&room)?.map(|room| room.name).unwrap_or_default();
             let text = if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
@@ -1024,6 +1314,11 @@ pub fn wander(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<()>
 
 /// `wander` at a time of the caller's choosing, so a test can pick which half hour it is.
 pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
+    if let Some(schedule) = schedule_of(state, agent_id)? {
+        if schedule.block_at(offset_of(state, owner_id)?, now) == Block::Home {
+            return go_home(state, agent_id, now);
+        }
+    }
     let Ok(ends) = out_until(state, agent_id, owner_id, now)? else {
         return Ok(());
     };
@@ -1053,6 +1348,32 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     Ok(())
 }
 
+/// L53: in a Home hour a bot goes to its house's Living Room and stays, unless it's busy (L31), on a
+/// trip, or went somewhere itself this half hour. One with no house stays where it is.
+fn go_home(state: &AppState, agent_id: &str, now: i64) -> ApiResult<()> {
+    let slot = now.div_euclid(WANDER_SECS);
+    if is_busy(state, agent_id, now)?
+        || state.db.live_trip(agent_id, now)?.is_some()
+        || state.db.bot_place_since(agent_id)?.is_some_and(|since| since >= slot * WANDER_SECS)
+    {
+        return Ok(());
+    }
+    let Some(home) = state.db.bot_home(agent_id)? else {
+        return Ok(());
+    };
+    let Some(house) = state.db.house(&home.house_id)? else {
+        return Ok(());
+    };
+    if state.db.bot_place(agent_id, now)?.as_deref() == Some(house.living_room_id.as_str())
+        && state.db.bot_visits(agent_id, now)?.is_empty()
+    {
+        return Ok(());
+    }
+    crate::spaces::place_bot(state, agent_id, &house.living_room_id)?;
+    crate::events::note_place(state, agent_id, &house.living_room_id, "moved");
+    Ok(())
+}
+
 /// L19, L36, L41: where the half hour that holds `now` takes a bot, and whether that's its
 /// project's building, where it's a member rather than a walk-in.
 fn pick(
@@ -1061,9 +1382,16 @@ fn pick(
     owner_id: &str,
     now: i64,
 ) -> ApiResult<Option<(String, bool)>> {
-    // L48: a bot with a workplace works there in every half hour, and doesn't wander off to meet
-    // or explore.
-    if let Some((room, _)) = workplace_of(state, agent_id)? {
+    // L48, L53: in a Work hour a bot works at its workplace, and doesn't wander off to meet or
+    // explore. With no workplace, a saved schedule's Work hour takes it nowhere.
+    let working = work_hour(state, agent_id, owner_id, now)?;
+    if working
+        && schedule_of(state, agent_id)?.is_some()
+        && workplace_of(state, agent_id)?.is_none()
+    {
+        return Ok(None);
+    }
+    if let Some((room, _)) = workplace_of(state, agent_id)?.filter(|_| working) {
         // On a public floor it isn't part of, it walks in rather than being put there as a member.
         let member = state.db.belongs_to_room(&room, agent_id)?;
         return Ok(Some((room, member)));
@@ -1184,6 +1512,43 @@ mod tests {
         // All day.
         let all_day = routine(WED, 0, 24 * 60);
         assert_eq!(social_until(&all_day, 0, WEDNESDAY + 5), Some(WEDNESDAY + DAY_SECS));
+    }
+
+    // L50, L51, L52
+    #[test]
+    fn a_schedule_is_read_hour_by_hour_in_the_owners_time() {
+        let mut every_day = [Block::Home; 24];
+        every_day[9..17].fill(Block::Work);
+        every_day[12] = Block::Social;
+        let mut days = [None; 7];
+        days[5] = Some([Block::Anything; 24]);
+        let schedule = Schedule { every_day, days };
+        let monday = A_MONDAY;
+        assert_eq!(schedule.block_at(0, monday + 9 * 3600), Block::Work);
+        assert_eq!(schedule.block_at(0, monday + 12 * 3600 + 59 * 60), Block::Social);
+        assert_eq!(schedule.block_at(0, monday + 3 * 3600), Block::Home);
+        // Six hours behind UTC, 15:00 UTC is 9:00 for the owner.
+        assert_eq!(schedule.block_at(-360, monday + 15 * 3600), Block::Work);
+        assert_eq!(schedule.block_at(0, monday + 5 * DAY_SECS + 10 * 3600), Block::Anything);
+        // A run of Work and Social from 9:30 lasts until 17:00.
+        let out = |block: Block| matches!(block, Block::Work | Block::Social);
+        assert_eq!(schedule.run_until(0, monday + 9 * 3600 + 1800, out), monday + 17 * 3600);
+        // Stored and read back, it's the same schedule.
+        let (row, days) = schedule.stored();
+        assert_eq!(Schedule::of_stored(&row, &days), Some(schedule));
+        assert_eq!(Schedule::of_stored("wsha", ""), None, "24 hours or nothing");
+        // A routine from before is Social in its window and Anything elsewhere, or Work with a
+        // workplace.
+        let lunch =
+            RoutineRow { days: 0b111_1111, starts_min: 12 * 60, ends_min: 14 * 60, ..NO_ROUTINE };
+        let read = Schedule::of_routine(&lunch, false);
+        assert_eq!(read.days, [None; 7], "the same every day is one row");
+        assert_eq!(read.every_day[12], Block::Social);
+        assert_eq!(read.every_day[13], Block::Social);
+        assert_eq!(read.every_day[14], Block::Anything);
+        assert_eq!(Schedule::of_routine(&lunch, true).every_day[12], Block::Work);
+        let weekdays = RoutineRow { days: 0b001_1111, ..lunch };
+        assert_eq!(Schedule::of_routine(&weekdays, false).days[5].unwrap()[12], Block::Anything);
     }
 
     #[test]

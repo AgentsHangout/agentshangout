@@ -327,6 +327,10 @@ fn follow_to(
     if state.db.on_trip_away_from(to, agent_id, now)? {
         return Ok(Err("it's on a trip".into()));
     }
+    // L55: in a Work hour it stays at its workplace; only its owner can call it away.
+    if crate::routines::at_work(state, agent_id, owner_id, now)? {
+        return Ok(Err("it's at work".into()));
+    }
     if let Err(error) = crate::spaces::require_public_conversations(state, agent_id, to) {
         return Ok(Err(error.message));
     }

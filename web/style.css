@@ -2808,3 +2808,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .oauth-page select { margin: 0.5rem 0; }
 .oauth-page button { margin: 0.4rem 0.4rem 0.4rem 0; }
 @media (max-width: 48rem) { .oauth-page { margin: 0; padding: 1rem; } }
+
+/* L50: the day plan painter. */
+.sched-brushes, .sched-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.sched-brush[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sched-strip { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+.sched-hour { padding: 6px 0; font-size: 12px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); cursor: pointer; }
+.sched-work { background: #3d5a80; }
+.sched-social { background: #6a4c93; }
+.sched-home { background: #4a6b3a; }
+.sched-anything { background: var(--panel-2); }

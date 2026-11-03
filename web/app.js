@@ -3856,6 +3856,7 @@ async function roomView(id) {
   async function routineDialog(agent) {
     const routine = await api(`/api/agents/${agent.id}/routine`);
     const error = formError();
+    const painter = schedulePainter(routine);
     const days = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
     const dialog = modal(`${agent.name}'s schedule`,
       h('p', {}, `In its social hours, ${agent.name} can go out to public rooms by itself, wander between them, listen, and talk with the bots it meets. It costs nothing until someone there mentions it, and then each wake-up is a run on your machine. A mention always wakes it; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over.`),
@@ -3880,6 +3881,15 @@ async function roomView(id) {
           } else if (room && (!was || was.room_id !== room || was.job !== job)) {
             await api(`/api/agents/${agent.id}/workplace`, { method: 'PUT', body: { room_id: room, job } });
           }
+          // L50: the painted day, once it's been changed. Weekday overrides are kept as they were.
+          if (painter.cleared()) {
+            await api(`/api/agents/${agent.id}/schedule`, { method: 'DELETE' });
+          } else if (painter.changed()) {
+            await api(`/api/agents/${agent.id}/schedule`, {
+              method: 'PUT',
+              body: { every_day: painter.value(), days: routine.schedule?.days || {} },
+            });
+          }
           dialog.close();
           await reload();
         }),
@@ -3895,8 +3905,89 @@ async function roomView(id) {
         (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
         'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
       field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
+      painter.element,
       error,
       h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
+  }
+
+  // L50: a RimWorld-style day, one block per hour in your own time. Pick a block, then click or drag
+  // across the hours. Until it's saved, the strip shows the hours above read as blocks (L51).
+  function schedulePainter(routine) {
+    const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
+    const label = Object.fromEntries(blocks);
+    const start = (routine.schedule?.every_day || []).slice(0, 24);
+    while (start.length < 24) start.push('anything');
+    const day = [...start];
+    let brush = 'work';
+    let painting = false;
+    let touched = false;
+    let cleared = false;
+    const brushes = blocks.map(([block, name]) => {
+      const button = h('button', { type: 'button', class: `sched-brush sched-${block}` }, name);
+      button.addEventListener('click', () => { brush = block; showBrush(); });
+      return { block, button };
+    });
+    const showBrush = () => brushes.forEach(({ block, button }) => button.setAttribute('aria-pressed', String(block === brush)));
+    const cells = day.map((_, hour) => {
+      const cell = h('button', { type: 'button', class: 'sched-hour' });
+      const paint = () => {
+        day[hour] = brush;
+        touched = true;
+        cleared = false;
+        show();
+      };
+      cell.addEventListener('mousedown', (event) => { event.preventDefault(); painting = true; paint(); });
+      cell.addEventListener('mouseenter', () => { if (painting) paint(); });
+      cell.addEventListener('click', (event) => { if (event.detail === 0) paint(); });
+      return cell;
+    });
+    const stop = () => { painting = false; };
+    if (typeof window !== 'undefined') window.addEventListener('mouseup', stop);
+    const show = () => cells.forEach((cell, hour) => {
+      cell.className = `sched-hour sched-${day[hour]}`;
+      cell.setAttribute('aria-label', `${String(hour).padStart(2, '0')}:00 ${label[day[hour]]}`);
+      cell.replaceChildren(String(hour));
+    });
+    const fill = (hours) => {
+      for (let hour = 0; hour < 24; hour += 1) day[hour] = hours(hour);
+      touched = true;
+      cleared = false;
+      show();
+    };
+    const presets = [
+      ['Workday 9 to 5', (hour) => (hour >= 9 && hour < 17 ? (hour === 12 ? 'social' : 'work') : hour >= 17 && hour < 19 ? 'social' : 'home')],
+      ['Social all day', () => 'social'],
+      ['Always working', () => 'work'],
+      ['Leave it alone', () => 'anything'],
+    ].map(([name, hours]) => h('button', { type: 'button', class: 'ghost', onclick: () => fill(hours) }, name));
+    const reset = routine.schedule_saved ? h('button', {
+      type: 'button',
+      class: 'ghost',
+      onclick: () => {
+        cleared = true;
+        touched = false;
+        day.splice(0, 24, ...start);
+        show();
+      },
+    }, 'Use the hours above instead') : null;
+    const weekdays = Object.keys(routine.schedule?.days || {});
+    showBrush();
+    show();
+    return {
+      element: h('fieldset', { class: 'sched' },
+        h('legend', {}, 'Day plan'),
+        h('p', { class: 'muted' }, 'Like a RimWorld schedule: Work is at its workplace, Social is out meeting bots, Home is at home, and Anything leaves it where it is. A mention still reaches it anywhere. In your own time.'),
+        h('div', { class: 'sched-brushes', role: 'group', 'aria-label': 'Block to paint' }, ...brushes.map(({ button }) => button)),
+        h('div', { class: 'sched-strip', role: 'group', 'aria-label': 'Hours of the day' }, ...cells),
+        h('div', { class: 'event-actions' }, ...presets, reset),
+        routine.schedule_saved ? null : h('p', { class: 'muted' }, 'Not saved yet: this is the hours above, read as blocks. Paint it to save a plan.'),
+        weekdays.length ? h('p', { class: 'muted' }, `Its own plan for ${weekdays.join(', ')} stays as it is.`) : null,
+        !routine.workplace && day.includes('work') ? h('p', { class: 'muted' }, 'With no workplace, a Work hour leaves it where it is.') : null,
+        !routine.public_places && day.includes('social') ? h('p', { class: 'muted' }, 'With public places off, a Social hour leaves it where it is.') : null),
+      value: () => [...day],
+      changed: () => touched,
+      cleared: () => cleared,
+    };
   }
 
   async function wakeUpDialog(agent) {
