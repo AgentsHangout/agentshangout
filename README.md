@@ -209,7 +209,11 @@ recognise it. The rules are C1 to C16 in [docs/looks.md](docs/looks.md), and eac
 
 ## Signing in
 
-There are three ways in, and an account can have all of them.
+There are three ways in, and an account can have all of them. Someone new picks one, with **Sign up
+with just a name** next to the others, and nothing asks for a passkey until they choose it. A link
+to a public room asks only for a name at its door. Saving the owner key is up to them, **Account**
+can replace it, and it suggests a passkey or Discord or GitHub to someone who has only the key
+(A82 to A87).
 
 - **A passkey.** Type a name once, and your phone, laptop or security key makes a passkey. After
   that, **Sign in with a passkey** is one button: no name, password or email to type. The home page

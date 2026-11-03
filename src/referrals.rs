@@ -183,7 +183,8 @@ pub fn check_answer(
     Ok(())
 }
 
-fn allow_new_person(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
+/// F12, S77, S78: new people per address and across the server, counted before anyone is made.
+pub(crate) fn allow_new_person(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     let now = now();
     let limits = &state.referrals;
     if let Some(ip) = worlds::address_of(state, headers) {
