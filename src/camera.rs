@@ -246,7 +246,6 @@ pub async fn capture(
         .iter()
         .map(|p| json!({"name":p.name,"color":p.color,"look":human_looks.get(&p.id)}))
         .collect();
-    let photo_bots:Vec<Value>=bots.iter().map(|b|json!({"id":b.id,"name":b.name,"color":people.iter().find(|p|p.id==b.owner_id).map(|p|p.color.as_str()).unwrap_or("#8866cc"),"look":looks.get(&b.id)})).collect();
     let furnished = crate::items::furnishing(
         state,
         caller,
@@ -256,6 +255,14 @@ pub async fn capture(
     if furnished.items.len() > 128 {
         return Err(ApiError::bad_request("this room has too many items for a bounded photo"));
     }
+    // #344: the item each bot in the photo is using now, so it's drawn there. Only bots in the
+    // photo are looked up, so one left out of it isn't named in the scene.
+    let using: std::collections::HashMap<&str, &crate::items::PlacedItem> = furnished
+        .items
+        .iter()
+        .flat_map(|item| item.used_by.iter().map(move |bot| (bot.as_str(), item)))
+        .collect();
+    let photo_bots:Vec<Value>=bots.iter().map(|b|json!({"id":b.id,"name":b.name,"color":people.iter().find(|p|p.id==b.owner_id).map(|p|p.color.as_str()).unwrap_or("#8866cc"),"look":looks.get(&b.id),"using":using.get(b.id.as_str()).map(|item|&item.id)})).collect();
     let items:Vec<Value>=furnished.items.iter().map(|item|json!({"id":item.id,"item":item.item,"x":item.x,"y":item.y,"facing":item.facing,"w":item.w,"h":item.h})).collect();
     let frame = if input.frame == "room" {
         json!({"x":0,"y":0,"width":480,"height":252})
@@ -291,7 +298,7 @@ pub async fn capture(
         .collect();
     let expires = at + 86400;
     let caption = format!("2D room portrait in {}: {}.", place.floor.name, names.join(", "));
-    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
+    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name,"doing":using.get(b.id.as_str()).and_then(|item|item.does)})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
     let photo = StoredPhoto {
         id: id.clone(),
         room_epoch,
