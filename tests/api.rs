@@ -33,18 +33,31 @@ impl Server {
     }
 
     async fn start_with(create_code: Option<String>) -> Self {
+        Self::start_from(create_code, |config| AppState::new(Db::open(":memory:").unwrap(), config))
+            .await
+    }
+
+    /// Like `start`, but the write limiter reads `clock`, so a burst can't straddle a minute.
+    async fn start_with_write_clock(clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        Self::start_from(None, |config| {
+            AppState::with_write_clock(Db::open(":memory:").unwrap(), config, clock)
+        })
+        .await
+    }
+
+    async fn start_from(
+        create_code: Option<String>,
+        make: impl FnOnce(Config) -> AppState,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let state = AppState::new(
-            Db::open(":memory:").unwrap(),
-            Config {
-                public_url: base.clone(),
-                create_code,
-                allow_private_webhooks: true,
-                keeper_id: None,
-                god_ids: Vec::new(),
-            },
-        );
+        let state = make(Config {
+            public_url: base.clone(),
+            create_code,
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: Vec::new(),
+        });
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
         Self { base, client: Client::new(), state }
@@ -1343,7 +1356,8 @@ async fn only_a_bot_in_the_room_can_ask_and_a_bot_can_have_five_waiting() {
 
 #[tokio::test]
 async fn asking_counts_against_a_bots_write_limit() {
-    let server = Server::start().await;
+    // One limiter minute for the whole burst, even if the wall clock crosses a boundary (#306).
+    let server = Server::start_with_write_clock(|| 120).await;
     let room = server.room().await;
     let (claude, _) = server.bot(&room.justin, &room.id, "Claude").await;
     let messages = format!("/api/hangouts/{}/messages", room.id);
