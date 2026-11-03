@@ -26,30 +26,33 @@
   touch-action: none;
   user-select: none;
 }
-.trust-edge { stroke: #8b6a3e; stroke-width: 1.5; }
-.trust-edge.owns { stroke: var(--wd-dk); stroke-width: 2; }
-.trust-edge.friend { stroke: var(--wd-brick-2); stroke-width: 2.5; }
-.trust-edge.pending { stroke: var(--wd-brick-2); stroke-dasharray: 2 4; stroke-linecap: round; }
+.trust-edge { stroke: #8b6a3e; }
+.trust-edge.owns { stroke: var(--wd-dk, #4d3620); stroke-width: 2; }
+.trust-edge.friend { stroke: var(--wd-brick-2, #a94a26); stroke-width: 2.5; }
+.trust-edge.pending { stroke: var(--wd-brick-2, #a94a26); stroke-dasharray: 2 4; stroke-linecap: round; }
 .trust-edge.bond { stroke: #6f8a4a; stroke-dasharray: 7 4; }
 .trust-node { cursor: pointer; }
 .trust-node .ring { fill: none; stroke: none; }
 .trust-node:focus { outline: none; }
-.trust-node:focus-visible .ring, .trust-node:hover .ring { stroke: var(--wd-lo); stroke-width: 2; stroke-dasharray: 3 3; }
-.trust-node.focused .ring { stroke: var(--wd-copper); stroke-width: 3; stroke-dasharray: none; }
-.trust-node circle:not(.ring), .trust-node rect { stroke: var(--wd-dk); stroke-width: 1.5; fill: var(--wd-face-2); }
-.trust-node.you circle:not(.ring) { fill: var(--wd-brick); }
-.trust-node.mine rect { fill: var(--wd-copper); }
-.trust-node.editing rect { fill: var(--wd-brick-2); stroke-width: 2.5; }
+.trust-node:focus-visible .ring, .trust-node:hover .ring { stroke: var(--wd-lo, #a98d5c); stroke-width: 2; stroke-dasharray: 3 3; }
+.trust-node.focused .ring { stroke: var(--wd-copper, #cf7a34); stroke-width: 3; stroke-dasharray: none; }
+.trust-node.focused .label { font-weight: 800; }
+.trust-node circle:not(.ring), .trust-node rect { stroke: var(--wd-dk, #4d3620); stroke-width: 1.5; fill: var(--wd-face-2, #ecdfbd); }
+.trust-node.you circle:not(.ring) { fill: var(--wd-brick, #6b2216); }
+.trust-node.mine rect { fill: var(--wd-copper, #cf7a34); }
+.trust-node.editing rect { fill: var(--wd-brick-2, #a94a26); stroke-width: 2.5; }
 .trust-node.bond rect { stroke-dasharray: 4 3; }
 .trust-node.paused rect { fill: #b39a74; }
-.trust-node.paused .initial { fill: var(--wd-ink); }
+.trust-node.paused .initial { fill: var(--wd-ink, #2b1d10); }
 .trust-node.waiting circle:not(.ring), .trust-node.waiting rect { stroke-dasharray: 2 3; opacity: .75; }
-.trust-node .initial { font: 700 13px var(--ui); fill: var(--wd-ink); pointer-events: none; }
+.trust-node image.head { image-rendering: pixelated; pointer-events: none; }
+.trust-node .initial { font: 700 13px var(--ui); fill: var(--wd-ink, #2b1d10); pointer-events: none; }
 .trust-node.you .initial, .trust-node.mine .initial { fill: #fff3d2; }
-.trust-node .label { font: 600 11px var(--ui); fill: var(--wd-ink); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
+.trust-node .label { font: 600 11px var(--ui); fill: var(--wd-ink, #2b1d10); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
 .trust-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
-.trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2); }
+.trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2, #a94a26); }
 .trust-legend .swatch:first-child { margin-left: 0; }
+.trust-legend .swatch.owns { border-top: 2px solid #4d3620; }
 .trust-legend .swatch.pending { border-top-style: dotted; }
 .trust-legend .swatch.bond { border-top: 2px dashed #6f8a4a; }
 

@@ -7641,7 +7641,7 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, crew: (bot) => bot?.configuration_room
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';

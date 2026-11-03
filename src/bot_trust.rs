@@ -97,10 +97,23 @@ async fn overview(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
         }
         Ok(json!({"id":a.id,"name":a.name,"doorbell":a.doorbell,"configuration_room":configuration_room,"trust":state.db.bot_trust(&a.id)?}))
     }).collect::<ApiResult<Vec<_>>>()?;
+    // BT6: what each person and bot in this view is wearing (C16), for drawing their heads.
+    let mut bot_ids: Vec<String> = bots.iter().map(|a| a.id.clone()).collect();
+    for a in &own {
+        if !bot_ids.contains(&a.id) {
+            bot_ids.push(a.id.clone());
+        }
+    }
+    let mut person_ids: Vec<String> = people.iter().map(|p| p.id.clone()).collect();
+    person_ids.push(caller.person_id.clone());
+    let looks = json!({
+        "people": crate::looks::worn(&state, crate::db::Wearer::Person, &person_ids)?,
+        "bots": crate::looks::worn(&state, crate::db::Wearer::Bot, &bot_ids)?,
+    });
     let bots: Vec<_> =
         bots.iter().map(|a| json!({"id":a.id,"name":a.name,"owner_id":a.owner_id})).collect();
     Ok(Json(
-        json!({"owner_id":caller.person_id,"people":people,"bots":bots,"friendships":state.db.explicit_friendships(&caller.person_id)?,"agents":agents}),
+        json!({"owner_id":caller.person_id,"people":people,"bots":bots,"looks":looks,"friendships":state.db.explicit_friendships(&caller.person_id)?,"agents":agents}),
     ))
 }
 

@@ -25,3 +25,19 @@ BT5. A selected delegate or accepted friend may bring a bot to a room the delega
 delegate must belong to the destination room, rather than merely visiting it. In a
 private room, its owner must already have membership; delegation cannot silently expand its owner's
 access. Existing participants mode retains owner-only manual bring and existing project invitations.
+
+BT6. The trust view has `looks`, with `people` and `bots`, by id: what each person and bot already
+in the view is wearing (C16), for drawing their heads. It names no one who isn't already in the view,
+says nothing about whose a bot is that the view doesn't, and a bot still gets 403.
+
+BT7. The connections graph draws every person and bot as its head, from `looks`, inside a frame that
+still says what it is: a round frame for you and people, a square one for bots, ringed and
+filled differently for the bot being edited. With no look, or where heads can't be drawn, the frame
+shows the first letter of the name. The picked node is ringed, and the legend says what each line and
+frame means.
+
+BT8. The graph is readable without trust.css. Every shape carries its fill and stroke, and the
+background is drawn in the graph itself, so a stylesheet that is late, missing or lacks its variables
+can't leave black circles with no lines. Names under nodes never overlap another name or node: one that
+would is drawn above its node, or shortened.
+

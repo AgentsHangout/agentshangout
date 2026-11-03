@@ -13,7 +13,21 @@ const ANCHOR = {
 // How long each kind of line wants to be.
 const REACH = { owns: 90, friend: 120, pending: 130, bond: 110 };
 
-export function trustPanel({ h, api, panels, me, crew }) {
+// Shapes and colours every part of the graph carries itself (BT8). trust.css restyles them, but a
+// stylesheet that is late, missing or without its variables can't leave black blobs with no lines.
+const TAN = '#e6d6ae', INK = '#2b1d10', DARK = '#4d3620', BRICK = '#a94a26';
+const EDGE = {
+  owns: { stroke: DARK, 'stroke-width': 2 },
+  friend: { stroke: BRICK, 'stroke-width': 2.5 },
+  pending: { stroke: BRICK, 'stroke-width': 1.5, 'stroke-dasharray': '2 4', 'stroke-linecap': 'round' },
+  bond: { stroke: '#6f8a4a', 'stroke-width': 1.5, 'stroke-dasharray': '7 4' },
+};
+const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd', bond: '#ecdfbd' };
+// How big each kind of frame is: half its width, so the label can sit clear of it.
+const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
+const LABEL_HIGH = 13;
+
+export function trustPanel({ h, api, panels, me, crew, figure }) {
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
   // Where every node was last drawn, so a change doesn't throw the graph around.
@@ -27,6 +41,43 @@ export function trustPanel({ h, api, panels, me, crew }) {
   const personName = id => data.people.find(p => p.id === id)?.name || 'Person';
   const botName = id => data.bots.find(p => p.id === id)?.name || 'Bot';
   const clone = value => JSON.parse(JSON.stringify(value));
+  // BT7: a node's head, drawn by the same art as rooms from what the server says it wears (C16).
+  // It's a picture of the head only, scaled up whole so it stays sharp, or null where there's none.
+  const heads = new Map();
+  function headOf(n) {
+    const person = n.kind === 'you' || n.kind === 'person';
+    const worn = n.lookId && data?.looks?.[person ? 'people' : 'bots']?.[n.lookId];
+    if (!figure || !worn) return null;
+    const key = `${person ? 'p' : 'b'}${JSON.stringify(worn)}`;
+    if (!heads.has(key)) {
+      let url = null;
+      try {
+        const whole = figure({ kind: person ? 'person' : 'bot', color: '#8b6a3e', worn });
+        const read = whole.getContext('2d').getImageData(0, 0, whole.width, whole.height);
+        let top = -1, left = whole.width, right = -1;
+        for (let y = 0; y < whole.height && top < 0; y++) for (let x = 0; x < whole.width; x++) {
+          if (read.data[(y * whole.width + x) * 4 + 3]) { top = y; break; }
+        }
+        // The head is the top of the figure: a bot's is wide, a person's is narrower than the shoulders.
+        const rows = person ? 11 : 13;
+        for (let y = top; top >= 0 && y < top + rows; y++) for (let x = 0; x < whole.width; x++) {
+          if (read.data[(y * whole.width + x) * 4 + 3]) { left = Math.min(left, x); right = Math.max(right, x); }
+        }
+        if (top >= 0) {
+          const side = Math.max(rows, right - left + 1);
+          const centre = (left + right + 1) / 2;
+          const out = document.createElement('canvas');
+          out.width = out.height = 60;
+          const g = out.getContext('2d');
+          g.imageSmoothingEnabled = false;
+          g.drawImage(whole, Math.round(centre - side / 2), top, side, rows, 0, 0, 60, Math.round(60 * rows / side));
+          url = out.toDataURL('image/png');
+        }
+      } catch (_) { url = null; }
+      heads.set(key, url);
+    }
+    return heads.get(key);
+  }
   const text = (words, className = 'muted') => h('p', { class: className }, words);
   const section = (title, ...children) => h('section', { class: 'trust-section' }, h('h3', {}, title), ...children);
   const state = words => h('span', { class: 'trust-tag' }, words);
@@ -129,7 +180,13 @@ export function trustPanel({ h, api, panels, me, crew }) {
       Object.assign(node(`person:${id}`, 'person', personName(id), f.status === 'accepted' ? 'Your friend' : waiting(f, owner)), { friendship: f });
       edges.push({ from: 'you', to: `person:${id}`, kind: f.status === 'accepted' ? 'friend' : 'pending' });
     }
-    if (!selected) return { nodes: [...nodes.values()], edges };
+    const finish = () => {
+      for (const n of nodes.values()) {
+        n.lookId = n.kind === 'you' ? owner : n.kind === 'person' ? n.id.slice(7) : n.kind === 'mine' ? n.id.slice(5) : n.botId;
+      }
+      return { nodes: [...nodes.values()], edges };
+    };
+    if (!selected) return finish();
     const centre = `mine:${selected}`;
     for (const f of data.friendships.filter(f => f.kind === 'bot' && [f.from_id, f.to_id].includes(selected))) {
       const id = other(f, selected);
@@ -144,7 +201,7 @@ export function trustPanel({ h, api, panels, me, crew }) {
       Object.assign(n, { bond: b, botId: n.botId || id });
       edges.push({ from: centre, to: at, kind: 'bond', strength: b.strength });
     });
-    return { nodes: [...nodes.values()], edges };
+    return finish();
   }
   // A small force layout: nodes push apart, lines pull together. Nodes already on screen barely move.
   function layout(nodes, edges) {
@@ -207,6 +264,36 @@ export function trustPanel({ h, api, panels, me, crew }) {
     }
     for (const n of nodes) placed.set(n.id, { x: n.x, y: n.y });
   }
+  // BT8: where each name goes. Under its node unless that would run into another name or node, then
+  // above it, then shortened, so names never sit on top of each other or on a head.
+  function labels(nodes) {
+    const taken = [];
+    const bodies = nodes.map(n => ({ id: n.id, x: n.x - HALF[n.kind] - 3, y: n.y - HALF[n.kind] - 3, w: HALF[n.kind] * 2 + 6, h: HALF[n.kind] * 2 + 6 }));
+    const placed = new Map();
+    const order = [...nodes].sort((a, b) => (a.id === `mine:${selected}` ? -1 : b.id === `mine:${selected}` ? 1 : 0) || a.y - b.y || a.x - b.x);
+    for (const n of order) {
+      const letters = [...n.name];
+      const words = [letters.length > 13 ? `${letters.slice(0, 12).join('')}…` : n.name, letters.length > 8 ? `${letters.slice(0, 7).join('')}…` : null].filter(Boolean);
+      // Under, over, then beside, each at full length and then shortened; the least crowded wins.
+      const options = [];
+      for (const text of words) for (const where of ['below', 'above', 'right', 'left']) options.push({ text, where });
+      let chosen, best = Infinity;
+      for (const option of options) {
+        const w = [...option.text].length * 6.4 + 6, half = HALF[n.kind];
+        const at = { below: [n.x, n.y + half + 14], above: [n.x, n.y - half - 6], right: [n.x + half + 4 + w / 2, n.y + 4], left: [n.x - half - 4 - w / 2, n.y + 4] }[option.where];
+        const x = Math.min(W - w / 2 - 2, Math.max(w / 2 + 2, at[0])), y = at[1];
+        const box = { x: x - w / 2, y: y - LABEL_HIGH + 3, w, h: LABEL_HIGH };
+        const overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+        const cost = (box.y < 0 || box.y + box.h > H ? 1000 : 0)
+          + taken.reduce((sum, t) => sum + overlap(box, t), 0) + bodies.reduce((sum, b) => sum + (b.id === n.id ? 0 : overlap(box, b)), 0);
+        if (cost < best) { best = cost; chosen = { option, x, y, box }; }
+        if (!cost) break;
+      }
+      taken.push(chosen.box);
+      placed.set(n.id, { text: chosen.option.text, x: chosen.x - n.x, y: chosen.y - n.y });
+    }
+    return placed;
+  }
   function connections() {
     const { nodes, edges } = graph();
     layout(nodes, edges);
@@ -218,27 +305,36 @@ export function trustPanel({ h, api, panels, me, crew }) {
       const pair = [e.from, e.to].sort().join(' ');
       const bend = seen.has(pair) ? 24 : 0; seen.add(pair);
       const a = byId.get(e.from), b = byId.get(e.to);
-      const line = svg('path', { class: `trust-edge ${e.kind}`, d: curve(a, b, bend), fill: 'none',
-        'stroke-width': e.kind === 'bond' ? 1 + Math.min(Number(e.strength) || 0, 9) / 3 : null });
+      const line = svg('path', { class: `trust-edge ${e.kind}`, d: curve(a, b, bend), fill: 'none', ...EDGE[e.kind],
+        ...(e.kind === 'bond' ? { 'stroke-width': 1 + Math.min(Number(e.strength) || 0, 9) / 3 } : {}) });
       return { e, line, a, b, bend };
     });
     const groups = new Map();
+    const names = labels(nodes);
     const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': selected ? `${bot().name}’s connections` : 'Your connections' },
+      svg('rect', { class: 'trust-ground', width: W, height: H, fill: TAN }),
       ...lines.map(l => l.line),
       ...nodes.map(n => {
-        const short = [...n.name].length > 13 ? `${[...n.name].slice(0, 12).join('')}…` : n.name;
-        const shape = n.kind === 'you' || n.kind === 'person'
-          ? svg('circle', { r: n.kind === 'you' ? 20 : 15 })
-          : svg('rect', { x: n.kind === 'mine' ? -17 : -14, y: n.kind === 'mine' ? -17 : -14, width: n.kind === 'mine' ? 34 : 28, height: n.kind === 'mine' ? 34 : 28, rx: 4 });
+        const half = HALF[n.kind], round = n.kind === 'you' || n.kind === 'person';
+        const editing = n.id === `mine:${selected}`;
+        const frame = { fill: TILE[n.kind], stroke: DARK, 'stroke-width': editing ? 2.5 : 1.5 };
+        const shape = round ? svg('circle', { r: half, ...frame })
+          : svg('rect', { x: -half, y: -half, width: half * 2, height: half * 2, rx: 4, ...frame, ...(editing ? { fill: BRICK } : {}) });
+        const head = headOf(n);
+        // A head sits inside its frame and fills it; a square of side 1.45 r fits a circle of radius r.
+        const side = round ? Math.round(half * 1.45) : half * 2 - 6;
+        const face = head ? svg('image', { class: 'head', href: head, x: -side / 2, y: -side / 2, width: side, height: side, 'aria-hidden': 'true', 'pointer-events': 'none' }) : null;
+        const label = names.get(n.id);
         const g = svg('g', {
-          class: `trust-node ${n.kind}${n.id === focusId() ? ' focused' : ''}${n.id === `mine:${selected}` ? ' editing' : ''}${n.friendship?.status === 'pending' ? ' waiting' : ''}${n.paused ? ' paused' : ''}`,
+          class: `trust-node ${n.kind}${n.id === focusId() ? ' focused' : ''}${editing ? ' editing' : ''}${n.friendship?.status === 'pending' ? ' waiting' : ''}${n.paused ? ' paused' : ''}`,
           transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-pressed': String(n.id === focusId()),
           'aria-label': `${n.name}, ${n.detail}`,
           onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(n); } },
           onpointerdown: e => drag(e, n),
-        }, svg('title', {}, `${n.name} · ${n.detail}`), svg('circle', { class: 'ring', r: n.kind === 'you' ? 26 : 22 }), shape,
-          svg('text', { class: 'initial', 'text-anchor': 'middle', dy: '0.35em' }, [...n.name][0]?.toUpperCase() || '?'),
-          svg('text', { class: 'label', 'text-anchor': 'middle', y: n.kind === 'you' ? 36 : 30 }, short));
+        }, svg('title', {}, `${n.name} · ${n.detail}`),
+          svg('circle', { class: 'ring', r: half + 5, fill: 'none', stroke: n.id === focusId() ? '#cf7a34' : 'none', 'stroke-width': 3 }), shape, face,
+          face ? null : svg('text', { class: 'initial', 'text-anchor': 'middle', dy: '0.35em', fill: n.kind === 'you' || n.kind === 'mine' ? '#fff3d2' : INK, 'font-size': 13, 'font-weight': 700 }, [...n.name][0]?.toUpperCase() || '?'),
+          svg('text', { class: 'label', 'text-anchor': 'middle', x: label.x, y: label.y, fill: INK, stroke: TAN, 'stroke-width': 3, 'paint-order': 'stroke', 'font-size': 11, 'font-weight': n.id === focusId() ? 800 : 600 }, label.text));
         groups.set(n.id, g);
         return g;
       }));
@@ -262,10 +358,11 @@ export function trustPanel({ h, api, panels, me, crew }) {
       addEventListener('pointermove', move); addEventListener('pointerup', up);
     }
     const legend = h('p', { class: 'trust-legend fine' },
-      h('span', { class: 'swatch friend' }), 'Friends', h('span', { class: 'swatch pending' }), 'Asked, not answered',
-      h('span', { class: 'swatch bond' }), 'Bond (earned, grants nothing)');
+      h('span', { class: 'swatch owns' }), 'Yours', h('span', { class: 'swatch friend' }), 'Friends',
+      h('span', { class: 'swatch pending' }), 'Asked, not answered', h('span', { class: 'swatch bond' }), 'Bond (earned)');
+    const about = text(`${selected ? `${bot().name}’s` : 'Your'} connections. Round is a person, square is a bot, and each wears its own look. The ringed one is open below.`, 'muted fine');
     const hint = text('Pick anyone in the graph to see and change them. Drag to move them.', 'muted fine');
-    return [picture, legend, hint, inspector(byId.get(focusId()))];
+    return [about, picture, legend, hint, inspector(byId.get(focusId()))];
   }
   function curve(a, b, bend) {
     if (!bend) return `M${a.x} ${a.y}L${b.x} ${b.y}`;
