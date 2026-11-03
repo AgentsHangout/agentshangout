@@ -54,6 +54,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/status", post(set_status))
         .route("/api/activity", post(report_activity))
         .route("/api/thinking", post(set_thinking))
+        .route("/api/hangouts/{id}/typing", post(set_human_typing))
         .route("/api/doorbell", post(doorbell_check))
         .route("/api/clock", put(set_clock))
         .route("/api/inbox", get(inbox))
@@ -1002,8 +1003,10 @@ fn live_events(
     let events = stream::unfold((hub, state, secret_hash, topic), move |mut context| async move {
         loop {
             let (hub, state, secret_hash, topic) = &mut context;
+            let mut human_typing = false;
             let event = match hub.recv().await {
                 Ok(event) if event.hangout_id == *topic => {
+                    human_typing = event.kind == "typing";
                     SseEvent::default().event(event.kind).data(event.data)
                 }
                 Ok(_) => continue,
@@ -1012,7 +1015,15 @@ fn live_events(
                 Err(RecvError::Closed) => return None,
             };
             let still_allowed = match state.authenticate(secret_hash) {
-                Ok(Some(caller)) => allowed(state, &caller, topic),
+                Ok(Some(caller)) => {
+                    if !allowed(state, &caller, topic) {
+                        return None;
+                    }
+                    if human_typing && caller.is_agent() {
+                        continue;
+                    }
+                    true
+                }
                 _ => false,
             };
             if !still_allowed {
@@ -1555,6 +1566,22 @@ async fn set_thinking(
     Json(body): Json<SetThinking>,
 ) -> ApiResult<Json<Value>> {
     ops::set_thinking(&state, &caller, body.hangout_id.as_deref(), body.on)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HumanTyping {
+    on: bool,
+}
+
+async fn set_human_typing(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<HumanTyping>,
+) -> ApiResult<Json<Value>> {
+    crate::typing::set(&state, &caller, &id, body.on)?;
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -5680,3 +5680,70 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
         conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
     assert_eq!(origins, 0);
 }
+
+// I86: typing is a transient, human-only signal in the room, never a chat line.
+#[tokio::test]
+async fn human_typing_is_room_scoped_and_clears_on_chat() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (other, bo) = server.someone("Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let path = format!("/api/hangouts/{room}/typing");
+    server.post(&scout.token, &path, json!({"on":true})).await.refused(StatusCode::FORBIDDEN);
+    server.post(&bo.key, &path, json!({"on":true})).await.refused(StatusCode::NOT_FOUND);
+    let before = server.snapshot(&ann.key, &room).await["messages"].clone();
+    let mut stream = server.stream(&ann.key, &room).await;
+    server.post(&ann.key, &path, json!({"on":true})).await.ok();
+    heard_on(&mut stream, &["event: typing", "Ann"]).await;
+    let snapshot = server.snapshot(&ann.key, &room).await;
+    assert_eq!(snapshot["typing"][0]["person_id"], ann.id);
+    assert_eq!(snapshot["messages"], before);
+    assert_eq!(server.snapshot(&bo.key, &other).await["typing"], json!([]));
+    assert_eq!(server.snapshot(&scout.token, &room).await["typing"], json!([]));
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"Hello"}))
+        .await
+        .ok();
+    assert_eq!(server.snapshot(&ann.key, &room).await["typing"], json!([]));
+    server.post(&ann.key, &path, json!({"on":true})).await.ok();
+    server.post(&ann.key, &path, json!({"on":false})).await.ok();
+    assert_eq!(server.snapshot(&ann.key, &room).await["typing"], json!([]));
+}
+
+#[tokio::test]
+async fn typing_does_not_reach_bots_and_revoked_readers_lose_the_stream() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let mut bot_stream = server.stream(&scout.token, &room).await;
+    let mut bo_stream = server.stream(&bo.key, &room).await;
+    let path = format!("/api/hangouts/{room}/typing");
+    server.post(&ann.key, &path, json!({"on":true})).await.ok();
+    heard_on(&mut bo_stream, &["event: typing", "Ann"]).await;
+    assert!(tokio::time::timeout(Duration::from_millis(150), bot_stream.chunk()).await.is_err());
+    server.state.db.remove_member(&room, &bo.id).unwrap();
+    server.post(&ann.key, &path, json!({"on":false})).await.ok();
+    let ended =
+        tokio::time::timeout(Duration::from_secs(2), bo_stream.chunk()).await.unwrap().unwrap();
+    assert!(ended.is_none());
+    server.post(&bo.key, &path, json!({"on":true})).await.refused(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn typing_away_and_membership_filtering_never_keep_old_people_visible() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let path = format!("/api/hangouts/{room}/typing");
+    server.post(&bo.key, &path, json!({"on":true})).await.ok();
+    server.post(&bo.key, &format!("/api/hangouts/{room}/away"), json!({})).await.ok();
+    assert_eq!(server.snapshot(&ann.key, &room).await["typing"], json!([]));
+    server.post(&bo.key, &path, json!({"on":true})).await.ok();
+    server.state.db.remove_member(&room, &bo.id).unwrap();
+    assert_eq!(server.snapshot(&ann.key, &room).await["typing"], json!([]));
+    server
+        .post(&ann.key, &path, json!({"on":true,"text":"must not accept draft text"}))
+        .await
+        .refused(StatusCode::UNPROCESSABLE_ENTITY);
+}
