@@ -52,15 +52,21 @@ internal class LocalClient private constructor(private val context: Context) {
   private val manifest = downloaded ?: context.assets.open("client/manifest.json").bufferedReader().use {
     ClientBundleManifest.parse(it.readText())
   }
+  private val updatePolicy = ClientUpdatePolicy()
 
   init {
     Log.i("AgentsHangoutClient", "Local client ${manifest.version.take(12)} (${if (downloaded == null) "APK" else "download"})")
+    checkInBackground()
+  }
+
+  private fun checkInBackground() {
+    if (!updatePolicy.begin(android.os.SystemClock.elapsedRealtime())) return
     Thread({
       try { checkForUpdate() }
       catch (error: Exception) {
         // No URL, invite, session, or response body is logged. Offline is normal.
         Log.i("AgentsHangoutClient", "Keeping installed client (${error.javaClass.simpleName})")
-      }
+      } finally { updatePolicy.finish() }
     }, "AgentsHangout-assets").start()
   }
 
@@ -109,17 +115,9 @@ internal class LocalClient private constructor(private val context: Context) {
   }
 
   private fun checkForUpdate() {
-    val releases = JSONArray(download(RELEASES_URL, 1024L * 1024).toString(Charsets.UTF_8))
-    val release = (0 until releases.length()).map { releases.getJSONObject(it) }
-      .filter { candidate ->
-        val tag = candidate.optString("tag_name")
-        val assets = candidate.optJSONArray("assets")
-        val names = if (assets == null) emptySet() else
-          (0 until assets.length()).map { assets.getJSONObject(it).optString("name") }.toSet()
-        !candidate.optBoolean("draft", true) && !candidate.optBoolean("prerelease", true) &&
-          tag.matches(Regex("mobile-assets-[A-Za-z0-9._-]{1,80}")) &&
-          names.containsAll(listOf("android-client.json", "android-client.zip"))
-      }.maxByOrNull { it.optString("published_at") }?.getString("tag_name") ?: return
+    val release = ClientUpdatePolicy.findRelease { page ->
+      JSONArray(download("$RELEASES_URL&page=$page", 4L * 1024 * 1024).toString(Charsets.UTF_8))
+    } ?: return
     val text = download("https://github.com/AgentsHangout/agentshangout/releases/download/$release/android-client.json", 128L * 1024)
       .toString(Charsets.UTF_8)
     val next = ClientBundleManifest.parse(text)
@@ -134,10 +132,12 @@ internal class LocalClient private constructor(private val context: Context) {
   }
 
   companion object {
-    private const val RELEASES_URL = "https://api.github.com/repos/AgentsHangout/agentshangout/releases?per_page=30"
+    private const val RELEASES_URL = "https://api.github.com/repos/AgentsHangout/agentshangout/releases?per_page=100"
     // These are precisely the server's index routes. OAuth callback routes must run the same client.
     private val SPA_ROUTE = Regex("/(?:h|join|c|world|house|s|join-city|join-house|p)/[^/]+|/worlds|/discord/linked|/sign-in/back")
     @Volatile private var instance: LocalClient? = null
+
+    fun resume() { instance?.checkInBackground() }
 
     fun install(context: Context, webView: WebView) {
       // A custom development server keeps the external loading behavior.

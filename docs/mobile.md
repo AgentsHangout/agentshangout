@@ -56,10 +56,12 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 
 ### 6. Phone sheets and room layout
 - **M3.** Phone sheets have a full-width dismiss handle at least 44px high, accepting touch, pen, and mouse pointers. A downward drag of at least 56px dismisses the sheet; short or cancelled gestures restore it. Close buttons, tap-outside, and Escape continue to work. The phone header and body form one plain surface without nested desktop bevels or backdrop blur over the animated game.
-- **M4.** A phone room starts with the whole scene fitted inside the available viewport at its original 480:252 aspect ratio, in portrait and landscape. The landscape navigation rail is reserved once. Pinch to zoom and pan a zoomed room; rotation keeps the camera within the new bounds. Repeated room information and floor navigation live in More; guest-access and quiet-room warnings remain visible. Desktop presentation stays unchanged.
+- **M4.** A phone room starts with the whole scene fitted inside the available viewport at its original 480:252 aspect ratio, in portrait and landscape. The landscape navigation rail is reserved once. Pinch to zoom and pan a zoomed room; rotation keeps the camera within the new bounds. Repeated room information and floor navigation live in More; guest-access and quiet-room warnings appear inside Chat and More. Desktop presentation stays unchanged.
 - **M5.** The room performance probe exercises the actual renderer, checking stationary artwork and label stability as well as moving and seated label positions. Timing is reported without a device-independent pass threshold. Android performance comparisons sample the same foreground interaction and reject backgrounded or restarted sessions.
 
 `mobile_rust/tests/phone-room.html` checks M3 and M4 with the actual panel functions and stylesheet inside a 393 × 852 phone frame. `mobile_rust/tests/room-performance.html` and `mobile_rust/tests/android_frames.py` support M5; see `mobile_rust/tests/PERFORMANCE.md` for their measurement limits.
+
+- **M8.** Phone rooms provide separate Room and World tabs: Room closes panels to show the interior, and World returns to The Commons. Guest expiry and quiet-room notices belong to the scrollable Chat and More panels, never a floating strip over the scene or composer. Desktop status notices remain unchanged.
 
 ### 7. Local Android client and asset updates
 - **M6.** Android serves one complete client bundle from private local storage or the APK on the existing production HTTPS origin. Static files missing from the selected version fail locally instead of mixing in server files. API calls, authentication, and event streams retain normal network behavior and existing session cookies. Custom development servers and other platforms retain external loading.
@@ -75,7 +77,12 @@ python mobile_rust/tools/client_bundle.py --release mobile-assets-0.1.2 --out mo
 
 This creates `android-client.json` and `android-client.zip`, without publishing anything. A person reviews the matching commit and publishes both attachments in a non-draft, non-prerelease `mobile-assets-*` GitHub release, with `make_latest=false`. This preserves the repository's latest-release meaning for server deployments. Never attach assets from a different commit to that manifest, and keep each asset release immutable.
 
-Phones inspect the first 30 public releases and select the newest published matching release with both attachments. Downloads use HTTPS and an explicit GitHub host allowlist. Limits are 16 MiB compressed, 32 MiB expanded, and 8 MiB per file. Storage retains the current, previous, and pending versions rather than an unlimited history. A published asset release and a foreground Android update check still need an end-to-end test before claiming live GitHub delivery; local store tests cover verification and activation independently of GitHub availability.
+Phones inspect up to three pages of 100 public releases and select the newest published matching release with both attachments. They check at launch and when returning to the foreground, at most once every five minutes, with only one check in flight. A verified update still waits for a new process; foreground checks never replace the running document. Downloads use HTTPS and an explicit GitHub host allowlist. Limits are 16 MiB compressed, 32 MiB expanded, and 8 MiB per file. Storage retains the current, previous, and pending versions rather than an unlimited history. A published asset release and a foreground Android update check still need an end-to-end test before claiming live GitHub delivery; local store tests cover verification and activation independently of GitHub availability. Server releases containing only a Linux binary do not update Android assets.
+
+Run the JVM update-policy and bundle-store tests with `python mobile_rust/tests/run_client_tests.py`
+(set `JAVA_HOME` to a compatible JDK, such as Android Studio's JBR). This uses the existing Gradle
+wrapper and test dependencies without requiring generated Tauri Android files. It does not compile
+the Android lifecycle integration or replace an on-device update check.
 
 ---
 

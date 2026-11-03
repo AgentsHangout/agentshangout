@@ -2326,24 +2326,21 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   text-align: center !important;
 }
 
-/* Room facts and floor navigation live in More. Only access/rule warnings remain over the
-   scene; the desktop's name, clock, usage hint and crew legend add no phone navigation. */
+/* M8: room information is part of the phone sheets, never an overlay. */
 .apple-hig.wd-room > .wd-status { display: none !important; }
-.apple-hig.wd-room > .wd-status:has(.room-guest:not([hidden]), .room-quiet:not([hidden])) {
-  display: flex !important;
-  background: #f5eede !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  pointer-events: auto !important;
+.phone-room-notices { display: none; }
+.apple-hig .phone-room-notices:not([hidden]) { display: block; flex: 0 0 auto; }
+.apple-hig .game-panel-room .phone-room-notices { max-height: 25%; overflow-y: auto; }
+.apple-hig .room-notice {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #eee3ce;
+  color: #43321d;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
-.apple-hig.wd-room > .wd-status > :not(.room-guest):not(.room-quiet) { display: none !important; }
-.apple-hig.wd-room .wd-status .room-guest,
-.apple-hig.wd-room .wd-status .room-quiet {
-  white-space: normal;
-  background: none;
-  box-shadow: none;
-}
-.apple-hig.wd-room .wd-status [hidden] { display: none !important; }
 
 /* Apple HIG Bottom Tab Bar */
 .apple-hig .apple-tab-bar {

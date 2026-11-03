@@ -2815,7 +2815,7 @@ async function roomView(id) {
 
   // The running notes along the bottom, around the status bar's own message and clock.
   const guestEl = h('span', { class: 'wd-seg wd-teal room-guest', role: 'status', hidden: true });
-  // I17: a rule nobody can see isn't fair on anyone, so this stays up at every width.
+  // I17, M8: desktop status plus inline phone notices in Chat and More.
   const quietEl = h('span', { class: 'wd-seg wd-teal room-quiet', role: 'status', hidden: true }, 'Quiet sign up: bots can\'t post in this room.');
   const floorsEl = h('nav', { class: 'wd-seg floors', 'aria-label': 'Floors', hidden: true });
   const floorsMore = h('nav', { class: 'phone-room-floors', 'aria-label': 'Room details', hidden: true });
@@ -2823,6 +2823,8 @@ async function roomView(id) {
   const legendEl = h('div', { class: 'wd-seg legend room-legend' });
   frame.status.prepend(guestEl, quietEl, floorsEl, aboutEl);
   frame.status.append(legendEl);
+  const chatNotices = h('div', { class: 'phone-room-notices' });
+  const moreNotices = h('div', { class: 'phone-room-notices' });
 
   const chatLog = h('div', { class: 'chat-log', 'aria-live': 'polite' });
   const calendarEl = h('div', { class: 'list' });
@@ -3569,6 +3571,7 @@ async function roomView(id) {
     stage.dataset.size = snapshot.floor?.floor.size || '';
     renderFloors();
     renderGuest();
+    syncRoomNotices([chatNotices, moreNotices], [guestEl, quietEl]);
     renderBoard();
     renderPins();
     typingHints.fromSnapshot(snapshot.typing, typingVersion);
@@ -4231,7 +4234,7 @@ async function roomView(id) {
       chatLog.scrollTop = chatLog.scrollHeight;
     },
     onClose: () => typingComposer.stop(),
-  }, chatLog, typingStatus, chatError, chatForm);
+  }, chatNotices, chatLog, typingStatus, chatError, chatForm);
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
@@ -4249,6 +4252,7 @@ async function roomView(id) {
     ownerNotesEl,
     ownerNotesError);
   panels.add('more', 'More', {},
+    moreNotices,
     floorsMore,
     aboutMore,
     h('div', { class: 'game-more' }, ...[
@@ -6356,11 +6360,20 @@ function installRoomCamera(host, stage) {
   };
 }
 
+function syncRoomNotices(targets, notices) {
+  for (const target of targets) {
+    target.replaceChildren(...notices.filter(notice => !notice.hidden).map(notice =>
+      h('p', { class: 'room-notice' }, notice.textContent)));
+    target.hidden = !target.childElementCount;
+  }
+}
+
 function installAppleHigRoom({ frame, panels }) {
   watchPhoneChrome(frame.root);
 
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [
+    { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
     { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
     { id: 'guests', label: 'Guests', icon: '👥', action: () => panels.open('crew') },
