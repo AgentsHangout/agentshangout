@@ -121,8 +121,8 @@ changes nothing but where the bot is.
 ### Packs
 
 - **I26.** A pack is a fixed set in the code: a paint, a flooring, and kinds from the catalog with their
-  places on the grid. Nothing in one is typed (S14). There are two: `fall`, and `halloween`, which is
-  over (I57).
+  places on the grid. Nothing in one is typed (S14). There are three: `fall`, `winter`, and
+  `halloween`, which is over (I57).
 - **I27.** Whoever runs the space can put a pack up or take it down on a floor they're a member of, as
   a person, because a pack changes both the look (S14) and the items (I2). Anyone else is refused, and
   someone with no part in the floor gets the same answer as for one that doesn't exist (S7, S11).
@@ -132,6 +132,8 @@ changes nothing but where the bot is.
 - **I29.** Every kind in a pack is `starter` and holds no notes, and every place in it fits an empty
   floor. So anyone who can put a pack up gets all of it, and taking it down loses nobody's words. A
   kind belongs to one pack and to no template, because taking a pack down takes all of that kind (I30).
+  A pack that costs credits is the one exception: its kinds, paint and flooring are only for someone
+  who bought it, and their bots (HC14 in [economy.md](economy.md)).
 - **I30.** `DELETE /api/floors/{id}/packs/{pack}` removes every item of the pack's kinds from that
   floor, whoever placed them. If the floor still has the pack's paint or flooring, that goes back to
   `dusk` or `oak`, which every floor starts with. Nothing records that a pack went up: once it's up its
@@ -221,10 +223,10 @@ changes nothing but where the bot is.
 ### The catalog
 
 - **I46.** Every kind has a `category`: `seating`, `tables`, `beds`, `storage`, `lights`, `kitchen`,
-  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `spooky` or `signs`.
-  `GET /api/items` lists them in the order the catalog shows them. The furniture that comes with a
-  room is listed under one too, so a couch is found with the seating, and the table is marked as
-  staying (S14).
+  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `winter`, `spooky` or
+  `signs`. `GET /api/items` lists them in the order the catalog shows them. The furniture that comes
+  with a room is listed under one too, so a couch is found with the seating, and the table is marked
+  as staying (S14).
 - **I67.** Every floor keeps its table, because a bot that's busy sits there, but it needn't stand in
   the middle. Whoever runs the space can move it anywhere it fits, as 16 by 9 cells with its seats, on
   the floor and clear of the door, the nap spots, the couch and the desk while they're shown, and

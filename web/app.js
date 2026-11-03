@@ -1316,22 +1316,71 @@ function standingFacts(standing) {
   return h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value))));
 }
 
-// HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown.
+// HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown. HC14 and
+// HC17: packs that cost credits can be bought here, and you set what each of your bots may spend.
 function creditsCard(credits) {
-  const waiting = credits.cities_not_earning.length;
-  const rows = [
-    ['Balance', count(credits.balance, 'credit', 'credits')],
-    ['Earned today', `${credits.earned_today} of ${credits.daily_cap}`],
-    ['Gatherings', String(credits.gatherings)],
-    ['Good trips', String(credits.good_trips)],
-    ['Trips you let in', String(credits.hosted_trips)],
-  ];
-  return h('section', { class: 'card', 'aria-label': 'Your credits' },
-    h('h2', {}, 'Your credits'),
-    h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
-    waiting ? h('p', { class: 'muted' },
-      `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering or a vouch.`) : null,
-    h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. Only you and your bots can see this, and credits can\'t be spent, sent or cashed out yet.'));
+  const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
+  const error = formError();
+
+  function render(now) {
+    const waiting = now.cities_not_earning.length;
+    const rows = [
+      ['Balance', count(now.balance, 'credit', 'credits')],
+      ['Earned today', `${now.earned_today} of ${now.daily_cap}`],
+      ['Gatherings', String(now.gatherings)],
+      ['Good trips', String(now.good_trips)],
+      ['Trips you let in', String(now.hosted_trips)],
+    ];
+    if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
+    const packName = (word) => `${sentence(word)} pack`;
+    const packRow = (offer) => h('li', {},
+      h('strong', {}, packName(offer.pack)),
+      h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
+      offer.bought ? h('span', {}, 'Yours. Put it up from a room\'s build catalog.')
+        : offer.over ? h('span', { class: 'muted' }, 'Its season is over.')
+          : h('button', {
+            type: 'button',
+            disabled: now.balance < offer.cost,
+            onclick: act(error, async () => {
+              if (!confirm(`Buy the ${packName(offer.pack).toLowerCase()} for ${count(offer.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+              render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
+            }),
+          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'));
+    const botRow = (bot) => {
+      const input = h('input', {
+        type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
+        'aria-label': `What ${bot.name} may spend a day`,
+      });
+      return h('li', {},
+        h('strong', {}, bot.name),
+        h('span', { class: 'muted' }, ` · spent ${bot.spent_today} today · may spend `),
+        input,
+        h('span', { class: 'muted' }, ' a day '),
+        h('button', {
+          type: 'button',
+          class: 'ghost',
+          onclick: act(error, async () => {
+            const daily = Number(input.value);
+            render(await api(`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`, { method: 'PUT', body: { daily } }));
+          }),
+        }, 'Save'));
+    };
+    card.replaceChildren(
+      h('h2', {}, 'Your credits'),
+      h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
+      waiting ? h('p', { class: 'muted' },
+        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
+      now.packs.length ? h('h3', {}, 'Packs') : null,
+      now.packs.length ? h('ul', { class: 'room-list' }, now.packs.map(packRow)) : null,
+      now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
+      now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
+      now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
+      error,
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs and nothing else, and can\'t be sent, bought or cashed out.'));
+  }
+
+  render(credits);
+  return card;
 }
 
 // What a house asks, as a list. With the asker's standing each line also says where they are.
@@ -2047,7 +2096,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       picture: itemPicture(kind.kind, kind.w, kind.h),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
-      why: !kind.unlocked ? friendsText(kind.friends_needed)
+      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: buy it in Account`
+        : !kind.unlocked ? friendsText(kind.friends_needed)
         : kind.mood === 'flirty' && isPublic ? 'private floors only'
           : full ? 'this floor is full'
             : null,
@@ -2080,12 +2130,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   // I28, I30: pressing it again takes it down, so a pack that's up is a tile that's pressed. I57: one
   // that's over is only here to come down, so the catalog shows it where it's up and nowhere else.
+  // HC14: a pack that costs credits goes up once it's bought, and comes down whether or not it is.
   function packTile(pack, up) {
+    const locked = pack.cost > 0 && !up && !catalog.look.packs_bought.includes(pack.pack);
     return catalogTile({
       name: `pack-${pack.pack}`,
       whole: roomOf(pack, view().floor.floor.hidden, pack.items),
       label: `${wordName(pack.pack)} pack`,
-      lines: [up ? 'Up now. Press to take it down' : 'Press to put it up'],
+      lines: [up ? 'Up now. Press to take it down' : pack.cost > 0 && !locked ? 'Yours. Press to put it up' : 'Press to put it up'],
+      why: locked ? `${pack.cost} credits: buy it in Account` : null,
       pressed: up,
       onclick: () => restyle(async () => {
         const done = await api(`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack.pack)}`, { method: up ? 'DELETE' : 'POST' });
@@ -2096,10 +2149,14 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   }
 
   function surfaceTile(field, word, picture, current) {
+    // HC14: a paint or flooring from a pack that costs credits is for whoever bought the pack.
+    const paidFor = catalog.look.packs.find((pack) => pack.cost > 0 && pack[field] === word);
+    const locked = paidFor && word !== current && !catalog.look.packs_bought.includes(paidFor.pack);
     return catalogTile({
       name: `${field}-${word}`,
       picture,
       label: wordName(word),
+      why: locked ? `in the ${wordName(paidFor.pack).toLowerCase()} pack: buy it in Account` : null,
       pressed: word === current,
       onclick: () => restyle(async () => {
         await saveLook({ [field]: word });

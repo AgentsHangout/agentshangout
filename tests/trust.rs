@@ -806,6 +806,11 @@ async fn no_table_in_the_database_holds_a_score_or_a_copy_of_standing() {
         for banned in
             ["standing", "score", "reputation", "points", "karma", "rank", "level", "credit"]
         {
+            // HC11 and HC15: these two hold what paid and what was spent, one row per thing that
+            // happened, never a balance or a score. Every column check below still applies to them.
+            if banned == "credit" && ["credit_paid", "credit_spends"].contains(&table.as_str()) {
+                continue;
+            }
             assert!(!table.contains(banned), "a table called {table} suggests stored standing");
         }
         let mut columns = conn.prepare(&format!("PRAGMA table_info({table})")).unwrap();

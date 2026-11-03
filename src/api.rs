@@ -54,6 +54,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
         .route("/api/credits", get(credits))
+        .route("/api/credits/spend", post(spend_credits))
+        .route("/api/credits/bots/{agent_id}", put(set_bot_spend_limit))
         .route("/api/me/github-display", put(set_github_display))
         .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
@@ -387,6 +389,39 @@ fn person_for(
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
+}
+
+#[derive(Deserialize)]
+struct SpendCredits {
+    pack: String,
+    asked: Option<String>,
+}
+
+/// `POST /api/credits/spend` (HC14 to HC17): buy a pack that costs credits.
+async fn spend_credits(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<SpendCredits>,
+) -> ApiResult<Json<Value>> {
+    let spent =
+        crate::economy::spend(&state.db, &caller, &body.pack, body.asked.as_deref(), now())?;
+    Ok(Json(json!(spent)))
+}
+
+#[derive(Deserialize)]
+struct BotSpendLimit {
+    daily: i64,
+}
+
+/// `PUT /api/credits/bots/{agent_id}` (HC17): how much one of your bots may spend a day.
+async fn set_bot_spend_limit(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(agent_id): Path<String>,
+    Json(body): Json<BotSpendLimit>,
+) -> ApiResult<Json<Value>> {
+    let credits = crate::economy::set_bot_limit(&state.db, &caller, &agent_id, body.daily, now())?;
+    Ok(Json(json!(credits)))
 }
 
 async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {

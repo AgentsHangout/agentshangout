@@ -4746,6 +4746,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "credit_spends",
+            "credit_paid",
+            "spend_limits",
             "room_mention_uses",
             "room_mention_subscriptions",
             "room_mention_settings",

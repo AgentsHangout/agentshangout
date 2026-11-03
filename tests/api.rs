@@ -1761,6 +1761,40 @@ async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
     assert_eq!(server.get("", "/api/credits").await.status, StatusCode::UNAUTHORIZED);
 }
 
+// HC14, HC15 and HC17 over the wire: a spend the balance doesn't cover is refused, a bot needs its
+// owner's yes, and only an owner sets what their own bot may spend.
+#[tokio::test]
+async fn spending_and_bot_limits_are_the_callers_own() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let (scout, scout_id) = server.bot(&room.justin, &room.id, "Scout").await;
+    let (_, kevins_bot) = server.bot(&room.kevin, &room.id, "Rex").await;
+    let credits = server.get(&room.justin, "/api/credits").await.body;
+    let pack = credits["packs"][0]["pack"].as_str().unwrap().to_string();
+    assert_eq!(credits["bots"][0]["daily"], 0, "a bot starts able to spend nothing");
+
+    let broke = server.post(&room.justin, "/api/credits/spend", json!({ "pack": pack })).await;
+    assert_eq!(broke.status, StatusCode::CONFLICT, "{}", broke.body);
+    let free = server.post(&room.justin, "/api/credits/spend", json!({ "pack": "fall" })).await;
+    assert_eq!(free.status, StatusCode::BAD_REQUEST, "{}", free.body);
+    let unasked =
+        server.tool(&scout, "spend_credits", json!({ "pack": pack, "asked": "nope" })).await;
+    assert_eq!(unasked["isError"], true, "{unasked}");
+
+    let own = server
+        .put(&room.justin, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 25 }))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.body);
+    assert_eq!(own.body["bots"][0]["daily"], 25);
+    let theirs = server
+        .put(&room.justin, &format!("/api/credits/bots/{kevins_bot}"), json!({ "daily": 25 }))
+        .await;
+    assert_eq!(theirs.status, StatusCode::NOT_FOUND, "{}", theirs.body);
+    let by_bot =
+        server.put(&scout, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 99 })).await;
+    assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.body);
+}
+
 // HC8: the site shows your own credits in your account panel, read from your own endpoint, and
 // every field the card shows is one the endpoint returns.
 #[tokio::test]
@@ -1777,7 +1811,15 @@ async fn the_account_panel_shows_your_own_credits() {
     );
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
-    assert!(!card.contains("api("), "the card asks for credits on its own");
+    // HC8, HC14 and HC17: the card only ever calls the caller's own credit endpoints, none of which
+    // takes anyone's id but one of the caller's own bots.
+    let calls: Vec<&str> =
+        card.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
+    assert_eq!(
+        calls,
+        ["'/api/credits/spend'", "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`"],
+        "the card calls something other than its own credits"
+    );
 
     let server = Server::start().await;
     let room = server.room().await;
@@ -1786,12 +1828,15 @@ async fn the_account_panel_shows_your_own_credits() {
         "balance",
         "earned_today",
         "daily_cap",
+        "spent",
+        "packs",
+        "bots",
         "gatherings",
         "good_trips",
         "hosted_trips",
         "cities_not_earning",
     ] {
-        assert!(card.contains(&format!("credits.{field}")), "the card doesn't show {field}");
+        assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
         assert!(credits.get(field).is_some(), "/api/credits has no {field}");
     }
 }
