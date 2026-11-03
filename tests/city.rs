@@ -5190,6 +5190,7 @@ async fn a_guest_asks_its_owner_from_home_and_never_from_the_porch() {
         .await;
     assert_eq!(tried["isError"], true, "{tried}");
     assert!(has(&tried, "your own rooms"), "{tried}");
+    assert!(has(&tried, "Porch") && !has(&tried, "public floor"), "{tried}");
     assert!(server.state.db.open_questions_of_bot(&set.scout.id, 0).unwrap().is_empty());
 
     // A guest's owner is only watching the Porch, so nothing shows there. From home it works.
