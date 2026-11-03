@@ -3893,7 +3893,7 @@ async function roomView(id) {
           } else if (painter.changed()) {
             await api(`/api/agents/${agent.id}/schedule`, {
               method: 'PUT',
-              body: { every_day: painter.value(), days: routine.schedule?.days || {} },
+              body: { every_day: painter.value(), days: painter.days() },
             });
           }
           dialog.close();
@@ -3921,7 +3921,12 @@ async function roomView(id) {
   function schedulePainter(routine) {
     const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
     const label = Object.fromEntries(blocks);
-    const start = (routine.schedule?.every_day || []).slice(0, 24);
+    // Weekday plans are kept only once saved. Read off a routine whose hours differ by weekday,
+    // they'd cover what's painted on every day, so the strip starts from a weekday's hours instead.
+    const savedDays = routine.schedule_saved ? (routine.schedule?.days || {}) : {};
+    const readDays = Object.values(routine.schedule_saved ? {} : (routine.schedule?.days || {}));
+    const first = readDays.find((row) => row.some((block) => block !== 'anything'));
+    const start = (first || routine.schedule?.every_day || []).slice(0, 24);
     while (start.length < 24) start.push('anything');
     const day = [...start];
     let brush = 'work';
@@ -3976,7 +3981,7 @@ async function roomView(id) {
         show();
       },
     }, 'Use the hours above instead') : null;
-    const weekdays = Object.keys(routine.schedule?.days || {});
+    const weekdays = Object.keys(savedDays);
     showBrush();
     show();
     return {
@@ -3991,6 +3996,7 @@ async function roomView(id) {
         !routine.workplace && day.includes('work') ? h('p', { class: 'muted' }, 'With no workplace, a Work hour leaves it where it is.') : null,
         !routine.public_places && day.includes('social') ? h('p', { class: 'muted' }, 'With public places off, a Social hour leaves it where it is.') : null),
       value: () => [...day],
+      days: () => savedDays,
       changed: () => touched,
       cleared: () => cleared,
     };
