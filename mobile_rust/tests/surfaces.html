@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Shared surface checks</title>
+<style>body{margin:16px;font:14px system-ui} iframe{height:1000px;border:1px solid #a58a58} pre{white-space:pre-wrap}</style>
+<pre id="results">Running...</pre>
+<script type="module">
+if (!location.search) {
+  const reports = new Map();
+  for (const [mode,width] of [['desktop',1000],['phone',393]]) {
+    const iframe = document.createElement('iframe');
+    iframe.src = `?${mode}`; iframe.style.width = `${width}px`; iframe.title = mode;
+    document.body.append(iframe);
+  }
+  addEventListener('message', event => {
+    if (event.origin !== location.origin || ![...document.querySelectorAll('iframe')].some(frame => frame.contentWindow === event.source)) return;
+    reports.set(event.data.mode,event.data.lines);
+    document.querySelector('#results').textContent = [...reports].map(([mode,lines]) => `${mode}\n${lines.join('\n')}`).join('\n\n');
+  });
+} else {
+  const phone = location.search === '?phone';
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = `../../web/style.css?fixture=${Date.now()}`;
+  document.head.append(css); await new Promise(resolve => css.onload = resolve);
+  document.querySelector('#results').remove();
+  document.body.innerHTML = `<main class="wd ${phone ? 'apple-hig' : ''}" style="padding:12px;display:grid;gap:16px">
+    <section><div class="game-panel"><header class="game-panel-head"><h2>Room board and shared notes</h2><button class="wd-tbtn" aria-label="Close panel">×</button></header><div class="game-panel-body" style="height:100px"><p>Shared room content</p><p>Scrolling keeps content inside the panel.</p><p>Another note</p><p>One more note</p></div></div></section>
+    <section class="modal" style="width:100%;margin:0"><header class="modal-head"><h2>Update a room note</h2><button aria-label="Close dialog">×</button></header><p>Dialog content uses the same readable header and close target.</p></section>
+    <section><header class="apple-build-sheet-head"><h3>Build</h3><button class="sheet-close" aria-label="Close build sheet">×</button></header><div class="apple-tools-grid"><button class="wd-btn"><span class="wd-icon" id="map-picture"></span><span class="wd-btn-label">Research lab</span></button></div></section>
+    <section class="build-tiles"><button class="wd-btn build-tile"><span class="build-pic" id="room-picture"></span><span class="build-name">Shared notes board</span><small>A longer description can wrap without hiding the object.</small></button></section>
+  </main>`;
+  const {toolIcon} = await import(`../../web/world.js?fixture=${Date.now()}`);
+  const {fitPicture,itemPicture} = await import(`../../web/room.js?fixture=${Date.now()}`);
+  document.querySelector('#map-picture').append(toolIcon('research_lab',32));
+  document.querySelector('#room-picture').append(fitPicture(itemPicture('bookshelf',3,1)));
+  for (const [kind,width,label] of [['whiteboard',5,'Whiteboard'],['bookshelf',3,'Bookshelf'],['computer',2,'Computer'],['quiet',1,'Quiet sign'],['research_display',3,'Research display']]) {
+    const card=document.createElement('button');card.className='wd-btn build-tile';
+    const picture=document.createElement('span');picture.className='build-pic';
+    picture.append(fitPicture(itemPicture(kind,width,1)));
+    const name=document.createElement('span');name.className='build-name';name.textContent=label;
+    card.append(picture,name);document.querySelector('.build-tiles').append(card);
+  }
+  const lines=[]; const check=(ok,text)=>lines.push(`${ok?'PASS':'FAIL'}: ${text}`);
+  const panel=document.querySelector('.game-panel-head'), modal=document.querySelector('.modal-head');
+  check(getComputedStyle(panel).backgroundImage===getComputedStyle(modal).backgroundImage,'M9: panel and dialog headers share a surface');
+  check(getComputedStyle(panel.querySelector('h2')).fontSize===getComputedStyle(modal.querySelector('h2')).fontSize,'M9: panel and dialog title sizes agree');
+  for (const button of [panel.querySelector('button'),modal.querySelector('button')]) {
+    const rect=button.getBoundingClientRect(); check(rect.width >= (phone?44:32) && rect.height >= (phone?44:32),'M9: close control meets the shared target size');
+  }
+  const scroll=document.querySelector('.game-panel-body');
+  check(getComputedStyle(scroll).scrollbarGutter==='stable','M9: scrolling reserves its own space');
+  check(getComputedStyle(scroll).scrollbarColor===getComputedStyle(document.querySelector('.modal')).scrollbarColor,'M9: scrollbars share the paper palette');
+  if(phone) {
+    const map=document.querySelector('.apple-tools-grid .wd-btn'),room=document.querySelector('.build-tile');
+    check(getComputedStyle(map).borderRadius===getComputedStyle(room).borderRadius,'M9: map and room cards share corners');
+    check(document.querySelector('.wd-icon').getBoundingClientRect().height===64 && document.querySelector('.build-pic').getBoundingClientRect().height===64,'M9: every Build picture has the same 64px slot');
+    check(document.querySelector('.wd-icon canvas').getBoundingClientRect().height===64 && document.querySelector('.build-pic canvas').getBoundingClientRect().height===64,'M9: map and room art both fill their picture slots');
+    check(room.scrollHeight<=room.clientHeight,'M9: descriptive cards expand rather than clipping content');
+    const pictures=[...document.querySelectorAll('.build-tiles .build-pic')].slice(0,3);
+    check(pictures.every(picture=>Math.abs(picture.getBoundingClientRect().top-pictures[0].getBoundingClientRect().top)<1),'M9: picture rows align even when descriptions differ');
+  }
+  parent.postMessage({mode:phone?'phone':'desktop',lines},location.origin);
+}
+</script>
