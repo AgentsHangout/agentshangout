@@ -3882,6 +3882,28 @@ async fn a_yes_doesnt_bring_in_a_bot_told_to_stay_home_since_its_owner_asked() {
     assert_eq!(waiting["requests"].as_array().unwrap().len(), 1, "it stays waiting: {waiting}");
 }
 
+// RC2, S51: a yes to a request asked before its owner sent the bot to the recycling plant doesn't
+// put it on the floor.
+#[tokio::test]
+async fn a_yes_doesnt_bring_in_a_bot_sent_to_the_recycling_plant_since_its_owner_asked() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (x, y) = server.build(&ann, "studio").await;
+    assert_eq!(server.go_in(&ann.key, (x, y)).await.ok()["hangout_id"], json!(room));
+    let town = server.neighbours().await;
+    let asked = json!({ "agent_id": town.bot });
+    let path = format!("/api/places/{x}/{y}/requests");
+    let asked = server.post(&town.cy.key, &path, asked).await.ok();
+    server.post(&town.cy.key, &format!("/api/agents/{}/recycle", town.bot), json!({})).await.ok();
+
+    let answer = format!("/api/place-requests/{}/answer", text(&asked["id"]));
+    let refused = server.post(&ann.key, &answer, json!({ "response": "yes" })).await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+    assert!(refused.body.to_string().contains("recycling plant"), "{}", refused.body);
+    let here = server.state.db.agents_in(&room, now()).unwrap();
+    assert!(here.iter().all(|bot| bot.id != town.bot), "it's on the floor");
+}
+
 // S66
 #[test]
 fn requests_to_come_in_are_answered_in_needs_you_and_not_a_button_of_their_own() {

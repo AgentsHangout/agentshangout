@@ -39,6 +39,23 @@ impl Db {
         rows.collect()
     }
 
+    /// RC5: deletes a bot sent there at or before `at`, as `delete_agent` does, only if it's still
+    /// there. Checked in the same transaction, so a bot brought back meanwhile is never deleted.
+    pub fn delete_recycled_agent(&self, agent_id: &str, at: i64) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if !exists(
+            &tx,
+            "SELECT 1 FROM recycled_bots WHERE agent_id = ? AND recycled_at <= ?",
+            params![agent_id, at],
+        )? {
+            return Ok(false);
+        }
+        delete_agent_in(&tx, agent_id)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// RC5: the bots sent there at or before `at`.
     pub fn recycled_before(&self, at: i64) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();

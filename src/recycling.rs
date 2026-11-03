@@ -85,8 +85,19 @@ async fn send(
         ops::refresh(&state, &room.id);
     }
     crate::spaces::refresh_bot_place(&state, &id)?;
+    refresh_home_city(&state, &id)?;
     state.worlds.mark_stale(crate::worlds::COMMONS_ID);
     Ok(Json(json!({ "recycled": true, "deleted_at": iso(at + KEEP_SECS) })))
+}
+
+/// RC2: the map of the city it lives in shows it, or stops showing it, at once.
+fn refresh_home_city(state: &AppState, agent_id: &str) -> ApiResult<()> {
+    let home = state.db.bot_home(agent_id)?.filter(|home| !home.house_id.is_empty());
+    if let Some(house) = home.map(|home| state.db.house(&home.house_id)).transpose()?.flatten() {
+        crate::city::refresh_house(state, &house);
+        ops::refresh_city(state, &house.city_id);
+    }
+    Ok(())
 }
 
 /// RC4: its owner brings it back while it waits. It comes with a new token and in no rooms, and
@@ -102,6 +113,7 @@ async fn bring_back(
     }
     let token = auth::new_agent_token();
     state.db.set_agent_token(&id, &auth::hash_secret(&token))?;
+    refresh_home_city(&state, &id)?;
     state.worlds.mark_stale(crate::worlds::COMMONS_ID);
     Ok(Json(json!({ "recycled": false, "agent_token": token })))
 }
@@ -119,14 +131,18 @@ async fn plant(State(state): State<AppState>, _caller: Caller) -> ApiResult<Json
 
 /// RC5: deletes, by A77 to A81, every bot that has waited its 7 days.
 pub fn sweep(state: &AppState, now: i64) -> rusqlite::Result<usize> {
-    let due = state.db.recycled_before(now - KEEP_SECS)?;
-    for agent_id in &due {
-        state.db.delete_agent(agent_id)?;
+    let before = now - KEEP_SECS;
+    let mut deleted = 0;
+    for agent_id in state.db.recycled_before(before)? {
+        // Only while it's still there: its owner may have brought it back since it was listed.
+        if state.db.delete_recycled_agent(&agent_id, before)? {
+            deleted += 1;
+        }
     }
-    if !due.is_empty() {
+    if deleted > 0 {
         state.worlds.mark_stale(crate::worlds::COMMONS_ID);
     }
-    Ok(due.len())
+    Ok(deleted)
 }
 
 /// RC5: run at startup and every minute, as `camera::run_cleanup` is.

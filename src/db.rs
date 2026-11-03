@@ -3027,7 +3027,8 @@ fn bot_place_from_row(row: &Row, now: i64) -> rusqlite::Result<BotPlace> {
 
 /// Bots with where they live (`bh`, possibly nothing) and where they are now. `?1` is now and
 /// `?2` is what `from` needs. `city` is SQL for the one city the map shows, so a bot's trips to
-/// other cities, and its home in another, stay off it.
+/// other cities, and its home in another, stay off it. A bot at the recycling plant is nowhere
+/// (RC2), so it isn't one of them.
 fn bot_places_sql(city: &str, from: &str) -> String {
     let away = |column: &str| {
         format!(
@@ -3043,10 +3044,22 @@ fn bot_places_sql(city: &str, from: &str) -> String {
                 COALESCE((SELECT own.stays_home FROM bot_homes own WHERE own.agent_id = a.id),
                          (SELECT 1 FROM bots_without_a_house w WHERE w.agent_id = a.id)),
                 bh.is_house, {}, {}
-         FROM agents a {from} ORDER BY a.created_at, a.id",
+         FROM (SELECT * FROM agents
+               WHERE id NOT IN (SELECT agent_id FROM recycled_bots)) a {from}
+         ORDER BY a.created_at, a.id",
         away("house_id"),
         away("ends_at")
     )
+}
+
+/// `Db::delete_agent`, inside a transaction its caller holds (RC5 checks first).
+fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
+    end_bot_player_token(tx, agent_id)?;
+    // These hold a bot's address with no foreign key to it.
+    tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
+    tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
+    tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
+    Ok(())
 }
 
 fn exists(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> rusqlite::Result<bool> {
@@ -4886,11 +4899,7 @@ impl Db {
     pub fn delete_agent(&self, agent_id: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        end_bot_player_token(&tx, agent_id)?;
-        // These hold a bot's address with no foreign key to it.
-        tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
-        tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
-        tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
+        delete_agent_in(&tx, agent_id)?;
         tx.commit()
     }
 
