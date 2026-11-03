@@ -28,6 +28,8 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_trust;
+pub use cadence::Cadence;
+mod cadence;
 mod camera;
 mod github_display;
 mod oauth;
@@ -1278,6 +1280,34 @@ CREATE TABLE IF NOT EXISTS research_work_watches (
  since INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, watcher)
 );
+-- RP1: a plan its owner made repeat. Phase 1: one time a day, on chosen weekdays.
+CREATE TABLE IF NOT EXISTS plan_cadences (
+ event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+ owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ days INTEGER NOT NULL,
+ time_min INTEGER NOT NULL,
+ offset_min INTEGER NOT NULL,
+ until_day INTEGER,
+ paused INTEGER NOT NULL DEFAULT 0,
+ since INTEGER NOT NULL
+);
+-- RP4: each start of a repeating plan, taken once, and what it did for each bot.
+CREATE TABLE IF NOT EXISTS plan_starts (
+ event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+ starts_at INTEGER NOT NULL,
+ handled_at INTEGER NOT NULL,
+ PRIMARY KEY (event_id, starts_at)
+);
+CREATE TABLE IF NOT EXISTS plan_start_bots (
+ event_id TEXT NOT NULL,
+ starts_at INTEGER NOT NULL,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ outcome TEXT NOT NULL CHECK (outcome IN ('cued', 'missed', 'paused', 'over_cap')),
+ rung_at INTEGER,
+ PRIMARY KEY (event_id, starts_at, agent_id),
+ FOREIGN KEY (event_id, starts_at) REFERENCES plan_starts(event_id, starts_at) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS plan_start_bots_by_bot ON plan_start_bots (agent_id, starts_at);
 -- RC2: a bot its owner sent to the recycling plant, and when. RC5 deletes it 7 days later.
 CREATE TABLE IF NOT EXISTS recycled_bots (
  agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,

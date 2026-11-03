@@ -540,6 +540,17 @@ fn record_mention_delivery(
     }
 }
 
+/// RP3: whether a ring to this bot from its owner, in this room, would be held now, as E22 holds an
+/// owner's mention: an earlier ring there in the last three minutes it hasn't read yet.
+pub(crate) fn owner_ring_held(
+    state: &AppState,
+    agent_id: &str,
+    room: &str,
+    at: i64,
+) -> ApiResult<bool> {
+    Ok(state.db.wake_ring_unread(agent_id, room, at - MENTION_RING_SECS)?)
+}
+
 /// E22, E24, E25, E31: who this mention rings, and why it doesn't. `belongs` is whether the bot
 /// belongs in this room. Bot rings are recorded here so a chain hold can count them. A non-owner
 /// person's ring is not: it counts only once the receiver accepts it.
@@ -1499,6 +1510,8 @@ pub struct Inbox {
     pub meet: Option<crate::routines::Meet>,
     /// L38: working at its project's building, or alone at the town square, once a half hour.
     pub nudge: Option<crate::routines::Call>,
+    /// RP5: its repeating plans' starts in the last day, cued, missed, paused or over the cap.
+    pub plan_starts: Vec<serde_json::Value>,
 }
 
 pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
@@ -1566,6 +1579,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
         inbox.meet = crate::routines::meet_of(state, agent_id, &caller.person_id, now)?;
         inbox.nudge = crate::routines::call_of(state, agent_id, &caller.person_id, now)?
             .filter(|call| call.event != "meet");
+        inbox.plan_starts = crate::cadence::recent_for_bot(state, agent_id, now)?;
     }
     inbox.project_changes = crate::projects::changes_of(state, caller)?;
     Ok(inbox)

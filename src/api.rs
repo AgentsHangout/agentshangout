@@ -48,6 +48,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::bot_trust::routes())
         .merge(crate::bot_profile::routes())
         .merge(crate::recycling::routes())
+        .merge(crate::cadence::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
         .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
         .route(
