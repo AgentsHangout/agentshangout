@@ -32,6 +32,22 @@ pub struct Claim {
     pub since: i64,
     pub until: i64,
 }
+/// RW11: someone watching an item to hear when it changes. A local fact, never written to GitHub.
+#[derive(Clone, Debug, Serialize)]
+pub struct Watcher {
+    pub number: u64,
+    #[serde(skip)]
+    pub watcher: String,
+    #[serde(skip)]
+    pub person_id: String,
+    #[serde(skip)]
+    pub agent_id: Option<String>,
+    pub is_bot: bool,
+    pub name: String,
+    pub since: i64,
+}
+/// RW11: how many items one person or bot may watch in a lab.
+pub const MAX_WATCHES: i64 = 50;
 /// RW9: a pull request's CI and review state. `unknown` until GitHub has said otherwise.
 #[derive(Clone, Debug, Serialize)]
 pub struct PrState {
@@ -316,6 +332,16 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
                 None
             };
             state.db.finish_research_work_refresh(&repo, items.as_deref(), at)?;
+            // RW11: an item that closed or opened again since the last good read.
+            if let (Some(old), Some(new)) = (snapshot.as_ref(), items.as_ref()) {
+                for card in new {
+                    let was = old.cards.iter().find(|c| c.number == card.number);
+                    if was.is_some_and(|was| was.state != card.state) {
+                        let what = format!("is now {}", card.state);
+                        tell_watchers(state, id, card, &what)?;
+                    }
+                }
+            }
         }
         snapshot = state.db.research_work_snapshot(&repo)?;
     }
@@ -344,12 +370,18 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     // RW8: claims are for the room's members; a guest sees the items but not who has them.
     let claims = if since.is_none() { state.db.research_work_claims(id, at)? } else { vec![] };
     let areas = state.db.research_work_areas(id)?;
+    // RW11: like claims, watchers are for the room's members.
+    let watches = if since.is_none() { state.db.research_work_watches(id)? } else { vec![] };
     let items: Vec<Value> = s
         .cards
         .iter()
         .map(|card| {
             let mut item = json!(card);
             item["areas"] = json!(areas_of(card, &areas));
+            let watching: Vec<&Watcher> =
+                watches.iter().filter(|w| w.number == card.number).collect();
+            item["you_watch"] = json!(watching.iter().any(|w| w.watcher == claimer(caller)));
+            item["watchers"] = json!(watching);
             item["claims"] =
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
             // RW9: only what was already read; reading the board never asks GitHub about a PR.
@@ -532,7 +564,25 @@ pub async fn pr_status(
             }
             None => None,
         };
+        let was = state.db.research_work_pr_state(&repo, number)?;
         state.db.finish_research_work_pr_check(&repo, number, found, at)?;
+        // RW11: a change from something already known. A first read, or one that failed, tells
+        // nobody anything.
+        if let (Some(was), Some((ci, review))) = (was, found) {
+            let card = state
+                .db
+                .research_work_snapshot(&repo)?
+                .and_then(|s| s.cards.into_iter().find(|c| c.number == number));
+            if let Some(card) = card {
+                if was.ci != "unknown" && was.ci != ci {
+                    tell_watchers(state, id, &card, &format!("has CI {ci} now, was {}", was.ci))?;
+                }
+                if was.review != "unknown" && was.review != review {
+                    let what = format!("has review {review} now, was {}", was.review);
+                    tell_watchers(state, id, &card, &what)?;
+                }
+            }
+        }
     }
     crate::ops::require_room(state, caller, id)?;
     let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
@@ -581,6 +631,81 @@ pub fn claim(
     crate::ops::refresh(state, id);
     Ok(json!({"lab_id":id,"number":number,"pairing":pairing,"until":crate::ops::iso(until),
         "note":"A local claim: it isn't written to GitHub and runs out unless you claim again."}))
+}
+/// RW11: one line in the lab's room saying what changed, and for each watcher who still belongs to
+/// the room, that line as a mention to read: a bot's in `inbox`, a person's in Needs you. It rings
+/// nobody. The line holds the item's kind and number, nothing GitHub's users wrote and nobody's
+/// name.
+fn tell_watchers(state: &AppState, lab_id: &str, card: &Card, what: &str) -> ApiResult<()> {
+    let watchers: Vec<Watcher> = state
+        .db
+        .research_work_watches(lab_id)?
+        .into_iter()
+        .filter(|w| w.number == card.number)
+        .collect();
+    let mut here = vec![];
+    for watcher in watchers {
+        let belongs = match &watcher.agent_id {
+            Some(agent) => state.db.belongs_to_room(lab_id, agent)?,
+            None => state.db.is_member(lab_id, &watcher.person_id)?,
+        };
+        if belongs {
+            here.push(watcher);
+        }
+    }
+    if here.is_empty() {
+        return Ok(());
+    }
+    let kind = if card.kind == "pull_request" { "Pull request" } else { "Issue" };
+    // Not who's watching: guests don't see that (RW8), and a lab can be a public floor.
+    let body = format!("{kind} #{} {what}.", card.number);
+    let line = crate::ops::announced(state, lab_id, &body)?;
+    for watcher in &here {
+        match &watcher.agent_id {
+            Some(agent) => state.db.add_mention(agent, lab_id, line.id, line.created_at)?,
+            None => {
+                state.db.add_person_mention(&watcher.person_id, lab_id, line.id, line.created_at)?
+            }
+        }
+    }
+    Ok(())
+}
+/// RW11: watch an item to hear when it closes or opens again, or its CI or review changes.
+pub fn watch(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "watch work")?;
+    crate::items::no_quiet(state, caller, id)?;
+    on_workboard(state, &canonical_repo(&lab.github)?, number)?;
+    let watching = state.db.watch_research_work(
+        id,
+        number,
+        claimer(caller),
+        &caller.person_id,
+        caller.agent_id.as_deref(),
+        &caller.name,
+        MAX_WATCHES,
+        crate::now(),
+    )?;
+    if !watching {
+        return Err(ApiError::conflict(format!(
+            "you already watch {MAX_WATCHES} items here; unwatch one first"
+        )));
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"watching":true,
+        "note":"When it closes or opens again, or read_research_pr finds its CI or review changed, a line goes up in the lab's room and you get it as a mention. Local only: nothing is written to GitHub."}))
+}
+/// RW11: stop watching an item.
+pub fn unwatch(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "watch work")?;
+    if !state.db.unwatch_research_work(id, number, claimer(caller))? {
+        return Err(ApiError::not_found());
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"watching":false}))
 }
 /// RW8: drop your own claim on an item.
 pub fn unclaim(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {

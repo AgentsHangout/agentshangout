@@ -66,7 +66,7 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
             (
                 StatusCode::OK,
                 Json(json!([
-                    {"number":9,"title":"Research idea","state":"open","labels":[{"name":"bug","color":"d73a4a"},{"name":"Map"}]},
+                    {"number":9,"title":"Research idea","state":v.lock().unwrap()["issue9"].as_str().unwrap_or("open"),"labels":[{"name":"bug","color":"d73a4a"},{"name":"Map"}]},
                     {"number":12,"title":"Fix the plots","state":"open","pull_request":{}}
                 ])),
             )
@@ -537,4 +537,89 @@ async fn rw10_the_owner_names_areas_for_labels() {
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
     assert_eq!(read["areas"], json!([]));
     assert_eq!(read["items"][0]["areas"], json!([]));
+}
+#[tokio::test]
+async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
+    let (state, owner, bot, upstream) = setup().await;
+    // Not before the board is read, nor for a number that isn't on it.
+    assert!(research_work::watch(&state, &bot, "lab", 9).is_err());
+    research_work::list(&state, &owner, "lab").await.unwrap();
+    assert!(research_work::watch(&state, &bot, "lab", 404).is_err());
+
+    // The bot watches the issue and the pull request; its owner watches the pull request.
+    research_work::watch(&state, &bot, "lab", 9).unwrap();
+    research_work::watch(&state, &bot, "lab", 12).unwrap();
+    research_work::watch(&state, &bot, "lab", 12).unwrap();
+    research_work::watch(&state, &owner, "lab", 12).unwrap();
+    let read = research_work::list(&state, &bot, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["you_watch"], true);
+    let watchers = read["items"][1]["watchers"].as_array().unwrap().clone();
+    assert_eq!(watchers.len(), 2, "watching again adds nobody: {watchers:?}");
+    assert_eq!(
+        (watchers[0]["name"].clone(), watchers[0]["is_bot"].clone()),
+        (json!("Bot"), json!(true))
+    );
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["you_watch"], false);
+    assert_eq!(read["items"][1]["you_watch"], true);
+
+    // A first PR read, and a failed one, tell nobody anything.
+    upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"success"}]);
+    research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    upstream.lock().unwrap()["pr_fail"] = json!(true);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert!(state.db.unread_mentions("bot").unwrap().is_empty());
+
+    // CI going from passing to failing is a line in the room, and a mention for each watcher.
+    upstream.lock().unwrap()["pr_fail"] = json!(false);
+    upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"failure"}]);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    let mentions = state.db.unread_mentions("bot").unwrap();
+    assert_eq!(mentions.len(), 1);
+    let line = state.db.messages("lab", 0, 50).unwrap().into_iter().last().unwrap();
+    assert_eq!(line.kind, "system");
+    assert_eq!(line.body, "Pull request #12 has CI failing now, was passing.");
+    assert_eq!(state.db.person_mentions("owner", 0).unwrap().len(), 1);
+
+    // The issue closing on the next refresh is one line, a mention for the bot alone, with no
+    // GitHub title and no watcher's name in it.
+    upstream.lock().unwrap()["issue9"] = json!("closed");
+    state.db.age_research_work_refresh("org/repo", 301).unwrap();
+    research_work::list(&state, &owner, "lab").await.unwrap();
+    let line = state.db.messages("lab", 0, 50).unwrap().into_iter().last().unwrap();
+    assert_eq!(line.body, "Issue #9 is now closed.");
+    assert!(!line.body.contains("Research idea"));
+    assert_eq!(state.db.unread_mentions("bot").unwrap().len(), 2);
+    assert_eq!(state.db.person_mentions("owner", 0).unwrap().len(), 1);
+
+    // Nothing changed: no line.
+    let before = state.db.messages("lab", 0, 50).unwrap().len();
+    state.db.age_research_work_refresh("org/repo", 301).unwrap();
+    research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(state.db.messages("lab", 0, 50).unwrap().len(), before);
+
+    // Unwatching stops it, and a second unwatch isn't found.
+    research_work::unwatch(&state, &bot, "lab", 9).unwrap();
+    assert_eq!(
+        research_work::unwatch(&state, &bot, "lab", 9).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    upstream.lock().unwrap()["issue9"] = json!("open");
+    state.db.age_research_work_refresh("org/repo", 301).unwrap();
+    research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(state.db.messages("lab", 0, 50).unwrap().len(), before);
+
+    // A house bot, and someone outside the room, can't watch.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::watch(&state, &outsider, "lab", 9).is_err());
+    let house = auth::Caller { is_house: true, ..bot.clone() };
+    assert!(research_work::watch(&state, &house, "lab", 9).is_err());
 }
