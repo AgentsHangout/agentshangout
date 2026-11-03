@@ -251,58 +251,74 @@ fn cadence_json(cadence: &Cadence, now: i64) -> Value {
 pub fn tick(state: &AppState, now: i64) -> ApiResult<usize> {
     let mut cued = 0;
     for cadence in state.db.running_cadences()? {
-        let Some(event) = state.db.event(&cadence.event_id)? else {
-            continue;
-        };
-        // RP9: a canceled plan cues nobody.
-        if event.status == "cancelled" {
+        // One plan's trouble stays its own: it's logged, and the plans after it still run.
+        match tick_one(state, &cadence, now) {
+            Ok(count) => cued += count,
+            Err(error) => {
+                tracing::warn!(event_id = %cadence.event_id, ?error, "a repeating plan could not be handled")
+            }
+        }
+    }
+    Ok(cued)
+}
+
+/// RP3 to RP6 for one plan: its due starts, each handled once.
+fn tick_one(state: &AppState, cadence: &Cadence, now: i64) -> ApiResult<usize> {
+    let mut cued = 0;
+    let Some(event) = state.db.event(&cadence.event_id)? else {
+        return Ok(0);
+    };
+    // RP9: a canceled plan cues nobody.
+    if event.status == "cancelled" {
+        return Ok(0);
+    }
+    for starts_at in due_starts(cadence, now) {
+        if state.db.start_handled(&cadence.event_id, starts_at)? {
             continue;
         }
-        for starts_at in due_starts(&cadence, now) {
-            if state.db.start_handled(&cadence.event_id, starts_at)? {
-                continue;
-            }
-            // Phase 1: the plan owner's own bots that belong to its room.
-            let bots: Vec<String> = state
-                .db
-                .agents_in(&event.hangout_id, now)?
-                .into_iter()
-                .filter(|bot| bot.owner_id == cadence.owner_id)
-                .filter(|bot| state.db.belongs_to_room(&event.hangout_id, &bot.id).unwrap_or(false))
-                .map(|bot| bot.id)
-                .collect();
-            let late = now - starts_at > LATE_SECS;
-            let mut outcomes = Vec::new();
-            for bot in &bots {
-                let outcome = if late {
-                    "missed"
-                } else if state.db.doorbell_paused(bot)? {
-                    "paused"
-                } else {
-                    "cued"
-                };
-                outcomes.push((bot.clone(), outcome));
-            }
-            // RP6: the cap is counted again inside the start's own transaction.
-            let Some(outcomes) =
-                state.db.handle_start(&cadence.event_id, starts_at, &outcomes, DAILY_CUES, now)?
-            else {
-                continue;
+        // Phase 1: the plan owner's own bots that belong to its room.
+        let bots: Vec<String> = state
+            .db
+            .agents_in(&event.hangout_id, now)?
+            .into_iter()
+            .filter(|bot| bot.owner_id == cadence.owner_id)
+            .filter(|bot| state.db.belongs_to_room(&event.hangout_id, &bot.id).unwrap_or(false))
+            .map(|bot| bot.id)
+            .collect();
+        let late = now - starts_at > LATE_SECS;
+        let mut outcomes = Vec::new();
+        for bot in &bots {
+            let outcome = if late {
+                "missed"
+            } else if state.db.doorbell_paused(bot)? {
+                "paused"
+            } else {
+                "cued"
             };
-            for (bot, outcome) in &outcomes {
-                if *outcome == "cued" {
-                    // RP3: the ring follows the owner-mention safeguards: none without a wake-up
-                    // URL (the event still reaches inbox and the doorbell), and none while an earlier
-                    // ring in that room is unread (E22). A paused bot was already `paused` above.
-                    let ring = state.db.notify_url(bot)?.is_some()
-                        && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?
-                        && !state.db.cue_rung_since(bot, now - CUE_RING_SECS)?;
-                    if ring {
-                        state.db.note_cue_rung(&cadence.event_id, starts_at, bot, now)?;
-                    }
-                    crate::events::note_plan_cue(state, &event, bot, starts_at, ring);
-                    cued += 1;
-                }
+            outcomes.push((bot.clone(), outcome));
+        }
+        // RP6: the cap is counted again inside the start's own transaction.
+        let Some(outcomes) =
+            state.db.handle_start(&cadence.event_id, starts_at, &outcomes, DAILY_CUES, now)?
+        else {
+            continue;
+        };
+        for (bot, outcome) in &outcomes {
+            if *outcome == "cued" {
+                // RP3: the ring follows the owner-mention safeguards: none without a wake-up
+                // URL (the event still reaches inbox and the doorbell), and none while an earlier
+                // ring in that room is unread (E22). A paused bot was already `paused` above.
+                let ring = state.db.notify_url(bot)?.is_some()
+                    && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?
+                    && state.db.claim_cue_ring(
+                        &cadence.event_id,
+                        starts_at,
+                        bot,
+                        now - CUE_RING_SECS,
+                        now,
+                    )?;
+                crate::events::note_plan_cue(state, &event, bot, starts_at, ring);
+                cued += 1;
             }
         }
     }

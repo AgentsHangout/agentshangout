@@ -321,3 +321,53 @@ async fn a_cue_really_rings_once_and_never_a_paused_bot() {
         .count();
     assert!(cues >= 2, "{events}");
 }
+
+// RP3, RP4, RP6: two ticks at the same moment, as two servers would, take a start once and ring the
+// bot once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_ticks_at_once_take_a_start_once_and_ring_once() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move || {
+        let counted = counted.clone();
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    s.state.db.set_notify_url(&rover.id, Some(&url)).unwrap();
+    for _ in 0..3 {
+        let plan = s.plan(&ann).await;
+        let path = format!("/api/events/{plan}/cadence");
+        let (status, _) = s
+            .request(&ann.key, Method::PUT, &path, json!({ "freq": "daily", "time": "09:00" }))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let at = tomorrow_at(now(), 9 * 3600) + 60;
+    let ticks: Vec<_> = (0..4)
+        .map(|_| {
+            let state = s.state.clone();
+            tokio::task::spawn_blocking(move || cadence::tick(&state, at).unwrap())
+        })
+        .collect();
+    let mut cued = 0;
+    for tick in ticks {
+        cued += tick.await.unwrap();
+    }
+    assert_eq!(cued, 3, "each of the three starts cued once, whichever tick took it");
+    assert_eq!(s.outcomes(&rover.id).len(), 3);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "rung once for the three");
+}

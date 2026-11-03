@@ -153,28 +153,31 @@ impl Db {
         )
     }
 
-    /// RP3: a cue rang the bot. Two plans starting together ring it once (E22's three minutes).
-    pub fn note_cue_rung(
+    /// RP3: claims this start's ring for the bot, unless a cue rang it since `since`. Checked and
+    /// written in one immediate transaction, so two ticks can't both ring it.
+    pub fn claim_cue_ring(
         &self,
         event_id: &str,
         starts_at: i64,
         agent_id: &str,
+        since: i64,
         at: i64,
-    ) -> rusqlite::Result<()> {
-        self.conn().execute(
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if exists(
+            &tx,
+            "SELECT 1 FROM plan_start_bots WHERE agent_id = ? AND rung_at > ?",
+            params![agent_id, since],
+        )? {
+            return Ok(false);
+        }
+        tx.execute(
             "UPDATE plan_start_bots SET rung_at = ? WHERE event_id = ? AND starts_at = ? AND agent_id = ?",
             params![at, event_id, starts_at, agent_id],
         )?;
-        Ok(())
-    }
-
-    /// RP3: whether a cue rang this bot since `since`.
-    pub fn cue_rung_since(&self, agent_id: &str, since: i64) -> rusqlite::Result<bool> {
-        exists(
-            &self.conn(),
-            "SELECT 1 FROM plan_start_bots WHERE agent_id = ? AND rung_at > ?",
-            params![agent_id, since],
-        )
+        tx.commit()?;
+        Ok(true)
     }
 
     /// RP6: how many times a bot was cued in the UTC day that holds `day_start`.
