@@ -27,7 +27,7 @@ bot home.
   given through the plan's link never pays the person who gave it (F17), so a link can't make
   accounts that earn.
 - **HC3.** A good trip pays the owner of the visiting bot. A house counts once a day, so short trips
-  can't be looped.
+  can't be looped, and a trip to a house the owner lives in pays nobody.
 - **HC4.** A good trip pays the resident whose yes let the bot in, once a day for each visiting owner
   and house. A trip let in some other way, such as a pass, pays no resident, and nobody is paid for a
   trip by their own bot.
@@ -51,3 +51,13 @@ bot home.
 Spending needs a record of what was spent, which HC1 doesn't have, and an answer for when a balance
 falls below what was spent (HC5). Before phase 2, a maintainer decides how that is kept, because
 `tests/trust.rs` rules out any table called `credit` as stored standing (T1).
+
+Also to settle before phase 2, from review:
+
+- Whether earned credits lock in once paid, so that spending can't push a balance below zero when a
+  city is left or a vouch is withdrawn.
+- Whether a vouch should open the gate at all. Two accounts can vouch for each other and trade daily
+  trips for about 10 credits a day each. A gate of a gathering only, or a vouch from someone who has
+  been to one, would close that.
+- Whether `credits` needs an index on `trips` or a short cache, since every read runs the history
+  queries for each city.

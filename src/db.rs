@@ -9412,9 +9412,12 @@ impl Db {
         sources.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
         // HC3 and HC4 count a trip the way standing does: it arrived, it's over, and no resident
         // sent the bot home. A house counts once a day, so short trips can't be looped.
+        // Nor is a trip to a house the bot's owner lives in, which is visiting themselves.
         let good_trip = "t.arrived_at IS NOT NULL
                AND (t.status = 'ended' OR (t.status = 'here' AND t.ends_at <= ?3))
-               AND NOT EXISTS (SELECT 1 FROM sent_home s WHERE s.trip_id = t.id)";
+               AND NOT EXISTS (SELECT 1 FROM sent_home s WHERE s.trip_id = t.id)
+               AND NOT EXISTS (SELECT 1 FROM residents r
+                               WHERE r.house_id = t.house_id AND r.person_id = a.owner_id)";
         let mut stmt = conn.prepare(&format!(
             "SELECT t.house_id || '/' || (t.arrived_at / 86400), MIN(t.arrived_at) FROM trips t
              JOIN agents a ON a.id = t.agent_id
@@ -14155,6 +14158,23 @@ mod tests {
 
         let paid = credits_of(&db, "p2", now);
         assert_eq!((paid.balance, paid.good_trips), (10, 2));
+    }
+
+    // HC3: a bot visiting a house its owner lives in isn't a visit
+    #[test]
+    fn a_trip_to_a_house_the_owner_lives_in_pays_nobody() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        // Bo lives at `ha` in one city and at `hq` in another, so his bot going to `hq` is going home.
+        city(&db, "c2", "sq2", "p1");
+        db.add_city_member("c2", "p2", 0).unwrap();
+        house(&db, "hq", "c2", "p1", 0);
+        assert!(db.add_resident("hq", "p2", 0).unwrap());
+        db.add_vouch("c2", "p2", "p1", 0).unwrap();
+        start_trip(&db, "own-house", "b2", "hq", 60, GATE + 1000);
+
+        let paid = credits_of(&db, "p2", GATE + CREDIT_DAY);
+        assert_eq!((paid.balance, paid.good_trips), (0, 0));
     }
 
     // HC5: no back pay, so waiting out the 30 days earns nothing
