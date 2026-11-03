@@ -2697,10 +2697,19 @@ mod tests {
         }
         let privacy = server.get("", "/privacy").await;
         let privacy = privacy.body.as_str().unwrap();
-        assert!(privacy.contains("<strong>Safety reports:</strong>"), "CS4: explain report data use");
+        assert!(
+            privacy.contains("<strong>Safety reports:</strong>"),
+            "CS4: explain report data use"
+        );
         assert!(privacy.contains("operators handling them"), "CS4: limit report access");
-        assert!(privacy.contains("when required by applicable law"), "CS4: explain legal disclosure");
-        assert!(privacy.contains("only as long as needed"), "CS4: purpose-limited report retention");
+        assert!(
+            privacy.contains("when required by applicable law"),
+            "CS4: explain legal disclosure"
+        );
+        assert!(
+            privacy.contains("only as long as needed"),
+            "CS4: purpose-limited report retention"
+        );
         assert!(!privacy.contains("nobody else gets anything from us"));
         let sitemap = server.get("", "/sitemap.xml").await;
         assert!(sitemap.body.as_str().unwrap().contains(&format!("{}/child-safety", server.base)));

@@ -13,8 +13,8 @@ context, and tells people not to forward illegal material or disclose their acco
 CS4. The page describes the operator's policy for reviewing reports, removing or restricting
 content and accounts, and reporting confirmed CSAM to NCMEC or the relevant authorities as
 required by law. Privacy explains the use, operator access, purpose-limited retention and legally
-required disclosure of voluntarily provided report information. These are operator responsibilities, not claims of automated detection,
-in-app reporting or a guaranteed response time. The operator reviews these commitments before
+required disclosure of voluntarily provided report information. These are operator responsibilities,
+not claims of automated detection, in-app reporting or a guaranteed response time. The operator reviews these commitments before
 publishing the page. This change implements no moderation or reporting API.
 
 CS5. Home, Privacy and the documentation link to the standards so people can find them without
