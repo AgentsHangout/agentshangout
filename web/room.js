@@ -4235,6 +4235,12 @@ export const EYES = {
   pink: '#ff8ac0',
   green: '#8cf08a',
   white: '#ffffff',
+  violet: '#bd91ff',
+  red: '#ff6464',
+  orange: '#ff8c42',
+  lime: '#c6f25b',
+  blue: '#5c8dff',
+  gold: '#ffe06a',
 };
 // The parts that are only a colour, so the wardrobe can show a swatch.
 export const LOOK_COLOURS = { skin: SKINS, hair: HAIRS, shirt: FABRICS, trousers: LEGS, shell: FABRICS, eyes: EYES };
@@ -4275,6 +4281,46 @@ const HATS = {
   party: (g, x, top, half) => {
     for (let i = 0; i < half; i++) r(g, i % 2 ? '#ffd24d' : '#e96fa4', x - half + i, top - 2 - i * 2, (half - i) * 2, 2);
     r(g, '#f4f1e8', x - 1, top - 2 - half * 2, 2, 1);
+  },
+  beret: (g, x, top, half, color, dark) => {
+    r(g, color, x - half + 1, top - 2, half * 2 - 2, 2);
+    r(g, dark, x - half, top, half * 2, 1);
+    r(g, color, x + 1, top - 3, 2, 1);
+  },
+  bucket: (g, x, top, half, color, dark) => {
+    r(g, color, x - half + 1, top - 3, half * 2 - 2, 3);
+    r(g, dark, x - half - 1, top, half * 2 + 2, 1);
+  },
+  cowboy: (g, x, top, half, color, dark) => {
+    r(g, dark, x - half + 1, top - 3, half * 2 - 2, 3);
+    r(g, color, x - half - 2, top, half * 2 + 4, 1);
+    r(g, '#d7a858', x - 1, top - 1, 2, 1);
+  },
+  flower_crown: (g, x, top, half) => {
+    r(g, '#4b9a66', x - half, top, half * 2, 1);
+    for (const [dx, color] of [[-half + 1, '#f07aa8'], [0, '#ffd24d'], [half - 1, '#8be0ff']]) r(g, color, x + dx, top - 1, 1, 1);
+  },
+  headphones: (g, x, top, half) => {
+    r(g, '#b7c4d8', x - half + 1, top - 2, 1, 3);
+    r(g, '#b7c4d8', x + half - 1, top - 2, 1, 3);
+    r(g, '#8be0ff', x - half, top, 2, 2);
+    r(g, '#8be0ff', x + half - 1, top, 2, 2);
+  },
+  halo: (g, x, top, half) => {
+    r(g, '#ffd24d', x - half + 1, top - 5, half * 2 - 2, 1);
+    r(g, '#fff1a8', x - 1, top - 6, 2, 1);
+  },
+  hard_hat: (g, x, top, half) => {
+    r(g, '#ffd24d', x - half + 1, top - 3, half * 2 - 2, 2);
+    r(g, '#f4f1e8', x - 1, top - 4, 2, 1);
+    r(g, '#e3a92f', x - half - 1, top - 1, half * 2 + 2, 1);
+  },
+  propeller: (g, x, top, half, color, dark) => {
+    r(g, color, x - half + 1, top - 2, half * 2 - 2, 2);
+    r(g, dark, x - half, top, half * 2, 1);
+    r(g, '#c9d2e2', x, top - 4, 1, 2);
+    r(g, '#ff6f8c', x - 3, top - 4, 3, 1);
+    r(g, '#8be0ff', x + 1, top - 4, 3, 1);
   },
 };
 
@@ -4382,9 +4428,15 @@ const FACES = {
 
 // A bot's head: how wide it is, and whether it has an antenna each side or one in the middle.
 const HEADS = {
-  antenna: { wide: 10, twin: false },
-  twin: { wide: 10, twin: true },
-  wide: { wide: 12, twin: false },
+  antenna: { wide: 10, twin: false, style: 'antenna' },
+  twin: { wide: 10, twin: true, style: 'twin' },
+  wide: { wide: 12, twin: false, style: 'wide' },
+  dish: { wide: 10, twin: false, style: 'dish' },
+  triple: { wide: 10, twin: false, style: 'triple' },
+  satellite: { wide: 10, twin: false, style: 'satellite' },
+  sprout: { wide: 10, twin: false, style: 'sprout' },
+  horns: { wide: 10, twin: false, style: 'horns' },
+  halo: { wide: 10, twin: false, style: 'halo' },
 };
 
 // A picture on a bot's chest, on a dark plate so it can be seen on any shell. Lights are the bare chest.
@@ -4399,6 +4451,11 @@ const CHESTS = {
   heart: (g, x, y) => plate(g, x, y, '#ff5d7a', ['#..#', '####', '.##.']),
   star: (g, x, y) => plate(g, x, y, '#ffd24d', ['.##.', '####', '.##.']),
   bolt: (g, x, y) => plate(g, x, y, '#8be0ff', ['..##', '.##.', '##..']),
+  book: (g, x, y) => plate(g, x, y, '#f4f1e8', ['##.#', '####', '##.#']),
+  flower: (g, x, y) => plate(g, x, y, '#f07aa8', ['.#..', '###.', '.#..']),
+  gear: (g, x, y) => plate(g, x, y, '#b7c4d8', ['.#.#', '####', '.#.#']),
+  moon: (g, x, y) => plate(g, x, y, '#ffd24d', ['.##.', '##..', '.##.']),
+  music: (g, x, y) => plate(g, x, y, '#8be0ff', ['.###', '..#.', '##..']),
   // White coat fronts over the shell, open in the middle, with a pen in the pocket.
   lab_coat: (g, x, y) => {
     r(g, '#f4f6fa', x - 4, y - 1, 3, 6);
@@ -4480,11 +4537,41 @@ function drawBot(g, bot, t) {
   // A hat goes on where the antennas would be.
   if (hat !== HATS.none) {
     hat(g, x, top, headW / 2 - 1, color, dark);
-  } else if (head.twin) {
+  } else if (head.style === 'twin') {
     r(g, '#9aa3b8', left + 2, top - 3, 1, 3);
     r(g, '#9aa3b8', left + headW - 3, top - 3, 1, 3);
     r(g, color, left + 1, top - 4, 3, 1);
     r(g, color, left + headW - 4, top - 4, 3, 1);
+  } else if (head.style === 'dish') {
+    r(g, '#9aa3b8', left + 2, top - 4, 1, 4);
+    r(g, '#d0d8e8', left + 2, top - 5, 4, 1);
+    r(g, '#d0d8e8', left + 4, top - 4, 1, 1);
+  } else if (head.style === 'triple') {
+    for (const dx of [2, Math.floor(headW / 2), headW - 3]) {
+      r(g, '#9aa3b8', left + dx, top - 3, 1, 3);
+      r(g, color, left + dx - 1, top - 4, 3, 1);
+    }
+  } else if (head.style === 'satellite') {
+    r(g, '#9aa3b8', x, top - 5, 1, 5);
+    r(g, '#ffd24d', x - 1, top - 6, 3, 1);
+    r(g, '#8be0ff', left - 2, top - 4, 1, 4);
+    r(g, '#8be0ff', left + headW + 1, top - 4, 1, 4);
+    r(g, '#8be0ff', left - 3, top - 5, 3, 1);
+    r(g, '#8be0ff', left + headW, top - 5, 3, 1);
+  } else if (head.style === 'sprout') {
+    r(g, '#74b46e', x, top - 4, 1, 4);
+    r(g, '#74b46e', x - 2, top - 6, 3, 1);
+    r(g, '#74b46e', x + 1, top - 7, 3, 1);
+    r(g, '#8cf08a', x - 2, top - 7, 2, 1);
+    r(g, '#8cf08a', x + 2, top - 8, 2, 1);
+  } else if (head.style === 'horns') {
+    r(g, '#d0d8e8', left + 1, top - 3, 1, 3);
+    r(g, '#d0d8e8', left + 2, top - 4, 1, 2);
+    r(g, '#d0d8e8', left + headW - 2, top - 3, 1, 3);
+    r(g, '#d0d8e8', left + headW - 3, top - 4, 1, 2);
+  } else if (head.style === 'halo') {
+    r(g, '#ffd24d', x - 3, top - 6, 6, 1);
+    r(g, '#fff1a8', x - 1, top - 7, 2, 1);
   } else {
     r(g, '#9aa3b8', x, top - 3, 1, 3);
     const lit = sitting && Math.floor(t / 400) % 2;

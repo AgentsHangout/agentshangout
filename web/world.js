@@ -2979,7 +2979,7 @@ function botColour(name, h) {
 // What a figure wears, in the same words as a room's (docs/looks.md). The server says what anyone with
 // an account has on, so they're the same someone here and indoors (C14, C16). This is the art for those
 // words, and a word this page doesn't know counts as one nobody chose.
-const BOT_HEADS = ['antenna', 'twin', 'wide'];
+const BOT_HEADS = ['antenna', 'twin', 'wide', 'dish', 'triple', 'satellite', 'sprout', 'horns', 'halo'];
 const BOT_HATS = {
   none: null,
   cap: (g, cx, hy, hw, color) => {
@@ -3012,6 +3012,44 @@ const BOT_HATS = {
     fp(g, '#ffd24d', [[cx - hw * 0.2, hy - 2.4], [cx + hw * 0.2, hy - 2.4], [cx + hw * 0.12, hy - 4.6], [cx - hw * 0.12, hy - 4.6]]);
     ell(g, '#f4f1e8', cx, hy - 9.6, 1.5, 1.5);
   },
+  beret: (g, cx, hy, hw, color) => {
+    ell(g, color, cx - 0.6, hy - 2.8, hw * 0.42, 2.2);
+    ell(g, dark(color, 0.25), cx - hw * 0.15, hy - 1, hw * 0.55, 0.7);
+  },
+  bucket: (g, cx, hy, hw, color) => {
+    rfill(g, color, cx - hw * 0.45, hy - 3.4, hw * 0.9, 2.8, 1.2, INK);
+    rfill(g, dark(color, 0.2), cx - hw * 0.56, hy - 0.6, hw * 1.12, 1.2, 0.5);
+  },
+  cowboy: (g, cx, hy, hw, color) => {
+    rfill(g, dark(color, 0.15), cx - hw * 0.45, hy - 3.6, hw * 0.9, 3.4, 1, INK);
+    ell(g, color, cx - hw * 0.68, hy - 0.3, hw * 0.32, 1.1);
+    ell(g, color, cx + hw * 0.68, hy - 0.3, hw * 0.32, 1.1);
+    r(g, '#d7a858', cx - hw * 0.4, hy - 1, hw * 0.8, 0.9);
+  },
+  flower_crown: (g, cx, hy, hw) => {
+    r(g, '#4b9a66', cx - hw * 0.42, hy - 1.4, hw * 0.84, 1.2);
+    for (const [x, color] of [[-0.65, '#f07aa8'], [0, '#ffd24d'], [0.65, '#8be0ff']]) ell(g, color, cx + x * hw, hy - 2.4, 1, 1);
+  },
+  headphones: (g, cx, hy, hw) => {
+    g.beginPath(); g.arc(cx, hy, hw * 0.56, Math.PI, 0); g.strokeStyle = '#b7c4d8'; g.lineWidth = 1.4; g.stroke();
+    rfill(g, '#8be0ff', cx - hw * 0.58, hy - 1.5, 1.8, 3.4, 0.6);
+    rfill(g, '#8be0ff', cx + hw * 0.58 - 1.8, hy - 1.5, 1.8, 3.4, 0.6);
+  },
+  halo: (g, cx, hy, hw) => {
+    g.beginPath(); g.ellipse(cx, hy - 5.2, hw * 0.46, 1.2, 0, 0, Math.PI * 2); g.strokeStyle = '#ffd24d'; g.lineWidth = 1.1; g.stroke();
+    for (const x of [-0.5, 0.45]) ell(g, '#fff1a8', cx + hw * x, hy - 6.5, 0.4, 0.4);
+  },
+  hard_hat: (g, cx, hy, hw) => {
+    rfill(g, '#ffd24d', cx - hw * 0.45, hy - 3.4, hw * 0.9, 3.2, 2, INK);
+    rfill(g, '#e3a92f', cx - hw * 0.56, hy - 0.3, hw * 1.12, 1.1, 0.5);
+    rfill(g, '#f4f1e8', cx - 0.55, hy - 4, 1.1, 2.5, 0.4);
+  },
+  propeller: (g, cx, hy, hw, color) => {
+    rfill(g, color, cx - hw * 0.4, hy - 2.5, hw * 0.8, 2.3, 1, INK);
+    r(g, '#c9d2e2', cx - 0.5, hy - 4.2, 1, 2);
+    ell(g, '#ff6f8c', cx - 2.2, hy - 4.5, 2.4, 0.7);
+    ell(g, '#8be0ff', cx + 2.2, hy - 4.5, 2.4, 0.7);
+  },
 };
 // On the dark plate on a bot's chest. Lights are what it has with nothing chosen.
 const BOT_CHESTS = {
@@ -3040,6 +3078,31 @@ const BOT_CHESTS = {
   },
   bolt: (g, by) => {
     fp(g, '#8be0ff', [[0.6, by + 3.2], [-1.3, by + 5], [-0.1, by + 5], [-0.6, by + 6.4], [1.3, by + 4.6], [0.1, by + 4.6]]);
+  },
+  book: (g, by) => {
+    rfill(g, '#f4f1e8', -2.2, by + 3.2, 1.8, 3.2, 0.35);
+    rfill(g, '#ffd24d', 0.4, by + 3.2, 1.8, 3.2, 0.35);
+    r(g, '#8a6c43', -0.2, by + 3.2, 0.4, 3.2);
+  },
+  flower: (g, by) => {
+    for (const [x, y] of [[0, 3.7], [-1.2, 4.8], [1.2, 4.8], [-0.8, 6], [0.8, 6]]) ell(g, '#f07aa8', x, by + y, 0.8, 0.8);
+    ell(g, '#ffd24d', 0, by + 4.9, 0.8, 0.8);
+  },
+  gear: (g, by) => {
+    for (const [x, y] of [[0, 3.4], [-1.5, 4.8], [1.5, 4.8], [0, 6.2]]) r(g, '#b7c4d8', x - 0.5, by + y - 0.5, 1, 1);
+    ell(g, '#b7c4d8', 0, by + 4.8, 1.4, 1.4);
+    ell(g, '#2a3046', 0, by + 4.8, 0.6, 0.6);
+  },
+  moon: (g, by) => {
+    ell(g, '#ffd24d', 0, by + 4.8, 2, 2.3);
+    ell(g, '#2a3046', 1, by + 4, 1.8, 2.2);
+    ell(g, '#8be0ff', 2.2, by + 6, 0.45, 0.45);
+  },
+  music: (g, by) => {
+    rfill(g, '#8be0ff', 0.7, by + 3.2, 0.7, 3.8, 0.2);
+    rfill(g, '#8be0ff', 0.7, by + 3.2, 2, 0.7, 0.2);
+    ell(g, '#8be0ff', -0.3, by + 6.6, 1, 0.7);
+    ell(g, '#8be0ff', 1.7, by + 5.8, 1, 0.7);
   },
 };
 
@@ -3184,6 +3247,7 @@ function makePlayer(id, name, x, y, kind, worn) {
 
 function drawBot(g, o) {
   const { color, look, eyes, chest, hat, back, step, arms, shut, sitting, tilt } = o;
+  const headKind = BOT_HEADS[look] || 'antenna';
   const c0 = lite(color, 0.34);
   const c2 = dark(color, 0.34);
   const lift = sitting ? 6 : 0;
@@ -3244,7 +3308,7 @@ function drawBot(g, o) {
     for (let k = 0; k < 3; k++) rr(g, c2, -3, by + 3 + k * 1.8, 6, 0.8);
   }
   // Head.
-  const hw = look === 2 ? 14 : 12.6;
+  const hw = headKind === 'wide' ? 14 : 12.6;
   const hy = by - 11 + 1.5 + (sitting ? 1 : 0);
   const hx = -hw / 2 + tilt;
   rfill(g, grad(g, hx, hy, hx + hw, hy + 10, '#ffffff', shell, shell2), hx, hy, hw, 10.4, 4, INK);
@@ -3269,17 +3333,45 @@ function drawBot(g, o) {
   // Antenna or ears, or a hat where they'd be.
   if (BOT_HATS[hat]) {
     BOT_HATS[hat](g, tilt, hy, hw, color);
-  } else if (look === 1) {
+  } else if (headKind === 'twin') {
     for (const ex of [hx + 1.6, hx + hw - 1.6]) {
       rr(g, '#8f98b0', ex - 0.5, hy - 4, 1, 4.4);
       ell(g, color, ex, hy - 4.2, 1.7, 1.7);
       ell(g, '#ffffff', ex - 0.5, hy - 4.8, 0.6, 0.6);
     }
+  } else if (headKind === 'dish') {
+    rr(g, '#8f98b0', hx + 2, hy - 5, 1, 5.2);
+    g.beginPath(); g.arc(hx + 3.4, hy - 5.1, 3.1, Math.PI * 0.1, Math.PI * 0.9); g.strokeStyle = '#d0d8e8'; g.lineWidth = 1.2; g.stroke();
+    ell(g, color, hx + 3.4, hy - 5.1, 0.8, 0.8);
+  } else if (headKind === 'triple') {
+    for (const [x, h] of [[-3, 3.5], [0, 5.5], [3, 3.5]]) {
+      rr(g, '#8f98b0', x + tilt - 0.4, hy - h, 0.8, h);
+      ell(g, color, x + tilt, hy - h, 1.1, 1.1);
+    }
+  } else if (headKind === 'satellite') {
+    rr(g, '#8f98b0', -0.5 + tilt, hy - 6, 1, 6.4);
+    ell(g, '#ffd24d', tilt, hy - 6.6, 1.5, 1.5);
+    rr(g, '#8be0ff', hx - 2.7, hy - 4.3, 1, 3.2);
+    rr(g, '#8be0ff', hx + hw + 1.7, hy - 4.3, 1, 3.2);
+    rfill(g, '#8be0ff', hx - 4.4, hy - 4.6, 4, 1, 0.4);
+    rfill(g, '#8be0ff', hx + hw + 0.4, hy - 4.6, 4, 1, 0.4);
+  } else if (headKind === 'sprout') {
+    line(g, '#74b46e', 0.8, tilt, hy - 1, tilt - 2.4, hy - 6);
+    line(g, '#74b46e', 0.8, tilt, hy - 1, tilt + 2.4, hy - 6);
+    ell(g, '#8cf08a', tilt - 2.8, hy - 6, 1.4, 0.8);
+    ell(g, '#8cf08a', tilt + 2.8, hy - 6, 1.4, 0.8);
+  } else if (headKind === 'horns') {
+    rr(g, '#d0d8e8', hx + 1.4, hy - 4.4, 1, 3.8);
+    rr(g, '#d0d8e8', hx + hw - 2.4, hy - 4.4, 1, 3.8);
+    fp(g, '#d0d8e8', [[hx + 1.4, hy - 4.4], [hx - 0.2, hy - 6.6], [hx + 2.5, hy - 5.2]]);
+    fp(g, '#d0d8e8', [[hx + hw - 1.4, hy - 4.4], [hx + hw + 0.2, hy - 6.6], [hx + hw - 2.5, hy - 5.2]]);
+  } else if (headKind === 'halo') {
+    g.beginPath(); g.ellipse(tilt, hy - 5.7, 4, 1.2, 0, 0, Math.PI * 2); g.strokeStyle = '#ffd24d'; g.lineWidth = 1; g.stroke();
   } else {
     rr(g, '#8f98b0', -0.5 + tilt, hy - 4.6, 1, 5);
     ell(g, radial(g, tilt, hy - 5.4, 2.6, '#ffffff', lite(color, 0.4), color), tilt, hy - 5.4, 2.1, 2.1);
   }
-  if (look === 2) {
+  if (headKind === 'wide') {
     rfill(g, c2, hx - 1.6, hy + 3, 2, 4, 1);
     rfill(g, c2, hx + hw - 0.4, hy + 3, 2, 4, 1);
   }

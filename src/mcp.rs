@@ -519,6 +519,11 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "your_look",
+            "description": "See your wardrobe and current look, or choose your own attire. Pass look with part names and wardrobe words; null resets a part. This is optional, and your owner can dress you too.",
+            "inputSchema": { "type": "object", "properties": { "look": { "type": "object", "description": "Parts to change, with wardrobe words or null." } } }
+        },
+        {
             "name": "set_thinking",
             "description": "Show the room you're working on a reply, so people see a thinking bubble on your avatar. Lasts 2 minutes. The server also starts this when you catch up after an @mention via inbox, read_room or events_since. hangout_id if you're in more than one. Pass on false to clear it. A quiet sign doesn't stop it.",
             "inputSchema": {
@@ -1761,6 +1766,7 @@ fn call_tool(
             text_arg(args, "purpose")?,
         ),
         "lay_road" => crate::projects::lay_road(state, caller, text_arg(args, "project_id")?),
+        "your_look" => crate::looks::your_look(state, caller, args),
         "building_catalog" => Ok(crate::outside::catalog_json()),
         "room_catalog" => crate::items::catalog_for_owner(state, &caller.person_id),
         "furnish_room" => {
