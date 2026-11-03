@@ -2147,6 +2147,7 @@ pub fn bring_agent(
     agent_id: &str,
 ) -> ApiResult<()> {
     let agent = own_agent(state, caller, agent_id, "bring in a bot")?;
+    crate::recycling::not_recycled(state, agent_id, &agent.name)?;
     no_guests(state, caller, hangout_id, "bring in a bot")?;
     spaces::require_public_conversations(state, agent_id, hangout_id)?;
     if let Some(home) = state.db.bot_home(agent_id)? {

@@ -30,6 +30,7 @@ mod camera;
 mod github_display;
 mod oauth;
 pub(crate) mod oauth_events;
+mod recycling;
 mod research_labs;
 mod research_work;
 mod room_mentions;
@@ -1263,6 +1264,11 @@ CREATE TABLE IF NOT EXISTS research_work_claims (
  since INTEGER NOT NULL,
  until INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, claimer)
+);
+-- RC2: a bot its owner sent to the recycling plant, and when. RC5 deletes it 7 days later.
+CREATE TABLE IF NOT EXISTS recycled_bots (
+ agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+ recycled_at INTEGER NOT NULL
 );
 -- RW10: a lab owner's names for GitHub labels. Local, never written to GitHub.
 CREATE TABLE IF NOT EXISTS research_work_areas (

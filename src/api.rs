@@ -45,6 +45,7 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
+        .merge(crate::recycling::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
         .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
         .route(

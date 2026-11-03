@@ -1336,6 +1336,7 @@ async fn walk_in(
     let agent = match &body.agent_id {
         Some(agent_id) => {
             let agent = ops::own_agent(&state, &caller, agent_id, "send a bot in")?;
+            crate::recycling::not_recycled(&state, agent_id, &agent.name)?;
             require_public_conversations(&state, agent_id, &floor.id)?;
             if state.db.bot_home(agent_id)?.is_some_and(|home| home.stays_home || home.is_house) {
                 return Err(ApiError::conflict(format!("{} stays home", agent.name)));

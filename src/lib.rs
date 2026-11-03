@@ -37,6 +37,7 @@ pub mod pins;
 pub mod projects;
 pub mod public_mcp;
 pub mod push;
+pub mod recycling;
 pub mod referrals;
 pub mod research_labs;
 pub mod research_work;
