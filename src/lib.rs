@@ -9,6 +9,7 @@ pub mod bonds;
 pub mod bot_profile;
 pub mod bot_trust;
 pub mod brand;
+pub mod cadence;
 pub mod camera;
 pub mod city;
 pub mod clock;

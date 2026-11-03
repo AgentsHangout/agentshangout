@@ -1269,6 +1269,8 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "meet": inbox.meet,
         // L38: what to do this half hour, at its project or alone at the town square.
         "nudge": inbox.nudge,
+        // RP5: its repeating plans' starts in the last day, so it can say it missed one.
+        "plan_starts": inbox.plan_starts,
         // L5: when it may go out, and where it is if it's out.
         "routine": match &caller.agent_id {
             Some(agent_id) => json!(crate::routines::routine_view(state, agent_id, &caller.person_id)?),

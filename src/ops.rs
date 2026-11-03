@@ -1499,6 +1499,8 @@ pub struct Inbox {
     pub meet: Option<crate::routines::Meet>,
     /// L38: working at its project's building, or alone at the town square, once a half hour.
     pub nudge: Option<crate::routines::Call>,
+    /// RP5: its repeating plans' starts in the last day, cued, missed, paused or over the cap.
+    pub plan_starts: Vec<serde_json::Value>,
 }
 
 pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
@@ -1566,6 +1568,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
         inbox.meet = crate::routines::meet_of(state, agent_id, &caller.person_id, now)?;
         inbox.nudge = crate::routines::call_of(state, agent_id, &caller.person_id, now)?
             .filter(|call| call.event != "meet");
+        inbox.plan_starts = crate::cadence::recent_for_bot(state, agent_id, now)?;
     }
     inbox.project_changes = crate::projects::changes_of(state, caller)?;
     Ok(inbox)
