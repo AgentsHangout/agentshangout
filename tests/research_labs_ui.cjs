@@ -48,7 +48,7 @@ const context = {
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation;`, context);
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}\n${extract('researchParticipation')}\nthis.panel = researchLabsPanel; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -92,7 +92,7 @@ async function check() {
   const buildStart = source.indexOf('  function build(tile)');
   const build = source.slice(buildStart, source.indexOf('\n  }\n', buildStart) + 4);
   Object.assign(context, {
-    tool: 'studio', me: { kind: 'person' }, pendingResearchLab: lab, placingResearchLab: false,
+    tool: 'research_lab', me: { kind: 'person' }, pendingResearchLab: lab, placingResearchLab: false,
     say() {}, choose(name) { context.tool = name; },
     watch: { soon() {} }, refreshTown() {},
   });
@@ -117,6 +117,59 @@ async function check() {
   assert.ok(find(body, node => node.href === 'https://github.com/AgentsHangout/Cure-MS/issues/1'), 'workroom links to the source issue');
   assert.ok(find(body, node => node.children?.includes('✦ Research contributor badge')), 'verified merged work displays bot swag');
   assert.ok(find(body, node => node.children?.some(text => typeof text === 'string' && text.includes('Ann’s bot'))), 'awards display bot and owner names');
+  // RL7: map identity comes from explicit class metadata, never an ordinary studio name.
+  const mapLab = { x: 4, y: 8, kind: 'research_lab', github: lab.github, github_url: 'javascript:alert(1)' };
+  const view = { research_labs: [mapLab] };
+  assert.equal(context.mapObject(view, 4, 8), mapLab);
+  assert.equal(context.mapObject(view, 4, 9), null);
+  const card = context.mapCard(mapLab);
+  assert.equal(find(card, n => n.tag === 'a').href, 'https://github.com/AgentsHangout/Cure-MS', 'hover links are constructed from a validated repository, never an arbitrary supplied URL');
+  assert.equal(context.mapObject({ research_labs: [{ ...mapLab, github: 'owner/../../bad' }] }, 4, 8), null);
+  assert.equal(context.repositoryLink('../bad'), null);
+  assert.equal(find(card, n => n.tag === 'a').target, '_blank');
+  // RL7: keep the actionable hover card stationary while its GitHub link is approached.
+  const cardAtStart = source.indexOf('  function placeCardAt()');
+  const cardAt = source.slice(cardAtStart, source.indexOf('\n  }\n', cardAtStart) + 4);
+  context.pointer = { x: 100, y: 100 };
+  context.placeCard = { hidden: false, dataset: {}, style: {}, offsetWidth: 200, offsetHeight: 130,
+    classList: { contains: name => name === 'research-object' },
+    parentElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) } };
+  vm.runInContext(`${cardAt}\nthis.placeCardAt = placeCardAt;`, context);
+  context.placeCardAt();
+  const left = context.placeCard.style.left;
+  context.pointer = { x: 140, y: 130 };
+  context.placeCardAt();
+  assert.equal(context.placeCard.style.left, left, 'the research card must not chase the pointer');
+  // RL8: a fresh menu choice opens lab creation; it cannot fall through to generic studio placement.
+  const pickStart = source.indexOf('  function pick(name)');
+  const pick = source.slice(pickStart, source.indexOf('\n  }\n', pickStart) + 4);
+  context.panels = { open(name) { context.openedPanel = name; } };
+  vm.runInContext(`${pick}\nthis.pick = pick;`, context);
+  context.pendingResearchLab = null;
+  context.pick('research_lab');
+  assert.equal(context.openedPanel, 'research');
+  context.tool = 'research_lab';
+  context.openedPanel = null;
+  context.build({ x: 47, y: 42 });
+  assert.equal(context.openedPanel, 'research');
+  assert.ok(source.includes("['research_lab', 'Research lab',"), 'the lab is a regular build-menu choice');
+  // RL7: renderer class changes invalidate only affected standing buildings, including removal.
+  const world = fs.readFileSync('web/world.js', 'utf8').replace(/\r\n/g, '\n');
+  const applyStart = world.indexOf('  applyResearchLabs(rows)');
+  const apply = world.slice(applyStart, world.indexOf('\n  }\n', applyStart) + 4);
+  context.K_HOUSE = 7;
+  vm.runInContext(`this.applyResearchLabs = function ${apply.trim()};`, context);
+  const dirtied = [];
+  const render = { n: 16, kind: new Uint8Array(256), researchLabs: new Set(), markDirty(x, y) { dirtied.push([x, y]); } };
+  render.kind[8 * 16 + 4] = 10;
+  context.applyResearchLabs.call(render, [mapLab, { x: -1, y: 0 }, { x: 2, y: 2 }]);
+  assert.equal(render.researchLabs.size, 1);
+  assert.deepEqual(dirtied, [[4, 8]]);
+  context.applyResearchLabs.call(render, [mapLab]);
+  assert.equal(dirtied.length, 1, 'unchanged lab classes do not repaint');
+  context.applyResearchLabs.call(render, []);
+  assert.equal(render.researchLabs.size, 0);
+  assert.equal(dirtied.length, 2, 'closing or removing a lab repaints its object');
   console.log('Research UI: eligibility, defaults, shared-room door, placement and failed creates verified.');
 }
 check().catch(error => { console.error(error); process.exitCode = 1; });

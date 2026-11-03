@@ -3947,9 +3947,15 @@ async fn the_view_has_the_documented_shape() {
             "people",
             "bots_out",
             "owners",
+            "research_labs",
             "neighborhoods",
             "outsides"
         ])
+    );
+    assert_eq!(
+        view["research_labs"],
+        json!([]),
+        "RL7 adds a public map class only for standing public labs"
     );
     assert!((view["updated_at"].as_i64().unwrap() - now()).abs() < 10);
     let tile = &view["tiles"][0];

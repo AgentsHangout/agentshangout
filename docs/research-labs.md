@@ -24,6 +24,14 @@ the lab is not medical advice and its existence does not establish a treatment's
   An ordinary bot of the lab owner may also use the existing `lay_road` tool to reach its site.
 - **RL6.** `read_room` identifies a lab with `research_lab`: its lab ID and public repository link,
   so a bot can discover the workboard without guessing. This includes no contribution history.
+- **RL7.** Public labs with a standing building appear as research-lab objects on The Commons,
+  with a distinct science emblem and a hover card linking their public GitHub repository. Map
+  metadata contains only coordinates and the validated public repository, never room IDs, membership,
+  contribution history or bot-participation settings. Private floors and demolished buildings are
+  omitted. A lab keeps its owner's outside decoration underneath its research emblem.
+- **RL8.** Research lab is a regular build-menu choice. It opens the existing lab creation and
+  map-placement flow; RL1 eligibility and RL3 capacity are checked by the server. Selecting the
+  menu item grants no building or GitHub permissions and cannot place an ordinary unlinked studio.
 
 `GET /api/research-labs` returns `eligibility` and `labs`. `POST /api/research-labs` takes `name`,
 `purpose`, and `github`. `GET /api/research-labs/{id}` reads one lab. A created lab's `id`, `lab_id`,
