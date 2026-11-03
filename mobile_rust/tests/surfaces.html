@@ -29,12 +29,19 @@ if (!location.search) {
   </main>`;
   const {toolIcon} = await import(`../../web/world.js?fixture=${Date.now()}`);
   const {fitPicture,itemPicture} = await import(`../../web/room.js?fixture=${Date.now()}`);
+  const source=(await(await fetch('../../web/app.js',{cache:'no-store'})).text()).replace(/\r\n/g,'\n');
+  const pictureWidth=Number(source.match(/const PIC_WIDTH = (\d+);/)[1]);
+  const pictureHeight=Number(source.match(/const PIC_TALL = (\d+);/)[1]);
+  const fittedStart=source.indexOf('  function fitted(');
+  const fittedSource=source.slice(fittedStart,source.indexOf('\n  }\n',fittedStart)+4);
+  const fitted=new Function('PIC_WIDTH','PIC_TALL','clamp',`${fittedSource}; return fitted;`)(pictureWidth,pictureHeight,(v,lo,hi)=>Math.max(lo,Math.min(hi,v)));
+  const roomPicture=(kind,w,h)=>fitted(fitPicture(itemPicture(kind,w,h),pictureWidth,pictureHeight));
   document.querySelector('#map-picture').append(toolIcon('research_lab',32));
-  document.querySelector('#room-picture').append(fitPicture(itemPicture('bookshelf',3,1)));
+  document.querySelector('#room-picture').append(roomPicture('bookshelf',3,1));
   for (const [kind,width,label] of [['whiteboard',5,'Whiteboard'],['bookshelf',3,'Bookshelf'],['computer',2,'Computer'],['quiet',1,'Quiet sign'],['research_display',3,'Research display']]) {
     const card=document.createElement('button');card.className='wd-btn build-tile';
     const picture=document.createElement('span');picture.className='build-pic';
-    picture.append(fitPicture(itemPicture(kind,width,1)));
+    picture.append(roomPicture(kind,width,1));
     const name=document.createElement('span');name.className='build-name';name.textContent=label;
     card.append(picture,name);document.querySelector('.build-tiles').append(card);
   }
@@ -52,7 +59,7 @@ if (!location.search) {
     const map=document.querySelector('.apple-tools-grid .wd-btn'),room=document.querySelector('.build-tile');
     check(getComputedStyle(map).borderRadius===getComputedStyle(room).borderRadius,'M9: map and room cards share corners');
     check(document.querySelector('.wd-icon').getBoundingClientRect().height===64 && document.querySelector('.build-pic').getBoundingClientRect().height===64,'M9: every Build picture has the same 64px slot');
-    check(document.querySelector('.wd-icon canvas').getBoundingClientRect().height===64 && document.querySelector('.build-pic canvas').getBoundingClientRect().height===64,'M9: map and room art both fill their picture slots');
+    check(document.querySelector('.wd-icon canvas').getBoundingClientRect().height===64 && [...document.querySelectorAll('.build-pic canvas')].every(canvas=>canvas.getBoundingClientRect().height===pictureHeight && canvas.getBoundingClientRect().width===pictureWidth && canvas.getBoundingClientRect().width<=canvas.parentElement.clientWidth),'M9: production room thumbnails fit their cards and share the map picture height');
     check(room.scrollHeight<=room.clientHeight,'M9: descriptive cards expand rather than clipping content');
     const pictures=[...document.querySelectorAll('.build-tiles .build-pic')].slice(0,3);
     check(pictures.every(picture=>Math.abs(picture.getBoundingClientRect().top-pictures[0].getBoundingClientRect().top)<1),'M9: picture rows align even when descriptions differ');
