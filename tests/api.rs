@@ -1809,13 +1809,30 @@ async fn the_account_panel_shows_your_own_credits() {
     );
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
-    // HC8, HC14 and HC17: the card only ever calls the caller's own credit endpoints, none of which
-    // takes anyone's id but one of the caller's own bots.
-    let calls: Vec<&str> =
-        card.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
+    // HC8, HC14, HC17 and HC21: the card and its refund helper only call the owner's
+    // credit endpoints and cancellation for the owner's own reserved questions.
+    let escrow =
+        app.split_once("function questionEscrowRows(questions, error, afterCancel) {").unwrap().1;
+    let escrow = escrow.split_once("\n}\n").unwrap().0;
+    let calls: Vec<String> = card
+        .split("api(")
+        .skip(1)
+        .chain(escrow.split("api(").skip(1))
+        .map(|call| {
+            let quote = call.chars().next().unwrap();
+            assert!(quote == '\'' || quote == '`', "expected an explicit endpoint");
+            let path = call[1..].split(quote).next().unwrap();
+            format!("{quote}{path}{quote}")
+        })
+        .collect();
     assert_eq!(
         calls,
-        ["'/api/credits/spend'", "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`"],
+        [
+            "'/api/credits/spend'",
+            "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
+            "'/api/credits'",
+            "`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`",
+        ],
         "the card calls something other than its own credits"
     );
 
@@ -1834,6 +1851,7 @@ async fn the_account_panel_shows_your_own_credits() {
         "good_trips",
         "hosted_trips",
         "cities_not_earning",
+        "open_questions",
     ] {
         assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
         assert!(credits.get(field).is_some(), "/api/credits has no {field}");

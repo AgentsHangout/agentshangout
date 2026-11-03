@@ -993,6 +993,84 @@ function paintWhiteboard(g, x, y) {
   r(g, '#ffb454', x + 12, y - 22, 8, 1);
 }
 
+// A small freestanding board that opens the room's discussion, jobs and issues boards.
+function paintBoardStation(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#4a3120', x - 12, y - 31, 24, 23);
+  r(g, '#c9a86a', x - 11, y - 30, 22, 21);
+  r(g, '#f4f1e8', x - 9, y - 28, 18, 17);
+  r(g, '#4f9dff', x - 7, y - 26, 11, 1);
+  r(g, '#4f9dff', x - 7, y - 23, 14, 1);
+  r(g, '#ffb454', x - 7, y - 19, 8, 1);
+  r(g, '#ffb454', x - 7, y - 16, 11, 1);
+  r(g, '#3ddc97', x + 5, y - 27, 2, 2);
+  r(g, '#3ddc97', x + 7, y - 24, 2, 2);
+}
+
+// A little rack of labeled papers, an entry point to notes shared across the room.
+function paintSharedNotesStation(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, '#6b4628', x - 6, y - 8, 12, 6);
+  r(g, '#8a5c37', x - 7, y - 9, 14, 2);
+  r(g, '#f4f1e8', x - 5, y - 17, 5, 8);
+  r(g, '#fff8dc', x - 1, y - 19, 6, 10);
+  r(g, '#4f9dff', x - 4, y - 15, 3, 1);
+  r(g, '#4f9dff', x - 4, y - 12, 3, 1);
+  r(g, '#ff6f8c', x, y - 16, 4, 1);
+  r(g, '#ff6f8c', x, y - 13, 3, 1);
+  r(g, '#d6453f', x - 3, y - 18, 1, 2);
+}
+
+// A desktop flip calendar, with a marked day and a foot that reads clearly at room scale.
+function paintCalendarStand(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 9, y - 5, 18, 4);
+  r(g, '#8a5c37', x - 10, y - 7, 20, 2);
+  r(g, '#f4f1e8', x - 9, y - 24, 18, 17);
+  r(g, '#c8342c', x - 9, y - 24, 18, 5);
+  r(g, '#f4f1e8', x - 6, y - 26, 2, 4);
+  r(g, '#f4f1e8', x + 4, y - 26, 2, 4);
+  for (let row = 0; row < 3; row++) for (let col = 0; col < 4; col++) {
+    r(g, row === 1 && col === 2 ? '#ff6f8c' : '#65708a', x - 6 + col * 3, y - 17 + row * 3, 1, 1);
+  }
+}
+
+// A corkboard covered in colorful pins; the Pins panel keeps the actual links and notes.
+function paintCorkboard(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#4a3120', x - 12, y - 31, 24, 23);
+  r(g, '#b9784f', x - 10, y - 29, 20, 19);
+  r(g, '#d89a6c', x - 9, y - 28, 18, 17);
+  r(g, '#f4f1e8', x - 7, y - 26, 6, 5);
+  r(g, '#cce8f4', x + 1, y - 26, 6, 5);
+  r(g, '#fff1a8', x - 5, y - 19, 7, 6);
+  r(g, '#f6d3de', x + 3, y - 19, 5, 6);
+  for (const [dx, dy, color] of [[-5, -26, '#c8342c'], [3, -26, '#3f8fc4'], [-2, -19, '#3ddc97'], [5, -19, '#d6453f']]) {
+    r(g, color, x + dx, y + dy, 1, 1);
+  }
+}
+
+// The research board is a physical summary of the lab's linked GitHub work, never a second data store.
+function paintResearchBoard(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#6b4628', x - 8, y - 8, 2, 7);
+  r(g, '#6b4628', x + 6, y - 8, 2, 7);
+  r(g, '#27354c', x - 12, y - 31, 24, 23);
+  r(g, '#16243a', x - 10, y - 29, 20, 19);
+  r(g, '#4f9dff', x - 8, y - 27, 11, 2);
+  r(g, '#3ddc97', x + 6, y - 27, 2, 2);
+  r(g, '#8e9bb2', x - 8, y - 22, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 22, 10, 2);
+  r(g, '#8e9bb2', x - 8, y - 18, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 18, 10, 2);
+  r(g, '#8e9bb2', x - 8, y - 14, 5, 2);
+  r(g, '#f4f1e8', x - 2, y - 14, 10, 2);
+}
+
 function paintEasel(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
   r(g, '#6b4628', x - 9, y - 13, 2, 11);
@@ -4075,6 +4153,11 @@ const ITEMS = {
     rise: 26,
   },
   whiteboard: { paint: paintWhiteboard, side: edgeOf(30, '#f4f1e8', '#20283e'), rise: 32 },
+  board_station: { paint: paintBoardStation, side: edgeOf(25, '#c9a86a', '#4a3120'), rise: 31 },
+  shared_notes_station: { paint: paintSharedNotesStation, side: edgeOf(16, '#fff8dc', '#6b4628'), rise: 19 },
+  calendar_stand: { paint: paintCalendarStand, side: edgeOf(17, '#f4f1e8', '#6b4628'), rise: 26 },
+  corkboard: { paint: paintCorkboard, side: edgeOf(25, '#d89a6c', '#4a3120'), rise: 31 },
+  research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },
   armchair: {
@@ -4309,6 +4392,11 @@ const USES = {
   microscope: { spots: 1, pose: 'stand', hands: true },
   fume_hood: { spots: 1, pose: 'stand', hands: true },
   centrifuge: { spots: 1, pose: 'stand', hands: true },
+  board_station: { spots: 1, pose: 'stand', hands: true },
+  shared_notes_station: { spots: 1, pose: 'stand', hands: true },
+  calendar_stand: { spots: 1, pose: 'stand', hands: true },
+  corkboard: { spots: 1, pose: 'stand', hands: true },
+  research_board: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },

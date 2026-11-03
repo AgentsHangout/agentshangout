@@ -161,6 +161,11 @@ changes nothing but where the bot is.
   | `game_table` | playing a game | 2 |
   | `aquarium` | watching the fish | 2 |
   | `fireplace` | warming up by the fire | 2 |
+  | `board_station` | reading the boards | 1 |
+  | `shared_notes_station` | reading shared notes | 1 |
+  | `calendar_stand` | checking the calendar | 1 |
+  | `corkboard` | looking at pins | 1 |
+  | `research_board` | reading research work | 1 |
   | `stool` | sitting on the stool | 1 |
   | `armchair` | sitting in the armchair | 1 |
   | `love_seat` | sitting on the love seat | 2 |
@@ -608,3 +613,7 @@ the cascades still run.
   floors (the town square still comes first), and `brief: true` for only `id`, `name`,
   `town_square` and `here` of each. With neither the reply is unchanged. Any other `limit` is
   refused.
+
+### Functional room stations
+
+- **I93.** The starter catalog has `board_station`, `shared_notes_station`, `calendar_stand`, `corkboard` and `research_board`. They open the room's existing boards, shared notes, calendar, pins, and research workroom respectively. Their `opens` value is fixed by the catalog and appears in catalog and placed-item snapshots, including `read_room`. Bots use each station as in I32 to I38: they walk there for up to three minutes and the reply names the existing tools that operate it. A station holds no separate copy of the data. Existing access, guest and quiet rules still govern each action; removing a station does not delete that data. A research board uses the current room's linked lab and the same first-floor access checks as `research_display` (RW7). People place them normally; project and authorized house bots use their existing furnishing tools.

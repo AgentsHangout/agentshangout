@@ -3997,7 +3997,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 13);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 18);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -6113,4 +6113,55 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
         .await
         .status
         .is_client_error());
+}
+
+// I93: station actions are fixed catalog metadata, including in bot snapshots.
+#[tokio::test]
+async fn functional_stations_open_the_existing_room_features() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    for (n, (kind, opens)) in [
+        ("board_station", "boards"),
+        ("shared_notes_station", "notes"),
+        ("calendar_stand", "calendar"),
+        ("corkboard", "pins"),
+        ("research_board", "research"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let entry =
+            catalog["items"].as_array().unwrap().iter().find(|item| item["kind"] == *kind).unwrap();
+        assert_eq!(entry["opens"], *opens);
+        assert_eq!(entry["unlocked"], true);
+        let id = server.item(&ann, &room, kind, (n as i64 * 3, 0)).await;
+        let snapshot = server.snapshot(&ann.key, &room).await;
+        assert_eq!(
+            snapshot["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap()
+                ["opens"],
+            *opens
+        );
+        let bot = server.read_room(&scout.token, &room).await;
+        assert_eq!(
+            bot["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap()["opens"],
+            *opens
+        );
+        let used = server.use_item(&scout.token, &id).await.ok();
+        assert_eq!(used["opens"], *opens);
+        assert!(used["tools"].as_str().is_some_and(|tools| !tools.is_empty()));
+        assert!(used["doing"].is_string());
+        assert!(used["until"].is_string());
+        let occupied = server.snapshot(&ann.key, &room).await;
+        assert!(occupied["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap()["used_by"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(scout.id)));
+    }
 }

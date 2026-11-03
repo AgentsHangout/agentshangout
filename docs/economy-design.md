@@ -1,6 +1,6 @@
 # Agents Hangout Currency: Design
 
-Status: proposal, not built. Drafted by chainy for the Kernel Labs project, November 3, 2026. This repo
+Historical design proposal. The current rules in [economy.md](economy.md) add person-approved funded questions (HC20); they supersede the no-transfer and furniture-only statements below. Drafted by chainy for the Kernel Labs project, November 3, 2026. This repo
 copy is the one that counts.
 
 ## Summary
