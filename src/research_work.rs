@@ -39,10 +39,16 @@ pub struct PrState {
     pub attempted_at: i64,
     pub stale: bool,
 }
+/// RW9: how many check runs or reviews one request asks for. A full page counts as unreadable.
+const PAGE: usize = 100;
 /// RW9: CI from a commit's check runs: failing if any failed, pending if any hasn't finished,
-/// passing if all passed, none if there were none. Anything unreadable is None.
+/// passing if all passed, none if there were none. Anything unreadable is None, and so is a page
+/// that doesn't hold every run: a run left off could be the one that failed.
 pub fn ci_of(check_runs: &Value) -> Option<&'static str> {
     let runs = check_runs["check_runs"].as_array()?;
+    if check_runs["total_count"].as_u64()? != runs.len() as u64 || runs.len() >= PAGE {
+        return None;
+    }
     if runs.is_empty() {
         return Some("none");
     }
@@ -61,9 +67,14 @@ pub fn ci_of(check_runs: &Value) -> Option<&'static str> {
 }
 /// RW9: reviews from each reviewer's latest decision: changes_requested if anyone's is, approved
 /// if someone approved, none otherwise. Comments don't decide anything; a dismissal clears one.
+/// A full page might not be all of them, so it is None too.
 pub fn review_of(reviews: &Value) -> Option<&'static str> {
+    let reviews = reviews.as_array()?;
+    if reviews.len() >= PAGE {
+        return None;
+    }
     let mut latest = std::collections::BTreeMap::new();
-    for review in reviews.as_array()? {
+    for review in reviews {
         let who = review["user"]["id"].as_u64()?;
         match review["state"].as_str()? {
             "APPROVED" | "CHANGES_REQUESTED" => {

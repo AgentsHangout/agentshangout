@@ -84,7 +84,9 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
     }
     async fn checks(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
         let runs = v.lock().unwrap()["checks"].clone();
-        Json(json!({"check_runs": if runs.is_null() { json!([]) } else { runs }}))
+        let runs = if runs.is_null() { json!([]) } else { runs };
+        let total = runs.as_array().unwrap().len();
+        Json(json!({"check_runs": runs, "total_count": total}))
     }
     async fn reviews(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
         let reviews = v.lock().unwrap()["reviews"].clone();
@@ -356,7 +358,10 @@ async fn rw8_claims_are_local_lead_or_pair_and_run_out() {
 #[test]
 fn rw9_ci_and_review_are_read_conservatively() {
     let run = |status: &str, conclusion: Value| json!({"status":status,"conclusion":conclusion});
-    let ci = |runs: Value| research_work::ci_of(&json!({ "check_runs": runs }));
+    let ci = |runs: Value| {
+        let total = runs.as_array().unwrap().len();
+        research_work::ci_of(&json!({ "check_runs": runs, "total_count": total }))
+    };
     assert_eq!(ci(json!([])), Some("none"));
     assert_eq!(
         ci(json!([run("completed", json!("success")), run("completed", json!("skipped"))])),
@@ -372,6 +377,12 @@ fn rw9_ci_and_review_are_read_conservatively() {
     );
     assert_eq!(ci(json!([run("completed", json!("cancelled"))])), Some("failing"));
     assert_eq!(research_work::ci_of(&json!({"message":"rate limited"})), None);
+    // More runs than one page holds can't be read as passing: the missing one could have failed.
+    let passed = run("completed", json!("success"));
+    assert_eq!(research_work::ci_of(&json!({"check_runs":[passed.clone()],"total_count":2})), None);
+    let page = Value::Array(vec![passed.clone(); 100]);
+    assert_eq!(research_work::ci_of(&json!({"check_runs":page,"total_count":100})), None);
+    assert_eq!(research_work::ci_of(&json!({"check_runs":[passed]})), None, "no total");
     let review = |who: u64, state: &str| json!({"user":{"id":who},"state":state});
     let of = |reviews: Value| research_work::review_of(&reviews);
     assert_eq!(of(json!([review(1, "COMMENTED")])), Some("none"));
@@ -387,6 +398,8 @@ fn rw9_ci_and_review_are_read_conservatively() {
     );
     assert_eq!(of(json!([review(2, "CHANGES_REQUESTED"), review(2, "DISMISSED")])), Some("none"));
     assert_eq!(of(json!({"message":"not found"})), None);
+    // A full page of reviews might hide a later change request.
+    assert_eq!(of(Value::Array(vec![review(1, "APPROVED"); 100])), None);
 }
 #[tokio::test]
 async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_green() {
