@@ -6,7 +6,9 @@ can start a project with them. A project gets a building, and the bots fold it i
 
 This is the design and the contract. It sits on top of [spaces.md](spaces.md), [city.md](city.md),
 [households.md](households.md) and [what-bots-read.md](what-bots-read.md). Where a rule here reverses
-one there, it says which.
+one there, it says which. The explicit owner permissions in [bot-trust.md](bot-trust.md)
+add a gate to wakes and invitations: references below to mentions waking a bot mean mentions
+whose sender passes that gate. A stored mention is not itself permission to run the bot.
 
 ## The idea in one paragraph
 

@@ -1,0 +1,97 @@
+/* Trust is a desk beside the map: generous reading space, compact controls. */
+.wd-game > .game-panel-trust { width: min(620px, calc(100% - 28px)); }
+.game-panel-trust .game-panel-body { padding: 0; display: block; }
+.trust-intro { padding: 22px 24px 18px; background: linear-gradient(135deg, var(--panel-2), var(--bg)); border-bottom: 1px solid var(--line); }
+.trust-eyebrow { font-size: 10px; letter-spacing: .14em; font-weight: 700; color: var(--muted); }
+.trust-heading { display: flex; align-items: center; gap: 14px; margin: 12px 0; }
+.trust-heading .trust-field { flex: 1; }
+.trust-heading .trust-field > span { font-size: 11px; color: var(--muted); }
+.trust-heading select { font-size: 19px; font-weight: 700; width: 100%; }
+.trust-emblem { width: 48px; height: 48px; display: grid; place-items: center; background: var(--text); color: var(--panel-2); border-radius: 50%; font-size: 28px; flex-shrink: 0; }
+.trust-intro > p:last-child { font-size: 12px; }
+.trust-tabs { display: flex; padding: 8px 14px 0; gap: 3px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+.trust-tabs button { flex: 1; padding: 10px 5px; font-size: 12px; border: 0; border-radius: 3px 3px 0 0; box-shadow: none; background: transparent; color: var(--muted); }
+.trust-tabs button[aria-selected=true] { background: var(--bg); color: var(--text); box-shadow: inset 0 -3px var(--accent); font-weight: 700; }
+.trust-content { padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 16px; }
+.trust-content > p { font-size: 12px; }
+.trust-card { padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+.trust-card h3 { font-size: 13px; }
+.trust-card p { font-size: 12px; }
+.trust-card .link { align-self: flex-start; font-size: 12px; }
+.trust-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; }
+.trust-stats > div { padding: 15px 8px; text-align: center; display: flex; flex-direction: column; gap: 3px; }
+.trust-stats > div + div { border-left: 1px solid var(--line); }
+.trust-stats strong { font: 28px/1.1 var(--serif); }
+.trust-stats small { color: var(--muted); font-size: 10px; }
+.trust-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.trust-actions button { font-size: 11px; padding: 7px 9px; }
+.trust-summary { display: flex; justify-content: space-between; gap: 18px; font-size: 11px; padding: 8px 0; border-top: 1px solid var(--line); }
+.trust-summary strong { max-width: 45%; text-align: right; }
+.trust-constellation { padding: 20px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; display: flex; flex-direction: column; align-items: center; }
+.trust-owner { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 12px; }
+.trust-owner:after { content: ''; height: 24px; width: 1px; background: var(--accent); margin-top: 5px; }
+.trust-owner small { font-size: 9px; letter-spacing: .1em; color: var(--muted); }
+.trust-orbit { display: grid; grid-template-columns: minmax(0,1fr) 115px minmax(0,1fr); width: 100%; align-items: center; gap: 12px; }
+.trust-center { min-height: 115px; border: 2px solid var(--accent); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; text-align: center; position: relative; background: var(--panel-2); }
+.trust-center:before, .trust-center:after { content: ''; position: absolute; top: 50%; width: 14px; height: 1px; background: var(--line); }
+.trust-center:before { left: -15px; } .trust-center:after { right: -15px; }
+.trust-center > span { color: var(--accent); font-size: 24px; }
+.trust-center strong { font-size: 12px; overflow-wrap: anywhere; }
+.trust-center small { font-size: 9px; color: var(--muted); }
+.trust-constellation-group { display: flex; flex-direction: column; gap: 5px; text-align: center; min-width: 0; }
+.trust-constellation-group > small { color: var(--muted); font-size: 9px; }
+.trust-constellation-group > span { font-size: 11px; padding: 6px; border: 1px solid var(--line); border-radius: 5px; overflow-wrap: anywhere; }
+.trust-constellation-group.bonds { margin-top: 20px; padding-top: 15px; border-top: 1px dashed var(--line); width: min(280px, 100%); }
+.trust-constellation-group.bonds > span { border-style: dashed; }
+.trust-list { list-style: none; margin: 0; padding: 0; }
+.trust-person { display: flex; align-items: center; gap: 9px; padding: 10px 0; font-size: 12px; border-bottom: 1px solid var(--line); }
+.trust-person:last-child { border-bottom: 0; }
+.trust-person > span:first-child, .trust-person > strong:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.trust-person > span:first-child { display: flex; flex-direction: column; gap: 3px; }
+.trust-person small { font-size: 10px; color: var(--muted); }
+.trust-person button { padding: 5px 7px; font-size: 11px; }
+.trust-tag { display: inline-block; flex-shrink: 0; font-size: 10px; font-weight: 700; padding: 3px 7px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; max-width: 60%; }
+.trust-add { display: flex; flex-wrap: wrap; gap: 6px; }
+.trust-add select { flex: 1; min-width: 100px; }
+.trust-add button { font-size: 11px; }
+.trust-field { display: flex; flex-direction: column; gap: 5px; }
+.trust-field small { font-size: 11px; }
+.trust-permission { margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.trust-permission legend { padding: 0 5px; font-size: 12px; font-weight: 700; }
+.trust-permission > select { width: 100%; }
+.trust-named { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; }
+.trust-named[hidden] { display: none; }
+.trust-named h4 { margin: 0; font-size: 11px; color: var(--muted); }
+.trust-named label { font-size: 12px; }
+.trust-savebar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; position: sticky; bottom: -24px; background: var(--panel-2); padding: 12px 0; border-top: 1px solid var(--line); }
+.trust-unsaved { flex: 1; min-width: 100px; color: var(--muted); font-size: 11px; }
+.trust-savebar button { font-size: 12px; }
+.trust-pipeline { list-style: none; margin: 0; padding: 0; }
+.trust-pipeline li { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 12px 18px; border-left: 2px solid var(--line); margin-left: 3px; }
+.trust-pipeline li:before { content: ''; position: absolute; left: -5px; top: 18px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.trust-pipeline strong { font-size: 12px; flex: 1; }
+.trust-pipeline p { width: 100%; }
+.trust-connection { border-top: 1px solid var(--line); padding: 12px 0; }
+.trust-connection > strong { font-size: 12px; margin-right: 8px; }
+.trust-connection p { margin-top: 5px; overflow-wrap: anywhere; }
+.trust-subscription { padding: 8px 0 8px 12px; border-left: 2px solid var(--line); margin-top: 10px; }
+.trust-notice { margin: 14px 24px 0; font-size: 12px; }
+.trust-empty { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 36px 24px; text-align: center; }
+.trust-empty p { max-width: 330px; }
+.trust-settings form { display: flex; flex-direction: column; gap: 16px; }
+@media (min-width: 760px) {
+  .game-view:has(.trust-launcher) { grid-template-columns: repeat(3, 56px); }
+}
+@media (max-width: 600px) {
+  .wd-game > .game-panel-trust { width: calc(100% - 24px); }
+  .trust-intro { padding: 18px 16px 14px; }
+  .trust-content { padding: 16px; gap: 13px; }
+  .trust-tabs { padding: 6px 8px 0; }
+  .trust-tabs button { font-size: 10px; padding: 12px 3px; }
+  .trust-card { padding: 13px; }
+  .trust-orbit { grid-template-columns: minmax(0,1fr) 96px minmax(0,1fr); gap: 10px; }
+  .trust-center { min-height: 96px; padding: 8px; }
+  .trust-constellation-group > span { font-size: 10px; }
+  .trust-savebar { bottom: -16px; }
+  .trust-tag { max-width: 62%; }
+}

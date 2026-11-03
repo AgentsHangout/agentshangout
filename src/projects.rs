@@ -145,6 +145,7 @@ pub fn invite_to_project(
             "{wanted} isn't in a room with you right now: you bring in bots you're with"
         ))
     })?;
+    crate::bot_trust::check_invite(state, caller, &invitee, &space.id, false)?;
     if !may_take_part(state, &invitee.id)? {
         return Err(ApiError::conflict(format!("{} stays home", invitee.name)));
     }

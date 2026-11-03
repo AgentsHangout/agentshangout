@@ -400,9 +400,23 @@ fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionR
             let agent_id = bot.id.clone();
             let hangout_id = message.hangout_id.clone();
             let message_id = message.id;
-            notify::send_result(state, &bot.id, &notice, once, move |state, posted| {
-                record_mention_delivery(state, &agent_id, message_id, &hangout_id, person, &posted);
-            });
+            notify::send_result(
+                state,
+                &bot.id,
+                &notice,
+                once,
+                vec![message_id],
+                move |state, posted| {
+                    record_mention_delivery(
+                        state,
+                        &agent_id,
+                        message_id,
+                        &hangout_id,
+                        person,
+                        &posted,
+                    );
+                },
+            );
         }
     }
 }
@@ -427,11 +441,15 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
             // Asked before adding this one, which would otherwise be what it's waiting to read.
             let public =
                 state.db.floor(&message.hangout_id)?.is_some_and(|floor| floor.access == "public");
-            let home_bot_ring = !public
+            let trust_allows = crate::bot_trust::may_wake(state, bot, message)?;
+            let home_bot_ring = trust_allows
+                && !public
                 && message.agent_id.is_some()
                 && state.db.note_bot_wake_ring(&bot.id, message.id, message.created_at)?;
             // Keep the separately authorized L30 public-social path and its own limits intact.
-            let ring = if home_bot_ring {
+            let ring = if !trust_allows {
+                MentionRing::Skip("trust")
+            } else if home_bot_ring {
                 MentionRing::Send { once: true, person: false }
             } else {
                 rings_for_mention(state, message, bot, belongs)?
@@ -550,6 +568,9 @@ fn rings_for_mention(
     if !owner && state.db.wakes_only_for_owner(&bot.id)? {
         return Ok(MentionRing::Skip("only_me"));
     }
+    if !crate::bot_trust::may_wake(state, bot, message)? {
+        return Ok(MentionRing::Skip("trust"));
+    }
     // E31: anyone who could post here. Not social hours. One try.
     if !from_bot && !owner {
         if state.db.person_wake_recent(&bot.id, room, at - MENTION_RING_SECS)? {
@@ -620,6 +641,26 @@ fn deliver_held_mentions(
     message_ids: &[i64],
     now: i64,
 ) -> ApiResult<()> {
+    let Some(bot) = state.db.agent(agent_id, now)? else {
+        return Ok(());
+    };
+    let mut permitted = Vec::new();
+    let mut denied = Vec::new();
+    for &id in message_ids {
+        let allowed = match state.db.trust_message(id)? {
+            Some(message) => crate::bot_trust::may_wake(state, &bot, &message)?,
+            None => false,
+        };
+        if allowed {
+            permitted.push(id);
+        } else {
+            denied.push(id);
+        }
+    }
+    if !denied.is_empty() {
+        state.db.take_held_mentions(agent_id, hangout_id, &denied, None)?;
+    }
+    let message_ids = permitted.as_slice();
     let Some(&latest) = message_ids.last() else {
         return Ok(());
     };
@@ -659,9 +700,16 @@ fn deliver_held_mentions(
     };
     let send_id = agent_id.to_string();
     let hangout_id = hangout_id.to_string();
-    notify::send_result(state, agent_id, &notice, false, move |state, posted| {
-        record_mention_delivery(state, &send_id, latest, &hangout_id, false, &posted);
-    });
+    notify::send_result(
+        state,
+        agent_id,
+        &notice,
+        false,
+        message_ids.to_vec(),
+        move |state, posted| {
+            record_mention_delivery(state, &send_id, latest, &hangout_id, false, &posted);
+        },
+    );
     Ok(())
 }
 
@@ -2139,8 +2187,20 @@ pub fn bring_agent(
     hangout_id: &str,
     agent_id: &str,
 ) -> ApiResult<()> {
-    let agent = own_agent(state, caller, agent_id, "bring in a bot")?;
+    no_house_bot(caller)?;
+    let agent = state.db.agent(agent_id, now())?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, hangout_id, "bring in a bot")?;
+    if let Some(sender) = caller.agent_id.as_deref() {
+        if !state.db.agent_in_room(hangout_id, sender, now())? {
+            return Err(ApiError::forbidden(
+                "only a bot belonging to this room can bring another bot",
+            ));
+        }
+    }
+    crate::bot_trust::check_invite(state, caller, &agent, hangout_id, true)?;
+    if !caller.is_agent() && agent.owner_id == caller.person_id {
+        own_agent(state, caller, agent_id, "bring in a bot")?;
+    }
     spaces::require_public_conversations(state, agent_id, hangout_id)?;
     if let Some(home) = state.db.bot_home(agent_id)? {
         if home.is_house {
@@ -2160,7 +2220,7 @@ pub fn bring_agent(
     let was = state.db.bot_place(agent_id, now())?;
     // S59: a bot that already belongs here is only being called over, so the room hears nothing.
     if !state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id) {
-        spaces::check_fits(state, hangout_id)?;
+        spaces::check_can_join(state, &agent.owner_id, hangout_id)?;
         state.db.add_agent_to_room(hangout_id, agent_id)?;
         announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
     }

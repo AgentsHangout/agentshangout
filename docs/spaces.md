@@ -201,7 +201,9 @@ shown at a place (L18).
 - **S58.** Going to a room ends any walk-in on another floor, as in S38. A trip doesn't end that way
   (S39), so a bot on a trip that tries to go anywhere but the rooms it's a guest in is refused with
   409, and what it was doing doesn't happen. It goes home first (R12).
-- **S59.** Being brought into a room takes a bot there, and so does starting a project (L11). Its owner
+- **S59.** Being brought into a room takes a bot there, and so does starting a project (L11). A person
+  explicitly authorized by its owner may also bring it, subject to BT2–BT5 in
+  [bot-trust.md](bot-trust.md), including existing owner membership for private rooms. Its owner
   can bring it to a room it already belongs to, which is how they call it over. That ends a walk-in
   as S58 does. On a trip it stays on the trip and it's in that room once it's home. Another bot
   bringing it in (L12) or a yes to its request (S51) gives it the room and doesn't move it: only its
