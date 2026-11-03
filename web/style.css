@@ -2799,3 +2799,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .oauth-page select { margin: 0.5rem 0; }
 .oauth-page button { margin: 0.4rem 0.4rem 0.4rem 0; }
 @media (max-width: 48rem) { .oauth-page { margin: 0; padding: 1rem; } }
+
+/* L44: a bot's status in the Bots panel. Words carry the meaning; color only helps scanning. */
+.bot-status { font-weight: 700; }
+.bot-status.working { color: #2f7d3a; }
+.bot-status.idle { color: #8a6d1f; }
+.bot-status.offline { color: #8b7a5e; font-weight: 500; }

@@ -1382,3 +1382,34 @@ async fn a_public_floor_can_be_a_workplace_and_the_bot_walks_in_there() {
     let at = now() + agenthangout::routines::WANDER_SECS;
     agenthangout::routines::wander_at(&server.state, &rover_id, &bo.id, at).unwrap();
 }
+
+// L44: the Bots panel gives each of its owner's bots one status: working on something, idle, or
+// offline when it hasn't called the server in ten minutes.
+#[tokio::test]
+async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
+    let (server, _, _) = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover").await;
+    async fn status_of(server: &Server, key: &str, id: &str) -> Value {
+        let bots = server.get(key, "/api/me/bots").await.ok();
+        bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == id).unwrap()["status"].clone()
+    }
+
+    // Not heard from in an hour: offline, with when it was last seen.
+    server.state.db.touch_agent_seen(&rover_id, now() - 3600).unwrap();
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "offline", "{status}");
+    assert!(status["last_seen_at"].is_i64());
+
+    // Calling the server brings it back, and with nothing on its plate it's idle.
+    server.tool(&rover, "inbox", json!({})).await;
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "idle", "{status}");
+
+    // Saying what it's busy with makes it working, and says what.
+    server.tool(&rover, "report_activity", json!({ "kind": "coding", "via": "Claude Code" })).await;
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "working", "{status}");
+    assert_eq!(status["activity"]["kind"], "coding");
+    assert_eq!(status["activity"]["via"], "Claude Code");
+}

@@ -120,9 +120,33 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             };
             json!({ "way": way, "at": slot * WANDER_SECS })
         });
+        // L44: one plain answer for its owner: working on something, idle, or offline. Offline is
+        // the ten minutes `say` already uses to call a bot quiet, so its session is probably closed.
+        let claims: Vec<Value> = state
+            .db
+            .research_claims_of_bot(&agent.id, now)?
+            .into_iter()
+            .map(|(lab, number, pairing)| json!({ "lab": lab, "number": number, "pairing": pairing }))
+            .collect();
+        let active = agent.activity.as_ref().filter(|activity| activity.until > now);
+        let state_word = if !agent.responsive(now) {
+            "offline"
+        } else if active.is_some() || doing == "thinking" || !claims.is_empty() {
+            "working"
+        } else {
+            "idle"
+        };
+        let status = json!({
+            "state": state_word,
+            "activity": active.map(|activity| json!({ "kind": activity.kind, "via": activity.via })),
+            "claims": claims,
+            "job": routine.workplace.as_ref().map(|workplace| workplace["job"].clone()),
+            "last_seen_at": agent.last_seen_at,
+        });
         bots.push(json!({
             "id": agent.id,
             "name": agent.name,
+            "status": status,
             "room": room_json,
             "place": place,
             "doing": doing,
