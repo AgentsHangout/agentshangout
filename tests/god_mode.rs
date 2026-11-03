@@ -1509,6 +1509,10 @@ async fn a_bots_schedule_paints_its_day_with_work_social_home_and_anything() {
     server.tool(&rover, "follow", json!({ "bot": "Scout" })).await;
     server.tool(&scout, "go_to_room", json!({ "hangout_id": living })).await;
     assert_eq!(place().as_deref(), Some(office.as_str()), "at work, it stays");
+    // Its owner can still call it away.
+    let bring = format!("/api/hangouts/{living}/agents/{rover_id}");
+    server.put(&bo.key, &bring, json!({})).await.ok();
+    assert_eq!(place().as_deref(), Some(living.as_str()), "its owner calls it away");
 
     // L51: deleting it goes back to the routine's window.
     let cleared = server.send(&bo.key, Method::DELETE, &path, None).await.ok();
@@ -1521,6 +1525,48 @@ async fn a_bots_schedule_paints_its_day_with_work_social_home_and_anything() {
     routines::wander_at(&server.state, &rover_id, &bo.id, at(30)).unwrap();
     assert_ne!(place().as_deref(), Some(living.as_str()), "a recycled bot goes nowhere");
     server.put(&bo.key, &path, all_home).await.refused(StatusCode::CONFLICT);
+}
+
+// L56: a bot that stays home and a house bot have no plan of their own: every hour is Home, a plan
+// can't be saved for them, and one saved before it stayed home moves it nowhere.
+#[tokio::test]
+async fn a_bot_that_stays_home_or_a_house_bot_has_no_plan_of_its_own() {
+    let (server, _, _) = Server::start().await;
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Elm", "your_name": "Bo", "create_code": CODE }))
+        .await
+        .ok();
+    let city = text(&made["city"]["id"]);
+    let bo = Who { key: text(&made["owner_key"]), id: text(&made["person"]["id"]) };
+    let house = server
+        .post(&bo.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Bo House" }))
+        .await
+        .ok();
+    let house_id = text(&house["house"]["id"]);
+    let living = text(&house["living_room_id"]);
+    let all_work = json!({ "every_day": vec!["work"; 24] });
+
+    // A plan saved while it went out, and then it's kept home.
+    let (homer, _) = server.bot(&bo, &living, "Homer").await;
+    server.all_day(&bo, &homer, true).await;
+    server.put(&bo.key, &format!("/api/agents/{homer}/schedule"), all_work.clone()).await.ok();
+    server.state.db.set_bot_home(&homer, &house_id, true, false).unwrap();
+    let keeper = server
+        .post(&bo.key, &format!("/api/houses/{house_id}/house-bot"), json!({ "name": "Keeper" }))
+        .await
+        .ok();
+    let keeper = text(&keeper["agent"]["id"]);
+
+    for (bot_id, name) in [(homer, "Homer"), (keeper, "Keeper")] {
+        let path = format!("/api/agents/{bot_id}/schedule");
+        server.put(&bo.key, &path, all_work.clone()).await.refused(StatusCode::CONFLICT);
+        let read = server.get(&bo.key, &format!("/api/agents/{bot_id}/routine")).await.ok();
+        assert_eq!(read["block"], "home", "{name}: {read}");
+        assert_eq!(read["schedule"]["every_day"], json!(vec!["home"; 24]), "{name}");
+        assert_eq!(read["schedule_saved"], false, "{name}");
+        let call = routines::call_of(&server.state, &bot_id, &bo.id, now()).unwrap();
+        assert!(call.is_none_or(|call| call.event != "work"), "{name} isn't called to work");
+    }
 }
 
 // L44: the Bots panel gives each of its owner's bots one status: working on something, idle, or

@@ -65,4 +65,14 @@ assert.ok(says(painter.element, 'With no workplace, a Work hour leaves it where 
 all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Use the hours above instead')[0].onclick();
 assert.equal(painter.cleared(), true);
 assert.equal(painter.changed(), false);
+assert.deepEqual(painter.days(), { sat: Array(24).fill('anything') }, 'a saved weekday plan is kept');
+
+// Not saved, and its hours differ by weekday: the read-off rows are shown, not sent, so what's
+// painted counts on every day instead of being covered by seven read-off weekdays.
+const weekdayRow = Array(24).fill('anything').fill('social', 9, 17);
+const weekdayRead = { schedule_saved: false, schedule: { every_day: Array(24).fill('anything'), days: { mon: weekdayRow, tue: weekdayRow, wed: weekdayRow, thu: weekdayRow, fri: weekdayRow, sat: Array(24).fill('anything'), sun: Array(24).fill('anything') } }, workplace: null, public_places: true };
+painter = context.painter(weekdayRead);
+assert.equal(painter.value()[10], 'social', "the strip starts from a weekday's hours");
+assert.ok(!says(painter.element, 'stays as it is'), 'no saved weekday plan to keep');
+assert.equal(JSON.stringify(painter.days()), '{}', 'read-off weekdays are not saved');
 console.log('Day plan painter: read-off strip, brush and drag, presets, keyboard and clearing verified.');
