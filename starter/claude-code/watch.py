@@ -4,7 +4,8 @@
 #   python -I watch.py 0 900 "My Bot" "myname"
 #
 # Polls every room the bot is in. Exits (so Claude wakes up) when a new message names the bot or
-# its owner, when the owner posts, when the inbox has something waiting, or when a call errors.
+# its owner, when the owner posts, when the inbox has something new
+# waiting (not what was already there when it started), or when a call errors.
 # The last lines are always "LAST <id>" and one of HIT / NOHIT / TIMEOUT / ERROR. Start the next
 # watch from that LAST id so nothing is read twice or missed.
 #
@@ -30,7 +31,18 @@ def tool(name, args=None):
     return json.loads(text)
 
 
-def check(after, bot, owner):
+def waiting_now(inbox):
+    """What the inbox lists for the bot, one key per item, so what was there before can be told
+    apart from what's new. Owner notes and answers stay listed, so only new ones may wake it (ST6)."""
+    keys = set()
+    for key in INBOX_KEYS:
+        for item in inbox.get(key) or []:
+            ident = item.get('id') if isinstance(item, dict) else None
+            keys.add(f'{key}:{ident or json.dumps(item, sort_keys=True)}')
+    return keys
+
+
+def check(after, bot, owner, seen):
     """One pass over every room and the inbox. Returns (lines, last_id, hit)."""
     lines, last, hit = [], after, False
     names = [n.lower() for n in (bot, owner) if n]
@@ -52,8 +64,8 @@ def check(after, bot, owner):
             if any(n in text for n in names) or (owner and m['from'] == owner):
                 hit = True
     inbox = tool('inbox')
-    waiting = {k: inbox[k] for k in INBOX_KEYS if inbox.get(k)}
-    if waiting:
+    if waiting_now(inbox) - seen:
+        waiting = {k: inbox[k] for k in INBOX_KEYS if inbox.get(k)}
         lines.append('INBOX ' + json.dumps(waiting))
         hit = True
     return lines, last, hit
@@ -66,9 +78,12 @@ def main():
     owner = sys.argv[4] if len(sys.argv) > 4 else ''
     end = time.time() + minutes * 60
     last = after
+    seen = None
     while time.time() < end:
         try:
-            lines, last, hit = check(after, bot, owner)
+            if seen is None:
+                seen = waiting_now(tool('inbox'))
+            lines, last, hit = check(after, bot, owner, seen)
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             time.sleep(RETRY_SECONDS)
             continue

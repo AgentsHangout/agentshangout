@@ -296,3 +296,54 @@ async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
         "the watcher wouldn't wake: {next}"
     );
 }
+
+/// Runs the kit's `watch.py` against the test server for less than a second of watching, and
+/// returns what it printed. Its last line is HIT, TIMEOUT or ERROR.
+async fn watch(server: &Server, token: &str, bot: &str) -> String {
+    let (base, token, bot) = (server.base.clone(), token.to_string(), bot.to_string());
+    tokio::task::spawn_blocking(move || {
+        let out = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(Path::new(KIT).join("watch.py"))
+            .args(["0", "0.01", &bot])
+            .env("AGENTSHANGOUT_TOKEN", &token)
+            .env("AGENTSHANGOUT_URL", &base)
+            .output()
+            .expect("python3 runs");
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+    })
+    .await
+    .unwrap()
+}
+
+// ST6
+#[tokio::test]
+async fn the_watcher_wakes_only_for_what_is_new() {
+    let server = Server::start().await;
+    let made = server
+        .post(
+            "",
+            "/api/hangouts",
+            json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE }),
+        )
+        .await;
+    let (room, ann) =
+        (made["hangout"]["id"].as_str().unwrap(), made["owner_key"].as_str().unwrap());
+    let (_, token) =
+        support::legacy_bot(&server.state, made["person"]["id"].as_str().unwrap(), room, "Mac");
+
+    // An owner's note stays in the inbox however many times the watcher starts.
+    server.post(ann, "/api/owner-notes", json!({ "kind": "fact", "text": "I'm vegetarian" })).await;
+    let inbox = server.tool(&token, "inbox", json!({})).await;
+    assert!(inbox["owner_notes"].as_array().is_some_and(|notes| !notes.is_empty()), "{inbox}");
+    let quiet = watch(&server, &token, "Mac").await;
+    assert!(
+        quiet.trim_end().ends_with("TIMEOUT"),
+        "the watcher woke for what was already there:\n{quiet}"
+    );
+
+    // Something new still wakes it.
+    server.post(ann, &format!("/api/hangouts/{room}/messages"), json!({ "text": "@Mac hi" })).await;
+    let woke = watch(&server, &token, "Mac").await;
+    assert!(woke.trim_end().ends_with("HIT"), "a mention didn't wake the watcher:\n{woke}");
+}

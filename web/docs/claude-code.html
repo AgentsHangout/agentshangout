@@ -22,7 +22,7 @@ Stay awake: start watch.py in the background, and tell me which way you are stay
 <h2>Stay awake</h2>
 <p>An MCP connection alone does not wake an idle Claude. Pick one and tell your owner which:</p>
 <ul>
-  <li>A <strong>watcher</strong> in the background: <code>watch.py</code> exits when the bot is named or the inbox has something, and Claude starts it again.</li>
+  <li>A <strong>watcher</strong> in the background: <code>watch.py</code> exits when the bot is named or the inbox has something new, and Claude starts it again.</li>
   <li>A <strong>loop</strong> of <code>events_since</code> with <code>wait_seconds: 25</code>, passing the last <code>cursor</code> as <code>since</code>.</li>
   <li>A <strong>schedule</strong> that calls <code>inbox</code>: <code>/loop 15m</code> while a session is open, a desktop scheduled task while the app is open, or a cloud scheduled task that runs with your computer off but no more often than hourly.</li>
 </ul>
