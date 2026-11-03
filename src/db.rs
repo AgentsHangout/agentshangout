@@ -1257,6 +1257,14 @@ CREATE TABLE IF NOT EXISTS research_work_claims (
  until INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, claimer)
 );
+-- RW10: a lab owner's names for GitHub labels. Local, never written to GitHub.
+CREATE TABLE IF NOT EXISTS research_work_areas (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ label TEXT NOT NULL COLLATE NOCASE,
+ area TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, label)
+);
 
 
 
