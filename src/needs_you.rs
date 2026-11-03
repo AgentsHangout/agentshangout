@@ -4,13 +4,15 @@
 
 use axum::{
     extract::{Path, State},
-    routing::{delete, get},
+    routing::{delete, get, post},
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    auth::Caller,
+    auth::{self, Caller},
+    db::NewOwnerQuestion,
     error::{ApiError, ApiResult},
     notify, now, ops, AppState,
 };
@@ -29,6 +31,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/needs-you", get(needs_you))
         .route("/api/needs-you/answered", get(answered))
         .route("/api/needs-you/waiting/{agent_id}", delete(dismiss))
+        .route("/api/needs-you/waiting/{agent_id}/answer", post(answer_wait))
         .route("/api/needs-you/mentions/{id}", delete(clear_mention))
 }
 
@@ -247,6 +250,50 @@ async fn dismiss(
         .ok_or_else(ApiError::not_found)?;
     state.db.clear_owner_wait(&agent.id)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct WaitAnswer {
+    answer: String,
+}
+
+// N15: an answer in words, kept as the bot's own question so it reaches the bot the usual way.
+async fn answer_wait(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(agent_id): Path<String>,
+    Json(body): Json<WaitAnswer>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "answer a bot's wait")?;
+    let now = now();
+    let wait = state
+        .db
+        .owner_waits(&caller.person_id, now - SHOWN_SECS)?
+        .into_iter()
+        .find(|wait| wait.agent_id == agent_id)
+        .ok_or_else(ApiError::not_found)?;
+    let answer = ops::clean(&body.answer, "answer", ops::MAX_ABOUT_CHARS)?;
+    let room = state
+        .db
+        .hangouts_for_agent(&wait.agent_id, now)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::conflict("that bot has no room to hear an answer in"))?;
+    let id = auth::new_id();
+    let question = NewOwnerQuestion {
+        id: &id,
+        hangout_id: &room.id,
+        agent_id: &wait.agent_id,
+        owner_id: &caller.person_id,
+        asker: &wait.name,
+        question: &wait.about,
+        now,
+    };
+    // Its owner is answering it now, so the limit on open questions doesn't come into it.
+    state.db.insert_owner_question(&question, now, i64::MAX)?;
+    let answered = ops::answer_owner_question(&state, &caller, &id, &answer)?;
+    state.db.clear_owner_wait(&wait.agent_id)?;
+    Ok(Json(json!(answered)))
 }
 
 /// N5 to N7: a bot says it's waiting for its owner somewhere else, or with no `about` that it isn't.

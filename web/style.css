@@ -207,6 +207,8 @@ input::placeholder { color: #8b7a5e; }
 .about dt:first-child { margin-top: 0; }
 .about dd { margin: 2px 0 0; color: #43321d; }
 .about a { color: #8a3a12; }
+.social-links { break-inside: avoid; }
+.social-links a { overflow-wrap: anywhere; }
 .about code { overflow-wrap: anywhere; background: rgba(120, 90, 44, .16); padding: 0 4px; border-radius: 2px; color: #2c1e11; }
 #app:not(:has(.home)):not(:empty) ~ .about { display: none; }
 

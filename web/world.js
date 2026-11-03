@@ -3012,6 +3012,11 @@ const BOT_CHESTS = {
     ell(g, lite(color, 0.7), -1, by + 4.8, 0.9, 0.9);
     ell(g, '#8be0ff', 1.2, by + 4.8, 0.9, 0.9);
   },
+  lab_coat: (g, by) => {
+    fp(g, '#f4f6fa', [[-2.6, by + 3], [-0.4, by + 3], [-0.4, by + 6.6], [-2.6, by + 6.6]]);
+    fp(g, '#f4f6fa', [[0.4, by + 3], [2.6, by + 3], [2.6, by + 6.6], [0.4, by + 6.6]]);
+    ell(g, '#3f8fc4', 1.6, by + 4.4, 0.4, 0.9);
+  },
   heart: (g, by) => {
     ell(g, '#ff5d7a', -0.9, by + 4.2, 1, 1);
     ell(g, '#ff5d7a', 0.9, by + 4.2, 1, 1);
@@ -5104,8 +5109,9 @@ export class World {
     return true;
   }
 
-  // Cheapest route over walkable tiles, preferring roads. Returns tiles after the start.
-  findPath(sx, sy, tx, ty, maxLength = 90) {
+  // Cheapest route over walkable tiles, preferring roads. Returns tiles after the start. A stroll keeps
+  // the search small, and a move between places passes `whole` to search the whole map (L18).
+  findPath(sx, sy, tx, ty, maxLength = 90, whole = false) {
     const n = this.n;
     if (sx === tx && sy === ty) return [];
     const pad = 8;
@@ -5115,7 +5121,7 @@ export class World {
     const y1 = Math.min(n - 1, Math.max(sy, ty) + pad);
     const w = x1 - x0 + 1;
     const h = y1 - y0 + 1;
-    if (w * h > 9000) return null;
+    if (!whole && w * h > 9000) return null;
     const cost = new Float32Array(w * h).fill(Infinity);
     const from = new Int32Array(w * h).fill(-1);
     const start = (sy - y0) * w + (sx - x0);
@@ -5338,7 +5344,8 @@ export class World {
       p.path.length = 0;
       return;
     }
-    const route = this.findPath(sx, sy, x, y);
+    // L18: however far it is across the map.
+    const route = this.findPath(sx, sy, x, y, this.n * this.n, true);
     if (route) {
       // A car keeps to the road. Only the legs of the route from one road tile to the next are
       // driven, and only when there are enough of them: the walk to the road and from it is on foot.

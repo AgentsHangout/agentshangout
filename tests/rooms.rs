@@ -1442,12 +1442,12 @@ async fn closing_a_floor_and_furnishing_it_doesnt_let_it_open_again() {
 // I12
 
 #[tokio::test]
-async fn only_a_bookshelf_cabinet_or_whiteboard_holds_notes() {
+async fn only_a_bookshelf_cabinet_whiteboard_or_microscope_holds_notes() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let holders: Vec<&str> =
         items::CATALOG.iter().filter(|kind| kind.holds_notes).map(|kind| kind.kind).collect();
-    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard"]);
+    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard", "microscope"]);
     for (n, kind) in holders.iter().enumerate() {
         let at = (28, n as i64 * 2);
         let id = server.item(&ann, &room, kind, at).await;
@@ -3870,7 +3870,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 10);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 11);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -5896,4 +5896,90 @@ async fn a_bot_shows_what_its_busy_with_until_it_ends_or_runs_out() {
     assert_eq!(shown().await.0, json!("reviewing"));
     server.state.db.age_activity(&rover.id, 61).unwrap();
     assert_eq!(shown().await, (Value::Null, Value::Null));
+}
+
+// I86, I87, I88, I89
+#[tokio::test]
+async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_allows() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let bob = server.join(&ann, &room, "Bob").await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    let subscribe = |agent: &str| format!("/api/hangouts/{room}/room-mentions/bots/{agent}");
+    let say = |token: &str, text: &str| {
+        let args = json!({ "hangout_id": room, "text": text });
+        let token = token.to_string();
+        let server = &server;
+        async move { server.tool(&token, "say", args).await["structuredContent"].clone() }
+    };
+    let mentions_of = |token: &str| {
+        let token = token.to_string();
+        let server = &server;
+        async move {
+            let inbox = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
+            inbox["mentions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| text(&m["text"]))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Off until the owner turns it on, and only the owner can; only a bot's owner subscribes it.
+    let read = server.read_room(&fido.token, &room).await;
+    assert_eq!(read["room_mentions"], json!({ "policy": "off", "you_are_subscribed": false }));
+    server
+        .put(&bob.key, &policy, json!({ "policy": "members" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let others = json!({ "subscribed": true });
+    server.put(&bob.key, &subscribe(&fido.id), others).await.refused(StatusCode::NOT_FOUND);
+    server
+        .put(&fido.token, &policy, json!({ "policy": "members" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server.put(&ann.key, &subscribe(&fido.id), json!({ "subscribed": true })).await.ok();
+    let off = say(&rover.token, "@room standup in five").await;
+    assert_eq!(off["room_mention"]["reason"], "off", "{off}");
+    assert!(mentions_of(&fido.token).await.is_empty());
+
+    // Owners only: Ann's bot can, Bob can't.
+    server.put(&ann.key, &policy, json!({ "policy": "owners" })).await.ok();
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&bob.key, &messages, json!({ "text": "@room hello all" })).await.ok();
+    assert!(mentions_of(&fido.token).await.is_empty(), "Bob isn't the room's owner");
+    let sent = say(&rover.token, "@room standup now").await;
+    assert_eq!(sent["room_mention"]["reached"], 1, "{sent}");
+    assert_eq!(mentions_of(&fido.token).await, ["@room standup now"]);
+    assert!(mentions_of(&rex.token).await.is_empty(), "Rex isn't subscribed");
+    let read = server.read_room(&fido.token, &room).await;
+    assert_eq!(read["room_mentions"]["you_are_subscribed"], true, "{read}");
+
+    // Once per room every ten minutes.
+    let again = say(&rover.token, "@room one more thing").await;
+    assert_eq!(again["room_mention"]["reason"], "too_soon", "{again}");
+    assert!(mentions_of(&fido.token).await.is_empty(), "read_room cleared the last one");
+
+    // Members: Bob can now, and a bot named in the line too gets one mention, not two.
+    server.state.db.age_room_mentions(&room, 11 * 60).unwrap();
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    server.post(&bob.key, &messages, json!({ "text": "@room and @Fido lunch?" })).await.ok();
+    assert_eq!(mentions_of(&fido.token).await, ["@room and @Fido lunch?"]);
+    server.read_room(&fido.token, &room).await;
+
+    // Unsubscribed, it reaches nobody.
+    server.state.db.age_room_mentions(&room, 11 * 60).unwrap();
+    server.put(&ann.key, &subscribe(&fido.id), json!({ "subscribed": false })).await.ok();
+    let none = say(&rover.token, "@room anyone?").await;
+    assert_eq!(none["room_mention"]["reason"], "nobody_subscribed", "{none}");
+    assert!(mentions_of(&fido.token).await.is_empty());
+    assert!(server
+        .put(&ann.key, &policy, json!({ "policy": "all" }))
+        .await
+        .status
+        .is_client_error());
 }

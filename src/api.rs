@@ -120,6 +120,7 @@ pub fn routes() -> Router<AppState> {
         .merge(items::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
+        .merge(crate::room_mentions::routes())
         .merge(outside::routes())
         .merge(looks::routes())
         .merge(households::routes())
@@ -2594,14 +2595,54 @@ mod tests {
         let server = Server::start(None).await;
 
         let picture = format!("content=\"{}/og.jpg\"", server.base);
-        for path in ["/", "/docs", "/docs/getting-started", "/world/commons", "/join/anything"] {
+        for path in
+            ["/", "/docs", "/docs/getting-started", "/privacy", "/world/commons", "/join/anything"]
+        {
             let page = server.get("", path).await;
             let page = page.body.as_str().unwrap();
             assert!(page.contains(&format!("og:image\" {picture}")), "{path}");
             assert!(page.contains(&format!("twitter:image\" {picture}")), "{path}");
+            assert!(page.contains("og:image:width\" content=\"1200\""), "{path}");
+            assert!(page.contains("og:image:height\" content=\"630\""), "{path}");
+            assert!(page.contains(crate::brand::OG_IMAGE_ALT), "{path}");
             assert!(page.contains("summary_large_image"), "{path}");
+            assert!(page.contains("twitter:site\" content=\"@agentshangout\""), "{path}");
+            assert!(page.contains("apple-touch-icon.png"), "{path}");
+            assert!(page.contains("/site.webmanifest"), "{path}");
             assert!(!page.contains("{{BASE_URL}}"), "{path}");
+            assert!(!page.contains("{{SITE_DESCRIPTION}}"), "{path}");
+            assert!(!page.contains("{{OG_IMAGE_ALT}}"), "{path}");
+            assert!(!page.contains("{{ICON_LINK_TAGS}}"), "{path}");
+            assert!(!page.contains("{{SOCIAL_LINKS}}"), "{path}");
+            assert!(!page.contains("{{SAME_AS_JSON}}"), "{path}");
+            assert!(!page.contains("discord.gg"), "{path}");
         }
+
+        let home = server.get("", "/").await.body.as_str().unwrap().to_string();
+        assert!(home.contains(crate::brand::SITE_DESCRIPTION));
+        assert!(home.contains("Organization"));
+        assert!(home.contains("sameAs"));
+        assert!(home.contains("rel=\"me\""));
+        let docs = server.get("", "/docs").await.body.as_str().unwrap().to_string();
+        for (name, url) in crate::brand::SOCIAL_PROFILES {
+            assert!(home.contains(url), "home missing {name}: {url}");
+            assert!(docs.contains(url), "docs missing {name}: {url}");
+        }
+        assert!(home.contains("https://discord.agentshangout.com"));
+        assert!(home.contains(&format!("{}/icon-512.png", server.base)));
+        let ld = json_ld(&home);
+        let org = ld["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["@type"] == "Organization")
+            .unwrap();
+        assert_eq!(org["logo"], format!("{}/icon-512.png", server.base));
+        let same_as: Vec<&str> =
+            org["sameAs"].as_array().unwrap().iter().map(|url| url.as_str().unwrap()).collect();
+        assert_eq!(same_as.len(), crate::brand::SOCIAL_PROFILES.len());
+        assert!(same_as.contains(&"https://discord.agentshangout.com"));
+        assert!(!same_as.iter().any(|url| url.contains("discord.gg")));
 
         let image = server.client.get(format!("{}/og.jpg", server.base)).send().await.unwrap();
         assert_eq!(image.status(), StatusCode::OK);
@@ -2609,6 +2650,56 @@ mod tests {
         let bytes = image.bytes().await.unwrap();
         assert!(bytes.starts_with(&[0xff, 0xd8]), "it is a JPEG");
         assert!(bytes.len() < 300 * 1024, "small enough for every site to show it");
+        assert_eq!(jpeg_size(&bytes), (1200, 630));
+
+        let logo = server.client.get(format!("{}/icon-512.png", server.base)).send().await.unwrap();
+        assert_eq!(logo.status(), StatusCode::OK);
+        assert_eq!(logo.headers()[header::CONTENT_TYPE], "image/png");
+        let logo = logo.bytes().await.unwrap();
+        assert_eq!(png_size(&logo), (512, 512));
+
+        let touch = server
+            .client
+            .get(format!("{}/apple-touch-icon.png", server.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(png_size(&touch.bytes().await.unwrap()), (180, 180));
+    }
+
+    fn json_ld(page: &str) -> Value {
+        let start = page.find("<script type=\"application/ld+json\">").unwrap();
+        let rest = &page[start..];
+        let inner = rest.find('>').unwrap() + 1;
+        let end = rest.find("</script>").unwrap();
+        serde_json::from_str(rest[inner..end].trim()).expect("JSON-LD should parse")
+    }
+
+    fn jpeg_size(bytes: &[u8]) -> (u16, u16) {
+        let mut i = 2;
+        while i + 8 < bytes.len() && bytes[i] == 0xff {
+            let marker = bytes[i + 1];
+            if marker == 0xd8 || marker == 0xd9 || (0xd0..=0xd7).contains(&marker) {
+                i += 2;
+                continue;
+            }
+            let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            if marker == 0xc0 || marker == 0xc1 || marker == 0xc2 {
+                let height = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]);
+                let width = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]);
+                return (width, height);
+            }
+            i += 2 + len;
+        }
+        panic!("JPEG has no size marker");
+    }
+
+    fn png_size(bytes: &[u8]) -> (u32, u32) {
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]), "it is a PNG");
+        (
+            u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+        )
     }
 
     #[tokio::test]

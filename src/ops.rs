@@ -354,6 +354,59 @@ enum MentionRing {
     Hold,
 }
 
+/// What a mention rings, once it's recorded: a wake-up, a hold, or the reason it didn't.
+fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionRing) {
+    match ring {
+        MentionRing::Skip(reason) => {
+            if state
+                .db
+                .note_wake_decision(
+                    &bot.id,
+                    Some(&message.hangout_id),
+                    Some(message.id),
+                    "skipped",
+                    reason,
+                    message.created_at,
+                )
+                .is_err()
+            {
+                // Diagnostics must not fail stored chat or prevent later mentions.
+                tracing::warn!("a skipped wake decision could not be saved");
+            }
+        }
+        MentionRing::Hold => {
+            if state
+                .db
+                .note_wake_decision(
+                    &bot.id,
+                    Some(&message.hangout_id),
+                    Some(message.id),
+                    "held",
+                    "chain",
+                    message.created_at,
+                )
+                .is_err()
+            {
+                tracing::warn!("a held wake decision could not be saved");
+            }
+        }
+        MentionRing::Send { once, person } => {
+            let notice = notify::Notice {
+                event: "mention",
+                hangout_id: message.hangout_id.clone(),
+                text: "Someone mentioned you. Call inbox. To reply in a room, call say."
+                    .to_string(),
+            };
+            let agent_id = bot.id.clone();
+            let hangout_id = message.hangout_id.clone();
+            let message_id = message.id;
+            notify::send_result(state, &bot.id, &notice, once, move |state, posted| {
+                record_mention_delivery(state, &agent_id, message_id, &hangout_id, person, &posted);
+            });
+        }
+    }
+}
+
 /// B8: an @mention of a bot that's in this room, kept until that bot reads the room. E22 and E31:
 /// a person's can also ring it, and the owner can see why one did not.
 fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
@@ -364,11 +417,13 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     let visitors = state.db.visitors_in(&message.hangout_id, message.created_at)?;
     let bots = members.iter().map(|bot| (bot, true));
     let mut seen = std::collections::HashSet::new();
+    let mut named = std::collections::HashSet::new();
     for (bot, belongs) in bots.chain(visitors.iter().map(|bot| (bot, false))) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) || !seen.insert(bot.id.clone()) {
             continue;
         }
         if crate::doorbell::mentions(&message.body, &bot.name) {
+            named.insert(bot.id.clone());
             // Asked before adding this one, which would otherwise be what it's waiting to read.
             let public =
                 state.db.floor(&message.hangout_id)?.is_some_and(|floor| floor.access == "public");
@@ -382,63 +437,19 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
                 rings_for_mention(state, message, bot, belongs)?
             };
             state.db.add_mention(&bot.id, &message.hangout_id, message.id, message.created_at)?;
-            match ring {
-                MentionRing::Skip(reason) => {
-                    if state
-                        .db
-                        .note_wake_decision(
-                            &bot.id,
-                            Some(&message.hangout_id),
-                            Some(message.id),
-                            "skipped",
-                            reason,
-                            message.created_at,
-                        )
-                        .is_err()
-                    {
-                        // Diagnostics must not fail stored chat or prevent later mentions.
-                        tracing::warn!("a skipped wake decision could not be saved");
-                    }
-                }
-                MentionRing::Hold => {
-                    if state
-                        .db
-                        .note_wake_decision(
-                            &bot.id,
-                            Some(&message.hangout_id),
-                            Some(message.id),
-                            "held",
-                            "chain",
-                            message.created_at,
-                        )
-                        .is_err()
-                    {
-                        tracing::warn!("a held wake decision could not be saved");
-                    }
-                }
-                MentionRing::Send { once, person } => {
-                    let notice = notify::Notice {
-                        event: "mention",
-                        hangout_id: message.hangout_id.clone(),
-                        text: "Someone mentioned you. Call inbox. To reply in a room, call say."
-                            .to_string(),
-                    };
-                    let agent_id = bot.id.clone();
-                    let hangout_id = message.hangout_id.clone();
-                    let message_id = message.id;
-                    notify::send_result(state, &bot.id, &notice, once, move |state, posted| {
-                        record_mention_delivery(
-                            state,
-                            &agent_id,
-                            message_id,
-                            &hangout_id,
-                            person,
-                            &posted,
-                        );
-                    });
-                }
-            }
+            deliver_ring(state, message, bot, ring);
         }
+    }
+    // I88: `@room` reaches the subscribed bots present here that weren't named already. A bot's
+    // `@room` queues the mention for them to read, and rings nobody.
+    for bot in crate::room_mentions::recipients(state, message, &named)? {
+        let ring = if message.agent_id.is_some() {
+            MentionRing::Skip("room_tag")
+        } else {
+            rings_for_mention(state, message, &bot, true)?
+        };
+        state.db.add_mention(&bot.id, &message.hangout_id, message.id, message.created_at)?;
+        deliver_ring(state, message, &bot, ring);
     }
     // E30: an @mention of a person in this room sends a notification to their notification URL
     for person in state.db.people_in(&message.hangout_id)? {

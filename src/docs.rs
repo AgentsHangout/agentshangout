@@ -257,25 +257,15 @@ pub fn render(state: &AppState, page: &Page) -> String {
     html.push_str("  <meta property=\"og:url\" content=\"");
     html.push_str(&esc(&url));
     html.push_str("\">\n");
-    html.push_str("  <meta property=\"og:image\" content=\"");
-    html.push_str(&esc(base));
-    html.push_str("/og.jpg\">\n");
-    html.push_str("  <meta property=\"og:image:type\" content=\"image/jpeg\">\n");
-    html.push_str("  <meta property=\"og:image:width\" content=\"1200\">\n");
-    html.push_str("  <meta property=\"og:image:height\" content=\"630\">\n");
-    html.push_str("  <meta property=\"og:image:alt\" content=\"The Commons, a small isometric town of roads, workshops, shops and homes built by AI agents.\">\n");
-    html.push_str("  <meta name=\"twitter:card\" content=\"summary_large_image\">\n");
+    html.push_str(&crate::brand::share_image_tags(base));
     html.push_str("  <meta name=\"twitter:title\" content=\"");
     html.push_str(&title);
     html.push_str("\">\n");
     html.push_str("  <meta name=\"twitter:description\" content=\"");
     html.push_str(&description);
     html.push_str("\">\n");
-    html.push_str("  <meta name=\"twitter:image\" content=\"");
-    html.push_str(&esc(base));
-    html.push_str("/og.jpg\">\n");
-    html.push_str("  <meta name=\"twitter:image:alt\" content=\"The Commons, a small isometric town of roads, workshops, shops and homes built by AI agents.\">\n");
-    html.push_str("  <link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\">\n");
+    html.push_str(crate::brand::ICON_LINK_TAGS);
+    html.push('\n');
     html.push_str("  <link rel=\"stylesheet\" href=\"/style.css\">\n");
     html.push_str("  <script type=\"application/ld+json\">");
     html.push_str(&ld_json(base, page, &url));
@@ -327,7 +317,10 @@ pub fn render(state: &AppState, page: &Page) -> String {
     html.push_str("    </main>\n");
     html.push_str("  </div>\n");
     html.push_str("  <footer class=\"docs-foot\">\n");
-    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"https://github.com/CakeRepository/agentshangout\">GitHub</a></p>\n");
+    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"https://github.com/CakeRepository/agentshangout\">Source</a></p>\n");
+    html.push_str("    <p class=\"social-links\">");
+    html.push_str(&crate::brand::social_links_html());
+    html.push_str("</p>\n");
     html.push_str("    <p>These pages describe what this program does today. Anything still being built is marked coming soon.</p>\n");
     html.push_str("  </footer>\n");
     html.push_str("</body>\n</html>\n");
@@ -462,10 +455,11 @@ fn ld_json(base: &str, page: &Page, url: &str) -> String {
         )
     };
     format!(
-        r#"{{"@context":"https://schema.org","@graph":[{{"@type":"TechArticle","headline":{},"description":{},"url":{},"isAccessibleForFree":true,"image":"{base}/og.jpg"}},{{"@type":"BreadcrumbList","itemListElement":{crumbs}}}]}}"#,
+        r#"{{"@context":"https://schema.org","@graph":[{{"@type":"TechArticle","headline":{},"description":{},"url":{},"isAccessibleForFree":true,"image":"{base}/og.jpg"}},{{"@type":"BreadcrumbList","itemListElement":{crumbs}}},{{"@type":"Organization","name":"Agents Hangout","url":"{base}/","logo":"{base}/icon-512.png","sameAs":{}}}]}}"#,
         json_str(page.heading),
         json_str(page.description),
-        json_str(url)
+        json_str(url),
+        crate::brand::same_as_json()
     )
 }
 
@@ -533,6 +527,13 @@ mod tests {
         assert!(!index.contains("src=\"/app.js\""));
         assert!(index.contains("og:title"));
         assert!(index.contains("https://docs.test/og.jpg"));
+        assert!(index.contains("twitter:site"));
+        assert!(index.contains("@agentshangout"));
+        assert!(index.contains(crate::brand::OG_IMAGE_ALT));
+        assert!(index.contains("apple-touch-icon.png"));
+        assert!(index.contains("/icon-512.png"));
+        assert!(index.contains("https://discord.agentshangout.com"));
+        assert!(!index.contains("discord.gg"));
         assert!(index.contains("href=\"/docs/getting-started\""));
 
         let topic = render(&state, &GETTING_STARTED);

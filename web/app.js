@@ -592,10 +592,11 @@ function passkeysCard(me, status, first) {
 // (the way in, your account, your rooms and cities, the form that starts a hangout) are panels that
 // open over the map. This builds those sections. It is asked for the first time one of them opens.
 async function homeParts(me) {
-  const [status, passkeyList, spaces, publicFloors, server] = await Promise.all([
+  const [status, passkeyList, spaces, credits, publicFloors, server] = await Promise.all([
     passkeyStatus(),
     me?.passkeys ? api('/api/passkeys').then((data) => data.passkeys).catch(() => null) : [],
     me ? api('/api/spaces').catch(() => null) : null,
+    me ? api('/api/credits').catch(() => null) : null,
     me ? api('/api/spaces/public').then((data) => data.floors).catch(() => []) : [],
     // If this can't be read, the page says what a server with a code would.
     api('/api/server').catch(() => ({ asks_for_code: true })),
@@ -805,7 +806,7 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, playersCard(), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), playersCard(),passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
@@ -1286,6 +1287,24 @@ function standingFacts(standing) {
     ['Vouched for by', standing.vouches.length ? nameList.format(standing.vouches) : 'Nobody yet'],
   ];
   return h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value))));
+}
+
+// HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown.
+function creditsCard(credits) {
+  const waiting = credits.cities_not_earning.length;
+  const rows = [
+    ['Balance', count(credits.balance, 'credit', 'credits')],
+    ['Earned today', `${credits.earned_today} of ${credits.daily_cap}`],
+    ['Gatherings', String(credits.gatherings)],
+    ['Good trips', String(credits.good_trips)],
+    ['Trips you let in', String(credits.hosted_trips)],
+  ];
+  return h('section', { class: 'card', 'aria-label': 'Your credits' },
+    h('h2', {}, 'Your credits'),
+    h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
+    waiting ? h('p', { class: 'muted' },
+      `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering or a vouch.`) : null,
+    h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. Only you and your bots can see this, and credits can\'t be spent, sent or cashed out yet.'));
 }
 
 // What a house asks, as a list. With the asker's standing each line also says where they are.
@@ -6522,7 +6541,14 @@ function needsYouPanel(panels) {
     return item(
       h('p', {}, h('strong', {}, wait.bot.name), ` is waiting for you somewhere else, since ${agoText(wait.since)}`),
       h('p', {}, wait.about),
-      h('p', { class: 'muted' }, 'Answer it where it is, such as on your computer. It clears when the bot carries on.'),
+      h('p', { class: 'muted' }, 'If it\'s a prompt on your computer, answer it there. Otherwise reply here, and your bot gets it in its inbox.'),
+      // N15: an answer in words reaches the bot like any other.
+      h('form', { class: 'chat-form', onsubmit: submitter(error, async ({ answer }) => {
+        await api(`/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}/answer`, { method: 'POST', body: { answer } });
+        await refresh(true);
+      }) },
+        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Reply', autocomplete: 'off', 'aria-label': `Reply to ${wait.bot.name}` }),
+        h('button', { type: 'submit' }, 'Send')),
       h('div', { class: 'event-actions' },
         h('button', { type: 'button', onclick: act(error, done(() => api(`/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}`, { method: 'DELETE' }))) }, 'Dismiss')),
       error);
