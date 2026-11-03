@@ -121,7 +121,7 @@ async fn tool_calls_are_counted_by_name_and_outcome() {
     // The days and the version are there too (U10).
     let today = report["by_day"].as_array().unwrap().last().unwrap().clone();
     assert!(today["calls"].as_i64().unwrap() >= 4);
-    assert_eq!(report["by_version"][0]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["by_version"][0]["version"], agenthangout::usage::build());
 }
 
 // U1, U2, U3
@@ -291,4 +291,85 @@ async fn counts_older_than_thirty_days_are_deleted() {
     // A bot's totals go with the bot.
     f.state.db.delete_agent("a").unwrap();
     assert!(f.state.db.usage_bot_days("a", 0).unwrap().is_empty());
+}
+
+// U5
+#[tokio::test]
+async fn an_idle_server_lets_go_of_the_day_when_it_ends() {
+    let f = Fixture::new().await;
+    let yesterday = now() - DAY;
+    f.state.usage.record(
+        yesterday,
+        "rest",
+        "/api/me",
+        agenthangout::usage::Who::Person("alice"),
+        StatusCode::OK,
+        Some(1),
+    );
+    f.state.usage.record(
+        yesterday,
+        "rest",
+        "/api/me",
+        agenthangout::usage::Who::Person("bob"),
+        StatusCode::OK,
+        Some(1),
+    );
+    f.state.usage.record(
+        yesterday,
+        "rest",
+        "/api/me",
+        agenthangout::usage::Who::Bot("a"),
+        StatusCode::OK,
+        Some(1),
+    );
+    assert_eq!(f.state.usage.held(), (2, 1));
+    // No request comes in. The minute timer rolls the day.
+    f.state.usage.roll(now());
+    assert_eq!(f.state.usage.held(), (0, 0));
+    f.state.usage.flush(&f.state);
+    let stored = f.state.db.usage_days(0).unwrap();
+    assert_eq!(stored, vec![(yesterday.div_euclid(DAY), 2, 1)]);
+}
+
+// U1, U2
+#[tokio::test]
+async fn requests_refused_before_a_tool_is_named_are_counted() {
+    let f = Fixture::new().await;
+    let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inbox","arguments":{}}});
+    // Credentials nobody has.
+    assert_eq!(
+        f.call("ah_bot_nobody", Method::POST, "/mcp", body.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // An owner key where a bot token goes.
+    assert_eq!(f.call("alice", Method::POST, "/mcp", body.clone()).await.0, StatusCode::FORBIDDEN);
+    // Another site's page.
+    let refused = f
+        .client
+        .post(format!("{}/mcp", f.base))
+        .bearer_auth("a")
+        .header("origin", "http://elsewhere.example")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let (_, report) = f.get("alice", "/api/usage").await;
+    let rejected = row(&report, "by_tool", "name", "rejected_request");
+    assert_eq!((rejected["calls"].as_i64(), rejected["refused"].as_i64()), (Some(3), Some(3)));
+    assert!(!report.to_string().contains("elsewhere"));
+}
+
+// U1
+#[tokio::test]
+async fn public_world_tool_calls_are_counted() {
+    let f = Fixture::new().await;
+    let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"how_am_i_doing","arguments":{}}});
+    f.call("", Method::POST, "/public/mcp", body).await;
+    let (_, report) = f.get("alice", "/api/usage").await;
+    let public = row(&report, "by_tool", "name", "how_am_i_doing");
+    assert_eq!(
+        (public["surface"].as_str(), public["calls"].as_i64()),
+        (Some("public_mcp"), Some(1))
+    );
 }

@@ -157,7 +157,7 @@ fn house_tools() -> Value {
 
 /// U1: the names a tool call may be counted under.
 pub(crate) fn tool_names() -> Vec<String> {
-    [tools(), house_tools()]
+    [tools(), house_tools(), crate::public_mcp::tools()]
         .iter()
         .flat_map(|list| list.as_array().into_iter().flatten())
         .filter_map(|tool| tool["name"].as_str().map(str::to_string))
@@ -2457,7 +2457,7 @@ fn track(
         None => crate::usage::Who::Person(&caller.person_id),
     };
     let millis = timed.then(|| started.elapsed().as_millis() as u64);
-    state.usage.record_tool(now(), name, who, failure, millis);
+    state.usage.record_tool(now(), "mcp", name, who, failure, millis);
 }
 
 fn dispatch(
@@ -2539,6 +2539,12 @@ pub async fn handle(
     // The MCP spec requires this, so a web page can't reach the server through a visitor's browser.
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) {
         if origin != state.config.public_url {
+            state.usage.record_rejected(
+                now(),
+                "mcp",
+                crate::usage::Who::Nobody,
+                StatusCode::FORBIDDEN,
+            );
             return ApiError::forbidden("origin not allowed").into_response();
         }
     }
@@ -2549,8 +2555,18 @@ pub async fn handle(
     });
     let caller = match caller {
         Ok(caller) if caller.is_agent() => caller,
-        Ok(_) => return ApiError::forbidden("use a bot token, not an owner key").into_response(),
+        Ok(person) => {
+            let who = crate::usage::Who::Person(&person.person_id);
+            state.usage.record_rejected(now(), "mcp", who, StatusCode::FORBIDDEN);
+            return ApiError::forbidden("use a bot token, not an owner key").into_response();
+        }
         Err(error) => {
+            state.usage.record_rejected(
+                now(),
+                "mcp",
+                crate::usage::Who::Nobody,
+                StatusCode::UNAUTHORIZED,
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:bot mcp:events\"", state.config.public_url))],

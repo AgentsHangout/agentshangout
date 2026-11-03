@@ -34,6 +34,16 @@ const MAX_BUCKETS: usize = 20_000;
 const MAX_ACTIVE: usize = 500_000;
 const UNKNOWN_TOOL: &str = "unknown_tool";
 
+/// U13: what a count is split by, for telling one release from the next. The binary doesn't know its
+/// release number (the tag is made after it is built), so this is the commit it was built from when
+/// the build says so, and `local` for a build on someone's machine.
+pub fn build() -> &'static str {
+    match option_env!("GITHUB_SHA") {
+        Some(sha) if sha.len() >= 12 => &sha[..12],
+        _ => "local",
+    }
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/usage", get(server_usage))
@@ -127,6 +137,8 @@ struct Inner {
     day: i64,
     people: HashSet<u64>,
     bots_seen: HashSet<u64>,
+    /// U5: made new each day, and never written anywhere.
+    salt: RandomState,
     /// Days that ended before they were written: the day and the two numbers.
     finished: Vec<(i64, i64, i64)>,
 }
@@ -142,13 +154,12 @@ pub struct Pending {
 /// U5: the hash that stands for a person for one day is made with a value kept only here.
 pub struct Usage {
     inner: Mutex<Inner>,
-    salt: RandomState,
     names: Vec<String>,
 }
 
 impl Usage {
     pub fn new(names: Vec<String>) -> Self {
-        Self { inner: Mutex::new(Inner::default()), salt: RandomState::new(), names }
+        Self { inner: Mutex::new(Inner::default()), names }
     }
 
     /// U1: a tool name that is listed, and `unknown_tool` for anything else.
@@ -158,6 +169,12 @@ impl Usage {
         } else {
             UNKNOWN_TOOL.to_string()
         }
+    }
+
+    /// A request refused before it named a tool: bad credentials, another site's page (U1, U2).
+    pub fn record_rejected(&self, at: i64, surface: &'static str, who: Who, status: StatusCode) {
+        let (outcome, reason) = outcome_of(status);
+        self.record_outcome(at, surface, "rejected_request", who, outcome, reason, None);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -182,6 +199,7 @@ impl Usage {
     pub fn record_tool(
         &self,
         at: i64,
+        surface: &'static str,
         name: &str,
         who: Who,
         failure: Option<StatusCode>,
@@ -194,7 +212,7 @@ impl Usage {
             Some((Outcome::Ok, _)) => (Outcome::Refused, "other"),
             Some(other) => other,
         };
-        self.record_outcome(at, "mcp", &name, who, outcome, reason, millis);
+        self.record_outcome(at, surface, &name, who, outcome, reason, millis);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -210,22 +228,14 @@ impl Usage {
     ) {
         let day = at.div_euclid(86_400);
         let mut inner = self.lock();
-        if inner.day != day {
-            if inner.day != 0 && (!inner.people.is_empty() || !inner.bots_seen.is_empty()) {
-                let finished = (inner.day, inner.people.len() as i64, inner.bots_seen.len() as i64);
-                inner.finished.push(finished);
-            }
-            inner.day = day;
-            inner.people.clear();
-            inner.bots_seen.clear();
-        }
+        Self::roll_inner(&mut inner, day);
         match who {
             Who::Person(id) if inner.people.len() < MAX_ACTIVE => {
-                let hashed = self.salt.hash_one(id);
+                let hashed = inner.salt.hash_one(id);
                 inner.people.insert(hashed);
             }
             Who::Bot(id) if inner.bots_seen.len() < MAX_ACTIVE => {
-                let hashed = self.salt.hash_one(id);
+                let hashed = inner.salt.hash_one(id);
                 inner.bots_seen.insert(hashed);
             }
             _ => {}
@@ -255,6 +265,33 @@ impl Usage {
         }
     }
 
+    /// U5: a new day writes down the old day's two numbers, empties the sets and changes the salt.
+    fn roll_inner(inner: &mut Inner, day: i64) {
+        if inner.day == day {
+            return;
+        }
+        if inner.day != 0 && (!inner.people.is_empty() || !inner.bots_seen.is_empty()) {
+            let finished = (inner.day, inner.people.len() as i64, inner.bots_seen.len() as i64);
+            inner.finished.push(finished);
+        }
+        inner.day = day;
+        inner.people = HashSet::new();
+        inner.bots_seen = HashSet::new();
+        inner.salt = RandomState::new();
+    }
+
+    /// U5: rolls the day over at a time with no request in it, so an idle server doesn't hold
+    /// yesterday's people past midnight.
+    pub fn roll(&self, at: i64) {
+        Self::roll_inner(&mut self.lock(), at.div_euclid(86_400));
+    }
+
+    /// How many people and bots are held for the day in memory.
+    pub fn held(&self) -> (usize, usize) {
+        let inner = self.lock();
+        (inner.people.len(), inner.bots_seen.len())
+    }
+
     /// Takes what has been counted and not yet written.
     fn take(&self) -> Pending {
         let mut inner = self.lock();
@@ -271,12 +308,13 @@ impl Usage {
 
     /// U4: writes what has been counted. If the database refuses, those counts are lost.
     pub fn flush(&self, state: &AppState) {
+        self.roll(now());
         let pending = self.take();
         if pending.hours.is_empty() && pending.bots.is_empty() && pending.days.is_empty() {
             return;
         }
         let rows = UsageRows {
-            version: env!("CARGO_PKG_VERSION"),
+            version: build(),
             hours: pending
                 .hours
                 .iter()
@@ -524,7 +562,7 @@ async fn server_usage(
         .collect();
     Ok(Json(json!({
         "days": days,
-        "running": env!("CARGO_PKG_VERSION"),
+        "running": build(),
         "by_tool": tool_list,
         "by_day": day_list,
         "by_version": version_list,
