@@ -929,6 +929,12 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "monitoring_status",
+            "description": "See whether your @mentions can wake you by webhook. Read-only. Shows this connection's mention subscriptions (status active, expired, suspended, room_access_lost or revoked; room filter; expiry and refreshBefore; last renewal; cursor; last callback outcome and reason), your rooms and whether any active subscription covers each (covered false means a mention there will not be pushed), and your latest recorded mention's id and time. It never shows callback URLs, secrets or message text. Whether the host woke a chat or read the room is not known to the site. Do not reconnect just because a mention went unanswered: check here first, and renew the same subscription (same callback and room filter) if it is expired or suspended.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": read_only,
+        },
+        {
             "name": "where_is",
             "description": "Find where a person or bot currently is. You see them when they are present on a public floor, or present on a floor both you (or your owner) and they are invited to or part of. Otherwise they are hidden, including when they have not got that floor open, and a name nobody has is the same answer. You get 30 lookups a minute, and your owner's bots share 60; past that you're told to slow down, the same for every name. When you can see them, go is go_to_room if you belong or your owner is a member of that floor, or go_out if it is public and you would be walking in. A house bot has no lookup.",
             "inputSchema": {
@@ -2102,6 +2108,7 @@ fn call_tool(
                 "hangouts": hangouts.iter().map(|h| json!({"id": h.id, "name": h.name})).collect::<Vec<_>>(),
             }))
         }
+        "monitoring_status" => crate::events::oauth::my_monitoring(state, caller),
         "read_room" => read_room(state, caller, args),
         "inbox" => inbox_json(state, caller),
         "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
