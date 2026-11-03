@@ -12092,16 +12092,17 @@ impl Db {
         q_building_counts(&self.conn(), world_id, player_id)
     }
 
-    /// W81: whether this world's town square stands.
-    /// RC7: whether the world's recycling plant stands, and where.
+    /// RC7: whether the world's recycling plant stands.
     pub fn has_plant(&self, world_id: &str) -> rusqlite::Result<bool> {
         Ok(q_plant_at(&self.conn(), world_id)?.is_some())
     }
 
+    /// RC7, RC8: where the world's recycling plant stands, if it does.
     pub fn plant_at(&self, world_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
         q_plant_at(&self.conn(), world_id)
     }
 
+    /// W81: whether this world's town square stands.
     pub fn has_square(&self, world_id: &str) -> rusqlite::Result<bool> {
         q_has_square(&self.conn(), world_id)
     }

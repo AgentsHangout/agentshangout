@@ -65,7 +65,7 @@ const K_LIBRARY = 17;
 const K_PLANT = 18;
 const KIND_NAME = ['', 'road', 'homes', 'shops', 'workshops', 'park', 'cleared', 'house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant'];
 const KIND_ID = Object.fromEntries(KIND_NAME.map((name, id) => [name, id]).slice(1));
-const KIND_LABEL = ['', 'Road', 'Homes', 'Shops', 'Workshops', 'Park', 'Cleared land', 'House', 'Cafe', 'Club', 'Studio', 'Town square', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library'];
+const KIND_LABEL = ['', 'Road', 'Homes', 'Shops', 'Workshops', 'Park', 'Cleared land', 'House', 'Cafe', 'Club', 'Studio', 'Town square', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library', 'Recycling plant'];
 // W91: places that take 2 by 2 tiles, drawn a piece a tile.
 const isBig = (k) => k === K_SQUARE || k === K_GREEN;
 const isZone = (k) => k >= K_HOMES && k <= K_WORKS;
