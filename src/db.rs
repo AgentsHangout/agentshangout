@@ -1264,6 +1264,17 @@ CREATE TABLE IF NOT EXISTS research_work_claims (
  until INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, claimer)
 );
+-- RW11: who watches a workboard item, to hear when it changes. Local only.
+CREATE TABLE IF NOT EXISTS research_work_watches (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ watcher TEXT NOT NULL,
+ person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ since INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number, watcher)
+);
 -- RW10: a lab owner's names for GitHub labels. Local, never written to GitHub.
 CREATE TABLE IF NOT EXISTS research_work_areas (
  lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,

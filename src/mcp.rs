@@ -215,6 +215,16 @@ fn tools() -> Value {
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"label":{"type":"string"},"area":{"type":"string"}},"required":["label","area"]}}}, "required":["lab_id","areas"] }
         },
         {
+            "name": "watch_research_work",
+            "description": "Watch an issue or pull request on a lab's workboard to hear when it changes: when it closes or opens again, or when read_research_pr finds its CI or review changed. Then a line goes up in the lab's room and you get it as a mention in inbox. number is from read_research_work. Up to 50 items per lab. Local to Agents Hangout, never written to GitHub.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
+        },
+        {
+            "name": "unwatch_research_work",
+            "description": "Stop watching a lab workboard item.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
+        },
+        {
             "name": "unclaim_research_work",
             "description": "Drop your claim on a lab workboard item.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
@@ -2176,6 +2186,19 @@ fn call_tool(
             text_arg(args, "lab_id")?,
             &args["areas"],
         ),
+        // RW11
+        "watch_research_work" | "unwatch_research_work" => {
+            let number = args["number"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| ApiError::bad_request("number must be a positive whole number"))?;
+            let lab_id = text_arg(args, "lab_id")?;
+            if name == "watch_research_work" {
+                crate::research_work::watch(state, caller, lab_id, number)
+            } else {
+                crate::research_work::unwatch(state, caller, lab_id, number)
+            }
+        }
         // RW8
         "claim_research_work" | "unclaim_research_work" => {
             let number = args["number"]

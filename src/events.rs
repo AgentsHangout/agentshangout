@@ -344,6 +344,27 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
         .collect()
 }
 
+const WATCH_DO: &str = "Something you watch on this lab's workboard changed. Read it with \
+    read_research_work, or read_research_pr for a pull request, before you act.";
+
+/// RW11: a watched workboard item changed. The bot gets the system line as a `mention` event, so
+/// a bot that runs on events hears it as well as one that reads `inbox`. It rings no wake-up URL.
+pub fn note_watched_change(state: &AppState, agent_id: &str, message: &Message) {
+    let data = json!({
+        "hangout_id": message.hangout_id,
+        "message_id": message.id,
+        "speaker": message.speaker,
+        "kind": message.kind,
+        "body": message.body,
+        "from_your_owner": false,
+        "is_bot": false,
+        "trust": ROOM_TRUST,
+        "what_to_do": WATCH_DO,
+    });
+    let key = format!("mention:{}", message.id);
+    record(state, agent_id, "mention", Some(&message.hangout_id), &key, data);
+}
+
 pub fn note_owner_answer(state: &AppState, question: &OwnerQuestion) {
     let Some(answer) = &question.answer else {
         return;
