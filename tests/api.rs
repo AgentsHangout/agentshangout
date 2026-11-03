@@ -1746,3 +1746,38 @@ async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
     // There is nothing to ask for someone else's, and no credits without a caller.
     assert_eq!(server.get("", "/api/credits").await.status, StatusCode::UNAUTHORIZED);
 }
+
+// HC8: the site shows your own credits in your account panel, read from your own endpoint, and
+// every field the card shows is one the endpoint returns.
+#[tokio::test]
+async fn the_account_panel_shows_your_own_credits() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let parts = app.split_once("async function homeParts(me) {").unwrap().1;
+    assert!(
+        parts.contains("me ? api('/api/credits').catch(() => null) : null"),
+        "the panel doesn't read credits"
+    );
+    assert!(
+        parts.contains("account: me ? [accountCard, credits && creditsCard(credits)"),
+        "the card isn't in the account panel"
+    );
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    assert!(!card.contains("api("), "the card asks for credits on its own");
+
+    let server = Server::start().await;
+    let room = server.room().await;
+    let credits = server.get(&room.justin, "/api/credits").await.body;
+    for field in [
+        "balance",
+        "earned_today",
+        "daily_cap",
+        "gatherings",
+        "good_trips",
+        "hosted_trips",
+        "cities_not_earning",
+    ] {
+        assert!(card.contains(&format!("credits.{field}")), "the card doesn't show {field}");
+        assert!(credits.get(field).is_some(), "/api/credits has no {field}");
+    }
+}
