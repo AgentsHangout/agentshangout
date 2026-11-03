@@ -543,6 +543,17 @@ fn record_mention_delivery(
 /// E22, E24, E25, E31: who this mention rings, and why it doesn't. `belongs` is whether the bot
 /// belongs in this room. Bot rings are recorded here so a chain hold can count them. A non-owner
 /// person's ring is not: it counts only once the receiver accepts it.
+/// RP3: whether a ring to this bot from its owner, in this room, would be held now, as E22 holds an
+/// owner's mention: an earlier ring there in the last three minutes it hasn't read yet.
+pub(crate) fn owner_ring_held(
+    state: &AppState,
+    agent_id: &str,
+    room: &str,
+    at: i64,
+) -> ApiResult<bool> {
+    Ok(state.db.wake_ring_unread(agent_id, room, at - MENTION_RING_SECS)?)
+}
+
 fn rings_for_mention(
     state: &AppState,
     message: &Message,

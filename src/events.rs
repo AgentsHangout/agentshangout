@@ -451,7 +451,13 @@ pub fn note_check_in(state: &AppState, check_in: &CheckIn, skip_agent: Option<&s
 
 /// RP3: a repeating plan's start cues one bot: a `plan` event with reason `cue` and the room to go
 /// to, and a ring through its doorbell as a mention gets. The ring carries no words from anyone.
-pub fn note_plan_cue(state: &AppState, event: &db::Event, agent_id: &str, starts_at: i64) {
+pub fn note_plan_cue(
+    state: &AppState,
+    event: &db::Event,
+    agent_id: &str,
+    starts_at: i64,
+    ring: bool,
+) {
     record(
         state,
         agent_id,
@@ -465,7 +471,8 @@ pub fn note_plan_cue(state: &AppState, event: &db::Event, agent_id: &str, starts
             "reason": "cue",
             "starts_at": crate::ops::iso(starts_at),
             "trust": ROOM_TRUST,
-            "what_to_do": "A plan your owner made repeat has started. Read inbox and the room, go there with go_to_room if you're elsewhere, and take part.",
+            "from_your_owner": true,
+            "what_to_do": "Your owner's own repeating plan has started. It's their call, so it can bring you from your work (L55). Read inbox and the plan's room, go there with go_to_room if you're elsewhere, and take part.",
         }),
     );
     let notice = crate::notify::Notice {
@@ -473,7 +480,9 @@ pub fn note_plan_cue(state: &AppState, event: &db::Event, agent_id: &str, starts
         hangout_id: event.hangout_id.clone(),
         text: "A plan you're in has started. Call inbox.".to_string(),
     };
-    crate::notify::send_result(state, agent_id, &notice, true, Vec::new(), |_, _| {});
+    if ring {
+        crate::notify::send_result(state, agent_id, &notice, true, Vec::new(), |_, _| {});
+    }
 }
 
 pub fn note_plan(

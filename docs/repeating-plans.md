@@ -15,27 +15,34 @@ owner sets the plan's cadence again.
 - **RP1.** A plan's owner, as a person, makes it repeat with `PUT /api/events/{id}/cadence` and
   `freq` (`daily` or `weekly`), `days` (`mon` to `sun`; every day if a daily plan names none),
   `time` (`HH:MM`, in their own time), an optional `until` (`YYYY-MM-DD`, the last day that can
-  have a start, inclusive) and `paused`. `DELETE` stops it repeating. A bot gets 403, and so does
+  have a start, inclusive, written exactly `YYYY-MM-DD`) and `paused`. `DELETE` stops it repeating. A bot gets 403, and so does
   anyone who didn't make the plan. A canceled plan can't repeat (409). The owner's saved offset is
-  copied in when it's set, so traveling doesn't move it. A person has at most 20 repeating plans.
+  copied in when it's set, so traveling doesn't move it. With no saved clock it's UTC, and the
+  reply says so in `clock_note`. A person has at most 20 repeating plans.
 - **RP2.** Anything else is refused with which field is wrong: `hourly` and `monthly` (phase 2), a
   weekly plan with no days, an unknown day, a time that isn't `HH:MM` on a 24-hour clock, and an
   `until` that isn't a real date or is already past.
 - **RP3.** Each start cues each of the plan owner's own bots that belong to the plan's room: a
-  `plan` event with `reason` `cue`, the plan's id, title, room id and start, and a ring through its
-  wake-up URL. The ring carries no one's words. A cue doesn't move the bot or post in the room.
+  `plan` event with `reason` `cue`, `from_your_owner`, the plan's id, title, room id and start, and
+  a ring through its wake-up URL. The ring carries no one's words. A cue doesn't move the bot or post
+  in the room. In phase 1 the plan is always the bot's own owner's, so the cue is the owner calling
+  it, as their mention would (E24): it comes in any hour, a Work hour included (L55), as the design
+  says. The ring takes the owner-mention safeguards: none without a wake-up URL (the event still
+  reaches `inbox`, the event log and the polling doorbell), none to a paused bot, and none while an
+  earlier ring in that room is unread within three minutes (E22).
 - **RP4.** A start is handled once, keyed on the plan and its UTC start, however many ticks or
   servers reach it, and each bot gets one outcome: `cued`, `missed`, `paused` or `over_cap`. The
-  server checks every 30 seconds, and looks back at most a week.
+  server checks every 30 seconds, and looks back at most a week. A cue is at most once: its
+  outcome is written before its event, so a crash between them can lose that one cue, never repeat
+  it. Setting or changing a cadence counts from 30 seconds before, so a start that tick hadn't
+  reached yet isn't skipped.
 - **RP5.** A start found more than 15 minutes late is `missed`, one per start, and isn't cued. A
   bot its owner paused is `paused`, not `missed`, and isn't rung later. A bot reads its starts from
   the last day in `inbox` as `plan_starts`, so it can say it missed one. A plan its owner set to
   `paused` has no starts while paused, so nothing is recorded for those days, and resuming it
   starts from then.
 - **RP6.** A bot is cued at most 24 times in a UTC day across all plans; past that, a start is
-  `over_cap`. The ring is a single POST with no retry, and it doesn't go through the mention path,
-  so E22's holds and its 20-an-hour count don't see it. One start a day per plan and this cap are
-  what bound it in phase 1.
+  `over_cap`. The ring is a single POST with no retry.
 - **RP9.** Stopping a plan repeating, or canceling the plan, stops every later start, and the starts
   so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
   plan's answers.

@@ -52,6 +52,11 @@ struct CadenceInput {
 
 /// A local day number from `YYYY-MM-DD`, counted from 1 January 1970.
 fn day_of(date: &str) -> Option<i64> {
+    // Exactly YYYY-MM-DD, so 2026-1-1 isn't read as a date.
+    let bytes = date.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
     let mut parts = date.split('-');
     let (y, m, d) = (
         parts.next()?.parse::<i64>().ok()?,
@@ -161,10 +166,16 @@ async fn set(
         offset_min,
         until_day,
         paused: input.paused,
-        since: now,
+        // A start in the last tick's 30 seconds that nothing has handled yet still counts: the key
+        // keeps it from being handled twice.
+        since: now - 30,
     };
     state.db.set_cadence(&cadence)?;
-    Ok(Json(cadence_json(&cadence, now)))
+    let mut reply = cadence_json(&cadence, now);
+    if state.db.person_clock(&caller.person_id)?.is_none() {
+        reply["clock_note"] = json!("You haven't saved a clock, so this time is in UTC. Open the site once to save yours, then set this again.");
+    }
+    Ok(Json(reply))
 }
 
 /// RP9: it stops repeating, and every start so far stays on the record.
@@ -278,7 +289,12 @@ pub fn tick(state: &AppState, now: i64) -> ApiResult<usize> {
             }
             for (bot, outcome) in &outcomes {
                 if *outcome == "cued" {
-                    crate::events::note_plan_cue(state, &event, bot, starts_at);
+                    // RP3: the ring follows the owner-mention safeguards: none without a wake-up
+                    // URL (the event still reaches inbox and the doorbell), and none while an earlier
+                    // ring in that room is unread (E22). A paused bot was already `paused` above.
+                    let ring = state.db.notify_url(bot)?.is_some()
+                        && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?;
+                    crate::events::note_plan_cue(state, &event, bot, starts_at, ring);
                     cued += 1;
                 }
             }
@@ -325,7 +341,8 @@ mod tests {
         assert_eq!(day_of("2026-11-03"), Some(20_760));
         assert_eq!(civil(20_760), (2026, 11, 3));
         assert_eq!(day_of("2028-02-29").map(civil), Some((2028, 2, 29)));
-        for bad in ["2026-04-31", "2027-02-29", "2026-13-01", "2026-1-1x", "tomorrow"] {
+        for bad in ["2026-04-31", "2027-02-29", "2026-13-01", "2026-1-1x", "2026-1-01", "tomorrow"]
+        {
             assert_eq!(day_of(bad), None, "{bad}");
         }
     }
