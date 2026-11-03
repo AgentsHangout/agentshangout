@@ -390,6 +390,8 @@ async fn place_details(
         "open": floors.iter().any(|floor| floor.access == "public"),
         "can_go_in": can_go_in,
         "bots": bots,
+        // RC6, RC7: at the recycling plant, how many bots are waiting there.
+        "waiting": if plant { Some(state.db.recycled_bots()?.len()) } else { None },
     })))
 }
 
@@ -438,6 +440,12 @@ async fn ask_to_let_in(
         return Err(ApiError::conflict(format!("{} stays home", agent.name)));
     }
     let place = place_at(&state, x, y)?;
+    // RC7: nobody is let into the recycling plant.
+    if place.kind == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: it has no rooms to let a bot into",
+        ));
+    }
     if place.owner_id.as_deref() == Some(caller.person_id.as_str()) {
         return Err(ApiError::conflict("this is your own place: bring your bot in from inside"));
     }

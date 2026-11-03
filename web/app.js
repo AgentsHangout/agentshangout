@@ -8790,9 +8790,19 @@ async function worldView(id, { home = false } = {}) {
     ];
     // W102: the card says what a click does, the same line for everyone. Any building action,
     // building outside included, is in the one menu that opens.
-    lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    // RC7: the recycling plant has no rooms, so its card says how many wait at it, not who's inside.
+    const plant = place.kind === 'recycling plant';
+    if (plant) {
+      const waiting = details?.waiting;
+      lines.push(h('small', { class: 'city-card-hint' }, Number.isFinite(waiting)
+        ? `${waiting} ${waiting === 1 ? 'bot' : 'bots'} waiting. Nobody goes inside.`
+        : 'Where bots wait before they’re deleted. Nobody goes inside.'));
+      lines.push(h('small', { class: 'city-card-hint' }, `${matchMedia('(pointer: coarse)').matches ? 'Tap' : 'Click'} to see who’s waiting`));
+    } else {
+      lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    }
     // L44: who's inside, by name and whose, as the map already shows them going in.
-    const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
+    const inside = plant ? [] : (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
     if (inside.length) {
       lines.push(h('small', { class: 'city-card-hint' }, `Inside: ${inside.map((row) => (row[7] ? `${row[0]} (${row[7]}\u2019s)` : row[0])).join(', ')}`));
     }
@@ -8801,7 +8811,7 @@ async function worldView(id, { home = false } = {}) {
       lines.push(h('span', { class: allowed ? 'city-card-bot allowed' : 'city-card-bot' },
         h('b', {}, bot.name), ` ${ACCESS_TEXT[bot.access] || ''}`));
     }
-    if (!lab && place.kind !== 'recycling plant' && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
+    if (!lab && !plant && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
     placeCard.replaceChildren(...lines.filter(Boolean));
     placeCard.hidden = false;
     placeCardAt();
