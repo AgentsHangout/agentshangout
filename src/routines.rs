@@ -137,7 +137,13 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             } else {
                 "offline"
             }
-        } else if active.is_some() || doing == "thinking" || !claims.is_empty() {
+        // Most bots never report an activity, so doing anything in the last ten minutes, as the
+        // busy rule (L31) counts it, is working too.
+        } else if active.is_some()
+            || doing == "thinking"
+            || !claims.is_empty()
+            || agent.last_active_at.is_some_and(|at| now - at < BUSY_SECS)
+        {
             "working"
         } else {
             "idle"
@@ -148,6 +154,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "claims": claims,
             "job": routine.workplace.as_ref().map(|workplace| workplace["job"].clone()),
             "last_seen_at": agent.last_seen_at,
+            "last_active_at": agent.last_active_at,
         });
         bots.push(json!({
             "id": agent.id,

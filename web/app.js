@@ -7872,7 +7872,11 @@ async function worldView(id, { home = false } = {}) {
       return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
     }
     if (status.state === 'working') {
-      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null]
+      // Without a reported activity or a claim, say when it last did something, and where it last spoke.
+      const recent = !status.activity && !claims.length && status.last_active_at
+        ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
+        : null;
+      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
         .filter(Boolean).join(' \u00b7 ');
       return `Working${what ? `: ${what}` : ''}`;
     }
