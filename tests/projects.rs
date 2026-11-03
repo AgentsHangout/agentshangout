@@ -1721,3 +1721,84 @@ async fn a_bot_moves_its_projects_table_and_lays_rugs() {
     let off = json!({ "project_id": project, "table": { "x": 30, "y": 0 } });
     server.refused(&town.fern, "furnish_room", off).await;
 }
+
+// I91
+#[tokio::test]
+async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let (project, _) = garden_robot(&server, &town).await;
+    server
+        .tool(&town.fern, "furnish_room", json!({ "project_id": project, "template": "workshop" }))
+        .await;
+    for n in 1..=20 {
+        let line = format!("Message number {n}, with a few words so it has some weight to it.");
+        server.tool(&town.fern, "say", json!({ "hangout_id": project, "text": line })).await;
+    }
+    let read = |extra: Value| {
+        let mut args = json!({ "hangout_id": project });
+        for (key, value) in extra.as_object().unwrap() {
+            args[key] = value.clone();
+        }
+        server.tool(&town.fern, "read_room", args)
+    };
+    let ids = |reply: &Value| -> Vec<i64> {
+        reply["messages"].as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect()
+    };
+    let size = |reply: &Value| reply.to_string().len();
+
+    let full = read(json!({})).await;
+    let all = ids(&full);
+    let total = all.len();
+    assert!(total >= 20);
+    assert!(full.get("earlier_messages").is_none());
+
+    // The last five, with the rest counted. Without limit nothing changes.
+    let last = read(json!({ "limit": 5 })).await;
+    assert_eq!(ids(&last), all[total - 5..]);
+    assert_eq!(last["earlier_messages"], total - 5);
+    assert_eq!(last["last_message_id"], full["last_message_id"]);
+    // limit counts after after_message_id, and a big limit leaves nothing out.
+    let after = read(json!({ "after_message_id": all[9], "limit": 3 })).await;
+    assert_eq!(ids(&after), all[total - 3..]);
+    assert_eq!(after["earlier_messages"], total - 10 - 3);
+    let roomy = read(json!({ "limit": 200 })).await;
+    assert_eq!(roomy["messages"], full["messages"]);
+    assert!(roomy.get("earlier_messages").is_none());
+    for bad in [json!(0), json!(201), json!(-1), json!("5"), json!(1.5)] {
+        let args = json!({ "hangout_id": project, "limit": bad });
+        let message = server.refused(&town.fern, "read_room", args).await;
+        assert!(message.contains("limit must be"), "{message}");
+    }
+
+    // brief keeps names and ids and drops descriptions.
+    let brief = read(json!({ "brief": true })).await;
+    assert_eq!(brief["messages"], full["messages"]);
+    let field = |reply: &Value, list: &str, key: &str| -> Vec<Value> {
+        reply[list].as_array().unwrap().iter().map(|one| one[key].clone()).collect()
+    };
+    assert_eq!(field(&brief, "bots", "name"), field(&full, "bots", "name"));
+    assert_eq!(field(&brief, "items", "id"), field(&full, "items", "id"));
+    assert!(!full["items"].as_array().unwrap().is_empty());
+    for item in brief["items"].as_array().unwrap() {
+        assert!(item["kind"].is_string() && item.get("does").is_none());
+        assert!(item.get("notes").is_none() && item.get("placed_by").is_none());
+    }
+    for bot in brief["bots"].as_array().unwrap() {
+        assert!(bot["state"].is_string() && bot.get("status").is_none());
+        assert!(bot.get("doing").is_none() && bot.get("last_seen").is_none());
+    }
+    assert_eq!(brief["whiteboard"], full["whiteboard"]);
+    assert_eq!(brief["boards"], full["boards"]);
+
+    let both = read(json!({ "limit": 5, "brief": true })).await;
+    eprintln!(
+        "read_room bytes: full {}, limit 5 {}, brief {}, both {}",
+        size(&full),
+        size(&last),
+        size(&brief),
+        size(&both)
+    );
+    assert!(size(&last) < size(&full) && size(&brief) < size(&full));
+    assert!(size(&both) < size(&last) && size(&both) < size(&brief));
+}
