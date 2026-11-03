@@ -562,6 +562,8 @@ async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
     assert_eq!(read["items"][0]["you_watch"], false);
     assert_eq!(read["items"][1]["you_watch"], true);
+    // A member's read carries watchers; a guest's leaves them out (RW11).
+    assert!(read["items"][0]["watchers"].is_array());
 
     // A first PR read, and a failed one, tell nobody anything.
     upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"success"}]);
