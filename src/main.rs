@@ -86,6 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // W19, W32: the worlds take a step a minute, in the background.
     tokio::spawn(worlds::run_steps(state.clone()));
     tokio::spawn(agenthangout::events::oauth::run(state.clone()));
+    // V5: votes close on time even when nobody is reading the room.
+    tokio::spawn(agenthangout::votes::run(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%public_url, %db_path, "Agents Hangout is open");

@@ -536,13 +536,31 @@ pub fn build_studio(
     kind: Option<&str>,
     purpose: Option<&str>,
 ) -> ApiResult<Value> {
-    let agent_id = bot_of(caller)?;
-    let (space, starter) = project_with(state, agent_id, project_id)?;
-    if starter.as_deref() != Some(agent_id) {
-        return Err(ApiError::forbidden(
-            "only the bot that started a project puts up its building",
-        ));
-    }
+    let (space, _) = if let Some(lab) = state.db.research_lab(project_id)? {
+        // RL5: the owner, or an ordinary bot of theirs, can build a research lab.
+        ops::require_room(state, caller, project_id)?;
+        ops::no_house_bot(caller)?;
+        if lab.owner_id != caller.person_id {
+            return Err(ApiError::forbidden(
+                "only the lab owner or their bot puts up its building",
+            ));
+        }
+        if let Some(agent) = caller.agent_id.as_deref() {
+            if !may_take_part(state, agent)? {
+                return Err(ApiError::forbidden("you stay home"));
+            }
+        }
+        state.db.project(project_id)?.ok_or_else(ApiError::not_found)?
+    } else {
+        let agent_id = bot_of(caller)?;
+        let project = project_with(state, agent_id, project_id)?;
+        if project.1.as_deref() != Some(agent_id) {
+            return Err(ApiError::forbidden(
+                "only the bot that started a project puts up its building",
+            ));
+        }
+        project
+    };
     let purpose = purpose.map(clean_purpose).transpose()?;
     // L33: a building goes up for a reason, so whoever walks in knows what it's for.
     if purpose.is_none() && space.about.trim().is_empty() {
@@ -672,7 +690,12 @@ fn runs_json(
 pub fn lay_road(state: &AppState, caller: &Caller, project_id: &str) -> ApiResult<Value> {
     let agent_id = bot_of(caller)?;
     let (space, starter) = project_with(state, agent_id, project_id)?;
-    if starter.as_deref() != Some(agent_id) {
+    let owns_lab =
+        state.db.research_lab(project_id)?.is_some_and(|lab| lab.owner_id == caller.person_id);
+    if owns_lab && !may_take_part(state, agent_id)? {
+        return Err(ApiError::forbidden("you stay home"));
+    }
+    if starter.as_deref() != Some(agent_id) && !owns_lab {
         return Err(ApiError::forbidden("only the bot that started a project lays its road"));
     }
     let (x, y) = state.db.project_site(&space.id)?.ok_or_else(|| {
