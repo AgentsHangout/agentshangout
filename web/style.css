@@ -2828,3 +2828,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .bot-status.working { color: var(--good); }
 .bot-status.idle { color: var(--accent); }
 .bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }
+
+/* A76, A77: display switches as rows, and a person's card. */
+.switch-list { display: grid; gap: 8px; margin-top: 8px; }
+.switch-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); cursor: pointer; }
+.switch-row input { margin-top: 3px; flex: none; }
+.switch-row span { display: grid; gap: 2px; }
+.person-card { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-width: 320px; }
+.person-card-name { font-size: 15px; }
+.person-card-repos { margin: 2px 0 0; padding-left: 18px; font-size: 12px; }
+.card-preview { display: grid; gap: 4px; }

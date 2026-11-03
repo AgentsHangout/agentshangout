@@ -446,6 +446,18 @@ merged-pull-request count. No tokens, no private repos, no emails.
   before and after fetching; repository owners must match that ID too. Reassigned or unsafe
   usernames fail closed. Each upstream JSON response is capped at two MiB.
 
+- **A76.** A person can show their linked Discord name on their card, with
+  `PUT /api/me/discord-display` and `{ "show": true }`. It starts off, needs a Discord link (409
+  without one), and only the person sets it: a bot gets 403. The choice is tied to the account it
+  was given for, so a different Discord account linked later shows nothing, and unlinking Discord
+  deletes the choice, so linking even the same account again shows nothing until they say so again.
+  `GET /api/me` says `discord_display`. This is the one exception to A56 for Discord: the name
+  they chose to show, never the account id.
+- **A77.** `GET /api/people/{id}/card`, for anyone signed in, is a person's card: their name, the
+  GitHub sections they turned on, exactly as the public view gives them (A70 to A75), and their
+  Discord name if they chose to show it (A76). Nothing else about them is on it. Settings shows the
+  switches as rows that say what each one shows, with a preview of the card as others see it.
+
 The display-switch browser regression can also be run with `node tests/github_display_ui.cjs`.
 
 ### Making an account with one

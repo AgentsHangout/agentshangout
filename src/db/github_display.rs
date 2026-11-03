@@ -27,6 +27,38 @@ impl Db {
         tx.commit()
     }
 
+    /// A76: shows or stops showing a person's linked Discord name. False, and nothing written, when
+    /// they have no Discord link to show.
+    pub fn set_discord_display(&self, person: &str, show: bool, at: i64) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        if !show {
+            conn.execute("DELETE FROM discord_display WHERE person_id = ?", [person])?;
+            return Ok(true);
+        }
+        let changed = conn.execute(
+            "INSERT INTO discord_display (person_id, account_id, updated_at)
+             SELECT person_id, account_id, ?2 FROM sign_in_links WHERE person_id = ?1 AND site = 'discord'
+             ON CONFLICT (person_id) DO UPDATE SET account_id = excluded.account_id,
+                 updated_at = excluded.updated_at",
+            params![person, at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// A76: the Discord name a person chose to show, while it's still the account they chose it for.
+    pub fn discord_shown_name(&self, person: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT l.account_name FROM discord_display d
+                 JOIN sign_in_links l ON l.person_id = d.person_id AND l.site = 'discord'
+                   AND l.account_id = d.account_id
+                 WHERE d.person_id = ?",
+                [person],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
     pub fn github_public_snapshot(&self, person: &str) -> rusqlite::Result<Value> {
         let conn = self.conn();
         let Some((id, login, display)) = context(&conn, person)? else {

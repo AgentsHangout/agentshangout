@@ -66,6 +66,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/credits/spend", post(spend_credits))
         .route("/api/credits/bots/{agent_id}", put(set_bot_spend_limit))
         .route("/api/me/github-display", put(set_github_display))
+        .route("/api/me/discord-display", put(set_discord_display))
+        .route("/api/people/{person_id}/card", get(person_card))
         .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
         .route("/api/session", post(sign_in).delete(sign_out))
@@ -547,6 +549,8 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         "sign_in": sign_in::for_person(&state, &caller.person_id)?,
         // A70: their own GitHub display switches, which nobody else is shown.
         "github_display": state.db.github_display_for(&caller.person_id)?.unwrap_or_default(),
+        // A76: whether they show their Discord name on their card.
+        "discord_display": state.db.discord_shown_name(&caller.person_id)?.is_some(),
         // A54: whether a site started this session, so the page doesn't offer what it can't do.
         "sign_in_session": state.db.is_sign_in_session(&caller.secret_hash)?,
         // Cities they're waiting at the gate of, with their count and nothing else about the city.
@@ -1515,6 +1519,42 @@ async fn set_github_display(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+struct DiscordDisplay {
+    show: bool,
+}
+
+/// A76: only the person, and only with a Discord link to show.
+async fn set_discord_display(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<DiscordDisplay>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "change Discord display")?;
+    if !state.db.set_discord_display(&caller.person_id, body.show, now())? {
+        return Err(ApiError::conflict("link Discord first"));
+    }
+    Ok(Json(json!({ "ok": true, "show": body.show })))
+}
+
+/// A77: a person's card, for anyone signed in: their name, the GitHub sections they turned on
+/// (A70 to A75) and their Discord name if they chose to show it (A76). Nothing else.
+async fn person_card(
+    State(state): State<AppState>,
+    _caller: Caller,
+    Path(person_id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let person = state.db.person(&person_id)?.ok_or_else(ApiError::not_found)?;
+    let github = github_snapshot(&state, &person_id).await?;
+    let discord = state.db.discord_shown_name(&person_id)?;
+    Ok(Json(json!({
+        "id": person_id,
+        "name": person.name,
+        "github": github,
+        "discord": discord.map(|name| json!({ "name": name })),
+    })))
+}
+
 /// A70 to A75: what anyone sees of one person's linked GitHub account: only the sections they
 /// turned on, read from the cache, never from the link rows (A74). Unauthenticated on purpose:
 /// it's what the person chose to show.
@@ -1522,6 +1562,12 @@ async fn show_github_display(
     State(state): State<AppState>,
     Path(person_id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    Ok(Json(github_snapshot(&state, &person_id).await?))
+}
+
+/// A72: refreshes the cache if it's due, then reads the current switches and cache (A74).
+async fn github_snapshot(state: &AppState, person_id: &str) -> ApiResult<Value> {
+    let person_id = person_id.to_string();
     if let Ok(_permit) = state.github_refresh_slots.clone().try_acquire_owned() {
         if let Some(claim) = state.db.claim_github_display_refresh(&person_id, now())? {
             let api_base = state
@@ -1546,7 +1592,7 @@ async fn show_github_display(
         }
     }
     // Re-read current identity and switches, never the state captured before network work.
-    Ok(Json(state.db.github_public_snapshot(&person_id)?))
+    Ok(state.db.github_public_snapshot(&person_id)?)
 }
 
 async fn house_notes(

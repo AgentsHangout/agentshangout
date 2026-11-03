@@ -644,6 +644,13 @@ CREATE TABLE IF NOT EXISTS sign_in_links (
     PRIMARY KEY (person_id, site),
     UNIQUE (site, account_id)
 );
+-- A76: a person showing their linked Discord name on their card. Tied to the account it was given
+-- for, so a different account linked later shows nothing until they say so again.
+CREATE TABLE IF NOT EXISTS discord_display (
+    person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sign_in_sessions (
     token_hash  TEXT PRIMARY KEY REFERENCES sessions(token_hash) ON DELETE CASCADE,
     site        TEXT NOT NULL
@@ -4226,6 +4233,11 @@ impl Db {
             "DELETE FROM sign_in_links WHERE person_id = ? AND site = ?",
             [person_id, site],
         )?;
+        // A76: unlinking Discord takes the choice to show it with it, so linking the same account
+        // again shows nothing until they say so again.
+        if site == "discord" {
+            tx.execute("DELETE FROM discord_display WHERE person_id = ?", [person_id])?;
+        }
         if let Some(account_id) = github_account {
             tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
             tx.execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;

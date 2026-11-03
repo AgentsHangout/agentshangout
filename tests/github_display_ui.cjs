@@ -39,7 +39,10 @@ const context = {
   confirm: () => false,
 };
 vm.createContext(context);
-vm.runInContext(`${extract('act')}\n${extract('signInCard')}\nthis.signInCard = signInCard;`, context);
+vm.runInContext(`${extract('act')}
+${extract('personCardView')}
+${extract('signInCard')}
+this.signInCard = signInCard; this.personCardView = personCardView;`, context);
 async function check() {
   context.signInCard({
     sign_in: [{ site: 'github', name: 'GitHub', linked: 'ann-codes' }],
@@ -81,6 +84,21 @@ async function check() {
   release();
   await unknown;
   assert.equal(box.indeterminate, true, 'unverifiable save must not show a definite off state');
+  // A77: the card shows only what came back, all of it as text.
+  const words = (tree) => JSON.stringify(tree);
+  const bare = context.personCardView({ name: 'Ann', github: { linked: false }, discord: null });
+  assert.ok(words(bare).includes('Ann') && words(bare).includes('Nothing else shown.'));
+  assert.ok(!words(bare).includes('GitHub') && !words(bare).includes('Discord'));
+  const full = context.personCardView({
+    name: 'Ann',
+    discord: { name: 'ann#1' },
+    github: { linked: true, login: 'ann-codes', stars: { total: 8 }, languages: [{ language: 'Rust', count: 1 }],
+      badge: { merged_prs: 7 }, repos: [{ name: '<b>alpha</b>', stargazers_count: 5 }] },
+  });
+  for (const shown of ['Discord: ann#1', 'ann-codes', '8 stars received', 'Top languages: Rust', '7 pull requests merged']) {
+    assert.ok(words(full).includes(shown), shown);
+  }
+  assert.ok(words(full).includes('"<b>alpha</b>"'), 'a repo name is a text child, never markup');
   console.log('Toggle UI: pending disabled; failed off restored; success persisted; later failed on restored.');
 }
 check().catch(error => { console.error(error); process.exitCode = 1; });

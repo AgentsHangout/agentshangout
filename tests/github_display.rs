@@ -939,3 +939,69 @@ async fn account_identity_changed_during_fetch_is_not_cached() {
     gate.add_permits(1);
     assert!(pending.await.unwrap().get("repos").is_none());
 }
+
+// A76, A77: a person's card shows their name, only the GitHub sections they turned on, and their
+// Discord name only once they choose to, and only for the account they chose it for.
+#[tokio::test]
+async fn a_person_card_shows_only_what_they_chose() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    let card_path = format!("/api/people/{}/card", ann.id);
+
+    // Nothing linked: a name and nothing else, and only to someone signed in.
+    server.get("", &card_path).await.refused(StatusCode::UNAUTHORIZED);
+    let card = server.get(&bo.key, &card_path).await.ok();
+    assert_eq!(card["name"], "Ann", "{card}");
+    assert_eq!(card["github"], json!({"linked": false}));
+    assert!(card["discord"].is_null());
+    server.get(&bo.key, "/api/people/nobody/card").await.refused(StatusCode::NOT_FOUND);
+
+    // Discord linked but not shown: still nothing. Showing needs a link, and only Ann can.
+    server
+        .put(&ann.key, "/api/me/discord-display", json!({ "show": true }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(server.state.db.set_sign_in_link(&ann.id, "discord", "d-1", "ann#1", now()).unwrap());
+    assert!(server.get(&bo.key, &card_path).await.ok()["discord"].is_null());
+    let (_, token) = server.bot(&ann, &room, "Scout").await;
+    server
+        .put(&token, "/api/me/discord-display", json!({ "show": true }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server.put(&ann.key, "/api/me/discord-display", json!({ "show": true })).await.ok();
+    assert_eq!(server.get(&ann.key, "/api/me").await.ok()["discord_display"], true);
+    let card = server.get(&bo.key, &card_path).await.ok();
+    assert_eq!(card["discord"]["name"], "ann#1", "{card}");
+    assert!(!card.to_string().contains("d-1"), "never the account id: {card}");
+
+    // GitHub sections show as the public view does.
+    server.link_github(&ann.id, "1001", "ann-codes");
+    server.set_display(
+        &ann.id,
+        &GitHubDisplay {
+            show_repos: true,
+            show_stars: false,
+            show_languages: true,
+            show_badge: false,
+        },
+    );
+    server.seed_cache(&fresh_cache(now()));
+    let card = server.get(&bo.key, &card_path).await.ok();
+    assert_eq!(card["github"]["login"], "ann-codes");
+    assert_eq!(card["github"]["repos"][0]["name"], "alpha");
+    assert!(card["github"]["stars"].is_null(), "{card}");
+
+    // Linking a different Discord account doesn't carry the choice over; turning it off hides it.
+    server.state.db.remove_sign_in_link(&ann.id, "discord").unwrap();
+    // Even the same account linked again shows nothing until she says so again.
+    assert!(server.state.db.set_sign_in_link(&ann.id, "discord", "d-1", "ann#1", now()).unwrap());
+    assert!(server.get(&bo.key, &card_path).await.ok()["discord"].is_null());
+    server.state.db.remove_sign_in_link(&ann.id, "discord").unwrap();
+    assert!(server.state.db.set_sign_in_link(&ann.id, "discord", "d-2", "ann#2", now()).unwrap());
+    assert!(server.get(&bo.key, &card_path).await.ok()["discord"].is_null());
+    server.put(&ann.key, "/api/me/discord-display", json!({ "show": true })).await.ok();
+    assert_eq!(server.get(&bo.key, &card_path).await.ok()["discord"]["name"], "ann#2");
+    server.put(&ann.key, "/api/me/discord-display", json!({ "show": false })).await.ok();
+    assert!(server.get(&bo.key, &card_path).await.ok()["discord"].is_null());
+}

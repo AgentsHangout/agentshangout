@@ -508,6 +508,29 @@ function apprenticeCard(me, crewRoom = null) {
     }))) : null;
 }
 
+// A77: a person's card: their name, the GitHub sections they chose to show and their Discord
+// name if they chose to. Everything here is text the server sent, so it goes in as text.
+function personCardView(card) {
+  const github = card.github || {};
+  const lines = [h('strong', { class: 'person-card-name' }, card.name || 'Someone')];
+  if (card.discord?.name) lines.push(h('small', {}, `Discord: ${card.discord.name}`));
+  if (github.linked && github.login) {
+    lines.push(h('small', {}, 'GitHub: ', h('a', { href: `https://github.com/${encodeURIComponent(github.login)}`, target: '_blank', rel: 'noopener noreferrer' }, github.login)));
+  }
+  if (github.stars && Number.isFinite(github.stars.total)) lines.push(h('small', { class: 'muted' }, `${github.stars.total} stars received`));
+  if (Array.isArray(github.languages) && github.languages.length) {
+    lines.push(h('small', { class: 'muted' }, `Top languages: ${github.languages.map((row) => row.language).filter(Boolean).join(', ')}`));
+  }
+  if (github.badge && Number.isFinite(github.badge.merged_prs)) {
+    lines.push(h('small', { class: 'muted' }, `${github.badge.merged_prs} pull requests merged into Agents Hangout`));
+  }
+  if (Array.isArray(github.repos) && github.repos.length) {
+    lines.push(h('ul', { class: 'person-card-repos' }, github.repos.slice(0, 6).map((repo) => h('li', {}, repo.name, Number.isFinite(repo.stars ?? repo.stargazers_count) ? ` · ${repo.stars ?? repo.stargazers_count}★` : ''))));
+  }
+  if (lines.length === 1) lines.push(h('small', { class: 'muted' }, 'Nothing else shown.'));
+  return h('div', { class: 'person-card' }, ...lines);
+}
+
 // A56: this is the only place a link shows, and only to its own person.
 function signInCard(me) {
   if (!me.sign_in.length) return null;
@@ -532,20 +555,34 @@ function signInCard(me) {
   // A70: what this person shows of their linked GitHub account, one switch per section. Only
   // when GitHub is linked, and only this person ever sees the switches.
   const github = me.sign_in.find((row) => row.site === 'github');
+  const discord = me.sign_in.find((row) => row.site === 'discord');
   const display = me.github_display || {};
-  const toggle = ([field, label]) => {
-    let confirmed = !!display[field];
-    const box = h('input', { type: 'checkbox', checked: confirmed });
+  // A77: how the card looks to others, read back from the server after each change.
+  const preview = h('div', { class: 'card-preview', 'aria-live': 'polite' });
+  const showPreview = async () => {
+    if (!me.person_id) return;
+    try {
+      const card = await api(`/api/people/${encodeURIComponent(me.person_id)}/card`);
+      preview.replaceChildren(h('small', { class: 'muted' }, 'How your card looks to others in a room:'), personCardView(card));
+    } catch {
+      preview.replaceChildren();
+    }
+  };
+  // One switch: saved on change, the server-confirmed value restored if a save fails (A70).
+  const toggle = ({ label, hint, on, save, read }) => {
+    let confirmed = !!on;
+    const box = h('input', { type: 'checkbox', role: 'switch', checked: confirmed });
     box.addEventListener('change', act(error, async () => {
       const requested = box.checked;
       box.indeterminate = false;
       try {
-        await api('/api/me/github-display', { method: 'PUT', body: { [field]: requested } });
+        await save(requested);
         confirmed = requested;
+        showPreview();
       } catch (error) {
         // A response can be lost after the server committed. Reconcile before claiming a value.
         try {
-          const current = (await api('/api/me')).github_display?.[field];
+          const current = read(await api('/api/me'));
           if (typeof current !== 'boolean') throw new Error('Unknown display state');
           confirmed = current;
         } catch {
@@ -556,16 +593,30 @@ function signInCard(me) {
         throw error;
       }
     }));
-    return h('label', {}, box, ` ${label}`);
+    return h('label', { class: 'switch-row' }, box,
+      h('span', {}, h('strong', {}, label), h('small', { class: 'muted' }, hint)));
   };
-  const displayToggles = github && github.linked ? h('div', {},
-    h('p', { class: 'muted' }, 'Show on your public profile:'),
-    ...[
-      ['show_repos', 'Public repos'],
-      ['show_stars', 'Stars received'],
-      ['show_languages', 'Top languages'],
-      ['show_badge', 'Merged pull requests'],
-    ].map(toggle)) : null;
+  const githubToggle = ([field, label, hint]) => toggle({
+    label, hint, on: display[field],
+    save: (requested) => api('/api/me/github-display', { method: 'PUT', body: { [field]: requested } }),
+    read: (current) => current.github_display?.[field],
+  });
+  const githubToggles = github && github.linked ? [
+    ['show_repos', 'Public repos', 'Your six most-starred public repos, by name and stars.'],
+    ['show_stars', 'Stars received', 'How many stars your public repos have in all.'],
+    ['show_languages', 'Top languages', 'The languages your public repos use most.'],
+    ['show_badge', 'Merged pull requests', 'How many pull requests you have merged into Agents Hangout.'],
+  ].map(githubToggle) : [];
+  // A76: your Discord name on your card, off until you turn it on.
+  const discordToggle = discord && discord.linked ? toggle({
+    label: 'Discord name', hint: `Shows ${discord.linked} on your card.`, on: me.discord_display,
+    save: (requested) => api('/api/me/discord-display', { method: 'PUT', body: { show: requested } }),
+    read: (current) => current.discord_display,
+  }) : null;
+  const displayToggles = githubToggles.length || discordToggle ? h('div', { class: 'switch-list' },
+    h('p', { class: 'muted' }, 'Show on your card, which anyone in a room with you can see. Everything starts off.'),
+    ...githubToggles, discordToggle, preview) : null;
+  if (displayToggles) showPreview();
   return h('section', { class: 'card passkeys', 'aria-label': 'Discord and GitHub' },
     h('h2', {}, 'Discord and GitHub'),
     h('p', { class: 'muted' }, 'Link an account to sign in with it. Your sign-in link stays private unless you choose to show GitHub sections below. Enabled sections and your GitHub username are public. ',
