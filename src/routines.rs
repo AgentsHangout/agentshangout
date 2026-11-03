@@ -1605,6 +1605,35 @@ mod tests {
         assert_eq!((read.every_day[17], read.every_day[18]), (Block::Social, Block::Anything));
         let weekdays = RoutineRow { days: 0b001_1111, ..lunch };
         assert_eq!(Schedule::of_routine(&weekdays, false).days[5].unwrap()[12], Block::Anything);
+        // A Friday window past midnight runs into Saturday's first hours, and no other day's.
+        let late = RoutineRow { days: 1 << 4, starts_min: 22 * 60, ends_min: 2 * 60, ..lunch };
+        let read = Schedule::of_routine(&late, false);
+        let (friday, saturday) = (read.days[4].unwrap(), read.days[5].unwrap());
+        assert_eq!(
+            (friday[21], friday[22], friday[23]),
+            (Block::Anything, Block::Social, Block::Social)
+        );
+        assert_eq!((saturday[1], saturday[2]), (Block::Social, Block::Anything));
+        assert_eq!(read.days[0].unwrap()[1], Block::Anything, "not Monday");
+        // Ten hours ahead of UTC, Sunday 20:00 UTC is Monday 6:00 for the owner, so Monday's row.
+        let mut days = [None; 7];
+        days[0] = Some([Block::Work; 24]);
+        let monday_only = Schedule { every_day: [Block::Home; 24], days };
+        let sunday_8pm = A_MONDAY + 6 * DAY_SECS + 20 * 3600;
+        assert_eq!(monday_only.block_at(600, sunday_8pm), Block::Work);
+        assert_eq!(monday_only.block_at(0, sunday_8pm), Block::Home);
+        // The run of Work hours ends at their Tuesday midnight, 14:00 UTC on Monday.
+        let work = |block: Block| block == Block::Work;
+        assert_eq!(
+            monday_only.run_until(600, sunday_8pm, work),
+            A_MONDAY + 7 * DAY_SECS + 14 * 3600
+        );
+        // Five and a half hours ahead, Sunday 18:00 UTC is 23:30 Sunday for the owner, so Home
+        // ends at their midnight, 18:30 UTC.
+        let home = |block: Block| block == Block::Home;
+        let sunday_6pm = A_MONDAY - 6 * 3600;
+        assert_eq!(monday_only.block_at(330, sunday_6pm), Block::Home);
+        assert_eq!(monday_only.run_until(330, sunday_6pm, home), sunday_6pm + 1800);
     }
 
     #[test]
