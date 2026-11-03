@@ -24,6 +24,7 @@ const h = (tag, props = {}, ...children) => new Node(tag, props, children);
 const all = node => node instanceof Node ? [node, ...node.children.flatMap(all)] : [];
 const text = node => node instanceof Node ? node.children.map(text).join(' ') : String(node);
 const findButton = (node, label) => all(node).find(n => n.tag === 'button' && text(n) === label);
+const node = name => all(body).find(n=>n.tag==='g'&&n.props['aria-label']?.startsWith(`${name}, `));
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const policy = () => Object.fromEntries(['wake','invite_public','invite_private'].map(k => [k,{mode:'participants',people:[],bots:[]} ]));
 const data = {owner_id:'owner', people:[{id:'owner',name:'You'},{id:'friend',name:'<img src=x onerror=alert(1)>'}], bots:[{id:'one',name:'Fern',owner_id:'owner'},{id:'two',name:'Moss',owner_id:'owner'},{id:'other',name:'Pine',owner_id:'friend'}], agents:[{id:'one',name:'Fern',doorbell:{paused:false},trust:policy()},{id:'two',name:'Moss',trust:policy()}], friendships:[{kind:'person',from_id:'friend',to_id:'owner',status:'pending'}]};
@@ -57,18 +58,18 @@ function build() { return context.trustPanel({h,api,panels,me:{name:'You',kind:'
   assert.ok(text(body).includes('Accepted by the host callback'));
   assert.ok(text(body).includes('HTTP 202'));
   assert.equal(all(body).filter(n=>n.tag==='span'&&text(n)==='Unknown to this server').length,2);
-  findButton(body,'Overview').props.onclick();
+  findButton(body,'Connections').props.onclick();
   const resume = findButton(body,'Resume bot').props.onclick(); await tick();
   deferred.at(-1).reject(Error('Health offline')); await resume;
   assert.ok(findButton(body,'Pause bot')); assert.equal(text(body).includes('Health offline'),false);
   findButton(body,'Monitoring').props.onclick(); assert.ok(text(body).includes('Settings saved. Monitoring health could not be refreshed'));
-  findButton(body,'Overview').props.onclick(); await findButton(body,'Wake-up settings').props.onclick();
+  findButton(body,'Connections').props.onclick(); await findButton(body,'Wake-up settings').props.onclick();
   const wakeDialog = context.document.body.children.at(-1);
   const conversations = all(wakeDialog).find(n=>n.tag==='input'&&n.type==='checkbox'); conversations.checked=false;
   const wakeSave = all(wakeDialog).find(n=>n.tag==='form').props.onsubmit({preventDefault(){}}); await tick();
   deferred.at(-1).resolve({connections:[],eligible_rooms:[],wake_only_owner:true}); await wakeSave;
   findButton(body,'Monitoring').props.onclick(); assert.ok(text(body).includes('Only-owner mention mode is on.'));
-  findButton(body,'Overview').props.onclick();
+  findButton(body,'Connections').props.onclick();
   // Switching the selected bot ignores the previous bot's delayed health response.
   const chooser = body.querySelector('[aria-label="Bot to manage"]');
   await chooser.props.onchange({target:{value:'two'}}); await tick();
@@ -84,9 +85,9 @@ function build() { return context.trustPanel({h,api,panels,me:{name:'You',kind:'
   setup.props.onchange({target:{value:'room'}});
   assert.equal(all(body).find(n=>n.textContent?.includes('arguments.hangout_id')).textContent.includes('Moss room'),true);
   // Editing selects keeps a draft, locks bot switching, and a failed save retains it.
-  findButton(body,'Permissions').props.onclick();
-  assert.ok(text(body).includes('Plans, check-ins and owner-scheduled routines continue to use their existing event rules.'));
-  const permissionSelect = all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Who can wake by mention');
+  findButton(body,'Connections').props.onclick();
+  assert.ok(text(body).includes('plans, check-ins and owner-scheduled routines keep their own rules.'));
+  const permissionSelect = all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Wake it by mention');
   permissionSelect.props.onchange({target:{value:'owner'}});
   assert.equal(body.querySelector('[aria-label="Bot to manage"]').disabled,true);
   assert.equal(findButton(body,'Save permissions').disabled,false);
@@ -94,18 +95,31 @@ function build() { return context.trustPanel({h,api,panels,me:{name:'You',kind:'
   assert.equal(requests.filter(r=>r.path==='/api/trust').length,dirtyLoads);
   rejectSave = true; await findButton(body,'Save permissions').props.onclick();
   assert.ok(text(body).includes('Save failed')); assert.ok(text(body).includes('Unsaved changes'));
-  assert.equal(all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Who can wake by mention').children.find(n=>n.selected).value,'owner');
+  assert.equal(all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Wake it by mention').children.find(n=>n.selected).value,'owner');
+  // While permissions are unsaved, picking another of your bots in the graph doesn't switch to it.
+  node('Fern').props.onkeydown({key:'Enter',preventDefault(){}});
+  assert.ok(text(body).includes('Save or reset this bot’s permissions')); assert.ok(text(body).includes('Unsaved changes'));
   rejectSave = false; await findButton(body,'Save permissions').props.onclick();
   assert.equal(requests.findLast(r=>r.path.endsWith('/trust')&&r.method==='PUT').body.wake.mode,'owner');
   assert.ok(text(body).includes('All changes saved'));
   // Editing an unrelated schedule setting preserves a saved end of day exactly.
-  findButton(body,'Overview').props.onclick(); await findButton(body,'Social schedule').props.onclick();
+  findButton(body,'Connections').props.onclick(); await findButton(body,'Social schedule').props.onclick();
   const dialog = context.document.body.children.at(-1);
   const until = all(dialog).find(n=>n.props['aria-label']==='Social hours end'); assert.equal(until.value,'24:00');
   await all(dialog).find(n=>n.tag==='form').props.onsubmit({preventDefault(){}});
   assert.equal(requests.findLast(r=>r.path.endsWith('/routine')&&r.method==='PUT').body.ends,'24:00');
+  // The graph has you, both your bots and the person who asked, with their request still open.
+  findButton(body,'Connections').props.onclick();
+  for (const name of ['You','Fern','Moss','<img src=x onerror=alert(1)>']) assert.ok(node(name),name);
+  assert.ok(node('<img src=x onerror=alert(1)>').props.class.includes('waiting'));
+  assert.ok(node('Moss').props.class.includes('editing')); assert.ok(!node('Fern').props.class.includes('editing'));
+  assert.equal(all(body).filter(n=>n.tag==='path'&&n.props.class.includes('owns')).length,2);
+  assert.equal(all(body).filter(n=>n.tag==='path'&&n.props.class.includes('pending')).length,1);
+  // Picking a bot that's yours edits it in place; picking a person shows their friendship.
+  node('Moss').props.onkeydown({key:'Enter',preventDefault(){}});
+  assert.ok(all(body).some(n=>n.tag==='input'&&n.props['aria-label']==='Bot name'&&n.props.value==='Moss'));
   // Invitations are rendered as text and acceptance uses the server's owner identity.
-  findButton(body,'Relationships').props.onclick();
+  node('<img src=x onerror=alert(1)>').props.onkeydown({key:'Enter',preventDefault(){}});
   assert.ok(text(body).includes('<img src=x onerror=alert(1)>')); assert.equal(all(body).some(n=>n.tag==='img'),false);
   await findButton(body,'Accept').props.onclick();
   assert.equal(requests.at(-2).path,'/api/trust/friendships/accept');
