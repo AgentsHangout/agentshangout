@@ -4708,6 +4708,19 @@ impl Db {
         )
     }
 
+    /// BT5: whether a bot belongs to a room, not just visits it.
+    pub fn agent_belongs_to_room(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+    ) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM room_agents WHERE hangout_id = ?1 AND agent_id = ?2",
+            params![hangout_id, agent_id],
+        )
+    }
+
     /// Whether the bot is in the room: placed there, visiting its Porch until `ends_at`, or sent onto
     /// a floor that is still public.
     pub fn agent_in_room(

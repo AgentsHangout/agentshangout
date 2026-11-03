@@ -1,4 +1,6 @@
 //! Numbered permission and consent rules in docs/bot-trust.md.
+mod support;
+
 use agenthangout::{
     app, auth,
     bot_trust::{self, Permission, Trust},
@@ -19,7 +21,7 @@ impl Fixture {
             Db::open(":memory:").unwrap(),
             Config {
                 public_url: "http://test".into(),
-                create_code: None,
+                create_code: Some("qa".into()),
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: vec![],
@@ -460,4 +462,84 @@ async fn bot_delegates_can_bring_only_with_current_permission() {
         StatusCode::OK
     );
     assert_eq!(f.call("b", Method::PUT, path, json!({})).await.0, StatusCode::NOT_FOUND);
+}
+
+// BT5: a bot that's only visiting a room, here by walking onto a public floor, can't bring a bot in,
+// even one whose owner chose it.
+#[tokio::test]
+async fn a_visiting_bot_delegate_cannot_bring_a_bot() {
+    let f = Fixture::new().await;
+    let made =
+        |name: &str| json!({"name":format!("{name} room"),"your_name":name,"create_code":"qa"});
+    let (_, ann) = f.call("", Method::POST, "/api/hangouts", made("Ann")).await;
+    let (key, room) = (ann["owner_key"].as_str().unwrap(), ann["hangout"]["id"].as_str().unwrap());
+    let (_, other) = f.call(key, Method::POST, "/api/hangouts", made("Ann's other")).await;
+    let (pal, _) = support::legacy_bot(
+        &f.state,
+        ann["person"]["id"].as_str().unwrap(),
+        other["hangout"]["id"].as_str().unwrap(),
+        "Pal",
+    );
+    let (_, bob) = f.call("", Method::POST, "/api/hangouts", made("Bob")).await;
+    let bob_key = bob["owner_key"].as_str().unwrap();
+    let (rover, rover_token) = support::legacy_bot(
+        &f.state,
+        bob["person"]["id"].as_str().unwrap(),
+        bob["hangout"]["id"].as_str().unwrap(),
+        "Rover",
+    );
+    let public = json!({"access":"public","create_code":"qa"});
+    assert_eq!(
+        f.call(key, Method::PUT, &format!("/api/floors/{room}"), public).await.0,
+        StatusCode::OK
+    );
+    let walked = f
+        .call(
+            bob_key,
+            Method::POST,
+            &format!("/api/floors/{room}/walk-in"),
+            json!({"agent_id":rover.id}),
+        )
+        .await;
+    assert_eq!(walked.0, StatusCode::OK, "{}", walked.1);
+    assert!(f.state.db.agent_in_room(room, &rover.id, now()).unwrap(), "Rover is visiting");
+    let mut trust = Trust::default();
+    trust.invite_public.mode = "selected".into();
+    trust.invite_public.bots.push(rover.id.clone());
+    let set = f
+        .call(
+            key,
+            Method::PUT,
+            &format!("/api/agents/{}/trust", pal.id),
+            serde_json::to_value(&trust).unwrap(),
+        )
+        .await;
+    assert_eq!(set.0, StatusCode::OK, "{}", set.1);
+
+    let brought = f
+        .call(
+            &rover_token,
+            Method::PUT,
+            &format!("/api/hangouts/{room}/agents/{}", pal.id),
+            json!({}),
+        )
+        .await;
+    assert_ne!(brought.0, StatusCode::OK, "{}", brought.1);
+    assert!(!f.state.db.agent_belongs_to_room(room, &pal.id).unwrap());
+}
+
+// E41: monitoring names only rooms the owner may see; a private room someone else brought the bot
+// into is only counted.
+#[tokio::test]
+async fn monitoring_never_names_a_private_room_its_owner_isnt_in() {
+    let f = Fixture::new().await;
+    f.state.db.add_agent_to_room("secret", "a").unwrap();
+    let (status, body) =
+        f.call("alice", Method::GET, "/api/agents/a/monitoring", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<_> =
+        body["eligible_rooms"].as_array().unwrap().iter().map(|r| r["name"].clone()).collect();
+    assert_eq!(names, [json!("Shared")], "{body}");
+    assert_eq!(body["other_rooms"], 1, "{body}");
+    assert!(!body.to_string().contains("Secret") && !body.to_string().contains("secret"), "{body}");
 }

@@ -2198,7 +2198,8 @@ pub fn bring_agent(
     let agent = state.db.agent(agent_id, now())?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, hangout_id, "bring in a bot")?;
     if let Some(sender) = caller.agent_id.as_deref() {
-        if !state.db.agent_in_room(hangout_id, sender, now())? {
+        // BT5: a bot that's only visiting, on a trip or a walk-in, can't bring anyone.
+        if !state.db.agent_belongs_to_room(hangout_id, sender)? {
             return Err(ApiError::forbidden(
                 "only a bot belonging to this room can bring another bot",
             ));

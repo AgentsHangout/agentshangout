@@ -403,6 +403,7 @@ export function trustPanel({ h, api, panels, me, crew }) {
       section('Bot conversation setting', state(config === undefined ? 'Checking' : config.error ? 'Unknown' : config.only_me ? 'Only you' : 'Room mentions enabled'),
         text('This bot’s Room conversations / Only me setting controls whose mentions it accepts, subject to mention permissions. It is separate from room-wide @room preferences and does not install a monitor.')),
       section('Room coverage', rooms.length ? h('ul', { class: 'trust-list' }, ...rooms.map(r => h('li', { class: 'trust-person' }, h('strong', {}, r.name), state(r.covered ? 'Subscription covers room' : 'Not covered')))) : text('No eligible rooms are listed for this bot.'),
+        monitoring.other_rooms ? text(`${monitoring.other_rooms === 1 ? 'One other room this bot is in isn’t' : `${monitoring.other_rooms} other rooms this bot is in aren’t`} shown, because you aren’t in it and it isn’t public.`) : null,
         text(monitoring.coverage_note || 'Coverage describes server subscriptions, not a confirmed host wake.'),
         monitoring.wake_paused ? text('This bot is paused. Mention delivery is blocked until you resume it.', 'error') : null,
         monitoring.wake_only_owner ? text('Only-owner mention mode is on. Other room participants cannot wake this bot by mention.') : null),

@@ -124,8 +124,13 @@ impl Db {
                 }
             }
         }
-        let mut eligible = Vec::new();
+        // E41: only rooms the owner may see are named; the rest are only counted.
+        let (mut eligible, mut unseen) = (Vec::new(), 0);
         for room in self.hangouts_for_agent(agent, at)? {
+            if !self.owner_sees_room(owner, &room.id)? {
+                unseen += 1;
+                continue;
+            }
             let covered = connections.iter().any(|g| {
                 g["subscriptions"].as_array().unwrap().iter().any(|s| {
                     s["status"] == "active"
@@ -140,7 +145,12 @@ impl Db {
         ).optional()?;
         let latest_mention = if let Some((id, recorded, room)) = latest {
             let room = match room {
-                Some(room) if self.agent_in_room(&room, agent, at)? => Some(room),
+                Some(room)
+                    if self.agent_in_room(&room, agent, at)?
+                        && self.owner_sees_room(owner, &room)? =>
+                {
+                    Some(room)
+                }
                 _ => None,
             };
             Some(
@@ -150,8 +160,22 @@ impl Db {
             None
         };
         Ok(
-            json!({"agent_id":agent,"latest_mention":latest_mention,"connections":connections,"eligible_rooms":eligible,"wake_paused":self.doorbell_paused(agent)?,"wake_only_owner":self.wakes_only_for_owner(agent)?,"coverage_note":"Active subscription coverage; each sender must also pass current wake permissions.","host":{"destination_chat":"unknown","run_started":"unknown","room_read":"unknown","renewal_automation":"external"},"setup_url":"/oauth/connections"}),
+            json!({"agent_id":agent,"latest_mention":latest_mention,"connections":connections,"eligible_rooms":eligible,"other_rooms":unseen,"wake_paused":self.doorbell_paused(agent)?,"wake_only_owner":self.wakes_only_for_owner(agent)?,"coverage_note":"Active subscription coverage; each sender must also pass current wake permissions.","host":{"destination_chat":"unknown","run_started":"unknown","room_read":"unknown","renewal_automation":"external"},"setup_url":"/oauth/connections"}),
         )
+    }
+    /// E41: a room the owner may name in their bot's diagnostics: one they belong to, or a public
+    /// floor anyone can see.
+    fn owner_sees_room(&self, owner: &str, room: &str) -> rusqlite::Result<bool> {
+        Ok(self.is_member(room, owner)?
+            || self
+                .conn()
+                .query_row(
+                    "SELECT 1 FROM floors WHERE hangout_id = ? AND access = 'public'",
+                    [room],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
     }
     pub(crate) fn oauth_subscription(
         &self,
@@ -325,6 +349,11 @@ mod tests {
         assert!(!value.to_string().contains("DO NOT EXPOSE"));
         assert!(!value.to_string().contains("private-source"));
         state.db.add_agent_to_room("private-source", "bot").unwrap();
+        // E41: someone else's private room stays unnamed until the owner belongs to it too.
+        assert!(state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"]
+            ["hangout_id"]
+            .is_null());
+        state.db.add_member("private-source", "owner", at).unwrap();
         assert_eq!(
             state.db.oauth_monitoring("owner", "bot", at).unwrap()["latest_mention"]["hangout_id"],
             "private-source"
