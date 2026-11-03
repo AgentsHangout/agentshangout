@@ -193,6 +193,25 @@ impl Db {
         tx.commit()
     }
 
+    /// L44: the workboard items a bot has claimed and not let lapse, with the lab's name, oldest
+    /// first, for its owner's Bots panel.
+    pub fn research_claims_of_bot(
+        &self,
+        agent_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, u64, bool)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(h.name, ''), c.number, c.pairing FROM research_work_claims c
+             LEFT JOIN hangouts h ON h.id = c.lab_id
+             WHERE c.agent_id = ? AND c.until > ? ORDER BY c.since, c.lab_id, c.number",
+        )?;
+        let rows = stmt.query_map(params![agent_id, now], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
     /// RW8: the claims on a lab's items that haven't run out, oldest first.
     pub fn research_work_claims(
         &self,

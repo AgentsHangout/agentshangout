@@ -7691,6 +7691,26 @@ async function worldView(id, { home = false } = {}) {
     asleep: 'asleep: nothing from it in a day',
   };
   const NEXT = { work: 'work at its building', meet: 'meet at the town square', explore: 'explore somewhere new' };
+  // L44: one plain answer per bot, first in its row: working on what, idle, or offline.
+  const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
+  const statusText = (bot) => {
+    const status = bot.status || {};
+    const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
+    if (status.state === 'asleep') {
+      const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
+      return `Asleep \u00b7 wakes when mentioned${seen}${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+    }
+    if (status.state === 'offline') {
+      const seen = status.last_seen_at ? `last seen ${agoText(status.last_seen_at)}` : 'never seen';
+      return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+    }
+    if (status.state === 'working') {
+      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null]
+        .filter(Boolean).join(' \u00b7 ');
+      return `Working${what ? `: ${what}` : ''}`;
+    }
+    return `Idle${status.job ? ` \u00b7 its job: ${status.job}` : ' \u00b7 nothing on its plate'}`;
+  };
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
@@ -7709,9 +7729,11 @@ async function worldView(id, { home = false } = {}) {
         h('button', { type: 'button', class: botsTab === tab ? 'primary' : '', role: 'tab', 'aria-selected': String(botsTab === tab), onclick: () => { botsTab = tab; renderBots(); } }, label)));
     let rows;
     if (botsTab === 'yours') {
-      rows = myBots.length ? myBots.map((bot) => h('div', { class: 'row' },
+      const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
+      rows = sorted.length ? sorted.map((bot) => h('div', { class: 'row' },
         h('span', { class: 'row-main' },
           h('strong', {}, bot.name),
+          h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
           h('small', {}, where(bot)),
           h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
           h('small', { class: 'muted' }, bot.next
@@ -7721,6 +7743,8 @@ async function worldView(id, { home = false } = {}) {
         bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
         h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')))
         : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
+      const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
+      if (myBots.length) rows.unshift(h('p', { class: 'muted', role: 'status' }, `${count('working')} working, ${count('idle')} idle, ${count('asleep')} asleep, ${count('offline')} offline`));
       rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Your crew')));
     } else {
       const out = latest?.bots_out || [];
