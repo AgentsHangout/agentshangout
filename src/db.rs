@@ -4544,6 +4544,22 @@ impl Db {
         Ok(())
     }
 
+    /// I85: ends what a bot said it's doing. False if nothing was showing.
+    pub fn clear_activity(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        let gone =
+            self.conn().execute("DELETE FROM agent_activity WHERE agent_id = ?", [agent_id])?;
+        Ok(gone == 1)
+    }
+
+    /// Moves what a bot said it's doing back in time, for tests of it running out (I85).
+    pub fn age_activity(&self, agent_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE agent_activity SET until_at = until_at - ?2 WHERE agent_id = ?1",
+            params![agent_id, by],
+        )?;
+        Ok(())
+    }
+
     pub fn record_activity(
         &self,
         agent_id: &str,

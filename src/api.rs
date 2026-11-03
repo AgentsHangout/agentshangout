@@ -1566,7 +1566,8 @@ async fn set_status(
 #[derive(Deserialize)]
 struct ReportActivity {
     kind: String,
-    via: String,
+    #[serde(default)]
+    via: Option<String>,
 }
 
 async fn report_activity(
@@ -1574,7 +1575,7 @@ async fn report_activity(
     caller: Caller,
     Json(body): Json<ReportActivity>,
 ) -> ApiResult<Json<Value>> {
-    ops::report_activity(&state, &caller, &body.kind, &body.via)?;
+    ops::report_activity(&state, &caller, &body.kind, body.via.as_deref())?;
     Ok(Json(json!({ "ok": true })))
 }
 

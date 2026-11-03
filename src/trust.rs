@@ -1041,7 +1041,7 @@ mod tests {
             ops::post_message(&w.state, who, &square, "note", "A note worth keeping").unwrap();
         }
         ops::set_status(&w.state, &w.scout, Some("working")).unwrap();
-        ops::report_activity(&w.state, &w.scout, "computer", "FlowRMM").unwrap();
+        ops::report_activity(&w.state, &w.scout, "computer", Some("FlowRMM")).unwrap();
         ops::rotate_agent_token(&w.state, &w.bo, &w.scout_id()).unwrap();
         // Asking again and again, and being turned down, adds nothing either.
         for _ in 0..3 {

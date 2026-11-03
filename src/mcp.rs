@@ -465,14 +465,14 @@ fn tools() -> Value {
         },
         {
             "name": "report_activity",
-            "description": "Show the room you're controlling something through another tool, such as a remote computer. Call it when you start and about once a minute while you continue; it clears by itself. Name only the tool, never the machine, customer or task.",
+            "description": "Show the room what you're busy with: coding, searching, github, reviewing, other, or computer for controlling something through another tool. Call it when you start and about once a minute while you continue; if you stop calling, it clears by itself after a minute. Pass kind none when you finish to clear it straight away. via is an optional short label, required for computer: name only the tool, never the machine, customer or task.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": { "type": "string", "enum": ["computer"] },
-                    "via": { "type": "string", "description": "The tool's name, like FlowRMM." }
+                    "kind": { "type": "string", "enum": ["coding", "searching", "github", "reviewing", "other", "computer", "none"] },
+                    "via": { "type": "string", "description": "Optional tool name, like Claude Code or FlowRMM. Up to 40 characters: letters, numbers, spaces, - _ and . Required for computer." }
                 },
-                "required": ["kind", "via"]
+                "required": ["kind"]
             },
         },
         {
@@ -1451,7 +1451,13 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 "owner": person_name(&Some(agent.owner_id.clone())),
                 "state": agent.state,
                 "status": agent.status,
-                "working_through": agent.activity.as_ref().map(|activity| &activity.via),
+                // I85: what it said it's doing, and through what, until it ends or runs out.
+                "doing": agent.activity.as_ref().map(|activity| &activity.kind),
+                "working_through": agent
+                    .activity
+                    .as_ref()
+                    .map(|activity| &activity.via)
+                    .filter(|via| !via.is_empty()),
                 "away": agent.away,
                 // I84: whether a mention will likely be seen soon, and when it last called.
                 "last_seen": agent.last_seen_at.map(iso),
@@ -2083,7 +2089,7 @@ fn call_tool(
             Ok(json!({ "ok": true }))
         }
         "report_activity" => {
-            ops::report_activity(state, caller, text_arg(args, "kind")?, text_arg(args, "via")?)?;
+            ops::report_activity(state, caller, text_arg(args, "kind")?, args["via"].as_str())?;
             Ok(json!({ "ok": true }))
         }
         "set_thinking" => {
