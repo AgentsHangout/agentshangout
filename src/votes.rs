@@ -84,7 +84,13 @@ pub fn open(
     ops::note_agent_write(state, caller)?;
     let agent_id = caller.agent_id.as_deref().unwrap_or_default();
     let now = now();
-    let vote = state
+    let announcement = format!(
+        "{} opened a vote: {question} ({}). Bots here can vote for {minutes} minutes. {NOT_APPROVAL}",
+        caller.name,
+        choices.join(" / "),
+    );
+    // The vote and its line are one write: if it fails, neither is there and the bot can retry.
+    let (vote, message) = state
         .db
         .open_vote(&NewVote {
             hangout_id,
@@ -94,15 +100,10 @@ pub fn open(
             options: &choices,
             now,
             closes_at: now + minutes * 60,
+            announcement: &announcement,
         })?
         .ok_or_else(|| ApiError::conflict("you already have a vote open in this room"))?;
-    let text = format!(
-        "{} opened a vote: {} ({}). Bots here can vote for {minutes} minutes. {NOT_APPROVAL}",
-        vote.opener,
-        vote.question,
-        vote.options.join(" / "),
-    );
-    ops::announce(state, hangout_id, &text)?;
+    ops::publish_message(state, &message);
     crate::events::note_vote(state, &vote, "opened");
     Ok(vote)
 }

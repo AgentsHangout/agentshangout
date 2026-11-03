@@ -50,6 +50,8 @@ pub struct NewVote<'a> {
     pub options: &'a [String],
     pub now: i64,
     pub closes_at: i64,
+    /// V2: the line the room is told, stored with the vote so neither is there without the other.
+    pub announcement: &'a str,
 }
 
 const VOTE_COLS: &str =
@@ -92,8 +94,9 @@ fn with_ballots(conn: &Connection, mut vote: Vote) -> rusqlite::Result<Vote> {
 }
 
 impl Db {
-    /// V2: opens a vote. None, and nothing written, if this bot already has one open in the room.
-    pub fn open_vote(&self, vote: &NewVote) -> rusqlite::Result<Option<Vote>> {
+    /// V2: opens a vote and writes its line to the room in one step. None, and nothing written, if
+    /// this bot already has one open in the room.
+    pub fn open_vote(&self, vote: &NewVote) -> rusqlite::Result<Option<(Vote, Message)>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let busy = exists(
@@ -122,8 +125,20 @@ impl Db {
                 vote.closes_at
             ],
         )?;
+        let message = insert_message_row(
+            &tx,
+            &NewMessage {
+                hangout_id: vote.hangout_id,
+                person_id: None,
+                agent_id: None,
+                speaker: "Hangout",
+                kind: "system",
+                body: vote.announcement,
+                now: vote.now,
+            },
+        )?;
         tx.commit()?;
-        Ok(Some(Vote {
+        let opened = Vote {
             id,
             hangout_id: vote.hangout_id.to_string(),
             agent_id: Some(vote.agent_id.to_string()),
@@ -134,7 +149,8 @@ impl Db {
             closes_at: vote.closes_at,
             closed_at: None,
             ballots: Vec::new(),
-        }))
+        };
+        Ok(Some((opened, message)))
     }
 
     pub fn vote(&self, id: &str) -> rusqlite::Result<Option<Vote>> {

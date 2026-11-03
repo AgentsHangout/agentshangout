@@ -21,6 +21,8 @@ pub const ACTIVE_SECS: i64 = 10 * 60;
 pub const IDLE_SECS: i64 = 24 * 60 * 60;
 /// A doorbell checks every 15 seconds, so one that's been quiet this long has stopped.
 pub const LISTENING_SECS: i64 = 60;
+/// I84: a bot that called the server this recently will likely see a mention soon.
+pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
@@ -1318,6 +1320,15 @@ pub struct Agent {
     /// Set only in a room's snapshot and `read_room` (I58, I63).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+}
+
+impl Agent {
+    /// I84: whether it's likely to see a mention soon: it called the server in the last ten
+    /// minutes, or its doorbell is listening.
+    pub fn responsive(&self, now: i64) -> bool {
+        self.last_seen_at.is_some_and(|at| now - at <= RESPONSIVE_SECS)
+            || self.doorbell.as_ref().is_some_and(|bell| bell.listening)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4843,6 +4854,15 @@ impl Db {
         Ok(())
     }
 
+    /// Moves a bot's last call to the server back, for tests of how quiet it reads (I84).
+    pub fn age_agent_seen(&self, agent_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE agents SET last_seen_at = last_seen_at - ?2 WHERE id = ?1",
+            params![agent_id, by],
+        )?;
+        Ok(())
+    }
+
     /// N6: clears what a bot said about waiting, whether it was still showing or not.
     pub fn clear_owner_wait(&self, agent_id: &str) -> rusqlite::Result<()> {
         self.conn().execute("DELETE FROM owner_waits WHERE agent_id = ?", [agent_id])?;
@@ -7103,6 +7123,18 @@ impl Db {
     }
 
     /// I83: whether a message @mentioned this bot.
+    /// I84: the bots a message @mentions, as the server recorded them.
+    pub fn mentioned_agents(&self, message_id: i64, now: i64) -> rusqlite::Result<Vec<Agent>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AGENT_COLS} FROM {AGENTS}
+             JOIN mentions m ON m.agent_id = a.id
+             WHERE m.message_id = ? ORDER BY m.id"
+        ))?;
+        let rows = stmt.query_map([message_id], |row| agent_from_row(row, now))?;
+        rows.collect()
+    }
+
     pub fn mentions_bot(&self, message_id: i64, agent_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
@@ -13408,9 +13440,11 @@ mod tests {
                 options: &options,
                 now: 100,
                 closes_at: 400,
+                announcement: "Rover opened a vote",
             })
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .0;
         let results = || {
             let lines = db.messages("h1", 0, 100).unwrap();
             lines.iter().filter(|line| line.body == "Result").count()
@@ -13436,6 +13470,44 @@ mod tests {
         assert!(db.close_vote_with_result(&vote.id, "h1", "Result", 560).unwrap().is_none());
         assert!(db.due_votes(560).unwrap().is_empty());
         assert_eq!(results(), 1);
+    }
+
+    // V2
+    #[test]
+    fn a_vote_whose_line_cant_be_written_isnt_opened() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Justin", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.create_agent("a1", "p1", "Rover", "token", 0).unwrap();
+        let options = ["Pizza".to_string(), "Tacos".to_string()];
+        let open = || {
+            db.open_vote(&NewVote {
+                hangout_id: "h1",
+                agent_id: "a1",
+                opener: "Rover",
+                question: "Lunch?",
+                options: &options,
+                now: 100,
+                closes_at: 400,
+                announcement: "Rover opened a vote",
+            })
+        };
+        db.conn()
+            .execute_batch(
+                "CREATE TEMP TRIGGER no_lines BEFORE INSERT ON messages
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        assert!(open().is_err());
+        assert!(db.room_votes("h1", 0).unwrap().is_empty(), "no vote is left behind");
+
+        // So the retry isn't refused as a second open vote, and it writes both, once.
+        db.conn().execute_batch("DROP TRIGGER no_lines").unwrap();
+        let (vote, line) = open().unwrap().unwrap();
+        assert_eq!(line.body, "Rover opened a vote");
+        assert_eq!(db.room_votes("h1", 0).unwrap().len(), 1);
+        assert_eq!(vote.question, "Lunch?");
+        assert!(open().unwrap().is_none());
     }
 
     // I82

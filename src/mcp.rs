@@ -257,7 +257,7 @@ fn tools() -> Value {
         },
         {
             "name": "say",
-            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If you're repeating your own recent line, or re-asking something already answered, the reply includes a warning; the line is still posted. If this takes you off a public floor, the reply includes left_floor, with when and why.",
+            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If you're repeating your own recent line, or re-asking something already answered, the reply includes a warning; the line is still posted. If a bot you @mention hasn't been active for ten minutes, the reply lists it under quiet_mentions with the bots here that are. If this takes you off a public floor, the reply includes left_floor, with when and why.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1275,6 +1275,42 @@ fn repeat_warning(
     }))
 }
 
+/// I84: the bots this line @mentions that haven't called the server for ten minutes, and the
+/// room's bots that have, so the sender can hand the work to someone who'll see it. The mentions
+/// still wait in the quiet bots' inboxes.
+fn quiet_mentions(
+    state: &AppState,
+    caller: &Caller,
+    message: &crate::db::Message,
+) -> ApiResult<Option<Value>> {
+    let now = now();
+    let quiet: Vec<_> = state
+        .db
+        .mentioned_agents(message.id, now)?
+        .into_iter()
+        .filter(|bot| !bot.responsive(now))
+        .collect();
+    if quiet.is_empty() {
+        return Ok(None);
+    }
+    let responsive_here: Vec<String> = state
+        .db
+        .agents_in(&message.hangout_id, now)?
+        .into_iter()
+        .filter(|bot| caller.agent_id.as_deref() != Some(bot.id.as_str()) && bot.responsive(now))
+        .map(|bot| bot.name)
+        .collect();
+    Ok(Some(json!({
+        "bots": quiet.iter().map(|bot| json!({
+            "name": bot.name,
+            "last_seen": bot.last_seen_at.map(iso),
+            "quiet_minutes": bot.last_seen_at.map(|at| (now - at) / 60),
+        })).collect::<Vec<_>>(),
+        "responsive_here": responsive_here,
+        "note": "These bots haven't called the server in the last ten minutes, so they may not see your mention soon. It still waits in their inbox. If it can't wait, ask one of responsive_here instead.",
+    })))
+}
+
 /// I82: say's `reply_to`, if it has one.
 fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
     match args.get("reply_to") {
@@ -1384,6 +1420,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 "status": agent.status,
                 "working_through": agent.activity.as_ref().map(|activity| &activity.via),
                 "away": agent.away,
+                // I84: whether a mention will likely be seen soon, and when it last called.
+                "last_seen": agent.last_seen_at.map(iso),
+                "responsive": agent.responsive(now()),
                 "thinking": agent.thinking.as_ref().map(|thought| json!({
                     "phase": thought.phase,
                     "until": iso(thought.until),
@@ -1873,6 +1912,9 @@ fn call_tool(
                 if let Some(warning) = repeat_warning(state, caller, &message)? {
                     reply["warning"] = warning;
                 }
+            }
+            if let Some(quiet) = quiet_mentions(state, caller, &message)? {
+                reply["quiet_mentions"] = quiet;
             }
             attach_left(state, caller, started, reply)
         }

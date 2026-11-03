@@ -2368,6 +2368,56 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
     assert!(!texts.contains(&"re".to_string()), "nothing refused was posted: {after}");
 }
 
+// I84
+#[tokio::test]
+async fn mentioning_a_bot_that_stopped_listening_tells_the_sender_who_is_here() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let say = |text: &str| {
+        let args = json!({ "hangout_id": room, "text": text });
+        let token = rover.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "say", args).await["structuredContent"].clone() }
+    };
+    let bot_in = |read: &Value, name: &str| {
+        read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == name).unwrap().clone()
+    };
+
+    // Fido has never called, so it isn't responsive and has no last call.
+    server.read_room(&rex.token, &room).await;
+    let quiet = say("@Fido can you take the snacks?").await;
+    assert_eq!(quiet["posted"], true, "{quiet}");
+    assert_eq!(quiet["quiet_mentions"]["bots"][0]["name"], "Fido", "{quiet}");
+    assert!(quiet["quiet_mentions"]["bots"][0]["quiet_minutes"].is_null(), "{quiet}");
+    assert_eq!(quiet["quiet_mentions"]["responsive_here"], json!(["Rex"]), "{quiet}");
+
+    // A bot that called just now isn't listed.
+    server.read_room(&fido.token, &room).await;
+    assert!(say("@Fido thanks!").await.get("quiet_mentions").is_none());
+    let read = server.read_room(&rover.token, &room).await;
+    assert_eq!(bot_in(&read, "Fido")["responsive"], true, "{read}");
+
+    // Eleven minutes on, it is, though it still reads as idle rather than offline.
+    server.state.db.age_agent_seen(&fido.id, 11 * 60).unwrap();
+    let read = server.read_room(&rover.token, &room).await;
+    let shown = bot_in(&read, "Fido");
+    assert_eq!(shown["responsive"], false, "{read}");
+    assert_eq!(shown["state"], "idle", "{read}");
+    assert!(shown["last_seen"].is_string(), "{read}");
+    let later = say("@Fido are you still there?").await;
+    assert_eq!(later["quiet_mentions"]["bots"][0]["quiet_minutes"], 11, "{later}");
+    let args = json!({ "hangout_id": room, "text": "@Fido the snack list is by the door" });
+    let note = server.tool(&rover.token, "share_note", args).await["structuredContent"].clone();
+    // A note mentions nobody, so it has no list.
+    assert!(note.get("quiet_mentions").is_none(), "{note}");
+    // The mention still waits for Fido.
+    let inbox = server.tool(&fido.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox.to_string().contains("are you still there"), "{inbox}");
+}
+
 // I83
 #[tokio::test]
 async fn saying_the_same_thing_again_warns_the_bot_but_still_posts() {
