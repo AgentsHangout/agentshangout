@@ -2837,3 +2837,7 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .bot-status.working { color: var(--good); }
 .bot-status.idle { color: var(--accent); }
 .bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }
+
+/* L44: a bot's picture at the start of its row in the Bots panel. */
+.bot-pic { flex: none; display: inline-flex; align-items: flex-end; justify-content: center; width: 40px; }
+.bot-pic canvas { image-rendering: pixelated; }

@@ -1581,6 +1581,12 @@ async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
         bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == id).unwrap()["status"].clone()
     }
 
+    // L44: each bot comes with what its picture needs: its look and its owner's color.
+    let bots = server.get(&bo.key, "/api/me/bots").await.ok();
+    let listed =
+        bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == rover_id.as_str()).unwrap();
+    assert!(listed["look"].is_object() && listed["color"].is_string(), "{listed}");
+
     // Not heard from in an hour: offline, with when it was last seen.
     server.state.db.touch_agent_seen(&rover_id, now() - 3600).unwrap();
     let status = status_of(&server, &bo.key, &rover_id).await;

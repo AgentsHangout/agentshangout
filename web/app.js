@@ -7902,6 +7902,8 @@ async function worldView(id, { home = false } = {}) {
     if (botsTab === 'yours') {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
       rows = sorted.length ? sorted.map((bot) => h('div', { class: 'row' },
+        // L44: its picture, in its own look, as the map and the wardrobe draw it.
+        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
         h('span', { class: 'row-main' },
           h('strong', {}, bot.name),
           h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
