@@ -38,6 +38,7 @@ mod recycling;
 mod research_labs;
 mod research_work;
 mod room_mentions;
+mod usage;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 
@@ -1556,6 +1557,36 @@ CREATE TABLE IF NOT EXISTS discord_display (
     account_id TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- U1 to U8: usage counts by hour, with no text, no ids of people and no room names. A bot's own daily
+-- totals go when the bot does.
+CREATE TABLE IF NOT EXISTS usage_hours (
+    hour    INTEGER NOT NULL,
+    surface TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    caller  TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    reason  TEXT NOT NULL,
+    version TEXT NOT NULL,
+    calls   INTEGER NOT NULL,
+    millis  INTEGER NOT NULL,
+    timed   INTEGER NOT NULL,
+    slow    INTEGER NOT NULL,
+    PRIMARY KEY (hour, surface, name, caller, outcome, reason, version)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS usage_days (
+    day    INTEGER PRIMARY KEY,
+    people INTEGER NOT NULL,
+    bots   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_bot_days (
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    day      INTEGER NOT NULL,
+    outcome  TEXT NOT NULL,
+    reason   TEXT NOT NULL,
+    calls    INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, day, outcome, reason)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS usage_bot_days_day ON usage_bot_days(day);
 "#;
 
 #[derive(Debug, Serialize)]

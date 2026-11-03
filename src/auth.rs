@@ -231,6 +231,9 @@ impl FromRequestParts<AppState> for Caller {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let caller = identify(&parts.headers, state)?;
+        if let Some(seen) = parts.extensions.get::<crate::usage::Seen>() {
+            seen.set(caller.is_agent(), caller.agent_id.as_deref().unwrap_or(&caller.person_id));
+        }
         if let Some(agent_id) = &caller.agent_id {
             state.db.touch_agent_seen(agent_id, now())?;
         }

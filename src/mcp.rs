@@ -155,6 +155,15 @@ fn house_tools() -> Value {
     ])
 }
 
+/// U1: the names a tool call may be counted under.
+pub(crate) fn tool_names() -> Vec<String> {
+    [tools(), house_tools(), crate::public_mcp::tools()]
+        .iter()
+        .flat_map(|list| list.as_array().into_iter().flatten())
+        .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+        .collect()
+}
+
 fn tools() -> Value {
     let hangout_id = json!({
         "type": "string",
@@ -2434,6 +2443,23 @@ fn rpc_result(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
+/// U1 to U4: counts one tool call. Only the tool's name, who asked and how it went are kept.
+fn track(
+    state: &AppState,
+    caller: &Caller,
+    name: &str,
+    started: std::time::Instant,
+    failure: Option<StatusCode>,
+    timed: bool,
+) {
+    let who = match &caller.agent_id {
+        Some(id) => crate::usage::Who::Bot(id),
+        None => crate::usage::Who::Person(&caller.person_id),
+    };
+    let millis = timed.then(|| started.elapsed().as_millis() as u64);
+    state.usage.record_tool(now(), "mcp", name, who, failure, millis);
+}
+
 fn dispatch(
     state: &AppState,
     headers: &HeaderMap,
@@ -2481,7 +2507,10 @@ fn dispatch(
             let empty = json!({});
             let args = params.get("arguments").unwrap_or(&empty);
             // Tool failures go back to the model as results, so it can read them and adjust.
-            let result = match call_tool(state, headers, caller, name, args) {
+            let started = std::time::Instant::now();
+            let called = call_tool(state, headers, caller, name, args);
+            track(state, caller, name, started, called.as_ref().err().map(|e| e.status), true);
+            let result = match called {
                 Ok(value) => json!({
                     "content": [{ "type": "text", "text": value.to_string() }],
                     "structuredContent": value,
@@ -2510,6 +2539,12 @@ pub async fn handle(
     // The MCP spec requires this, so a web page can't reach the server through a visitor's browser.
     if let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) {
         if origin != state.config.public_url {
+            state.usage.record_rejected(
+                now(),
+                "mcp",
+                crate::usage::Who::Nobody,
+                StatusCode::FORBIDDEN,
+            );
             return ApiError::forbidden("origin not allowed").into_response();
         }
     }
@@ -2520,8 +2555,18 @@ pub async fn handle(
     });
     let caller = match caller {
         Ok(caller) if caller.is_agent() => caller,
-        Ok(_) => return ApiError::forbidden("use a bot token, not an owner key").into_response(),
+        Ok(person) => {
+            let who = crate::usage::Who::Person(&person.person_id);
+            state.usage.record_rejected(now(), "mcp", who, StatusCode::FORBIDDEN);
+            return ApiError::forbidden("use a bot token, not an owner key").into_response();
+        }
         Err(error) => {
+            state.usage.record_rejected(
+                now(),
+                "mcp",
+                crate::usage::Who::Nobody,
+                StatusCode::UNAUTHORIZED,
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:bot mcp:events\"", state.config.public_url))],
@@ -2572,7 +2617,17 @@ pub async fn handle(
     if method == "tools/call" && params["name"].as_str() == Some("events_since") {
         let empty = json!({});
         let args = params.get("arguments").unwrap_or(&empty);
-        let result = match events::since_tool(&state, &caller, args).await {
+        let waited = events::since_tool(&state, &caller, args).await;
+        // U3: this one waits on purpose, so it adds no response time.
+        track(
+            &state,
+            &caller,
+            "events_since",
+            std::time::Instant::now(),
+            waited.as_ref().err().map(|e| e.status),
+            false,
+        );
+        let result = match waited {
             Ok(value) => json!({
                 "content": [{ "type": "text", "text": value.to_string() }],
                 "structuredContent": value,
@@ -2585,12 +2640,21 @@ pub async fn handle(
         return Json(rpc_result(id, result)).into_response();
     }
     if method == "tools/call" && params["name"].as_str() == Some("take_snapshot") {
+        let started = std::time::Instant::now();
         let result = match serde_json::from_value::<crate::camera::Capture>(
             params.get("arguments").cloned().unwrap_or_else(|| json!({})),
         ) {
             Ok(input) => crate::camera::capture(&state, &caller, input).await,
             Err(_) => Err(ApiError::bad_request("invalid camera arguments")),
         };
+        track(
+            &state,
+            &caller,
+            "take_snapshot",
+            started,
+            result.as_ref().err().map(|e| e.status),
+            true,
+        );
         let result = match result {
             Ok((metadata, png)) => {
                 json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}],"structuredContent":metadata})
@@ -2604,13 +2668,15 @@ pub async fn handle(
         let empty = json!({});
         let args = params.get("arguments").unwrap_or(&empty);
         let started = now();
-        let result = match async {
+        let timer = std::time::Instant::now();
+        let pinned = async {
             let hangout = resolve_hangout(&state, &caller, args)?;
             let reply = pins::pin_and_preview(&state, &caller, &hangout.id, args).await?;
             attach_left(&state, &caller, started, reply)
         }
-        .await
-        {
+        .await;
+        track(&state, &caller, "pin", timer, pinned.as_ref().err().map(|e| e.status), true);
+        let result = match pinned {
             Ok(value) => json!({
                 "content": [{ "type": "text", "text": value.to_string() }],
                 "structuredContent": value,
@@ -2633,6 +2699,7 @@ pub async fn handle(
         ) {
             let empty = json!({});
             let args = params.get("arguments").unwrap_or(&empty);
+            let timer = std::time::Instant::now();
             let result = async {
                 match name {
                     "create_research_lab" => {
@@ -2667,6 +2734,7 @@ pub async fn handle(
                 }
             }
             .await;
+            track(&state, &caller, name, timer, result.as_ref().err().map(|e| e.status), true);
             let result = match result {
                 Ok(value) => {
                     json!({ "content": [{ "type": "text", "text": value.to_string() }], "structuredContent": value })
