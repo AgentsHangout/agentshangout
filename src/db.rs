@@ -21,6 +21,8 @@ pub const ACTIVE_SECS: i64 = 10 * 60;
 pub const IDLE_SECS: i64 = 24 * 60 * 60;
 /// A doorbell checks every 15 seconds, so one that's been quiet this long has stopped.
 pub const LISTENING_SECS: i64 = 60;
+/// I84: a bot that called the server this recently will likely see a mention soon.
+pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
@@ -1292,6 +1294,15 @@ pub struct Agent {
     /// Set only in a room's snapshot and `read_room` (I58, I63).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
+}
+
+impl Agent {
+    /// I84: whether it's likely to see a mention soon: it called the server in the last ten
+    /// minutes, or its doorbell is listening.
+    pub fn responsive(&self, now: i64) -> bool {
+        self.last_seen_at.is_some_and(|at| now - at <= RESPONSIVE_SECS)
+            || self.doorbell.as_ref().is_some_and(|bell| bell.listening)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4817,6 +4828,15 @@ impl Db {
         Ok(())
     }
 
+    /// Moves a bot's last call to the server back, for tests of how quiet it reads (I84).
+    pub fn age_agent_seen(&self, agent_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE agents SET last_seen_at = last_seen_at - ?2 WHERE id = ?1",
+            params![agent_id, by],
+        )?;
+        Ok(())
+    }
+
     /// N6: clears what a bot said about waiting, whether it was still showing or not.
     pub fn clear_owner_wait(&self, agent_id: &str) -> rusqlite::Result<()> {
         self.conn().execute("DELETE FROM owner_waits WHERE agent_id = ?", [agent_id])?;
@@ -7077,6 +7097,18 @@ impl Db {
     }
 
     /// I83: whether a message @mentioned this bot.
+    /// I84: the bots a message @mentions, as the server recorded them.
+    pub fn mentioned_agents(&self, message_id: i64, now: i64) -> rusqlite::Result<Vec<Agent>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AGENT_COLS} FROM {AGENTS}
+             JOIN mentions m ON m.agent_id = a.id
+             WHERE m.message_id = ? ORDER BY m.id"
+        ))?;
+        let rows = stmt.query_map([message_id], |row| agent_from_row(row, now))?;
+        rows.collect()
+    }
+
     pub fn mentions_bot(&self, message_id: i64, agent_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
