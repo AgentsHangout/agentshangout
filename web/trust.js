@@ -27,7 +27,7 @@ const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
 const LABEL_HIGH = 13;
 
-export function trustPanel({ h, api, panels, me, crew, figure }) {
+export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
   // Where every node was last drawn, so a change doesn't throw the graph around.
@@ -422,7 +422,7 @@ export function trustPanel({ h, api, panels, me, crew, figure }) {
           await api(`${path()}/doorbell`, { method: 'PUT', body: { paused } }); b.doorbell.paused = paused;
           await refreshHealthAfterSettings();
         })) : null,
-        button('Social schedule', scheduleDialog), button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
+        dress ? button('Change look', () => dress(b.id)) : null, button('Social schedule', scheduleDialog), button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
       b.doorbell?.paused ? text('Paused: nothing wakes this bot until you resume it.', 'error') : null,
       h('h4', {}, 'Who can reach it'),
       text('These only narrow existing room access. They never let anyone into a private room, and plans, check-ins and owner-scheduled routines keep their own rules.', 'muted fine'),
@@ -558,5 +558,10 @@ export function trustPanel({ h, api, panels, me, crew, figure }) {
       h('form', { onsubmit: async e => { e.preventDefault(); submit.disabled = true; failure.hidden = true; try { await save(); dialog.close(); } catch (err) { failure.textContent = err.message; failure.hidden = false; } finally { submit.disabled = false; } } }, ...children, failure, h('div', { class: 'modal-actions' }, button('Cancel', () => dialog.close()), submit)));
     document.body.append(dialog); dialog.showModal(); dialog.querySelector('input')?.focus();
   }
-  return { toggle, open: () => panels.open('trust') };
+  // BT9: after a look is changed elsewhere, the graph shows it, unless a draft here would be lost.
+  async function refreshLooks() {
+    if (!data || dirty || busy) return;
+    try { data.looks = (await api('/api/trust')).looks; render(); } catch (_) { /* the next open reads it again */ }
+  }
+  return { toggle, open: () => panels.open('trust'), refreshLooks };
 }
