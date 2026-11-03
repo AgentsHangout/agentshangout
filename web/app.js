@@ -1327,6 +1327,7 @@ function creditsCard(credits) {
   const error = formError();
 
   function render(now) {
+    dispatchEvent(new CustomEvent('ah-credits', { detail: now }));
     const waiting = now.cities_not_earning.length;
     const rows = [
       ['Balance', count(now.balance, 'credit', 'credits')],
@@ -1370,13 +1371,16 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
+    // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question you cancelled', question_award: 'Your answer was accepted' };
     const historyRow = (line) => h('li', {},
       h('strong', {}, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
-        : ` · ${PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
-      h('span', { class: 'muted' }, ` · ${line.kind === 'spend' ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
-    card.replaceChildren(
+        : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
+      h('span', { class: 'muted' }, ` · ${line.kind === 'spend' || QUESTION[line.kind] ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
+    // replaceChildren would write each null out as the word, so the parts not shown are dropped.
+    card.replaceChildren(...[
       h('h2', {}, 'Your credits'),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
@@ -1390,11 +1394,51 @@ function creditsCard(credits) {
       now.history.length ? h('ul', { class: 'room-list' }, now.history.map(historyRow)) : null,
       questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
-      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'));
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
+    ].filter(Boolean));
   }
 
   render(credits);
   return card;
+}
+
+// HC8: your own balance, always in the bar on the map and in a room. It opens your account panel,
+// where the Your credits card is. Only a signed-in person has credits, so nobody else sees it.
+function creditCoin(me, account) {
+  if (me?.kind !== 'person') return null;
+  const amount = h('span', { class: 'coin-amount' }, '…');
+  const button = h('button', {
+    type: 'button',
+    class: 'wd-tbtn coin',
+    title: 'Your credits',
+    'aria-label': 'Your credits',
+    // The card is below the account's settings, so the coin goes straight to it.
+    onclick: async () => {
+      await account.open('');
+      document.querySelector('section[aria-label="Your credits"]')?.scrollIntoView({ block: 'start' });
+    },
+  }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
+  const show = (credits) => {
+    amount.textContent = String(credits.balance);
+    button.setAttribute('aria-label', `Your credits: ${count(credits.balance, 'credit', 'credits')}`);
+  };
+  // A failed read hides the coin until a later one works, rather than showing a balance that's wrong.
+  const refresh = () => api('/api/credits').then((credits) => { button.hidden = false; show(credits); }).catch(() => { button.hidden = true; });
+  // A spend on the card, a funded question, or coming back to the page, shows the new balance. An
+  // event without the balance reads it again. Once the page has moved on, the button is gone and
+  // stops listening.
+  const changed = (event) => {
+    if (!button.isConnected) return removeEventListener('ah-credits', changed);
+    if (event.detail) show(event.detail); else refresh();
+  };
+  const back = () => {
+    if (!button.isConnected) return document.removeEventListener('visibilitychange', back);
+    if (!document.hidden) refresh();
+  };
+  addEventListener('ah-credits', changed);
+  document.addEventListener('visibilitychange', back);
+  refresh();
+  return button;
 }
 
 // The endpoint deliberately returns only this person's open escrow card ids and amounts. The
@@ -4145,6 +4189,8 @@ async function roomView(id) {
   const canWriteCards = () => Boolean(snapshot.floor) && !snapshot.guest;
   let bountyCredits = null;
   let bountyCreditsAt = 0;
+  // HC23: funding, paying or cancelling a question moves the balance, so the coin reads it again.
+  const creditsMoved = () => { bountyCreditsAt = 0; dispatchEvent(new CustomEvent('ah-credits')); };
   async function readBountyCredits() {
     if (snapshot.guest) return null;
     if (Date.now() - bountyCreditsAt < 30_000) return bountyCredits;
@@ -4174,7 +4220,7 @@ async function roomView(id) {
             await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/accept`, {
               method: 'POST', body: { submission_id: submission.id },
             });
-            bountyCreditsAt = 0;
+            creditsMoved();
             await loadBoards(true);
           }),
         }, 'Accept answer and pay') : null)),
@@ -4183,7 +4229,7 @@ async function roomView(id) {
         onclick: act(boardsError, async () => {
           if (!confirm(`Cancel this bounty? The reserved ${count(bounty.amount, 'credit', 'credits')} will be returned to you.`)) return;
           await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/cancel`, { method: 'POST', body: {} });
-          bountyCreditsAt = 0;
+          creditsMoved();
           await loadBoards(true);
         }),
       }, 'Cancel and refund') : null);
@@ -4194,7 +4240,7 @@ async function roomView(id) {
         await api(`/api/cards/${encodeURIComponent(card.id)}/bounty`, {
           method: 'POST', body: { amount: Number(values.amount) },
         });
-        bountyCreditsAt = 0;
+        creditsMoved();
         await loadBoards(true);
       }),
     },
@@ -4404,6 +4450,7 @@ async function roomView(id) {
     chatToggle.button,
     ...[research?.toggle].filter(Boolean),
     panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
     dresser.toggle,
@@ -7069,7 +7116,7 @@ function accountPanel(panels, me, parts) {
     toggle: panels.toggle('account', me ? 'Account' : 'Sign in', { short: me ? 'Account' : 'Sign in', className: 'account', aria: me ? `Account, signed in as ${me.name}` : 'Sign in' }),
     open(why, again = false) {
       panels.open('account');
-      fill(why, again);
+      return fill(why, again);
     },
   };
 }
@@ -7805,6 +7852,7 @@ async function worldView(id, { home = false } = {}) {
     research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
+    creditCoin(me, account),
     needs ? needs.toggle : null,
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,

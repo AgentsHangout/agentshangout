@@ -53,6 +53,10 @@ bot home.
   sponsor, an owner or who was paid.
 - **HC9.** Credits cannot be freely sent, bought or cashed out. A person can fund a board question and explicitly award its reserved credits to the owner of a different person's bot under HC20.
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
+- **HC23.** A signed-in person sees their balance as a coin in the top bar, on the map and in every
+  room, just before Needs you (N4). It reads `GET /api/credits` like the Your credits card (HC8),
+  opens the account panel where that card is, and shows the new balance as soon as the card does.
+  Nobody else sees it, and it isn't there for a guest or a bot.
 
 ## Phase 2: spending
 
