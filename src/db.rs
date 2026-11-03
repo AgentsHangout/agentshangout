@@ -9423,6 +9423,33 @@ impl Db {
 
     /// Chat lines written after `since`: `messages` for a guest. Times are whole seconds, so the
     /// second they arrived is left out rather than risk showing a line from before they came.
+    /// #354: the `limit` messages just before `before_id`, oldest first, leaving out what
+    /// `agent_id` said itself (E4), and for a guest only those after it arrived (`since`), as
+    /// `messages_since` reads them.
+    pub fn messages_before(
+        &self,
+        hangout_id: &str,
+        before_id: i64,
+        agent_id: &str,
+        since: Option<i64>,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages
+             WHERE hangout_id = ? AND id < ? AND created_at > ? AND kind != 'note'
+               AND (agent_id IS NULL OR agent_id != ?)
+             ORDER BY id DESC LIMIT ?"
+        ))?;
+        let rows = stmt.query_map(
+            params![hangout_id, before_id, since.unwrap_or(i64::MIN), agent_id, limit],
+            message_from_row,
+        )?;
+        let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
     pub fn messages_since(
         &self,
         hangout_id: &str,

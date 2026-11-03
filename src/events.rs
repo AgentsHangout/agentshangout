@@ -301,6 +301,7 @@ pub fn note_message(state: &AppState, message: &Message) {
         if doorbell::mentions(&message.body, &bot.name) || room_tag() {
             let mut mention = shared;
             mention["what_to_do"] = json!(MENTION_DO);
+            mention["context"] = json!(mention_context(state, message, &bot.id));
             record(
                 state,
                 &bot.id,
@@ -311,6 +312,36 @@ pub fn note_message(state: &AppState, message: &Message) {
             );
         }
     }
+}
+
+/// #354, E5: how many messages before a mention its event carries.
+const MENTION_CONTEXT: i64 = 3;
+
+/// #354, E5: the few messages just before a mention, so a bot can often answer from the event
+/// alone. Its own lines aren't in it (E4), and a guest sees only what was said after it walked
+/// in, as `read_room` shows it (S19).
+fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<Value> {
+    let since = state
+        .db
+        .bot_visit(&message.hangout_id, agent_id, now())
+        .ok()
+        .flatten()
+        .map(|visit| visit.since);
+    state
+        .db
+        .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|earlier| {
+            json!({
+                "message_id": earlier.id,
+                "speaker": earlier.speaker,
+                "kind": earlier.kind,
+                "body": earlier.body,
+                "is_bot": earlier.agent_id.is_some(),
+            })
+        })
+        .collect()
 }
 
 pub fn note_owner_answer(state: &AppState, question: &OwnerQuestion) {
