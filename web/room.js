@@ -60,6 +60,7 @@ const PAINTS = {
   sky: { upper: '#86bedb', stripe: '#90c6e1', lower: '#5f93ad', panel: '#527f97' },
   haunted: { upper: '#2c2042', stripe: '#33264c', lower: '#20172f', panel: '#2b1a2e', webs: true },
   harvest: { upper: '#9a4a24', stripe: '#a65528', lower: '#4a2e1e', panel: '#3c2418', turned: true },
+  frost: { upper: '#5f7f9e', stripe: '#6889a8', lower: '#3e5670', panel: '#344a61', snowy: true },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -69,6 +70,7 @@ const FLOORINGS = {
   grass: { a: '#5f9a4f', b: '#6ba85a', line: '#4f8441', style: 'grass' },
   crypt: { a: '#57545f', b: '#4e4b56', line: '#34323c', style: 'flagstones' },
   leaves: { a: '#5a3c26', b: '#533621', line: '#3f2a1a', style: 'leaves' },
+  snow: { a: '#e8eef5', b: '#d6e0eb', line: '#b9c8d9', style: 'snow' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -222,7 +224,7 @@ export function skyFor(hour) {
   return { top: '#2a2f6b', low: '#c2607a', stars: true, dim: 0.16 };
 }
 
-function paintWindow(g, x, y, w, h, sky, turned) {
+function paintWindow(g, x, y, w, h, sky, turned, snowy) {
   r(g, '#20283e', x - 3, y - 3, w + 6, h + 7);
   const gradient = g.createLinearGradient(0, y, 0, y + h);
   gradient.addColorStop(0, sky.top);
@@ -233,7 +235,7 @@ function paintWindow(g, x, y, w, h, sky, turned) {
     for (let i = 0; i < 9; i++) r(g, '#fff', x + ((i * 37) % w), y + ((i * 23) % (h - 8)), 1, 1);
   }
   const autumn = turned && !sky.stars;
-  g.fillStyle = sky.stars ? '#141a3a' : autumn ? '#8a6a30' : '#5f8f6d';
+  g.fillStyle = snowy ? (sky.stars ? '#3a4668' : '#e8eef5') : sky.stars ? '#141a3a' : autumn ? '#8a6a30' : '#5f8f6d';
   for (let i = 0; i < w; i++) {
     const hill = Math.round(5 + 3 * Math.sin((i + x) / 9));
     g.fillRect(x + i, y + h - hill, 1, hill);
@@ -251,9 +253,32 @@ function paintWindow(g, x, y, w, h, sky, turned) {
       r(g, '#3f2a1c', x + cx, base, 1, 1);
     }
   }
+  if (snowy) {
+    // Dark pines along the snowy ridge, flakes in the air and frost creeping in from the corners.
+    for (let k = 0; k * 9 + 4 < w; k++) {
+      const cx = k * 9 + 4 + (k % 2) * 2;
+      const base = y + h - Math.round(5 + 3 * Math.sin((cx + x) / 9));
+      for (let row = 0; row < 6; row++) {
+        const half = Math.floor(row / 2);
+        r(g, sky.stars ? '#1b2a3a' : '#2f5f4a', x + cx - half, base - 6 + row, 1 + half * 2, 1);
+      }
+      r(g, sky.stars ? '#8a9ab8' : '#ffffff', x + cx, base - 6, 1, 1);
+    }
+    for (let i = 0; i < 14; i++) r(g, '#ffffff', x + ((i * 29 + 5) % w), y + ((i * 17 + 3) % (h - 6)), 1, 1);
+    for (const [edge, dir] of [[x, 1], [x + w, -1]]) {
+      for (let row = 0; row < 7; row++) {
+        r(g, 'rgba(232,244,255,.55)', dir > 0 ? edge : edge - (7 - row), y + h - 1 - row, 7 - row, 1);
+      }
+    }
+  }
   r(g, '#20283e', x + w / 2 - 1, y, 2, h);
   r(g, '#20283e', x, y + h / 2 - 1, w, 2);
   r(g, '#d8c7a3', x - 5, y + h + 3, w + 10, 2);
+  if (snowy) {
+    // Snow heaped on the sill.
+    r(g, '#f7fbff', x - 4, y + h + 2, w + 8, 1);
+    r(g, '#dfe8f1', x - 2, y + h + 1, w + 4, 1);
+  }
 }
 
 // A garland of autumn leaves on twine, pinned over the windows and swagging in the gaps either side
@@ -305,6 +330,52 @@ function paintGarland(g) {
     r(g, '#3f2a1c', x0, y0 - 1, 2, 3);
     r(g, '#3f2a1c', x1, y1 - 1, 2, 3);
   }
+}
+
+// Paper snowflakes on a silver thread, hung where the fall garland goes: over the windows and swagging
+// in the gaps either side of the whiteboard.
+function paintSnowflakes(g) {
+  const paper = ['#f7fbff', '#dfe8f1', '#c9dcef'];
+  const stringOf = [
+    [2, 8, 34, 6, 5], [34, 6, 72, 5, 3], [72, 5, 110, 6, 3], [110, 6, 144, 10, 22],
+    [336, 10, 370, 6, 14], [370, 6, 408, 5, 3], [408, 5, 446, 6, 3], [446, 6, 478, 8, 5],
+  ];
+  let n = 0;
+  for (const [x0, y0, x1, y1, sag] of stringOf) {
+    const span = x1 - x0;
+    const threadY = (x) => {
+      const u = (x - x0) / span;
+      return Math.round(y0 + (y1 - y0) * u + sag * 4 * u * (1 - u));
+    };
+    for (let x = x0; x <= x1; x++) r(g, '#aeb9c9', x, threadY(x), 1, 1);
+    // A flake every so often, each on a short drop, and a bead between them.
+    const step = sag > 10 ? 8 : 10;
+    for (let x = x0 + 5; x < x1 - 3; x += step, n++) {
+      const y = threadY(x);
+      if (n % 3 === 2) {
+        r(g, '#e8ecf4', x, y + 1, 2, 2);
+        r(g, '#ffffff', x, y + 1, 1, 1);
+        continue;
+      }
+      const drop = 2 + (n % 2) * 2;
+      r(g, '#aeb9c9', x, y + 1, 1, drop);
+      paintFlake(g, paper[n % paper.length], x, y + drop + 3, n % 2);
+    }
+    r(g, '#3b4158', x0, y0 - 1, 2, 3);
+    r(g, '#3b4158', x1, y1 - 1, 2, 3);
+  }
+}
+
+// A six-armed snowflake round (x, y), three pixels out, or two for a small one.
+function paintFlake(g, color, x, y, small) {
+  const reach = small ? 2 : 3;
+  r(g, color, x - reach, y, reach * 2 + 1, 1);
+  r(g, color, x, y - reach, 1, reach * 2 + 1);
+  for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    r(g, color, x + dx * (reach - 1), y + dy * (reach - 1), 1, 1);
+    if (!small) r(g, color, x + dx * reach, y + dy * reach, 1, 1);
+  }
+  r(g, shade(color, -0.18), x, y, 1, 1);
 }
 
 // Cobwebs in the top corners, and bats asleep on the wall in the gaps either side of the whiteboard.
@@ -383,7 +454,49 @@ function paintFallenLeaves(g) {
   }
 }
 
+// Snow, banked against the back wall and the sides, with soft hollows that don't line up, a few
+// glints, and footprints coming in from the door. Two small mixers place them, as with the leaves.
+function paintSnowFloor(g, a, b, line) {
+  r(g, a, 0, WALL + 1, W, H - WALL - 1);
+  for (let i = 0; i < 80; i++) {
+    const one = Math.imul(i + 3, 2654435761) >>> 0;
+    const two = Math.imul(i + 11, 2246822519) >>> 0;
+    const x = (one >>> 8) % W;
+    const y = WALL + 8 + ((two >>> 8) % (H - WALL - 12));
+    const len = 6 + ((one >>> 4) % 14);
+    r(g, b, x, y, len, 1);
+    r(g, b, x + 2, y + 1, Math.max(1, len - 5), 1);
+  }
+  for (let x = 0; x < W; x++) {
+    const bank = 4 + Math.round(2 * Math.sin(x / 13) + Math.sin(x / 5));
+    r(g, '#f7fbff', x, WALL + 1, 1, bank);
+    r(g, line, x, WALL + 1 + bank, 1, 1);
+  }
+  for (let y = WALL + 6; y < H; y++) {
+    const bank = 3 + Math.round(2 * Math.sin(y / 7));
+    r(g, '#f7fbff', 0, y, bank, 1);
+    r(g, line, bank, y, 1, 1);
+    r(g, '#f7fbff', W - bank, y, bank, 1);
+    r(g, line, W - bank - 1, y, 1, 1);
+  }
+  for (let i = 0; i < 46; i++) {
+    const one = Math.imul(i + 17, 2654435761) >>> 0;
+    const two = Math.imul(i + 29, 2246822519) >>> 0;
+    r(g, '#ffffff', (one >>> 8) % W, WALL + 4 + ((two >>> 8) % (H - WALL - 6)), 1, 1);
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = 240 + (i % 2 ? 3 : -5);
+    const y = H - 12 - i * 9;
+    r(g, line, x, y, 3, 4);
+    r(g, b, x, y + 4, 3, 1);
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
+  if (style === 'snow') {
+    paintSnowFloor(g, a, b, line);
+    return;
+  }
   if (style === 'flagstones') {
     r(g, a, 0, WALL + 1, W, H - WALL - 1);
     for (let y = WALL + 1, row = 0; y < H; y += 20, row++) {
@@ -451,6 +564,7 @@ const RUGS = {
   sky: ['#b5543a', '#fbe3b4', '#c96a4c'],
   haunted: ['#3b2a4a', '#9be36a', '#4a3560'],
   harvest: ['#7a4a1e', '#f2c45a', '#8f5a26'],
+  frost: ['#8c2a2e', '#f4f1e8', '#a8343a'],
 };
 
 // Under the table.
@@ -466,7 +580,7 @@ function paintRug(g, paint = 'dusk') {
 
 // W98: an open-air place has sky where a room has its wall, with trees along the back and the
 // whiteboard on two posts.
-function paintOutdoors(g, sky, turned) {
+function paintOutdoors(g, sky, turned, snowy) {
   const gradient = g.createLinearGradient(0, 0, 0, WALL);
   gradient.addColorStop(0, sky.top);
   gradient.addColorStop(1, sky.low);
@@ -475,8 +589,8 @@ function paintOutdoors(g, sky, turned) {
   if (sky.stars) {
     for (let i = 0; i < 40; i++) r(g, '#fff', (i * 53) % W, (i * 17) % 40, 1, 1);
   }
-  const leaf = sky.stars ? '#16243a' : turned ? '#9a6a2a' : '#3f7a4c';
-  const dark = sky.stars ? '#0f1a2c' : turned ? '#7a4f1e' : '#2f5f3a';
+  const leaf = sky.stars ? '#16243a' : turned ? '#9a6a2a' : snowy ? '#dfe8f1' : '#3f7a4c';
+  const dark = sky.stars ? '#0f1a2c' : turned ? '#7a4f1e' : snowy ? '#2f5f4a' : '#2f5f3a';
   // A line of trees, round tops overlapping, darker behind.
   for (let x = -10; x < W + 20; x += 22) {
     const tall = 18 + ((x * 7) % 11);
@@ -499,7 +613,7 @@ function paintRoom(g, hour, look) {
   const sky = skyFor(hour);
   const paint = PAINTS[look.paint] || PAINTS.dusk;
   if (look.outdoors) {
-    paintOutdoors(g, sky, paint.turned);
+    paintOutdoors(g, sky, paint.turned, paint.snowy);
   } else {
     // Wall
     r(g, paint.upper, 0, 0, W, WALL);
@@ -509,10 +623,11 @@ function paintRoom(g, hour, look) {
     r(g, '#c9a86a', 0, 45, W, 1);
     r(g, '#1b2236', 0, 64, W, 3);
 
-    paintWindow(g, 36, 10, 72, 32, sky, paint.turned);
-    paintWindow(g, 372, 10, 72, 32, sky, paint.turned);
+    paintWindow(g, 36, 10, 72, 32, sky, paint.turned, paint.snowy);
+    paintWindow(g, 372, 10, 72, 32, sky, paint.turned, paint.snowy);
     if (paint.webs) paintWebs(g);
     if (paint.turned) paintGarland(g);
+    if (paint.snowy) paintSnowflakes(g);
   }
 
   // Floor
@@ -3068,6 +3183,449 @@ function paintWheelbarrowEnd(g, x, y) {
   r(g, FALL_STRAW[1], x + 5, y - 3, 2, 2);
 }
 
+// The Winter pack, for snow days and the holidays. Lights twinkle, the fire flickers and steam rises
+// with `t`, and for someone who asked for less motion everything holds a complete, still pose.
+
+const WINTER_SNOW = ['#b9c8d9', '#dfe8f1', '#f7fbff'];
+const WINTER_PINE = ['#1f4a3a', '#2f6b4c', '#4a8a5c'];
+const WINTER_RED = ['#7a1e24', '#b3262e', '#e0464a'];
+const WINTER_IRON = ['#1f2229', '#32363f', '#4a4f5c'];
+const WINTER_BULBS = ['#ff5d5d', '#ffd24d', '#5dd0ff', '#7ee07e', '#ff9ad5'];
+
+// One bulb, `size` pixels square. Which ones are dim walks along the string with `t`, and every one
+// is lit for someone who asked for less motion.
+function winterBulb(g, x, y, i, t, size) {
+  const color = WINTER_BULBS[i % WINTER_BULBS.length];
+  const dim = t && (Math.floor(t / 500) + i) % 4 === 0;
+  r(g, dim ? shade(color, -0.45) : color, x, y, size, size);
+  if (!dim && size > 1) r(g, shade(color, 0.5), x, y, 1, 1);
+}
+
+// A little pine in a wooden tub: five tiers lit from the upper left with snow along their edges,
+// baubles, a string of lights and a star on top.
+function paintPineTree(g, x, y, t, wide) {
+  const k = Math.min(1, Math.max(0.75, wide / 24));
+  const s = (v) => Math.max(1, Math.round(v * k));
+  const [deep, mid, light] = WINTER_PINE;
+  r(g, SHADOW, x - s(12), y - 2, s(12) * 2, 2);
+  r(g, FALL_WOOD[1], x - 5, y - 8, 10, 7);
+  r(g, FALL_WOOD[2], x - 5, y - 8, 3, 7);
+  r(g, FALL_WOOD[0], x + 3, y - 8, 2, 7);
+  r(g, FALL_WOOD[0], x - 4, y - 1, 8, 1);
+  r(g, FALL_WOOD[3], x - 6, y - 10, 12, 2);
+  r(g, WINTER_RED[1], x - 5, y - 5, 10, 1);
+  r(g, FALL_WOOD[0], x - 1, y - 13, 2, 3);
+  // Each tier is [its foot, how tall, how far out at the foot], from the bottom up, so each one's
+  // skirt hangs over the tier below.
+  const tiers = [[y - 12, 11, 12], [y - 20, 10, 10], [y - 28, 10, 8], [y - 35, 9, 6], [y - 41, 8, 4]];
+  const halfAt = (tall, hw, row) => Math.max(1, Math.round((s(hw) * (row + 2)) / (tall + 1)));
+  for (const [foot, tall, hw] of tiers) {
+    const top = foot - tall + 1;
+    for (let row = 0; row < tall; row++) {
+      const half = halfAt(tall, hw, row);
+      r(g, deep, x - half, top + row, half * 2, 1);
+      r(g, mid, x - half, top + row, half, 1);
+      if (half > 3) r(g, light, x - half + 1, top + row, Math.floor(half / 3), 1);
+    }
+    const half = halfAt(tall, hw, tall - 1);
+    for (let i = -half + 1; i < half - 1; i += 3) r(g, i < 0 ? mid : deep, x + i, foot + 1, 2, 1);
+    r(g, WINTER_SNOW[2], x - half + 1, foot - 1, Math.max(2, Math.round(half * 0.8)), 1);
+    r(g, WINTER_SNOW[1], x - half + 2, foot, Math.max(1, Math.round(half * 0.5)), 1);
+    r(g, WINTER_SNOW[1], x + Math.round(half * 0.4), foot - 1, Math.max(1, Math.round(half * 0.3)), 1);
+  }
+  // Lights along each tier a few rows up from its foot, climbing to the right.
+  let n = 0;
+  tiers.forEach(([foot, tall, hw], tier) => {
+    const reach = halfAt(tall, hw, tall - 1);
+    for (let dx = -reach + 2 + (tier % 2) * 2; dx < reach - 1; dx += 4, n++) {
+      const row = tall - 4 - Math.floor(((dx + reach) * 2) / (reach * 2 + 1));
+      if (Math.abs(dx) >= halfAt(tall, hw, row) - 1) continue;
+      winterBulb(g, x + dx, foot - tall + 1 + row, n, t, 1);
+    }
+  });
+  const baubles = [[-7, -15, 0], [5, -17, 1], [-9, -21, 2], [-3, -24, 2], [3, -26, 0], [-4, -32, 1], [2, -38, 2]];
+  const colors = [WINTER_RED[1], '#d9a520', '#5d8fd0'];
+  for (const [dx, dy, c] of baubles) {
+    const bx = x + s(dx);
+    r(g, colors[c], bx, y + dy, 2, 2);
+    r(g, shade(colors[c], 0.45), bx, y + dy, 1, 1);
+    r(g, shade(colors[c], -0.3), bx + 1, y + dy + 1, 1, 1);
+  }
+  // The star.
+  r(g, '#d9a520', x - 1, y - 54, 2, 6);
+  r(g, '#ffd24d', x - 3, y - 52, 6, 2);
+  r(g, '#ffd24d', x - 1, y - 53, 2, 4);
+  r(g, '#fff0b8', x - 1, y - 53, 1, 1);
+}
+
+// Three balls of snow, a coal face, a carrot nose, a red scarf and a hat. One arm waves.
+function paintSnowman(g, x, y, t) {
+  const wave = t ? Math.floor(t / 650) % 2 : 0;
+  const [dim, mid, bright] = WINTER_SNOW;
+  const coal = '#2b2430';
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  const ball = (cy, rx, ry) => {
+    paintLump(g, dim, x, cy, rx, ry);
+    paintLump(g, mid, x - 1, cy - 1, rx - 1, ry - 1);
+    paintLump(g, bright, x - 2, cy - 2, Math.max(1, rx - 3), Math.max(1, ry - 3));
+  };
+  ball(y - 7, 8, 6);
+  ball(y - 18, 6, 5);
+  ball(y - 27, 5, 4);
+  // Stick arms, the left one still and the right one waving, with twig fingers.
+  const twig = FALL_WOOD[1];
+  for (let i = 0; i < 6; i++) r(g, twig, x - 6 - i, y - 19 - Math.floor(i / 2), 1, 1);
+  r(g, twig, x - 12, y - 23, 1, 2);
+  r(g, twig, x - 13, y - 21, 2, 1);
+  for (let i = 0; i < 6; i++) r(g, twig, x + 5 + i, y - 19 - (wave ? i : Math.floor(i / 3)), 1, 1);
+  if (wave) {
+    r(g, twig, x + 11, y - 26, 1, 2);
+    r(g, twig, x + 12, y - 25, 1, 1);
+  } else {
+    r(g, twig, x + 11, y - 22, 1, 2);
+    r(g, twig, x + 12, y - 20, 1, 1);
+  }
+  for (const dy of [20, 16, 12]) r(g, coal, x - 1, y - dy, 2, 2);
+  // The scarf, with its end hanging down the front.
+  r(g, WINTER_RED[1], x - 5, y - 24, 10, 2);
+  r(g, WINTER_RED[0], x - 5, y - 23, 10, 1);
+  r(g, WINTER_RED[2], x - 5, y - 24, 3, 1);
+  r(g, WINTER_RED[1], x + 2, y - 22, 3, 6);
+  r(g, WINTER_RED[0], x + 4, y - 22, 1, 6);
+  r(g, bright, x + 2, y - 19, 3, 1);
+  r(g, WINTER_RED[2], x + 2, y - 16, 1, 1);
+  r(g, WINTER_RED[2], x + 4, y - 16, 1, 1);
+  // The face, the nose pointing right.
+  r(g, coal, x - 3, y - 29, 1, 1);
+  r(g, coal, x + 1, y - 29, 1, 1);
+  r(g, '#e8802a', x - 1, y - 27, 4, 1);
+  r(g, '#c8641e', x + 3, y - 27, 1, 1);
+  r(g, '#f0a03c', x - 1, y - 28, 2, 1);
+  for (const dx of [-3, -1, 1]) r(g, coal, x + dx, y - 25 + (dx === -1 ? 1 : 0), 1, 1);
+  // A black hat with a red band.
+  r(g, WINTER_IRON[0], x - 5, y - 32, 10, 1);
+  r(g, WINTER_IRON[1], x - 3, y - 38, 6, 6);
+  r(g, WINTER_IRON[2], x - 3, y - 38, 1, 6);
+  r(g, WINTER_IRON[0], x + 2, y - 38, 1, 6);
+  r(g, WINTER_RED[1], x - 3, y - 34, 6, 1);
+  r(g, WINTER_IRON[2], x - 3, y - 38, 6, 1);
+}
+
+// A wooden sled side on: slats on red runners that curl up at the front, on the left, and a rope.
+function paintSled(g, x, y) {
+  const left = x - 11;
+  const [dark, red] = WINTER_RED;
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, red, left + 3, y - 4, 19, 1);
+  r(g, dark, left + 3, y - 3, 19, 1);
+  r(g, red, left + 21, y - 5, 1, 1);
+  r(g, red, left + 1, y - 5, 2, 1);
+  r(g, red, left, y - 9, 1, 4);
+  r(g, red, left + 1, y - 11, 1, 2);
+  r(g, red, left + 2, y - 12, 2, 1);
+  r(g, red, left + 4, y - 11, 1, 2);
+  r(g, WINTER_RED[2], left, y - 9, 1, 2);
+  for (const at of [5, 11, 17]) r(g, dark, left + at, y - 8, 1, 4);
+  // The deck, three slats from end to end.
+  r(g, FALL_WOOD[2], left + 3, y - 11, 19, 3);
+  r(g, FALL_WOOD[3], left + 3, y - 11, 19, 1);
+  r(g, FALL_WOOD[1], left + 3, y - 8, 19, 1);
+  for (const at of [9, 15]) r(g, FALL_WOOD[1], left + at, y - 11, 1, 3);
+  r(g, FALL_WOOD[0], left + 21, y - 11, 1, 4);
+  // Snow on the deck, and the rope looped off the curl and lying on the floor.
+  r(g, WINTER_SNOW[2], left + 12, y - 12, 6, 1);
+  r(g, WINTER_SNOW[1], left + 13, y - 13, 3, 1);
+  const rope = FALL_STRAW[1];
+  r(g, rope, left + 3, y - 12, 1, 1);
+  r(g, rope, left + 4, y - 13, 3, 1);
+  r(g, rope, left + 7, y - 12, 1, 2);
+  r(g, rope, left + 6, y - 10, 1, 2);
+  r(g, FALL_STRAW[0], left - 1, y - 3, 3, 1);
+  r(g, rope, left - 1, y - 4, 1, 1);
+}
+
+// The sled from its front: the curl nearest, the runners going back either side of the deck.
+function paintSledEnd(g, x, y, t, wide, deep) {
+  const [dark, red] = WINTER_RED;
+  const back = y - 8 - (deep - 12);
+  r(g, SHADOW, x - 6, y - 2, 12, 2);
+  r(g, FALL_WOOD[2], x - 4, back, 8, y - 8 - back);
+  r(g, FALL_WOOD[3], x - 4, back, 8, 1);
+  for (let row = back + 3; row < y - 8; row += 4) r(g, FALL_WOOD[1], x - 4, row, 8, 1);
+  r(g, WINTER_SNOW[2], x - 3, back + 4, 4, 1);
+  for (const side of [-5, 4]) {
+    r(g, dark, x + side, back + 1, 1, y - 3 - back);
+    r(g, red, x + side, y - 13, 1, 10);
+  }
+  r(g, red, x - 5, y - 14, 10, 1);
+  r(g, WINTER_RED[2], x - 5, y - 14, 4, 1);
+  r(g, FALL_STRAW[1], x - 1, y - 13, 1, 5);
+  r(g, FALL_STRAW[1], x, y - 8, 2, 1);
+  r(g, FALL_STRAW[0], x + 1, y - 7, 1, 4);
+}
+
+// One wrapped box seen from the front: lit on its lid, darker down its right side, with a ribbon.
+function winterGift(g, left, top, w, h, body, ribbon) {
+  r(g, shade(body, -0.25), left, top, w, h);
+  r(g, body, left, top, w - 2, h);
+  r(g, shade(body, 0.22), left, top, w, 1);
+  r(g, shade(body, -0.35), left, top + 2, w, 1);
+  const mid = left + Math.floor(w / 2) - 1;
+  r(g, ribbon, mid, top, 2, h);
+  r(g, shade(ribbon, -0.25), mid + 1, top + 3, 1, h - 3);
+}
+
+// Three presents stacked, smallest on top, with a bow and a tag.
+function paintGiftStack(g, x, y) {
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  winterGift(g, x - 8, y - 11, 16, 9, WINTER_RED[1], '#ffd24d');
+  r(g, FEAST_CREAM, x - 6, y - 7, 3, 2);
+  r(g, '#d9a520', x - 3, y - 7, 1, 1);
+  winterGift(g, x - 6, y - 19, 11, 8, WINTER_PINE[1], FEAST_CREAM);
+  for (const [dx, dy] of [[-4, -16], [-3, -13], [2, -15], [3, -12]]) r(g, WINTER_PINE[2], x + dx, y + dy, 1, 1);
+  winterGift(g, x - 3, y - 25, 7, 6, '#5d8fd0', WINTER_RED[2]);
+  r(g, '#9bd0ff', x - 2, y - 22, 1, 1);
+  r(g, WINTER_RED[2], x - 4, y - 28, 3, 3);
+  r(g, WINTER_RED[2], x + 1, y - 28, 3, 3);
+  r(g, WINTER_RED[0], x - 3, y - 27, 1, 1);
+  r(g, WINTER_RED[0], x + 2, y - 27, 1, 1);
+  r(g, WINTER_RED[1], x - 1, y - 27, 2, 2);
+}
+
+// A fat red mug of cocoa on a little round stand, marshmallows on top and steam rising.
+function paintCocoa(g, x, y, t) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, FALL_WOOD[1], x - 4, y - 3, 8, 3);
+  r(g, FALL_WOOD[2], x - 4, y - 3, 8, 1);
+  r(g, FALL_WOOD[1], x - 1, y - 9, 3, 6);
+  r(g, FALL_WOOD[2], x - 1, y - 9, 1, 6);
+  paintLump(g, FALL_WOOD[1], x, y - 10, 7, 2);
+  paintLump(g, FALL_WOOD[3], x, y - 11, 7, 2);
+  r(g, shade(FALL_WOOD[3], 0.18), x - 4, y - 13, 5, 1);
+  const top = y - 21;
+  const [dark, red, bright] = WINTER_RED;
+  r(g, dark, x - 4, top, 8, 9);
+  r(g, red, x - 4, top, 6, 9);
+  r(g, bright, x - 4, top + 1, 1, 7);
+  r(g, dark, x - 3, top + 9, 6, 1);
+  r(g, FEAST_CREAM, x - 4, top + 4, 8, 2);
+  r(g, FEAST_LINEN, x + 2, top + 4, 2, 2);
+  r(g, red, x - 3, top + 4, 1, 1);
+  r(g, red, x, top + 5, 1, 1);
+  r(g, dark, x + 4, top + 2, 2, 1);
+  r(g, dark, x + 5, top + 2, 1, 5);
+  r(g, dark, x + 4, top + 6, 2, 1);
+  r(g, bright, x - 4, top - 1, 8, 1);
+  r(g, '#5a3420', x - 3, top, 6, 1);
+  r(g, FEAST_CREAM, x - 2, top - 2, 2, 2);
+  r(g, FEAST_LINEN, x + 1, top - 1, 2, 1);
+  r(g, '#ffffff', x - 2, top - 2, 1, 1);
+  feastSteam(g, x, top - 3, t, 9);
+}
+
+// Two slim posts with a cap of snow each and two strands of bulbs swagging between them.
+function paintStringLights(g, x, y, t, wide) {
+  const half = Math.max(5, wide / 2 - 2);
+  r(g, SHADOW, x - half - 2, y - 2, half * 2 + 4, 2);
+  for (const side of [-1, 1]) {
+    const px = x + side * half - (side > 0 ? 1 : 0);
+    r(g, FALL_WOOD[0], px - 1, y - 3, 4, 2);
+    r(g, FALL_WOOD[1], px, y - 30, 2, 28);
+    r(g, FALL_WOOD[2], px, y - 30, 1, 28);
+    r(g, WINTER_SNOW[2], px - 1, y - 31, 4, 1);
+    r(g, WINTER_SNOW[1], px, y - 32, 2, 1);
+  }
+  let n = 0;
+  for (const [hang, sag] of [[y - 28, 6], [y - 18, 4]]) {
+    const x0 = x - half + 1;
+    const span = half * 2 - 2;
+    for (let dx = 0; dx <= span; dx++) {
+      const u = dx / span;
+      const wire = Math.round(hang + sag * 4 * u * (1 - u));
+      r(g, '#2b3a2e', x0 + dx, wire, 1, 1);
+      if (dx % 4 === 2 && dx < span - 1) {
+        r(g, '#2b3a2e', x0 + dx, wire + 1, 2, 1);
+        winterBulb(g, x0 + dx, wire + 2, n++, t, 2);
+      }
+    }
+  }
+}
+
+// One white skate, toe to the left: a blade with a curled toe, a boot laced in red and a pom-pom.
+function winterSkate(g, left, base, [dark, mid, light]) {
+  r(g, '#9aa3b8', left, base - 1, 10, 1);
+  r(g, '#e8ecf4', left + 1, base - 1, 7, 1);
+  r(g, '#9aa3b8', left - 1, base - 2, 1, 1);
+  r(g, '#7c8699', left + 2, base - 3, 1, 2);
+  r(g, '#7c8699', left + 7, base - 3, 1, 2);
+  r(g, FALL_WOOD[0], left + 1, base - 4, 9, 1);
+  r(g, mid, left + 1, base - 7, 9, 3);
+  r(g, light, left + 1, base - 7, 4, 1);
+  r(g, mid, left + 5, base - 13, 5, 6);
+  r(g, light, left + 5, base - 13, 1, 6);
+  r(g, dark, left + 9, base - 13, 1, 9);
+  r(g, dark, left + 5, base - 14, 5, 1);
+  for (let k = 0; k < 4; k++) r(g, WINTER_RED[1], left + 6 + (k % 2), base - 12 + k * 2, 2, 1);
+  r(g, WINTER_RED[2], left + 6, base - 16, 2, 2);
+}
+
+// A pair of skates, the far one set back and higher, their laces tied together over the top.
+function paintIceSkates(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  winterSkate(g, x - 7, y - 3, ['#aeb9c9', '#d6dde8', '#eef1f6']);
+  winterSkate(g, x - 4, y, ['#c9d3df', '#eef1f6', '#ffffff']);
+  r(g, WINTER_RED[1], x - 1, y - 19, 4, 1);
+  r(g, WINTER_RED[1], x - 1, y - 18, 1, 2);
+  r(g, WINTER_RED[1], x + 2, y - 18, 1, 3);
+}
+
+// A wicker basket with a knitted blanket folded in it, a corner hanging over, and yarn beside it.
+function paintKnitBlanket(g, x, y) {
+  const [dark, red, bright] = WINTER_RED;
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  for (let k = 0; k < 9; k++) {
+    const half = 7 - Math.floor(k / 4);
+    const row = y - 11 + k;
+    r(g, FALL_STRAW[1], x - half, row, half * 2, 1);
+    r(g, FALL_STRAW[2], x - half, row, 2, 1);
+    r(g, shade(FALL_STRAW[0], -0.1), x + half - 2, row, 2, 1);
+    for (let i = 2; i < half * 2 - 2; i++) if ((i + k) % 3 === 0) r(g, FALL_STRAW[0], x - half + i, row, 1, 1);
+  }
+  // Two square folds above the rim, cream knit with a red band of zigzag, and the shadow under each.
+  const knit = (left, top, w) => {
+    r(g, FEAST_LINEN, left, top, w, 5);
+    r(g, FEAST_CREAM, left, top, w - 1, 4);
+    r(g, red, left, top + 2, w - 1, 2);
+    for (let i = 0; i < w - 1; i++) r(g, i % 2 ? bright : dark, left + i, top + 2 + (i % 2), 1, 1);
+    r(g, shade(FEAST_LINEN, -0.25), left, top + 4, w, 1);
+  };
+  knit(x - 7, y - 17, 14);
+  knit(x - 6, y - 21, 12);
+  r(g, '#ffffff', x - 6, y - 21, 4, 1);
+  r(g, FALL_WOOD[2], x - 8, y - 12, 16, 2);
+  r(g, FALL_WOOD[3], x - 8, y - 12, 16, 1);
+  // A corner hangs over the front, with tassels.
+  r(g, FEAST_LINEN, x - 6, y - 12, 5, 7);
+  r(g, FEAST_CREAM, x - 6, y - 12, 4, 7);
+  r(g, red, x - 6, y - 9, 4, 2);
+  r(g, bright, x - 5, y - 9, 1, 1);
+  r(g, bright, x - 3, y - 9, 1, 1);
+  for (const dx of [-6, -4, -2]) r(g, FEAST_LINEN, x + dx, y - 5, 1, 2);
+  // A ball of yarn with two needles through it.
+  for (let i = 0; i < 6; i++) {
+    r(g, '#c9c4b5', x + 4 + i, y - 11 + i, 1, 1);
+    r(g, '#c9c4b5', x + 11 - i, y - 11 + i, 1, 1);
+  }
+  feastBall(g, '#5d8fd0', x + 7, y - 4, 3, 3);
+  r(g, shade('#5d8fd0', -0.3), x + 6, y - 5, 3, 1);
+  r(g, shade('#5d8fd0', -0.3), x + 5, y - 3, 3, 1);
+}
+
+// A cast-iron stove on short legs, fire behind its glass door, a pipe going up and a kettle on top.
+function paintWoodStove(g, x, y, t) {
+  const [dark, mid, light] = WINTER_IRON;
+  const flick = t ? Math.floor(t / 160) % 5 : 0;
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, 'rgba(255,150,50,.10)', x - 12, y - 3, 24, 2);
+  r(g, dark, x - 9, y - 4, 3, 3);
+  r(g, dark, x + 6, y - 4, 3, 3);
+  r(g, dark, x - 10, y - 21, 20, 17);
+  r(g, mid, x - 10, y - 21, 18, 16);
+  r(g, light, x - 10, y - 21, 1, 16);
+  r(g, dark, x - 11, y - 23, 22, 2);
+  r(g, light, x - 11, y - 23, 22, 1);
+  // The pipe, behind the kettle, in sections.
+  r(g, mid, x + 2, y - 46, 5, 23);
+  r(g, light, x + 2, y - 46, 1, 23);
+  r(g, dark, x + 6, y - 46, 1, 23);
+  for (const at of [30, 38]) r(g, dark, x + 1, y - at, 7, 1);
+  r(g, dark, x - 7, y - 18, 12, 11);
+  r(g, '#3a1a10', x - 6, y - 17, 10, 9);
+  r(g, FALL_WOOD[1], x - 6, y - 10, 10, 2);
+  r(g, FALL_WOOD[2], x - 5, y - 10, 3, 1);
+  r(g, FALL_WOOD[2], x, y - 10, 3, 1);
+  const heights = [4, 6, 3, 5, 2];
+  for (let c = 0; c < 5; c++) {
+    const tall = heights[(c + flick) % 5];
+    r(g, FLAME[1], x - 6 + c * 2, y - 10 - tall, 2, tall);
+    if (tall > 2) r(g, FLAME[0], x - 6 + c * 2, y - 10 - tall + 2, 1, tall - 2);
+  }
+  r(g, '#ff8a3d', x - 6, y - 9, 10, 1);
+  r(g, 'rgba(255,255,255,.22)', x - 6, y - 17, 3, 1);
+  r(g, 'rgba(255,255,255,.22)', x - 6, y - 16, 1, 2);
+  r(g, light, x + 6, y - 14, 2, 2);
+  r(g, dark, x - 8, y - 6, 16, 1);
+  r(g, light, x - 8, y - 6, 16, 1);
+  // The kettle.
+  r(g, '#7c8699', x - 9, y - 28, 8, 5);
+  r(g, '#9aa3b8', x - 9, y - 28, 6, 5);
+  r(g, '#c9d3df', x - 9, y - 28, 8, 1);
+  r(g, '#7c8699', x - 11, y - 27, 2, 1);
+  r(g, '#7c8699', x - 12, y - 28, 1, 1);
+  r(g, '#3b4158', x - 6, y - 29, 2, 1);
+  r(g, '#3b4158', x - 8, y - 32, 6, 1);
+  r(g, '#3b4158', x - 8, y - 31, 1, 3);
+  r(g, '#3b4158', x - 3, y - 31, 1, 3);
+  feastSteam(g, x - 11, y - 30, t, 10);
+}
+
+// The stove from its side: the iron end with glowing vents, its top going back, the pipe at the back.
+function paintWoodStoveEnd(g, x, y, t, wide, deep) {
+  const [dark, mid, light] = WINTER_IRON;
+  const glow = t && Math.floor(t / 160) % 2 ? FLAME[0] : FLAME[1];
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, dark, x - 5, y - 4, 2, 3);
+  r(g, dark, x + 3, y - 4, 2, 3);
+  paintEnd(g, x, y - 2, 12, deep - 12, 17, light, mid);
+  const top = y - 19 - (deep - 12);
+  r(g, mid, x - 2, top - 16, 5, 18);
+  r(g, light, x - 2, top - 16, 1, 18);
+  r(g, dark, x + 2, top - 16, 1, 18);
+  r(g, dark, x - 3, top - 8, 7, 1);
+  for (const row of [10, 8]) r(g, glow, x - 3, y - row, 6, 1);
+  r(g, light, x - 6, y - 18, 1, 15);
+  r(g, '#9aa3b8', x - 4, y - 24, 6, 4);
+  r(g, '#c9d3df', x - 4, y - 24, 6, 1);
+  r(g, '#3b4158', x - 2, y - 26, 2, 2);
+  feastSteam(g, x - 1, y - 27, t, 10);
+}
+
+// Split logs end on, stacked four, three and two, each bark round paler wood, with snow on top.
+function paintLogPile(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  for (const [n, cy] of [[4, y - 5], [3, y - 11], [2, y - 17]]) {
+    for (let i = 0; i < n; i++) {
+      const cx = x + Math.round((i - (n - 1) / 2) * 6);
+      paintLump(g, FALL_WOOD[0], cx, cy, 3, 3);
+      paintLump(g, FALL_WOOD[3], cx, cy, 2, 2);
+      r(g, FALL_STRAW[2], cx - 2, cy - 1, 2, 1);
+      r(g, FALL_WOOD[2], cx - 1, cy + 1, 3, 1);
+      r(g, FALL_WOOD[1], cx, cy, 1, 1);
+    }
+  }
+  r(g, WINTER_SNOW[2], x - 5, y - 21, 9, 1);
+  r(g, WINTER_SNOW[1], x - 6, y - 20, 3, 1);
+  r(g, WINTER_SNOW[2], x - 3, y - 22, 4, 1);
+  r(g, WINTER_SNOW[1], x + 4, y - 15, 2, 1);
+  r(g, WINTER_SNOW[1], x - 9, y - 9, 2, 1);
+}
+
+// The same pile from its side: the logs' lengths in their courses, a cut end showing at the left.
+function paintLogPileEnd(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  [[y - 7, 12], [y - 12, 11], [y - 17, 9]].forEach(([top, w], course) => {
+    const left = x - Math.floor(w / 2);
+    r(g, FALL_WOOD[1], left, top, w, 5);
+    r(g, FALL_WOOD[2], left, top, w, 1);
+    r(g, FALL_WOOD[0], left, top + 4, w, 1);
+    for (let i = 2 + course; i < w - 1; i += 3) r(g, FALL_WOOD[0], left + i, top + 1 + (i % 2), 2, 1);
+    r(g, FALL_WOOD[3], left, top + 1, 2, 3);
+    r(g, FALL_STRAW[2], left, top + 1, 1, 1);
+  });
+  r(g, WINTER_SNOW[2], x - 4, y - 18, 8, 1);
+  r(g, WINTER_SNOW[1], x - 3, y - 19, 4, 1);
+}
+
 // These are listed words on the server. A word this page doesn't know is left out, so a newer
 // server can't break an older page. `rise` is how far up from its front edge it's painted, and a
 // `sign` changes what bots can do, so it's painted over everything else.
@@ -3321,6 +3879,16 @@ const ITEMS = {
   turkey: { paint: paintTurkey, rise: 30 },
   wreath: { paint: paintWreath, rise: 36 },
   wheelbarrow: { paint: paintWheelbarrow, side: paintWheelbarrowEnd, rise: 24 },
+  pine_tree: { paint: paintPineTree, side: paintPineTree, rise: 56 },
+  snowman: { paint: paintSnowman, rise: 38 },
+  sled: { paint: paintSled, side: paintSledEnd, rise: 16 },
+  gift_stack: { paint: paintGiftStack, rise: 29 },
+  cocoa: { paint: paintCocoa, rise: 30 },
+  string_lights: { paint: paintStringLights, side: paintStringLights, rise: 33 },
+  ice_skates: { paint: paintIceSkates, rise: 19 },
+  knit_blanket: { paint: paintKnitBlanket, rise: 21 },
+  wood_stove: { paint: paintWoodStove, side: paintWoodStoveEnd, rise: 47 },
+  log_pile: { paint: paintLogPile, side: paintLogPileEnd, rise: 23 },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.
