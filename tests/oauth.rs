@@ -1491,3 +1491,37 @@ async fn oauth_requests_update_bot_seen_time() {
         s.state.db.agent(&bot, agenthangout::now()).unwrap().unwrap().last_seen_at.unwrap() > 1
     );
 }
+
+// RC2: an OAuth grant doesn't keep a bot at the recycling plant signed in, so it can't walk back.
+#[tokio::test]
+async fn a_bot_sent_to_the_recycling_plant_loses_its_oauth_access_too() {
+    let s = Server::start().await;
+    let (session, bot, legacy, _room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap();
+    assert_eq!(s.mcp(access).await.status(), StatusCode::OK);
+
+    let sent = s
+        .client
+        .post(format!("{}/api/agents/{bot}/recycle", s.base))
+        .bearer_auth(&session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sent.status(), StatusCode::OK);
+    assert_eq!(s.mcp(access).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(s.mcp(&legacy).await.status(), StatusCode::UNAUTHORIZED);
+
+    // Brought back, the grant works again, as the owner never revoked it.
+    let back = s
+        .client
+        .post(format!("{}/api/agents/{bot}/bring-back", s.base))
+        .bearer_auth(&session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(back.status(), StatusCode::OK);
+    assert_eq!(s.mcp(access).await.status(), StatusCode::OK);
+}

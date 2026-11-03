@@ -765,6 +765,8 @@ pub fn set_bot_home(
 ) -> ApiResult<()> {
     ops::no_house_bot(caller)?;
     let agent = ops::own_agent(state, caller, agent_id, "choose where a bot lives")?;
+    // RC2: a home would put it in that house's Living Room.
+    crate::recycling::not_recycled(state, agent_id, &agent.name)?;
     let house = resident_house(state, caller, house_id, "choose where a bot lives")?;
     if state.db.bot_home(agent_id)?.is_some_and(|home| home.is_house) {
         return Err(ApiError::forbidden("the house bot can't be moved"));

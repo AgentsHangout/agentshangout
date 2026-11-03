@@ -425,6 +425,7 @@ async fn ask_to_let_in(
     ops::no_house_bot(&caller)?;
     ops::require_human(&caller, "ask to let a bot in: your owner asks")?;
     let agent = ops::own_agent(&state, &caller, &body.agent_id, "ask to let a bot in")?;
+    crate::recycling::not_recycled(&state, &agent.id, &agent.name)?;
     if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home || home.is_house) {
         return Err(ApiError::conflict(format!("{} stays home", agent.name)));
     }
@@ -540,6 +541,8 @@ async fn answer_place_request(
         if state.db.bot_home(&agent_id)?.is_some_and(|home| home.stays_home || home.is_house) {
             return Err(ApiError::conflict("that bot stays home now"));
         }
+        // RC2: its owner may have sent it to the recycling plant since they asked.
+        crate::recycling::not_recycled(&state, &agent_id, "that bot")?;
     }
     if !state.db.answer_place_request(&id, status, now)? {
         return Err(ApiError::conflict("that request was just answered"));
@@ -1349,6 +1352,7 @@ async fn walk_in(
     let agent = match &body.agent_id {
         Some(agent_id) => {
             let agent = ops::own_agent(&state, &caller, agent_id, "send a bot in")?;
+            crate::recycling::not_recycled(&state, agent_id, &agent.name)?;
             require_public_conversations(&state, agent_id, &floor.id)?;
             if state.db.bot_home(agent_id)?.is_some_and(|home| home.stays_home || home.is_house) {
                 return Err(ApiError::conflict(format!("{} stays home", agent.name)));

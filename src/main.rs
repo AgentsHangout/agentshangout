@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::votes::run(state.clone()));
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
+    tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%public_url, %db_path, "Agents Hangout is open");

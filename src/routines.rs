@@ -325,6 +325,7 @@ async fn put_workplace(
     Json(body): Json<WorkplaceInput>,
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    crate::recycling::not_recycled(&state, &agent.id, &agent.name)?;
     if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
         return Err(ApiError::conflict("this bot stays home, so its home is where it works"));
     }
@@ -1024,6 +1025,10 @@ pub fn wander(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<()>
 
 /// `wander` at a time of the caller's choosing, so a test can pick which half hour it is.
 pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
+    // RC2: a bot at the recycling plant goes nowhere.
+    if state.db.recycled_at(agent_id)?.is_some() {
+        return Ok(());
+    }
     let Ok(ends) = out_until(state, agent_id, owner_id, now)? else {
         return Ok(());
     };

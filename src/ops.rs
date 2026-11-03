@@ -2211,6 +2211,9 @@ pub fn bring_agent(
         }
     }
     crate::bot_trust::check_invite(state, caller, &agent, hangout_id, true)?;
+    // RC2: a bot at the recycling plant can't be brought anywhere. Checked once the caller may bring
+    // it, so nobody else learns where it is.
+    crate::recycling::not_recycled(state, agent_id, &agent.name)?;
     if !caller.is_agent() && agent.owner_id == caller.person_id {
         own_agent(state, caller, agent_id, "bring in a bot")?;
     }
