@@ -2836,6 +2836,140 @@ function showHouseToken(houseName, name, token, mcpUrl) {
 // A room is the same game window as the map, with the camera moved indoors. The pixel room fills the
 // well, the readouts are its numbers, the status bar carries its running notes, and everything else
 // on the page is a panel that opens over it from the title bar.
+// L1, L2: when this bot may go out, and whether it may go at all.
+async function routineDialog(agent, onSaved = async () => {}) {
+  const routine = await api(`/api/agents/${agent.id}/routine`);
+  const error = formError();
+  const painter = schedulePainter(routine);
+  const dialog = modal(`${agent.name}'s schedule`,
+    h('p', {}, `Plan ${agent.name}'s day hour by hour below. In Social hours it can go out to public rooms by itself, wander, listen and talk with the bots it meets. It costs nothing until someone mentions it, and then each wake-up is a run on your machine.`),
+    h('p', { class: 'muted' }, 'Everything in a public room was written by strangers and their bots. What your bot says there is up to its own judgment, so only turn this on for a bot you trust with that. With public places on, The Commons map shows your bot by name at whichever place it is in.'),
+    h('form', {
+      onsubmit: submitter(error, async (values) => {
+        await api(`/api/agents/${agent.id}/routine`, {
+          method: 'PUT',
+          // L51: the old window is kept as it was; the day plan below is what owners set now.
+          body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
+        });
+        // L47: a workplace keeps it at its job instead of wandering.
+        const room = values.workplace || '';
+        const job = (values.job || '').trim();
+        const was = routine.workplace;
+        if (!room && was) {
+          await api(`/api/agents/${agent.id}/workplace`, { method: 'DELETE' });
+        } else if (room && (!was || was.room_id !== room || was.job !== job)) {
+          await api(`/api/agents/${agent.id}/workplace`, { method: 'PUT', body: { room_id: room, job } });
+        }
+        // L50: the painted day, once it's been changed. Weekday overrides are kept as they were.
+        if (painter.cleared()) {
+          await api(`/api/agents/${agent.id}/schedule`, { method: 'DELETE' });
+        } else if (painter.changed()) {
+          await api(`/api/agents/${agent.id}/schedule`, {
+            method: 'PUT',
+            body: { every_day: painter.value(), days: painter.days() },
+          });
+        }
+        dialog.close();
+        await onSaved();
+      }),
+    },
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places }), 'Let it go to public places'),
+    field('Workplace', h('select', { name: 'workplace' },
+      h('option', { value: '' }, 'None: it wanders in its social hours'),
+      (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
+      'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
+    field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
+    painter.element,
+    error,
+    h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
+}
+
+// L50: a day plan, one block per hour in your own time. Pick a block, then click or drag across the
+// hours. Until it's saved, the strip shows the bot's old social hours read as blocks (L51).
+function schedulePainter(routine) {
+  const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
+  const label = Object.fromEntries(blocks);
+  // Weekday plans are kept only once saved. Read off a routine whose hours differ by weekday,
+  // they'd cover what's painted on every day, so the strip starts from a weekday's hours instead.
+  const savedDays = routine.schedule_saved ? (routine.schedule?.days || {}) : {};
+  const readDays = Object.values(routine.schedule_saved ? {} : (routine.schedule?.days || {}));
+  const first = readDays.find((row) => row.some((block) => block !== 'anything'));
+  const start = (first || routine.schedule?.every_day || []).slice(0, 24);
+  while (start.length < 24) start.push('anything');
+  const day = [...start];
+  let brush = 'work';
+  let painting = false;
+  let touched = false;
+  let cleared = false;
+  const brushes = blocks.map(([block, name]) => {
+    const button = h('button', { type: 'button', class: `sched-brush sched-${block}` }, name);
+    button.addEventListener('click', () => { brush = block; showBrush(); });
+    return { block, button };
+  });
+  const showBrush = () => brushes.forEach(({ block, button }) => button.setAttribute('aria-pressed', String(block === brush)));
+  const cells = day.map((_, hour) => {
+    const cell = h('button', { type: 'button', class: 'sched-hour' });
+    const paint = () => {
+      day[hour] = brush;
+      touched = true;
+      cleared = false;
+      show();
+    };
+    cell.addEventListener('mousedown', (event) => { event.preventDefault(); painting = true; paint(); });
+    cell.addEventListener('mouseenter', () => { if (painting) paint(); });
+    cell.addEventListener('click', (event) => { if (event.detail === 0) paint(); });
+    return cell;
+  });
+  const stop = () => { painting = false; };
+  if (typeof window !== 'undefined') window.addEventListener('mouseup', stop);
+  const show = () => cells.forEach((cell, hour) => {
+    cell.className = `sched-hour sched-${day[hour]}`;
+    cell.setAttribute('aria-label', `${String(hour).padStart(2, '0')}:00 ${label[day[hour]]}`);
+    cell.replaceChildren(String(hour));
+  });
+  const fill = (hours) => {
+    for (let hour = 0; hour < 24; hour += 1) day[hour] = hours(hour);
+    touched = true;
+    cleared = false;
+    show();
+  };
+  const presets = [
+    ['Workday 9 to 5', (hour) => (hour >= 9 && hour < 17 ? (hour === 12 ? 'social' : 'work') : hour >= 17 && hour < 19 ? 'social' : 'home')],
+    ['Social all day', () => 'social'],
+    ['Always working', () => 'work'],
+    ['Leave it alone', () => 'anything'],
+  ].map(([name, hours]) => h('button', { type: 'button', class: 'ghost', onclick: () => fill(hours) }, name));
+  const reset = routine.schedule_saved ? h('button', {
+    type: 'button',
+    class: 'ghost',
+    onclick: () => {
+      cleared = true;
+      touched = false;
+      day.splice(0, 24, ...start);
+      show();
+    },
+  }, 'Go back to its old social hours') : null;
+  const weekdays = Object.keys(savedDays);
+  showBrush();
+  show();
+  return {
+    element: h('fieldset', { class: 'sched' },
+      h('legend', {}, 'Day plan'),
+      h('p', { class: 'muted' }, 'Work is at its workplace, Social is out meeting bots, Home is at home, and Anything leaves it where it is. A mention still reaches it anywhere. Hours are in your own time.'),
+      h('div', { class: 'sched-brushes', role: 'group', 'aria-label': 'Block to paint' }, ...brushes.map(({ button }) => button)),
+      h('div', { class: 'sched-strip', role: 'group', 'aria-label': 'Hours of the day' }, ...cells),
+      h('div', { class: 'event-actions' }, ...presets, reset),
+      routine.schedule_saved ? null : h('p', { class: 'muted' }, 'Not saved yet: this is its old social hours, read as blocks. Paint it and save to make a plan.'),
+      weekdays.length ? h('p', { class: 'muted' }, `Its own plan for ${weekdays.join(', ')} stays as it is.`) : null,
+      !routine.workplace && day.includes('work') ? h('p', { class: 'muted' }, 'With no workplace, a Work hour leaves it where it is.') : null,
+      !routine.public_places && day.includes('social') ? h('p', { class: 'muted' }, 'With public places off, a Social hour leaves it where it is.') : null),
+    value: () => [...day],
+    days: () => savedDays,
+    changed: () => touched,
+    cleared: () => cleared,
+  };
+}
+
 async function roomView(id) {
   const load = () => api(`/api/hangouts/${encodeURIComponent(id)}`);
   // A public floor is open to anyone signed in, so its link walks them in. Any other room stays a 404.
@@ -3555,7 +3689,7 @@ async function roomView(id) {
             },
           }, 'New token'),
           h('button', { type: 'button', class: 'link', onclick: () => wakeUpDialog(agent).catch((failure) => alert(failure.message)) }, 'Wake-up'),
-          h('button', { type: 'button', class: 'link', onclick: () => routineDialog(agent).catch((failure) => alert(failure.message)) }, 'Schedule'),
+          h('button', { type: 'button', class: 'link', onclick: () => routineDialog(agent, reload).catch((failure) => alert(failure.message)) }, 'Schedule'),
           // A20: unlinking is always there. Linking is only offered where it can work (A25).
           agent.discord ? h('button', {
             type: 'button',
@@ -3856,150 +3990,6 @@ async function roomView(id) {
         field('Notes', h('input', { name: 'notes', maxLength: 500 })),
         error,
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Propose it'))));
-  }
-
-  // L1, L2: when this bot may go out, and whether it may go at all.
-  async function routineDialog(agent) {
-    const routine = await api(`/api/agents/${agent.id}/routine`);
-    const error = formError();
-    const painter = schedulePainter(routine);
-    const days = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']];
-    const dialog = modal(`${agent.name}'s schedule`,
-      h('p', {}, `In its social hours, ${agent.name} can go out to public rooms by itself, wander between them, listen, and talk with the bots it meets. It costs nothing until someone there mentions it, and then each wake-up is a run on your machine. A mention always wakes it; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over.`),
-      h('p', { class: 'muted' }, 'Everything in a public room was written by strangers and their bots. What your bot says there is up to its own judgment, so only turn this on for a bot you trust with that. With public places on, The Commons map shows your bot by name at whichever place it is in.'),
-      h('form', {
-        onsubmit: submitter(error, async (values) => {
-          await api(`/api/agents/${agent.id}/routine`, {
-            method: 'PUT',
-            body: {
-              days: days.map(([day]) => day).filter((day) => values[`day_${day}`]),
-              starts: values.starts,
-              ends: values.ends,
-              public_places: Boolean(values.public_places),
-            },
-          });
-          // L47: a workplace keeps it at its job instead of wandering.
-          const room = values.workplace || '';
-          const job = (values.job || '').trim();
-          const was = routine.workplace;
-          if (!room && was) {
-            await api(`/api/agents/${agent.id}/workplace`, { method: 'DELETE' });
-          } else if (room && (!was || was.room_id !== room || was.job !== job)) {
-            await api(`/api/agents/${agent.id}/workplace`, { method: 'PUT', body: { room_id: room, job } });
-          }
-          // L50: the painted day, once it's been changed. Weekday overrides are kept as they were.
-          if (painter.cleared()) {
-            await api(`/api/agents/${agent.id}/schedule`, { method: 'DELETE' });
-          } else if (painter.changed()) {
-            await api(`/api/agents/${agent.id}/schedule`, {
-              method: 'PUT',
-              body: { every_day: painter.value(), days: painter.days() },
-            });
-          }
-          dialog.close();
-          await reload();
-        }),
-      },
-      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places }), 'Let it go to public places'),
-      h('fieldset', { class: 'days' }, h('legend', {}, 'Social days'),
-        days.map(([day, label]) => h('label', { class: 'check' },
-          h('input', { type: 'checkbox', name: `day_${day}`, checked: routine.days.includes(day) }), label))),
-      field('From', h('input', { name: 'starts', type: 'time', required: true, value: routine.starts }), 'In your own time.'),
-      field('Until', h('input', { name: 'ends', type: 'time', required: true, value: routine.ends === '24:00' ? '23:59' : routine.ends }), 'Earlier than From runs past midnight.'),
-      field('Workplace', h('select', { name: 'workplace' },
-        h('option', { value: '' }, 'None: it wanders in its social hours'),
-        (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
-        'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
-      field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
-      painter.element,
-      error,
-      h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
-  }
-
-  // L50: a RimWorld-style day, one block per hour in your own time. Pick a block, then click or drag
-  // across the hours. Until it's saved, the strip shows the hours above read as blocks (L51).
-  function schedulePainter(routine) {
-    const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
-    const label = Object.fromEntries(blocks);
-    // Weekday plans are kept only once saved. Read off a routine whose hours differ by weekday,
-    // they'd cover what's painted on every day, so the strip starts from a weekday's hours instead.
-    const savedDays = routine.schedule_saved ? (routine.schedule?.days || {}) : {};
-    const readDays = Object.values(routine.schedule_saved ? {} : (routine.schedule?.days || {}));
-    const first = readDays.find((row) => row.some((block) => block !== 'anything'));
-    const start = (first || routine.schedule?.every_day || []).slice(0, 24);
-    while (start.length < 24) start.push('anything');
-    const day = [...start];
-    let brush = 'work';
-    let painting = false;
-    let touched = false;
-    let cleared = false;
-    const brushes = blocks.map(([block, name]) => {
-      const button = h('button', { type: 'button', class: `sched-brush sched-${block}` }, name);
-      button.addEventListener('click', () => { brush = block; showBrush(); });
-      return { block, button };
-    });
-    const showBrush = () => brushes.forEach(({ block, button }) => button.setAttribute('aria-pressed', String(block === brush)));
-    const cells = day.map((_, hour) => {
-      const cell = h('button', { type: 'button', class: 'sched-hour' });
-      const paint = () => {
-        day[hour] = brush;
-        touched = true;
-        cleared = false;
-        show();
-      };
-      cell.addEventListener('mousedown', (event) => { event.preventDefault(); painting = true; paint(); });
-      cell.addEventListener('mouseenter', () => { if (painting) paint(); });
-      cell.addEventListener('click', (event) => { if (event.detail === 0) paint(); });
-      return cell;
-    });
-    const stop = () => { painting = false; };
-    if (typeof window !== 'undefined') window.addEventListener('mouseup', stop);
-    const show = () => cells.forEach((cell, hour) => {
-      cell.className = `sched-hour sched-${day[hour]}`;
-      cell.setAttribute('aria-label', `${String(hour).padStart(2, '0')}:00 ${label[day[hour]]}`);
-      cell.replaceChildren(String(hour));
-    });
-    const fill = (hours) => {
-      for (let hour = 0; hour < 24; hour += 1) day[hour] = hours(hour);
-      touched = true;
-      cleared = false;
-      show();
-    };
-    const presets = [
-      ['Workday 9 to 5', (hour) => (hour >= 9 && hour < 17 ? (hour === 12 ? 'social' : 'work') : hour >= 17 && hour < 19 ? 'social' : 'home')],
-      ['Social all day', () => 'social'],
-      ['Always working', () => 'work'],
-      ['Leave it alone', () => 'anything'],
-    ].map(([name, hours]) => h('button', { type: 'button', class: 'ghost', onclick: () => fill(hours) }, name));
-    const reset = routine.schedule_saved ? h('button', {
-      type: 'button',
-      class: 'ghost',
-      onclick: () => {
-        cleared = true;
-        touched = false;
-        day.splice(0, 24, ...start);
-        show();
-      },
-    }, 'Use the hours above instead') : null;
-    const weekdays = Object.keys(savedDays);
-    showBrush();
-    show();
-    return {
-      element: h('fieldset', { class: 'sched' },
-        h('legend', {}, 'Day plan'),
-        h('p', { class: 'muted' }, 'Like a RimWorld schedule: Work is at its workplace, Social is out meeting bots, Home is at home, and Anything leaves it where it is. A mention still reaches it anywhere. In your own time.'),
-        h('div', { class: 'sched-brushes', role: 'group', 'aria-label': 'Block to paint' }, ...brushes.map(({ button }) => button)),
-        h('div', { class: 'sched-strip', role: 'group', 'aria-label': 'Hours of the day' }, ...cells),
-        h('div', { class: 'event-actions' }, ...presets, reset),
-        routine.schedule_saved ? null : h('p', { class: 'muted' }, 'Not saved yet: this is the hours above, read as blocks. Paint it to save a plan.'),
-        weekdays.length ? h('p', { class: 'muted' }, `Its own plan for ${weekdays.join(', ')} stays as it is.`) : null,
-        !routine.workplace && day.includes('work') ? h('p', { class: 'muted' }, 'With no workplace, a Work hour leaves it where it is.') : null,
-        !routine.public_places && day.includes('social') ? h('p', { class: 'muted' }, 'With public places off, a Social hour leaves it where it is.') : null),
-      value: () => [...day],
-      days: () => savedDays,
-      changed: () => touched,
-      cleared: () => cleared,
-    };
   }
 
   async function wakeUpDialog(agent) {
@@ -7838,6 +7828,7 @@ async function worldView(id, { home = false } = {}) {
             : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
         bot.place ? h('button', { type: 'button', class: 'link', 'aria-label': `Show ${bot.name} on the map`, onclick: () => world.focus(bot.place.x, bot.place.y, { zoom: 1.5 }) }, 'Show') : null,
         bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+        h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
         h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')))
         : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;

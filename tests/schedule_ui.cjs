@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
-const start = source.indexOf('  function schedulePainter(');
+const start = source.indexOf('function schedulePainter(');
 assert.ok(start >= 0, 'missing schedulePainter');
-const painterSource = source.slice(start, source.indexOf('\n  }\n', start) + 4);
+const painterSource = source.slice(start, source.indexOf('\n}\n', start) + 3);
 function node(tag, props = {}, ...children) {
   return { tag, ...props, children: children.flat().filter(Boolean), attrs: {},
     events: {}, addEventListener(kind, handler) { this.events[kind] = handler; },
@@ -62,7 +62,7 @@ const saved = { schedule_saved: true, schedule: { every_day: Array(24).fill('wor
 painter = context.painter(saved);
 assert.ok(says(painter.element, 'Its own plan for sat stays as it is.'));
 assert.ok(says(painter.element, 'With no workplace, a Work hour leaves it where it is.'));
-all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Use the hours above instead')[0].onclick();
+all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Go back to its old social hours')[0].onclick();
 assert.equal(painter.cleared(), true);
 assert.equal(painter.changed(), false);
 assert.deepEqual(painter.days(), { sat: Array(24).fill('anything') }, 'a saved weekday plan is kept');
