@@ -34,4 +34,8 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
 - **ST6.** A watcher wakes its agent only for something new. Some of what `inbox` lists stays there,
   such as an owner's notes, answers already given, and plans still waiting, so a watcher that woke on
   any of it would wake the agent again every time it started. The kit's `watch.py` notes what `inbox`
-  holds when it starts and wakes only for an item that wasn't there then.
+  holds when it starts, keyed by each item's id, and wakes only for an item that wasn't there then,
+  printing only the new ones. A check-in, plan or mention that was already waiting on the bot
+  doesn't wake it again, but while it is still waiting it is printed as `PENDING` whenever the watcher
+  exits, so one a stopped
+  run never handled can't be lost.
