@@ -80,6 +80,14 @@ const HATS: &[Choice] = &[
     word("witch", "Witch hat"),
     word("crown", "Crown"),
     word("party", "Party hat"),
+    word("beret", "Beret"),
+    word("bucket", "Bucket hat"),
+    word("cowboy", "Cowboy hat"),
+    word("flower_crown", "Flower crown"),
+    word("headphones", "Headphones"),
+    word("halo", "Halo"),
+    word("hard_hat", "Hard hat"),
+    word("propeller", "Propeller hat"),
 ];
 
 /// C1: everything a person can choose. Nothing else can be worn, and nothing typed is part of it.
@@ -157,12 +165,28 @@ pub const BOT_PARTS: [Part; 5] = [
     Part {
         part: "head",
         label: "Head",
-        choices: &[word("antenna", "Antenna"), word("twin", "Two antennas"), word("wide", "Wide")],
+        choices: &[
+            word("antenna", "Antenna"),
+            word("twin", "Two antennas"),
+            word("wide", "Wide"),
+            word("dish", "Dish"),
+            word("triple", "Triple antenna"),
+            word("satellite", "Satellite"),
+            word("sprout", "Sprout"),
+            word("horns", "Horns"),
+            word("halo", "Halo"),
+        ],
     },
     Part {
         part: "eyes",
         label: "Eyes",
         choices: &[
+            word("violet", "Violet"),
+            word("red", "Red"),
+            word("orange", "Orange"),
+            word("lime", "Lime"),
+            word("blue", "Blue"),
+            word("gold", "Gold"),
             word("cyan", "Cyan"),
             word("amber", "Amber"),
             word("pink", "Pink"),
@@ -179,6 +203,11 @@ pub const BOT_PARTS: [Part; 5] = [
             word("star", "Star"),
             word("bolt", "Bolt"),
             word("lab_coat", "Lab coat"),
+            word("book", "Book"),
+            word("flower", "Flower"),
+            word("gear", "Gear"),
+            word("moon", "Moon"),
+            word("music", "Music"),
         ],
     },
     Part { part: "hat", label: "Hat", choices: HATS },
@@ -400,6 +429,28 @@ fn slow_down(state: &AppState, caller: &Caller) -> ApiResult<()> {
     Err(ApiError::too_many_requests(format!(
         "slow down: {MAX_CHANGES_PER_MINUTE} changes a minute"
     )))
+}
+
+/// C8: the authenticated bot may read and change its own look only.
+pub fn your_look(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
+    let id = caller
+        .agent_id
+        .as_deref()
+        .ok_or_else(|| ApiError::forbidden("only a bot can choose its look"))?;
+    let agent = state.db.agent(id, now())?.ok_or_else(ApiError::not_found)?;
+    if let Some(value) = args.get("look") {
+        let change: Change = serde_json::from_value(value.clone())
+            .map_err(|_| ApiError::bad_request("look must be an object of wardrobe choices"))?;
+        slow_down(state, caller)?;
+        let reply = change_look(state, Wearer::Bot, id, &change)?;
+        refresh_bot(state, &agent)?;
+        Ok(reply)
+    } else {
+        let mut chosen = looks_of(state, Wearer::Bot, &[id.to_string()])?;
+        Ok(
+            json!({ "parts": BOT_PARTS, "look": chosen.remove(id).unwrap_or_default(), "worn": worn_by(state, Wearer::Bot, id)? }),
+        )
+    }
 }
 
 // Routes
