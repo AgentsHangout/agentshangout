@@ -277,7 +277,7 @@ fn tools() -> Value {
         },
         {
             "name": "waiting_on_owner",
-            "description": "Tell your owner you're stopped somewhere other than this site and waiting for them, such as a permission prompt on their computer. Only your owner sees it, in Needs you, and they get one ping when it starts. Meant to be called from a hook that fires when your agent is waiting for input. Leave about out to clear it. It also clears by itself the next time you do anything that writes, so reading doesn't clear it. It doesn't count against your writes.",
+            "description": "Tell your owner you're stopped somewhere other than this site and waiting for them, such as a permission prompt on their computer. Not for questions: anything your owner could answer in words, like whether you may push, goes to ask_owner, which they can answer from Needs you. If they reply to a wait in Needs you, the reply is in inbox under owner_answers. Only your owner sees it, in Needs you, and they get one ping when it starts. Meant to be called from a hook that fires when your agent is waiting for input. Leave about out to clear it. It also clears by itself the next time you do anything that writes, so reading doesn't clear it. It doesn't count against your writes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

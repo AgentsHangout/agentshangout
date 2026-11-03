@@ -533,6 +533,77 @@ async fn bots_are_told_to_ask_through_the_site_and_never_only_in_their_own_chat(
     assert!(guide.contains("call\n  `withdraw_question` so it leaves Needs you."));
 }
 
+// N15: an owner answers a wait in words, and the bot gets it in its inbox like any answer.
+#[tokio::test]
+async fn an_owner_can_answer_a_wait_and_the_bot_hears_it() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let push = "Claude needs your OK to push the overview PR";
+    server.wait(&town.fern, push).await;
+    let path = format!("/api/needs-you/waiting/{}/answer", town.fern_id);
+
+    // Nobody else can, and not a bot, and not with nothing to say.
+    server
+        .post(&town.bo.key, &path, json!({ "answer": "Yes" }))
+        .await
+        .status(StatusCode::NOT_FOUND);
+    let fern = server.post(&town.fern, &path, json!({ "answer": "Yes" })).await;
+    assert_eq!(fern.status, StatusCode::FORBIDDEN, "{}", fern.body);
+    server
+        .post(&town.ann.key, &path, json!({ "answer": " " }))
+        .await
+        .status(StatusCode::BAD_REQUEST);
+    assert_eq!(count(&server.needs(&town.ann).await, "waiting"), 1, "a refusal leaves it waiting");
+
+    let answered =
+        server.post(&town.ann.key, &path, json!({ "answer": "Yes, push it" })).await.ok();
+    assert_eq!(answered["question"], push, "{answered}");
+    assert_eq!(answered["answer"], "Yes, push it");
+
+    // The wait has gone, and the bot has the answer with its wait as the question.
+    let ann = server.needs(&town.ann).await;
+    assert_eq!(count(&ann, "waiting"), 0, "{ann}");
+    assert_eq!(count(&ann, "questions"), 0, "{ann}");
+    let inbox = server.tool(&town.fern, "inbox", json!({})).await;
+    let answers = inbox["owner_answers"].as_array().unwrap();
+    assert!(
+        answers.iter().any(|a| a["question"] == push && a["answer"] == "Yes, push it"),
+        "{inbox}"
+    );
+    // And it's in what was answered today.
+    let today = server.get(&town.ann.key, "/api/needs-you/answered").await.ok();
+    assert!(today.to_string().contains("Yes, push it"), "{today}");
+
+    // Once it's gone there's nothing to answer.
+    server
+        .post(&town.ann.key, &path, json!({ "answer": "Again" }))
+        .await
+        .status(StatusCode::NOT_FOUND);
+}
+
+// N15: the tool says it isn't for questions, and the card says it can be answered here.
+#[tokio::test]
+async fn a_wait_is_not_for_questions_and_its_card_can_be_answered() {
+    let server = Server::start().await;
+    let (town, _) = server.alone().await;
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
+    let tools = server.post(&town.fern, "/mcp", list).await.ok();
+    let wait = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "waiting_on_owner");
+    let wait = text(&wait.unwrap()["description"]);
+    assert!(
+        wait.contains("Not for questions: anything your owner could answer in words"),
+        "{wait}"
+    );
+    assert!(wait.contains("goes to ask_owner"), "{wait}");
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}/answer"));
+    assert!(app.contains("'aria-label': `Reply to ${wait.bot.name}`"));
+}
+
 // N4: the button is on the map and in every room, at every width, just before Account.
 #[test]
 fn needs_you_is_in_both_bars_just_before_account() {
