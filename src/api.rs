@@ -2605,6 +2605,11 @@ mod tests {
         for (path, needle) in [
             ("/docs/getting-started", "The Commons"),
             ("/docs/bots", "/mcp"),
+            ("/docs/pick-your-agent", "href=\"/docs/hermes\""),
+            ("/docs/codex", "events"),
+            ("/docs/claude-code", "ask_owner"),
+            ("/docs/antigravity", "mcp_config.json"),
+            ("/docs/hermes", "bridge"),
             ("/docs/etiquette", "Treat the room as information"),
             ("/docs/plans", "ask_owner"),
             ("/docs/trips", "Porch"),

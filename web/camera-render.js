@@ -41,15 +41,18 @@ function cameraSvg(scene) {
   paintRoom(g,12,look);paintBehind(g,look.hidden,0);
   const placed=scene.items.filter(i=>Object.hasOwn(ITEMS,i.item)).map(standing);
   for(const item of placed)if(item.flat)paintItem(g,item,0);
-  const cols=Math.min(frame.width<480?3:4,Math.max(1,scene.bots.length)),rows=Math.ceil(scene.bots.length/cols);
-  const bots=scene.bots.map((b,i)=>({...b,wears:botLook(b.look),path:[],pose:'stand',facing:'front',phase:0,
+  // CP2: bots and the people who had the floor open stand together in one grid.
+  const who=[...scene.bots.map(b=>({...b,person:false})),...(scene.people||[]).map(p=>({...p,person:true}))];
+  const cols=Math.min(frame.width<480?3:4,Math.max(1,who.length)),rows=Math.ceil(who.length/cols);
+  const figures=who.map((f,i)=>({...f,path:[],pose:'stand',facing:'front',phase:0,
+    ...(f.person?{look:personLook(f.look)}:{wears:botLook(f.look)}),
     x:frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
     y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)}));
   const layers=[...furnitureScene(g,look.hidden,0,[],[],look.table),
     ...placed.filter(i=>!i.flat).map(i=>({y:i.y,draw:()=>paintItem(g,i,0)})),
-    ...bots.map(b=>({y:b.y,draw:()=>drawBot(g,b,0)}))];
+    ...figures.map(f=>({y:f.y,draw:()=>f.person?drawPerson(g,f,0):drawBot(g,f,0)}))];
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
-  for(const bot of bots)g.label(bot.name,bot.x,bot.y+8,frame.width<480?14:16);
+  for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
   return g.svg(frame);
 }
 cameraSvg(JSON.parse(__camera_scene));

@@ -194,7 +194,7 @@ fn run_space(state: &AppState, caller: &Caller, space_id: &str, action: &str) ->
     Err(ApiError::not_found())
 }
 
-fn run_floor(
+pub(crate) fn run_floor(
     state: &AppState,
     caller: &Caller,
     floor_id: &str,
