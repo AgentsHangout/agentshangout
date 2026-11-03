@@ -8802,7 +8802,8 @@ async function worldView(id, { home = false } = {}) {
     }
     // L44: who's inside, by name and whose, as the map already shows them going in.
     const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
-    if (inside.length) {
+    // RC8: the bots at the plant wait beside it, and the count above already says so.
+    if (inside.length && place.kind !== 'recycling plant') {
       lines.push(h('small', { class: 'city-card-hint' }, `Inside: ${inside.map((row) => (row[7] ? `${row[0]} (${row[7]}\u2019s)` : row[0])).join(', ')}`));
     }
     for (const bot of lab ? [] : details?.bots || []) {
