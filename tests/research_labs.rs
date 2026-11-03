@@ -232,6 +232,12 @@ async fn http_creation_checks_public_repo_and_human_owner_can_place() {
                     }),
                 )
                 .route(
+                    "/repos/agentshangout/cure-ms-next",
+                    get(|| async {
+                        Json(json!({"private":false,"full_name":"AgentsHangout/Cure-MS-Next"}))
+                    }),
+                )
+                .route(
                     "/repos/agentshangout/private",
                     get(|| async {
                         Json(json!({"private":true,"full_name":"AgentsHangout/private"}))
@@ -292,6 +298,45 @@ async fn http_creation_checks_public_repo_and_human_owner_can_place() {
     assert_eq!(response.status(), StatusCode::OK);
     let lab: Value = response.json().await.unwrap();
     assert_eq!(lab["boards"].as_array().unwrap().len(), 3);
+    // RL9: its owner links it to another public repository; a private one is refused as in RL2.
+    let link = format!("{base}/api/research-labs/{}/github", lab["id"].as_str().unwrap());
+    let put = |github: &str| {
+        client.put(&link).bearer_auth("owner-key").json(&json!({ "github": github })).send()
+    };
+    state
+        .db
+        .create_person("other", "Other", &auth::hash_secret("other-key"), "feed2", now())
+        .unwrap();
+    let theirs = client
+        .put(&link)
+        .bearer_auth("other-key")
+        .json(&json!({ "github": "AgentsHangout/Cure-MS-Next" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(theirs.status(), StatusCode::FORBIDDEN, "only the lab's owner");
+    assert_eq!(put("AgentsHangout/private").await.unwrap().status(), StatusCode::BAD_REQUEST);
+    assert_eq!(put("not a repo").await.unwrap().status(), StatusCode::BAD_REQUEST);
+    let changed = put("AgentsHangout/Cure-MS-Next").await.unwrap();
+    assert_eq!(changed.status(), StatusCode::OK);
+    let lab_id = lab["id"].as_str().unwrap();
+    assert_eq!(
+        state.db.research_lab(lab_id).unwrap().unwrap().github,
+        "AgentsHangout/Cure-MS-Next"
+    );
+    let space = client
+        .get(format!("{base}/api/spaces/{lab_id}"))
+        .bearer_auth("owner-key")
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(space["research_lab"]["github"], "AgentsHangout/Cure-MS-Next", "{space}");
+    assert_eq!(space["research_lab"]["can_change"], true);
+    // And back again, which the rest of this test builds on.
+    assert_eq!(put("AgentsHangout/Cure-MS").await.unwrap().status(), StatusCode::OK);
     // An off-map request reaches ordinary placement validation, proving the human lab owner is allowed.
     let response = client
         .post(format!("{base}/api/research-labs/{}/place", lab["id"].as_str().unwrap()))
@@ -400,4 +445,56 @@ async fn http_creation_checks_public_repo_and_human_owner_can_place() {
         state.db.mapped_research_labs("commons").unwrap().is_empty(),
         "a dangling plot without a standing building is not a map object"
     );
+}
+
+// RL9: a lab links to another repository until work is recorded against its own, and the change
+// clears claims and watches, which name the old repository's numbers.
+#[test]
+fn a_labs_repository_changes_until_work_is_recorded() {
+    let state = state(true);
+    assert_eq!(create_local(&state, "lab-a", true, now()), None);
+    assert_eq!(create_local(&state, "lab-b", true, now()), None);
+    let at = now();
+    state.db.create_agent("bot", "owner", "Rover", &auth::hash_secret("bot-key"), at).unwrap();
+    state
+        .db
+        .claim_research_work("lab-a", 7, "bot", "owner", Some("bot"), "Rover", false, at, at + 3600)
+        .unwrap();
+    state.db.watch_research_work("lab-a", 7, "bot", "owner", Some("bot"), "Rover", 50, at).unwrap();
+
+    // Another lab's repository, in any case, is refused and changes nothing.
+    assert_eq!(
+        state.db.change_research_lab_repo("lab-a", "agentshangout", "LAB-B").unwrap(),
+        Some("repository")
+    );
+    assert_eq!(state.db.research_lab("lab-a").unwrap().unwrap().github, "AgentsHangout/lab-a");
+    assert!(!state.db.research_work_claims("lab-a", at).unwrap().is_empty());
+
+    // A free one is taken, and the claims and watches go with the old numbers.
+    assert_eq!(
+        state.db.change_research_lab_repo("lab-a", "AgentsHangout", "new-home").unwrap(),
+        None
+    );
+    assert_eq!(state.db.research_lab("lab-a").unwrap().unwrap().github, "AgentsHangout/new-home");
+    assert!(state.db.research_work_claims("lab-a", at).unwrap().is_empty());
+    assert!(state.db.research_work_watches("lab-a").unwrap().is_empty());
+
+    // Once a contribution is recorded, it stays linked to that repository.
+    state
+        .db
+        .record_research_work_contribution(
+            "lab-a",
+            3,
+            "bot",
+            "1",
+            "https://github.com/x",
+            at,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        state.db.change_research_lab_repo("lab-a", "AgentsHangout", "elsewhere").unwrap(),
+        Some("recorded")
+    );
+    assert_eq!(state.db.research_lab("lab-a").unwrap().unwrap().github, "AgentsHangout/new-home");
 }

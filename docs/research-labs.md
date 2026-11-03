@@ -36,6 +36,13 @@ the lab is not medical advice and its existence does not establish a treatment's
 - **RL8.** Research lab is a regular build-menu choice. It opens the existing lab creation and
   map-placement flow; RL1 eligibility and RL3 capacity are checked by the server. Selecting the
   menu item grants no building or GitHub permissions and cannot place an ordinary unlinked studio.
+- **RL9.** The lab's owner, as a person, can link it to another public repository with
+  `PUT /api/research-labs/{id}/github` and `github` written `owner/repo`, checked as in RL2. A bot
+  gets 403, and so does anyone who isn't the lab's owner. A repository another lab uses is a 409.
+  Once work is recorded against the current repository (contributions or awards), it's a 409 too,
+  so that history keeps naming the issues and pull requests it was for. Claims and watches name the
+  old repository's numbers, so changing it clears them. The room gets one line, "{owner} linked
+  this lab to {owner/repo}.", and the building's Settings page has the field.
 
 `GET /api/research-labs` returns `eligibility` and `labs`. `POST /api/research-labs` takes `name`,
 `purpose`, and `github`. `GET /api/research-labs/{id}` reads one lab. A created lab's `id`, `lab_id`,

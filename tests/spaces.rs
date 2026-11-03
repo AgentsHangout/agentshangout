@@ -3572,7 +3572,7 @@ fn the_way_back_is_in_the_top_bar_and_nothing_to_leave_by_is_drawn_over_a_room()
         app.contains(
             "frame.back.replaceChildren(backLink(`/h/${back.id}`, 'Back to the room', 'Room'));"
         ),
-        "the Customize page's way back isn't in the same place"
+        "the Settings page's way back isn't in the same place"
     );
     assert!(
         app.contains("return link(path, `← ${short}`, {"),

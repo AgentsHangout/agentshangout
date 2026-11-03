@@ -166,6 +166,9 @@ struct SpaceView {
     floors: Vec<FloorDetail>,
     people: Vec<SpacePerson>,
     turned_out: Vec<Person>,
+    /// RL9: for a research lab, its repository, and whether this caller may change it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    research_lab: Option<Value>,
 }
 
 // Who runs what
@@ -993,7 +996,17 @@ async fn space_view(
             people.push(SpacePerson { person, walked_in: true });
         }
     }
-    Ok(Json(SpaceView { floors, people, turned_out: state.db.turned_out_of(&space.id)?, space }))
+    let research_lab = state.db.research_lab(&space.id)?.map(|lab| {
+        json!({ "github": lab.github, "github_url": lab.github_url,
+                "can_change": lab.owner_id == caller.person_id })
+    });
+    Ok(Json(SpaceView {
+        floors,
+        people,
+        turned_out: state.db.turned_out_of(&space.id)?,
+        space,
+        research_lab,
+    }))
 }
 
 #[derive(Default, Deserialize)]

@@ -716,7 +716,7 @@ async function homeParts(me) {
     return h('li', {},
       link(`/h/${floors[0].id}`, space.name),
       h('span', { class: 'muted' }, ` · ${floors.length === 1 ? '1 floor' : `${floors.length} floors`}${open ? ` · ${open} public` : ''}${onMap ? '' : ' · not on the map yet'} · `),
-      link(`/s/${space.id}`, 'Customize'));
+      link(`/s/${space.id}`, 'Settings'));
   };
   const spacesCard = spaces && h('section', { class: 'card', 'aria-label': 'Your spaces' },
     h('h2', {}, 'Your spaces'),
@@ -3620,7 +3620,7 @@ async function roomView(id) {
         : link(`/h/${each.id}`, each.name, { class: 'wd-tbtn floor-chip' }))),
       h('span', { class: `floor-tag${open ? ' public' : ''}` }, open ? 'Public' : 'Private'),
       h('small', {}, `${SIZE_NAME[floor.size] || floor.size} · ${here} of ${capacity}`),
-      ...(runsIt ? [link(`/s/${space.id}?from=${encodeURIComponent(id)}`, 'Customize', { class: 'wd-tbtn' })] : []),
+      ...(runsIt ? [link(`/s/${space.id}?from=${encodeURIComponent(id)}`, 'Settings', { class: 'wd-tbtn' })] : []),
       ...(snapshot.guest ? [h('button', {
         type: 'button',
         class: 'wd-tbtn',
@@ -4591,7 +4591,7 @@ async function spaceView(id) {
   // The floor this was opened from, if any. It's only ever matched against this space's own floors.
   const from = new URLSearchParams(location.search).get('from');
 
-  const frame = windowFrame({ label: `Customize ${view.space.name}`, stats: SPACE_STATS, heading: 'h1' });
+  const frame = windowFrame({ label: `Settings for ${view.space.name}`, stats: SPACE_STATS, heading: 'h1' });
   frame.root.classList.add('wd-game', 'wd-space');
   frame.root.querySelector('.wd-stats').setAttribute('aria-label', 'Space facts');
   frame.message.setAttribute('role', 'status');
@@ -4614,6 +4614,26 @@ async function spaceView(id) {
   const sheet = (title, label, ...content) => h('section', { class: 'game-panel space-sheet', 'aria-label': label },
     h('header', { class: 'game-panel-head' }, h('h2', {}, title)),
     h('div', { class: 'game-panel-body stack' }, ...content));
+
+  // RL9: a lab's owner links it to another public repository, until work is recorded against it.
+  function labPanel() {
+    const lab = view.research_lab;
+    const error = formError();
+    const current = h('p', { class: 'muted' }, 'Linked to ', link(lab.github_url, lab.github), '.');
+    if (!lab.can_change) return sheet('GitHub repository', 'GitHub repository', current, h('p', { class: 'muted' }, 'Only the lab\'s owner can change it.'));
+    return sheet('GitHub repository', 'GitHub repository', current,
+      h('form', {
+        class: 'stack',
+        onsubmit: submitter(error, async (values) => {
+          await api(`/api/research-labs/${path}/github`, { method: 'PUT', body: values });
+          await reload();
+        }),
+      },
+        field('Repository', h('input', { name: 'github', required: true, maxLength: 140, value: lab.github, autocomplete: 'off' }),
+          'A public repository, written owner/repo. Claims and watches on the workboard are cleared. Once work is recorded against this one, it stays linked.'),
+        error,
+        h('button', { type: 'submit' }, 'Link repository')));
+  }
 
   function spacePanel() {
     const error = formError();
@@ -4796,7 +4816,7 @@ async function spaceView(id) {
   function render() {
     const { space, floors, people } = view;
     document.title = `${space.name} · Agents Hangout`;
-    frame.title.replaceChildren(space.name, h('span', { class: 'wd-title-sub' }, ' · Customize'));
+    frame.title.replaceChildren(space.name, h('span', { class: 'wd-title-sub' }, ' · Settings'));
     frame.outputs.floors.textContent = `${floors.length} of ${limits.floors}`;
     frame.outputs.people.textContent = String(people.length);
     frame.outputs.open.textContent = String(floors.filter(({ floor }) => floor.access === 'public').length);
@@ -4807,6 +4827,7 @@ async function spaceView(id) {
     frame.actions.replaceChildren(titleLink('/', 'The Commons', 'Map'));
     body.replaceChildren(
       spacePanel(),
+      ...(view.research_lab ? [labPanel()] : []),
       floorsPanel(),
       peoplePanel(),
       ...(space.kind === 'third' ? [closePanel()] : []));
