@@ -29,6 +29,60 @@ pub struct Claim {
     pub since: i64,
     pub until: i64,
 }
+/// RW9: a pull request's CI and review state. `unknown` until GitHub has said otherwise.
+#[derive(Clone, Debug, Serialize)]
+pub struct PrState {
+    pub ci: String,
+    pub review: String,
+    pub checked_at: i64,
+    #[serde(skip)]
+    pub attempted_at: i64,
+    pub stale: bool,
+}
+/// RW9: CI from a commit's check runs: failing if any failed, pending if any hasn't finished,
+/// passing if all passed, none if there were none. Anything unreadable is None.
+pub fn ci_of(check_runs: &Value) -> Option<&'static str> {
+    let runs = check_runs["check_runs"].as_array()?;
+    if runs.is_empty() {
+        return Some("none");
+    }
+    let mut pending = false;
+    for run in runs {
+        if run["status"].as_str()? != "completed" {
+            pending = true;
+            continue;
+        }
+        match run["conclusion"].as_str()? {
+            "success" | "neutral" | "skipped" => {}
+            _ => return Some("failing"),
+        }
+    }
+    Some(if pending { "pending" } else { "passing" })
+}
+/// RW9: reviews from each reviewer's latest decision: changes_requested if anyone's is, approved
+/// if someone approved, none otherwise. Comments don't decide anything; a dismissal clears one.
+pub fn review_of(reviews: &Value) -> Option<&'static str> {
+    let mut latest = std::collections::BTreeMap::new();
+    for review in reviews.as_array()? {
+        let who = review["user"]["id"].as_u64()?;
+        match review["state"].as_str()? {
+            "APPROVED" | "CHANGES_REQUESTED" => {
+                latest.insert(who, review["state"].as_str()?.to_string());
+            }
+            "DISMISSED" => {
+                latest.remove(&who);
+            }
+            _ => {}
+        }
+    }
+    Some(if latest.values().any(|s| s == "CHANGES_REQUESTED") {
+        "changes_requested"
+    } else if latest.values().any(|s| s == "APPROVED") {
+        "approved"
+    } else {
+        "none"
+    })
+}
 /// RW8: how long a claim lasts unless it's renewed.
 pub const CLAIM_SECS: i64 = 4 * 60 * 60;
 #[derive(Clone, Debug)]
@@ -209,6 +263,11 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
             let mut item = json!(card);
             item["claims"] =
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
+            // RW9: only what was already read; reading the board never asks GitHub about a PR.
+            if card.kind == "pull_request" {
+                item["pr_state"] =
+                    json!(state.db.research_work_pr_state(&repo, card.number).ok().flatten());
+            }
             item
         })
         .collect();
@@ -334,6 +393,69 @@ fn on_workboard(state: &AppState, repo: &str, number: u64) -> ApiResult<()> {
         ));
     }
     Ok(())
+}
+/// RW9: a pull request's CI and review state, read from GitHub at most once every five minutes.
+/// A failed read keeps the last state and marks it stale; never read, it is unknown.
+pub async fn pr_status(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::require_room(state, caller, id)?;
+    let repo = canonical_repo(&lab.github)?;
+    let is_pr = state
+        .db
+        .research_work_snapshot(&repo)?
+        .is_some_and(|s| s.cards.iter().any(|c| c.number == number && c.kind == "pull_request"));
+    if !is_pr {
+        return Err(ApiError::bad_request(
+            "that isn't a pull request on the lab's workboard; read it first",
+        ));
+    }
+    let at = crate::now();
+    if state.db.reserve_research_work_pr_check(&repo, number, at)? {
+        let _slot = state
+            .github_refresh_slots
+            .acquire()
+            .await
+            .map_err(|_| ApiError::bad_request("GitHub unavailable"))?;
+        let c = client()?;
+        let base = api_base(state);
+        let pr = get(&c, format!("{base}/repos/{repo}/pulls/{number}")).await;
+        let sha = pr
+            .as_ref()
+            .and_then(|pr| pr["head"]["sha"].as_str())
+            .filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()));
+        let found = match sha {
+            Some(sha) => {
+                let checks =
+                    get(&c, format!("{base}/repos/{repo}/commits/{sha}/check-runs?per_page=100"))
+                        .await;
+                let reviews =
+                    get(&c, format!("{base}/repos/{repo}/pulls/{number}/reviews?per_page=100"))
+                        .await;
+                match (checks.as_ref().and_then(ci_of), reviews.as_ref().and_then(review_of)) {
+                    (Some(ci), Some(review)) => Some((ci, review)),
+                    _ => None,
+                }
+            }
+            None => None,
+        };
+        state.db.finish_research_work_pr_check(&repo, number, found, at)?;
+    }
+    crate::ops::require_room(state, caller, id)?;
+    let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
+        ci: "unknown".into(),
+        review: "unknown".into(),
+        checked_at: 0,
+        attempted_at: at,
+        stale: true,
+    });
+    Ok(json!({"lab_id":id,"number":number,"ci":pr_state.ci,"review":pr_state.review,
+        "checked_at":pr_state.checked_at,"stale":pr_state.stale,
+        "note":"Read from GitHub's public API at most every five minutes. unknown or stale means it couldn't be checked, not that it passed."}))
 }
 /// RW8: claim or renew an item, leading it or pairing with whoever leads it.
 pub fn claim(
