@@ -121,16 +121,16 @@ pub fn set_areas(state: &AppState, caller: &Caller, id: &str, areas: &Value) -> 
     if lab.owner_id != caller.person_id {
         return Err(ApiError::forbidden("only the lab owner or their bot names its areas"));
     }
-    let given = areas.as_object().ok_or_else(|| {
-        ApiError::bad_request("areas must be an object from GitHub label to area name")
-    })?;
+    // A list, not an object: the owner's order decides the order of an item's areas.
+    let bad = || ApiError::bad_request("areas must be a list of { label, area }");
+    let given = areas.as_array().ok_or_else(bad)?;
     if given.len() > MAX_AREAS {
         return Err(ApiError::bad_request(format!("name at most {MAX_AREAS} labels")));
     }
     let mut pairs: Vec<(String, String)> = vec![];
-    for (label, area) in given {
-        let label = label.trim();
-        let area = area.as_str().map(str::trim).unwrap_or_default();
+    for pair in given {
+        let label = pair["label"].as_str().ok_or_else(bad)?.trim();
+        let area = pair["area"].as_str().ok_or_else(bad)?.trim();
         let fits = |text: &str, most: usize| {
             !text.is_empty() && text.chars().count() <= most && !text.chars().any(char::is_control)
         };
@@ -151,7 +151,10 @@ pub fn set_areas(state: &AppState, caller: &Caller, id: &str, areas: &Value) -> 
     Ok(json!({ "ok": true, "areas": area_map(&pairs) }))
 }
 fn area_map(areas: &[(String, String)]) -> Value {
-    Value::Object(areas.iter().map(|(l, a)| (l.clone(), json!(a))).collect())
+    json!(areas
+        .iter()
+        .map(|(label, area)| json!({ "label": label, "area": area }))
+        .collect::<Vec<_>>())
 }
 /// RW8: how long a claim lasts unless it's renewed.
 pub const CLAIM_SECS: i64 = 4 * 60 * 60;

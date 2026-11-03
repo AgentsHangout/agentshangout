@@ -479,32 +479,46 @@ fn rw10_cards_keep_label_names_only() {
 #[tokio::test]
 async fn rw10_the_owner_names_areas_for_labels() {
     let (state, owner, bot, _) = setup().await;
-    let areas = json!({"BUG":"Bugs","map":"City map","docs":"Bugs"});
+    // Not alphabetical, so the order kept is the owner's, not the labels'.
+    let areas = json!([
+        {"label":"map","area":"City map"},
+        {"label":"docs","area":"Writing"},
+        {"label":"BUG","area":"Bugs"}
+    ]);
     // The owner's bot names them; labels match in any case.
     let set = research_work::set_areas(&state, &bot, "lab", &areas).unwrap();
-    assert_eq!(set["areas"]["map"], "City map");
+    assert_eq!(set["areas"], areas);
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
-    assert_eq!(read["areas"]["BUG"], "Bugs");
+    assert_eq!(read["areas"], areas);
     assert_eq!(read["items"][0]["number"], 9);
     assert_eq!(read["items"][0]["labels"], json!(["bug", "Map"]));
-    assert_eq!(read["items"][0]["areas"], json!(["Bugs", "City map"]));
+    assert_eq!(read["items"][0]["areas"], json!(["City map", "Bugs"]));
+    // Two labels can share an area, which is listed once.
+    let shared = json!([{"label":"Map","area":"Fixes"},{"label":"bug","area":"Fixes"}]);
+    research_work::set_areas(&state, &owner, "lab", &shared).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["areas"], json!(["Fixes"]));
+    research_work::set_areas(&state, &owner, "lab", &areas).unwrap();
     assert_eq!(read["items"][1]["areas"], json!([]));
 
     // Bad maps are refused and change nothing.
+    let pair = |label: &str, area: Value| json!({ "label": label, "area": area });
     for bad in [
+        json!({"bug":"Bugs"}),
         json!(["bug"]),
-        json!({"bug":""}),
-        json!({"bug":7}),
-        json!({"":"Bugs"}),
-        json!({"bug":"x".repeat(41)}),
-        json!({"bug":"Bugs","Bug":"Other"}),
-        Value::Object((0..31).map(|n| (format!("l{n}"), json!("a"))).collect()),
+        json!([pair("bug", json!(""))]),
+        json!([pair("bug", json!(7))]),
+        json!([{"label":"bug"}]),
+        json!([pair("", json!("Bugs"))]),
+        json!([pair("bug", json!("x".repeat(41)))]),
+        json!([pair("bug", json!("Bugs")), pair("Bug", json!("Other"))]),
+        Value::Array((0..31).map(|n| pair(&format!("l{n}"), json!("a"))).collect()),
     ] {
         let error = research_work::set_areas(&state, &owner, "lab", &bad).unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_REQUEST, "{bad}");
     }
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
-    assert_eq!(read["items"][0]["areas"], json!(["Bugs", "City map"]));
+    assert_eq!(read["items"][0]["areas"], json!(["City map", "Bugs"]));
 
     // Only the owner and their bots; not a house bot or someone outside the room.
     let outsider = auth::Caller {
@@ -518,9 +532,9 @@ async fn rw10_the_owner_names_areas_for_labels() {
     let house = auth::Caller { is_house: true, ..bot.clone() };
     assert!(research_work::set_areas(&state, &house, "lab", &areas).is_err());
 
-    // An empty map clears them.
-    research_work::set_areas(&state, &owner, "lab", &json!({})).unwrap();
+    // An empty list clears them.
+    research_work::set_areas(&state, &owner, "lab", &json!([])).unwrap();
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
-    assert_eq!(read["areas"], json!({}));
+    assert_eq!(read["areas"], json!([]));
     assert_eq!(read["items"][0]["areas"], json!([]));
 }

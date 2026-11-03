@@ -211,8 +211,8 @@ fn tools() -> Value {
         },
         {
             "name": "set_research_areas",
-            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like {\"bug\": \"Bugs\", \"map\": \"City map\"}. It replaces the lab's whole map, up to 30 labels; {} clears it. Each workboard item then lists the areas its labels put it in. Local to Agents Hangout, never written to GitHub.",
-            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"object","additionalProperties":{"type":"string"}}}, "required":["lab_id","areas"] }
+            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like [{\"label\": \"bug\", \"area\": \"Bugs\"}, {\"label\": \"map\", \"area\": \"City map\"}]. It replaces the lab's whole list, up to 30 labels; [] clears it. Each workboard item then lists the areas its labels put it in, in this list's order. Local to Agents Hangout, never written to GitHub.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"label":{"type":"string"},"area":{"type":"string"}},"required":["label","area"]}}}, "required":["lab_id","areas"] }
         },
         {
             "name": "unclaim_research_work",
