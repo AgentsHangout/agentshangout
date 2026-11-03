@@ -9444,6 +9444,49 @@ impl Db {
         Ok(sources)
     }
 
+    /// HC5: when this person met a city's gate, if they have: `wait` after they joined, and once
+    /// they'd been to a gathering there or someone in the city vouched for them, whichever came
+    /// first. Worked out from what's there now, so a vouch that stops counting moves it.
+    pub fn credit_gate_met_at(
+        &self,
+        city_id: &str,
+        person_id: &str,
+        wait: i64,
+        now: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        let conn = self.conn();
+        let joined: Option<i64> = conn
+            .query_row(
+                "SELECT joined_at FROM city_members WHERE city_id = ? AND person_id = ?",
+                params![city_id, person_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(joined) = joined else { return Ok(None) };
+        let first_gathering: Option<i64> = conn.query_row(
+            &format!(
+                "SELECT MIN(e.ends_at) {GATHERINGS}
+                   AND EXISTS (SELECT 1 FROM rsvps y WHERE y.event_id = e.id
+                               AND y.person_id = ?3 AND y.response = 'yes')"
+            ),
+            params![city_id, now, person_id],
+            |row| row.get(0),
+        )?;
+        let first_vouch: Option<i64> = conn.query_row(
+            &format!(
+                "SELECT MIN(v.created_at) {VOUCHERS_IN_CITY}
+                 WHERE v.city_id = ? AND v.for_person = ?"
+            ),
+            params![city_id, person_id],
+            |row| row.get(0),
+        )?;
+        let vouched_or_gathered = match (first_gathering, first_vouch) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Ok(vouched_or_gathered.map(|at| at.max(joined + wait)).filter(|met| *met <= now))
+    }
+
     /// Notes that a resident ended this trip by sending the bot home.
     pub fn record_sent_home(&self, trip_id: &str, now: i64) -> rusqlite::Result<()> {
         self.conn().execute(
@@ -14051,6 +14094,8 @@ mod tests {
     }
 
     const CREDIT_DAY: i64 = 86_400;
+    /// Ann and Bo joined their city at 0, so its 30 days are up here (HC5).
+    const GATE: i64 = 30 * CREDIT_DAY;
 
     fn credits_of(db: &Db, person_id: &str, now: i64) -> crate::economy::Credits {
         crate::economy::credits(db, person_id, now).unwrap()
@@ -14061,8 +14106,8 @@ mod tests {
     fn a_gathering_pays_each_person_who_said_yes_once_the_city_gate_is_met() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
-        plan(&db, "done", "sq", 100, "confirmed");
-        plan(&db, "cancelled", "sq", 100, "cancelled");
+        plan(&db, "done", "sq", GATE + 100, "confirmed");
+        plan(&db, "cancelled", "sq", GATE + 100, "cancelled");
         plan(&db, "later", "sq", 40 * CREDIT_DAY, "confirmed");
 
         // Ten days in, nobody has been in the city long enough.
@@ -14070,7 +14115,7 @@ mod tests {
         assert_eq!(early.balance, 0);
         assert_eq!(early.cities_not_earning, ["c1"]);
 
-        // A month in, the gathering that finished pays both people. One still to come doesn't.
+        // Past the 30 days, the gathering that finished pays both people. One still to come doesn't.
         for person in ["p1", "p2"] {
             let paid = credits_of(&db, person, 31 * CREDIT_DAY);
             assert_eq!((paid.balance, paid.gatherings), (20, 1), "{person}");
@@ -14086,7 +14131,7 @@ mod tests {
         two_houses(&db);
         db.create_person("p3", "Cy", "key3", "feed3", 0).unwrap();
         db.add_city_member("c1", "p3", 0).unwrap();
-        plan(&db, "linked", "sq", 100, "confirmed");
+        plan(&db, "linked", "sq", GATE + 100, "confirmed");
         db.add_plan_invitee("linked", "p3", 30, 0).unwrap();
         db.upsert_rsvp("linked", "p3", "yes", None, "", 0).unwrap();
 
@@ -14094,22 +14139,35 @@ mod tests {
         assert_eq!(credits_of(&db, "p3", 31 * CREDIT_DAY).balance, 0);
     }
 
-    // HC3, HC5
+    // HC3
     #[test]
     fn a_good_trip_pays_the_visiting_owner_once_a_house_and_day_and_only_once_it_is_over() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
-        let now = 31 * CREDIT_DAY;
+        let now = GATE + 10 * CREDIT_DAY;
         db.add_vouch("c1", "p2", "p1", 0).unwrap();
-        start_trip(&db, "t1", "b2", "hz", 60, 1000);
-        start_trip(&db, "t2", "b2", "hz", 60, 5000);
-        start_trip(&db, "next-day", "b2", "hz", 60, CREDIT_DAY + 1000);
-        start_trip(&db, "sent-home", "b2", "hz", 60, 2 * CREDIT_DAY);
-        db.record_sent_home("sent-home", 2 * CREDIT_DAY + 10).unwrap();
+        start_trip(&db, "t1", "b2", "hz", 60, GATE + 1000);
+        start_trip(&db, "t2", "b2", "hz", 60, GATE + 5000);
+        start_trip(&db, "next-day", "b2", "hz", 60, GATE + CREDIT_DAY + 1000);
+        start_trip(&db, "sent-home", "b2", "hz", 60, GATE + 2 * CREDIT_DAY);
+        db.record_sent_home("sent-home", GATE + 2 * CREDIT_DAY + 10).unwrap();
         start_trip(&db, "under-way", "b2", "hz", 60, now - 60);
 
         let paid = credits_of(&db, "p2", now);
         assert_eq!((paid.balance, paid.good_trips), (10, 2));
+    }
+
+    // HC5: no back pay, so waiting out the 30 days earns nothing
+    #[test]
+    fn only_what_happens_after_someone_meets_the_gate_pays_them() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.add_vouch("c1", "p2", "p1", 0).unwrap();
+        start_trip(&db, "day-5", "b2", "hz", 60, 5 * CREDIT_DAY);
+        start_trip(&db, "day-31", "b2", "hz", 60, 31 * CREDIT_DAY);
+
+        let paid = credits_of(&db, "p2", 32 * CREDIT_DAY);
+        assert_eq!((paid.balance, paid.good_trips), (5, 1));
     }
 
     // HC5
@@ -14117,15 +14175,32 @@ mod tests {
     fn a_city_pays_nothing_without_a_gathering_or_a_vouch_however_long_someone_has_been_in_it() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
-        start_trip(&db, "t1", "b2", "hz", 60, 1000);
-        let now = 90 * CREDIT_DAY;
+        start_trip(&db, "before", "b2", "hz", 60, 50 * CREDIT_DAY);
+        let vouched = 60 * CREDIT_DAY;
 
-        let unpaid = credits_of(&db, "p2", now);
+        let unpaid = credits_of(&db, "p2", vouched);
         assert_eq!(unpaid.balance, 0);
         assert_eq!(unpaid.cities_not_earning, ["c1"]);
 
-        db.add_vouch("c1", "p2", "p1", now).unwrap();
-        assert_eq!(credits_of(&db, "p2", now).balance, 5);
+        // A vouch opens the gate from then on. The trip before it still pays nothing.
+        db.add_vouch("c1", "p2", "p1", vouched).unwrap();
+        start_trip(&db, "after", "b2", "hz", 60, vouched + 1000);
+        assert_eq!(credits_of(&db, "p2", vouched + CREDIT_DAY).balance, 5);
+    }
+
+    // HC5: credits are worked out from the cities someone is in now
+    #[test]
+    fn leaving_a_city_takes_away_what_it_paid() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        plan(&db, "done", "sq", GATE + 100, "confirmed");
+        let now = 31 * CREDIT_DAY;
+        assert_eq!(credits_of(&db, "p2", now).balance, 20);
+
+        db.remove_city_member("c1", "p2", "p2", now).unwrap();
+        let gone = credits_of(&db, "p2", now + 1);
+        assert_eq!(gone.balance, 0);
+        assert!(gone.cities_not_earning.is_empty());
     }
 
     // HC4
@@ -14153,12 +14228,12 @@ mod tests {
             assert!(db.trip_host_ok(id, "p1", at).unwrap());
             db.arrive(id, at).unwrap();
         };
-        hosted("t1", 1000);
-        hosted("t2", 5000);
+        hosted("t1", GATE + 1000);
+        hosted("t2", GATE + 5000);
         // A trip let in some other way, such as a pass, pays no resident.
-        start_trip(&db, "no-yes", "b2", "hz", 60, CREDIT_DAY + 1000);
+        start_trip(&db, "no-yes", "b2", "hz", 60, GATE + CREDIT_DAY + 1000);
 
-        let paid = credits_of(&db, "p1", 31 * CREDIT_DAY);
+        let paid = credits_of(&db, "p1", GATE + 3 * CREDIT_DAY);
         assert_eq!((paid.balance, paid.hosted_trips), (5, 1));
     }
 
@@ -14168,16 +14243,17 @@ mod tests {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
         for n in 0..6 {
-            plan(&db, &format!("g{n}"), "sq", 100 + n, "confirmed");
+            plan(&db, &format!("g{n}"), "sq", GATE + 100 + n, "confirmed");
         }
-        plan(&db, "next-day", "sq", CREDIT_DAY + 100, "confirmed");
+        plan(&db, "next-day", "sq", GATE + CREDIT_DAY + 100, "confirmed");
 
-        let paid = credits_of(&db, "p1", 31 * CREDIT_DAY);
+        // Five fill the first day's 100, the sixth pays nothing, and the next day starts again.
+        let paid = credits_of(&db, "p1", GATE + 3 * CREDIT_DAY);
         assert_eq!(paid.balance, 100 + 20);
         assert_eq!(paid.gatherings, 6);
 
         // What happened today counts against today.
-        let today = 31 * CREDIT_DAY;
+        let today = GATE + 3 * CREDIT_DAY;
         plan(&db, "today", "sq", today + 100, "confirmed");
         assert_eq!(credits_of(&db, "p1", today + 200).earned_today, 20);
     }
@@ -14189,8 +14265,8 @@ mod tests {
         two_houses(&db);
         db.add_vouch("c1", "p1", "p2", 0).unwrap();
         for n in 0..50 {
-            say(&db, "sq", "chat", &format!("hi {n}"), n);
-            say(&db, "sq", "note", &format!("note {n}"), n);
+            say(&db, "sq", "chat", &format!("hi {n}"), GATE + n);
+            say(&db, "sq", "note", &format!("note {n}"), GATE + n);
         }
         assert_eq!(credits_of(&db, "p1", 31 * CREDIT_DAY).balance, 0);
     }

@@ -31,10 +31,11 @@ bot home.
 - **HC4.** A good trip pays the resident whose yes let the bot in, once a day for each visiting owner
   and house. A trip let in some other way, such as a pass, pays no resident, and nobody is paid for a
   trip by their own bot.
-- **HC5.** A city pays someone only once they've been in it at least 30 days and have either been to
-  a gathering there or have someone in the city who vouches for them. It's checked whenever credits
-  are worked out, so a city that doesn't pay yet starts paying for what already happened once the
-  gate is met, and a city someone leaves stops counting.
+- **HC5.** A city pays someone only for what happens there after they meet its gate: 30 days in the
+  city, and either a gathering there or someone in the city who vouches for them, whichever came
+  first. Nothing from before then is paid later, so waiting out the 30 days earns nothing. Credits
+  are worked out from the cities someone is in now, so leaving a city, or losing the only vouch that
+  opened its gate, takes away what it paid. A balance can go down.
 - **HC6.** Nobody is credited more than 100 for things that happened on one UTC day. The earliest
   things that day count first, so the same ones always count.
 - **HC7.** Chat, notes, tokens, bot activity and requests never pay anything (R39, T2). Every credit
@@ -47,6 +48,6 @@ bot home.
 
 ## What this leaves for later
 
-Spending needs a record of what was spent, which HC1 doesn't have. Before phase 2, a maintainer
-decides how that is kept, because `tests/trust.rs` rules out any table called `credit` as stored
-standing (T1).
+Spending needs a record of what was spent, which HC1 doesn't have, and an answer for when a balance
+falls below what was spent (HC5). Before phase 2, a maintainer decides how that is kept, because
+`tests/trust.rs` rules out any table called `credit` as stored standing (T1).

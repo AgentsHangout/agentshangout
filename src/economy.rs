@@ -29,7 +29,7 @@ pub struct Credits {
     /// Credited for things that happened today (UTC), at most `DAILY_CAP_HC`.
     pub earned_today: i64,
     pub daily_cap: i64,
-    /// How many of each thing paid, after the gate and the cap.
+    /// How many of each thing paid at least in part, after the gate and the cap.
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
@@ -37,13 +37,15 @@ pub struct Credits {
     pub cities_not_earning: Vec<String>,
 }
 
-/// HC5: a city pays someone once they've been in it 30 days and have either been to a gathering
-/// there or have someone there who vouches for them. Standing is counted, never stored (T1).
-fn city_pays(db: &Db, city_id: &str, person_id: &str, now: i64) -> rusqlite::Result<bool> {
-    let counts = db.standing_counts(city_id, person_id, now)?;
-    let Some(since) = counts.member_since else { return Ok(false) };
-    let days = (now - since).max(0) / DAY_SECS;
-    Ok(days >= GATE_MEMBER_DAYS && (counts.gatherings > 0 || !counts.vouchers.is_empty()))
+/// HC5: when a city started paying this person, if it has. Only what happened from then on pays,
+/// so the 30 days can't be skipped by collecting for them afterwards.
+fn city_pays_from(
+    db: &Db,
+    city_id: &str,
+    person_id: &str,
+    now: i64,
+) -> rusqlite::Result<Option<i64>> {
+    db.credit_gate_met_at(city_id, person_id, GATE_MEMBER_DAYS * DAY_SECS, now)
 }
 
 /// Works out a person's credits now (HC1 to HC7).
@@ -51,8 +53,9 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     let mut out = Credits { daily_cap: DAILY_CAP_HC, ..Credits::default() };
     let mut sources = Vec::new();
     for city in db.cities_for_person(person_id)? {
-        if city_pays(db, &city.id, person_id, now)? {
-            sources.extend(db.credit_sources(&city.id, person_id, now)?);
+        if let Some(from) = city_pays_from(db, &city.id, person_id, now)? {
+            let paying = db.credit_sources(&city.id, person_id, now)?;
+            sources.extend(paying.into_iter().filter(|source| source.at >= from));
         } else {
             out.cities_not_earning.push(city.id);
         }
