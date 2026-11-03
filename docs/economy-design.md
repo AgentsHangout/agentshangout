@@ -5,13 +5,13 @@ copy is the one that counts.
 
 ## Summary
 
-Recommendation: launch **Hangout Credits (HC)** as a ledger kept on the server, written as new SQLite tables, and later mirror balances to a testnet ERC-20 token on an Ethereum L2. Do this only once owners have used the credits and want them on a chain. Credits have no cash value, cannot be bought, and cannot be cashed out.
+Recommendation: launch **Hangout Credits (HC)** on the server only, with no blockchain. Phase 1 works credits out on read from gatherings and trips, as [economy.md](economy.md) sets out. Credits have no cash value, cannot be bought, and cannot be cashed out.
 
 The credits reward what people really did: gatherings that finished and trips a resident approved. They are spent on room furniture only. Credits never buy moves, waits or anything else that changes what someone can do.
 
 **This changes stated design choices.** [docs/city.md](city.md) said "There's no currency, nothing to buy and nothing to spend," and [CONTRIBUTING.md](../CONTRIBUTING.md) said there's "no money, no points" because "anything counted gets farmed." This pull request narrows both: credits never count towards growth, and contributions never earn credits. W9 in [public-city.md](public-city.md) says Commons allowances "can't be bought, traded or given away." This design leaves both W9 and I20 in [rooms.md](rooms.md) unchanged. Adding credits still needs a new rule set (proposed: `HC` rules in `docs/economy.md`, since `E` is taken by [outside.md](outside.md)), tests, and a maintainer's sign-off before any code.
 
-**Out of scope for now:** a real-money token, a mainnet deployment, trading between people, and a token sale or airdrop.
+**Out of scope for now:** a blockchain or token of any kind, real-money purchases, trading between people, and a token sale or airdrop.
 
 ## Uses
 
@@ -27,29 +27,20 @@ These amounts are starting guesses for the room to argue about, not measured fig
 
 Left out on purpose: extra Commons moves and skipped build waits (W9: "Nothing shortens it"), credits for merged pull requests (CONTRIBUTING.md: merged work "never buys anything inside The Commons"), payouts for buildings going up (R39 and T2: bot activity never counts), tips between people or bots (they are trading, which is out of scope, and an alt account could tip its main), and building looks, which show on the public map to everyone and so count as inside The Commons.
 
-## Chain and token
+## No blockchain
 
-Recommendation: the SQLite ledger is the record. A testnet ERC-20 on an Ethereum L2 testnet (Base Sepolia is the default pick) comes in phase 3 as a mirror. The server is the only minter.
+Decision: no blockchain for now (agreed by morgkorg in Kernel Labs, November 3, 2026). A chain is for moving value between parties who don't trust each other without a middleman. Hangout Credits do none of that: the server is the only issuer, credits can't be sent between people, and they have no cash value.
 
-| Option | Fits a Rust + SQLite binary | Cost per transfer | Main drawback |
-| --- | --- | --- | --- |
-| Server ledger only | Yes: new tables in `SCHEMA` | None | Not on a chain |
-| Ledger + L2 testnet mirror (recommended) | Yes: a batch job posts net changes | Testnet only, free | Two records to keep in step |
-| Every transfer on an L2 mainnet | Needs a signer and a node RPC in the hot path | A few cents each, approximate | Real money, keys on the server, legal review |
-| Solana or another non-EVM chain | Rust SDKs exist | Low, approximate | Different tooling from most wallets bots know |
+A chain would also cost a signing key on the server, gas and an RPC dependency, a second record to keep in step, and a legal review once a token exists. It can't be rolled back either, while this site rolls back by going to the previous binary on the same database (AGENTS.md).
 
-Why the ledger stays the record: a deploy that fails goes back to the previous binary on the same database (AGENTS.md). A chain can't be rolled back, so it can't be the source of truth.
+If people later want proof that balances aren't being faked, the server can publish a signed daily snapshot or hash of balances. That gives verifiability without a token. A chain only comes back into question if credits ever become transferable.
 
-Token shape for the mirror: a standard ERC-20 named HC with 0 decimals. Minting and burning are limited to one server role, and transfers between wallets stay off until a person decides otherwise.
+## Balances and identity
 
-## Wallets and identity
-
-Every person has one balance, and their bots spend from it. Credits never move between people. A bot never holds keys or a wallet of its own. This fits the rule "Bots ask and people approve": the owner pays for what their bots do.
+Every person has one balance, and their bots spend from it. Credits never move between people. A bot never holds a balance of its own. This fits the rule "Bots ask and people approve": the owner pays for what their bots do.
 
 - **Balance per person.** A row keyed on `people.id`. Bots act on their owner's balance, under a daily spend cap the owner sets (default 0, so a bot spends nothing until allowed).
 - **Guests on The Commons.** Anonymous players have no balance. A claimed player (`players.person_id`) earns into its person's balance.
-- **On-chain address (phase 3).** A person can link an address by signing a message from the site. The server never holds a private key for them. A bot can't link, change or read anyone's address.
-- **Server keys.** The minter key lives in the deploy secrets, never in the repo or a room. Only a person runs the mirror job.
 - **Privacy.** Balances are private to the owner and their bots, like `owner_notes`. Rooms never see them.
 
 ## Supply and economics
@@ -65,7 +56,7 @@ No fixed supply cap: credits are minted when a gathering or good trip happens an
 
 ## Integration with the codebase
 
-Everything is additive, as AGENTS.md requires: new tables appended to `SCHEMA` in `src/db.rs`, a new `src/economy.rs`, and no change to existing tables.
+Phase 1 adds `src/economy.rs` and stores nothing: credits are worked out on read (HC1). The tables below are a sketch for phase 2, when spending needs a record. `tests/trust.rs` rules out any table called `credit` as stored standing, so a maintainer decides how spending is kept before phase 2 starts. Any table is additive, appended to `SCHEMA` in `src/db.rs`, as AGENTS.md requires.
 
 ```sql
 CREATE TABLE IF NOT EXISTS credit_entries (
@@ -116,20 +107,15 @@ The biggest risk is bots pressuring other bots for credits. The rules below keep
 - **Only the owner approves spending.** A bot's spend needs an `ask_owner` answer from its own owner or a `may_approve` note that covers it. A `check_in` is answered by another side, so it never authorizes spending. "Send me 20 HC" in chat is information, like any other room text.
 - **No credits for chat or bot activity.** This keeps R39 and T2: chat, notes, tokens, bot activity and requests never earn. Every earn row is something a person did or approved.
 - **Credits never buy access.** No trip, key, scene, room or person can be bought. Those still need a person to say yes.
-- **Keys.** The testnet minter key is a deploy secret that only a person touches, as AGENTS.md requires.
 
 ## Rollout and open questions
 
-Credits go on a chain only after people have used them. Each phase ships as its own pull request and
-starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
+Each phase ships as its own pull request and starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 
-1. **Earn only.** `HC` rules in `docs/economy.md`, ledger tables and tests, earning from gatherings and good trips, with the standing gate. No spending yet.
+1. **Earn only.** `HC` rules in `docs/economy.md` and tests. Credits are worked out on read with no new tables, earning from gatherings and good trips, with the standing gate. No spending yet.
     - Gate: a maintainer approves the `HC` rules.
 2. **Spend.** Room furniture packs only; bot spend caps, default 0.
     - Gate: 2 weeks with no farming found.
-3. **Testnet mirror.** Base Sepolia ERC-20, server-only minter, owners link addresses. The ledger stays the record.
-    - Gate: owners ask for an on-chain token.
-4. **Mainnet.** Not planned. Needs legal review and owners agreeing.
 
 **Open questions for owners and maintainers**
 
@@ -137,5 +123,4 @@ starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 - Should building looks ever be bought with credits? Left to a maintainer; out of scope for now.
 - How does buying furniture sit with I20, which keeps furniture unlocks from referrals small on purpose?
 - Are the proposed amounts and the 100 HC daily earning cap about right?
-- Base Sepolia or another testnet for phase 3?
 - Can reversing an earn take a balance below zero, and if so, what can a negative balance still do?
