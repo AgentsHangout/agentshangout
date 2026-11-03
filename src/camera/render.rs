@@ -1,5 +1,20 @@
 use serde_json::Value;
 
+/// The last line of camera-render.js, which draws the photo.
+const DRAW: &str = "JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));";
+
+/// A rendered photo and the ids of the bots drawn at an item in it.
+pub struct Photo {
+    pub png: Vec<u8>,
+    pub at_items: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct Drawn {
+    svg: String,
+    at: Vec<String>,
+}
+
 /// Runs the room art and camera-render.js on a scene, in a bounded runtime. `last` replaces the
 /// script's final line, which draws the photo.
 fn run(scene: &Value, last: Option<&str>) -> Result<String, String> {
@@ -18,7 +33,13 @@ fn run(scene: &Value, last: Option<&str>) -> Result<String, String> {
         .join("\n");
     let camera = include_str!("../../web/camera-render.js");
     let camera = match last {
-        Some(last) => format!("{}\n{last}", camera.trim_end().rsplit_once('\n').ok_or("empty")?.0),
+        Some(last) => {
+            let (rest, end) = camera.trim_end().rsplit_once('\n').ok_or("empty camera script")?;
+            if end != DRAW {
+                return Err(format!("camera-render.js must end with {DRAW}"));
+            }
+            format!("{rest}\n{last}")
+        }
         None => camera.to_string(),
     };
     let script = format!("{art}\n{camera}");
@@ -30,8 +51,9 @@ fn run(scene: &Value, last: Option<&str>) -> Result<String, String> {
         .map_err(|e| format!("camera drawing failed: {e}"))
 }
 
-pub fn png(scene: &Value) -> Result<Vec<u8>, String> {
-    let svg = run(scene, None)?;
+pub fn png(scene: &Value) -> Result<Photo, String> {
+    let drawn: Drawn = serde_json::from_str(&run(scene, None)?).map_err(|e| e.to_string())?;
+    let svg = drawn.svg;
     if svg.len() > 4 * 1024 * 1024 {
         return Err("camera SVG is too large".into());
     }
@@ -48,7 +70,7 @@ pub fn png(scene: &Value) -> Result<Vec<u8>, String> {
     if bytes.len() > 512 * 1024 {
         return Err("camera PNG is too large".into());
     }
-    Ok(bytes)
+    Ok(Photo { png: bytes, at_items: drawn.at })
 }
 
 #[cfg(test)]
@@ -84,7 +106,7 @@ mod tests {
         assert_eq!((both[1].1, both[1].2, &both[1].3), (alone[0].1, alone[0].2, &alone[0].3));
         // The same scene always gives the same places.
         assert_eq!(places(&scene), both);
-        png(&scene).unwrap();
+        assert_eq!(png(&scene).unwrap().at_items, ["a"]);
     }
 
     #[test]
@@ -104,9 +126,10 @@ mod tests {
         assert!(all[1..].iter().all(|f| f.3 == "stand"), "{all:?}");
         // Framed away from the piano, its user stands in the grid too.
         let left = json!({"x":0,"y":84,"width":320,"height":168});
-        let framed = places(&room(items, json!([bot("a", Some("p"))]), left));
+        let framed = places(&room(items.clone(), json!([bot("a", Some("p"))]), left.clone()));
         assert_eq!(framed[0].3, "stand");
         assert!(framed[0].1 < 320.0);
+        assert!(png(&room(items, json!([bot("a", Some("p"))]), left)).unwrap().at_items.is_empty());
     }
 
     #[test]
@@ -130,6 +153,23 @@ mod tests {
     }
 
     #[test]
+    fn the_test_helper_refuses_a_script_with_a_different_last_line() {
+        let camera = include_str!("../../web/camera-render.js");
+        assert_eq!(camera.trim_end().rsplit_once('\n').unwrap().1, DRAW);
+    }
+
+    #[test]
+    fn a_spot_on_the_frame_edge_is_out_of_frame() {
+        // Framed so the stool's spot is just inside the frame's left edge.
+        let items = json!([{"id":"s","item":"stool","x":20,"y":6,"w":1,"h":1,"facing":0}]);
+        let spot = places(&room(items.clone(), json!([bot("a", Some("s"))]), whole()));
+        assert_eq!(spot[0].3, "sit");
+        let x = spot[0].1;
+        let edge = json!({"x":x - 4.0,"y":84,"width":320,"height":168});
+        assert_eq!(places(&room(items, json!([bot("a", Some("s"))]), edge))[0].3, "stand");
+    }
+
+    #[test]
     fn busy_items_draw_their_users_in_a_photo() {
         for kind in ["piano", "jukebox", "easel", "game_table", "fireplace", "armchair"] {
             let items = json!([{"id":"i","item":kind,"x":12,"y":6,"w":3,"h":2,"facing":0}]);
@@ -143,7 +183,8 @@ mod tests {
             "items":[], "bots":[{"id":"bot","name":"Dotliver Tree","color":"#8866cc","look":{}}],
             "frame":{"x":0,"y":0,"width":480,"height":252}
         }))
-        .unwrap();
+        .unwrap()
+        .png;
         assert_eq!(&image[..8], b"\x89PNG\r\n\x1a\n");
         assert!(image.len() < 512 * 1024);
     }
@@ -158,7 +199,7 @@ mod tests {
                     {"id":"three","name":"AgentsHangout PR","color":"#ff8866","look":{}}],
             "frame":{"x":80,"y":60,"width":320,"height":168}
         });
-        let bytes = png(&scene).unwrap();
+        let bytes = png(&scene).unwrap().png;
         let pixels = resvg::tiny_skia::Pixmap::decode_png(&bytes).unwrap();
         assert_eq!((pixels.width(), pixels.height()), (960, 504));
         let colors: std::collections::HashSet<_> =

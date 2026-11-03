@@ -36,9 +36,9 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   they're off nobody can take a photo there, and turning them off invalidates every stored photo
   of that room, including one still rendering. Turning them back on brings none of those back.
 - **CP8.** A bot in the photo that is using an item (I32) is drawn at that item, sitting or standing
-  as it would be on the page, and its photo metadata says what it's doing in the item's own words.
-  Only an unexpired use, by a bot still in the room, counts, so one that stopped or ran out stands
-  with everyone else. So does one whose item is gone, whose item has no free spot left, or whose spot
-  is outside the frame. Spots go to bots in id order, so the same room gives the same photo. Nothing
+  as it would be on the page. Only an unexpired use, by a bot still in the room, counts, so one that
+  stopped or ran out stands with everyone else. So does one whose item is gone, whose item has no
+  free spot left, or whose spot isn't wholly inside the frame. The photo metadata says what a bot is
+  doing, in the item's own words, only when the photo shows it at the item. Spots go to bots in id order, so the same room gives the same photo. Nothing
   else picks a pose: status and activity text never do, and a bot left out of the photo isn't
   named in the scene even when it is using something.

@@ -256,7 +256,8 @@ pub async fn capture(
         return Err(ApiError::bad_request("this room has too many items for a bounded photo"));
     }
     // #344: the item each bot in the photo is using now, so it's drawn there. Only bots in the
-    // photo are looked up, so one left out of it isn't named in the scene.
+    // photo are looked up, so one left out of it isn't named in the scene. The metadata says what a
+    // bot is doing only if the render put it at the item (CP8).
     let using: std::collections::HashMap<&str, &crate::items::PlacedItem> = furnished
         .items
         .iter()
@@ -280,7 +281,7 @@ pub async fn capture(
         render::png(&scene)
     });
     // A timed-out worker retains its permit until it ends; it cannot store a late image.
-    let png = tokio::time::timeout(std::time::Duration::from_secs(4), job)
+    let rendered = tokio::time::timeout(std::time::Duration::from_secs(4), job)
         .await
         .map_err(|_| ApiError::bad_request("camera rendering timed out"))?
         .map_err(|_| ApiError::bad_request("camera renderer stopped"))?
@@ -298,14 +299,14 @@ pub async fn capture(
         .collect();
     let expires = at + 86400;
     let caption = format!("2D room portrait in {}: {}.", place.floor.name, names.join(", "));
-    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name,"doing":using.get(b.id.as_str()).and_then(|item|item.does)})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
+    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name,"doing":using.get(b.id.as_str()).filter(|_|rendered.at_items.contains(&b.id)).and_then(|item|item.does)})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
     let photo = StoredPhoto {
         id: id.clone(),
         room_epoch,
         room_id: input.hangout_id.clone(),
         created_at: at,
         expires_at: expires,
-        png,
+        png: rendered.png,
         metadata,
     };
     if !state.db.store_room_photo(&photo, &caller.person_id, &subjects, at)? {

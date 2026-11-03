@@ -47,7 +47,8 @@ function cameraPlaced(scene) {
 // one grid, and CP2 puts the people who had the floor open in it with the bots.
 function cameraFigures(scene,placed) {
   const frame=scene.frame,taken=new Set();
-  const inFrame=s=>s.x>=frame.x&&s.x<=frame.x+frame.width&&s.y>=frame.y&&s.y<=frame.y+frame.height;
+  // A whole figure has to fit, so a spot right at the frame's edge doesn't count.
+  const inFrame=s=>s.x>=frame.x+10&&s.x<=frame.x+frame.width-10&&s.y>=frame.y+24&&s.y<=frame.y+frame.height-10;
   const spotFor=f=>{const spot=f.using&&placed.find(i=>i.id===f.using)?.spots.find(s=>!taken.has(s)&&inFrame(s));if(spot)taken.add(spot);return spot||null;};
   const who=[...scene.bots.map(b=>({...b,person:false,spot:spotFor(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null}))];
   const loose=who.filter(f=>!f.spot);
@@ -73,6 +74,7 @@ function cameraSvg(scene) {
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
   for(const f of figures)f.spot?.busy?.(g,f,0);
   for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
-  return g.svg(frame);
+  // The ids of the bots drawn at an item, so the photo's metadata says only what the picture shows.
+  return {svg:g.svg(frame),at:figures.filter(f=>f.spot).map(f=>f.id)};
 }
-cameraSvg(JSON.parse(__camera_scene));
+JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));
