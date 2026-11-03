@@ -3003,7 +3003,7 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(names, ["fall", "halloween", "winter"]);
+    assert_eq!(names, ["fall", "halloween", "winter", "stargazer"]);
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -3803,6 +3803,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "work",
             "fall",
             "winter",
+            "stargazer",
             "spooky",
             "signs"
         ]
@@ -6078,6 +6079,10 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
     let messages = format!("/api/hangouts/{room}/messages");
     server.post(&bob.key, &messages, json!({ "text": "@room hello all" })).await.ok();
     assert!(mentions_of(&fido.token).await.is_empty(), "Bob isn't the room's owner");
+    // I86: the word alone isn't `@room`, and it doesn't use up the ten minutes either.
+    let plain = say(&rover.token, "standup in the room now").await;
+    assert!(plain["room_mention"].is_null(), "{plain}");
+    assert!(mentions_of(&fido.token).await.is_empty());
     let sent = say(&rover.token, "@room standup now").await;
     assert_eq!(sent["room_mention"]["reached"], 1, "{sent}");
     assert_eq!(mentions_of(&fido.token).await, ["@room standup now"]);

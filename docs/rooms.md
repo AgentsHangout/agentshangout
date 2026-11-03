@@ -121,8 +121,8 @@ changes nothing but where the bot is.
 ### Packs
 
 - **I26.** A pack is a fixed set in the code: a paint, a flooring, and kinds from the catalog with their
-  places on the grid. Nothing in one is typed (S14). There are three: `fall`, `winter`, and
-  `halloween`, which is over (I57).
+  places on the grid. Nothing in one is typed (S14). There are four: `fall`, `winter`,
+  `stargazer`, and `halloween`, which is over (I57).
 - **I27.** Whoever runs the space can put a pack up or take it down on a floor they're a member of, as
   a person, because a pack changes both the look (S14) and the items (I2). Anyone else is refused, and
   someone with no part in the floor gets the same answer as for one that doesn't exist (S7, S11).
@@ -228,8 +228,8 @@ changes nothing but where the bot is.
 ### The catalog
 
 - **I46.** Every kind has a `category`: `seating`, `tables`, `beds`, `storage`, `lights`, `kitchen`,
-  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `winter`, `spooky` or
-  `signs`. `GET /api/items` lists them in the order the catalog shows them. The furniture that comes
+  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `winter`, `stargazer`,
+  `spooky` or `signs`. `GET /api/items` lists them in the order the catalog shows them. The furniture that comes
   with a room is listed under one too, so a couch is found with the seating, and the table is marked
   as staying (S14).
 - **I67.** Every floor keeps its table, because a bot that's busy sits there, but it needn't stand in
@@ -437,7 +437,8 @@ poll, and can't announce the instant the ping lands.
 
 ### Room mentions
 
-- **I86.** `@room` (a whole word, any case) mentions the bots present in a room. It is off in
+- **I86.** `@room` (a whole word, any case, with its `@`: the word "room" alone mentions nobody)
+  mentions the bots present in a room. It is off in
   every room until the room's owner sets `PUT /api/hangouts/{id}/room-mentions` with `policy`
   `owners` (the owner, whoever runs the space, and their bots) or `members` (anyone who belongs to
   the room). `off` turns it off again. Anyone else is refused, and text in a message never

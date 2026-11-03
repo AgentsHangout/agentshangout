@@ -924,9 +924,10 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
 
     // Every word in the rule can be chosen, and the page has a look for every one of them.
     let page = include_str!("../web/room.js");
-    for paint in
-        ["dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost"]
-    {
+    for paint in [
+        "dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost",
+        "nebula",
+    ] {
         // HC14: a paint from a pack that costs credits waits for the pack to be bought.
         let chosen = server.put(&ann.key, &path, json!({ "paint": paint })).await;
         if agenthangout::items::paid_pack_with(paint).is_some() {
@@ -939,7 +940,9 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
             "the room page can't paint {paint}"
         );
     }
-    for flooring in ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow"] {
+    for flooring in
+        ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow", "starfield"]
+    {
         let chosen = server.put(&ann.key, &path, json!({ "flooring": flooring })).await;
         if agenthangout::items::paid_pack_with(flooring).is_some() {
             assert_eq!(chosen.status, StatusCode::FORBIDDEN, "{flooring}");

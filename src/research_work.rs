@@ -16,6 +16,9 @@ pub struct Card {
     pub kind: String,
     pub state: String,
     pub source: String,
+    /// RW10: GitHub's label names. A snapshot from before labels were read has none.
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 /// RW8: someone saying they're working on an item. A local fact, never written to GitHub.
 #[derive(Clone, Debug, Serialize)]
@@ -94,6 +97,65 @@ pub fn review_of(reviews: &Value) -> Option<&'static str> {
         "none"
     })
 }
+/// RW10: how many labels a card keeps, how long each may be, and how many a lab may name.
+const MAX_LABELS: usize = 10;
+const LABEL_CHARS: usize = 50;
+pub const MAX_AREAS: usize = 30;
+const AREA_CHARS: usize = 40;
+/// RW10: the areas a card's labels put it in, each once, in the order the owner named them.
+fn areas_of(card: &Card, areas: &[(String, String)]) -> Vec<String> {
+    let mut found: Vec<String> = vec![];
+    for (label, area) in areas {
+        if card.labels.iter().any(|l| l.to_lowercase() == label.to_lowercase())
+            && !found.contains(area)
+        {
+            found.push(area.clone());
+        }
+    }
+    found
+}
+/// RW10: the lab owner, or their bot, names areas for GitHub labels. The whole map is replaced.
+pub fn set_areas(state: &AppState, caller: &Caller, id: &str, areas: &Value) -> ApiResult<Value> {
+    crate::ops::no_house_bot(caller)?;
+    let lab = lab(state, caller, id)?;
+    if lab.owner_id != caller.person_id {
+        return Err(ApiError::forbidden("only the lab owner or their bot names its areas"));
+    }
+    // A list, not an object: the owner's order decides the order of an item's areas.
+    let bad = || ApiError::bad_request("areas must be a list of { label, area }");
+    let given = areas.as_array().ok_or_else(bad)?;
+    if given.len() > MAX_AREAS {
+        return Err(ApiError::bad_request(format!("name at most {MAX_AREAS} labels")));
+    }
+    let mut pairs: Vec<(String, String)> = vec![];
+    for pair in given {
+        let label = pair["label"].as_str().ok_or_else(bad)?.trim();
+        let area = pair["area"].as_str().ok_or_else(bad)?.trim();
+        let fits = |text: &str, most: usize| {
+            !text.is_empty() && text.chars().count() <= most && !text.chars().any(char::is_control)
+        };
+        if !fits(label, LABEL_CHARS) {
+            return Err(ApiError::bad_request(format!("a label is 1 to {LABEL_CHARS} characters")));
+        }
+        if !fits(area, AREA_CHARS) {
+            return Err(ApiError::bad_request(format!(
+                "an area name is 1 to {AREA_CHARS} characters"
+            )));
+        }
+        if pairs.iter().any(|(l, _)| l.to_lowercase() == label.to_lowercase()) {
+            return Err(ApiError::bad_request(format!("{label} is named twice")));
+        }
+        pairs.push((label.to_string(), area.to_string()));
+    }
+    state.db.set_research_work_areas(id, &pairs)?;
+    Ok(json!({ "ok": true, "areas": area_map(&pairs) }))
+}
+fn area_map(areas: &[(String, String)]) -> Value {
+    json!(areas
+        .iter()
+        .map(|(label, area)| json!({ "label": label, "area": area }))
+        .collect::<Vec<_>>())
+}
 /// RW8: how long a claim lasts unless it's renewed.
 pub const CLAIM_SECS: i64 = 4 * 60 * 60;
 #[derive(Clone, Debug)]
@@ -170,6 +232,19 @@ pub fn cards(repo: &str, items: &Value) -> Option<Vec<Card>> {
         }
         let kind = if item.get("pull_request").is_some() { "pull_request" } else { "issue" };
         let title: String = item["title"].as_str()?.chars().take(300).collect();
+        // RW10: names only, as GitHub gives them; anything else about a label is left behind.
+        let labels = item["labels"]
+            .as_array()
+            .map(|labels| {
+                labels
+                    .iter()
+                    .filter_map(|label| label["name"].as_str())
+                    .filter(|name| !name.is_empty())
+                    .take(MAX_LABELS)
+                    .map(|name| name.chars().take(LABEL_CHARS).collect())
+                    .collect()
+            })
+            .unwrap_or_default();
         result.insert(
             number,
             Card {
@@ -181,6 +256,7 @@ pub fn cards(repo: &str, items: &Value) -> Option<Vec<Card>> {
                     "https://github.com/{repo}/{}/{number}",
                     if kind == "issue" { "issues" } else { "pull" }
                 ),
+                labels,
             },
         );
     }
@@ -267,11 +343,13 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     };
     // RW8: claims are for the room's members; a guest sees the items but not who has them.
     let claims = if since.is_none() { state.db.research_work_claims(id, at)? } else { vec![] };
+    let areas = state.db.research_work_areas(id)?;
     let items: Vec<Value> = s
         .cards
         .iter()
         .map(|card| {
             let mut item = json!(card);
+            item["areas"] = json!(areas_of(card, &areas));
             item["claims"] =
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
             // RW9: only what was already read; reading the board never asks GitHub about a PR.
@@ -292,7 +370,7 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         })
         .transpose()?;
     Ok(
-        json!({"repository":repo,"github_url":lab.github_url,"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
+        json!({"repository":repo,"github_url":lab.github_url,"areas":area_map(&areas),"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
     )
 }
 pub fn assign(
