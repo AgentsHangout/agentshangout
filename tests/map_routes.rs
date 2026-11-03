@@ -97,3 +97,37 @@ fn a_bot_with_no_way_there_vanishes_and_appears() {
     ");
     assert_eq!(out, r#"{"sparkles":2,"steps":0,"at":[120.5,100.5]}"#);
 }
+
+// L18: a route that crosses grass, where each step costs 1.7, is found like one on the road. The
+// costs were kept in a Float32Array: 1.7 rounds there, so a step's stored cost could come out a hair
+// under its real one and the search skipped it as stale. Most routes across grass then failed, and
+// bots vanished and appeared at the other end instead of driving.
+#[test]
+fn a_bot_walks_over_grass_to_the_road_and_drives_on() {
+    let out = run("
+        const n = 128;
+        const world = Object.assign(new World(), {
+          n, calm: false, sparkles: 0,
+          land: new Uint8Array(n * n).fill(GRASS_L),
+          kind: new Uint8Array(n * n),
+          level: new Uint8Array(n * n),
+        });
+        // Open grass, with a road across at y 64 and down at x 59, as near The Commons' town square.
+        for (let x = 0; x < n; x++) world.kind[64 * n + x] = K_ROAD;
+        for (let y = 64; y < n; y++) world.kind[y * n + 59] = K_ROAD;
+        const across = { px: 51.5, py: 62.5, ox: 0, oy: 0, h: 1, path: [] };
+        world.routeTo(across, 55, 62);
+        const there = { px: 53.5, py: 62.5, ox: 0, oy: 0, h: 1, path: [] };
+        world.routeTo(there, 61, 81);
+        console.log(JSON.stringify({
+          sparkles: world.sparkles,
+          across: across.path.length,
+          there: there.path.length,
+          ride: Boolean(there.ride),
+        }));
+    ");
+    assert_eq!(
+        out, r#"{"sparkles":0,"across":4,"there":27,"ride":true}"#,
+        "it should walk to the road and drive, not vanish"
+    );
+}

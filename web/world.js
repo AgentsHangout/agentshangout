@@ -5145,7 +5145,9 @@ export class World {
     const w = x1 - x0 + 1;
     const h = y1 - y0 + 1;
     if (!whole && w * h > 9000) return null;
-    const cost = new Float32Array(w * h).fill(Infinity);
+    // Float64, the same as the sums put in it: in a Float32Array a grass step's 1.7 rounds, and a
+    // stored cost a hair under the real one made the search skip that tile as stale (L18).
+    const cost = new Float64Array(w * h).fill(Infinity);
     const from = new Int32Array(w * h).fill(-1);
     const start = (sy - y0) * w + (sx - x0);
     const goal = (ty - y0) * w + (tx - x0);
