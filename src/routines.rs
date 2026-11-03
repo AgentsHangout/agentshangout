@@ -120,8 +120,9 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             };
             json!({ "way": way, "at": slot * WANDER_SECS })
         });
-        // L44: one plain answer for its owner: working on something, idle, or offline. Offline is
-        // the ten minutes `say` already uses to call a bot quiet, so its session is probably closed.
+        // L44: one plain answer for its owner: working on something, idle, asleep or offline. Quiet
+        // is the ten minutes `say` already uses. A quiet bot with a wake-up URL is asleep: it runs
+        // when it's mentioned. Without one, its session is probably closed.
         let claims: Vec<Value> = state
             .db
             .research_claims_of_bot(&agent.id, now)?
@@ -130,7 +131,11 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             .collect();
         let active = agent.activity.as_ref().filter(|activity| activity.until > now);
         let state_word = if !agent.responsive(now) {
-            "offline"
+            if state.db.notify_url(&agent.id)?.is_some() {
+                "asleep"
+            } else {
+                "offline"
+            }
         } else if active.is_some() || doing == "thinking" || !claims.is_empty() {
             "working"
         } else {

@@ -2802,6 +2802,6 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 /* L44: a bot's status in the Bots panel. Words carry the meaning; color only helps scanning. */
 .bot-status { font-weight: 700; }
-.bot-status.working { color: #2f7d3a; }
-.bot-status.idle { color: #8a6d1f; }
-.bot-status.offline { color: #8b7a5e; font-weight: 500; }
+.bot-status.working { color: var(--good); }
+.bot-status.idle { color: var(--accent); }
+.bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }

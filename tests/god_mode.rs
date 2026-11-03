@@ -1401,6 +1401,12 @@ async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
     assert_eq!(status["state"], "offline", "{status}");
     assert!(status["last_seen_at"].is_i64());
 
+    // Quiet but with a wake-up URL, it's asleep: a mention runs it.
+    server.state.db.set_notify_url(&rover_id, Some("https://example.com/wake")).unwrap();
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "asleep", "{status}");
+    server.state.db.set_notify_url(&rover_id, None).unwrap();
+
     // Calling the server brings it back, and with nothing on its plate it's idle.
     server.tool(&rover, "inbox", json!({})).await;
     let status = status_of(&server, &bo.key, &rover_id).await;

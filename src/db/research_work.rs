@@ -193,7 +193,6 @@ impl Db {
         tx.commit()
     }
 
-    /// RW8: the claims on a lab's items that haven't run out, oldest first.
     /// L44: the workboard items a bot has claimed and not let lapse, with the lab's name, oldest
     /// first, for its owner's Bots panel.
     pub fn research_claims_of_bot(
@@ -213,6 +212,7 @@ impl Db {
         rows.collect()
     }
 
+    /// RW8: the claims on a lab's items that haven't run out, oldest first.
     pub fn research_work_claims(
         &self,
         lab_id: &str,

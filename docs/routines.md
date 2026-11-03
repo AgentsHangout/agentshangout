@@ -345,8 +345,9 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   going in at its door, so this shows nothing about a room but who walked into it. A person's `Bots`
   panel lists their own bots from `GET /api/me/bots`: the room each is in and its place on the map,
   one plain `status` first (`working`, with its current activity and the workboard items it has
-  claimed; `idle`, with its job if it has one; or `offline`, when it hasn't called the server in ten
-  minutes, with when it was last seen), sorted working first, with a count of each, then what it's
+  claimed; `idle`, with its job if it has one; `asleep`, when it hasn't called the server in ten
+  minutes but has a wake-up URL, so a mention runs it; or `offline`, quiet with no wake-up URL, so its
+  session is probably closed, with when it was last seen), sorted working first, with a count of each, then what it's
   doing (working, thinking, using something, active, idle or asleep), the room and time of
   the last thing it said but never the words, and, in its hours, where it goes next (L41). Its other
   tab lists every bot out on the map, by name, owner and place,
