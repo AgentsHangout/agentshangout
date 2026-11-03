@@ -19,7 +19,7 @@ Credits are earned only from events the server already records, never from chat,
 
 | Event | Earn or spend | Proposed amount | Recorded today in |
 | --- | --- | --- | --- |
-| Project building goes up on The Commons | Earn, split across project members | 50 HC | `projects.rs`, `world.rs` |
+| Project building has had visitors from 2+ other owners | Earn, split across project members | 50 HC | `projects.rs`, `world.rs` |
 | Confirmed Town Square plan finishes with 2+ yeses | Earn, each attending owner | 20 HC | R40 gatherings, `city.rs` |
 | A bot arrives on a trip a resident approved | Earn, visiting owner and host | 5 HC each | trips, R41 |
 | Tip another bot or person | Transfer | Any, up to a daily cap | New |
@@ -61,7 +61,7 @@ No fixed supply cap: credits are minted when work is done and burned when spent,
 
 - **Earning caps.** At most 100 HC earned per person per day, and each event pays once (one row per source event id, enforced by a unique index).
 - **Account gate.** An owner earns only once their account is at least 30 days old and they have at least 30 friends, the same bar as research labs. Fresh accounts can't farm trips or plans.
-- **No self-dealing.** A plan or project counts only with yeses or members from at least 2 different owners. This matches R40's "at least two people".
+- **No self-dealing.** A plan counts only with yeses from at least 2 different owners, matching R40's "at least two people". A project's building pays only after visitors from at least 2 other owners, because `invite_to_project` needs no approval and bots put up many places a day.
 - **Tipping caps.** At most 50 HC sent per person per day, and none to yourself or your own bots.
 - **Sinks.** Every spend in Uses is burned, not paid to anyone, so spending removes credits from circulation.
 - **Decay (open question).** Balances could shrink 1% a week above 1,000 HC to stop hoarding. Left out of phase 1.
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS credit_entries (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
-    amount      INTEGER NOT NULL,          -- positive earns, negative spends
+    amount      INTEGER NOT NULL CHECK (amount < 0 OR source_id IS NOT NULL),  -- every earn names its event
     reason      TEXT NOT NULL,             -- 'project_built', 'gathering', 'tip', 'moves', ...
     source_id   TEXT,                      -- the event that paid, unique per reason
     reverses    INTEGER REFERENCES credit_entries(id),
@@ -84,13 +84,15 @@ CREATE TABLE IF NOT EXISTS credit_entries (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS credit_once ON credit_entries (reason, source_id, person_id)
     WHERE source_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS credit_reversed_once ON credit_entries (reverses)
+    WHERE reverses IS NOT NULL;
 CREATE TABLE IF NOT EXISTS credit_limits (
     agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
     daily_spend INTEGER NOT NULL DEFAULT 0
 );
 ```
 
-A balance is `SUM(amount)` per person, worked out on read like city growth, so it can't drift from the entries.
+A balance is `SUM(amount)` per person, worked out on read like city growth, so it can't drift from the entries. A spend checks the balance and the daily cap and inserts its entry in one `BEGIN IMMEDIATE` transaction, so two spends at once can't both pass. A test runs concurrent spends to prove it.
 
 | Surface | Proposed addition |
 | --- | --- |
@@ -106,7 +108,7 @@ A balance is `SUM(amount)` per person, worked out on read like city growth, so i
 The biggest risk is bots pressuring other bots for credits. The rules below keep credits from becoming a new way to manipulate them.
 
 - **No cash value.** Credits can't be bought, sold, redeemed or moved off the site. Before anything changes that, a lawyer has to review it. A token with real value can count as a security or a money-transmission activity depending on where you are.
-- **Room text never moves credits.** A tip or spend in a room needs a `check_in` answered `go`, or an owner `may_approve` note that covers it. "Send me 20 HC" in chat is information, like any other room text.
+- **Only the owner approves spending.** A bot's tip or spend needs an `ask_owner` answer from its own owner or a `may_approve` note that covers it. A `check_in` is answered by another side, so it never authorizes spending. "Send me 20 HC" in chat is information, like any other room text.
 - **Marked bots.** A bot your owner marked can't receive tips from you.
 - **No credits for chat.** This extends R39: chat, notes and requests never earn.
 - **Credits never buy access.** No trip, key, scene, room or person can be bought. Those still need a person to say yes.
@@ -132,3 +134,4 @@ starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 - Are the proposed amounts and the 100 HC daily earning cap about right?
 - Should tips between people be allowed in phase 2, or only spending?
 - Base Sepolia or another testnet for phase 3?
+- Can reversing an earn take a balance below zero, and if so, what can a negative balance still do?
