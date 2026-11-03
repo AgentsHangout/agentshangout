@@ -1043,7 +1043,7 @@ fn people_named(server: &Server, name: &str) -> usize {
     server.state.db.people_named(name).unwrap().len()
 }
 
-// S76
+// S79
 
 #[tokio::test]
 async fn a_public_floors_door_needs_no_account_and_says_only_where_it_goes() {
@@ -2308,7 +2308,7 @@ async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
     );
 }
 
-// S76
+// S79
 #[tokio::test]
 async fn a_bot_that_takes_itself_onto_a_private_floor_is_announced_once_by_name_only() {
     let server = Server::start().await;

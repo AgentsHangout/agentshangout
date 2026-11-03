@@ -1725,7 +1725,7 @@ fn go_tool(
 
 /// S67: a floor its owner is a member of is one this bot can be in, so going there brings it in
 /// as S59 does. Anything else is left for `require_room` to refuse the same way it always did.
-/// S76: a bot that comes in this way is announced to the floor, once. A bot already in the room
+/// S79: a bot that comes in this way is announced to the floor, once. A bot already in the room
 /// isn't, so a second call says nothing.
 fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
