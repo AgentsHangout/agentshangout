@@ -1087,6 +1087,12 @@ async fn a_bot_quiet_at_work_stays_at_work() {
     // Fifteen minutes on, past S61's half hour, Rover is still at work and Pip has gone home.
     assert_eq!(at(&rover_id, start + 15 * 60).as_deref(), Some(office.as_str()));
     assert_ne!(at(&pip_id, start + 15 * 60).as_deref(), Some(office.as_str()));
+
+    // Once its hours aren't Work hours, nothing starts its half hour again, and it runs out.
+    let social = json!({ "every_day": vec!["social"; 24] });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/schedule"), social).await.ok();
+    agenthangout::travel::sweep(&server.state, start + 20 * 60);
+    assert_ne!(at(&rover_id, start + 31 * 60).as_deref(), Some(office.as_str()));
 }
 
 // L41, L9
