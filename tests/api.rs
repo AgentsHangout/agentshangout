@@ -1793,6 +1793,32 @@ async fn spending_and_bot_limits_are_the_callers_own() {
     assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.body);
 }
 
+// HC23: the coin in the top bar is only ever the signed-in person's own balance, in both bars,
+// just before Needs you, and it opens the account panel.
+#[test]
+fn the_top_bar_shows_your_own_balance_as_a_coin() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let coin = app.split_once("function creditCoin(me, account) {").unwrap().1;
+    let coin = coin.split_once("\n}\n").unwrap().0;
+    assert!(
+        coin.contains("if (me?.kind !== 'person') return null;"),
+        "the coin isn't only for a person"
+    );
+    let calls: Vec<&str> =
+        coin.split("api(").skip(1).map(|call| call.split(')').next().unwrap()).collect();
+    assert_eq!(calls, ["'/api/credits'"], "the coin calls something other than your own credits");
+    assert!(coin.contains("await account.open('');"), "the coin doesn't open the account panel");
+    // The card tells the coin about a spend, so the two never disagree.
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    assert!(card.contains("dispatchEvent(new CustomEvent('ah-credits'"));
+    for view in ["worldView", "roomView"] {
+        let view = app.split_once(&format!("async function {view}(")).unwrap().1;
+        let bar = view.split_once("frame.actions.append(").unwrap().1.split_once("));").unwrap().0;
+        let at = bar.find("creditCoin(me, account)").unwrap_or_else(|| panic!("no coin in {view}"));
+        assert!(at < bar.find("needs").unwrap(), "the coin isn't before Needs you in {view}");
+    }
+}
+
 // HC8: the site shows your own credits in your account panel, read from your own endpoint, and
 // every field the card shows is one the endpoint returns.
 #[tokio::test]
@@ -1809,6 +1835,12 @@ async fn the_account_panel_shows_your_own_credits() {
     );
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
+    // A part the card leaves out is dropped, not written out as "null".
+    assert!(card.contains("].filter(Boolean));"), "the card can show null");
+    // HC22: every kind of line the history can hold has its own words on the card.
+    for kind in ["question:", "question_refund:", "question_award:", "gathering:", "good_trip:"] {
+        assert!(card.contains(kind), "the history has no words for {kind}");
+    }
     // HC8, HC14, HC17 and HC21: the card and its refund helper only call the owner's
     // credit endpoints and cancellation for the owner's own reserved questions.
     let escrow =
@@ -1887,20 +1919,9 @@ async fn the_shop_shows_each_paid_pack_before_it_is_bought() {
     let kevins = server.get(&room.kevin, "/api/credits").await.body;
     assert_eq!(kevins["packs"], credits["packs"]);
 
-    let app = include_str!("../web/app.js").replace(
-        "
-", "
-",
-    );
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
-    let card = card
-        .split_once(
-            "
-}
-",
-        )
-        .unwrap()
-        .0;
+    let card = card.split_once("\n}\n").unwrap().0;
     assert!(card.contains("h('h3', {}, 'Shop')"), "the card has no shop");
     assert!(
         card.contains("roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },"),
@@ -1913,20 +1934,9 @@ async fn the_shop_shows_each_paid_pack_before_it_is_bought() {
 // something that paid.
 #[test]
 fn every_kind_of_credit_history_line_has_its_own_words() {
-    let app = include_str!("../web/app.js").replace(
-        "
-", "
-",
-    );
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
-    let card = card
-        .split_once(
-            "
-}
-",
-        )
-        .unwrap()
-        .0;
+    let card = card.split_once("\n}\n").unwrap().0;
     for kind in
         ["gathering", "good_trip", "hosted_trip", "question", "question_refund", "question_award"]
     {

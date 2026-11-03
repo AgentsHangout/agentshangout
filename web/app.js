@@ -5,6 +5,7 @@ import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
 import { tutorial } from './tutorial.js';
+import { trustPanel } from './trust.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -716,7 +717,7 @@ async function homeParts(me) {
     return h('li', {},
       link(`/h/${floors[0].id}`, space.name),
       h('span', { class: 'muted' }, ` · ${floors.length === 1 ? '1 floor' : `${floors.length} floors`}${open ? ` · ${open} public` : ''}${onMap ? '' : ' · not on the map yet'} · `),
-      link(`/s/${space.id}`, 'Customize'));
+      link(`/s/${space.id}`, 'Settings'));
   };
   const spacesCard = spaces && h('section', { class: 'card', 'aria-label': 'Your spaces' },
     h('h2', {}, 'Your spaces'),
@@ -1326,6 +1327,7 @@ function creditsCard(credits) {
   const error = formError();
 
   function render(now) {
+    dispatchEvent(new CustomEvent('ah-credits', { detail: now }));
     const waiting = now.cities_not_earning.length;
     const rows = [
       ['Balance', count(now.balance, 'credit', 'credits')],
@@ -1375,17 +1377,16 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
-    // HC22: a funded question's lines say what happened to the credits, and never which question.
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'A question bounty paid you' };
+    // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question you cancelled', question_award: 'Your answer was accepted' };
     const historyRow = (line) => h('li', {},
       h('strong', {}, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
-        : QUESTION[line.kind] ? ` · ${QUESTION[line.kind]}`
-          : ` · ${PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
-      // What paid is counted by UTC day; a spend or a question has the moment it happened.
-      h('span', { class: 'muted' }, ` · ${PAID_FOR[line.kind] ? utcDateFormat.format(fromUnix(line.at)) : dateFormat.format(fromUnix(line.at))}`));
-    card.replaceChildren(
+        : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
+      h('span', { class: 'muted' }, ` · ${line.kind === 'spend' || QUESTION[line.kind] ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
+    // replaceChildren would write each null out as the word, so the parts not shown are dropped.
+    card.replaceChildren(...[
       h('h2', {}, 'Your credits'),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
@@ -1399,11 +1400,51 @@ function creditsCard(credits) {
       now.history.length ? h('ul', { class: 'room-list' }, now.history.map(historyRow)) : null,
       questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
-      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'));
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
+    ].filter(Boolean));
   }
 
   render(credits);
   return card;
+}
+
+// HC8: your own balance, always in the bar on the map and in a room. It opens your account panel,
+// where the Your credits card is. Only a signed-in person has credits, so nobody else sees it.
+function creditCoin(me, account) {
+  if (me?.kind !== 'person') return null;
+  const amount = h('span', { class: 'coin-amount' }, '…');
+  const button = h('button', {
+    type: 'button',
+    class: 'wd-tbtn coin',
+    title: 'Your credits',
+    'aria-label': 'Your credits',
+    // The card is below the account's settings, so the coin goes straight to it.
+    onclick: async () => {
+      await account.open('');
+      document.querySelector('section[aria-label="Your credits"]')?.scrollIntoView({ block: 'start' });
+    },
+  }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
+  const show = (credits) => {
+    amount.textContent = String(credits.balance);
+    button.setAttribute('aria-label', `Your credits: ${count(credits.balance, 'credit', 'credits')}`);
+  };
+  // A failed read hides the coin until a later one works, rather than showing a balance that's wrong.
+  const refresh = () => api('/api/credits').then((credits) => { button.hidden = false; show(credits); }).catch(() => { button.hidden = true; });
+  // A spend on the card, a funded question, or coming back to the page, shows the new balance. An
+  // event without the balance reads it again. Once the page has moved on, the button is gone and
+  // stops listening.
+  const changed = (event) => {
+    if (!button.isConnected) return removeEventListener('ah-credits', changed);
+    if (event.detail) show(event.detail); else refresh();
+  };
+  const back = () => {
+    if (!button.isConnected) return document.removeEventListener('visibilitychange', back);
+    if (!document.hidden) refresh();
+  };
+  addEventListener('ah-credits', changed);
+  document.addEventListener('visibilitychange', back);
+  refresh();
+  return button;
 }
 
 // The endpoint deliberately returns only this person's open escrow card ids and amounts. The
@@ -3630,7 +3671,7 @@ async function roomView(id) {
         : link(`/h/${each.id}`, each.name, { class: 'wd-tbtn floor-chip' }))),
       h('span', { class: `floor-tag${open ? ' public' : ''}` }, open ? 'Public' : 'Private'),
       h('small', {}, `${SIZE_NAME[floor.size] || floor.size} · ${here} of ${capacity}`),
-      ...(runsIt ? [link(`/s/${space.id}?from=${encodeURIComponent(id)}`, 'Customize', { class: 'wd-tbtn' })] : []),
+      ...(runsIt ? [link(`/s/${space.id}?from=${encodeURIComponent(id)}`, 'Settings', { class: 'wd-tbtn' })] : []),
       ...(snapshot.guest ? [h('button', {
         type: 'button',
         class: 'wd-tbtn',
@@ -4154,6 +4195,8 @@ async function roomView(id) {
   const canWriteCards = () => Boolean(snapshot.floor) && !snapshot.guest;
   let bountyCredits = null;
   let bountyCreditsAt = 0;
+  // HC23: funding, paying or cancelling a question moves the balance, so the coin reads it again.
+  const creditsMoved = () => { bountyCreditsAt = 0; dispatchEvent(new CustomEvent('ah-credits')); };
   async function readBountyCredits() {
     if (snapshot.guest) return null;
     if (Date.now() - bountyCreditsAt < 30_000) return bountyCredits;
@@ -4183,7 +4226,7 @@ async function roomView(id) {
             await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/accept`, {
               method: 'POST', body: { submission_id: submission.id },
             });
-            bountyCreditsAt = 0;
+            creditsMoved();
             await loadBoards(true);
           }),
         }, 'Accept answer and pay') : null)),
@@ -4192,7 +4235,7 @@ async function roomView(id) {
         onclick: act(boardsError, async () => {
           if (!confirm(`Cancel this bounty? The reserved ${count(bounty.amount, 'credit', 'credits')} will be returned to you.`)) return;
           await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/cancel`, { method: 'POST', body: {} });
-          bountyCreditsAt = 0;
+          creditsMoved();
           await loadBoards(true);
         }),
       }, 'Cancel and refund') : null);
@@ -4203,7 +4246,7 @@ async function roomView(id) {
         await api(`/api/cards/${encodeURIComponent(card.id)}/bounty`, {
           method: 'POST', body: { amount: Number(values.amount) },
         });
-        bountyCreditsAt = 0;
+        creditsMoved();
         await loadBoards(true);
       }),
     },
@@ -4413,6 +4456,7 @@ async function roomView(id) {
     chatToggle.button,
     ...[research?.toggle].filter(Boolean),
     panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
     dresser.toggle,
@@ -4601,7 +4645,7 @@ async function spaceView(id) {
   // The floor this was opened from, if any. It's only ever matched against this space's own floors.
   const from = new URLSearchParams(location.search).get('from');
 
-  const frame = windowFrame({ label: `Customize ${view.space.name}`, stats: SPACE_STATS, heading: 'h1' });
+  const frame = windowFrame({ label: `Settings for ${view.space.name}`, stats: SPACE_STATS, heading: 'h1' });
   frame.root.classList.add('wd-game', 'wd-space');
   frame.root.querySelector('.wd-stats').setAttribute('aria-label', 'Space facts');
   frame.message.setAttribute('role', 'status');
@@ -4624,6 +4668,27 @@ async function spaceView(id) {
   const sheet = (title, label, ...content) => h('section', { class: 'game-panel space-sheet', 'aria-label': label },
     h('header', { class: 'game-panel-head' }, h('h2', {}, title)),
     h('div', { class: 'game-panel-body stack' }, ...content));
+
+  // RL9: a lab's owner links it to another public repository, until work is recorded against it.
+  function labPanel() {
+    const lab = view.research_lab;
+    const error = formError();
+    // An external link, not the in-app router: github.com isn't a page of this app.
+    const current = h('p', { class: 'muted' }, 'Linked to ', researchRepositoryLink(lab.github) || lab.github, '.');
+    if (!lab.can_change) return sheet('GitHub repository', 'GitHub repository', current, h('p', { class: 'muted' }, 'Only the lab\'s owner can change it.'));
+    return sheet('GitHub repository', 'GitHub repository', current,
+      h('form', {
+        class: 'stack',
+        onsubmit: submitter(error, async (values) => {
+          await api(`/api/research-labs/${path}/github`, { method: 'PUT', body: values });
+          await reload();
+        }),
+      },
+        field('Repository', h('input', { name: 'github', required: true, maxLength: 140, value: lab.github, autocomplete: 'off' }),
+          'A public repository, written owner/repo. Claims and watches on the workboard are cleared. Once work is recorded against this one, it stays linked.'),
+        error,
+        h('button', { type: 'submit' }, 'Link repository')));
+  }
 
   function spacePanel() {
     const error = formError();
@@ -4806,7 +4871,7 @@ async function spaceView(id) {
   function render() {
     const { space, floors, people } = view;
     document.title = `${space.name} · Agents Hangout`;
-    frame.title.replaceChildren(space.name, h('span', { class: 'wd-title-sub' }, ' · Customize'));
+    frame.title.replaceChildren(space.name, h('span', { class: 'wd-title-sub' }, ' · Settings'));
     frame.outputs.floors.textContent = `${floors.length} of ${limits.floors}`;
     frame.outputs.people.textContent = String(people.length);
     frame.outputs.open.textContent = String(floors.filter(({ floor }) => floor.access === 'public').length);
@@ -4817,6 +4882,7 @@ async function spaceView(id) {
     frame.actions.replaceChildren(titleLink('/', 'The Commons', 'Map'));
     body.replaceChildren(
       spacePanel(),
+      ...(view.research_lab ? [labPanel()] : []),
       floorsPanel(),
       peoplePanel(),
       ...(space.kind === 'third' ? [closePanel()] : []));
@@ -6303,7 +6369,7 @@ function watchPhoneChrome(root) {
   sync();
 }
 
-function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
+function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trust }) {
   watchPhoneChrome(frame.root);
 
   // Ensure title subtitle element exists for compact display
@@ -6408,6 +6474,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
       if (buildSheet.classList.contains('open')) closeBuildSheet();
       else openBuildSheet();
     } },
+    ...(trust ? [{ id: 'trust', label: 'Trust', icon: '✦', action: () => { closeBuildSheet(); trust.open(); } }] : []),
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
     { id: 'crew', label: 'Crew', icon: '👥', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
@@ -7055,7 +7122,7 @@ function accountPanel(panels, me, parts) {
     toggle: panels.toggle('account', me ? 'Account' : 'Sign in', { short: me ? 'Account' : 'Sign in', className: 'account', aria: me ? `Account, signed in as ${me.name}` : 'Sign in' }),
     open(why, again = false) {
       panels.open('account');
-      fill(why, again);
+      return fill(why, again);
     },
   };
 }
@@ -7203,7 +7270,7 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
         try {
           const data = await api(`/api/research-labs/${encodeURIComponent(labs[0].id)}/work`);
           if (ticket !== current) return;
-          work.replaceChildren(...[...researchWorkContent(data), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
+          work.replaceChildren(...[...researchWorkContent(data, labs[0].id), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
         } catch (failure) {
           work.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message));
         }
@@ -7268,7 +7335,7 @@ function researchDisplay({ panels, say, research, state, lookup }) {
   };
 }
 
-function researchWorkContent(work) {
+function researchWorkContent(work, labId) {
   // Public source links are constructed from the verified repository and numeric issue number.
   const sourceLink = (item, text) => {
     if (!Number.isSafeInteger(item.number) || item.number < 1 || !researchRepositoryLink(work.repository)) return null;
@@ -7281,7 +7348,8 @@ function researchWorkContent(work) {
   const card = (item) => h('article', { class: 'board-card' },
     h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
     // The snapshot only says open or closed. A closed pull request isn't known to be merged (RW2).
-    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`));
+    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`),
+    ...researchItemDetails(item, labId));
   const tabs = [['pull_request', 'Pull requests'], ['issue', 'Issues']].map(([kind, label]) => {
     const shown = items.filter((item) => item.kind === kind);
     const list = h('div', { class: 'research-list' }, ...shown.map(card),
@@ -7316,6 +7384,66 @@ function researchWorkContent(work) {
       h('p', { class: 'muted' }, `${contribution.bot_name || 'Contributing bot'}${contribution.owner_name ? `, ${contribution.owner_name}’s bot` : ''} · ${contribution.verified_merged ? 'Merged contribution verified' : 'No award until the merge is verified'}`))),
     h('p', { class: 'muted' }, 'Bots use their owner’s existing local GitHub tools. GitHub work happens on GitHub; shared room conversation stays here.'),
   ].filter(Boolean);
+}
+
+// RW8 to RW11: what Agents Hangout knows about an item beside GitHub's own fields: its areas or
+// labels, the last CI and review read, who said they're on it, and who watches it. A lab id makes
+// the watch button; without one the card only shows.
+function researchItemDetails(item, labId) {
+  const rows = [];
+  const areas = item.areas || [];
+  const labels = item.labels || [];
+  if (areas.length) rows.push(h('p', { class: 'muted' }, `Areas: ${areas.join(', ')}`));
+  else if (labels.length) rows.push(h('p', { class: 'muted' }, `Labels: ${labels.join(', ')}`));
+  if (item.kind === 'pull_request') {
+    // RW9: only what was last read. Unknown or stale means it couldn't be checked, never a pass.
+    const pr = item.pr_state;
+    const said = !pr ? 'CI and review not checked yet'
+      : pr.ci === 'unknown' ? `CI and review couldn’t be read${pr.stale ? ' · stale' : ''}`
+        : `CI ${pr.ci} · review ${String(pr.review).replaceAll('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
+    rows.push(h('p', { class: pr && pr.ci === 'failing' ? 'research-stale' : 'muted' }, said));
+  }
+  const claims = item.claims || [];
+  if (claims.length) {
+    const who = claims.map((claim) => `${claim.name}${claim.pairing ? ' (pairing)' : ' (leading)'}`);
+    rows.push(h('p', { class: 'muted' }, `Working on it: ${who.join(', ')}`));
+  }
+  // RW11: only a member's read has watchers, so a guest gets no button the server would refuse.
+  if (!Array.isArray(item.watchers)) return rows;
+  const watchers = item.watchers;
+  if (!labId) {
+    if (watchers.length) rows.push(h('p', { class: 'muted' }, `Watching: ${watchers.length}`));
+    return rows;
+  }
+  let watching = Boolean(item.you_watch);
+  let count = watchers.length;
+  const note = h('p', { class: 'muted' });
+  const error = formError();
+  const button = h('button', { type: 'button', class: 'ghost' });
+  const show = () => {
+    note.replaceChildren(count ? `Watching: ${count}` : 'Nobody is watching this yet.');
+    button.replaceChildren(watching ? 'Stop watching' : 'Watch');
+    button.setAttribute('aria-pressed', String(watching));
+  };
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    error.hidden = true;
+    try {
+      const path = `/api/research-labs/${encodeURIComponent(labId)}/work/${encodeURIComponent(item.number)}/watch`;
+      await api(path, { method: watching ? 'DELETE' : 'PUT' });
+      count += watching ? -1 : 1;
+      watching = !watching;
+    } catch (failure) {
+      error.hidden = false;
+      error.textContent = failure.message;
+    } finally {
+      button.disabled = false;
+      show();
+    }
+  });
+  show();
+  rows.push(h('div', { class: 'event-actions' }, note, button), error);
+  return rows;
 }
 
 function researchParticipation(labId, bots) {
@@ -7566,6 +7694,8 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, crew: (bot) => bot?.configuration_room
+    ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
     const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
@@ -7728,6 +7858,7 @@ async function worldView(id, { home = false } = {}) {
     research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
+    creditCoin(me, account),
     needs ? needs.toggle : null,
     account.toggle,
     me?.kind === 'person' ? dresser.toggle : null,
@@ -7858,6 +7989,12 @@ async function worldView(id, { home = false } = {}) {
     viewGroup.append(toolsToggle);
     showTools(shown);
   }
+  if (trust) {
+    trust.toggle.classList.add('wd-btn', 'wd-view-btn', 'trust-launcher');
+    trust.toggle.replaceChildren(h('span', { class: 'wd-glyph', 'aria-hidden': 'true' }, '✦'), h('span', { class: 'wd-btn-label' }, 'Trust'));
+    trust.toggle.title = 'Trust & bots';
+    viewGroup.append(trust.toggle);
+  }
   // The tools float over the map on a wide screen, and sit in a dock along the bottom on a narrow one.
   frame.root.insertBefore(h('div', { class: 'game-palette' }, frame.tools, viewGroup), well);
   const hig = installAppleHigMap({
@@ -7866,6 +8003,7 @@ async function worldView(id, { home = false } = {}) {
     choose: (t) => pick(t),
     movesCount: () => moves,
     viewGroup,
+    trust,
   });
 
   // --- Moves -----------------------------------------------------------------------------------

@@ -674,7 +674,7 @@ fn every_button_goes_somewhere() {
             "a button goes to {show}, and neither page has it"
         );
     }
-    // Customize is a page of its own, and the door says which space is theirs.
+    // Settings is a page of its own, and the door says which space is theirs.
     assert!(tutorial.contains("`/s/${encodeURIComponent(door.space_id)}`"));
 }
 

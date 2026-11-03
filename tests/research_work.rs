@@ -562,6 +562,8 @@ async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
     let read = research_work::list(&state, &owner, "lab").await.unwrap();
     assert_eq!(read["items"][0]["you_watch"], false);
     assert_eq!(read["items"][1]["you_watch"], true);
+    // A member's read carries watchers; a guest's leaves them out (RW11).
+    assert!(read["items"][0]["watchers"].is_array());
 
     // A first PR read, and a failed one, tell nobody anything.
     upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"success"}]);
@@ -582,6 +584,9 @@ async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
     let events = state.db.list_bot_events("bot", 0, Some("mention"), None, 0, true, 10).unwrap();
     assert_eq!(events.len(), 1, "{events:?}");
     assert!(events[0].data.contains("Pull request #12 has CI failing now"), "{events:?}");
+    // E5: like every mention event, it carries `context`, empty for a workboard change.
+    let data: serde_json::Value = serde_json::from_str(&events[0].data).unwrap();
+    assert_eq!(data["context"], json!([]), "{data}");
     let line = state.db.messages("lab", 0, 50).unwrap().into_iter().last().unwrap();
     assert_eq!(line.kind, "system");
     assert_eq!(line.body, "Pull request #12 has CI failing now, was passing.");

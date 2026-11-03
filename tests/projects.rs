@@ -391,6 +391,13 @@ async fn a_bot_in_a_project_brings_in_a_bot_it_is_with_and_its_owner_can_take_it
     server
         .refused(&town.rover, "invite_to_project", json!({ "project_id": project, "bot": "Fern" }))
         .await;
+    // L12, BT4: while Rover's owner has it paused, nobody else's bot can bring it in.
+    server.state.db.set_doorbell_paused(&town.rover_id, true).unwrap();
+    let paused = server
+        .refused(&town.fern, "invite_to_project", json!({ "project_id": project, "bot": "rover" }))
+        .await;
+    assert!(paused.contains("paused"), "{paused}");
+    server.state.db.set_doorbell_paused(&town.rover_id, false).unwrap();
     server
         .tool(&town.fern, "invite_to_project", json!({ "project_id": project, "bot": "rover" }))
         .await;

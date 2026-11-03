@@ -2452,3 +2452,121 @@ const CORE: [&str; 19] = [
     "answer_check_in",
     "rsvp",
 ];
+
+// E5, #354: a mention carries the few messages just before it, as the bot could read them.
+#[tokio::test]
+async fn a_mention_carries_the_messages_just_before_it() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let made = server.post("", "/api/hangouts", json!({ "name": "Out", "your_name": "Pat" })).await;
+    let pat = made.body["owner_key"].as_str().unwrap().to_string();
+    let home = made.body["hangout"]["id"].as_str().unwrap().to_string();
+    let (pixel, pixel_id) = server.bot(&pat, &home, "Pixel").await;
+
+    server.say(&kevin, &room, "SENTINEL before anyone walked in").await;
+    server.say(&kevin, &room, "first line").await;
+    server.say(&justin, &room, "second line").await;
+    server.say(&kevin, &room, "third line").await;
+    let opened =
+        server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
+    assert_eq!(opened.status, StatusCode::OK, "{}", opened.body);
+    let walked = server
+        .post(&pat, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pixel_id }))
+        .await;
+    assert_eq!(walked.status, StatusCode::OK, "{}", walked.body);
+    server.say(&kevin, &room, "after the walk-in").await;
+    server.say(&scout, &room, "SCOUTSAID my own line").await;
+    server.say(&justin, &room, "@Scout @Pixel what do you two think?").await;
+
+    let mention_of = |events: &Value| {
+        events["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["name"] == "mention")
+            .cloned()
+            .unwrap_or_else(|| panic!("no mention in {events}"))
+    };
+    // A member: the three messages just before it, oldest first, not the mention itself.
+    let member = mention_of(&server.tool(&scout, "events_since", json!({ "since": "0" })).await);
+    let context = member["data"]["context"].as_array().unwrap();
+    let bodies: Vec<_> = context.iter().map(|line| line["body"].as_str().unwrap()).collect();
+    assert_eq!(bodies.len(), 3, "{member}");
+    assert_eq!(bodies.last(), Some(&"after the walk-in"), "{member}");
+    assert!(!bodies.iter().any(|body| body.contains("SENTINEL") || body.contains("@Scout")));
+    // E4: its own line isn't in its context, so the three are the others' lines before it.
+    assert!(!member.to_string().contains("SCOUTSAID"), "{member}");
+    assert!(context.iter().all(|line| line["speaker"].is_string() && line["message_id"].is_i64()));
+    let ids: Vec<i64> = context.iter().map(|line| line["message_id"].as_i64().unwrap()).collect();
+    assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "oldest first: {ids:?}");
+
+    // A guest: nothing from before it walked in, and only what its own read_room shows (S19).
+    let guest = mention_of(&server.tool(&pixel, "events_since", json!({ "since": "0" })).await);
+    let guest_context = guest["data"]["context"].as_array().unwrap();
+    assert!(!guest.to_string().contains("first line"), "{guest}");
+    assert!(!guest.to_string().contains("SENTINEL"), "{guest}");
+    let read = server.tool(&pixel, "read_room", json!({ "hangout_id": room })).await;
+    let readable: Vec<i64> = read["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        guest_context.iter().all(|line| readable.contains(&line["message_id"].as_i64().unwrap())),
+        "{guest} vs {readable:?}"
+    );
+}
+
+// E5, #354: a note is never in a mention's context, and a webhook delivery carries the same
+// context as `events_since`.
+#[tokio::test]
+async fn a_mention_context_leaves_out_notes_and_reaches_webhooks_the_same() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let (url, hook) = start_hook("echo").await;
+    let subscribed = server
+        .mcp(
+            &scout,
+            json!(1),
+            "events/subscribe",
+            json!({
+                "name": "mention", "delivery": { "mode": "webhook", "url": url, "secret": SECRET }
+            }),
+        )
+        .await;
+    assert!(subscribed.body["error"].is_null(), "{}", subscribed.body);
+
+    server.say(&kevin, &room, "a chat line").await;
+    let noted = server
+        .post(&kevin, &format!("/api/hangouts/{room}/notes"), json!({ "text": "NOTEONLY aside" }))
+        .await;
+    assert_eq!(noted.status, StatusCode::OK, "{}", noted.body);
+    assert_eq!(noted.body["kind"], "note", "{}", noted.body);
+    server.say(&justin, &room, "another chat line").await;
+    server.say(&kevin, &room, "@Scout what next?").await;
+
+    let events = server.tool(&scout, "events_since", json!({ "since": "0" })).await;
+    let mention = events["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "mention")
+        .cloned()
+        .unwrap_or_else(|| panic!("no mention in {events}"));
+    let context = mention["data"]["context"].clone();
+    let bodies: Vec<_> =
+        context.as_array().unwrap().iter().map(|line| line["body"].as_str().unwrap()).collect();
+    // Up to three lines, but the note between the two chat lines is skipped, not counted.
+    assert_eq!(bodies.len(), 3, "{mention}");
+    assert!(bodies.ends_with(&["a chat line", "another chat line"]), "{mention}");
+    assert!(!mention.to_string().contains("NOTEONLY"), "{mention}");
+
+    let hit = wait_for(&hook, |hit| {
+        hit.body["name"] == "mention" && hit.body["data"]["body"] == "@Scout what next?"
+    })
+    .await;
+    assert_eq!(hit.body["data"]["context"], context, "{:?}", hit.body);
+}

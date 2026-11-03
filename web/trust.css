@@ -1,0 +1,90 @@
+/* Trust & bots: a game panel like the others, with the connections drawn as a graph. */
+.wd-game > .game-panel-trust { width: min(560px, calc(100% - 28px)); }
+.trust-top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 12px; }
+.trust-top .trust-field { flex: 1 1 180px; }
+.trust-content { display: grid; gap: var(--surface-gap); min-width: 0; }
+.trust-field { display: grid; gap: 3px; font-weight: 700; font-size: 12px; }
+.trust-field > span { color: var(--wd-ink); }
+.trust-field small { font-weight: 400; }
+.trust-section, .trust-inspector { display: grid; gap: 8px; min-width: 0; }
+.trust-section { padding-top: 10px; border-top: 1px solid var(--wd-lo); }
+.trust-section:first-child { padding-top: 0; border-top: 0; }
+.trust-section h3, .trust-inspector h3 { font: 700 14px/1.3 var(--ui); overflow-wrap: anywhere; }
+.trust-inspector h3:focus { outline: none; }
+.trust-inspector h4 { margin-top: 6px; font: 700 13px/1.3 var(--ui); }
+.trust-inspector .facts { font-size: 13px; }
+.trust-tag { display: inline-block; padding: 1px 6px; font-size: 11px; font-weight: 700; background: var(--wd-face-2); box-shadow: inset 1px 1px 0 var(--wd-lo), inset -1px -1px 0 var(--wd-hi); }
+.trust-notice { font-size: 13px; }
+
+/* The graph sits in a sunken well, like a field. */
+.trust-graph {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #e6d6ae;
+  box-shadow: inset 1px 1px 0 var(--wd-lo), inset -1px -1px 0 var(--wd-hi), inset 2px 2px 0 rgba(77, 54, 32, .35);
+  touch-action: none;
+  user-select: none;
+}
+.trust-edge { stroke: #8b6a3e; stroke-width: 1.5; }
+.trust-edge.owns { stroke: var(--wd-dk); stroke-width: 2; }
+.trust-edge.friend { stroke: var(--wd-brick-2); stroke-width: 2.5; }
+.trust-edge.pending { stroke: var(--wd-brick-2); stroke-dasharray: 2 4; stroke-linecap: round; }
+.trust-edge.bond { stroke: #6f8a4a; stroke-dasharray: 7 4; }
+.trust-node { cursor: pointer; }
+.trust-node .ring { fill: none; stroke: none; }
+.trust-node:focus { outline: none; }
+.trust-node:focus-visible .ring, .trust-node:hover .ring { stroke: var(--wd-lo); stroke-width: 2; stroke-dasharray: 3 3; }
+.trust-node.focused .ring { stroke: var(--wd-copper); stroke-width: 3; stroke-dasharray: none; }
+.trust-node circle:not(.ring), .trust-node rect { stroke: var(--wd-dk); stroke-width: 1.5; fill: var(--wd-face-2); }
+.trust-node.you circle:not(.ring) { fill: var(--wd-brick); }
+.trust-node.mine rect { fill: var(--wd-copper); }
+.trust-node.editing rect { fill: var(--wd-brick-2); stroke-width: 2.5; }
+.trust-node.bond rect { stroke-dasharray: 4 3; }
+.trust-node.paused rect { fill: #b39a74; }
+.trust-node.paused .initial { fill: var(--wd-ink); }
+.trust-node.waiting circle:not(.ring), .trust-node.waiting rect { stroke-dasharray: 2 3; opacity: .75; }
+.trust-node .initial { font: 700 13px var(--ui); fill: var(--wd-ink); pointer-events: none; }
+.trust-node.you .initial, .trust-node.mine .initial { fill: #fff3d2; }
+.trust-node .label { font: 600 11px var(--ui); fill: var(--wd-ink); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
+.trust-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
+.trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2); }
+.trust-legend .swatch:first-child { margin-left: 0; }
+.trust-legend .swatch.pending { border-top-style: dotted; }
+.trust-legend .swatch.bond { border-top: 2px dashed #6f8a4a; }
+
+/* The picked node: its facts and controls, under the graph. */
+.trust-inspector { padding: 10px; background: var(--wd-face-2); box-shadow: inset 1px 1px 0 var(--wd-hi), inset -1px -1px 0 var(--wd-lo); }
+.trust-rename input { flex: 1 1 160px; min-width: 0; }
+.trust-inspector :is(h3, h4, h5, p, dl) { margin: 0; }
+.trust-list { margin: 0; }
+.trust-person { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0; border-bottom: 1px solid rgba(120, 90, 44, .35); font-size: 13px; }
+.trust-person:last-child { border-bottom: 0; }
+.trust-person > span:first-child { flex: 1; min-width: 0; display: grid; overflow-wrap: anywhere; }
+.trust-add select { flex: 1 1 140px; min-width: 0; }
+.trust-permission { display: grid; gap: 6px; }
+.trust-permission select { width: 100%; }
+.trust-named { display: grid; gap: 4px; padding: 4px 0 2px 10px; border-left: 2px solid var(--wd-lo); }
+.trust-named[hidden] { display: none; }
+.trust-named h5 { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.trust-named label { font-size: 13px; }
+.trust-savebar { position: sticky; bottom: 0; padding: 6px 0; background: var(--wd-face-2); }
+.trust-unsaved { flex: 1; }
+
+/* Monitoring keeps its steps as a plain numbered list. */
+.trust-pipeline { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.trust-pipeline li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.trust-pipeline strong { flex: 1; font-size: 13px; }
+.trust-pipeline p { width: 100%; font-size: 13px; }
+.trust-connection { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid rgba(120, 90, 44, .35); }
+.trust-connection p { overflow-wrap: anywhere; }
+.trust-subscription { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--wd-lo); }
+.trust-empty { display: grid; gap: 8px; justify-items: start; }
+.trust-settings form { display: grid; gap: 12px; }
+@media (min-width: 760px) {
+  .game-view:has(.trust-launcher) { grid-template-columns: repeat(3, 56px); }
+}
+@media (max-width: 600px) {
+  .wd-game > .game-panel-trust { width: calc(100% - 24px); }
+  .trust-node .label { font-size: 13px; }
+}

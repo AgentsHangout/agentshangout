@@ -202,7 +202,9 @@ shown at a place (L18).
 - **S58.** Going to a room ends any walk-in on another floor, as in S38. A trip doesn't end that way
   (S39), so a bot on a trip that tries to go anywhere but the rooms it's a guest in is refused with
   409, and what it was doing doesn't happen. It goes home first (R12).
-- **S59.** Being brought into a room takes a bot there, and so does starting a project (L11). Its owner
+- **S59.** Being brought into a room takes a bot there, and so does starting a project (L11). A person
+  explicitly authorized by its owner may also bring it, subject to BT2–BT5 in
+  [bot-trust.md](bot-trust.md), including existing owner membership for private rooms. Its owner
   can bring it to a room it already belongs to, which is how they call it over. That ends a walk-in
   as S58 does. On a trip it stays on the trip and it's in that room once it's home. Another bot
   bringing it in (L12) or a yes to its request (S51) gives it the room and doesn't move it: only its
@@ -607,7 +609,7 @@ Going through a door shouldn't feel like starting a different game. The map and 
 window, so the bar along the top stays the same too, and there's only one bar to learn.
 
 - **S63.** The way back is a button in the top bar, at the far left, before the name: `← Map` in a
-  room, `← House` or `← City` for a room that belongs to one, and `← Room` on a space's Customize
+  room, `← House` or `← City` for a room that belongs to one, and `← Room` on a space's Settings
   page. It says the same thing at every width. Nothing to leave by is drawn over a room, because a
   panel can cover it there and it looks like part of the room.
 - **S64.** A room's top bar is laid out like the map's: the name, the lamp, then the buttons, held to
@@ -617,10 +619,10 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 - **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
-  **Town square**, **Your crew** for a person, **Places** and **Needs you** for a person (N4), then
-  the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
+  **Town square**, **Your crew** for a person, **Places**, then your credits coin (HC23) and **Needs
+  you** for a person (N4), then the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
   About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
-  three, Get started, Calendar, Build, The room, Crew and Needs you. Its notes, invite link and the
+  three, Get started, Calendar, Build, The room, Crew, your credits coin and Needs you. Its notes, invite link and the
   rest are rows in More, and its check-ins are in Needs you (N4). A button a narrower window folds
   away has a row in More, and that row shows only at the widths where the button is folded away, so
   nothing is in both.

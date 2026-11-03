@@ -419,6 +419,76 @@ async fn stalled_delivery_does_not_block_an_independent_grant() {
     assert_eq!(slow.events().len(), 1, "renewal must retain the acknowledged cursor");
 }
 
+// E5, #354: an OAuth callback delivery of a mention carries the same `context` as events_since.
+#[tokio::test]
+async fn oauth_mention_callbacks_carry_the_messages_before_them() {
+    let s = Server::start().await;
+    let r: Value = s
+        .client
+        .post(format!("{}/api/hangouts", s.base))
+        .json(&json!({"name":"OAuth room","your_name":"Owner"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let owner = r["owner_key"].as_str().unwrap().to_string();
+    let room = r["hangout"]["id"].as_str().unwrap().to_string();
+    let person = s.state.authenticate(&agenthangout::auth::hash_secret(&owner)).unwrap().unwrap();
+    let (agent, token) = support::legacy_bot(&s.state, &person.person_id, &room, "Dedicated bot");
+    let session = s.state.start_session(&person.person_id).unwrap();
+    let client = s.register().await;
+    let code = s.code(&session, &client, &agent.id).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap();
+    let (hook, url) = Webhook::start().await;
+    assert!(s.event_rpc(access, "events/subscribe", subscription(&room, &url)).await["result"]
+        .is_object());
+
+    for text in ["an earlier line", "@Dedicated bot are you there?"] {
+        let said = s
+            .client
+            .post(format!("{}/api/hangouts/{room}/messages", s.base))
+            .bearer_auth(&owner)
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(said.status(), StatusCode::OK);
+    }
+    agenthangout::events::oauth::deliver(&s.state).await.unwrap();
+    let delivered = hook.events();
+    let mention = delivered
+        .iter()
+        .find(|event| event["name"] == "mention")
+        .unwrap_or_else(|| panic!("no mention delivered: {delivered:?}"));
+    let context = mention["data"]["context"].as_array().unwrap();
+    assert_eq!(context.len(), 1, "{mention}");
+    assert_eq!(context[0]["body"], "an earlier line", "{mention}");
+
+    let polled = s
+        .client
+        .post(format!("{}/mcp", s.base))
+        .bearer_auth(&token)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+            "params":{"name":"events_since","arguments":{"since":"0"}}}))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let polled = polled["result"]["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "mention")
+        .cloned()
+        .unwrap();
+    assert_eq!(polled["data"]["context"], mention["data"]["context"]);
+}
+
 #[tokio::test]
 async fn oauth_outbound_limit_is_shared_and_concurrent_creates_respect_the_grant_cap() {
     use std::{

@@ -108,9 +108,9 @@ const LESSONS = [
     lessons: [
       {
         title: 'Rename it',
-        steps: ['Press **Customize** at the bottom of your room.', 'Type a new name under **Your house** and press **Save**.'],
+        steps: ['Press **Settings** at the bottom of your room.', 'Type a new name under **Your house** and press **Save**.'],
         note: 'Everyone on The Commons sees this name when they hover over your house.',
-        button: 'Customize',
+        button: 'Settings',
         show: 'customize',
       },
       {
@@ -138,14 +138,14 @@ const LESSONS = [
       },
       {
         title: 'Add a floor',
-        steps: ['Press **Customize**.', 'Under **Floors**, name the new floor and press **Add a floor**.'],
+        steps: ['Press **Settings**.', 'Under **Floors**, name the new floor and press **Add a floor**.'],
         note: 'A house can have 5 floors. Each one is a room of its own, with its own chat, plans, bots and invite link. **Size** says how many fit: 8, 50 or 150, counting people and bots.',
-        button: 'Customize',
+        button: 'Settings',
         show: 'customize',
       },
       {
         title: 'Choose who comes in',
-        steps: ['Press **Invite** under **More** for a floor\'s private link.', 'Press **Replace link** to stop an old link working.', 'To take someone off every floor, press **Customize**, then **Turn out**.'],
+        steps: ['Press **Invite** under **More** for a floor\'s private link.', 'Press **Replace link** to stop an old link working.', 'To take someone off every floor, press **Settings**, then **Turn out**.'],
         note: 'Every floor starts private. A floor opens to anyone signed in only at a cafe, unless you have the server\'s code.',
         button: 'Invite someone',
         show: 'invite',

@@ -34,6 +34,8 @@ const context = vm.createContext({
   bountyCreditsAt: 100,
   loadBoards: async () => { refreshes++; },
 });
+// As in app.js, a change to the balance clears the cached one (and tells the coin, HC23).
+vm.runInContext('var creditsMoved = () => { bountyCreditsAt = 0; };', context);
 vm.runInContext(helper, context);
 vm.runInContext(escrowHelper, context);
 const sameCall = (actual, expected) => assert.equal(JSON.stringify(actual), JSON.stringify(expected));

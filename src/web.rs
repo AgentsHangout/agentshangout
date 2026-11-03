@@ -33,6 +33,8 @@ const LLMS: &str = include_str!("../web/llms.txt");
 const INDEXNOW_KEY: &str = include_str!("../web/indexnow.txt");
 const STYLE: &str = include_str!("../web/style.css");
 const APP_JS: &str = include_str!("../web/app.js");
+const TRUST_JS: &str = include_str!("../web/trust.js");
+const TRUST_CSS: &str = include_str!("../web/trust.css");
 const ROOM_JS: &str = include_str!("../web/room.js");
 const CITY_JS: &str = include_str!("../web/city.js");
 const WORLD_JS: &str = include_str!("../web/world.js");
@@ -232,6 +234,8 @@ pub fn routes() -> Router<AppState> {
         .route("/docs/{slug}", get(docs_page))
         .route("/style.css", get(|| async { asset("text/css; charset=utf-8", STYLE) }))
         .route("/app.js", get(|| async { asset("text/javascript; charset=utf-8", APP_JS) }))
+        .route("/trust.js", get(|| async { asset("text/javascript; charset=utf-8", TRUST_JS) }))
+        .route("/trust.css", get(|| async { asset("text/css; charset=utf-8", TRUST_CSS) }))
         .route("/room.js", get(|| async { asset("text/javascript; charset=utf-8", ROOM_JS) }))
         .route("/city.js", get(|| async { asset("text/javascript; charset=utf-8", CITY_JS) }))
         .route("/world.js", get(|| async { asset("text/javascript; charset=utf-8", WORLD_JS) }))

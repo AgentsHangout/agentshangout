@@ -1033,6 +1033,15 @@ textarea.plain { font-family: inherit; font-size: 14px; }
   font-size: 12px;
   border-color: #2b1608;
 }
+/* HC8: the balance coin in the bar. */
+.wd .wd-tbtn.coin { gap: 5px; font-variant-numeric: tabular-nums; }
+.wd .coin-mark {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff3b0, #e8b730 55%, #a8770f);
+  box-shadow: inset 0 0 0 1px #7a5508;
+}
 .wd .wd-btn:hover, .wd .wd-tbtn:hover { background: linear-gradient(#fbf2d8, #ead9ae); filter: none; }
 .wd .wd-btn:active, .wd .wd-tbtn:active {
   background: #cdb98a;

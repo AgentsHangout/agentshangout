@@ -269,9 +269,23 @@ async fn post_once(
     notice: &Notice,
     auth: Option<&str>,
 ) -> (Posted, bool) {
+    post_once_checked(state, url, notice, auth, || true).await
+}
+
+async fn post_once_checked(
+    state: &AppState,
+    url: &Url,
+    notice: &Notice,
+    auth: Option<&str>,
+    allowed: impl Fn() -> bool,
+) -> (Posted, bool) {
     let Some(client) = client_for(state, url).await else {
         return (Posted::nothing("connection_refused"), false);
     };
+    // DNS and connection setup may yield while consent or the destination is revoked.
+    if !allowed() {
+        return (Posted::nothing("access_revoked"), false);
+    }
     let room = (!notice.hangout_id.is_empty()).then_some(notice.hangout_id.as_str());
     let link = match room {
         Some(id) => format!("{}/h/{id}", state.config.public_url),
@@ -356,8 +370,14 @@ pub fn send(state: &AppState, owner_ids: &[String], notice: &Notice) {
 
 /// Sends in the background and reports what came back. `once` is a single POST: a home bot ring
 /// (E27) and a non-owner person's mention (E31), so a retry cannot start another paid run.
-pub fn send_result<F>(state: &AppState, agent_id: &str, notice: &Notice, once: bool, done: F)
-where
+pub fn send_result<F>(
+    state: &AppState,
+    agent_id: &str,
+    notice: &Notice,
+    once: bool,
+    message_ids: Vec<i64>,
+    done: F,
+) where
     F: FnOnce(&AppState, Posted) + Send + 'static,
 {
     let Some(url) = state.db.notify_url(agent_id).ok().flatten() else {
@@ -369,18 +389,33 @@ where
         return;
     };
     let auth = state.db.notify_auth(agent_id).ok().flatten();
+    let agent_id = agent_id.to_string();
     let state = state.clone();
     let notice = notice.clone();
     tokio::spawn(async move {
-        let posted = if once {
-            let (posted, _) = post_once(&state, &parsed, &notice, auth.as_deref()).await;
-            if !posted.accepted() {
-                tracing::warn!(event = notice.event, "wake notification was not delivered");
-            }
-            posted
-        } else {
-            deliver_result(&state, &url, &notice, auth.as_deref()).await
+        let mut posted = Posted::nothing("trust");
+        let allowed = || {
+            state.db.notify_url(&agent_id).ok().flatten().as_deref() == Some(url.as_str())
+                && state.db.notify_auth(&agent_id).ok().flatten() == auth
+                && crate::bot_trust::delivery_allowed(&state, &agent_id, &message_ids)
+                    .unwrap_or(false)
         };
+        for delay in RETRY_DELAYS {
+            if !once {
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+            }
+            // A queued callback or retry must honor permission changes made after chat was stored.
+            if !allowed() {
+                posted = Posted::nothing("trust");
+                break;
+            }
+            let (result, retry) =
+                post_once_checked(&state, &parsed, &notice, auth.as_deref(), allowed).await;
+            posted = result;
+            if once || posted.accepted() || !retry {
+                break;
+            }
+        }
         done(&state, posted);
     });
 }
