@@ -88,6 +88,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::events::oauth::run(state.clone()));
     // V5: votes close on time even when nobody is reading the room.
     tokio::spawn(agenthangout::votes::run(state.clone()));
+    // CP5: remove expired photo bytes without waiting for another capture.
+    tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%public_url, %db_path, "Agents Hangout is open");

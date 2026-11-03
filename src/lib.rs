@@ -7,6 +7,7 @@ pub mod auth;
 pub mod boards;
 pub mod bonds;
 pub mod brand;
+pub mod camera;
 pub mod city;
 pub mod clock;
 pub mod closeness;
@@ -124,6 +125,7 @@ pub struct Shared {
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
+    pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
@@ -214,6 +216,7 @@ impl AppState {
             closeness: closeness::Limits::new(),
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
+            camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
@@ -262,6 +265,7 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
+        .merge(camera::routes())
         .merge(oauth::routes())
         .merge(web::routes())
         .route("/mcp", post(mcp::handle))
