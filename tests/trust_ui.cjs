@@ -142,6 +142,12 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   assert.ok(all(node('<img src=x onerror=alert(1)>')).some(n=>n.tag==='text'&&n.props.class==='initial'));
   assert.equal(all(node('Fern')).some(n=>n.tag==='text'&&n.props.class==='initial'),false);
   assert.equal(all(body).some(n=>n.tag==='img'),false);
+  // BT9: Change look hands the picked bot to the Character panel, and new looks reach the graph.
+  const dressed = []; const dresser = build({figure,dress:id=>dressed.push(id)}); await dresser.open(); await tick();
+  await findButton(body,'Change look').props.onclick(); assert.deepEqual(dressed,['one']);
+  const before = pictures.length; data.looks.bots.one = {head:'antenna',chest:'moon'};
+  await dresser.refreshLooks(); await tick();
+  assert.ok(pictures.slice(before).some(w=>w.worn.chest==='moon'),'the picked bot is drawn in its new look');
   // BT8: nothing depends on the stylesheet: a background, and a fill and stroke on every shape and line.
   assert.ok(all(body).some(n=>n.tag==='rect'&&n.props.class==='trust-ground'&&n.props.fill));
   for (const n of all(body).filter(n=>n.tag==='path'&&n.props.class?.includes('trust-edge'))) assert.ok(n.props.stroke&&n.props['stroke-width'],n.props.class);

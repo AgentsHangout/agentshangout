@@ -57,12 +57,11 @@ async fn send(
     let at = now();
     let rooms = state.db.hangouts_for_agent(&id, at)?;
     let walked = state.db.bot_visits(&id, at)?;
-    // A token nobody holds, so the old one stops at once, open streams included (as A78).
-    state.db.set_agent_token(&id, &auth::hash_secret(&auth::new_agent_token()))?;
-    state.db.end_bot_player_token(&id)?;
+    // A token nobody holds, so the old one stops at once, open streams included (as A78), written
+    // with the plant's row and the player's token in one transaction.
+    state.db.recycle_bot(&id, &auth::hash_secret(&auth::new_agent_token()), at)?;
     // RC2: it stops following, so a bot it followed can't take it anywhere now (S74).
     state.db.unfollow(&id, at)?;
-    state.db.recycle_bot(&id, at)?;
     for floor in &walked {
         state.db.end_visit(floor, &id)?;
         ops::refresh(&state, floor);
@@ -110,11 +109,10 @@ async fn bring_back(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let agent = ops::own_agent(&state, &caller, &id, "bring a bot back")?;
-    if !state.db.unrecycle_bot(&id)? {
+    let token = auth::new_agent_token();
+    if !state.db.unrecycle_bot(&id, &auth::hash_secret(&token))? {
         return Err(ApiError::conflict(format!("{} isn't at the recycling plant", agent.name)));
     }
-    let token = auth::new_agent_token();
-    state.db.set_agent_token(&id, &auth::hash_secret(&token))?;
     refresh_home_city(&state, &id)?;
     state.worlds.mark_stale(crate::worlds::COMMONS_ID);
     Ok(Json(json!({ "recycled": false, "agent_token": token })))
