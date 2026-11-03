@@ -1598,6 +1598,17 @@ async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
     let status = status_of(&server, &bo.key, &rover_id).await;
     assert_eq!(status["state"], "idle", "{status}");
 
+    // Doing something, here saying something in its room, makes it working for ten minutes,
+    // though it never reported an activity.
+    server.tool(&rover, "say", json!({ "hangout_id": home, "text": "On it." })).await;
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "working", "{status}");
+    assert!(status["activity"].is_null() && status["last_active_at"].is_i64(), "{status}");
+    server.state.db.touch_agent_active(&rover_id, now() - 11 * 60).unwrap();
+    server.tool(&rover, "inbox", json!({})).await;
+    let status = status_of(&server, &bo.key, &rover_id).await;
+    assert_eq!(status["state"], "idle", "ten minutes on, it's idle again: {status}");
+
     // Saying what it's busy with makes it working, and says what.
     server.tool(&rover, "report_activity", json!({ "kind": "coding", "via": "Claude Code" })).await;
     let status = status_of(&server, &bo.key, &rover_id).await;
