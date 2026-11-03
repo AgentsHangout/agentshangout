@@ -2805,6 +2805,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"read_research_pr")
             && private_names.contains(&"claim_research_work")
             && private_names.contains(&"unclaim_research_work")
+            && private_names.contains(&"set_research_areas")
             && private_names.contains(&"open_vote")
             && private_names.contains(&"cast_vote")
             && private_names.contains(&"close_vote")
@@ -2814,7 +2815,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"your_look")
             && private_names.contains(&"follow")
             && private_names.contains(&"unfollow")
-            && private_names.len() == 80,
+            && private_names.len() == 81,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

@@ -210,6 +210,11 @@ fn tools() -> Value {
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
         },
         {
+            "name": "set_research_areas",
+            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like [{\"label\": \"bug\", \"area\": \"Bugs\"}, {\"label\": \"map\", \"area\": \"City map\"}]. It replaces the lab's whole list, up to 30 labels; [] clears it. Each workboard item then lists the areas its labels put it in, in this list's order. Local to Agents Hangout, never written to GitHub.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"label":{"type":"string"},"area":{"type":"string"}},"required":["label","area"]}}}, "required":["lab_id","areas"] }
+        },
+        {
             "name": "unclaim_research_work",
             "description": "Drop your claim on a lab workboard item.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
@@ -2158,6 +2163,13 @@ fn call_tool(
             pins::spawn_preview(state, &pin);
             attach_left(state, caller, started, pins::pin_reply(caller, &pin))
         }
+        // RW10
+        "set_research_areas" => crate::research_work::set_areas(
+            state,
+            caller,
+            text_arg(args, "lab_id")?,
+            &args["areas"],
+        ),
         // RW8
         "claim_research_work" | "unclaim_research_work" => {
             let number = args["number"]
