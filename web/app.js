@@ -12,6 +12,8 @@ const startingTitle = document.title;
 // Where someone was when they left for Discord or GitHub, for this tab only.
 const WAY_BACK = 'way-back';
 const leaving = () => sessionStorage.setItem(WAY_BACK, location.pathname);
+// S78: where a signed-out person's account from just a name is made.
+const NEW_PERSON = '/api/people';
 let leaveRoom = () => {};
 
 // Builds DOM with text nodes only. Nothing a bot writes is ever parsed as HTML.
@@ -198,7 +200,8 @@ async function announcementDialog() {
 
 // With a passkey the owner key is the way back in after losing every one, not the only way in. With
 // Discord or GitHub it's also what A54 asks for, which they should know before they say they saved it.
-function showOwnerKey(key, then, { passkey = false, site } = {}) {
+// A84: for a `fresh` account, saving it is their choice, and Skip for now closes it the same way.
+function showOwnerKey(key, then, { passkey = false, site, fresh = false } = {}) {
   const once = 'It\'s shown only this once, so put it in your password manager.';
   const text = site
     ? `You'll need this or a passkey to change how you sign in or delete your account, and it's your way back in if you ever lose your ${site} account. ${once}`
@@ -207,8 +210,10 @@ function showOwnerKey(key, then, { passkey = false, site } = {}) {
     h('p', {}, passkey || site
       ? text
       : 'This is the only way back into your account on another device, and it won\'t be shown again. Put it in your password manager.'),
+    fresh ? h('p', { class: 'muted' }, 'If you skip it, you can get a new one under Account.') : null,
     secretRow(key),
     h('div', { class: 'modal-actions' },
+      fresh ? h('button', { type: 'button', class: 'link', onclick: () => dialog.close() }, 'Skip for now') : null,
       h('button', { type: 'button', class: 'primary', onclick: () => dialog.close() }, 'I saved it')));
   dialog.addEventListener('close', then, { once: true });
 }
@@ -302,33 +307,17 @@ const NO_PASSKEYS = {
   server: 'Passkeys aren\'t switched on at this address.',
 };
 
-// An account made from just a name, or with Discord or GitHub, has no passkey. Show its owner key,
-// offer a passkey if this browser can use one, then carry on.
+// A84: a new account's owner key, then on to wherever they were going. Nothing else is asked of them
+// there. A passkey or a site can be added any time, and Account reminds them (A85).
 function afterNewAccount(ownerKey, enter, { site } = {}) {
-  showOwnerKey(ownerKey, async () => {
-    if ((await passkeyStatus()).usable) await offerPasskey();
-    enter();
-  }, { site });
+  showOwnerKey(ownerKey, enter, { site, fresh: true });
 }
 
-// Resolves when the person has added a passkey or said not now.
-function offerPasskey() {
-  return new Promise((resolve) => {
-    const error = formError();
-    const dialog = modal('Add a passkey?',
-      h('p', {}, `${PASSKEY_EXPLAINER} Your owner key still works as a backup.`),
-      error,
-      h('div', { class: 'modal-actions' },
-        h('button', { type: 'button', class: 'ghost', onclick: () => dialog.close() }, 'Not now'),
-        h('button', {
-          type: 'button',
-          class: 'primary',
-          onclick: act(error, async () => {
-            if (await registerPasskey()) dialog.close();
-          }),
-        }, 'Add a passkey')));
-    dialog.addEventListener('close', resolve, { once: true });
-  });
+// A83: an account from just a name, from the map. Invite pages and a public room's door have their
+// own way to send the name, so this is only for the home page and the sign-in dialog.
+async function signUpByName(yourName, enter) {
+  const { owner_key: key } = await api(NEW_PERSON, { method: 'POST', body: { your_name: yourName } });
+  afterNewAccount(key, enter);
 }
 
 function ownerKeyForm(onSignedIn) {
@@ -344,75 +333,78 @@ function ownerKeyForm(onSignedIn) {
     h('button', { type: 'submit' }, 'Sign in'));
 }
 
-const ownerKeyInstead = (onSignedIn) => h('details', { class: 'quiet' },
-  h('summary', {}, 'Use an owner key instead'),
-  ownerKeyForm(onSignedIn));
-
-// What a signed-out person is offered. A passkey leads, and the owner key is tucked underneath.
-// Where passkeys can't work it is the owner key form on its own, as it was before passkeys.
-// `nameOnly` is a way past the passkey for invite pages, where someone with no authenticator
-// would otherwise be stuck.
-function accessCard({ title, intro = [], note, status, createText, onSignedIn, onCreated, onOwnerKey, nameOnly }) {
-  if (!status.usable) {
-    return h('div', { class: 'card access' },
-      h('h2', {}, 'Been here before?'),
-      h('p', { class: 'muted note' }, `${NO_PASSKEYS[status.reason]} Sign in with your owner key.`),
-      signInElsewhere(),
-      ownerKeyForm(onOwnerKey));
-  }
-
-  const signInError = formError();
-  const createError = formError();
-  const nameInput = h('input', { name: 'your_name', required: true, maxLength: 60, autocomplete: 'given-name' });
-  const createForm = h('form', {
-    class: 'create-account',
-    hidden: true,
-    onsubmit: submitter(createError, async ({ your_name: yourName }) => {
-      const made = await registerPasskey({ name: yourName });
-      if (made) await onCreated(made);
-    }),
-  },
-    field('Your name', nameInput, 'Then your phone or computer will ask you to make a passkey.'),
-    createError,
-    h('div', { class: 'form-actions' },
-      h('button', { type: 'submit' }, createText),
-      nameOnly && h('button', {
-        type: 'button',
-        class: 'link',
-        onclick: act(createError, async () => {
-          if (nameInput.reportValidity()) await nameOnly.run(nameInput.value);
-        }),
-      }, nameOnly.text)),
-    signInElsewhere('Sign up', '?new=true'));
-
-  const toggle = h('button', {
-    type: 'button',
-    class: 'link',
-    'aria-expanded': 'false',
-    onclick: () => {
-      createForm.hidden = !createForm.hidden;
-      toggle.setAttribute('aria-expanded', String(!createForm.hidden));
-      if (!createForm.hidden) nameInput.focus();
-    },
-  }, 'Create an account');
-
-  return h('div', { class: 'card access' },
-    h('h2', {}, title),
-    ...intro,
-    h('p', { class: 'muted' }, note ? `${PASSKEY_EXPLAINER} ${note}` : PASSKEY_EXPLAINER),
-    h('button', {
+// The ways back in for someone who already has an account: a passkey where this browser can use one,
+// Discord or GitHub, or the owner key. `onSignedIn` gets the person when a passkey says who, and
+// nothing otherwise. Discord and GitHub come back to this page by WAY_BACK, and the others stay on it.
+function signInChoices(status, onSignedIn) {
+  const error = formError();
+  return h('div', { class: 'sign-in-choices' },
+    status.usable ? h('button', {
       type: 'button',
-      class: 'primary',
-      onclick: act(signInError, async () => {
+      onclick: act(error, async () => {
         const person = await signInWithPasskey();
         if (person) await onSignedIn(person);
       }),
-    }, 'Sign in with a passkey'),
+    }, 'Sign in with a passkey') : null,
     signInElsewhere(),
-    signInError,
-    h('p', { class: 'muted' }, 'New here? ', toggle),
-    createForm,
-    ownerKeyInstead(onOwnerKey));
+    error,
+    ownerKeyForm(onSignedIn));
+}
+
+// A82: what a signed-out person is offered. Every way in is one choice of the same kind: just a name,
+// a passkey where this browser can make one, and Discord or GitHub where the server has them (A58).
+// Nothing asks the browser for a passkey until they pick that one and say their name. Signing back in
+// is folded away underneath, and `signInOpen` unfolds it for someone who said they have an account.
+// `byName(name)` makes the account from a name (A83), and `onCreated` gets a new passkey's account.
+function accessCard({ title, intro = [], note, status, nameText, byName, onSignedIn, onCreated, signInOpen = false }) {
+  const error = formError();
+  const nameInput = h('input', { name: 'your_name', required: true, maxLength: 60, autocomplete: 'given-name' });
+  const hint = h('span', {});
+  const submit = h('button', { type: 'submit', class: 'primary' });
+  let way = 'name';
+  const form = h('form', {
+    class: 'create-account',
+    hidden: true,
+    onsubmit: submitter(error, async ({ your_name: yourName }) => {
+      if (way === 'name') return byName(yourName);
+      const made = await registerPasskey({ name: yourName });
+      if (made) await onCreated(made);
+    }),
+  }, field('Your name', nameInput, hint), error, submit);
+
+  const ways = [
+    ['name', 'Sign up with just a name', 'That\'s all it takes. You can add a passkey, Discord or GitHub later.', nameText],
+    status.usable ? ['passkey', 'Sign up with a passkey', 'Then your phone or computer asks to make one, with your fingerprint, face or PIN. There\'s no password to remember.', 'Make a passkey'] : null,
+  ].filter(Boolean);
+  const choices = ways.map(([key, label, words, button]) => {
+    const choice = h('button', {
+      type: 'button',
+      class: 'way',
+      'aria-pressed': 'false',
+      onclick: () => {
+        way = key;
+        for (const other of choices) other.setAttribute('aria-pressed', String(other === choice));
+        hint.textContent = words;
+        submit.textContent = button;
+        form.hidden = false;
+        nameInput.focus();
+      },
+    }, label);
+    return choice;
+  });
+
+  const pick = 'Pick one way in. You can add the others later.';
+  return h('div', { class: 'card access' },
+    h('h2', {}, title),
+    ...intro,
+    h('p', { class: 'muted' }, note ? `${pick} ${note}` : pick),
+    h('div', { class: 'ways', role: 'group', 'aria-label': 'Ways in' },
+      ...choices,
+      signInElsewhere('Sign up', '?new=true')),
+    form,
+    h('details', { class: 'quiet', open: signInOpen },
+      h('summary', {}, 'Already have an account? Sign in'),
+      signInChoices(status, onSignedIn)));
 }
 
 // Plain links to this server, which redirects to the site. It stays empty until the server says
@@ -426,6 +418,60 @@ function signInElsewhere(verb = 'Sign in', query = '') {
     onclick: leaving,
   }, `${verb} with ${name}`)))).catch(() => {});
   return links;
+}
+
+// A85: someone whose only way in is the owner key hears, under Account and never in a dialog, that a
+// passkey or a site would let them sign in on their other devices. Not now hides it in this browser.
+// Without storage it just shows each time.
+const NUDGE_SEEN = 'only-owner-key-nudge';
+function onlyOwnerKeyNudge(me, status) {
+  const sites = me.sign_in || [];
+  if (me.passkeys || sites.some((row) => row.linked)) return null;
+  const ways = [
+    status.usable ? 'add a passkey' : null,
+    sites.length ? `link ${sites.map((row) => row.name).join(' or ')}` : null,
+  ].filter(Boolean).join(' or ');
+  if (!ways) return null;
+  try {
+    if (localStorage.getItem(NUDGE_SEEN)) return null;
+  } catch { /* no storage, so it shows */ }
+  const nudge = h('div', { class: 'note nudge', role: 'note' },
+    h('p', {}, `${ways[0].toUpperCase()}${ways.slice(1)} so you can sign in on your other devices.`),
+    h('button', {
+      type: 'button',
+      class: 'link',
+      onclick: () => {
+        try {
+          localStorage.setItem(NUDGE_SEEN, '1');
+        } catch { /* it comes back next time */ }
+        nudge.remove();
+      },
+    }, 'Not now'));
+  return nudge;
+}
+
+// A87, A54: replacing the owner key, in Account on the map and in every room. Someone who skipped
+// saving it gets a new one here. A session a site started can't, so it says how to get to it instead.
+function ownerKeyControl(me) {
+  if (me.sign_in_session) {
+    return h('p', { class: 'muted' },
+      'You signed in with Discord or GitHub. To replace your owner key, change your passkeys or delete your account, sign in with a passkey or your owner key. If you\'ve lost both, ',
+      h('a', { href: '/privacy', target: '_blank' }, 'here\'s how to reach us'),
+      '.');
+  }
+  const error = formError();
+  return h('div', { class: 'owner-key-control' },
+    h('button', {
+      type: 'button',
+      class: 'ghost',
+      onclick: act(error, async () => {
+        if (!confirm('Replace your owner key? The old one stops working right away, and your other devices get signed out.')) return;
+        const { owner_key: key } = await api('/api/key/rotate', { method: 'POST' });
+        showOwnerKey(key, route, { passkey: me.passkeys > 0 });
+      }),
+    }, 'Replace owner key'),
+    h('small', { class: 'muted' }, 'Lost it, or skipped saving it? This gives you a new one.'),
+    error);
 }
 
 // A59, A60: nothing exists until they say yes here, and the name is theirs to choose.
@@ -675,34 +721,25 @@ async function homeParts(me) {
     createError,
     h('button', { type: 'submit', class: 'primary' }, 'Start it'));
 
-  const signIn = () => accessCard({
-    title: 'Sign in',
+  // A82, A83: the way in on the map. `open` unfolds signing back in, for a sign-in that ran out.
+  const signIn = (open = false) => accessCard({
+    title: 'New here?',
     status,
-    createText: 'Create account',
+    nameText: 'Make my account',
+    byName: (yourName) => signUpByName(yourName, route),
     onSignedIn: () => route(),
-    onCreated: ({ owner_key: key }) => showOwnerKey(key, route, { passkey: true }),
-    onOwnerKey: () => route(),
+    onCreated: ({ owner_key: key }) => showOwnerKey(key, route, { passkey: true, fresh: true }),
+    signInOpen: open,
   });
 
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
+    onlyOwnerKeyNudge(me, status),
     h('p', { class: 'muted' }, 'You\'re signed in. Build in any world, add bots through your house crew, and start private rooms and cities.'),
     freeTimesField(me),
     housePlansField(me),
     photosField(),
-    // A54: what a session a site started can't do, and how to get to it.
-    me.sign_in_session ? h('p', { class: 'muted' },
-      'You signed in with Discord or GitHub. To replace your owner key, change your passkeys or delete your account, sign in with a passkey or your owner key. If you\'ve lost both, ',
-      h('a', { href: '/privacy', target: '_blank' }, 'here\'s how to reach us'),
-      '.') : h('button', {
-      type: 'button',
-      class: 'ghost',
-      onclick: async () => {
-        if (!confirm('Replace your owner key? The old one stops working right away, and your other devices get signed out.')) return;
-        const { owner_key: key } = await api('/api/key/rotate', { method: 'POST' });
-        showOwnerKey(key, route, { passkey: me.passkeys > 0 });
-      },
-    }, 'Replace owner key'),
+    ownerKeyControl(me),
     h('button', {
       type: 'button',
       class: 'ghost',
@@ -966,9 +1003,9 @@ function startCityDialog(me) {
       h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Start it'))));
 }
 
-// The card on an invite page. Signed in, it is one button. Signed out, passkeys come first where
-// they work, and the name form is what's left where they don't. Either way the page joins them as
-// soon as they're in. `join(body)` asks the server, and `enter(result)` goes where they joined.
+// The card on an invite page. Signed in, it is one button. Signed out, it's the ways in of A82, and
+// whichever they pick, the page joins them as soon as they're in. `join(body)` asks the server, and
+// `enter(result)` goes where they joined.
 function joinCard({ me, status, notes = [], note = 'You\'ll join right away.', button, join, enter }) {
   const root = h('div', { class: 'cards' });
 
@@ -1003,38 +1040,18 @@ function joinCard({ me, status, notes = [], note = 'You\'ll join right away.', b
       ready(person, failure.status === 404 ? 'That invite doesn\'t work any more. Ask for a new link.' : failure.message);
     }
   }
-  const joinAsOwnerKey = async () => joinAs(await api('/api/me'));
-
+  // A83: just a name goes in the invite's own join, which makes the account and joins at once.
   function signedOut() {
-    if (status.usable) {
-      root.replaceChildren(accessCard({
-        title: 'Sign in or create an account',
-        intro: notes,
-        note,
-        status,
-        createText: 'Create account and join',
-        onSignedIn: joinAs,
-        onCreated: ({ person, owner_key: key }) => showOwnerKey(key, () => joinAs(person), { passkey: true }),
-        onOwnerKey: joinAsOwnerKey,
-        nameOnly: {
-          text: 'No passkey? Join with just your name',
-          run: async (name) => arrive(await join({ your_name: name })),
-        },
-      }));
-      return;
-    }
-    const error = formError();
-    root.replaceChildren(h('div', { class: 'card' },
-      h('form', {
-        class: 'card-form',
-        onsubmit: submitter(error, async (values) => arrive(await join(values))),
-      },
-        ...notes,
-        field('Your name', h('input', { name: 'your_name', required: true, maxLength: 60 })),
-        error,
-        h('button', { type: 'submit', class: 'primary' }, button)),
-      h('p', { class: 'muted' }, `${NO_PASSKEYS[status.reason]} A name is all you need.`),
-      ownerKeyInstead(joinAsOwnerKey)));
+    root.replaceChildren(accessCard({
+      title: 'How do you want to join?',
+      intro: notes,
+      note,
+      status,
+      nameText: button,
+      byName: async (yourName) => arrive(await join({ your_name: yourName })),
+      onSignedIn: async (person) => joinAs(person || await api('/api/me')),
+      onCreated: ({ person, owner_key: key }) => showOwnerKey(key, () => joinAs(person), { passkey: true, fresh: true }),
+    }));
   }
 
   if (me) ready(me);
@@ -2833,31 +2850,73 @@ function showHouseToken(houseName, name, token, mcpUrl) {
   });
 }
 
+// How a room's address opens: `{snapshot}` for the room, or `{door}`, a page to show instead.
+// A public floor is open to anyone signed in, so its link walks them in (S18) and any other room stays
+// a 404. E22: walking in asks nothing first. The warning about waking bots is for bringing or sending
+// one, so it's in those dialogs. A86: signed out, the floor's door decides. A public floor shows its
+// door, and anything else stays the 401, which takes them to the map as before.
+async function openRoom(id, load) {
+  try {
+    return { snapshot: await load() };
+  } catch (failure) {
+    if (failure.status === 401) {
+      const door = await api(`/api/floors/${encodeURIComponent(id)}/door`).catch(() => null);
+      if (!door) throw failure;
+      return { door: doorView(id, door, await passkeyStatus()) };
+    }
+    if (failure.status !== 404) throw failure;
+    await api(`/api/floors/${encodeURIComponent(id)}/walk-in`, { method: 'POST' });
+    return { snapshot: await load() };
+  }
+}
+
+// A86: a public floor's door, for someone signed out who followed a link to it. A name walks them in
+// with a new account (S77), then the owner key (A84), then the room. Someone with an account signs in
+// here instead and comes back to the same address, which walks them in as anyone signed in.
+function doorView(id, door, status) {
+  const error = formError();
+  const where = door.space_name && door.space_name !== door.name ? `${door.space_name}: ${door.name}` : door.name;
+  const signIn = h('div', { class: 'quiet', hidden: true }, signInChoices(status, () => route()));
+  const toggle = h('button', {
+    type: 'button',
+    class: 'link',
+    'aria-expanded': 'false',
+    onclick: () => {
+      signIn.hidden = !signIn.hidden;
+      toggle.setAttribute('aria-expanded', String(!signIn.hidden));
+    },
+  }, 'Sign in');
+  document.title = `${where} · Agents Hangout`;
+  return h('main', { class: 'home' },
+    h('header', { class: 'hero' },
+      h('p', { class: 'brand' }, 'Agents Hangout'),
+      h('h1', {}, where),
+      h('p', { class: 'lede' }, 'A public room. Anyone can walk in, and you see what\'s said from when you arrive.')),
+    h('div', { class: 'cards' }, h('div', { class: 'card access door' },
+      h('form', {
+        class: 'card-form',
+        onsubmit: submitter(error, async ({ your_name: yourName }) => {
+          const walked = await api(`/api/floors/${encodeURIComponent(id)}/walk-in`, { method: 'POST', body: { your_name: yourName } });
+          if (walked.owner_key) afterNewAccount(walked.owner_key, route);
+          else route();
+        }),
+      },
+        field('Your name', h('input', { name: 'your_name', required: true, maxLength: 60, autocomplete: 'given-name' }),
+          'It\'s what people here see, and all you need to come in.'),
+        error,
+        h('button', { type: 'submit', class: 'primary' }, 'Walk in')),
+      h('p', { class: 'muted' }, 'Already have an account? ', toggle),
+      signIn)));
+}
+
 // A room is the same game window as the map, with the camera moved indoors. The pixel room fills the
 // well, the readouts are its numbers, the status bar carries its running notes, and everything else
 // on the page is a panel that opens over it from the title bar.
 async function roomView(id) {
   const load = () => api(`/api/hangouts/${encodeURIComponent(id)}`);
-  // A public floor is open to anyone signed in, so its link walks them in. Any other room stays a 404.
-  let snapshot = await load().catch(async (failure) => {
-    if (failure.status !== 404) throw failure;
-    const publicFloors = await api('/api/spaces/public');
-    if (publicFloors.floors.some((floor) => floor.id === id)) {
-      const enter = await new Promise((resolve) => {
-        const dialog = modal('Before you enter this public room',
-          h('p', {}, 'People and bots here can wake a bot you bring by using its name, with or without @. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money.'),
-          h('p', {}, 'Every public room requires bots to accept conversations. You can switch this on or off in each bot’s Wake up settings. Switching it off makes that bot leave public rooms; choose a different bot to bring here. Your bots stay where they are until you send them in.'),
-          h('div', { class: 'modal-actions' },
-            h('button', { type: 'button', onclick: () => dialog.close() }, 'Cancel'),
-            h('button', { type: 'button', class: 'primary', onclick: () => dialog.close('enter') }, 'Enter room')));
-        dialog.addEventListener('close', () => resolve(dialog.returnValue === 'enter'), { once: true });
-      });
-      if (!enter) { go('/'); return null; }
-    }
-    await api(`/api/floors/${encodeURIComponent(id)}/walk-in`, { method: 'POST' });
-    return load();
-  });
-  if (!snapshot) return;
+  const opened = await openRoom(id, load);
+  if (opened.door) return opened.door;
+  let { snapshot } = opened;
   const me = await api('/api/me').catch(() => null);
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
@@ -6335,10 +6394,10 @@ async function signInDialog(title, why) {
   const dialog = modal(title, h('p', {}, why), accessCard({
     title: 'Your account',
     status,
-    createText: 'Create account',
+    nameText: 'Make my account',
+    byName: async (yourName) => { await signUpByName(yourName, route); dialog.close(); },
     onSignedIn: () => { dialog.close(); route(); },
-    onCreated: ({ owner_key: key }) => { dialog.close(); showOwnerKey(key, route, { passkey: true }); },
-    onOwnerKey: () => { dialog.close(); route(); },
+    onCreated: ({ owner_key: key }) => { dialog.close(); showOwnerKey(key, route, { passkey: true, fresh: true }); },
   }));
   signInOpen = dialog;
   return dialog;
@@ -7209,7 +7268,7 @@ function accountPanel(panels, me, parts) {
       const ready = await parts();
       body.replaceChildren(
         ...(why ? [h('p', { class: 'note', role: 'status' }, why)] : []),
-        ...(again ? [ready.signIn()] : ready.account),
+        ...(again ? [ready.signIn(true)] : ready.account),
         ...(again ? [] : notificationActions(me)));
     } catch (error) {
       body.replaceChildren(h('p', { class: 'error' }, error.message));

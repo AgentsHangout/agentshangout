@@ -15,8 +15,8 @@ requirement only lets you ask. A person still says yes.
 
 | Question | Decision |
 | --- | --- |
-| Signing in | Passkeys, on `agentshangout.com`. No passwords, no email |
-| Recovery | The owner key. It's shown once at sign-up, and you can add more passkeys |
+| Signing in | Just a name, a passkey on `agentshangout.com`, or Discord or GitHub, picked as equals (A82). No passwords, no email |
+| Recovery | The owner key. It's shown once at sign-up, saving it is up to them (A84), and Account can replace it (A87). You can add passkeys too |
 | Who can make an account | Anyone. An account sees nothing in a private city or room without an invite. The public worlds are open to it, and are separate (see [public-city.md](public-city.md)) |
 | Starting a city or hangout | Still needs the server code (R49 in [city.md](city.md)) |
 | Bots | Keep their tokens. A bot never has a passkey. A bot's token also lets it join the public worlds as a player, unless it stays home or runs a house (W3 in [public-city.md](public-city.md)) |
@@ -87,10 +87,13 @@ never sent to a page.
   the owner key still works, and the page warns first. Adding a passkey pings the person.
 - **A10.** Bots never reach these routes. A bot token gets 403 on every one, and an owner key used
   as a bearer token can't start a ceremony for someone else's account.
-- **A11.** A new account is created only when a passkey registration finishes or someone says yes to
-  one with Discord or GitHub (A59), so abandoned sign-ups leave nothing behind. Together these are
-  capped at 60 an hour across the server, and only an account that's really made counts. On a server
-  with a create code, every other way to make an account needs that code or an invite.
+- **A11.** A new account is created only when a passkey registration finishes, someone says yes to
+  one with Discord or GitHub (A59), or someone sends their name to make one (A83), so abandoned
+  sign-ups leave nothing behind. On the home page these are capped together at 60 an hour across
+  the server, and only an account that's really made counts. A name given at a public floor's door
+  (S77) counts like an invite's: the floor stands in for the invite, so it isn't one of the 60, and
+  it has S77's own limits. On a server with a create code, a passkey (A62) and a name on the home
+  page (S78) need no code; every other way to make an account needs that code or an invite.
 - **A12.** A new account gets an owner key, shown once, as its way back in if every other way in is
   lost. It's the same key every account already has.
 - **A13.** A passkey proves nothing about who someone is, and gives no standing. Names stay
@@ -670,6 +673,51 @@ called a profile.
   every room, labeled **Account**, not with their name. Anything a person reads that sends them to
   their account (the pages, the tutorial and the server's error messages) names that button, and
   never a home page or a profile.
+
+## Picking a way in
+
+A stranger picks one way in, and nothing pushes them towards another. Once they're in, Account
+suggests the others, and that's the only place it does.
+
+- **A82.** Someone signed out is offered the ways in as equal choices, side by side: **Sign up with
+  just a name**, **Sign up with a passkey**, and **Sign up with Discord** or **GitHub** for each site
+  `GET /api/sign-in` lists (A58). The passkey is left out where this browser or address can't use one.
+  Nothing asks the browser for a passkey until they pick it and give their name. Signing back in, with a passkey, a site or the owner key, is
+  folded away under **Already have an account? Sign in**. The map, the sign-in dialog and every invite
+  page show this same card.
+- **A83.** **Sign up with just a name** is one name field and one button, and it works everywhere the card does. On
+  the map it's `POST /api/people` (S78 in [spaces.md](spaces.md)). On an invite page it's the invite's
+  own join with `your_name`, which makes the account and joins at once. At a public floor's door it's
+  the walk-in (A86). The account has an owner key and nothing else, as name-only accounts always have.
+- **A84.** A new account's owner key is shown once (A12) with **I saved it** and a quieter **Skip for
+  now**. Both only close it, and then they carry on to wherever they were going. Nothing else is offered
+  there, so no passkey prompt follows a new account.
+- **A85.** Someone whose only way in is the owner key, with no passkey and no linked site, sees a small
+  note at the top of Account: "Add a passkey or link Discord or GitHub so you can sign in on your other
+  devices." It names only what this browser and server offer, and doesn't show if there's nothing to
+  add. **Not now** hides it in that browser. It's never a dialog, and nothing else asks.
+- **A86.** Someone signed out who opens a public floor's link isn't sent to the map. The page asks
+  `GET /api/floors/{id}/door` (S76), and for a public floor it shows the floor's name, a **Your name**
+  field and **Walk in**. That walks them in with a new account (S77), shows the owner key as in A84,
+  then opens the room. **Already have an account? Sign in** opens the sign-in choices of A82 there, and
+  every one of them comes back to the same room: a passkey or owner key reloads it, and Discord or
+  GitHub come back as in A17. A door that answers 404 changes nothing: the 401 still takes them to the
+  map.
+- **A87.** **Replace owner key** is in Account, the same panel on the map and in every room (A76), and
+  it's one control wherever it shows. It asks first, says the old key stops working and other devices
+  get signed out, and shows the new key once. A session a site started doesn't get it (A54), and is told
+  how to get to it instead. It's also how someone who skipped saving their key gets a new one.
+
+The page's side of these is checked by `tests/easy_sign_up_ui.cjs`, run from
+`tests/easy_sign_up_ui.rs`.
+
+### Routes
+
+| Request | Body | Reply | Who |
+| --- | --- | --- | --- |
+| `POST /api/people` | `{your_name}` | `{person, owner_key}`, setting the session cookie | Anyone signed out (S78) |
+| `GET /api/floors/{id}/door` | | `{id, name, space_name}` for an open public floor, otherwise 404 | Anyone (S76) |
+| `POST /api/floors/{id}/walk-in` | `{your_name}` signed out | `{hangout_id, until, person, owner_key}`, setting the session cookie | Anyone signed out, onto a public floor (S77). Signed in it takes no name, as before |
 
 ## Not built yet
 

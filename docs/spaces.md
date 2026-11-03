@@ -29,7 +29,7 @@ the moment they arrive, so making a floor public can never show what was said on
 | How many third spaces | 3 |
 | How many floors | 5 to a space, counting the first |
 | What is private or public | Each floor. A space has no setting of its own |
-| What public means | Anyone signed in. There is no looking in without an account |
+| What public means | Anyone with an account, and a name typed at the door makes one (S77). There is no looking in without an account |
 | What a house costs | Nothing. Third spaces and opening a floor to the public need the server's code, if it has one, unless the place was built on the map |
 | What's shared | A café, from the start. Everything else is private unless you're invited |
 | Rooms off the map | Only with the server's code, so on a server run for other people every room is a place on the map. Anyone else hosts their own |
@@ -120,8 +120,10 @@ that reason.
 - **S16.** Opening a floor needs the server's code, if it has one, so a server that keeps strangers
   from starting hangouts keeps them from starting public rooms. A café is the exception (S48): the
   week it takes to unlock one (W61) stands in for the code.
-- **S17.** Public means anyone signed in. With no account you get a 401, as for any room. Room pages
-  stay out of search.
+- **S17.** Public means anyone with an account, and getting one takes only a name at the door (S76 to
+  S78), so a link to a public floor doesn't send anyone through signing up. Everyone in a room is still
+  an account: with none, reading or writing a room is a 401, as for any room. Room pages stay out of
+  search.
 - **S18.** Anyone signed in can walk in. A walk-in has no membership, so they aren't anyone's friend
   for it (FR1), no notification reaches them for it, and it gets them onto no other floor.
 - **S19.** A walk-in is a guest. As in R14 and R15 they see what happened on the floor from the moment
@@ -280,6 +282,34 @@ bots can go places together.
   lab), or 2 hours after it started. One
   row in `bot_follows` a follower holds it.
 
+### Walking in with a name
+
+Someone sent a link to a public floor gets in by typing a name. The account is made there and then,
+the same name-only account an invite or a plan's link makes, and from then on they're a walk-in like
+anyone else.
+
+- **S76.** `GET /api/floors/{id}/door` needs no account. For an open public floor it answers
+  `{id, name, space_name}`, which the public list (S28) already shows anyone signed in, so a link can
+  say where it goes. Anything else, whether a private floor, an id that doesn't exist or, for someone
+  signed in, a floor of a space they were turned out of (S27), is the same 404 as a room that doesn't
+  exist, so the door never tells a private floor from a missing one. It says nothing about who is
+  there or what was said, and never gives an invite link (S19, S21).
+- **S77.** Signed out, `POST /api/floors/{id}/walk-in` with `{your_name}` makes a name-only account
+  and walks it in. Only onto an open public floor: anything else is the 404 of S76, and a full floor
+  a 409, and neither makes anyone. The name is cleaned as every `your_name` is, and the account counts
+  towards the limits on new people from a plan's link (F12): 10 an hour from one address, 120 across
+  the server. The browser is signed in with the session cookie every name-only join sets, and the
+  walk-in is the one S18 to S23 describe, so they see the floor only from when they arrived. The reply
+  is the walk-in's `{hangout_id, until}` with `person` and `owner_key`, shown once (A12 in
+  [accounts-and-trust.md](accounts-and-trust.md)). With no name it's still a 401. `agent_id` signed
+  out is a 401 and makes nobody, because a bot is sent in by the account it belongs to. Signed in,
+  `your_name` is ignored.
+- **S78.** Signed out, `POST /api/people` with `{your_name}` makes a name-only account from the home
+  page, signs that browser in the same way and answers `{person, owner_key}`. The name and limits are
+  as in S77, and it also counts towards the hour's new accounts that passkeys and sites share (A11),
+  since it's the same door. It needs no create code, for the reason in A62. Someone signed in gets a
+  409 and a bot a 403, and neither makes anyone.
+
 ## Limits
 
 | What | Limit |
@@ -297,6 +327,7 @@ bots can go places together.
 | Leaders a bot follows | 1 |
 | Writes a minute by a person who walked in | 30 |
 | Doors a person tries a minute | 30 |
+| New accounts at a floor's door or the home page | 10 an hour per address, 120 an hour across the server, and the home page's also count towards the 60 an hour of A11 |
 | Space and floor names | 60 characters |
 | A space's about | 500 characters |
 | The public list | 50 floors |
@@ -446,10 +477,12 @@ SpaceView {
 | `PUT /api/floors/{id}` | `{name?, access?, size?, paint?, flooring?, hidden?, create_code?}` | `Floor` | Whoever runs it. `create_code` is for opening a floor (S16) |
 | `POST /api/floors/{id}/move` | `{direction: "up" \| "down"}` | `{ok}` | Whoever runs it |
 | `DELETE /api/floors/{id}` | | `{ok}` | Whoever runs it |
-| `POST /api/floors/{id}/walk-in` | `{agent_id?}` | `{hangout_id, until}` | A person, for themselves or their own bot |
+| `GET /api/floors/{id}/door` | | `{id, name, space_name}` | Anyone. Any floor but an open public one is a 404 (S76) |
+| `POST /api/floors/{id}/walk-in` | `{agent_id?}`, or `{your_name}` signed out | `{hangout_id, until}`, and signed out `person` and `owner_key` with the session cookie | A person, for themselves or their own bot. Signed out, a name makes the account (S77) |
 | `POST /api/floors/{id}/walk-out` | `{agent_id?}` | `{ok}` | A person, for themselves or their own bot |
 | `POST /api/floors/{id}/close` | | `Floor` | The keeper (S29) |
 | `POST /api/spaces/door` | `{x, y}` | `{hangout_id}` | A person. Anyone else gets a 401, and anyone who can't go in the 404 of a plot with no room (S31, S32) |
+| `POST /api/people` | `{your_name}` | `{person, owner_key}`, setting the session cookie | Anyone signed out (S78) |
 | `GET /api/presence` | `name` | `{name, here, go?, rule}` | A bot (S67). `here` is null when they're hidden |
 
 A floor's id is its hangout's id, so every route under `/api/hangouts/{id}` works on it, and a floor's

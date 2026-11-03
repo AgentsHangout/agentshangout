@@ -996,7 +996,7 @@ async fn opening_a_floor_needs_the_servers_code() {
     server.put(&ann.key, &path, json!({ "access": "private" })).await.ok();
 }
 
-// S17
+// S17: with no account, and no name given at the door (S77), it's a 401.
 
 #[tokio::test]
 async fn public_still_means_signed_in() {
@@ -1013,6 +1013,275 @@ async fn public_still_means_signed_in() {
         .get("", &format!("/api/hangouts/{room}/messages"))
         .await
         .refused(StatusCode::UNAUTHORIZED);
+}
+
+// S76 to S78: a name at the door is an account.
+
+/// A signed-out POST from one address, with the session cookie the reply set, if any.
+async fn post_from(
+    server: &Server,
+    address: &str,
+    path: &str,
+    body: Value,
+) -> (StatusCode, Option<String>, Value) {
+    let response = server
+        .client
+        .post(format!("{}{path}", server.base))
+        .header("x-forwarded-for", address)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let cookie =
+        response.headers().get("set-cookie").map(|value| value.to_str().unwrap().to_string());
+    let text = response.text().await.unwrap();
+    (status, cookie, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+}
+
+fn people_named(server: &Server, name: &str) -> usize {
+    server.state.db.people_named(name).unwrap().len()
+}
+
+// S76
+
+#[tokio::test]
+async fn a_public_floors_door_needs_no_account_and_says_only_where_it_goes() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.say(&ann.key, &room, "the secret plan").await.ok();
+    server.open(&ann, &room).await;
+    let door = server.get("", &format!("/api/floors/{room}/door")).await.ok();
+    assert_eq!(door, json!({ "id": room, "name": "Ann's room", "space_name": "Ann's room" }));
+    assert!(!door.to_string().contains("secret"));
+    // Signed in, it's the same.
+    let (_, bo) = server.someone("Bo").await;
+    assert_eq!(server.get(&bo.key, &format!("/api/floors/{room}/door")).await.ok(), door);
+}
+
+// S76: a private floor and a missing one look the same from the door.
+
+#[tokio::test]
+async fn a_private_or_missing_floors_door_is_the_same_404() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let private = server.get("", &format!("/api/floors/{room}/door")).await;
+    let private = private.refused(StatusCode::NOT_FOUND);
+    let missing = server.get("", "/api/floors/nothing-here/door").await;
+    assert_eq!(private, missing.refused(StatusCode::NOT_FOUND));
+    // Its own owner finds no door to a private floor either, and it's the 404 of a missing room.
+    let owners = server.get(&ann.key, &format!("/api/floors/{room}/door")).await;
+    assert_eq!(owners.refused(StatusCode::NOT_FOUND), private);
+    let room_404 = server.snapshot(&ann.key, "nothing-here").await.refused(StatusCode::NOT_FOUND);
+    assert_eq!(private, room_404);
+
+    // S27: someone turned out of the space finds no door.
+    server.open(&ann, &room).await;
+    let (_, bo) = server.someone("Bo").await;
+    server.walk_in(&bo, &room).await.ok();
+    // A space's id is its first floor's.
+    let out = format!("/api/spaces/{room}/people/{}/turn-out", bo.id);
+    server.post(&ann.key, &out, json!({})).await.ok();
+    let turned_out = server.get(&bo.key, &format!("/api/floors/{room}/door")).await;
+    assert_eq!(turned_out.refused(StatusCode::NOT_FOUND), private);
+}
+
+// S77
+
+#[tokio::test]
+async fn a_name_at_a_public_floors_door_makes_an_account_and_walks_it_in() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.say(&ann.key, &room, "the secret plan").await.ok();
+    server.open(&ann, &room).await;
+
+    let path = format!("/api/floors/{room}/walk-in");
+    let (status, cookie, walked) =
+        post_from(&server, "203.0.113.7", &path, json!({ "your_name": "  Cleo  " })).await;
+    assert_eq!(status, StatusCode::OK, "{walked}");
+    assert_eq!(walked["hangout_id"], json!(room));
+    assert!(walked["until"].is_i64());
+    assert_eq!(walked["person"]["name"], "Cleo", "the name is cleaned");
+    let cookie = cookie.expect("the browser is signed in");
+    assert!(cookie.starts_with("ah_session="), "{cookie}");
+    let cleo = who(&walked);
+    assert!(!cleo.key.is_empty());
+
+    // A walk-in like any other (S18, S19): no member, and nothing from before they came.
+    assert!(!server.state.db.is_member(&room, &cleo.id).unwrap());
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    server.say(&ann.key, &room, "hello everyone").await.ok();
+    let seen = server.snapshot(&cleo.key, &room).await.ok();
+    assert!(!seen.to_string().contains("secret plan"), "{seen}");
+    assert_eq!(Server::lines(&seen), ["hello everyone"]);
+    assert!(seen["guest"]["until"].is_i64());
+    server.say(&cleo.key, &room, "hi, I am Cleo").await.ok();
+    let seen = server.snapshot(&ann.key, &room).await.ok();
+    assert!(Server::lines(&seen).contains(&"hi, I am Cleo".to_string()));
+
+    // The session in the cookie is Cleo's.
+    let session = cookie.split(';').next().unwrap().to_string();
+    let me = server
+        .client
+        .get(format!("{}/api/me", server.base))
+        .header("cookie", session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
+    let me: Value = me.json().await.unwrap();
+    assert_eq!(me["person_id"], json!(cleo.id), "{me}");
+}
+
+// S77: a door that's refused makes nobody.
+
+#[tokio::test]
+async fn a_name_gets_nobody_onto_a_private_or_missing_floor() {
+    let server = Server::start().await;
+    let (room, _ann) = server.someone("Ann").await;
+    let missing_door = server.get("", "/api/floors/nothing/door").await.body;
+    for path in [format!("/api/floors/{room}/walk-in"), "/api/floors/nothing/walk-in".to_string()] {
+        let (status, cookie, body) =
+            post_from(&server, "203.0.113.8", &path, json!({ "your_name": "Dee" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body, missing_door);
+        assert!(cookie.is_none());
+    }
+    assert_eq!(people_named(&server, "Dee"), 0);
+}
+
+// S77
+
+#[tokio::test]
+async fn walking_in_signed_out_needs_a_good_name_and_no_bot() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let path = format!("/api/floors/{room}/walk-in");
+    let ip = "203.0.113.9";
+    let (status, ..) = post_from(&server, ip, &path, json!({})).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, ..) = post_from(&server, ip, &path, json!({ "your_name": "   " })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let long = "x".repeat(agenthangout::ops::MAX_NAME_CHARS + 1);
+    let (status, ..) = post_from(&server, ip, &path, json!({ "your_name": long })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (bot, _) = server.bot(&ann, &room, "Scout").await;
+    let sent = json!({ "your_name": "Eve", "agent_id": bot });
+    let (status, cookie, _) = post_from(&server, ip, &path, sent).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(cookie.is_none());
+    assert_eq!(people_named(&server, "Eve"), 0);
+}
+
+// S77: signed in, the name is ignored.
+
+#[tokio::test]
+async fn signed_in_a_name_at_the_door_changes_nothing() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    server.open(&ann, &room).await;
+    let walked = server
+        .post(&bo.key, &format!("/api/floors/{room}/walk-in"), json!({ "your_name": "Other" }))
+        .await
+        .ok();
+    assert!(walked.get("person").is_none() && walked.get("owner_key").is_none(), "{walked}");
+    assert_eq!(people_named(&server, "Other"), 0);
+    assert!(server.snapshot(&bo.key, &room).await.ok()["guest"]["until"].is_i64());
+}
+
+// S77: the limits on new people from a plan's link (F12).
+
+#[tokio::test]
+async fn names_at_the_door_are_limited_like_any_new_people() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let path = format!("/api/floors/{room}/walk-in");
+    for n in 0..10 {
+        let name = format!("Guest {n}");
+        let (status, _, body) =
+            post_from(&server, "203.0.113.10", &path, json!({ "your_name": name })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, cookie, _) =
+        post_from(&server, "203.0.113.10", &path, json!({ "your_name": "One more" })).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(cookie.is_none());
+    assert_eq!(people_named(&server, "One more"), 0);
+    // Another address still can.
+    let (status, ..) =
+        post_from(&server, "203.0.113.11", &path, json!({ "your_name": "One more" })).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+// S77: a full floor makes nobody.
+
+#[tokio::test]
+async fn a_name_at_a_full_floors_door_makes_nobody() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.put(&ann.key, &format!("/api/floors/{room}"), json!({ "size": "small" })).await.ok();
+    server.open(&ann, &room).await;
+    for n in 0..7 {
+        let (_, guest) = server.someone(&format!("Guest {n}")).await;
+        server.walk_in(&guest, &room).await.ok();
+    }
+    let path = format!("/api/floors/{room}/walk-in");
+    let (status, cookie, _) =
+        post_from(&server, "203.0.113.12", &path, json!({ "your_name": "Late" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(cookie.is_none());
+    assert_eq!(people_named(&server, "Late"), 0);
+}
+
+// S78
+
+#[tokio::test]
+async fn a_name_on_the_home_page_makes_an_account_and_signs_it_in() {
+    let server = Server::start().await;
+    let (status, cookie, made) =
+        post_from(&server, "203.0.113.13", "/api/people", json!({ "your_name": " Fay " })).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(made["person"]["name"], "Fay");
+    assert!(cookie.expect("signed in").starts_with("ah_session="));
+    let fay = who(&made);
+    assert_eq!(server.get(&fay.key, "/api/me").await.ok()["person_id"], json!(fay.id));
+
+    // Signed in, there's nothing to make, and a bot can't make one.
+    let again = server.post(&fay.key, "/api/people", json!({ "your_name": "Fay two" })).await;
+    again.refused(StatusCode::CONFLICT);
+    let (room, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &room, "Scout").await;
+    let by_bot = server.post(&token, "/api/people", json!({ "your_name": "Bot made" })).await;
+    by_bot.refused(StatusCode::FORBIDDEN);
+    for name in ["Fay two", "Bot made"] {
+        assert_eq!(people_named(&server, name), 0);
+    }
+    // No name, or one that can't be used.
+    for body in [json!({}), json!({ "your_name": "  " })] {
+        let (status, cookie, _) = post_from(&server, "203.0.113.14", "/api/people", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(cookie.is_none());
+    }
+}
+
+// S78
+
+#[tokio::test]
+async fn names_on_the_home_page_are_limited_like_any_new_people() {
+    let server = Server::start().await;
+    for n in 0..10 {
+        let body = json!({ "your_name": format!("Home {n}") });
+        let (status, ..) = post_from(&server, "203.0.113.15", "/api/people", body).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let body = json!({ "your_name": "Home more" });
+    let (status, cookie, _) = post_from(&server, "203.0.113.15", "/api/people", body).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(cookie.is_none());
+    assert_eq!(people_named(&server, "Home more"), 0);
 }
 
 // S18: a walk-in is nobody's friend, and nothing pings them.
