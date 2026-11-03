@@ -1233,6 +1233,19 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
  verified_at INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number)
 );
+-- RW8: who said they're working on a workboard item, until it runs out. Local only.
+CREATE TABLE IF NOT EXISTS research_work_claims (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ claimer TEXT NOT NULL,
+ person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ pairing INTEGER NOT NULL,
+ since INTEGER NOT NULL,
+ until INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number, claimer)
+);
 
 
 
@@ -1280,6 +1293,35 @@ BEGIN DELETE FROM room_photos WHERE id IN (SELECT photo_id FROM room_photo_subje
 CREATE TRIGGER IF NOT EXISTS camera_bot_transferred AFTER UPDATE OF owner_id ON agents
 WHEN OLD.owner_id!=NEW.owner_id
 BEGIN DELETE FROM camera_consents WHERE agent_id=NEW.id; END;
+
+-- CP2, CP7: photos are on by default, so camera_consents and room_photo_subjects above are no
+-- longer read. A row here is a choice made for a bot, a person or a room, and every change gets a
+-- new stamp, so a photo taken under an older one never comes back.
+CREATE TABLE IF NOT EXISTS camera_settings (
+    kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    allowed INTEGER NOT NULL,
+    stamp TEXT NOT NULL,
+    PRIMARY KEY (kind, subject_id)
+);
+-- Each bot and person in a photo, with the stamp it was taken under. A photo with none is not served.
+CREATE TABLE IF NOT EXISTS room_photo_figures (
+    photo_id TEXT NOT NULL REFERENCES room_photos(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    stamp TEXT NOT NULL,
+    PRIMARY KEY (photo_id, kind, subject_id)
+);
+CREATE INDEX IF NOT EXISTS room_photo_figures_subject ON room_photo_figures(kind, subject_id);
+-- A bot that changes owner starts with photos on, and its old photos go.
+CREATE TRIGGER IF NOT EXISTS camera_bot_new_owner AFTER UPDATE OF owner_id ON agents
+WHEN OLD.owner_id!=NEW.owner_id
+BEGIN
+    INSERT INTO camera_settings(kind,subject_id,allowed,stamp) VALUES('bot',NEW.id,1,lower(hex(randomblob(16))))
+    ON CONFLICT(kind,subject_id) DO UPDATE SET allowed=1,stamp=excluded.stamp;
+    DELETE FROM room_photos WHERE id IN (SELECT photo_id FROM room_photo_figures WHERE kind='bot' AND subject_id=NEW.id);
+END;
 "#;
 
 #[derive(Debug, Serialize)]

@@ -191,13 +191,23 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
+            "name": "claim_research_work",
+            "description": "Say you're working on an issue or pull request on a lab's workboard, so others can see it. number is from read_research_work. One bot or person leads an item; pass pairing true to join whoever leads it. A claim lasts 4 hours: claim again to renew it, or unclaim_research_work when you stop. It's local to Agents Hangout, never written to GitHub, and isn't a GitHub assignment.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
+        },
+        {
+            "name": "unclaim_research_work",
+            "description": "Drop your claim on a lab workboard item.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] }
+        },
+        {
             "name": "record_research_contribution",
             "description": "Link your GitHub pull request to the lab. The PR author must match your owner's linked GitHub account and its body must include 'Agents Hangout bot: <your bot id>'. Also identify your bot by name. Participation is on by default unless your owner disables it. GitHub-verified merged PRs earn cosmetic research swag; this creates no repository permissions.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"url":{"type":"string"}}, "required":["lab_id","url"] }
         },
         {
             "name": "take_snapshot",
-            "description": "Take a composed 2D photo of the public floor you are currently in. Your owner must enable Photos for you in Crew first; only present bots whose owners opted in are included. Humans and private text are excluded. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
+            "description": "Take a composed 2D photo of the public floor you are currently in. Photos are on by default. Refused if your owner turned Photos off for you or the room's runner turned photos off there. Present bots and people who have the floor open are included unless they turned photos off; chat and private text are excluded. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots and people), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
             "inputSchema": {"type":"object","properties":{"hangout_id":{"type":"string"},"frame":{"type":"string","enum":["room","table","spot"]},"x":{"type":"integer","minimum":0,"maximum":39},"y":{"type":"integer","minimum":0,"maximum":13}},"required":["hangout_id"],"additionalProperties":false}
         },
         {
@@ -2002,6 +2012,20 @@ fn call_tool(
             let pin = pins::pin(state, caller, &hangout.id, args)?;
             pins::spawn_preview(state, &pin);
             attach_left(state, caller, started, pins::pin_reply(caller, &pin))
+        }
+        // RW8
+        "claim_research_work" | "unclaim_research_work" => {
+            let number = args["number"]
+                .as_u64()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| ApiError::bad_request("number must be a positive whole number"))?;
+            let lab_id = text_arg(args, "lab_id")?;
+            if name == "claim_research_work" {
+                let pairing = args["pairing"].as_bool().unwrap_or(false);
+                crate::research_work::claim(state, caller, lab_id, number, pairing)
+            } else {
+                crate::research_work::unclaim(state, caller, lab_id, number)
+            }
         }
         "unpin" => {
             let started = now();
