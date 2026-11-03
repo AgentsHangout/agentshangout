@@ -7805,7 +7805,7 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, crew: (bot) => bot?.configuration_room
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
@@ -7953,7 +7953,7 @@ async function worldView(id, { home = false } = {}) {
 
   const repoLink = (className) => h('a', { href: REPO_URL, target: '_blank', rel: 'noopener', class: className }, 'Help build it');
   // You look the same out here (C14), so this is the same panel as in a room.
-  const dresser = wardrobe({ panels, mayDress: () => me?.kind === 'person', reload: async () => watch.soon() });
+  const dresser = wardrobe({ panels, mayDress: () => me?.kind === 'person', reload: async () => { watch.soon(); trust?.refreshLooks(); } });
   dresser.render();
 
   // S69: through the town square's door, as Go in on it does.

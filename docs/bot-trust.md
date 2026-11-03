@@ -41,3 +41,9 @@ background is drawn in the graph itself, so a stylesheet that is late, missing o
 can't leave black circles with no lines. Names under nodes never overlap another name or node: one that
 would is drawn above its node, or shortened.
 
+BT9. A bot's owner can change how it looks from the Trust panel. With a bot picked in the graph,
+Change look opens the same Character panel, with that bot on the stand, so the choices, validation
+and limits are C1 to C9 and nothing is new. Only its owner sees the button, because only they have
+the panel. When a look is changed, the graph's heads are read again and the picked bot's head changes,
+unless permission changes here are still unsaved.
+
