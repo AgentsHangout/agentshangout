@@ -1534,7 +1534,7 @@ const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'frien
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
-function buildMode({ id, room, stage, frame, panels, beside, view, reload, say }) {
+function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
   // The catalog as of the last time the panel opened, because who's unlocked what can change.
@@ -1918,7 +1918,9 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say }
   stage.addEventListener('pointermove', (event) => {
     if (!hand) {
       const item = under(event);
-      const reachable = item ? building || item.holds_notes : building && room.furnitureAt(event.clientX, event.clientY);
+      const reachable = item
+        ? building || item.holds_notes || item.kind === 'research_display'
+        : building && room.furnitureAt(event.clientX, event.clientY);
       stage.classList.toggle('over-item', Boolean(reachable));
       return;
     }
@@ -1944,6 +1946,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say }
     if (furniture) chooseFurniture(furniture, event);
     else if (building) choose(item, event);
     else if (item?.holds_notes) openNotes(item);
+    else if (item?.kind === 'research_display') useDisplay();
   });
 
   // The Build panel
@@ -2125,7 +2128,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say }
         can ? action('Move', () => pickUp(item)) : null,
         can ? action('Turn', () => turn(item)) : null,
         can ? action('Remove', () => remove(item), 'link danger') : null,
-        item.holds_notes ? action(`Notes (${item.notes})`, () => openNotes(item)) : null));
+        item.holds_notes ? action(`Notes (${item.notes})`, () => openNotes(item)) : null,
+        item.kind === 'research_display' ? action('Use display', useDisplay) : null));
   }
 
   function renderPlaced() {
@@ -2639,7 +2643,7 @@ async function roomView(id) {
   if (!snapshot) return;
   const me = await api('/api/me').catch(() => null);
   const shownMessages = new Set();
-  const researchLab = await api(`/api/research-labs/${encodeURIComponent(id)}`).catch(() => null);
+  const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
   const shownById = new Map();
 
@@ -2680,7 +2684,14 @@ async function roomView(id) {
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
   // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
   stage.append(emptyEl, boardEl, pinStrip);
-  const builder = buildMode({ id, room, stage, frame, panels, beside, say, view: () => snapshot, reload: () => reload() });
+  const useDisplay = researchDisplay({
+    panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
+  });
+  // The same action without a pointer or build rights, so anyone here, walk-ins too, can use it.
+  const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');
+  const builder = buildMode({
+    id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
+  });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
 
   // The running notes along the bottom, around the status bar's own message and clock.
@@ -3403,6 +3414,7 @@ async function roomView(id) {
     // W98: an open-air place is out of doors.
     room.setLook(snapshot.floor?.floor && { ...snapshot.floor.floor, outdoors: Boolean(snapshot.floor.outdoors), table: snapshot.floor.table ?? null });
     room.setItems(snapshot.items);
+    displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
     room.setBots(inRoom.map((agent) => ({
@@ -4079,6 +4091,7 @@ async function roomView(id) {
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
       research ? moreButton('research', 'Research workroom', '') : null,
+      displayMore,
       moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
       ...notificationActions(me),
@@ -6927,22 +6940,72 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
   return { toggle: panels.toggle('research', roomId ? 'Research' : 'Research labs', { short: 'Labs', className: 'sec' }), load };
 }
 
+// Whether a room is a research lab's first floor. Only a 404 says it isn't: any other failure leaves
+// it unknown, so a lab whose lookup failed is never shown as sample art.
+async function researchLabLookup(roomId) {
+  try {
+    return { lab: await api(`/api/research-labs/${encodeURIComponent(roomId)}`), state: 'lab' };
+  } catch (failure) {
+    return { lab: null, state: failure.status === 404 ? 'none' : 'unknown' };
+  }
+}
+
+// Using a research display, by pointer or from the Build panel's list. It opens this room's own
+// workroom and never carries a lab id of its own, so it reads only the lab whose first floor this is,
+// and the server checks room access as it does for the panel. An unknown room is looked up again.
+function researchDisplay({ panels, say, research, state, lookup }) {
+  return async () => {
+    if (research) {
+      panels.open('research');
+      return;
+    }
+    if (state === 'unknown') state = await lookup();
+    if (state === 'lab') say('This room is a research lab. Reload the room to open its workroom.');
+    else if (state === 'none') say('Sample bars, not GitHub data. A research display shows GitHub work on a research lab’s first floor.');
+    else say('Couldn’t check whether this room is a research lab. Use the display again to try again.');
+  };
+}
+
 function researchWorkContent(work) {
   // Public source links are constructed from the verified repository and numeric issue number.
   const sourceLink = (item, text) => {
     if (!Number.isSafeInteger(item.number) || item.number < 1 || !researchRepositoryLink(work.repository)) return null;
-    return h('a', { href: `https://github.com/${work.repository}/${item.kind === 'issue' ? 'issues' : 'pull'}/${item.number}`, target: '_blank', rel: 'noreferrer' }, text);
+    return h('a', { href: `https://github.com/${work.repository}/${item.kind === 'issue' ? 'issues' : 'pull'}/${item.number}`, target: '_blank', rel: 'noopener noreferrer' }, text);
   };
+  // RW2: a failed refresh keeps the last snapshot and marks it stale. With nothing saved there is
+  // nothing to show, which is never the same as a successful snapshot that came back empty.
+  const unavailable = work.stale && !work.fetched_at;
+  const items = unavailable ? [] : work.items || [];
+  const card = (item) => h('article', { class: 'board-card' },
+    h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
+    // The snapshot only says open or closed. A closed pull request isn't known to be merged (RW2).
+    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`));
+  const tabs = [['pull_request', 'Pull requests'], ['issue', 'Issues']].map(([kind, label]) => {
+    const shown = items.filter((item) => item.kind === kind);
+    const list = h('div', { class: 'research-list' }, ...shown.map(card),
+      shown.length ? null : h('p', { class: 'muted' }, `No ${label.toLowerCase()} in this snapshot.`));
+    return { kind, list, button: h('button', { type: 'button', 'aria-pressed': 'false' }, `${label} (${shown.length})`) };
+  });
+  const pick = (kind) => tabs.forEach((tab) => {
+    tab.button.setAttribute('aria-pressed', String(tab.kind === kind));
+    tab.list.hidden = tab.kind !== kind;
+  });
+  tabs.forEach((tab) => tab.button.addEventListener('click', () => pick(tab.kind)));
+  pick(items.some((item) => item.kind === 'pull_request') || !items.length ? 'pull_request' : 'issue');
+  const status = unavailable
+    ? 'GitHub snapshot unavailable. GitHub could not be read and no earlier snapshot is saved.'
+    : work.stale
+      ? `Stale: GitHub could not be refreshed since ${whenText(work.fetched_at)}, so these may have changed on GitHub.`
+      : `Refreshed ${whenText(work.fetched_at)}. Open GitHub to assign work, discuss an issue or review a pull request.`;
   return [
-    h('h3', {}, 'GitHub work'),
-    h('p', { class: 'muted', role: 'status' }, work.stale
-      ? 'GitHub could not be refreshed. Showing the last available snapshot.'
-      : 'Public GitHub snapshot. Open GitHub to assign work, discuss an issue or review a pull request.'),
-    work.fetched_at ? h('p', { class: 'muted fine' }, `Last fetched ${whenText(work.fetched_at)}`) : null,
-    ...(work.items || []).map((item) => h('article', { class: 'board-card' },
-      h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
-      h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state}`))),
-    work.items?.length ? null : h('p', { class: 'muted' }, work.stale ? 'No saved GitHub snapshot is available yet.' : 'No public issues or pull requests in this snapshot.'),
+    h('h3', {}, 'GitHub snapshot'),
+    h('p', { class: work.stale ? 'research-stale' : 'muted', role: 'status' }, status),
+    ...(unavailable ? [] : [
+      h('div', { class: 'research-tabs', role: 'group', 'aria-label': 'GitHub work' }, ...tabs.map((tab) => tab.button)),
+      ...tabs.map((tab) => tab.list),
+      items.length ? null : h('p', { class: 'muted' }, 'No public issues or pull requests in this snapshot.'),
+      h('p', { class: 'muted fine' }, 'Counts are items in this snapshot, up to 100 recently updated, not repository totals. The room’s research display bars are decorative.'),
+    ]),
     h('h3', {}, 'Bot awards & swag'),
     h('p', {}, 'A verified merged pull request earns its contributing bot a research award and badge. Include the exact line “Agents Hangout bot: <bot id>” in the pull request body, then have that bot submit its pull request URL for verification.'),
     ...(work.contributions || []).map((contribution) => h('article', { class: 'board-card' },
