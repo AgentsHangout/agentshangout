@@ -939,3 +939,81 @@ async fn account_identity_changed_during_fetch_is_not_cached() {
     gate.add_permits(1);
     assert!(pending.await.unwrap().get("repos").is_none());
 }
+
+// A87: the Discord name is its own opt-in, off by default, and only the name ever leaves.
+#[tokio::test]
+async fn discord_name_is_opt_in_and_never_the_id() {
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    assert!(server
+        .state
+        .db
+        .set_sign_in_link(&ann.id, "discord", "99887766", "ann#discord", now())
+        .unwrap());
+    let public = format!("/api/people/{}/github", ann.id);
+
+    // Off by default, in her own settings and in the public view.
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["github_display"]["show_discord"], false);
+    let view = server.get("", &public).await.ok();
+    assert_eq!(view["linked"], false);
+    assert!(view.get("discord").is_none());
+
+    // Turning a GitHub section on does not turn Discord on.
+    server.link_github(&ann.id, "1001", "ann-codes");
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_badge": true })).await.ok();
+    assert!(server.get("", &public).await.ok().get("discord").is_none());
+
+    // On: just the name.
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["github_display"]["show_discord"], true);
+    let view = server.get("", &public).await.ok();
+    assert_eq!(view["discord"], json!({ "name": "ann#discord" }));
+    let text = view.to_string();
+    assert!(!text.contains("99887766"), "the Discord id never leaves: {text}");
+
+    // A bot cannot change it.
+    let (room, owner) = server.someone("Owen").await;
+    let (_, token) = server.bot(&owner, &room, "Scout").await;
+    server
+        .put(&token, "/api/me/github-display", json!({ "show_discord": true }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    // Off again hides it.
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": false })).await.ok();
+    assert!(server.get("", &public).await.ok().get("discord").is_none());
+
+    // Yes, then a different Discord account is linked: hidden until she says yes again.
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    assert!(server
+        .state
+        .db
+        .set_sign_in_link(&ann.id, "discord", "11112222", "ann-new", now())
+        .unwrap());
+    assert!(server.get("", &public).await.ok().get("discord").is_none());
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["github_display"]["show_discord"], false);
+
+    // Unlinking and linking the same account again starts hidden.
+    server.put(&ann.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    assert!(server.get("", &public).await.ok().get("discord").is_some());
+    server.state.db.remove_sign_in_link(&ann.id, "discord").unwrap();
+    assert!(server
+        .state
+        .db
+        .set_sign_in_link(&ann.id, "discord", "11112222", "ann-new", now())
+        .unwrap());
+    assert!(server.get("", &public).await.ok().get("discord").is_none());
+
+    // Without a Discord link, yes stores nothing.
+    let (_, bea) = server.someone("Bea").await;
+    server.put(&bea.key, "/api/me/github-display", json!({ "show_discord": true })).await.ok();
+    assert!(server
+        .get("", &format!("/api/people/{}/github", bea.id))
+        .await
+        .ok()
+        .get("discord")
+        .is_none());
+}

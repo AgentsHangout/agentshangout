@@ -24,10 +24,47 @@ impl Db {
         tx.execute("UPDATE github_display_cache SET last_attempt_at=0 WHERE github_user_id IN (SELECT github_user_id FROM github_display_refresh_claims WHERE person_id=?)", [person])?;
         tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person])?;
         tx.execute("INSERT INTO github_display(person_id,show_repos,show_stars,show_languages,show_badge,updated_at) VALUES(?1,COALESCE(?2,0),COALESCE(?3,0),COALESCE(?4,0),COALESCE(?5,0),?6) ON CONFLICT(person_id) DO UPDATE SET show_repos=COALESCE(?2,show_repos),show_stars=COALESCE(?3,show_stars),show_languages=COALESCE(?4,show_languages),show_badge=COALESCE(?5,show_badge),updated_at=?6", params![person,patch.show_repos,patch.show_stars,patch.show_languages,patch.show_badge,at])?;
+        if let Some(show) = patch.show_discord {
+            let link: Option<String> = tx
+                .query_row(
+                    "SELECT account_id FROM sign_in_links WHERE person_id=? AND site='discord'",
+                    [person],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match (show, link) {
+                (true, Some(account)) => {
+                    tx.execute("INSERT INTO discord_display(person_id,account_id,updated_at) VALUES(?1,?2,?3) ON CONFLICT(person_id) DO UPDATE SET account_id=excluded.account_id,updated_at=excluded.updated_at", params![person, account, at])?;
+                }
+                _ => {
+                    tx.execute("DELETE FROM discord_display WHERE person_id=?", [person])?;
+                }
+            }
+        }
         tx.commit()
     }
 
+    /// A87: whether this person shows their Discord name now: they said yes, for the account
+    /// that is still linked.
+    pub fn discord_name_shown(&self, person: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT l.account_name FROM discord_display d JOIN sign_in_links l ON l.person_id=d.person_id AND l.site='discord' AND l.account_id=d.account_id WHERE d.person_id=?",
+                [person],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
     pub fn github_public_snapshot(&self, person: &str) -> rusqlite::Result<Value> {
+        let mut view = self.github_only_snapshot(person)?;
+        if let Some(name) = self.discord_name_shown(person)? {
+            view["discord"] = json!({ "name": name });
+        }
+        Ok(view)
+    }
+
+    fn github_only_snapshot(&self, person: &str) -> rusqlite::Result<Value> {
         let conn = self.conn();
         let Some((id, login, display)) = context(&conn, person)? else {
             return Ok(json!({"linked":false}));

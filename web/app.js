@@ -578,16 +578,27 @@ function signInCard(me) {
   // A70: what this person shows of their linked GitHub account, one switch per section. Only
   // when GitHub is linked, and only this person ever sees the switches.
   const github = me.sign_in.find((row) => row.site === 'github');
+  const discord = me.sign_in.find((row) => row.site === 'discord');
   const display = me.github_display || {};
-  const toggle = ([field, label]) => {
+  // A82: a small preview of the person card, drawn by the same code a room uses, from the same
+  // public response, so it shows exactly what anyone else is shown.
+  const preview = h('div', { class: 'game-menu person-card person-card-preview', 'aria-live': 'polite' }, personCardBody(undefined));
+  const refreshPreview = async () => {
+    const data = me.person_id ? await api(`/api/people/${encodeURIComponent(me.person_id)}/github`).catch(() => null) : null;
+    preview.replaceChildren(
+      h('div', { class: 'game-menu-head' }, h('strong', {}, me.name || 'You'), h('small', {}, 'Your card in a room')),
+      personCardBody(data));
+  };
+  const toggle = ([field, label, line]) => {
     let confirmed = !!display[field];
-    const box = h('input', { type: 'checkbox', checked: confirmed });
+    const box = h('input', { type: 'checkbox', role: 'switch', class: 'switch-input', checked: confirmed });
     box.addEventListener('change', act(error, async () => {
       const requested = box.checked;
       box.indeterminate = false;
       try {
         await api('/api/me/github-display', { method: 'PUT', body: { [field]: requested } });
         confirmed = requested;
+        refreshPreview();
       } catch (error) {
         // A response can be lost after the server committed. Reconcile before claiming a value.
         try {
@@ -602,16 +613,23 @@ function signInCard(me) {
         throw error;
       }
     }));
-    return h('label', {}, box, ` ${label}`);
+    return h('label', { class: 'pref-row' },
+      h('span', { class: 'pref-text' }, h('strong', {}, label), h('small', { class: 'muted' }, line)),
+      box);
   };
-  const displayToggles = github && github.linked ? h('div', {},
-    h('p', { class: 'muted' }, 'Show on your public profile:'),
+  const shows = (github && github.linked) || (discord && discord.linked);
+  if (shows) refreshPreview();
+  const displayToggles = shows ? h('div', { class: 'pref-group' },
+    h('h3', {}, 'Show on your card'),
+    h('p', { class: 'muted' }, 'Everything is off until you turn it on. People hovering you in a room see only what is on here. Your sign-in links stay private.'),
     ...[
-      ['show_repos', 'Public repos'],
-      ['show_stars', 'Stars received'],
-      ['show_languages', 'Top languages'],
-      ['show_badge', 'Merged pull requests'],
-    ].map(toggle)) : null;
+      github && github.linked ? ['show_repos', 'Public repos', 'Your most-starred public repos.'] : null,
+      github && github.linked ? ['show_stars', 'Stars received', 'The total across your public repos.'] : null,
+      github && github.linked ? ['show_languages', 'Top languages', 'The languages your public repos use most.'] : null,
+      github && github.linked ? ['show_badge', 'Merged pull requests', 'How many you have merged into Agents Hangout.'] : null,
+      discord && discord.linked ? ['show_discord', 'Discord name', `Your Discord username, ${discord.linked}. Never your Discord id.`] : null,
+    ].filter(Boolean).map(toggle),
+    preview) : null;
   return h('section', { class: 'card passkeys', 'aria-label': 'Discord and GitHub' },
     h('h2', {}, 'Discord and GitHub'),
     h('p', { class: 'muted' }, 'Link an account to sign in with it. Your sign-in link stays private unless you choose to show GitHub sections below. Enabled sections and your GitHub username are public. ',
@@ -2569,6 +2587,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     // Closing an item's notes beside the room goes back to the catalog they were opened from.
     backToCatalog: (was) => building && was === 'itemnotes' && beside.matches,
     leave: () => menu.close(),
+    // Whether the room is being built in or has something in hand: person cards stay out of the way.
+    get active() { return building || Boolean(hand); },
   };
 }
 
@@ -3124,6 +3144,15 @@ async function roomView(id) {
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
   });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
+  // A83, A84: hover a person for their card, press it for the same card with what can be done.
+  const personCard = personCards({
+    room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
+    mention: (name) => {
+      panels.open('room');
+      chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
+      chatInput.focus();
+    },
+  });
 
   // The running notes along the bottom, around the status bar's own message and clock.
   const guestEl = h('span', { class: 'wd-seg wd-teal room-guest', role: 'status', hidden: true });
@@ -4786,6 +4815,7 @@ async function roomView(id) {
     boardWatch.disconnect();
     stopRoomCamera();
     room.destroy();
+    personCard.close();
     builder.leave();
     document.removeEventListener('keydown', onKey, true);
     document.documentElement.classList.remove('in-game');
@@ -7371,6 +7401,163 @@ function popupMenu(root, { refocus }) {
   }
 
   return { open, close, get isOpen() { return Boolean(el); } };
+}
+
+// A82 to A87: what a person's card says about them, from the public response of
+// `GET /api/people/{id}/github`. Only sections that response carries are drawn, so a section the
+// person left off can never appear. Everything is text, never HTML (A71).
+function githubCardRows(data) {
+  if (!data) return [];
+  const rows = [];
+  if (data.linked) {
+    if (Array.isArray(data.repos)) {
+      rows.push(['Public repos', data.repos.length
+        ? data.repos.slice(0, 3).map((repo) => `${repo.name} (${repo.stargazers_count} stars)`).join(', ')
+        : 'None yet']);
+    }
+    if (data.stars) rows.push(['Stars received', String(data.stars.total)]);
+    if (Array.isArray(data.languages)) {
+      rows.push(['Top languages', data.languages.length ? data.languages.slice(0, 3).map((lang) => lang.language).join(', ') : 'None yet']);
+    }
+    if (data.badge) rows.push(['Merged pull requests', String(data.badge.merged_prs)]);
+  }
+  // A87: only when they turned it on, and only the name. The server never sends the Discord id.
+  if (typeof data.discord?.name === 'string') rows.push(['Discord', data.discord.name]);
+  return rows;
+}
+
+// A GitHub login is only ever linked to as itself, after this check.
+const githubProfileUrl = (login) => (/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login || '') ? `https://github.com/${login}` : null);
+
+// The body of a person card, shared by the room and by the preview in Settings. `data` is
+// undefined while the public response is loading, null if it failed.
+function personCardBody(data) {
+  const rows = githubCardRows(data);
+  if (data === undefined) return h('p', { class: 'person-card-note' }, 'Loading...');
+  if (!rows.length) return h('p', { class: 'person-card-note' }, 'Nothing shared on their card.');
+  return h('dl', { class: 'person-card-rows' }, ...rows.flatMap(([label, text]) => [h('dt', {}, label), h('dd', {}, text)]));
+}
+
+// A83: hover or press a person in a room for their card. What it holds is fetched once per person
+// for five minutes (a failure for one), and only after the pointer has rested on them.
+function personCards({ room, stage, root, view, locked, mention }) {
+  const cache = new Map();
+  let el = null;
+  let pinned = false;
+  let shownFor = null;
+  let timer = 0;
+  const lookup = (personId) => {
+    const hit = cache.get(personId);
+    if (hit && hit.until > Date.now()) return hit.promise;
+    const entry = { until: Date.now() + 5 * 60 * 1000 };
+    entry.promise = api(`/api/people/${encodeURIComponent(personId)}/github`).catch(() => {
+      entry.until = Date.now() + 60 * 1000;
+      return null;
+    });
+    cache.set(personId, entry);
+    return entry.promise;
+  };
+  const close = () => {
+    clearTimeout(timer);
+    timer = 0;
+    if (el) el.remove();
+    el = null;
+    pinned = false;
+    shownFor = null;
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('keydown', onEscape, true);
+  };
+  function onEscape(event) {
+    if (event.key === 'Escape') close();
+  }
+  function outside(event) {
+    if (el && !el.contains(event.target)) close();
+  }
+  const place = (x, y) => {
+    const pad = 8;
+    let left = x + 12;
+    let top = y + 12;
+    if (left + el.offsetWidth > innerWidth - pad) left = Math.max(pad, x - el.offsetWidth - 12);
+    if (top + el.offsetHeight > innerHeight - pad) top = Math.max(pad, innerHeight - el.offsetHeight - pad);
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(top)}px`;
+  };
+  async function show(personId, x, y, pin) {
+    const who = view().people.find((p) => p.id === personId);
+    if (!who) return;
+    close();
+    pinned = pin;
+    shownFor = personId;
+    const body = h('div', { class: 'person-card-body' }, personCardBody(undefined));
+    const you = personId === view().you.person_id;
+    const foot = h('div', { class: 'person-card-foot' });
+    el = h('div', { class: 'game-menu person-card', role: pin ? 'dialog' : 'tooltip', 'aria-label': `${who.name}, person card` },
+      h('div', { class: 'game-menu-head' }, h('strong', {}, you ? `${who.name} (you)` : who.name), h('small', {}, 'Person')),
+      body, foot);
+    root.append(el);
+    place(x, y);
+    if (pin) document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', onEscape, true);
+    const data = await lookup(personId);
+    if (!el || shownFor !== personId) return;
+    body.replaceChildren(personCardBody(data));
+    const link = githubProfileUrl(data?.login);
+    if (pin) {
+      const actions = [
+        you ? null : ['Mention in chat', () => mention(who.name)],
+        link ? ['View on GitHub', link] : null,
+      ].filter(Boolean);
+      foot.replaceChildren(...(actions.length
+        ? actions.map(([label, run]) => (typeof run === 'string'
+          // A plain link, so nothing follows an address by script.
+          ? h('a', { class: 'game-menu-item', href: run, target: '_blank', rel: 'noopener noreferrer', onclick: () => setTimeout(close) }, label)
+          : h('button', { type: 'button', class: 'game-menu-item', onclick: () => { close(); run(); } }, label)))
+        : [h('p', { class: 'person-card-note' }, 'Nothing else to do here.')]));
+    } else {
+      // W102: hovering says what a press does.
+      foot.replaceChildren(h('p', { class: 'person-card-note' }, 'Click for options'));
+    }
+    place(x, y);
+    if (pin) foot.querySelector('button, a')?.focus({ preventScroll: true });
+  }
+  const under = (event) => {
+    if (event.target.closest?.('button, a')) return null;
+    return event.target.closest?.('[data-person]')?.dataset.person || room.personAt(event.clientX, event.clientY);
+  };
+  stage.addEventListener('pointermove', (event) => {
+    if (pinned || event.pointerType === 'touch') return;
+    const personId = locked() ? null : under(event);
+    stage.classList.toggle('over-person', Boolean(personId));
+    if (personId === shownFor || (!personId && !el && !timer)) {
+      if (el && personId) place(event.clientX, event.clientY);
+      return;
+    }
+    close();
+    if (!personId) return;
+    shownFor = personId;
+    const { clientX, clientY } = event;
+    timer = setTimeout(() => { timer = 0; show(personId, clientX, clientY, false); }, 250);
+  });
+  stage.addEventListener('pointerleave', () => { if (!pinned) close(); });
+  const open = (event) => {
+    if (locked()) return;
+    const personId = under(event);
+    if (!personId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    show(personId, event.clientX, event.clientY, true);
+  };
+  // Left and right press open the same card (A84).
+  stage.addEventListener('click', open, true);
+  stage.addEventListener('contextmenu', open, true);
+  stage.addEventListener('keydown', (event) => {
+    const chip = event.target.closest?.('[data-person]');
+    if (!chip || locked() || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    const box = chip.getBoundingClientRect();
+    show(chip.dataset.person, box.left, box.bottom, true);
+  });
+  return { close };
 }
 
 // A small picture to the left of a menu item: the tool's own icon.

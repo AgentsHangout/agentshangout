@@ -577,6 +577,10 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     }
     let hangouts = state.db.hangouts_for_person(&caller.person_id)?;
     let places = city::my_places(&state, &caller)?;
+    let mut github_display =
+        json!(state.db.github_display_for(&caller.person_id)?.unwrap_or_default());
+    github_display["show_discord"] =
+        json!(state.db.discord_name_shown(&caller.person_id)?.is_some());
     let mut me = json!({
         "kind": "person",
         "person_id": caller.person_id,
@@ -592,7 +596,7 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
         // A56: their own links, which nobody else is shown.
         "sign_in": sign_in::for_person(&state, &caller.person_id)?,
         // A70: their own GitHub display switches, which nobody else is shown.
-        "github_display": state.db.github_display_for(&caller.person_id)?.unwrap_or_default(),
+        "github_display": github_display,
         // A54: whether a site started this session, so the page doesn't offer what it can't do.
         "sign_in_session": state.db.is_sign_in_session(&caller.secret_hash)?,
         // Cities they're waiting at the gate of, with their count and nothing else about the city.

@@ -5289,6 +5289,27 @@ export class Room {
     return under.sort((a, b) => Number(Boolean(b.sign)) - Number(Boolean(a.sign)) || Number(Boolean(a.flat)) - Number(Boolean(b.flat)) || b.y - a.y)[0]?.id ?? null;
   }
 
+  // The person whose figure is at a place on the page, or null (A82). The nearest feet win when
+  // two stand close; bots are not people and are never returned.
+  personAt(clientX, clientY) {
+    const box = this.canvas.getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    const x = ((clientX - box.left) / box.width) * W;
+    const y = ((clientY - box.top) / box.height) * H;
+    let best = null;
+    let nearest = Infinity;
+    for (const person of this.people.values()) {
+      const tall = person.pose === 'sit' ? 18 : 26;
+      if (Math.abs(x - person.x) > 8 || y < person.y - tall || y > person.y + 3) continue;
+      const gap = Math.abs(x - person.x) + Math.abs(y - person.y);
+      if (gap < nearest) {
+        nearest = gap;
+        best = person.id;
+      }
+    }
+    return best;
+  }
+
   // The word for what came with the room at a place on the page, if this floor shows it. An item
   // stands in front of all of it, so this is for a click that found no item.
   furnitureAt(clientX, clientY) {
@@ -5339,7 +5360,7 @@ export class Room {
       if (person.name !== data.name) {
         person.name = data.name;
         person.label.textContent = data.name;
-        person.chip.title = data.name;
+        person.chip.title = `${data.name}: click for options`;
       }
       person.look = personLook(data.look);
       if (person.color !== data.color) {
@@ -5410,6 +5431,7 @@ export class Room {
     const chip = document.createElement('span');
     chip.className = 'bot-chip';
     chip.style.top = 'auto';
+    chip.dataset.person = data.id;
     const dot = document.createElement('i');
     const label = document.createElement('span');
     chip.append(dot, label);

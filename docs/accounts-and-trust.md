@@ -449,6 +449,39 @@ merged-pull-request count. No tokens, no private repos, no emails.
   before and after fetching; repository owners must match that ID too. Reassigned or unsafe
   usernames fail closed. Each upstream JSON response is capped at two MiB.
 
+- **A82.** In Settings, the choices from A70 are switch rows under "Show on your card", one per
+  section, each with a line saying what it shows, and under them a preview of the card a room
+  draws for you. The preview is built from the same public response and the same code as the
+  card (A83), so it shows exactly what anyone else is shown. Only the person sees these rows;
+  the saving, restoring and indeterminate rules of A70 are unchanged.
+- **A83.** Hovering a person in a room, on the figure or on the name tag, shows their card after
+  the pointer has rested on them for a moment: their name, and only the sections of A70 they turned
+  on, read from `GET /api/people/{person_id}/github` and nothing else. A person with none turned
+  on, or with no link, gets a card with just the name. Their Discord name is on it only if they
+  turned it on (A87). The sign-in link and the sign-in sites' account ids are never on it.
+  Everything on it is text (A71).
+- **A84.** Pressing a person, with the left button or the right, or a tap, opens the same card
+  with what can be done: "Mention in chat" (not on your own card) and, if they show their GitHub
+  login, "View on GitHub". The hover card ends with "Click for options" (W102), and the
+  name tag says the same, so hovering says what a press does. The right button replaces the
+  browser's menu only over a person. While building, or with something in hand, people are left
+  alone and the build clicks work as before.
+- **A85.** The card for a person is fetched once for five minutes, and once for a minute after a
+  failure, however often the pointer passes over them; the server's own refresh limits (A72) apply
+  as ever. A failed lookup shows a card with only the name, never an error or a made-up count.
+- **A86.** Bots have no GitHub or Discord section: pressing or hovering a bot works as it did, and
+  a bot's owner and what it is doing stay where they were. The card is for people only.
+- **A87.** Showing a Discord name is a switch of its own, "Discord name", in the same Settings
+  section and saved with the same request as the others (`show_discord` on
+  `PUT /api/me/github-display`, a person only, 403 for a bot). It is off for everyone until they
+  turn it on, and a GitHub switch never turns it on. Turning it on needs a Discord link (A46);
+  without one nothing is stored. It is remembered for the Discord account linked when they said
+  yes: linking a different one, or unlinking, hides it until they say yes again. When on,
+  `GET /api/people/{person_id}/github` adds `discord: {name}`, the username kept for showing
+  (A46), even when no GitHub section is shown, and `GET /api/me` shows
+  `github_display.show_discord` to that person alone. The Discord id never leaves the server this
+  way. With every GitHub switch off and Discord off, A74 still holds.
+
 The display-switch browser regression can also be run with `node tests/github_display_ui.cjs`.
 
 ### Making an account with one
