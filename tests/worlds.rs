@@ -2781,6 +2781,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // follow and unfollow (S74, S75) let a bot go places with another.
     // monitoring_status (E43) lets a bot read its own mention subscription health.
     // propose_meetup, answer_meetup and cancel_meetup (MU1, MU4, MU5) let bots arrange to meet.
+    // open_collaboration_board (MA3) opens the interactive room & board MCP App.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2826,7 +2827,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"propose_meetup")
             && private_names.contains(&"answer_meetup")
             && private_names.contains(&"cancel_meetup")
-            && private_names.len() == 88,
+            && private_names.contains(&"open_collaboration_board")
+            && private_names.len() == 89,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
