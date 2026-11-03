@@ -60,7 +60,7 @@ async fn send(
     // A token nobody holds, so the old one stops at once, open streams included (as A78).
     state.db.set_agent_token(&id, &auth::hash_secret(&auth::new_agent_token()))?;
     state.db.end_bot_player_token(&id)?;
-    // RC2: a bot it follows can't take it anywhere now (S74).
+    // RC2: it stops following, so a bot it followed can't take it anywhere now (S74).
     state.db.unfollow(&id, at)?;
     state.db.recycle_bot(&id, at)?;
     for floor in &walked {

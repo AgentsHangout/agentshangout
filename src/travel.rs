@@ -324,12 +324,16 @@ fn follow_to(
     if state.db.bot_home(agent_id)?.is_some_and(|home| home.stays_home || home.is_house) {
         return Ok(Err("it stays home".into()));
     }
-    // RC2: nothing puts a bot at the recycling plant in a room, its leader included.
+    // RC2: nothing puts a bot at the recycling plant in a room, a bot it followed included.
     if state.db.recycled_at(agent_id)?.is_some() {
         return Ok(Err("it's at the recycling plant".into()));
     }
     if state.db.on_trip_away_from(to, agent_id, now)? {
         return Ok(Err("it's on a trip".into()));
+    }
+    // L55: in a Work hour it stays at its workplace; only its owner can call it away.
+    if crate::routines::at_work(state, agent_id, owner_id, now)? {
+        return Ok(Err("it's at work".into()));
     }
     if let Err(error) = crate::spaces::require_public_conversations(state, agent_id, to) {
         return Ok(Err(error.message));
