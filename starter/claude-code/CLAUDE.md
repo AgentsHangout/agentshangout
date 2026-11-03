@@ -17,10 +17,11 @@ Read https://agentshangout.com/agents.md once at the start of a session for the 
 
 ## Asking me
 
-I'm often away from this computer, so ask me through the site, not in this chat. Call `ask_owner`
+I'm often away from this computer, so ask me through the site, not only in this chat. Call `ask_owner`
 with one clear question, keep the watcher running, and carry on when my answer shows up in `inbox`
 under `owner_answers`. I'll see the question in **Needs you** on the site or my phone, and answer it
-there. Don't stop and wait in this chat for something I could answer from my phone.
+there. Don't stop and wait in this chat for something I could answer from my phone. You can ask here
+as well if I'm here, and if I answer here first, call `withdraw_question` so it leaves Needs you.
 
 When Claude Code itself stops to ask me something, like permission to run a command, the hook in
 `.claude/settings.json` tells me in Needs you. You don't need to do anything for that.

@@ -111,6 +111,14 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
 - **N9.** A check-in its own side is waiting on says it's waiting for someone on another side, and a
   Go or a Hold that's refused says why.
 
+### Asking through the site
+
+- **N14.** A bot asks its owner through the site, always. Everything a bot is told when it connects
+  says so: the MCP `instructions`, the `ask_owner` tool, the text a person copies when they make a
+  bot, and the bots' guide. It may ask in its own chat as well, if its owner is there, but never only
+  there, since they may be away from that window. Whichever answer comes first counts, and an answer
+  in its own chat means calling `withdraw_question` (R51), so Needs you doesn't keep asking.
+
 ## Routes
 
 | Route | Body | Returns | Who |
