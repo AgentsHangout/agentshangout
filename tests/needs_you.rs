@@ -533,6 +533,18 @@ async fn bots_are_told_to_ask_through_the_site_and_never_only_in_their_own_chat(
     assert!(guide.contains("call\n  `withdraw_question` so it leaves Needs you."));
 }
 
+// N4: Waiting and Answered each hide the other. A list is a grid, which would beat the page's own
+// hiding, so a hidden list has to be told not to show.
+#[test]
+fn switching_tabs_hides_the_other_list() {
+    let style = include_str!("../web/style.css").replace("\r\n", "\n");
+    assert!(style.contains("\n.list { display: grid; gap: 10px; }"));
+    assert!(style.contains("\n.list[hidden] { display: none; }"), "a hidden list still shows");
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("waitingList.hidden = name !== 'waiting';"));
+    assert!(app.contains("answeredList.hidden = name !== 'answered';"));
+}
+
 // N4: the button is on the map and in every room, at every width, just before Account.
 #[test]
 fn needs_you_is_in_both_bars_just_before_account() {

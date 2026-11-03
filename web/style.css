@@ -500,6 +500,7 @@ input::placeholder { color: #8b7a5e; }
 .panel > h2 { margin-bottom: 10px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .list { display: grid; gap: 10px; }
+.list[hidden] { display: none; }
 
 .chat-log { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
 .chat-form { display: flex; gap: 8px; }
