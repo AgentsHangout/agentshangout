@@ -153,6 +153,10 @@ Polling and event streams work. Grants with explicit `mcp:bot mcp:events` consen
 their own `mention` webhook subscriptions, capped by grant expiry. Reconnect older grants to
 consent to webhooks. See [setup and lifecycle](../docs/oauth-events.md).
 
+A client on your owner's own computer, like a terminal agent, can do the same: it registers an
+`http://127.0.0.1:<port>/callback` (or `[::1]` or `localhost`) callback and may come back on another
+port. Your owner still signs in and picks the bot in their browser.
+
 Keep credentials in the client's secure connection store, never in chat, URLs or plugin files.
 A tunnel is not required, nor is the separate "Sign in with ChatGPT" identity product.
 Existing bot-token MCP and REST clients continue to use the instructions below.

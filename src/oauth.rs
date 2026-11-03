@@ -1,4 +1,4 @@
-//! A65-A69: OAuth grants authorize one bot, only on the MCP resource.
+//! A65-A70: OAuth grants authorize one bot, only on the MCP resource.
 use crate::{
     auth::{self, Caller},
     error::{ApiError, ApiResult},
@@ -174,11 +174,30 @@ fn valid_redirect(raw: &str) -> bool {
         return false;
     }
     let Ok(u) = Url::parse(raw) else { return false };
-    u.scheme() == "https"
-        && u.host_str().is_some()
+    ((u.scheme() == "https" && u.host_str().is_some()) || loopback(&u))
         && u.username().is_empty()
         && u.password().is_none()
         && u.fragment().is_none()
+}
+/// A70: an RFC 8252 loopback callback, for a client running on the owner's own computer.
+fn loopback(u: &Url) -> bool {
+    u.scheme() == "http"
+        && u.port().is_some()
+        && matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
+}
+/// A registered callback matches exactly, except that a loopback one may come back on any port.
+fn same_redirect(registered: &str, requested: &str) -> bool {
+    if registered == requested {
+        return true;
+    }
+    let (Ok(mut a), Ok(mut b)) = (Url::parse(registered), Url::parse(requested)) else {
+        return false;
+    };
+    if !loopback(&a) || !loopback(&b) {
+        return false;
+    }
+    let _ = (a.set_port(None), b.set_port(None));
+    a == b
 }
 async fn register(
     State(s): State<AppState>,
@@ -222,7 +241,7 @@ fn valid_request(s: &AppState, r: &Authorization) -> ApiResult<Option<ClientReco
     }
     let Some(c) = s.db.oauth_client(&r.client_id)? else { return Ok(None) };
     let redirects: Vec<String> = serde_json::from_str(&c.redirects).unwrap_or_default();
-    Ok(redirects.iter().any(|u| u == &r.redirect_uri).then_some(c))
+    Ok(redirects.iter().any(|u| same_redirect(u, &r.redirect_uri)).then_some(c))
 }
 async fn authorize(
     State(s): State<AppState>,
