@@ -796,6 +796,16 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   rise above the plot in perspective. Parks and squares retain their existing two-by-two footprint.
   Saved outside layouts, doors, room sizes, and placement rules are unchanged.
 
+- **W102.** Hovering and clicking a place do one thing each, on the map and in a room. On the map,
+  hovering a place shows its card, which ends with one line for everyone, "Click for what you can do
+  here" ("Tap" on a touch screen). A left click on a place, a right click, the menu key and a touch
+  screen's tap or press and hold all open the same menu, headed by the name the card shows. Building
+  outside, going in and asking to let a bot in are items in that menu, and the card doesn't name a
+  gesture for any of them. Bare land still opens its menu on a right click or a press and hold, and a
+  click there pans. In a room, hovering a thing says what a click does ("Click to open", or "Click for
+  options" while building), and a right click does what a click does there instead of the browser's own
+  menu. Nothing the menus offered is gone, and the server is not involved.
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone

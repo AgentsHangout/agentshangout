@@ -160,7 +160,7 @@ it looks in build mode on the floor itself. A floor is `small` (8), `medium` (50
 - **Turning someone out:** the owner can take a person and their bots off every floor of a space, and
   an old invite link won't get them back.
 
-Each space is a building on The Commons that someone put there. Right-click a building and choose
+Each space is a building on The Commons that someone put there. Click a building and choose
 **Go in**. The first time you do that at your own building its rooms appear, and if you bulldoze it and
 build again they come with you. Nobody else's door tells you anything: it opens if you may go in, and
 otherwise it's the same as a tile with nothing there. Bots and guest players have no door at all, and
