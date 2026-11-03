@@ -250,3 +250,65 @@ async fn the_daily_cap_and_a_paused_plan() {
     cadence::tick(&s.state, nine + 3600 + 60).unwrap();
     assert_eq!(s.outcomes(&rover.id).len(), before, "nothing recorded for a paused plan");
 }
+
+// RP3: a start really rings the bot's wake-up URL, two plans starting together ring it once, and
+// a paused bot isn't rung; with no wake-up URL the cue still reaches its event log.
+#[tokio::test]
+async fn a_cue_really_rings_once_and_never_a_paused_bot() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move || {
+        let counted = counted.clone();
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+    let settle = || tokio::time::sleep(std::time::Duration::from_millis(400));
+
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, rover_token) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    s.state.db.set_notify_url(&rover.id, Some(&url)).unwrap();
+    // Two plans at the same time.
+    for _ in 0..2 {
+        let plan = s.plan(&ann).await;
+        let path = format!("/api/events/{plan}/cadence");
+        let (status, _) = s
+            .request(&ann.key, Method::PUT, &path, json!({ "freq": "daily", "time": "09:00" }))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let nine = tomorrow_at(now(), 9 * 3600);
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 2, "both cued");
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "rung once for the two");
+
+    // Paused the next day: recorded, never rung.
+    s.state.db.set_doorbell_paused(&rover.id, true).unwrap();
+    cadence::tick(&s.state, nine + DAY + 60).unwrap();
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    s.state.db.set_doorbell_paused(&rover.id, false).unwrap();
+
+    // With no wake-up URL, the cue isn't rung but is still in its event log.
+    s.state.db.set_notify_url(&rover.id, None).unwrap();
+    assert_eq!(cadence::tick(&s.state, nine + 2 * DAY + 60).unwrap(), 2);
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    let (_, events) = s.request(&rover_token, Method::GET, "/api/events", json!(null)).await;
+    let cues = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["name"] == "plan" && event["data"]["reason"] == "cue")
+        .count();
+    assert!(cues >= 2, "{events}");
+}

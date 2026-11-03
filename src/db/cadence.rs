@@ -135,6 +135,30 @@ impl Db {
         )
     }
 
+    /// RP3: a cue rang the bot. Two plans starting together ring it once (E22's three minutes).
+    pub fn note_cue_rung(
+        &self,
+        event_id: &str,
+        starts_at: i64,
+        agent_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE plan_start_bots SET rung_at = ? WHERE event_id = ? AND starts_at = ? AND agent_id = ?",
+            params![at, event_id, starts_at, agent_id],
+        )?;
+        Ok(())
+    }
+
+    /// RP3: whether a cue rang this bot since `since`.
+    pub fn cue_rung_since(&self, agent_id: &str, since: i64) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM plan_start_bots WHERE agent_id = ? AND rung_at > ?",
+            params![agent_id, since],
+        )
+    }
+
     /// RP6: how many times a bot was cued in the UTC day that holds `day_start`.
     pub fn cues_on_day(&self, agent_id: &str, day_start: i64) -> rusqlite::Result<i64> {
         self.conn().query_row(

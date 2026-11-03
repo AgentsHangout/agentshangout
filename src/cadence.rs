@@ -27,6 +27,8 @@ pub const LATE_SECS: i64 = 15 * 60;
 pub const DAILY_CUES: i64 = 24;
 /// RP1: the most repeating plans one person has.
 pub const MAX_CADENCES: i64 = 20;
+/// RP3: after a cue rings a bot, the next cue in this long doesn't ring it again (as E22's hold).
+const CUE_RING_SECS: i64 = 3 * 60;
 /// How far back the loop looks for starts it hasn't handled, so a long outage still ends.
 const LOOK_BACK_SECS: i64 = 7 * DAY_SECS;
 
@@ -293,7 +295,11 @@ pub fn tick(state: &AppState, now: i64) -> ApiResult<usize> {
                     // URL (the event still reaches inbox and the doorbell), and none while an earlier
                     // ring in that room is unread (E22). A paused bot was already `paused` above.
                     let ring = state.db.notify_url(bot)?.is_some()
-                        && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?;
+                        && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?
+                        && !state.db.cue_rung_since(bot, now - CUE_RING_SECS)?;
+                    if ring {
+                        state.db.note_cue_rung(&cadence.event_id, starts_at, bot, now)?;
+                    }
                     crate::events::note_plan_cue(state, &event, bot, starts_at, ring);
                     cued += 1;
                 }

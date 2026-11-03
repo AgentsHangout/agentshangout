@@ -1303,6 +1303,7 @@ CREATE TABLE IF NOT EXISTS plan_start_bots (
  starts_at INTEGER NOT NULL,
  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
  outcome TEXT NOT NULL CHECK (outcome IN ('cued', 'missed', 'paused', 'over_cap')),
+ rung_at INTEGER,
  PRIMARY KEY (event_id, starts_at, agent_id),
  FOREIGN KEY (event_id, starts_at) REFERENCES plan_starts(event_id, starts_at) ON DELETE CASCADE
 );

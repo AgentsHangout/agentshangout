@@ -481,7 +481,7 @@ pub fn note_plan_cue(
         text: "A plan you're in has started. Call inbox.".to_string(),
     };
     if ring {
-        crate::notify::send_result(state, agent_id, &notice, true, Vec::new(), |_, _| {});
+        crate::notify::send_cue(state, agent_id, &notice, &event.id, &event.proposed_by);
     }
 }
 

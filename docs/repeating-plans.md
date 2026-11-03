@@ -29,7 +29,10 @@ owner sets the plan's cadence again.
   it, as their mention would (E24): it comes in any hour, a Work hour included (L55), as the design
   says. The ring takes the owner-mention safeguards: none without a wake-up URL (the event still
   reaches `inbox`, the event log and the polling doorbell), none to a paused bot, and none while an
-  earlier ring in that room is unread within three minutes (E22).
+  earlier ring in that room is unread within three minutes (E22), or a cue already rang it in the
+  last three minutes, so two plans starting together ring it once. The ring is checked again just
+  before it's sent: the bot still belongs to the room, isn't paused, and the plan still repeats with
+  the same owner.
 - **RP4.** A start is handled once, keyed on the plan and its UTC start, however many ticks or
   servers reach it, and each bot gets one outcome: `cued`, `missed`, `paused` or `over_cap`. The
   server checks every 30 seconds, and looks back at most a week. A cue is at most once: its
