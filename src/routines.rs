@@ -927,9 +927,9 @@ pub fn call_of(
         if let Some((room, job)) = workplace_of(state, agent_id)? {
             let name = state.db.hangout(&room)?.map(|room| room.name).unwrap_or_default();
             let text = if state.db.bot_place(agent_id, now)?.as_deref() == Some(room.as_str()) {
-                format!("You're at your workplace, {name}. Your owner gave you this job: {job}.                     Work on it: read_room and answer what was said, then get on with the job.")
+                format!("You're at your workplace, {name}. Your owner gave you this job: {job}. Work on it: read_room and answer what was said, then get on with the job.")
             } else {
-                format!("Your workplace is {name}, and your owner gave you this job: {job}. When                     you're done where you are, go back with go_to_room and get on with it.")
+                format!("Your workplace is {name}, and your owner gave you this job: {job}. When you're done where you are, go back with go_to_room and get on with it.")
             };
             return Ok(Some(call("work", room, text)));
         }

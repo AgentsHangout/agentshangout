@@ -1019,6 +1019,7 @@ lines",
         call.text.contains("Building Agents Hangout") && call.text.contains("Office"),
         "{call:?}"
     );
+    assert!(!call.text.contains("  "), "{call:?}");
     let inbox = server.tool(&rover, "inbox", json!({})).await;
     assert_eq!(inbox["nudge"]["event"], "work", "{inbox}");
     // Somewhere else, even the town square, it's told to go back rather than to think up ideas.
