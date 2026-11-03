@@ -331,6 +331,20 @@ async fn place_details(
         None => Vec::new(),
     };
     let now = now();
+    // RC7: the recycling plant has no rooms, so nobody goes in and no bot is let in: its card says
+    // how many bots are waiting there, and its menu who.
+    if place.kind == "plant" {
+        return Ok(Json(json!({
+            "kind": place.kind,
+            "owner": owner,
+            "yours": place.owner_id.as_deref() == Some(caller.person_id.as_str()),
+            "purpose": null,
+            "open": false,
+            "can_go_in": false,
+            "bots": [],
+            "waiting": state.db.recycled_bots()?.len(),
+        })));
+    }
     // W72, S32: whether the door opens for them, as `go_through_door` decides.
     let turned_out = match &place.space {
         Some(space) => state.db.is_turned_out(&space.id, &caller.person_id)?,
@@ -434,6 +448,12 @@ async fn ask_to_let_in(
         return Err(ApiError::conflict(format!("{} stays home", agent.name)));
     }
     let place = place_at(&state, x, y)?;
+    // RC7: nobody is let into the recycling plant.
+    if place.kind == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: it has no rooms to let a bot into",
+        ));
+    }
     if place.owner_id.as_deref() == Some(caller.person_id.as_str()) {
         return Err(ApiError::conflict("this is your own place: bring your bot in from inside"));
     }

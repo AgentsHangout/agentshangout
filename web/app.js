@@ -8790,7 +8790,16 @@ async function worldView(id, { home = false } = {}) {
     ];
     // W102: the card says what a click does, the same line for everyone. Any building action,
     // building outside included, is in the one menu that opens.
-    lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    // RC7: the recycling plant has no rooms; its card says who's waiting and what a click shows.
+    if (place.kind === 'recycling plant') {
+      const waiting = details?.waiting;
+      lines.push(h('small', { class: 'city-card-hint' }, Number.isFinite(waiting)
+        ? `${waiting} ${waiting === 1 ? 'bot' : 'bots'} waiting. Nobody goes inside.`
+        : 'Where bots wait before they’re deleted. Nobody goes inside.'));
+      lines.push(h('small', { class: 'city-card-hint' }, matchMedia('(pointer: coarse)').matches ? 'Tap to see who’s waiting' : 'Click to see who’s waiting'));
+    } else {
+      lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    }
     // L44: who's inside, by name and whose, as the map already shows them going in.
     const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
     if (inside.length) {

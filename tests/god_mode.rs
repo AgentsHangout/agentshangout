@@ -1644,4 +1644,14 @@ async fn the_recycling_plant_is_gods_and_shows_whos_waiting() {
     assert_eq!(row[8], json!([plant.0, plant.1]), "{row}");
     assert!(row[7].as_str().is_none_or(str::is_empty), "no owner: {row}");
     assert!(!view.to_string().contains("Bo's") && !view.to_string().contains(&bo.id));
+
+    // RC7: its place details offer no way in and no bot to let in, and say how many are waiting.
+    let place = format!("/api/places/{}/{}", plant.0, plant.1);
+    let details = server.get(&bo.key, &place).await.ok();
+    assert_eq!(details["can_go_in"], false, "{details}");
+    assert_eq!(details["bots"], json!([]), "{details}");
+    assert_eq!(details["waiting"], 1, "{details}");
+    let (other_id, _) = server.bot(&bo, &room, "Fido").await;
+    let asked = json!({ "agent_id": other_id });
+    server.post(&bo.key, &format!("{place}/requests"), asked).await.refused(StatusCode::CONFLICT);
 }
