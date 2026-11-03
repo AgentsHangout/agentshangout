@@ -12,7 +12,7 @@ use agenthangout::{
         bot_chain_hold_secs, Doorbell, Failure, Mention, Seen, Task, Wake, BOT_CHAIN_HOLD_SECS,
         MAX_BOT_RUNS_IN_A_ROW,
     },
-    now, AppState, Config,
+    items, now, AppState, Config,
 };
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -1888,4 +1888,59 @@ async fn the_account_panel_shows_your_own_credits() {
         assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
         assert!(credits.get(field).is_some(), "/api/credits has no {field}");
     }
+}
+
+// HC24: the shop shows every paid pack as it comes, from what the code fixes for it, so its paint,
+// flooring and pieces are the same for everyone and the card draws them before anything is bought.
+#[tokio::test]
+async fn the_shop_shows_each_paid_pack_before_it_is_bought() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let credits = server.get(&room.justin, "/api/credits").await.body;
+    let paid: Vec<_> = items::PACKS.iter().filter(|pack| pack.cost > 0).collect();
+    let offers = credits["packs"].as_array().unwrap();
+    assert_eq!(offers.len(), paid.len());
+    for (offer, pack) in offers.iter().zip(&paid) {
+        assert_eq!(offer["pack"], pack.pack);
+        assert_eq!(offer["paint"], pack.paint);
+        assert_eq!(offer["flooring"], pack.flooring);
+        let pieces = offer["pieces"].as_array().unwrap();
+        assert_eq!(pieces.len(), pack.items.len(), "{} drops a piece", pack.pack);
+        for (piece, item) in pieces.iter().zip(pack.items) {
+            let kind = items::kind_of(item.kind).unwrap();
+            assert_eq!(
+                (&piece["kind"], &piece["label"], &piece["x"], &piece["y"]),
+                (&json!(item.kind), &json!(kind.label), &json!(item.x), &json!(item.y))
+            );
+            assert_eq!((&piece["w"], &piece["h"]), (&json!(kind.w), &json!(kind.h)));
+        }
+    }
+    // Kevin hasn't bought anything either, and sees the same shop.
+    let kevins = server.get(&room.kevin, "/api/credits").await.body;
+    assert_eq!(kevins["packs"], credits["packs"]);
+
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    assert!(card.contains("h('h3', {}, 'Shop')"), "the card has no shop");
+    assert!(
+        card.contains("roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },"),
+        "the shop doesn't draw the pack"
+    );
+    assert!(card.contains("offer.pieces.map("), "the shop doesn't put the pieces in the picture");
+}
+
+// HC22: each kind of history line has its own words, so a funded question's credits aren't shown as
+// something that paid.
+#[test]
+fn every_kind_of_credit_history_line_has_its_own_words() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    for kind in
+        ["gathering", "good_trip", "hosted_trip", "question", "question_refund", "question_award"]
+    {
+        assert!(card.contains(&format!(" {kind}: '")), "the history has no words for {kind}");
+    }
+    assert!(card.contains("line.kind === 'spend'"), "the history has no words for a spend");
 }

@@ -116,6 +116,11 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Because what paid is dated by its day and a spend by its moment, something that paid later on
   the day of a spend is listed below it. A spend by a bot that has since been deleted names no bot,
   since deleting a bot clears it from `credit_spends`, though the spend itself stays.
+- **HC24.** Each pack in `credits.packs` also gives its `paint`, its `flooring` and its `pieces`:
+  each piece's kind, label, the cell the pack puts it on, and how much floor it takes. All of it is
+  fixed in the code, the same for everyone, and none of it is anyone's room, so showing it gives
+  nothing away (HC8). The account panel's Shop draws each pack as it comes, on its own paint and
+  flooring, and lists what's in it, so a person can see a pack before buying it.
 
 ### For a maintainer to look at
 
