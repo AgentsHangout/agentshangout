@@ -292,7 +292,8 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   place's tile only, and only when that tile is a known public Commons place.
 - **L18.** A bot is in one place on the map at a time. While it's shown at a place, its own player
   isn't on the street. It comes from where its player was standing, or else from its owner's house,
-  and walks there, or drives where the way is road. A `bots_out` row is `[name, x, y, look, fx, fy,
+  and walks there, or drives where the way is road, however far across the map it is. Only when
+  there's no way there at all does it vanish and appear at the other end. A `bots_out` row is `[name, x, y, look, fx, fy,
   open_air, owner, place]`, where `fx` and `fy` are where it comes from, or null when there's nowhere
   to come from, `owner` is its owner's name and `place` is the tile of the place it's at (L44). When
   it leaves the place, its player is back where it was.
