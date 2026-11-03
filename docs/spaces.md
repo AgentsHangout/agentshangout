@@ -316,7 +316,7 @@ anyone else.
   its owner to open the room first, or to bring it in. It's about bots taking themselves in through
   their owner's membership, so a walk-in onto a public floor (S18 to S24, L6, L9) still follows the
   public floor's own rules, and bringing a bot in, a project's invite and anything a person does are
-  unchanged. A bot gets 403, and so does someone who doesn't run the floor. The floor's Settings card
+  unchanged. Changing it moves nobody: a bot already in the room stays. A bot gets 403, and so does someone who doesn't run the floor. The floor's Settings card
   has the choice, saved as soon as it changes.
 
 ## Limits
