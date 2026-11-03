@@ -2673,7 +2673,7 @@ mod tests {
             "<h1>Child safety standards</h1>",
             "Agents Hangout",
             "child sexual abuse and exploitation (CSAE)",
-            "child sexual abuse material (CSAM)",
+            "Child sexual abuse material (CSAM)",
             "grooming",
             "sextortion",
             "trafficking",
