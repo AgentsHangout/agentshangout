@@ -2347,8 +2347,12 @@ fn wipe_sql() -> String {
 
 /// What the wipe leaves alone. Every other table has to end up empty, so a table added later can't
 /// escape it by nobody remembering.
-const KEPT_BY_THE_WIPE: [&str; 34] = [
+const KEPT_BY_THE_WIPE: [&str; 38] = [
     "people",
+    "credit_paid",
+    "credit_spends",
+    "spend_limits",
+    "question_bounties",
     "passkey_users",
     "passkeys",
     "sessions",
@@ -2556,6 +2560,28 @@ async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_worki
     }
     let (people, bots) = (rows("people"), rows("agents"));
 
+    connection.execute("INSERT INTO spend_limits(agent_id,daily) VALUES(?1,7)", [&scout]).unwrap();
+
+    // HC20: one open and one paid question, with real ledger debits. The wipe must refund the
+    // open one, retain the paid transfer, and erase both answers.
+    connection.execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('wipe-board',?1,'discussion','Questions',?2,0)", rusqlite::params![room, ann.id]).unwrap();
+    for card in ["wipe-open-card", "wipe-paid-card"] {
+        connection.execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES(?1,'wipe-board','Question','',?2,0,0)", rusqlite::params![card, ann.id]).unwrap();
+    }
+    connection.execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES(?1,'gathering','wipe-seed','wipe-city',30,0,0)", [&ann.id]).unwrap();
+    for (id, card, amount, status) in
+        [("wipe-open", "wipe-open-card", 10, "open"), ("wipe-paid", "wipe-paid-card", 5, "paid")]
+    {
+        connection
+            .execute(
+                "INSERT INTO credit_spends(person_id,pack,amount,created_at) VALUES(?1,?2,?3,0)",
+                rusqlite::params![ann.id, format!("question:{id}"), amount],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status,recipient_id) VALUES(?1,?2,?3,?4,?5,?6)", rusqlite::params![id, card, ann.id, amount, status, if status == "paid" {Some(&bo.id)} else {None}]).unwrap();
+        connection.execute("INSERT INTO question_answers(id,bounty_id,bot_id,owner_id,text,created_at) VALUES(?1,?2,?3,?4,'private answer',0)", rusqlite::params![format!("{id}-answer"),id,scout,bo.id]).unwrap();
+    }
+
     // As the sqlite3 command would run it: a new connection, with foreign keys off until it says.
     connection.pragma_update(None, "foreign_keys", false).unwrap();
     connection.execute_batch(&wipe_sql()).unwrap();
@@ -2573,6 +2599,17 @@ async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_worki
     for table in tables.iter().filter(|table| !KEPT_BY_THE_WIPE.contains(&table.as_str())) {
         assert_eq!(rows(table), 0, "{table} should be empty, or be on the list of what stays");
     }
+    let limit: i64 = connection
+        .query_row("SELECT daily FROM spend_limits WHERE agent_id=?", [&scout], |row| row.get(0))
+        .unwrap();
+    assert_eq!(limit, 7, "a retained bot keeps its spending limit");
+    assert_eq!(rows("question_answers"), 0, "the room's answers are erased");
+    assert_eq!(count("SELECT COUNT(*) FROM question_bounties WHERE id='wipe-open' AND status='refunded' AND card_id IS NULL"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM question_bounties WHERE id='wipe-paid' AND status='paid' AND card_id IS NULL"), 1);
+    let sponsor = server.state.db.credit_totals(&ann.id, 0).unwrap();
+    let recipient = server.state.db.credit_totals(&bo.id, 0).unwrap();
+    assert_eq!(sponsor.paid - sponsor.spent, 25, "open reservation refunded, paid award kept");
+    assert_eq!(recipient.paid - recipient.spent, 5, "paid award stays with recipient");
     assert_eq!(rows("people"), people, "every account stays");
     assert_eq!(rows("agents"), bots - 1, "only the house bot goes");
     let broken = connection
@@ -2584,6 +2621,8 @@ async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_worki
     assert_eq!(broken, 0, "nothing should point at something deleted");
     // Running it twice does no harm.
     connection.execute_batch(&wipe_sql()).unwrap();
+    let again = server.state.db.credit_totals(&ann.id, 0).unwrap();
+    assert_eq!(again.paid - again.spent, 25, "a second wipe cannot refund twice");
     drop(connection);
 
     // A new server starts on what's left, and the site works.

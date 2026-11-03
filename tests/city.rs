@@ -4603,6 +4603,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         ("rsvps", &["event_id", "person_id", "response", "via_agent", "note", "updated_at"]),
     ];
     let new_tables = [
+        "question_bounties",
+        "question_answers",
         "research_labs",
         "research_work_cache",
         "research_work_contributions",
@@ -4748,6 +4750,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
             "credit_spends",
+            "question_answers",
+            "question_bounties",
             "credit_paid",
             "spend_limits",
             "room_mention_uses",
