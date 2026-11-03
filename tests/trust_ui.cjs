@@ -49,7 +49,8 @@ const figure = worn => { pictures.push(worn); return {width:26,height:36,getCont
 const context = {h,api,panels,document:{activeElement:null,body:h('body'),createElement:canvas},console};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('web/trust.js','utf8').replace('export function trustPanel','function trustPanel'),context);
-function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'You',kind:'person'},crew:()=>{},...extra}); }
+const scheduled = [];
+function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'You',kind:'person'},crew:()=>{},schedule:(b)=>scheduled.push(b.name),...extra}); }
 (async () => {
   const panel = build(); await panel.open(); await tick();
   assert.ok(text(body).includes('Fern')); assert.ok(findButton(body,'Wake-up settings'));
@@ -106,12 +107,10 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   rejectSave = false; await findButton(body,'Save permissions').props.onclick();
   assert.equal(requests.findLast(r=>r.path.endsWith('/trust')&&r.method==='PUT').body.wake.mode,'owner');
   assert.ok(text(body).includes('All changes saved'));
-  // Editing an unrelated schedule setting preserves a saved end of day exactly.
-  findButton(body,'Connections').props.onclick(); await findButton(body,'Social schedule').props.onclick();
-  const dialog = context.document.body.children.at(-1);
-  const until = all(dialog).find(n=>n.props['aria-label']==='Social hours end'); assert.equal(until.value,'24:00');
-  await all(dialog).find(n=>n.tag==='form').props.onsubmit({preventDefault(){}});
-  assert.equal(requests.findLast(r=>r.path.endsWith('/routine')&&r.method==='PUT').body.ends,'24:00');
+  // Schedule opens the same day plan dialog as the room's Crew, for the bot being edited.
+  findButton(body,'Connections').props.onclick(); findButton(body,'Schedule').props.onclick();
+  assert.deepEqual(scheduled,['Moss']);
+  assert.ok(!all(body).some(n=>n.tag==='button'&&n.children.includes('Social schedule')),'the old social schedule is gone');
   // The graph has you, both your bots and the person who asked, with their request still open.
   findButton(body,'Connections').props.onclick();
   for (const name of ['You','Fern','Moss','<img src=x onerror=alert(1)>']) assert.ok(node(name),name);

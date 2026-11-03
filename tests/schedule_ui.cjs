@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
-const start = source.indexOf('  function schedulePainter(');
-assert.ok(start >= 0, 'missing schedulePainter');
-const painterSource = source.slice(start, source.indexOf('\n  }\n', start) + 4);
+const start = source.indexOf('\nfunction schedulePainter(') + 1;
+assert.ok(start > 0, 'missing schedulePainter');
+const painterSource = source.slice(start, source.indexOf('\n}\n', start) + 2);
 function node(tag, props = {}, ...children) {
   return { tag, ...props, children: children.flat().filter(Boolean), attrs: {},
     events: {}, addEventListener(kind, handler) { this.events[kind] = handler; },
@@ -57,14 +57,15 @@ brush('Home').events.click();
 hours[9].events.click({ detail: 0 });
 assert.equal(painter.value()[9], 'home');
 
-// Saved: a way back to the hours above, which clears it, and weekday plans are mentioned.
+// Saved: weekday plans are mentioned, and there's no way back to the old social hours, which the
+// dialog no longer shows.
 const saved = { schedule_saved: true, schedule: { every_day: Array(24).fill('work'), days: { sat: Array(24).fill('anything') } }, workplace: null, public_places: false };
 painter = context.painter(saved);
 assert.ok(says(painter.element, 'Its own plan for sat stays as it is.'));
 assert.ok(says(painter.element, 'With no workplace, a Work hour leaves it where it is.'));
-all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Use the hours above instead')[0].onclick();
-assert.equal(painter.cleared(), true);
+assert.equal(all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Use the hours above instead').length, 0);
 assert.equal(painter.changed(), false);
+assert.ok(!says(painter.element, 'RimWorld'), 'the plan explains itself without naming a game');
 assert.deepEqual(painter.days(), { sat: Array(24).fill('anything') }, 'a saved weekday plan is kept');
 
 // Not saved, and its hours differ by weekday: the read-off rows are shown, not sent, so what's
@@ -75,4 +76,4 @@ painter = context.painter(weekdayRead);
 assert.equal(painter.value()[10], 'social', "the strip starts from a weekday's hours");
 assert.ok(!says(painter.element, 'stays as it is'), 'no saved weekday plan to keep');
 assert.equal(JSON.stringify(painter.days()), '{}', 'read-off weekdays are not saved');
-console.log('Day plan painter: read-off strip, brush and drag, presets, keyboard and clearing verified.');
+console.log('Day plan painter: read-off strip, brush and drag, presets, keyboard and saved weekdays verified.');
