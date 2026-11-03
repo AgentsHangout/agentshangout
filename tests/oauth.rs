@@ -1261,6 +1261,105 @@ async fn oauth_registration_is_bounded_and_never_fetches_client_metadata() {
     assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 #[tokio::test]
+async fn oauth_loopback_callbacks_serve_clients_on_the_owners_computer() {
+    // A70: a terminal client registers a loopback callback and may come back on another port.
+    let s = Server::start().await;
+    let (session, bot, _, _) = s.setup().await;
+    for redirect in [
+        "http://127.0.0.1/callback",
+        "http://127.0.0.2:27890/callback",
+        "http://10.0.0.1:27890/callback",
+        "http://127.0.0.1.example:27890/callback",
+        "http://localhost.example:27890/callback",
+        "http://user@127.0.0.1:27890/callback",
+        "http://127.0.0.1:27890/callback#fragment",
+    ] {
+        let r = s
+            .client
+            .post(format!("{}/oauth/register", s.base))
+            .json(&json!({"redirect_uris":[redirect]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{redirect}");
+    }
+    let registered = "http://127.0.0.1:27890/callback";
+    let r = s.client.post(format!("{}/oauth/register",s.base)).json(&json!({"redirect_uris":[registered,"http://[::1]:27890/callback","http://localhost:27890/callback"],"client_name":"Hermes","token_endpoint_auth_method":"none"})).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let client: String = r.json::<Value>().await.unwrap()["client_id"].as_str().unwrap().into();
+    let resource = format!("{}/mcp", s.base);
+    let authorize = |redirect: &'static str| {
+        s.client
+            .get(format!("{}/oauth/authorize", s.base))
+            .header("cookie", format!("ah_session={session}"))
+            .query(&[
+                ("client_id", client.as_str()),
+                ("redirect_uri", redirect),
+                ("response_type", "code"),
+                ("code_challenge", CHALLENGE),
+                ("code_challenge_method", "S256"),
+                ("resource", resource.as_str()),
+                ("scope", "mcp:bot mcp:events"),
+                ("state", "client-state"),
+            ])
+            .send()
+    };
+    for redirect in [
+        "http://127.0.0.1:27890/other",
+        "http://127.0.0.2:51234/callback",
+        "https://127.0.0.1:51234/callback",
+        "http://127.0.0.1:51234/callback?extra=1",
+    ] {
+        let r = authorize(redirect).await.unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{redirect}");
+        assert!(r.headers().get("location").is_none());
+    }
+    for redirect in ["http://[::1]:51234/callback", "http://localhost:51234/callback"] {
+        assert_eq!(authorize(redirect).await.unwrap().status(), StatusCode::OK, "{redirect}");
+    }
+    let callback = "http://127.0.0.1:51234/callback";
+    let page = authorize(callback).await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(page.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("form-action 'self' http://127.0.0.1:51234"));
+    let nonce = hidden(&page.text().await.unwrap(), "nonce");
+    let consent = s.consent(&session, &nonce, &bot, "allow").await;
+    assert_eq!(consent.status(), StatusCode::SEE_OTHER);
+    let location = reqwest::Url::parse(consent.headers()["location"].to_str().unwrap()).unwrap();
+    let mut sent_to = location.clone();
+    sent_to.set_query(None);
+    assert_eq!(sent_to.as_str(), callback);
+    let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
+    let exchange = |redirect: &'static str, code: String| {
+        s.client
+            .post(format!("{}/oauth/token", s.base))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", client.as_str()),
+                ("code", code.as_str()),
+                ("redirect_uri", redirect),
+                ("resource", resource.as_str()),
+                ("code_verifier", VERIFIER),
+            ])
+            .send()
+    };
+    // The code is bound to the port it was sent to, not just the registered one.
+    let r = exchange(registered, code.clone()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let nonce = hidden(&authorize(callback).await.unwrap().text().await.unwrap(), "nonce");
+    let consent = s.consent(&session, &nonce, &bot, "allow").await;
+    let location = reqwest::Url::parse(consent.headers()["location"].to_str().unwrap()).unwrap();
+    let code = location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned();
+    let r = exchange(callback, code).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let token: Value = r.json().await.unwrap();
+    let access = token["access_token"].as_str().unwrap();
+    assert_eq!(s.mcp(access).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn oauth_owner_mutations_and_public_players_do_not_accept_access_tokens() {
     let s = Server::start().await;
     let (session, bot, _, _) = s.setup().await;
