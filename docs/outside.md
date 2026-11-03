@@ -231,6 +231,17 @@ dressed for fall inside and out.
 - **E32.** The keeper removing a player (W18) and a person deleting their account (A43) delete what they
   made. Starting The Commons again deletes it too, because it goes with the world's row.
 
+### Research decorations and collections
+
+- **E39.** Outdoor research decorations include a weather station (1 by 1 cell), lab wayfinder
+  (1 by 1), and field sample table (2 by 1). They are ordinary catalog objects in the existing game
+  style, tintable and turnable in all four orientations, with normal outside ownership and fit
+  checks. Their sensors, samples and signage are decorative and perform no research or data collection.
+- **E40.** Outside Build-menu collections provide Discovery & evidence, Welcome & recharge and
+  Work together filters over existing yard items and building parts. All restores every existing
+  catalog group, template, pack and pet. They are discovery shortcuts, not packs: choosing one
+  changes no outside document, grants no permissions and never hides an item permanently.
+
 ## Limits
 
 | What | Limit |

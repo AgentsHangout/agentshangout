@@ -1531,6 +1531,25 @@ const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'friends'}`;
 
+// I90, E40: collections only filter existing catalog entries; All keeps every category available.
+function selectedBuildCollection(catalog, id) {
+  return (catalog?.collections || []).find((collection) => collection.id === id) || null;
+}
+
+function collectionOffers(collection, field, word) {
+  return !collection || (collection[field] || []).includes(word);
+}
+
+function buildCollectionPicker(catalog, selected, onSelect) {
+  const collections = catalog.collections || [];
+  if (!collections.length) return null;
+  return h('div', { class: 'build-collections' },
+    field('Collection', h('select', { name: 'build-collection', value: selected?.id || '', 'aria-label': 'Build-menu collection', onchange: (event) => onSelect(event.target.value) },
+      h('option', { value: '' }, 'All'),
+      ...collections.map((collection) => h('option', { value: collection.id, selected: collection.id === selected?.id }, collection.label)))),
+    selected ? h('p', { class: 'muted fine' }, selected.description) : null);
+}
+
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
@@ -1540,6 +1559,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   // The catalog as of the last time the panel opened, because who's unlocked what can change.
   let catalog = null;
   let catalogKey = null;
+  let collectionId = '';
   let placedKey = null;
   let tiles = new Map();
   // Whether build mode is on. The panel can be out of the way of the room while it is.
@@ -2092,18 +2112,19 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const { floor, guest, items } = view();
     const { paint, flooring, hidden } = floor.floor;
     const { look } = catalog;
+    const collection = selectedBuildCollection(catalog, collectionId);
     const shape = { isPublic: floor.floor.access === 'public', full: items.length >= catalog.max_items };
     const up = look.packs.filter((pack) => items.some((item) => pack.items.some((part) => part.kind === item.kind)))
       .map((pack) => pack.pack);
-    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up]);
+    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up, collectionId]);
     if (key === catalogKey) return;
     catalogKey = key;
     const focused = catalogEl.contains(document.activeElement) ? document.activeElement.name : null;
-    const offered = catalog.items.filter((kind) => (kind.sign ? floor.runs_it : !guest));
-    const styling = floor.runs_it ? look : { furniture: [], paints: [], floorings: [] };
+    const offered = catalog.items.filter((kind) => (kind.sign ? floor.runs_it : !guest) && collectionOffers(collection, 'items', kind.kind));
+    const styling = floor.runs_it && !collection ? look : { furniture: [], paints: [], floorings: [] };
     tiles = new Map();
-    catalogEl.replaceChildren(...[
-      ...(floor.runs_it && !guest ? [
+    catalogEl.replaceChildren(...[buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean), ...[
+      ...(floor.runs_it && !guest && !collection ? [
         ['Templates', look.templates.map(templateTile), true],
         ['Packs', look.packs.filter((pack) => !pack.over || up.includes(pack.pack)).map((pack) => packTile(pack, up.includes(pack.pack))), true],
       ] : []),
@@ -6808,6 +6829,11 @@ function popupMenu(root, { refocus }) {
     const buttons = [];
     const rows = items.map((item) => {
       if (!item) return h('hr', { class: 'game-menu-gap', 'aria-hidden': 'true' });
+      if (item.repository) {
+        const anchor = researchMenuLink(item.repository);
+        if (anchor) buttons.push(anchor);
+        return anchor;
+      }
       const button = h('button', {
         type: 'button',
         role: item.checked === undefined ? 'menuitem' : 'menuitemradio',
@@ -6874,10 +6900,15 @@ function researchMapObject(view, x, y) {
 }
 
 function researchMapCard(lab) {
-  return h('section', { class: 'city-card-research' },
-    h('strong', {}, h('span', { 'aria-hidden': 'true' }, '⚗ '), 'Research lab'),
-    h('span', {}, 'Public GitHub repository'),
-    researchRepositoryLink(lab.github));
+  return h('span', { class: 'city-card-hint' }, 'GitHub: ', researchRepositoryLink(lab.github));
+}
+
+function researchMenuLink(repository) {
+  const anchor = researchRepositoryLink(repository);
+  if (!anchor) return null;
+  anchor.className = 'game-menu-item';
+  anchor.setAttribute('role', 'menuitem');
+  return anchor;
 }
 
 function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
@@ -7741,8 +7772,10 @@ async function worldView(id, { home = false } = {}) {
 
   function tileMenu(t) {
     // W91: a big place's other tiles have a level, but that is which piece of it they are.
-    const what = t.kind ? `${KIND_NAME[t.kind] || t.kind}${t.level && !BIG_KINDS.has(t.kind) ? `, level ${t.level}` : ''}` : LAND_NAME[t.land];
+    const lab = researchMapObject(latest, t.x, t.y);
+    const what = lab ? 'Research lab' : t.kind ? `${KIND_NAME[t.kind] || t.kind}${t.level && !BIG_KINDS.has(t.kind) ? `, level ${t.level}` : ''}` : LAND_NAME[t.land];
     const items = [];
+    if (lab) items.push({ repository: lab.github });
     if (!me) {
       items.push({ label: 'Sign in to build', run: () => account.open('Sign in to build here. Looking around is free.') });
     } else if (frozen) {
@@ -7771,6 +7804,7 @@ async function worldView(id, { home = false } = {}) {
   // floors. Instead, ask its owner to let one of your bots in. On your own, going in is how you get
   // to its rooms.
   async function placeMenu(t, spec) {
+    const lab = researchMapObject(latest, t.x, t.y);
     let details;
     try {
       details = await api(`/api/places/${encodeURIComponent(t.x)}/${encodeURIComponent(t.y)}`);
@@ -7788,7 +7822,7 @@ async function worldView(id, { home = false } = {}) {
       try { canBuildOutside = (await api(`/api/places/${encodeURIComponent(t.x)}/${encodeURIComponent(t.y)}/outside`)).can_edit; } catch (_) { /* the server decides */ }
     }
     if (canBuildOutside) own.push({ label: 'Build outside', run: () => outsideBuild.open(t) });
-    for (const bot of details.bots || []) {
+    for (const bot of lab ? [] : details.bots || []) {
       if (bot.access === 'needs_invite') {
         own.push({ label: `Ask to let ${bot.name} in`, run: () => askIn(t, bot) });
       } else if (bot.access === 'asked') {
@@ -7797,7 +7831,7 @@ async function worldView(id, { home = false } = {}) {
         own.push({ label: `${bot.name}: not this week`, run: () => say(`The owner said no to ${bot.name}. You can ask again in a week.`) });
       }
     }
-    const owner = details.owner ? `${details.owner}\u2019s ${KIND_WORDS[details.kind] || details.kind}` : spec.title;
+    const owner = details.owner ? `${details.owner}\u2019s ${lab ? 'research lab' : KIND_WORDS[details.kind] || details.kind}` : spec.title;
     return { ...spec, title: owner, items: own.length ? [...own, null, ...rest] : rest };
   }
 
@@ -7903,7 +7937,7 @@ async function worldView(id, { home = false } = {}) {
   function placeCardAt() {
     if (!pointer || placeCard.hidden) return;
     // A link must stay put while the pointer crosses from the canvas into its card.
-    if (placeCard.classList.contains('research-object') && placeCard.dataset.anchored) return;
+    if (placeCard.classList.contains('has-repository') && placeCard.dataset.anchored) return;
     const box = placeCard.parentElement.getBoundingClientRect();
     const x = pointer.x - box.left;
     const y = pointer.y - box.top;
@@ -7911,12 +7945,12 @@ async function worldView(id, { home = false } = {}) {
     const hgt = placeCard.offsetHeight;
     placeCard.style.left = `${Math.max(4, x + 16 + w > box.width ? x - w - 16 : x + 16)}px`;
     placeCard.style.top = `${Math.max(4, y + 16 + hgt > box.height ? y - hgt - 16 : y + 16)}px`;
-    if (placeCard.classList.contains('research-object')) placeCard.dataset.anchored = '1';
+    if (placeCard.classList.contains('has-repository')) placeCard.dataset.anchored = '1';
   }
 
   function showPlace(place) {
     if (!place || !pointer) {
-      if (placeCard.classList.contains('research-object') && !placeCard.hidden) hidePlaceCardSoon();
+      if (placeCard.classList.contains('has-repository') && !placeCard.hidden) hidePlaceCardSoon();
       else placeCard.hidden = true;
       return;
     }
@@ -7928,13 +7962,13 @@ async function worldView(id, { home = false } = {}) {
     const name = nameAt(place.x, place.y);
     const details = placeDetails.get(key)?.body;
     const lab = researchMapObject(latest, place.x, place.y);
-    placeCard.classList.toggle('research-object', Boolean(lab));
+    placeCard.classList.toggle('has-repository', Boolean(lab));
     placeCard.setAttribute('aria-hidden', lab ? 'false' : 'true');
     const kind = lab ? 'research lab' : place.kind;
     const lines = [
-      lab ? researchMapCard(lab) : null,
       h('strong', { class: 'city-card-name' }, name || `A ${place.kind}`),
       h('span', { class: 'city-card-home' }, details?.yours ? `Your ${kind}` : owner ? `${owner}\u2019s ${kind}` : `A ${kind}`),
+      lab ? researchMapCard(lab) : null,
       hoodAt(place.x, place.y) ? h('small', { class: 'city-card-hint' }, `In ${hoodAt(place.x, place.y)[0]}`) : null,
       // L34: what it's for, as plain text.
       details?.purpose ? h('span', { class: 'city-card-purpose' }, details.purpose) : null,
@@ -8005,7 +8039,7 @@ async function worldView(id, { home = false } = {}) {
     else placeCardAt();
   });
   world.canvas.addEventListener('pointerleave', () => {
-    if (placeCard.classList.contains('research-object') && !placeCard.hidden) hidePlaceCardSoon();
+    if (placeCard.classList.contains('has-repository') && !placeCard.hidden) hidePlaceCardSoon();
     else hidePlaceCard();
   });
   world.canvas.addEventListener('wheel', () => menu.close(), { passive: true });
@@ -8019,6 +8053,7 @@ async function worldView(id, { home = false } = {}) {
   let outsideRows = [];
   const outsideBuild = outsideBuilder({
     h,
+    selectedBuildCollection, collectionOffers, buildCollectionPicker,
     api,
     modal,
     popupMenu,

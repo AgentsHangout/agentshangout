@@ -1874,6 +1874,28 @@ pub fn catalog_for_owner(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     Ok(catalog_json(friends, god_mode::is_on(state, owner_id)?))
 }
 
+/// I90: equipment candidates become collection members only after they enter the real catalog.
+fn discovery_collection_items(catalog: &[Kind]) -> Vec<&'static str> {
+    [
+        "microscope",
+        "research_bench",
+        "research_display",
+        "telescope",
+        "globe",
+        "bookshelf",
+        "whiteboard",
+        // Conditional candidates: omitted from client metadata until their catalog entries exist.
+        "fume_hood",
+        "centrifuge",
+        "specimen_fridge",
+        "lab_notebook_stand",
+        "periodic_table",
+    ]
+    .into_iter()
+    .filter(|word| catalog.iter().any(|kind| kind.kind == *word))
+    .collect()
+}
+
 /// I22: the catalog, with what this many friends unlocks.
 fn catalog_json(friends: i64, god: bool) -> Value {
     json!({
@@ -1908,6 +1930,12 @@ fn catalog_json(friends: i64, god: bool) -> Value {
         "categories": CATEGORIES.iter().map(|(category, label)| {
             json!({ "category": category, "label": label })
         }).collect::<Vec<_>>(),
+        // I90: discovery filters only; the ordinary catalog remains authoritative.
+        "collections": [
+            { "id":"discovery", "label":"Discovery & evidence", "description":"Observe, compare and share findings.", "items":discovery_collection_items(&CATALOG) },
+            { "id":"welcome", "label":"Welcome & recharge", "description":"A comfortable place to meet and take a break.", "items":["armchair","bench","coffee_table","lamp","plant","coffee_machine"] },
+            { "id":"together", "label":"Work together", "description":"Make room for shared ideas and making things.", "items":["whiteboard","workbench","computer","monitor","standing_desk","research_display","bookshelf"] },
+        ],
         // I45: what the catalog also offers whoever runs the space.
         "look": {
             "paints": spaces::PAINTS,
@@ -2151,4 +2179,24 @@ async fn set_moods(
     let on = body_of(body)?.moods;
     state.db.set_bot_moods(&agent.id, on)?;
     Ok(Json(json!({ "ok": true, "moods": on })))
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+
+    // I90: a candidate becomes discoverable only when its real catalog entry is present.
+    #[test]
+    fn discovery_candidates_follow_the_available_catalog() {
+        let microscope = *kind_of("microscope").unwrap();
+        let future =
+            ["fume_hood", "centrifuge", "specimen_fridge", "lab_notebook_stand", "periodic_table"];
+        assert_eq!(discovery_collection_items(&[microscope]), vec!["microscope"]);
+        let mut available = vec![microscope, Kind { kind: "unknown_item", ..microscope }];
+        available.extend(future.iter().map(|word| Kind { kind: word, ..microscope }));
+        let discovered = discovery_collection_items(&available);
+        assert!(future.iter().all(|word| discovered.contains(word)));
+        assert!(!discovered.contains(&"unknown_item"));
+        assert_eq!(discovered.len(), future.len() + 1);
+    }
 }

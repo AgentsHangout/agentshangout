@@ -95,10 +95,10 @@ function gableRoof(g, R, z, rise, roof, wall, axis, o = 0.8) {
 
 // Which way a thing is turned: `a` runs along its long side, `b` across it. Facing 2 and 3 are facing 0
 // and 1 the other way round. Returns a mapping to the ground and the length and width.
-function frame(item) {
+function frame(item, squareAlongU = true) {
   const du = item.u1 - item.u0;
   const dv = item.v1 - item.v0;
-  const alongU = du >= dv;
+  const alongU = du > dv || du === dv && squareAlongU;
   const L = Math.max(du, dv);
   const W = Math.min(du, dv);
   const flip = item.facing >= 2;
@@ -2970,6 +2970,47 @@ const FALL = {
 
 // E15: every kind in `YARD` that this file draws, by its catalog word.
 export const YARD_ART = {
+  // E39: decorative field-research equipment, in the same isometric yard style.
+  weather_station(S, item) {
+    if (!S.day) return;
+    const g = S.g, f = frame(item, item.facing % 2 === 0), c = colorIn(item, '#4f8e98');
+    pool(g, item.u, item.v, 1.2, 0.22);
+    solid(g, [item.u0 + 0.3, item.v0 + 0.3, item.u1 - 0.3, item.v1 - 0.3], 0, 0.5, c);
+    stroke(g, '#a7b5bb', 0.65, [pt(f, 1, 1), pt(f, 1, 1, 10)]);
+    solid(g, [item.u - 0.55, item.v - 0.55, item.u + 0.55, item.v + 0.55], 3, 5.5, '#e6e9df');
+    for (const z of [3.4, 4, 4.6, 5.2]) stroke(g, '#a7b5bb', 0.25, [pt(f, 0.5, 1.55, z), pt(f, 1.5, 1.55, z)]);
+    stroke(g, c, 0.6, [pt(f, 0, 1, 8.5), pt(f, 2, 1, 8.5)]);
+    for (const a of [0, 2]) { const [x, y] = pt(f, a, 1, 8.6); ell(g, '#d9e7e9', x, y, 0.9, 0.45); }
+    fq(g, c, f, [0.4, 1, 10], [1.7, 0.4, 10], [1.7, 1.6, 10]);
+  },
+  lab_wayfinder(S, item) {
+    if (!S.day) return;
+    const g = S.g, f = frame(item, item.facing % 2 === 0), c = colorIn(item, '#3d8d83');
+    pool(g, item.u, item.v, 0.9, 0.2);
+    stroke(g, '#756046', 0.65, [pt(f, 1, 1), pt(f, 1, 1, 8)]);
+    const [u, v] = f.m(0.1, 1);
+    upright(g, f.alongU, u, v, () => {
+      rr(g, c, -0.7, -8.6, 3.4, 3.5);
+      g.save();
+      if (f.flip) { g.translate(2, 0); g.scale(-1, 1); }
+      fp(g, '#f4edd7', [[0.1, -8.1], [0.8, -8.1], [0.8, -7.2], [1.3, -5.7], [-0.4, -5.7], [0.1, -7.2]]);
+      fp(g, '#b8e5cf', [[1.6, -7.8], [2.5, -7], [1.6, -6.2]]);
+      g.restore();
+    });
+  },
+  field_sample_table(S, item) {
+    if (!S.day) return;
+    const g = S.g, f = frame(item, item.facing % 2 === 0), c = colorIn(item, '#5c8b91');
+    pool(g, item.u, item.v, 2, 0.2);
+    for (const [a, b] of [[0.4, 0.4], [3.6, 0.4], [0.4, 1.6], [3.6, 1.6]]) stroke(g, '#63717a', 0.5, [pt(f, a, b), pt(f, a, b, 3)]);
+    fq(g, c, f, [0, 0, 3], [4, 0, 3], [4, 2, 3], [0, 2, 3]);
+    for (const [a, liquid] of [[0.8, '#d2c06d'], [1.6, '#72b8ae'], [2.4, '#a18bb5']]) {
+      const [u, v] = f.m(a, 0.8);
+      drum(g, u, v, 0.22, 3, 4.5, '#d5e7df', liquid);
+      drum(g, u, v, 0.24, 4.4, 4.7, '#728a8d');
+    }
+    fq(g, '#ede4cb', f, [3, 0.4, 3.05], [3.8, 0.4, 3.05], [3.8, 1.7, 3.05], [3, 1.7, 3.05]);
+  },
   ...TREES,
   ...FALL,
   ...PLANTS,
