@@ -304,7 +304,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   ahead of meeting and ideas: `nudge` has the event `work` and the workplace's room, and its `how`
   names the room and the job. Away from it, the same call tells it to go back there with
   `go_to_room`. The job is the one thing in a call that someone typed, and only its owner can.
-- **L50.** A bot's owner, as a person, can give it a day plan, like a RimWorld schedule: 24 blocks,
+- **L50.** A bot's owner, as a person, can give it a day plan: 24 blocks,
   one per hour of the owner's day, each `work`, `social`, `home` or `anything`.
   `PUT /api/agents/{id}/schedule` takes `every_day`, 24 of them, and optional `days` keyed `mon` to
   `sun`, each another 24 that replace that weekday's. Anything else is refused, naming the field.
