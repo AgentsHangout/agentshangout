@@ -181,7 +181,7 @@ pub(crate) fn announce_in_house_only(
     announce(state, hangout_id, body)
 }
 
-fn publish_message(state: &AppState, message: &Message) {
+pub(crate) fn publish_message(state: &AppState, message: &Message) {
     let data = serde_json::to_string(message).unwrap_or_default();
     publish(state, &message.hangout_id, "message", data);
 }
