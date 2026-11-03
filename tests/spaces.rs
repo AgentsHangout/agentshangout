@@ -1043,7 +1043,7 @@ fn people_named(server: &Server, name: &str) -> usize {
     server.state.db.people_named(name).unwrap().len()
 }
 
-// S79
+// S76
 
 #[tokio::test]
 async fn a_public_floors_door_needs_no_account_and_says_only_where_it_goes() {
