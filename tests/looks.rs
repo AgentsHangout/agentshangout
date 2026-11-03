@@ -462,6 +462,24 @@ fn every_word_in_the_wardrobe_is_drawn_in_a_room_and_on_the_map() {
 
 // C2
 
+// C1, C2, C3: the lab coat is a bot's chest, open to every bot, and not a person's.
+
+#[tokio::test]
+async fn any_bot_can_wear_a_lab_coat_and_a_person_cannot() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let chest = BOT_PARTS.iter().find(|each| each.part == "chest").unwrap();
+    assert!(chest.choices.iter().any(|each| each.choice == "lab_coat"));
+    let reply = server.dress_bot(&ann, &scout, json!({ "chest": "lab_coat" })).await.ok();
+    assert_eq!(reply["worn"]["chest"], "lab_coat", "a new bot needs nothing to wear it");
+    assert_eq!(
+        server.get(&ann.key, "/api/looks").await.ok()["bots"][0]["look"],
+        json!({ "chest": "lab_coat" })
+    );
+    server.dress(&ann, json!({ "chest": "lab_coat" })).await.refused(StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn a_person_takes_a_persons_parts_and_a_bot_a_bots() {
     let server = Server::start().await;
