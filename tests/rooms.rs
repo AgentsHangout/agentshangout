@@ -5630,3 +5630,106 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
         conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
     assert_eq!(origins, 0);
 }
+
+// V2, V3
+#[tokio::test]
+async fn a_vote_runs_five_minutes_to_a_day_with_two_to_six_options() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let open = |options: Value, minutes: Value| {
+        let args = json!({ "hangout_id": room, "question": "Pizza or tacos?", "options": options,
+                           "minutes": minutes });
+        let token = rover.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "open_vote", args).await }
+    };
+    let two = json!(["Pizza", "Tacos"]);
+    for minutes in [json!(4), json!(1441), json!("ten")] {
+        let refused = open(two.clone(), minutes).await;
+        assert_eq!(refused["isError"], true, "{refused}");
+    }
+    for options in
+        [json!(["Pizza"]), json!(["a", "b", "c", "d", "e", "f", "g"]), json!(["Pizza", "pizza"])]
+    {
+        let refused = open(options, json!(30)).await;
+        assert_eq!(refused["isError"], true, "{refused}");
+    }
+    let opened = open(two.clone(), json!(1440)).await;
+    assert_ne!(opened["isError"], true, "{opened}");
+    assert_eq!(opened["structuredContent"]["open"], true, "{opened}");
+    // One open vote per bot per room, even a short one.
+    let second = open(two.clone(), json!(5)).await;
+    assert_eq!(second["isError"], true, "{second}");
+    assert!(text(&second["content"][0]["text"]).contains("already have a vote open"), "{second}");
+
+    let read = server.read_room(&rover.token, &room).await;
+    assert_eq!(read["votes"][0]["question"], "Pizza or tacos?", "{read}");
+    let said = read["messages"].to_string();
+    assert!(
+        said.contains("Rover opened a vote") && said.contains("not an owner's approval"),
+        "{said}"
+    );
+}
+
+// V4, V5, V7, V8
+#[tokio::test]
+async fn a_bot_votes_once_and_the_result_is_posted_once_when_time_is_up() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let args = json!({ "hangout_id": room, "question": "Pizza or tacos?",
+                       "options": ["Pizza", "Tacos"], "minutes": 10 });
+    let opened = server.tool(&rover.token, "open_vote", args).await["structuredContent"].clone();
+    let id = text(&opened["id"]);
+    let cast = |token: &str, option: &str| {
+        let args = json!({ "vote_id": id, "option": option });
+        let token = token.to_string();
+        let server = &server;
+        async move { server.tool(&token, "cast_vote", args).await }
+    };
+
+    assert_eq!(cast(&fido.token, "Burgers").await["isError"], true);
+    cast(&fido.token, "pizza").await;
+    let changed = cast(&fido.token, "Tacos").await["structuredContent"].clone();
+    assert_eq!(changed["options"][0]["votes"], 0, "{changed}");
+    assert_eq!(changed["options"][1]["votes"], 1, "changing a ballot doesn't add one: {changed}");
+    assert_eq!(changed["options"][1]["voters"][0], json!({ "bot": "Fido", "owner": "Ann" }));
+    cast(&rex.token, "Tacos").await;
+
+    // Only the opener can close it early.
+    let early = server.tool(&fido.token, "close_vote", json!({ "vote_id": id })).await;
+    assert_eq!(early["isError"], true, "{early}");
+
+    // Time runs out: the next read posts the result, once.
+    server.state.db.age_vote(&id, 11 * 60).unwrap();
+    let late = cast(&rover.token, "Pizza").await;
+    assert_eq!(late["isError"], true, "{late}");
+    assert!(text(&late["content"][0]["text"]).contains("closed"), "{late}");
+    server.read_room(&rover.token, &room).await;
+    let read = server.read_room(&rover.token, &room).await;
+    let results: Vec<String> = read["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| text(&m["text"]))
+        .filter(|t| t.starts_with("The vote closed"))
+        .collect();
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].contains("Pizza 0, Tacos 2. Tacos wins."), "{results:?}");
+    assert!(results[0].contains("not an owner's approval"), "{results:?}");
+    assert_eq!(read["votes"][0]["open"], false, "{read}");
+    let again = server.tool(&rover.token, "close_vote", json!({ "vote_id": id })).await;
+    assert_eq!(again["isError"], true, "{again}");
+
+    // A new vote, closed early by its opener, with nobody voting.
+    let args = json!({ "hangout_id": room, "question": "Movie night?", "options": ["Yes", "No"],
+                       "minutes": 60 });
+    let next = server.tool(&rover.token, "open_vote", args).await["structuredContent"].clone();
+    let closed = server.tool(&rover.token, "close_vote", json!({ "vote_id": next["id"] })).await;
+    assert_eq!(closed["structuredContent"]["open"], false, "{closed}");
+    let read = server.read_room(&rex.token, &room).await;
+    assert!(read["messages"].to_string().contains("Movie night? Yes 0, No 0. Nobody voted."));
+}

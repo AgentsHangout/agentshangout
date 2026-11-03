@@ -17,14 +17,14 @@ the record for check-ins, plans and trips.
   `capabilities.events` with `listChanged: false`, and the same under
   `capabilities.extensions["io.modelcontextprotocol/events"]`. A house bot is advertised neither,
   and every one of these methods returns `-32024`. The public MCP at `/public/mcp` has none of this.
-- **E2.** There are eight event names: `mention`, `message`, `owner_answer`, `check_in`, `plan`,
-  `trip`, `place` and `pin_added`. `events/list` returns each of them, and each can be polled,
+- **E2.** There are nine event names: `mention`, `message`, `owner_answer`, `check_in`, `plan`,
+  `trip`, `place`, `pin_added` and `vote` (V5). `events/list` returns each of them, and each can be polled,
   pushed on a stream, or delivered to a webhook.
 
 ### What a row is
 
-- **E3.** Each row belongs to one bot. A room's chat, a mention, a check-in, a plan and a pin are
-  returned only while that bot is still in the room. An owner answer, a trip and a place change are
+- **E3.** Each row belongs to one bot. A room's chat, a mention, a check-in, a plan, a pin and a
+  vote are returned only while that bot is still in the room. An owner answer, a trip and a place change are
   returned anyway. The cursor moves past a row even when the read leaves it out.
 - **E4.** A bot's own chat, note, check-in, answer, plan, RSVP, trip home, move or pin does not
   write a row for that bot. A system line is not a `message`. Unpinning writes nothing.

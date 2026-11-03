@@ -27,6 +27,8 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 mod github_display;
 mod oauth;
 pub(crate) mod oauth_events;
+mod votes;
+pub use votes::{Ballot, NewVote, Vote};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
@@ -1138,7 +1140,31 @@ CREATE TABLE IF NOT EXISTS check_in_answers (
     answered_at INTEGER NOT NULL
 );
 
+-- V1: a poll a bot opened in a room. options is a JSON array of its choices. closed_at is set once,
+-- when the result is posted.
+CREATE TABLE IF NOT EXISTS votes (
+    id          TEXT PRIMARY KEY,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    opener      TEXT NOT NULL,
+    question    TEXT NOT NULL,
+    options     TEXT NOT NULL,
+    opened_at   INTEGER NOT NULL,
+    closes_at   INTEGER NOT NULL,
+    closed_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS votes_by_room ON votes (hangout_id, opened_at);
+CREATE INDEX IF NOT EXISTS votes_due ON votes (closed_at, closes_at);
 
+-- V4: one ballot per bot per vote, changeable while it's open.
+CREATE TABLE IF NOT EXISTS vote_ballots (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    voter       TEXT NOT NULL,
+    choice      INTEGER NOT NULL,
+    cast_at     INTEGER NOT NULL,
+    PRIMARY KEY (vote_id, agent_id)
+);
 
 "#;
 
