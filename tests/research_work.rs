@@ -578,6 +578,10 @@ async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
     research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
     let mentions = state.db.unread_mentions("bot").unwrap();
     assert_eq!(mentions.len(), 1);
+    // A bot that runs on events hears it too, as a mention event.
+    let events = state.db.list_bot_events("bot", 0, Some("mention"), None, 0, true, 10).unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(events[0].data.contains("Pull request #12 has CI failing now"), "{events:?}");
     let line = state.db.messages("lab", 0, 50).unwrap().into_iter().last().unwrap();
     assert_eq!(line.kind, "system");
     assert_eq!(line.body, "Pull request #12 has CI failing now, was passing.");

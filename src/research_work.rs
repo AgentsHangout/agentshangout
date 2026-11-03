@@ -633,8 +633,8 @@ pub fn claim(
         "note":"A local claim: it isn't written to GitHub and runs out unless you claim again."}))
 }
 /// RW11: one line in the lab's room saying what changed, and for each watcher who still belongs to
-/// the room, that line as a mention to read: a bot's in `inbox`, a person's in Needs you. It rings
-/// nobody. The line holds the item's kind and number, nothing GitHub's users wrote and nobody's
+/// the room, that line as a mention to read: a bot's in `inbox` and its event log, a person's in
+/// Needs you. It rings nobody. The line holds the item's kind and number, nothing GitHub's users wrote and nobody's
 /// name.
 fn tell_watchers(state: &AppState, lab_id: &str, card: &Card, what: &str) -> ApiResult<()> {
     let watchers: Vec<Watcher> = state
@@ -662,7 +662,10 @@ fn tell_watchers(state: &AppState, lab_id: &str, card: &Card, what: &str) -> Api
     let line = crate::ops::announced(state, lab_id, &body)?;
     for watcher in &here {
         match &watcher.agent_id {
-            Some(agent) => state.db.add_mention(agent, lab_id, line.id, line.created_at)?,
+            Some(agent) => {
+                state.db.add_mention(agent, lab_id, line.id, line.created_at)?;
+                crate::events::note_watched_change(state, agent, &line);
+            }
             None => {
                 state.db.add_person_mention(&watcher.person_id, lab_id, line.id, line.created_at)?
             }
