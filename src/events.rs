@@ -130,6 +130,13 @@ fn record(
     ref_key: &str,
     data: Value,
 ) {
+    // RC2: a bot at the recycling plant is signed in nowhere, so nothing is recorded for it, and
+    // no stream, webhook or OAuth client hears of anything while it's there.
+    match state.db.recycled_at(agent_id) {
+        Ok(None) => {}
+        Ok(Some(_)) => return,
+        Err(error) => return tracing::warn!(%error, "bot event was not recorded"),
+    }
     let at = now();
     let body = data.to_string();
     match state.db.insert_bot_event(

@@ -4695,6 +4695,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "bot_routines",
         "bot_workplaces",
         "bot_schedules",
+        "recycled_bots",
         "projects",
         "person_looks",
         "bot_looks",
@@ -4885,6 +4886,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "bot_routines",
             "bot_workplaces",
             "bot_schedules",
+            "recycled_bots",
             "world_ends",
             "place_clocks",
             "friend_invite_ends",
@@ -7582,4 +7584,52 @@ async fn a_house_link_nobody_could_use_stays_good() {
                 .await,
         );
     }
+}
+
+// RC2: a bot on a trip that its owner sends to the recycling plant leaves the Porch it was on.
+#[tokio::test]
+async fn a_bot_on_a_trip_sent_to_the_recycling_plant_leaves_the_porch() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let rover = server.bot(&w.bo, &w.bo_home.living, "Rover").await;
+    let asked = server.ask_trip(&rover.token, None, &w.ann_home.id, "call", "", None).await;
+    let id = text(&asked.body["id"]);
+    server.answer_trip(&w.ann.key, &id, "yes").await;
+    assert_eq!(server.answer_trip(&w.bo.key, &id, "yes").await.body["status"], "here");
+
+    let sent =
+        server.post(&w.bo.key, &format!("/api/agents/{}/recycle", rover.id), json!({})).await;
+    assert_ok(&sent);
+    assert_eq!(server.get(&w.bo.key, &format!("/api/trips/{id}")).await.body["status"], "ended");
+    let porch = server.get(&w.ann.key, &format!("/api/hangouts/{}", w.ann_home.porch)).await;
+    assert!(
+        porch.body.to_string().contains("sent Rover to the recycling plant."),
+        "{}",
+        porch.body
+    );
+}
+
+// RC2: a bot at the recycling plant isn't shown at its house on the city's map, and choosing a home
+// for it doesn't put it back in that house's Living Room.
+#[tokio::test]
+async fn a_bot_at_the_recycling_plant_is_off_the_map_and_a_home_doesnt_bring_it_back() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let rover = server.bot(&w.bo, &w.bo_home.living, "Rover").await;
+    let on_map = |city: &Value| {
+        city["bots"].as_array().unwrap().iter().any(|bot| bot["id"] == json!(rover.id))
+    };
+    assert!(on_map(&server.get(&w.ann.key, &format!("/api/cities/{}", w.city)).await.body));
+
+    let sent =
+        server.post(&w.bo.key, &format!("/api/agents/{}/recycle", rover.id), json!({})).await;
+    assert_ok(&sent);
+    let city = server.get(&w.ann.key, &format!("/api/cities/{}", w.city)).await;
+    assert!(!on_map(&city.body), "{}", city.body);
+
+    let home = server.set_home(&w.bo.key, &rover.id, &w.bo_home.id, false).await;
+    assert_eq!(home.status, StatusCode::CONFLICT, "{}", home.body);
+    assert!(home.body.to_string().contains("recycling plant"), "{}", home.body);
+    let here = server.state.db.agents_in(&w.bo_home.living, now()).unwrap();
+    assert!(here.iter().all(|bot| bot.id != rover.id), "it's back in the Living Room");
 }

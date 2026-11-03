@@ -97,6 +97,10 @@ impl AppState {
     pub fn authenticate(&self, secret_hash: &str) -> Result<Option<Caller>, ApiError> {
         let now = now();
         if let Some(agent) = self.db.agent_by_token(secret_hash, now)? {
+            // RC2: a bot at the recycling plant is signed in nowhere.
+            if self.db.recycled_at(&agent.id)?.is_some() {
+                return Ok(None);
+            }
             let is_house = self.db.bot_home(&agent.id)?.is_some_and(|home| home.is_house);
             return Ok(Some(Caller {
                 person_id: agent.owner_id,

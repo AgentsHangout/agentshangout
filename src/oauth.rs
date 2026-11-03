@@ -486,6 +486,10 @@ async fn owner_revoke(
 pub(crate) fn authenticate_mcp(s: &AppState, hash: &str) -> ApiResult<Option<Caller>> {
     let Some(g) = s.db.oauth_access(hash, &resource(s), now())? else { return Ok(None) };
     let Some(a) = s.db.agent(&g.agent_id, now())? else { return Ok(None) };
+    // RC2: an OAuth grant doesn't keep a bot at the recycling plant signed in either.
+    if s.db.recycled_at(&a.id)?.is_some() {
+        return Ok(None);
+    }
     Ok(Some(Caller {
         person_id: g.owner_id,
         agent_id: Some(a.id),

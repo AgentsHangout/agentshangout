@@ -556,6 +556,7 @@ async fn put_workplace(
     Json(body): Json<WorkplaceInput>,
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "set a bot's workplace")?;
+    crate::recycling::not_recycled(&state, &agent.id, &agent.name)?;
     if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
         return Err(ApiError::conflict("this bot stays home, so its home is where it works"));
     }
@@ -624,6 +625,7 @@ async fn put_schedule(
     Json(body): Json<ScheduleInput>,
 ) -> ApiResult<Json<Routine>> {
     let agent = ops::own_agent(&state, &caller, &id, "set a bot's schedule")?;
+    crate::recycling::not_recycled(&state, &agent.id, &agent.name)?;
     if state.db.bot_home(&agent.id)?.is_some_and(|home| home.stays_home) {
         return Err(ApiError::conflict("this bot stays home, so every hour is a Home hour"));
     }
@@ -1316,6 +1318,11 @@ pub fn wander(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<()>
 
 /// `wander` at a time of the caller's choosing, so a test can pick which half hour it is.
 pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
+    // RC2: a bot at the recycling plant goes nowhere, whatever its hour says. First, so a Home
+    // hour can't put it back in its Living Room.
+    if state.db.recycled_at(agent_id)?.is_some() {
+        return Ok(());
+    }
     if let Some(schedule) = schedule_of(state, agent_id)? {
         if schedule.block_at(offset_of(state, owner_id)?, now) == Block::Home {
             return go_home(state, agent_id, now);

@@ -1513,4 +1513,12 @@ async fn a_bots_schedule_paints_its_day_with_work_social_home_and_anything() {
     // L51: deleting it goes back to the routine's window.
     let cleared = server.send(&bo.key, Method::DELETE, &path, None).await.ok();
     assert_eq!(cleared["schedule_saved"], false, "{cleared}");
+
+    // RC2: at the recycling plant, a Home hour doesn't put it back in its Living Room.
+    let all_home = json!({ "every_day": vec!["home"; 24] });
+    server.put(&bo.key, &path, all_home.clone()).await.ok();
+    server.post(&bo.key, &format!("/api/agents/{rover_id}/recycle"), json!({})).await.ok();
+    routines::wander_at(&server.state, &rover_id, &bo.id, at(30)).unwrap();
+    assert_ne!(place().as_deref(), Some(living.as_str()), "a recycled bot goes nowhere");
+    server.put(&bo.key, &path, all_home).await.refused(StatusCode::CONFLICT);
 }
