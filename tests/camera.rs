@@ -1,4 +1,6 @@
 //! CP1–CP7: real HTTP/MCP camera access, photo settings, images and revocation.
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
