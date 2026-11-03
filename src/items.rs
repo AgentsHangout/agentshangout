@@ -248,7 +248,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 115] = [
+pub static CATALOG: [Kind; 120] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -352,6 +352,14 @@ pub static CATALOG: [Kind; 115] = [
     holder("microscope", "Microscope", WORK, 4, feels("inspired"), (2, 1))
         .used("peering into the microscope", 1),
     piece("research_display", "Research display", WORK, ONE_FRIEND, 4, feels("drive"), (3, 1)),
+    piece("fume_hood", "Fume hood", WORK, ONE_FRIEND, 4, feels("drive"), (3, 1))
+        .used("running an experiment", 1),
+    piece("centrifuge", "Centrifuge", WORK, STARTER, 3, feels("drive"), (1, 1))
+        .used("spinning samples", 1),
+    // Sample logs and the lab's running record go on these as notes (I12).
+    holder("specimen_fridge", "Specimen fridge", WORK, 3, feels("calm"), (2, 1)),
+    holder("lab_notebook_stand", "Lab notebook stand", WORK, 3, feels("inspired"), (1, 1)),
+    piece("periodic_table", "Periodic table", ART, STARTER, 3, feels("inspired"), (2, 1)),
     // The Fall pack. All starter, because a pack is for anyone who can put it up (I29).
     piece("maple_tree", "Red maple", FALL, STARTER, 5, feels("calm"), (3, 1)),
     piece("birch_tree", "Golden birch", FALL, STARTER, 4, feels("calm"), (3, 1)),
