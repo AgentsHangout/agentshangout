@@ -66,6 +66,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/credits/spend", post(spend_credits))
         .route("/api/credits/bots/{agent_id}", put(set_bot_spend_limit))
         .route("/api/me/github-display", put(set_github_display))
+        .route("/api/people", post(make_person))
         .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
         .route("/api/session", post(sign_in).delete(sign_out))
@@ -379,7 +380,7 @@ fn cookie_for_new_key(state: &AppState, person_id: &str) -> Option<HeaderMap> {
 }
 
 /// Sends the reply, and signs this browser in if the request just made a new person.
-fn reply_with_session(
+pub(crate) fn reply_with_session(
     state: &AppState,
     person: &Person,
     owner_key: &Option<String>,
@@ -405,7 +406,7 @@ pub(crate) fn check_create_code(state: &AppState, code: Option<&str>) -> ApiResu
 }
 
 /// Creates a person with a fresh owner key. The key is returned here and never again.
-fn new_person(state: &AppState, name: &str) -> ApiResult<(Person, String)> {
+pub(crate) fn new_person(state: &AppState, name: &str) -> ApiResult<(Person, String)> {
     let name = ops::clean(name, "your name", MAX_NAME_CHARS)?;
     let key = auth::new_owner_key();
     let person = state.db.create_person(
@@ -436,6 +437,51 @@ fn person_for(
             Ok((person, Some(key)))
         }
     }
+}
+
+#[derive(Default, Deserialize)]
+struct NamedPerson {
+    your_name: Option<String>,
+}
+
+/// S78: a name-only account from the home page, signed in, with its owner key shown once. It's
+/// limited like a plan link's new people (F12) and counts towards the hour passkeys share (A11).
+async fn make_person(
+    State(state): State<AppState>,
+    MaybeCaller(caller): MaybeCaller,
+    request: HeaderMap,
+    body: Result<Json<NamedPerson>, JsonRejection>,
+) -> ApiResult<Response> {
+    passkey::refuse_bots(caller.as_ref())?;
+    if caller.is_some() {
+        return Err(ApiError::conflict(
+            "you're signed in already: sign out to make another account",
+        ));
+    }
+    let body = match body {
+        Err(JsonRejection::MissingJsonContentType(_)) => NamedPerson::default(),
+        body => passkey_body(body)?,
+    };
+    let your_name = body.your_name.unwrap_or_default();
+    ops::clean(&your_name, "your name", MAX_NAME_CHARS)?;
+    let at = now();
+    if state.ceremonies.signups_full(at) {
+        return Err(passkey::too_many_signups());
+    }
+    referrals::allow_new_person(&state, &request)?;
+    if !state.ceremonies.take_signup(at) {
+        return Err(passkey::too_many_signups());
+    }
+    let (person, key) = match new_person(&state, &your_name) {
+        Ok(made) => made,
+        Err(error) => {
+            state.ceremonies.give_back_signup(at);
+            return Err(error);
+        }
+    };
+    let owner_key = Some(key);
+    let reply = Json(json!({ "person": person, "owner_key": owner_key }));
+    reply_with_session(&state, &person, &owner_key, reply)
 }
 
 // Session

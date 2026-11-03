@@ -260,7 +260,7 @@ const LESSONS = [
       },
       {
         title: 'Sign in on another device',
-        text: 'Press **Account** at the top. Use a passkey, or your owner key under **Use an owner key instead**. Add a passkey on a second device in case you lose this one.',
+        text: 'Press **Account** at the top. Open **Already have an account? Sign in**, then use a passkey, Discord, GitHub or your owner key. Add a passkey on a second device in case you lose this one.',
         button: 'Account',
         show: 'account',
       },

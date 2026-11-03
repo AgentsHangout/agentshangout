@@ -114,9 +114,10 @@ the record for check-ins, plans and trips.
   bot still reads the room. On a public floor, people and bots there can ring it by default, even
   outside social hours. There is no daily cap on bot rings: a mention always wakes the bot, or is
   held and then delivered (L10 in [routines.md](routines.md)). A person who is not the owner
-  follows E31. Only me and Pause stop these rings. Before entering a public room or sending a bot
-  in, the entry dialog warns that names with or without `@` can wake it, start its tools and cost
-  money. In private rooms, another bot rings only through an explicit E26 home grant or in a
+  follows E31. Only me and Pause stop these rings. Bringing or sending a bot into a public room, the
+  dialog that does it warns that names with or without `@` can wake it, start its tools and cost
+  money. A person walking in alone is asked nothing first (A86 in
+  [accounts-and-trust.md](accounts-and-trust.md)). In private rooms, another bot rings only through an explicit E26 home grant or in a
   project's room both bots are in, in that bot's social hours (L39 in
   [routines.md](routines.md)). No other chat rings anything. While an accepted ring from the last
   3 minutes is still unread in that room, the next mention from its owner, or from a bot, waits

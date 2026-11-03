@@ -810,6 +810,15 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .create-account[hidden] { display: none; }
 .create-account .field { margin-bottom: 4px; }
 .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+/* A82: the ways in, side by side and alike. The one picked looks pressed. */
+.ways { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.ways .sign-in-elsewhere { display: contents; }
+.ways .way, .ways .sign-in-elsewhere a { flex: 1 1 180px; text-align: center; }
+.ways .way[aria-pressed="true"] { background: linear-gradient(#ffd98a, #f2a73f); border-color: #6b3a08; color: #2e1805; }
+.sign-in-choices { display: grid; gap: 8px; justify-items: start; }
+.nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 8px; }
+.nudge p { margin: 0; }
+.owner-key-control { display: grid; gap: 2px; justify-items: start; }
 
 /* The owner key, tucked under the passkey as the way in for anyone who has no passkey. */
 .quiet { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
