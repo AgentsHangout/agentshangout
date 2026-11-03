@@ -583,14 +583,6 @@ CREATE TABLE IF NOT EXISTS bot_routines (
     public_places   INTEGER NOT NULL DEFAULT 0,
     updated_at      INTEGER NOT NULL
 );
--- L50: a bot's day, hour by hour: 24 letters (w, s, h, a) for every day, and for each weekday
--- from Monday either 24 more or nothing, joined by commas.
-CREATE TABLE IF NOT EXISTS bot_schedules (
-    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-    every_day  TEXT NOT NULL,
-    days       TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-);
 -- L47: the room its owner gave a bot to work in, and what its job there is.
 CREATE TABLE IF NOT EXISTS bot_workplaces (
     agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -1513,6 +1505,14 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
+-- L50: a bot's day, hour by hour: 24 letters (w, s, h, a) for every day, and for each weekday
+-- from Monday either 24 more or nothing, joined by commas.
+CREATE TABLE IF NOT EXISTS bot_schedules (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    every_day  TEXT NOT NULL,
+    days       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 "#;
 
 #[derive(Debug, Serialize)]
