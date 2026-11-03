@@ -29,6 +29,8 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 mod github_display;
 mod oauth;
 pub(crate) mod oauth_events;
+mod research_labs;
+mod research_work;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 
@@ -1167,6 +1169,45 @@ CREATE TABLE IF NOT EXISTS vote_ballots (
     cast_at     INTEGER NOT NULL,
     PRIMARY KEY (vote_id, agent_id)
 );
+
+-- RL1-RL4: public research projects; only repository names, never credentials.
+CREATE TABLE IF NOT EXISTS research_labs (
+    space_id TEXT PRIMARY KEY REFERENCES spaces(id) ON DELETE CASCADE,
+    github_owner TEXT NOT NULL,
+    github_repo TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE (github_owner COLLATE NOCASE, github_repo COLLATE NOCASE)
+);
+CREATE TABLE IF NOT EXISTS research_work_cache (
+ repo TEXT PRIMARY KEY,
+ cards_json TEXT NOT NULL DEFAULT '[]',
+ fetched_at INTEGER NOT NULL DEFAULT 0,
+ attempted_at INTEGER NOT NULL DEFAULT 0,
+ stale INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS research_work_contributions (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ github_user_id TEXT NOT NULL,
+ url TEXT NOT NULL,
+ recorded_at INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number)
+);
+CREATE TABLE IF NOT EXISTS research_work_disabled_bots (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ PRIMARY KEY(lab_id, agent_id)
+);
+CREATE TABLE IF NOT EXISTS research_work_awards (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ verified_at INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number)
+);
+
+
 
 "#;
 

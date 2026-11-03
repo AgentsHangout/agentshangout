@@ -44,6 +44,10 @@ use crate::{
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(crate::research_labs::routes())
+        .route("/api/research-labs/{id}/work", get(research_work))
+        .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
+        .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
         .route("/api/me/github-display", put(set_github_display))
         .route("/api/people/{person_id}/github", get(show_github_display))
@@ -120,6 +124,42 @@ pub fn routes() -> Router<AppState> {
         .merge(routines::routes())
         .merge(city_routes())
         .merge(world_routes())
+}
+
+async fn research_work(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::list(&state, &caller, &id).await?))
+}
+
+#[derive(Deserialize)]
+struct ResearchParticipation {
+    enabled: bool,
+}
+
+async fn research_participation(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, agent_id)): Path<(String, String)>,
+    Json(body): Json<ResearchParticipation>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::assign(&state, &caller, &id, &agent_id, body.enabled)?))
+}
+
+#[derive(Deserialize)]
+struct ResearchContribution {
+    url: String,
+}
+
+async fn research_contribution(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<ResearchContribution>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::contribution(&state, &caller, &id, &body.url).await?))
 }
 
 /// Passkey sign-in. Every route here refuses bots.

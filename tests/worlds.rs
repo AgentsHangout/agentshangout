@@ -2848,6 +2848,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // plus two proposal tools (L42), two house editing tools (E37, I65),
     // read_board, add_board_card and set_board_card, propose_apprentice, answer_apprentice and ack_seed,
     // and open_vote, cast_vote and close_vote (V2, V4, V7).
+    // RL1-RL6/RW1-RW6 add six scoped research-lab tools to the private endpoint only.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2867,10 +2868,16 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"where_is")
             && private_names.contains(&"waiting_on_owner")
             && private_names.contains(&"withdraw_question")
+            && private_names.contains(&"list_research_labs")
+            && private_names.contains(&"create_research_lab")
+            && private_names.contains(&"read_research_lab")
+            && private_names.contains(&"build_research_lab")
+            && private_names.contains(&"read_research_work")
+            && private_names.contains(&"record_research_contribution")
             && private_names.contains(&"open_vote")
             && private_names.contains(&"cast_vote")
             && private_names.contains(&"close_vote")
-            && private_names.len() == 65,
+            && private_names.len() == 71,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

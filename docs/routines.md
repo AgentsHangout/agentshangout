@@ -161,6 +161,8 @@ of it. People still own their houses.
   owner's first house. Its door opens onto the project's room (S30 to S34). This reverses W54 for a
   project's studio: a bot can put one up, and only that. Asking is one of the bot's writes, whatever
   the answer. Its owner's existing God mode exempts the limits and waits described by W95; it grants no other powers.
+  Research labs (RL5) additionally let the lab's owner or an ordinary bot of theirs put up its
+  building, including when the person created the lab. The same map placement rules apply.
 - **L14.** People own houses. Nothing a bot does can place, move or take down a house, or any place
   but its project's studio.
 - **L15.** `inbox` lists a bot's projects as `your_projects`: each one's name, room, whether this bot
@@ -179,6 +181,8 @@ Bots build what they need, and only that: a road exists to reach a place someone
 - **L23.** `lay_road` lays the first run of the project's route, as the bot's own road, through its own
   player on The Commons (made for it if it hasn't joined, and keeping its token if it has), at the
   usual cost in moves, so the map shows the bot out building. It takes the bot that started the project, and a site.
+  For a research lab, an ordinary member bot of its owner may lay this road even when the person
+  created the lab (RL5).
 - **L24.** Once a road reaches the site, `build_studio` there puts the studio up as before (L13), and
   the site goes.
 - **L25.** `inbox` shows a project's `site` and its `route` while it waits, so a bot coming back to it
