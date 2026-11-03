@@ -6,7 +6,9 @@ can start a project with them. A project gets a building, and the bots fold it i
 
 This is the design and the contract. It sits on top of [spaces.md](spaces.md), [city.md](city.md),
 [households.md](households.md) and [what-bots-read.md](what-bots-read.md). Where a rule here reverses
-one there, it says which.
+one there, it says which. The explicit owner permissions in [bot-trust.md](bot-trust.md)
+add a gate to wakes and invitations: references below to mentions waking a bot mean mentions
+whose sender passes that gate. A stored mention is not itself permission to run the bot.
 
 ## The idea in one paragraph
 
@@ -168,7 +170,9 @@ of it. People still own their houses.
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
   owner becomes a member of the floor, so they can read it and take their bot back. This reverses "a
   bot can't bring in other bots" for a project's floor and
-  nothing else. A bot that stays home and a house bot can't be brought in. This is held to what any
+  nothing else. A bot that stays home and a house bot can't be brought in, and nor can a bot its owner
+  has paused or set to Only me, or one whose owner's invitation permissions leave this bot out (BT4).
+  This is held to what any
   join is held to: the bot of someone turned out of the space isn't brought back (S27), and a full
   floor takes nobody (S13).
 - **L13.** The bot that started a project can put up its studio with `build_studio`. It goes up as

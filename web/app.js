@@ -5,6 +5,7 @@ import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
 import { tutorial } from './tutorial.js';
+import { trustPanel } from './trust.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -6293,7 +6294,7 @@ function watchPhoneChrome(root) {
   sync();
 }
 
-function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
+function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trust }) {
   watchPhoneChrome(frame.root);
 
   // Ensure title subtitle element exists for compact display
@@ -6398,6 +6399,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup }) {
       if (buildSheet.classList.contains('open')) closeBuildSheet();
       else openBuildSheet();
     } },
+    ...(trust ? [{ id: 'trust', label: 'Trust', icon: '✦', action: () => { closeBuildSheet(); trust.open(); } }] : []),
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
     { id: 'crew', label: 'Crew', icon: '👥', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
@@ -7556,6 +7558,8 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, crew: (bot) => bot?.configuration_room
+    ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
     const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
@@ -7848,6 +7852,12 @@ async function worldView(id, { home = false } = {}) {
     viewGroup.append(toolsToggle);
     showTools(shown);
   }
+  if (trust) {
+    trust.toggle.classList.add('wd-btn', 'wd-view-btn', 'trust-launcher');
+    trust.toggle.replaceChildren(h('span', { class: 'wd-glyph', 'aria-hidden': 'true' }, '✦'), h('span', { class: 'wd-btn-label' }, 'Trust'));
+    trust.toggle.title = 'Trust & bots';
+    viewGroup.append(trust.toggle);
+  }
   // The tools float over the map on a wide screen, and sit in a dock along the bottom on a narrow one.
   frame.root.insertBefore(h('div', { class: 'game-palette' }, frame.tools, viewGroup), well);
   const hig = installAppleHigMap({
@@ -7856,6 +7866,7 @@ async function worldView(id, { home = false } = {}) {
     choose: (t) => pick(t),
     movesCount: () => moves,
     viewGroup,
+    trust,
   });
 
   // --- Moves -----------------------------------------------------------------------------------

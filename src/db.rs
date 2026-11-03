@@ -26,6 +26,8 @@ pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod bot_profile;
+mod bot_trust;
 mod camera;
 mod github_display;
 mod oauth;
@@ -1448,6 +1450,54 @@ END;
 CREATE TRIGGER IF NOT EXISTS question_bot_deleted AFTER DELETE ON agents
 BEGIN
     UPDATE question_answers SET bot_id='', owner_id='', text='[removed]' WHERE bot_id=OLD.id;
+END;
+CREATE TABLE IF NOT EXISTS bot_trust_settings (
+    agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    settings TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS explicit_friendships (
+    kind TEXT NOT NULL CHECK(kind IN ('person','bot')),
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','accepted')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(kind,from_id,to_id)
+);
+CREATE TABLE IF NOT EXISTS oauth_event_health (
+    subscription_id TEXT PRIMARY KEY,
+    grant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    client_name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    grant_expires_at INTEGER NOT NULL,
+    hangout_id TEXT,
+    expires_at INTEGER NOT NULL,
+    last_renewed_at INTEGER NOT NULL,
+    cursor INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    last_reason TEXT,
+    last_at INTEGER,
+    http_status INTEGER
+);
+CREATE INDEX IF NOT EXISTS oauth_event_health_owner ON oauth_event_health(owner_id,agent_id);
+INSERT OR IGNORE INTO oauth_event_health (
+    subscription_id,grant_id,owner_id,agent_id,client_name,scope,grant_expires_at,
+    hangout_id,expires_at,last_renewed_at,cursor,state
+)
+SELECT s.id,g.id,g.owner_id,g.agent_id,c.name,g.scope,g.expires_at,
+    json_extract(s.arguments,'$.hangout_id'),s.expires_at,0,s.cursor,
+    CASE WHEN s.active=1 THEN 'active' ELSE 'suspended' END
+FROM oauth_event_subscriptions s
+JOIN mcp_oauth_grants g ON g.id=s.grant_id
+JOIN mcp_oauth_clients c ON c.id=g.client_id;
+CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_person AFTER DELETE ON people
+BEGIN
+    DELETE FROM explicit_friendships WHERE kind='person' AND (from_id=OLD.id OR to_id=OLD.id);
+END;
+CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON agents
+BEGIN
+    DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
 "#;
 
@@ -4666,6 +4716,19 @@ impl Db {
                AND EXISTS (SELECT 1 FROM members m
                            WHERE m.hangout_id = ?1 AND m.person_id = f.from_person)",
             params![hangout_id, person_id, since],
+        )
+    }
+
+    /// BT5: whether a bot belongs to a room, not just visits it.
+    pub fn agent_belongs_to_room(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+    ) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM room_agents WHERE hangout_id = ?1 AND agent_id = ?2",
+            params![hangout_id, agent_id],
         )
     }
 

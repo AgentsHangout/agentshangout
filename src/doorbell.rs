@@ -228,6 +228,8 @@ struct Me {
     hangouts: Vec<Identified>,
     #[serde(default)]
     only_me: bool,
+    #[serde(default)]
+    trust_wake_check_available: bool,
     /// H18: bots this bot's owner marked. Missing on a server older than this doorbell.
     #[serde(default)]
     ignored_bots: Vec<String>,
@@ -311,6 +313,11 @@ struct Message {
 #[derive(Deserialize)]
 struct Messages {
     messages: Vec<Message>,
+}
+
+#[derive(Deserialize)]
+struct WakePermissions {
+    allowed: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -461,6 +468,19 @@ impl Doorbell {
             let (mut bots, mut people): (Vec<_>, Vec<_>) = chat
                 .filter(|message| mentions(&message.body, &me.name))
                 .partition(|message| message.agent_id.is_some());
+            let allowed = if me.trust_wake_check_available {
+                let mut ids: Vec<_> = bots.iter().chain(people.iter()).map(|m| m.id).collect();
+                ids.extend(bot_pending.get(&room.id).into_iter().flatten().copied());
+                let url = format!("{}/api/agents/{agent_id}/trust/wake-check", self.url);
+                let response: WakePermissions = self
+                    .send(self.client.post(url).json(&serde_json::json!({"message_ids":ids})))
+                    .await?;
+                bots.retain(|m| response.allowed.contains(&m.id));
+                people.retain(|m| response.allowed.contains(&m.id));
+                Some(response.allowed)
+            } else {
+                None
+            };
             // OT1 to OT4: a task is the owner's own words, and only the server says who the owner
             // is. It takes no part in the wake-up.
             let mut owner = None;
@@ -535,12 +555,13 @@ impl Doorbell {
                 bot_mentions.extend(bots.into_iter().map(&mention));
             }
             bot_mentions.retain(|item| {
-                !server_owns_bot_mention(
-                    &me.held_bot_mentions,
-                    &me.rung_bot_mentions,
-                    &item.hangout_id,
-                    item.message_id,
-                )
+                allowed.as_ref().is_none_or(|ids| ids.contains(&item.message_id))
+                    && !server_owns_bot_mention(
+                        &me.held_bot_mentions,
+                        &me.rung_bot_mentions,
+                        &item.hangout_id,
+                        item.message_id,
+                    )
             });
             if !bot_mentions.is_empty() {
                 let hold_until = bot_hold_until.get(&room.id).copied();
