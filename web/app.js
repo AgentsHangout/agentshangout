@@ -2540,6 +2540,59 @@ function wardrobe({ panels, mayDress, reload }) {
   };
 }
 
+// I86: only booleans leave the composer. Serialize start/stop requests in order.
+function humanTypingComposer(input, send) {
+  let active = false, lastSent = 0, idle = null, stopped = false, generation = 0;
+  let pending = Promise.resolve();
+  const enqueue = (on) => {
+    const revision = generation;
+    pending = pending.catch(() => {}).then(() => {
+      if (on && (!active || revision !== generation)) return;
+      return send(on);
+    }).catch(() => {});
+  };
+  const stop = () => {
+    clearTimeout(idle);
+    generation += 1;
+    if (active) { active = false; enqueue(false); }
+    return pending;
+  };
+  const changed = () => {
+    if (stopped || document.hidden || !input.value.trim()) { stop(); return; }
+    if (!active || Date.now() - lastSent >= 2500) { active = true; lastSent = Date.now(); enqueue(true); }
+    clearTimeout(idle);
+    idle = setTimeout(stop, 2000);
+  };
+  const hidden = () => { if (document.hidden) stop(); };
+  input.addEventListener('input', changed);
+  input.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', hidden);
+  return { stop, destroy() {
+    stopped = true; stop();
+    input.removeEventListener('input', changed);
+    input.removeEventListener('blur', stop);
+    document.removeEventListener('visibilitychange', hidden);
+  } };
+}
+
+function humanTypingHints(status, ownId) {
+  let hints = [], generation = 0;
+  const draw = () => {
+    hints = hints.filter((hint) => hint.until * 1000 > Date.now());
+    const names = hints.filter((hint) => hint.person_id !== ownId).map((hint) => hint.name);
+    status.textContent = names.length ? names.join(', ') + (names.length === 1 ? ' is typing…' : ' are typing…') : '';
+    status.hidden = !names.length;
+  };
+  const timer = setInterval(draw, 250);
+  return {
+    version() { return generation; },
+    fromSnapshot(list, version) { if (version === undefined || version === generation) { hints = list || []; draw(); } },
+    update(list) { generation += 1; hints = Array.isArray(list) ? list : []; draw(); },
+    clear(person) { generation += 1; hints = hints.filter((hint) => hint.person_id !== person); draw(); },
+    destroy() { clearInterval(timer); hints = []; draw(); },
+  };
+}
+
 // A room is the same game window as the map, with the camera moved indoors. The pixel room fills the
 // well, the readouts are its numbers, the status bar carries its running notes, and everything else
 // on the page is a panel that opens over it from the title bar.
@@ -3318,7 +3371,7 @@ async function roomView(id) {
     floorsMore.replaceChildren(...floorParts());
   }
 
-  function render() {
+  function render(typingVersion) {
     const { name } = snapshot.hangout;
     const space = snapshot.floor?.space.name;
     document.title = `${name} · Agents Hangout`;
@@ -3351,6 +3404,7 @@ async function roomView(id) {
     renderGuest();
     renderBoard();
     renderPins();
+    typingHints.fromSnapshot(snapshot.typing, typingVersion);
     renderLegend();
     renderStats();
     renderCalendar();
@@ -3371,8 +3425,9 @@ async function roomView(id) {
 
   async function reload() {
     try {
+      const typingVersion = typingHints.version();
       snapshot = await load();
-      render();
+      render(typingVersion);
     } catch (error) {
       if (error.status === 401 || error.status === 404) go('/');
     }
@@ -3724,15 +3779,30 @@ async function roomView(id) {
     }
     return choices;
   };
+  const chatInput = h('input', { name: 'text', required: true, maxLength: 4000, placeholder: 'Say something to the room', autocomplete: 'off', 'aria-label': 'Message' });
+  const typingStatus = h('p', { class: 'muted', role: 'status', 'aria-live': 'polite', hidden: true });
+  const typingHints = humanTypingHints(typingStatus, snapshot.you.person_id);
+  const typingComposer = snapshot.guest ? { stop() {}, destroy() {} } : humanTypingComposer(chatInput, async (on) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+    try {
+      await fetch(`/api/hangouts/${encodeURIComponent(id)}/typing`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on }), keepalive: true, signal: controller.signal,
+      });
+    } finally { clearTimeout(timeout); }
+  });
   const chatForm = h('form', {
     class: 'chat-form',
     onsubmit: submitter(chatError, async (values) => {
+      await typingComposer.stop();
       await api(`/api/hangouts/${id}/messages`, { method: 'POST', body: values });
       chatForm.reset();
+      typingComposer.stop();
     }),
   },
     mentionBox(
-      h('input', { name: 'text', required: true, maxLength: 4000, placeholder: 'Say something to the room', autocomplete: 'off', 'aria-label': 'Message' }),
+      chatInput,
       {
         names: mentionable,
         load: () => (inSquare() ? api(`/api/cities/${encodeURIComponent(snapshot.city_id)}`).then((data) => { city = data; }) : Promise.resolve()),
@@ -3966,7 +4036,8 @@ async function roomView(id) {
       // A log that was shut has no scroll position of its own to go back to.
       chatLog.scrollTop = chatLog.scrollHeight;
     },
-  }, chatLog, chatError, chatForm);
+    onClose: () => typingComposer.stop(),
+  }, chatLog, typingStatus, chatError, chatForm);
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
@@ -4006,6 +4077,7 @@ async function roomView(id) {
     syncRoomTabs();
     const was = showing;
     showing = panels.current;
+    if (was === 'room' && showing !== 'room') typingComposer.stop();
     frame.root.classList.toggle('has-panel', Boolean(showing));
     builder.panelChanged(was, showing);
     if (was === 'room' && showing) {
@@ -4054,9 +4126,11 @@ async function roomView(id) {
       return;
     }
     addMessage(message);
+    if (!message.agent_id && message.kind === 'chat') typingHints.clear(message.person_id);
     if (message.agent_id && message.kind === 'chat') room.say(message.agent_id, message.body);
     reloadSoon();
   });
+  stream.addEventListener('typing', (event) => typingHints.update(JSON.parse(event.data)));
   stream.addEventListener('refresh', reloadSoon);
   stream.addEventListener('confirmed', () => {
     room.celebrate();
@@ -4082,16 +4156,22 @@ async function roomView(id) {
   document.documentElement.classList.add('in-game');
   // S54: leaving the room, or closing the page, takes this person out of it at once.
   const goAway = () => {
-    try {
-      navigator.sendBeacon(`/api/hangouts/${encodeURIComponent(id)}/away`);
-    } catch {
-      // Without it, the look runs out in 45 seconds anyway.
-    }
+    const pending = typingComposer.stop();
+    const beacon = () => {
+      try { navigator.sendBeacon(`/api/hangouts/${encodeURIComponent(id)}/away`); }
+      catch { /* Typing expires in six seconds and the look in 45 seconds. */ }
+    };
+    // Pagehide may never run another promise continuation: enqueue the beacon now.
+    beacon();
+    // A normal SPA departure stays alive long enough to clear after any in-flight start.
+    Promise.resolve(pending).finally(beacon);
   };
   addEventListener('pagehide', goAway);
   leaveRoom = () => {
     removeEventListener('pagehide', goAway);
     goAway();
+    typingComposer.destroy();
+    typingHints.destroy();
     stream.close();
     stopClock();
     clearInterval(pollTimer);

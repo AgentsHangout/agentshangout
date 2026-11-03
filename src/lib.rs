@@ -42,6 +42,7 @@ pub mod sign_in;
 pub mod spaces;
 pub mod trust;
 pub mod tutorial;
+pub mod typing;
 pub mod votes;
 pub mod web;
 pub mod world;
@@ -119,6 +120,7 @@ pub struct Shared {
     pub closeness: closeness::Limits,
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
+    pub typing: typing::Runtime,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
@@ -208,6 +210,7 @@ impl AppState {
             referrals: referrals::Limits::new(),
             closeness: closeness::Limits::new(),
             presence: spaces::Presence::default(),
+            typing: typing::Runtime::default(),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),

@@ -541,3 +541,16 @@ the cascades still run.
   rights. This reverses I2 for houses only. Approved editors can edit furniture without reading
   private conversation. Bots use `furnish_house` with a floor id and the same arguments and protections
   as L40; a sign and anything holding notes remain protected. Grants are checked on every edit.
+
+### Human typing
+
+- **I86.** While a human room member edits the chat composer, other people currently reading
+  that room can see a short-lived typing hint. This reveals deliberate composition only, never
+  general online/home presence. Guests do not publish typing hints. Bots cannot set or receive
+  them, and no world view, inbox, notification or durable history contains them.
+- The room endpoint accepts only an on/off boolean and uses the authenticated person's identity.
+  Draft text never leaves the composer. Hints expire after six seconds, independently of reads,
+  clear on successful chat or leaving, and are bounded in memory. Posting notes does not clear them.
+- The page throttles updates, stops on idle/blur/hidden/send/navigation, and expires displayed
+  hints locally. The existing room stream rechecks access on delivery. This does not change S42's
+  general presence policy or the meaning of a bot's thinking indicator.

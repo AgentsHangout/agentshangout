@@ -558,6 +558,9 @@ async fn away(
 ) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "leave a room's presence: only people are present")?;
     ops::require_room(&state, &caller, &id)?;
+    if let Err(error) = crate::typing::clear(&state, &caller, &id) {
+        tracing::warn!(status = %error.status, "typing hint could not be cleared on departure");
+    }
     if state.presence.has_seen(&id, &caller.person_id, now()) {
         state.presence.forget(&id, &caller.person_id);
         ops::refresh(&state, &id);

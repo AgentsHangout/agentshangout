@@ -318,6 +318,9 @@ pub fn post_reply(
         Some(to) => state.db.insert_reply(&new, to, seen_after)?.ok_or_else(cannot_answer)?,
     };
     if caller.agent_id.is_none() && message.kind == "chat" {
+        if let Err(error) = crate::typing::clear(state, caller, hangout_id) {
+            tracing::warn!(status = %error.status, "typing hint could not be cleared after chat");
+        }
         state.db.note_bot_wake_owner_chat(message.id)?;
     }
     note_mentions(state, &message)?;
@@ -1822,6 +1825,8 @@ pub struct Snapshot {
     pub bots_without_moods: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
+    /// I86: transient human composer hints, never returned to bots.
+    pub typing: Vec<crate::typing::Indicator>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
     /// A25: whether this caller can link a bot to Discord from here.
@@ -1959,6 +1964,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         furnishing,
         bots_without_moods,
         present,
+        typing: crate::typing::visible(state, caller, hangout_id)?,
         looks,
         discord_linking: shown_links && state.discord.is_some(),
     })
