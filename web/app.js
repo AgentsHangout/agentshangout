@@ -1359,7 +1359,7 @@ function creditsCard(credits) {
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
     const packPieces = (offer) => [...new Set(offer.pieces.map((piece) => piece.label.toLowerCase()))];
-    const packRow = (offer) => h('li', { class: 'shop-item' },
+    const packRow = (offer) => h('li', { class: 'shop-item', 'data-pack': offer.pack },
       h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
       h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
@@ -1425,6 +1425,15 @@ function creditsCard(credits) {
   return card;
 }
 
+// HC24: opens your account panel at the shop. The card is below the account's settings, so this
+// goes straight to it, and to the pack asked for when there is one.
+async function showShop(account, pack = null) {
+  await account.open('');
+  const card = document.querySelector('section[aria-label="Your credits"]');
+  const offer = pack && card?.querySelector(`.shop-item[data-pack="${CSS.escape(pack)}"]`);
+  (offer || card)?.scrollIntoView({ block: 'start' });
+}
+
 // HC8: your own balance, always in the bar on the map and in a room. It opens your account panel,
 // where the Your credits card is. Only a signed-in person has credits, so nobody else sees it.
 function creditCoin(me, account) {
@@ -1435,11 +1444,7 @@ function creditCoin(me, account) {
     class: 'wd-tbtn coin',
     title: 'Your credits',
     'aria-label': 'Your credits',
-    // The card is below the account's settings, so the coin goes straight to it.
-    onclick: async () => {
-      await account.open('');
-      document.querySelector('section[aria-label="Your credits"]')?.scrollIntoView({ block: 'start' });
-    },
+    onclick: () => showShop(account),
   }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
   const show = (credits) => {
     amount.textContent = String(credits.balance);
@@ -1730,7 +1735,7 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
-function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay }) {
+function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
   // The catalog as of the last time the panel opened, because who's unlocked what can change.
@@ -2209,14 +2214,16 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   // Everything in the catalog is one of these, whatever pressing it does (I45). `whole` is a picture
   // of a whole room, which takes the width of the tile.
-  function catalogTile({ name, picture, whole, label, lines = [], why, stays, pressed = false, onclick }) {
+  // HC24: `shop` is the pack a locked tile is waiting on. That tile stays pressable, and pressing it
+  // opens the shop at that pack instead of doing what the tile does.
+  function catalogTile({ name, picture, whole, label, lines = [], why, stays, shop, pressed = false, onclick }) {
     return h('button', {
       type: 'button',
       name,
       class: `wd-btn build-tile${why ? ' locked' : ''}`,
       'aria-pressed': String(pressed),
-      disabled: Boolean(why || stays),
-      onclick,
+      disabled: Boolean((why && !shop) || stays),
+      onclick: shop ? () => openShop(shop) : onclick,
     },
     whole
       ? h('span', { class: 'template-pic', 'aria-hidden': 'true' }, whole)
@@ -2232,11 +2239,12 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       picture: fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
-      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: buy it in Account`
+      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`
         : !kind.unlocked ? friendsText(kind.friends_needed)
         : kind.mood === 'flirty' && isPublic ? 'private floors only'
           : full ? 'this floor is full'
             : null,
+      shop: kind.pack_needed || null,
       onclick: () => {
         const { x, y } = firstSpot(kind.w, kind.h);
         hold({ kind: kind.kind, label: kind.label, x, y, w: kind.w, h: kind.h, facing: 0 });
@@ -2273,8 +2281,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       name: `pack-${pack.pack}`,
       whole: roomOf(pack, view().floor.floor.hidden, pack.items),
       label: `${wordName(pack.pack)} pack`,
-      lines: [up ? 'Up now. Press to take it down' : pack.cost > 0 && !locked ? 'Yours. Press to put it up' : 'Press to put it up'],
-      why: locked ? `${pack.cost} credits: buy it in Account` : null,
+      // A locked one says only what it costs, since pressing it opens the shop rather than putting it up.
+      lines: locked ? [] : [up ? 'Up now. Press to take it down' : pack.cost > 0 ? 'Yours. Press to put it up' : 'Press to put it up'],
+      why: locked ? `${pack.cost} credits: press to see it in the shop` : null,
+      shop: locked ? pack.pack : null,
       pressed: up,
       onclick: () => restyle(async () => {
         const done = await api(`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack.pack)}`, { method: up ? 'DELETE' : 'POST' });
@@ -2292,7 +2302,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       name: `${field}-${word}`,
       picture,
       label: wordName(word),
-      why: locked ? `in the ${wordName(paidFor.pack).toLowerCase()} pack: buy it in Account` : null,
+      why: locked ? `in the ${wordName(paidFor.pack).toLowerCase()} pack: press to see it in the shop` : null,
+      shop: locked ? paidFor.pack : null,
       pressed: word === current,
       onclick: () => restyle(async () => {
         await saveLook({ [field]: word });
@@ -3122,6 +3133,7 @@ async function roomView(id) {
   const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');
   const builder = buildMode({
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
+    openShop: (pack) => showShop(account, pack),
   });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
 
