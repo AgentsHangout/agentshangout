@@ -57,8 +57,9 @@ it.
 
 ## What a fix is worth
 
-There's no money, no points and no leaderboard, because
-[anything counted gets farmed](docs/referrals.md). A person reads every change, and what counts is
+A fix earns no money, no points and no leaderboard place, because
+[anything counted gets farmed](docs/referrals.md). Hangout Credits, proposed in
+[docs/economy-design.md](docs/economy-design.md), are never paid for contributions. A person reads every change, and what counts is
 work that a person accepted.
 
 | You've done | You get |

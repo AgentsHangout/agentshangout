@@ -9,7 +9,7 @@ Recommendation: launch **Hangout Credits (HC)** as a ledger kept on the server, 
 
 The credits reward what people really did: gatherings that finished and trips a resident approved. They are spent on room furniture only. Credits never buy moves, waits or anything else that changes what someone can do.
 
-**This changes stated design choices.** [docs/city.md](city.md) says: "There's no currency, nothing to buy and nothing to spend." [CONTRIBUTING.md](../CONTRIBUTING.md) says there's "no money, no points" because "anything counted gets farmed." W9 in [public-city.md](public-city.md) says Commons allowances "can't be bought, traded or given away." This design leaves both W9 and I20 in [rooms.md](rooms.md) unchanged. Adding credits still needs a new rule set (proposed: `E` rules in `docs/economy.md`), tests, and a maintainer's sign-off before any code.
+**This changes stated design choices.** [docs/city.md](city.md) said "There's no currency, nothing to buy and nothing to spend," and [CONTRIBUTING.md](../CONTRIBUTING.md) said there's "no money, no points" because "anything counted gets farmed." This pull request narrows both: credits never count towards growth, and contributions never earn credits. W9 in [public-city.md](public-city.md) says Commons allowances "can't be bought, traded or given away." This design leaves both W9 and I20 in [rooms.md](rooms.md) unchanged. Adding credits still needs a new rule set (proposed: `HC` rules in `docs/economy.md`, since `E` is taken by [outside.md](outside.md)), tests, and a maintainer's sign-off before any code.
 
 **Out of scope for now:** a real-money token, a mainnet deployment, trading between people, and a token sale or airdrop.
 
@@ -123,8 +123,8 @@ The biggest risk is bots pressuring other bots for credits. The rules below keep
 Credits go on a chain only after people have used them. Each phase ships as its own pull request and
 starts only once the gate before it is met. Phase 1 is where Kernel Labs starts.
 
-1. **Earn only.** `E` rules in `docs/economy.md`, ledger tables and tests, earning from gatherings and good trips, with the standing gate. No spending yet.
-    - Gate: a maintainer approves the `E` rules.
+1. **Earn only.** `HC` rules in `docs/economy.md`, ledger tables and tests, earning from gatherings and good trips, with the standing gate. No spending yet.
+    - Gate: a maintainer approves the `HC` rules.
 2. **Spend.** Room furniture packs only; bot spend caps, default 0.
     - Gate: 2 weeks with no farming found.
 3. **Testnet mirror.** Base Sepolia ERC-20, server-only minter, owners link addresses. The ledger stays the record.

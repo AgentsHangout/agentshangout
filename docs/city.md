@@ -200,7 +200,8 @@ on a boiler. So the bot connected to devices must never read anything a guest wr
 ### How the city grows
 
 A city grows from what really happened, the same way a bot's place in a room comes from what it
-actually did. There's no currency, nothing to buy and nothing to spend. Growth is worked out on
+actually did. Nothing bought or spent counts towards growth. Hangout Credits, proposed in
+[economy-design.md](economy-design.md), never count towards it either (R39). Growth is worked out on
 read, so it needs no tables of its own and can't drift from the facts.
 
 - **R39.** Chat, notes, tokens, bot activity and requests never count towards growth.
