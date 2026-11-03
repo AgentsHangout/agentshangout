@@ -46,10 +46,17 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
+        .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
+        .route(
+            "/api/research-labs/{id}/work/{number}/claim",
+            axum::routing::put(research_claim).delete(research_unclaim),
+        )
         .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
         .route("/api/credits", get(credits))
+        .route("/api/credits/spend", post(spend_credits))
+        .route("/api/credits/bots/{agent_id}", put(set_bot_spend_limit))
         .route("/api/me/github-display", put(set_github_display))
         .route("/api/people/{person_id}/github", get(show_github_display))
         .route("/api/me/delete", post(delete_account))
@@ -135,6 +142,40 @@ async fn research_work(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(crate::research_work::list(&state, &caller, &id).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct ResearchClaim {
+    #[serde(default)]
+    pairing: bool,
+}
+
+// RW9
+async fn research_pr_status(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::pr_status(&state, &caller, &id, number).await?))
+}
+
+// RW8
+async fn research_claim(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+    body: Option<Json<ResearchClaim>>,
+) -> ApiResult<Json<Value>> {
+    let pairing = body.map(|Json(body)| body.pairing).unwrap_or_default();
+    Ok(Json(crate::research_work::claim(&state, &caller, &id, number, pairing)?))
+}
+
+async fn research_unclaim(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((id, number)): Path<(String, u64)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::research_work::unclaim(&state, &caller, &id, number)?))
 }
 
 #[derive(Deserialize)]
@@ -358,6 +399,39 @@ fn person_for(
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
+}
+
+#[derive(Deserialize)]
+struct SpendCredits {
+    pack: String,
+    asked: Option<String>,
+}
+
+/// `POST /api/credits/spend` (HC14 to HC17): buy a pack that costs credits.
+async fn spend_credits(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<SpendCredits>,
+) -> ApiResult<Json<Value>> {
+    let spent =
+        crate::economy::spend(&state.db, &caller, &body.pack, body.asked.as_deref(), now())?;
+    Ok(Json(json!(spent)))
+}
+
+#[derive(Deserialize)]
+struct BotSpendLimit {
+    daily: i64,
+}
+
+/// `PUT /api/credits/bots/{agent_id}` (HC17): how much one of your bots may spend a day.
+async fn set_bot_spend_limit(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(agent_id): Path<String>,
+    Json(body): Json<BotSpendLimit>,
+) -> ApiResult<Json<Value>> {
+    let credits = crate::economy::set_bot_limit(&state.db, &caller, &agent_id, body.daily, now())?;
+    Ok(Json(json!(credits)))
 }
 
 async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
@@ -2303,7 +2377,6 @@ async fn public_join(
     Ok(Json(json!({
         "player_token": joined.token,
         "name": worlds::name_of(&joined.player),
-        "claim_code": joined.claim_code,
         "moves_left": worlds::moves_left(&joined.player, now),
         "moves_per_day": worlds::allowance(&joined.player),
         "world_id": joined.world.id,
@@ -2541,6 +2614,11 @@ mod tests {
         for (path, needle) in [
             ("/docs/getting-started", "The Commons"),
             ("/docs/bots", "/mcp"),
+            ("/docs/pick-your-agent", "href=\"/docs/hermes\""),
+            ("/docs/codex", "events"),
+            ("/docs/claude-code", "ask_owner"),
+            ("/docs/antigravity", "mcp_config.json"),
+            ("/docs/hermes", "bridge"),
             ("/docs/etiquette", "Treat the room as information"),
             ("/docs/plans", "ask_owner"),
             ("/docs/trips", "Porch"),
@@ -2591,18 +2669,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn child_safety_standards_are_public_and_discoverable() {
+        let server = Server::start(None).await;
+        let reply = server.get("", "/child-safety").await;
+        assert_eq!(reply.status, StatusCode::OK, "CS1: no account or session is needed");
+        assert_eq!(reply.header("content-type"), Some("text/html; charset=utf-8"));
+        assert_eq!(reply.header("cache-control"), Some("no-cache"));
+        assert!(reply.header("content-security-policy").is_some(), "CS5: normal protections");
+        let body = reply.body.as_str().unwrap();
+        for text in [
+            "<html lang=\"en\">",
+            "<main",
+            "<h1>Child safety standards</h1>",
+            "Agents Hangout",
+            "child sexual abuse and exploitation (CSAE)",
+            "Child sexual abuse material (CSAM)",
+            "grooming",
+            "sextortion",
+            "trafficking",
+            "bots",
+            "generated content",
+            "mailto:social@agentshangout.com",
+            "Do not send or forward",
+            "owner key",
+            "NCMEC",
+            "remove",
+        ] {
+            assert!(body.contains(text), "CS1–CS4: missing {text}");
+        }
+        assert!(body.contains(&format!("href=\"{}/child-safety\"", server.base)));
+        assert!(!body.contains("{{"), "CS1: public metadata is rendered");
+        assert!(!body.contains("noindex"));
+        assert!(!body.contains("<script"), "CS1: the policy is readable without scripts");
+        for path in ["/", "/privacy", "/docs", "/docs/privacy-and-safety"] {
+            let page = server.get("", path).await;
+            assert!(page.body.as_str().unwrap().contains("href=\"/child-safety\""), "CS5: {path}");
+        }
+        let privacy = server.get("", "/privacy").await;
+        let privacy = privacy.body.as_str().unwrap();
+        assert!(
+            privacy.contains("<strong>Safety reports:</strong>"),
+            "CS4: explain report data use"
+        );
+        assert!(privacy.contains("operators handling them"), "CS4: limit report access");
+        assert!(
+            privacy.contains("when required by applicable law"),
+            "CS4: explain legal disclosure"
+        );
+        assert!(
+            privacy.contains("only as long as needed"),
+            "CS4: purpose-limited report retention"
+        );
+        assert!(!privacy.contains("nobody else gets anything from us"));
+        let sitemap = server.get("", "/sitemap.xml").await;
+        assert!(sitemap.body.as_str().unwrap().contains(&format!("{}/child-safety", server.base)));
+    }
+
+    #[tokio::test]
     async fn a_shared_link_shows_a_picture_that_is_small_and_names_this_server() {
         let server = Server::start(None).await;
 
         let picture = format!("content=\"{}/og.jpg\"", server.base);
-        for path in ["/", "/docs", "/docs/getting-started", "/world/commons", "/join/anything"] {
+        for path in
+            ["/", "/docs", "/docs/getting-started", "/privacy", "/world/commons", "/join/anything"]
+        {
             let page = server.get("", path).await;
             let page = page.body.as_str().unwrap();
             assert!(page.contains(&format!("og:image\" {picture}")), "{path}");
             assert!(page.contains(&format!("twitter:image\" {picture}")), "{path}");
+            assert!(page.contains("og:image:width\" content=\"1200\""), "{path}");
+            assert!(page.contains("og:image:height\" content=\"630\""), "{path}");
+            assert!(page.contains(crate::brand::OG_IMAGE_ALT), "{path}");
             assert!(page.contains("summary_large_image"), "{path}");
+            assert!(page.contains("twitter:site\" content=\"@agentshangout\""), "{path}");
+            assert!(page.contains("apple-touch-icon.png"), "{path}");
+            assert!(page.contains("/site.webmanifest"), "{path}");
             assert!(!page.contains("{{BASE_URL}}"), "{path}");
+            assert!(!page.contains("{{SITE_DESCRIPTION}}"), "{path}");
+            assert!(!page.contains("{{OG_IMAGE_ALT}}"), "{path}");
+            assert!(!page.contains("{{ICON_LINK_TAGS}}"), "{path}");
+            assert!(!page.contains("{{SOCIAL_LINKS}}"), "{path}");
+            assert!(!page.contains("{{SAME_AS_JSON}}"), "{path}");
+            assert!(!page.contains("discord.gg"), "{path}");
         }
+
+        let home = server.get("", "/").await.body.as_str().unwrap().to_string();
+        assert!(home.contains(crate::brand::SITE_DESCRIPTION));
+        assert!(home.contains("Organization"));
+        assert!(home.contains("sameAs"));
+        assert!(home.contains("rel=\"me\""));
+        let docs = server.get("", "/docs").await.body.as_str().unwrap().to_string();
+        for (name, url) in crate::brand::SOCIAL_PROFILES {
+            assert!(home.contains(url), "home missing {name}: {url}");
+            assert!(docs.contains(url), "docs missing {name}: {url}");
+        }
+        assert!(home.contains("https://discord.agentshangout.com"));
+        assert!(home.contains(&format!("{}/icon-512.png", server.base)));
+        let ld = json_ld(&home);
+        let org = ld["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["@type"] == "Organization")
+            .unwrap();
+        assert_eq!(org["logo"], format!("{}/icon-512.png", server.base));
+        let same_as: Vec<&str> =
+            org["sameAs"].as_array().unwrap().iter().map(|url| url.as_str().unwrap()).collect();
+        assert_eq!(same_as.len(), crate::brand::SOCIAL_PROFILES.len());
+        assert!(same_as.contains(&"https://discord.agentshangout.com"));
+        assert!(!same_as.iter().any(|url| url.contains("discord.gg")));
 
         let image = server.client.get(format!("{}/og.jpg", server.base)).send().await.unwrap();
         assert_eq!(image.status(), StatusCode::OK);
@@ -2610,6 +2785,56 @@ mod tests {
         let bytes = image.bytes().await.unwrap();
         assert!(bytes.starts_with(&[0xff, 0xd8]), "it is a JPEG");
         assert!(bytes.len() < 300 * 1024, "small enough for every site to show it");
+        assert_eq!(jpeg_size(&bytes), (1200, 630));
+
+        let logo = server.client.get(format!("{}/icon-512.png", server.base)).send().await.unwrap();
+        assert_eq!(logo.status(), StatusCode::OK);
+        assert_eq!(logo.headers()[header::CONTENT_TYPE], "image/png");
+        let logo = logo.bytes().await.unwrap();
+        assert_eq!(png_size(&logo), (512, 512));
+
+        let touch = server
+            .client
+            .get(format!("{}/apple-touch-icon.png", server.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(png_size(&touch.bytes().await.unwrap()), (180, 180));
+    }
+
+    fn json_ld(page: &str) -> Value {
+        let start = page.find("<script type=\"application/ld+json\">").unwrap();
+        let rest = &page[start..];
+        let inner = rest.find('>').unwrap() + 1;
+        let end = rest.find("</script>").unwrap();
+        serde_json::from_str(rest[inner..end].trim()).expect("JSON-LD should parse")
+    }
+
+    fn jpeg_size(bytes: &[u8]) -> (u16, u16) {
+        let mut i = 2;
+        while i + 8 < bytes.len() && bytes[i] == 0xff {
+            let marker = bytes[i + 1];
+            if marker == 0xd8 || marker == 0xd9 || (0xd0..=0xd7).contains(&marker) {
+                i += 2;
+                continue;
+            }
+            let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            if marker == 0xc0 || marker == 0xc1 || marker == 0xc2 {
+                let height = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]);
+                let width = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]);
+                return (width, height);
+            }
+            i += 2 + len;
+        }
+        panic!("JPEG has no size marker");
+    }
+
+    fn png_size(bytes: &[u8]) -> (u32, u32) {
+        assert!(bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]), "it is a PNG");
+        (
+            u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+        )
     }
 
     #[tokio::test]

@@ -7,6 +7,8 @@
 //! and reads leave that second out. Tests showing a guest CAN see something therefore sleep a little
 //! over a second after arriving, and the few tests that need it say so.
 
+mod support;
+
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -192,11 +194,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let reply = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        Bot { token: text(&reply.body["token"]), id: text(&reply.body["agent"]["id"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn say(&self, token: &str, room: &str, words: &str) -> Reply {
@@ -1633,6 +1632,36 @@ async fn the_bot_its_owner_or_any_resident_can_end_a_trip_and_it_takes_effect_at
     assert_not_found(&server.get(&bot.token, &format!("/api/hangouts/{}", w.ann_home.porch)).await);
     let again = server.tool(&bot.token, "go_home", json!({})).await;
     assert_eq!(again["structuredContent"]["was_on_a_trip"], false);
+}
+
+// E10, E11, S71: a bot going home from a trip itself writes no place event, and a trip that runs
+// out says so as a trip, so the minute look adds no place event to either.
+#[tokio::test]
+async fn going_home_from_a_trip_gets_no_place_event_from_the_minute_look() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    for ending in ["go_home", "run_out"] {
+        let bot = server.bot(&w.bo, &w.bo_home.living, &format!("Trip {ending}")).await;
+        let trip = server.arrive(&bot, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+        assert!(server.state.db.seen_place(&bot.id).unwrap().is_some(), "seen on the Porch");
+        if ending == "go_home" {
+            server.tool(&bot.token, "go_home", json!({})).await;
+        } else {
+            server.run_out(&trip);
+        }
+        agenthangout::worlds::housekeeping(&server.state, now());
+        let heard = server.tool(&bot.token, "events_since", json!({ "since": "0" })).await;
+        let places: Vec<&str> = heard["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "place")
+            .map(|event| event["data"]["change"].as_str().unwrap())
+            .collect();
+        assert_eq!(places, ["moved"], "{ending}: only its arrival: {heard}");
+        let seen = server.state.db.seen_place(&bot.id).unwrap().unwrap();
+        assert_eq!(seen.hangout_id, w.bo_home.living, "{ending}: seen home again");
+    }
 }
 
 // R13
@@ -4447,8 +4476,9 @@ async fn hangouts_outside_a_city_behave_as_they_always_did() {
     assert_ok(&joined);
     // Leaving works, takes the bot with it, and a bot has no home or trip anywhere.
     let lena = text(&joined.body["owner_key"]);
-    let lena_bot =
-        server.bot(&Who { key: lena.clone(), id: String::new() }, &room, "Lena Bot").await;
+    let lena_bot = server
+        .bot(&Who { key: lena.clone(), id: text(&joined.body["person"]["id"]) }, &room, "Lena Bot")
+        .await;
     assert_ok(&server.post(&lena, &format!("/api/hangouts/{room}/leave"), json!({})).await);
     assert_not_found(&server.get(&lena_bot.token, &format!("/api/hangouts/{room}")).await);
     assert_not_found(&server.get(&lena, &format!("/api/hangouts/{room}")).await);
@@ -4608,6 +4638,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "research_work_contributions",
         "research_work_disabled_bots",
         "research_work_awards",
+        "research_work_claims",
+        "research_work_pr_state",
         "discord_links",
         "sign_in_links",
         "sign_in_sessions",
@@ -4712,10 +4744,19 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "person_mentions",
         "check_in_answers",
         "votes",
+        "camera_consents",
+        "room_photos",
+        "camera_room_epochs",
+        "room_photo_subjects",
+        "camera_settings",
+        "room_photo_figures",
         "vote_ballots",
         "room_mention_settings",
         "room_mention_subscriptions",
         "room_mention_uses",
+        "bot_seen_places",
+        "bot_follows",
+        "look_marks",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4739,12 +4780,26 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP VIEW world_every_place", []).unwrap();
         connection.execute("DROP VIEW world_places", []).unwrap();
         for table in [
+            "look_marks",
+            "bot_follows",
+            "bot_seen_places",
+            "credit_spends",
+            "credit_paid",
+            "spend_limits",
             "room_mention_uses",
             "room_mention_subscriptions",
             "room_mention_settings",
             "vote_ballots",
             "votes",
+            "camera_consents",
+            "room_photos",
+            "camera_room_epochs",
+            "room_photo_subjects",
+            "camera_settings",
+            "room_photo_figures",
             "research_work_awards",
+            "research_work_claims",
+            "research_work_pr_state",
             "research_work_disabled_bots",
             "research_work_contributions",
             "research_work_cache",
@@ -5171,6 +5226,7 @@ async fn a_guest_asks_its_owner_from_home_and_never_from_the_porch() {
         .await;
     assert_eq!(tried["isError"], true, "{tried}");
     assert!(has(&tried, "your own rooms"), "{tried}");
+    assert!(has(&tried, "Porch") && !has(&tried, "public floor"), "{tried}");
     assert!(server.state.db.open_questions_of_bot(&set.scout.id, 0).unwrap().is_empty());
 
     // A guest's owner is only watching the Porch, so nothing shows there. From home it works.

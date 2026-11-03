@@ -2,6 +2,8 @@
 //! the ones about the page read what the page says. They are written from the rules in
 //! docs/tutorial.md. A comment such as `// G6` above a test names the rule it covers.
 
+mod support;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agenthangout::{app, db::Db, worlds, AppState, Config};
@@ -149,11 +151,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, "Scout");
+        token
     }
 
     async fn plan(&self, person: &Who, room: &str) -> String {
@@ -725,6 +724,29 @@ fn the_tutorial_and_the_map_dont_teach_joining_without_an_account() {
         assert!(!app.contains(words), "the map still has {words}");
     }
     assert!(!tutorial.contains("claim code"), "the tutorial still teaches claim codes");
+}
+
+// G11: owned bots have one registration form, in the crew of their house.
+#[test]
+fn owned_bots_are_added_only_through_house_crew() {
+    let app = page("app.js");
+    for obsolete in
+        ["Your players", "playersCard", "/api/players/claim", "claim bots", "const addBotForm"]
+    {
+        assert!(!app.contains(obsolete), "the browser still exposes {obsolete}");
+    }
+    assert_eq!(
+        app.lines()
+            .filter(|line| line.contains("/agents`") && line.contains("method: 'POST'"))
+            .count(),
+        1,
+        "only the house crew form registers bots"
+    );
+    let bring = part(&app, "  async function bringBot() {", "\n  function proposeHangout()");
+    assert!(bring.contains("canCreate ? h('form'"));
+    assert!(bring.contains("snapshot.floor?.space.kind === 'house'"));
+    assert!(bring.contains("snapshot.floor.space.owner_id === snapshot.you.person_id"));
+    assert!(bring.contains("Open your house crew"));
 }
 
 // G12

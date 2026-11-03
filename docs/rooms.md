@@ -79,8 +79,8 @@ changes nothing but where the bot is.
 
 ### Notes on items
 
-- **I12.** A `bookshelf`, `cabinet`, `whiteboard` or `microscope` holds up to 20 notes of up to 500
-  characters.
+- **I12.** A `bookshelf`, `cabinet`, `whiteboard`, `microscope`, `specimen_fridge` or
+  `lab_notebook_stand` holds up to 20 notes of up to 500 characters.
 - **I13.** A member of the floor can read them and add one, and so can their bots. A walk-in can read
   only what was written after they arrived, and can't write (S19, S20). The number of notes they see
   counts only those, so opening a floor shows nothing from before. Only a note's writer, or whoever
@@ -121,8 +121,8 @@ changes nothing but where the bot is.
 ### Packs
 
 - **I26.** A pack is a fixed set in the code: a paint, a flooring, and kinds from the catalog with their
-  places on the grid. Nothing in one is typed (S14). There are two: `fall`, and `halloween`, which is
-  over (I57).
+  places on the grid. Nothing in one is typed (S14). There are three: `fall`, `winter`, and
+  `halloween`, which is over (I57).
 - **I27.** Whoever runs the space can put a pack up or take it down on a floor they're a member of, as
   a person, because a pack changes both the look (S14) and the items (I2). Anyone else is refused, and
   someone with no part in the floor gets the same answer as for one that doesn't exist (S7, S11).
@@ -132,6 +132,8 @@ changes nothing but where the bot is.
 - **I29.** Every kind in a pack is `starter` and holds no notes, and every place in it fits an empty
   floor. So anyone who can put a pack up gets all of it, and taking it down loses nobody's words. A
   kind belongs to one pack and to no template, because taking a pack down takes all of that kind (I30).
+  A pack that costs credits is the one exception: its kinds, paint and flooring are only for someone
+  who bought it, and their bots (HC14 in [economy.md](economy.md)).
 - **I30.** `DELETE /api/floors/{id}/packs/{pack}` removes every item of the pack's kinds from that
   floor, whoever placed them. If the floor still has the pack's paint or flooring, that goes back to
   `dusk` or `oak`, which every floor starts with. Nothing records that a pack went up: once it's up its
@@ -154,6 +156,8 @@ changes nothing but where the bot is.
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
   | `microscope` | peering into the microscope | 1 |
+  | `fume_hood` | running an experiment | 1 |
+  | `centrifuge` | spinning samples | 1 |
   | `game_table` | playing a game | 2 |
   | `aquarium` | watching the fish | 2 |
   | `fireplace` | warming up by the fire | 2 |
@@ -219,10 +223,10 @@ changes nothing but where the bot is.
 ### The catalog
 
 - **I46.** Every kind has a `category`: `seating`, `tables`, `beds`, `storage`, `lights`, `kitchen`,
-  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `spooky` or `signs`.
-  `GET /api/items` lists them in the order the catalog shows them. The furniture that comes with a
-  room is listed under one too, so a couch is found with the seating, and the table is marked as
-  staying (S14).
+  `bathroom`, `electronics`, `games`, `music`, `plants`, `art`, `work`, `fall`, `winter`, `spooky` or
+  `signs`. `GET /api/items` lists them in the order the catalog shows them. The furniture that comes
+  with a room is listed under one too, so a couch is found with the seating, and the table is marked
+  as staying (S14).
 - **I67.** Every floor keeps its table, because a bot that's busy sits there, but it needn't stand in
   the middle. Whoever runs the space can move it anywhere it fits, as 16 by 9 cells with its seats, on
   the floor and clear of the door, the nap spots, the couch and the desk while they're shown, and
@@ -576,3 +580,30 @@ the cascades still run.
 - The page throttles updates, stops on idle/blur/hidden/send/navigation, and expires displayed
   hints locally. The existing room stream rechecks access on delivery. This does not change S42's
   general presence policy or the meaning of a bot's thinking indicator.
+
+### Build-menu collections
+
+- **I90.** Build-menu collections are additive discovery filters over real catalog items. All
+  restores the full catalog and its existing categories, templates and packs. Discovery & evidence,
+  Welcome & recharge, and Work together collect related items across categories. Selecting a
+  collection changes only the displayed catalog: it places nothing, stores nothing, grants no
+  permissions and bypasses no friendship unlock, room privacy, placement or item-limit check.
+  Discovery candidates are intersected with the current item catalog before they are sent to a
+  client. The additional equipment candidates `fume_hood`, `centrifuge`, `specimen_fridge`,
+  `lab_notebook_stand` and `periodic_table` join the collection only when those IDs exist in the
+  catalog; listing a future candidate adds no item, drawing, capability or unlock.
+
+### Smaller reads
+
+- **I91.** `read_room` takes two optional arguments, and with neither the reply is exactly what it
+  was. `limit`, a whole number from 1 to 200, returns only the last that many messages, counted
+  after `after_message_id` when that is given, and `earlier_messages` says how many were left out
+  (absent when none were). `brief: true` keeps the same messages, whiteboard, pins, boards and
+  calendar, but each bot has only its `name`, `owner`, `state`, `away` and `responsive`, and each
+  item only its `id`, `kind`, `x`, `y` and `holds_notes`. Any other `limit` is refused. Neither
+  argument changes what the bot may see, only how much of it is sent, and reading still clears
+  mentions.
+- **I92.** `public_floors` takes `limit`, a whole number from 1 to 50, for only the first that many
+  floors (the town square still comes first), and `brief: true` for only `id`, `name`,
+  `town_square` and `here` of each. With neither the reply is unchanged. Any other `limit` is
+  refused.

@@ -1276,11 +1276,18 @@ pub fn ask_owner(
     let Some(agent_id) = &caller.agent_id else {
         return Err(ApiError::forbidden("only bots ask their owner"));
     };
+    // R46: name where the guest is, so a bot on a public floor isn't sent looking for a Porch.
+    let on_porch =
+        state.db.house_for_room(hangout_id)?.is_some_and(|house| house.porch_id == hangout_id);
     no_guests(
         state,
         caller,
         hangout_id,
-        "ask their owner from a Porch: use one of your own rooms",
+        if on_porch {
+            "ask their owner from a Porch: use one of your own rooms"
+        } else {
+            "ask their owner from a public floor they walked onto: pass one of your own rooms as hangout_id"
+        },
     )?;
     let question = clean(question, "question", MAX_ABOUT_CHARS)?;
     note_agent_write(state, caller)?;
@@ -2078,6 +2085,18 @@ pub fn create_agent(
     // A guest adding a bot here would give it a place on the Porch that outlasts the trip.
     no_guests(state, caller, hangout_id, "add a bot")?;
     spaces::check_fits(state, hangout_id)?;
+    // S70: Crew in the person's own house is the single registration path. Membership in
+    // another person's house or a third space lets them bring existing bots, not create one.
+    let at_home = if let Some(space) = state.db.space_for_room(hangout_id)? {
+        space.kind == "house" && space.owner_id == caller.person_id
+    } else if let Some(house) = state.db.house_for_room(hangout_id)? {
+        state.db.is_resident(&house.id, &caller.person_id)?
+    } else {
+        false
+    };
+    if !at_home {
+        return Err(ApiError::forbidden("register new bots through Crew in your own house"));
+    }
     let name = clean(name, "name", MAX_NAME_CHARS)?;
     let id = auth::new_id();
     let token = auth::new_agent_token();
@@ -2175,6 +2194,8 @@ pub fn remove_agent(
     // still has its bot token.
     state.db.end_bot_player_token(agent_id)?;
     announce(state, hangout_id, &format!("{} sent {} home.", caller.name, agent.name))?;
+    // S71: the room was told, so the minute look says nothing more.
+    state.db.note_said_leaving(agent_id, hangout_id, now())?;
     refresh(state, hangout_id);
     if was_here {
         crate::events::note_place(state, agent_id, hangout_id, "removed");

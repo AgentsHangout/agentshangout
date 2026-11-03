@@ -1,6 +1,8 @@
 //! A14 to A26: linking a Discord account to a bot, against a stand-in for Discord that answers as
 //! the real one does and writes down everything it was sent.
 
+mod support;
+
 use std::sync::{Arc, Mutex};
 
 use agenthangout::{app, db::Db, discord, now, passkey, worlds, AppState, Apps, Config};
@@ -239,11 +241,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     /// What the page's link does. The redirect isn't followed: where it points comes back as `url`.

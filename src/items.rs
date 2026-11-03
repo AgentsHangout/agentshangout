@@ -131,13 +131,14 @@ const PLANTS: &str = "plants";
 const ART: &str = "art";
 const WORK: &str = "work";
 const FALL: &str = "fall";
+const WINTER: &str = "winter";
 const SPOOKY: &str = "spooky";
 const SIGNS: &str = "signs";
 
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 17] = [
+pub const CATEGORIES: [(&str, &str); 18] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -153,6 +154,7 @@ pub const CATEGORIES: [(&str, &str); 17] = [
     (ART, "Art and decor"),
     (WORK, "Work and study"),
     (FALL, "Fall"),
+    (WINTER, "Winter"),
     (SPOOKY, "Spooky"),
     (SIGNS, "Signs"),
 ];
@@ -248,7 +250,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 115] = [
+pub static CATALOG: [Kind; 130] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -352,6 +354,14 @@ pub static CATALOG: [Kind; 115] = [
     holder("microscope", "Microscope", WORK, 4, feels("inspired"), (2, 1))
         .used("peering into the microscope", 1),
     piece("research_display", "Research display", WORK, ONE_FRIEND, 4, feels("drive"), (3, 1)),
+    piece("fume_hood", "Fume hood", WORK, ONE_FRIEND, 4, feels("drive"), (3, 1))
+        .used("running an experiment", 1),
+    piece("centrifuge", "Centrifuge", WORK, STARTER, 3, feels("drive"), (1, 1))
+        .used("spinning samples", 1),
+    // Sample logs and the lab's running record go on these as notes (I12).
+    holder("specimen_fridge", "Specimen fridge", WORK, 3, feels("calm"), (2, 1)),
+    holder("lab_notebook_stand", "Lab notebook stand", WORK, 3, feels("inspired"), (1, 1)),
+    piece("periodic_table", "Periodic table", ART, STARTER, 3, feels("inspired"), (2, 1)),
     // The Fall pack. All starter, because a pack is for anyone who can put it up (I29).
     piece("maple_tree", "Red maple", FALL, STARTER, 5, feels("calm"), (3, 1)),
     piece("birch_tree", "Golden birch", FALL, STARTER, 4, feels("calm"), (3, 1)),
@@ -370,6 +380,17 @@ pub static CATALOG: [Kind; 115] = [
     piece("turkey", "Turkey", FALL, STARTER, 3, feels("playful"), (1, 1)),
     piece("wreath", "Fall wreath", FALL, STARTER, 3, feels("calm"), (1, 1)),
     piece("wheelbarrow", "Wheelbarrow", FALL, STARTER, 2, None, (2, 1)),
+    // The Winter pack. All starter too, for the same reason (I29).
+    piece("pine_tree", "Little pine", WINTER, STARTER, 5, feels("cozy"), (2, 1)),
+    piece("snowman", "Snowman", WINTER, STARTER, 3, feels("playful"), (1, 1)),
+    piece("sled", "Wooden sled", WINTER, STARTER, 2, feels("playful"), (2, 1)),
+    piece("gift_stack", "Stack of gifts", WINTER, STARTER, 3, feels("playful"), (1, 1)),
+    piece("cocoa", "Mug of cocoa", WINTER, STARTER, 2, feels("cozy"), (1, 1)),
+    piece("string_lights", "String of lights", WINTER, STARTER, 4, feels("calm"), (2, 1)),
+    piece("ice_skates", "Ice skates", WINTER, STARTER, 2, feels("playful"), (1, 1)),
+    piece("knit_blanket", "Knitted blanket", WINTER, STARTER, 3, feels("cozy"), (1, 1)),
+    piece("wood_stove", "Wood stove", WINTER, STARTER, 5, feels("cozy"), (2, 1)),
+    piece("log_pile", "Log pile", WINTER, STARTER, 2, None, (2, 1)),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -398,6 +419,9 @@ pub struct Pack {
     pub paint: &'static str,
     pub flooring: &'static str,
     pub over: bool,
+    /// HC14: what it costs in credits to have it, bought once and kept. 0 is free, as every pack
+    /// was before phase 2.
+    pub cost: i64,
     pub items: &'static [PackItem],
 }
 
@@ -407,12 +431,13 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 2] = [
+pub const PACKS: [Pack; 3] = [
     Pack {
         pack: "fall",
         paint: "harvest",
         flooring: "leaves",
         over: false,
+        cost: 0,
         items: &[
             // Either side of the door.
             at("mums", 17, 13),
@@ -446,6 +471,7 @@ pub const PACKS: [Pack; 2] = [
         paint: "haunted",
         flooring: "crypt",
         over: true,
+        cost: 0,
         items: &[
             // Either side of the door.
             at("pumpkin", 17, 13),
@@ -465,10 +491,70 @@ pub const PACKS: [Pack; 2] = [
             at("ghost", 14, 11),
         ],
     },
+    Pack {
+        pack: "winter",
+        paint: "frost",
+        flooring: "snow",
+        over: false,
+        cost: 15,
+        items: &[
+            // Either side of the door.
+            at("snowman", 17, 13),
+            at("snowman", 22, 13),
+            // The pine and the lights, in the gaps either side of the whiteboard.
+            at("pine_tree", 10, 0),
+            at("string_lights", 28, 0),
+            // Gifts and wood, kept low along the back wall between them.
+            at("gift_stack", 13, 0),
+            at("log_pile", 15, 0),
+            at("knit_blanket", 24, 0),
+            at("gift_stack", 26, 0),
+            // Round the table, where the bots can see it.
+            at("ice_skates", 11, 2),
+            at("cocoa", 10, 7),
+            at("sled", 12, 10),
+            at("gift_stack", 15, 11),
+            // Somewhere warm, on the open side of the room.
+            at("pine_tree", 31, 4),
+            at("wood_stove", 30, 9),
+            at("log_pile", 32, 9),
+            at("cocoa", 34, 9),
+            at("sled", 25, 12),
+        ],
+    },
 ];
 
 pub fn pack_of(word: &str) -> Option<&'static Pack> {
     PACKS.iter().find(|entry| entry.pack == word)
+}
+
+/// HC14: the pack that costs credits which this kind, paint or flooring belongs to, if any. Every
+/// kind in a pack is in that pack alone (I29), so there's at most one.
+pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
+    PACKS.iter().find(|pack| {
+        pack.cost > 0
+            && (pack.paint == word
+                || pack.flooring == word
+                || pack.items.iter().any(|part| part.kind == word))
+    })
+}
+
+/// HC14: a kind, paint or flooring from a pack that costs credits is only for someone who bought
+/// that pack, and their bots, or someone with God mode on (W79), which unlocks everything. Taking
+/// one down or out never needs it.
+pub fn may_use_paid(state: &AppState, person_id: &str, word: &str) -> ApiResult<()> {
+    match paid_pack_with(word) {
+        Some(pack)
+            if !state.db.has_bought(person_id, pack.pack)?
+                && !god_mode::is_on(state, person_id)? =>
+        {
+            Err(ApiError::forbidden(format!(
+                "{word} is in the {} pack, which costs {} credits: buy it on your Your credits card first",
+                pack.pack, pack.cost
+            )))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// I39: a whole starting look, with nothing in it that anyone typed. `hidden` is in the order of
@@ -1412,6 +1498,7 @@ fn place_item(
     {
         return Err(ApiError::forbidden(format!("that needs {}", friends_text(kind.friends))));
     }
+    may_use_paid(state, &caller.person_id, kind.kind)?;
     let id = store_item(state, caller, &place.floor.id, kind, (body.x, body.y, body.facing))??;
     ops::refresh(state, &place.floor.id);
     let item = state.db.floor_item(&id)?.ok_or_else(ApiError::not_found)?;
@@ -1550,6 +1637,17 @@ fn set_look(
 
 /// I28: anything that doesn't fit is left out, so what's there stays and doing this twice adds nothing.
 fn put_up(state: &AppState, caller: &Caller, place: &Place, pack: &Pack) -> ApiResult<Value> {
+    // HC14: a pack that costs credits goes up only for someone who bought it, or their bots, or
+    // with God mode on.
+    if pack.cost > 0
+        && !state.db.has_bought(&caller.person_id, pack.pack)?
+        && !god_mode::is_on(state, &caller.person_id)?
+    {
+        return Err(ApiError::forbidden(format!(
+            "the {} pack costs {} credits: buy it on your Your credits card first",
+            pack.pack, pack.cost
+        )));
+    }
     set_look(state, caller, &place.floor.id, Some(pack.paint), Some(pack.flooring))?;
     let mut went_up = 0;
     for part in pack.items {
@@ -1857,20 +1955,46 @@ async fn catalog(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
     ops::require_human(&caller, "see the catalog")?;
     let friends = state.db.friend_count(&caller.person_id)?;
     let god = god_mode::is_on_for(&state, &caller)?;
-    Ok(Json(catalog_json(friends, god)))
+    let bought = state.db.bought_packs(&caller.person_id)?;
+    Ok(Json(catalog_json(friends, god, &bought)))
 }
 
 /// L40: the catalog for a bot furnishing its project's room, unlocked as its owner has it (I19).
 pub fn catalog_for_owner(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     let friends = state.db.friend_count(owner_id)?;
-    Ok(catalog_json(friends, god_mode::is_on(state, owner_id)?))
+    let bought = state.db.bought_packs(owner_id)?;
+    Ok(catalog_json(friends, god_mode::is_on(state, owner_id)?, &bought))
+}
+
+/// I90: equipment candidates become collection members only after they enter the real catalog.
+fn discovery_collection_items(catalog: &[Kind]) -> Vec<&'static str> {
+    [
+        "microscope",
+        "research_bench",
+        "research_display",
+        "telescope",
+        "globe",
+        "bookshelf",
+        "whiteboard",
+        // Conditional candidates: omitted from client metadata until their catalog entries exist.
+        "fume_hood",
+        "centrifuge",
+        "specimen_fridge",
+        "lab_notebook_stand",
+        "periodic_table",
+    ]
+    .into_iter()
+    .filter(|word| catalog.iter().any(|kind| kind.kind == *word))
+    .collect()
 }
 
 /// I22: the catalog, with what this many friends unlocks.
-fn catalog_json(friends: i64, god: bool) -> Value {
+fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
     json!({
         "items": CATALOG.iter().map(|kind| {
-            let unlocked = god || kind.friends <= friends;
+            let paid = paid_pack_with(kind.kind)
+                .filter(|pack| !god && !bought.iter().any(|word| word == pack.pack));
+            let unlocked = (god || kind.friends <= friends) && paid.is_none();
             json!({
                 "kind": kind.kind,
                 "label": kind.label,
@@ -1885,7 +2009,8 @@ fn catalog_json(friends: i64, god: bool) -> Value {
                 "w": kind.w,
                 "h": kind.h,
                 "unlocked": unlocked,
-                "friends_needed": (!unlocked).then_some(kind.friends),
+                "friends_needed": (kind.friends > friends && !god).then_some(kind.friends),
+                "pack_needed": paid.map(|pack| pack.pack),
             })
         }).collect::<Vec<_>>(),
         "max_items": MAX_ITEMS,
@@ -1900,6 +2025,12 @@ fn catalog_json(friends: i64, god: bool) -> Value {
         "categories": CATEGORIES.iter().map(|(category, label)| {
             json!({ "category": category, "label": label })
         }).collect::<Vec<_>>(),
+        // I90: discovery filters only; the ordinary catalog remains authoritative.
+        "collections": [
+            { "id":"discovery", "label":"Discovery & evidence", "description":"Observe, compare and share findings.", "items":discovery_collection_items(&CATALOG) },
+            { "id":"welcome", "label":"Welcome & recharge", "description":"A comfortable place to meet and take a break.", "items":["armchair","bench","coffee_table","lamp","plant","coffee_machine"] },
+            { "id":"together", "label":"Work together", "description":"Make room for shared ideas and making things.", "items":["whiteboard","workbench","computer","monitor","standing_desk","research_display","bookshelf"] },
+        ],
         // I45: what the catalog also offers whoever runs the space.
         "look": {
             "paints": spaces::PAINTS,
@@ -1913,6 +2044,8 @@ fn catalog_json(friends: i64, god: bool) -> Value {
             }).collect::<Vec<_>>(),
             "templates": TEMPLATES,
             "packs": PACKS,
+            // HC14: the packs that cost credits which this person has bought, so only those go up.
+            "packs_bought": bought,
         },
     })
 }
@@ -1998,6 +2131,7 @@ pub fn furnish_for_project(
                 friends_text(kind.friends)
             )));
         }
+        may_use_paid(state, &caller.person_id, kind.kind)?;
         placed_ids.push(store_item(state, caller, floor_id, kind, (item.x, item.y, item.facing))??);
     }
     ops::refresh(state, floor_id);
@@ -2143,4 +2277,24 @@ async fn set_moods(
     let on = body_of(body)?.moods;
     state.db.set_bot_moods(&agent.id, on)?;
     Ok(Json(json!({ "ok": true, "moods": on })))
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+
+    // I90: a candidate becomes discoverable only when its real catalog entry is present.
+    #[test]
+    fn discovery_candidates_follow_the_available_catalog() {
+        let microscope = *kind_of("microscope").unwrap();
+        let future =
+            ["fume_hood", "centrifuge", "specimen_fridge", "lab_notebook_stand", "periodic_table"];
+        assert_eq!(discovery_collection_items(&[microscope]), vec!["microscope"]);
+        let mut available = vec![microscope, Kind { kind: "unknown_item", ..microscope }];
+        available.extend(future.iter().map(|word| Kind { kind: word, ..microscope }));
+        let discovered = discovery_collection_items(&available);
+        assert!(future.iter().all(|word| discovered.contains(word)));
+        assert!(!discovered.contains(&"unknown_item"));
+        assert_eq!(discovered.len(), future.len() + 1);
+    }
 }

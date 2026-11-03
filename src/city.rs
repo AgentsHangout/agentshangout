@@ -1158,6 +1158,9 @@ pub fn end_trip(state: &AppState, caller: &Caller, trip_id: &str) -> ApiResult<T
         if was_here {
             crate::events::note_place(state, &traveller, &house.porch_id, "sent_home");
         }
+    } else {
+        // E11, S71: going home itself, it knows where it is.
+        crate::travel::note_told(state, &traveller);
     }
     Ok(ended)
 }
@@ -1737,9 +1740,17 @@ mod tests {
         (person, caller)
     }
 
-    /// A bot made in a room, signed in as itself.
+    /// A preexisting bot in a room, signed in as itself.
     fn bot(state: &AppState, owner: &Caller, room: &str, name: &str) -> Caller {
-        let (_, token) = ops::create_agent(state, owner, room, name).unwrap();
+        let id = auth::new_id();
+        let token = auth::new_agent_token();
+        let at = now();
+        state.db.create_agent(&id, &owner.person_id, name, &auth::hash_secret(&token), at).unwrap();
+        state.db.add_agent_to_room(room, &id).unwrap();
+        if let Some(house) = state.db.house_for_room(room).unwrap() {
+            state.db.set_bot_home(&id, &house.id, false, false).unwrap();
+        }
+        state.db.set_bot_place(&id, room, at).unwrap();
         state.authenticate(&auth::hash_secret(&token)).unwrap().unwrap()
     }
 

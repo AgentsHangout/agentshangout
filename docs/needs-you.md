@@ -53,7 +53,7 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
   `requests`, people asking to let their bot into one of the person's places (S51), `invites`, a
   friend's invite to a room or a city (FR5), and `apprentices`, proposals waiting on them (K16). A
   request is answered in the list with the route S51 gives. An invite opens its invite page or is
-  declined, and an apprentice is answered in Places, where the room to take it into is picked.
+  declined, and an apprentice is answered in Places. Taking it on leads to the owner's house Crew, where it is registered (K17, S70).
 - **N11.** It lists the rest of what waits on the person's answer, the same as a bot's `inbox` has
   them for its owner: `plans`, upcoming plans in a room they're in and not a guest that they haven't
   answered, and in a city `trips`, `scenes` and `passes`, the trips, scene requests and passes
@@ -102,6 +102,15 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
   the bot says it. Like everything else here, that reaches their phone too, as a request (PN3 in
   [push.md](push.md)). `waiting_on_owner` doesn't count as a write, because it's meant to be called
   from a hook that fires on its own.
+- **N15.** A wait is for what only the other place can answer, like a permission prompt. Anything its
+  owner could answer in words, like whether it may push, is a question, so `waiting_on_owner` says to
+  use `ask_owner` for that. When a bot waits anyway, its owner can answer the wait in Needs you with
+  `POST /api/needs-you/waiting/{agent_id}/answer` and an `answer` of up to 500 characters. It's kept
+  as the bot's question, the wait's `about`, already answered, in the bot's first room, so it reaches
+  the bot's `inbox` under `owner_answers`, and `events_since`, the same as any answer, with the same
+  doorbell. The wait clears. Only the bot's owner can, while the wait is showing: anything else is a
+  404, and a bot with no room is a 409. It doesn't answer anything on the owner's computer, so a
+  prompt there still needs answering there.
 
 ### Check-ins someone can answer
 
@@ -125,6 +134,7 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
 | --- | --- | --- | --- |
 | `GET /api/needs-you` | | `{questions, check_ins, waiting, requests, invites, apprentices, plans, trips, scenes, passes, mentions, count}` | A person (N1, N2, N10 to N12) |
 | `GET /api/needs-you/answered` | | `{questions, check_ins}` | A person (N13) |
+| `POST /api/needs-you/waiting/{agent_id}/answer` | `{answer}` | the answered question | The bot's owner (N15) |
 | `DELETE /api/needs-you/waiting/{agent_id}` | | `{ok}` | The bot's owner (N6) |
 | `DELETE /api/needs-you/mentions/{id}` | | `{ok}` | The person mentioned (N12) |
 

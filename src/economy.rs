@@ -1,15 +1,17 @@
-//! Hangout Credits, phase 1: earning only. The rules are HC1 to HC10 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19 and HC22 in docs/economy.md.
 //!
-//! Credits are worked out on read from plans and trips (HC1), the same way standing and a city's
-//! growth are, so nothing here is stored, nothing can drift from the facts and there's no table to
-//! edit. Phase 1 has no spending (HC9), so there's nothing yet that a stored ledger would be for.
+//! What could pay is worked out from plans and trips, the same way standing and a city's growth
+//! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
+//! pack is written to `credit_spends` (HC15). No table holds a balance: it's what was paid less what
+//! was spent, worked out on read (HC1).
 
 use serde::Serialize;
 
 use crate::{
     auth::Caller,
-    db::{CreditKind, Db},
+    db::{CreditKind, CreditLine, CreditSource, Db, Spend},
     error::{ApiError, ApiResult},
+    items::{pack_of, PACKS},
     ops::DAY_SECS,
 };
 
@@ -21,24 +23,60 @@ pub const GOOD_TRIP_HC: i64 = 5;
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
 pub const GATE_MEMBER_DAYS: i64 = 30;
+/// HC22: how many lines of history `credits` returns.
+pub const HISTORY_LINES: i64 = 50;
+/// HC17: how long an owner's yes through `ask_owner` lets their bot spend.
+pub const ASKED_FOR_SECS: i64 = DAY_SECS;
 
-/// What a person has earned, worked out now. Only they and their bots see it (HC8).
+/// What a person has, worked out now. Only they and their bots see it (HC8).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Credits {
     pub balance: i64,
     /// Credited for things that happened today (UTC), at most `DAILY_CAP_HC`.
     pub earned_today: i64,
     pub daily_cap: i64,
+    /// Everything ever spent (HC15).
+    pub spent: i64,
     /// How many of each thing paid at least in part, after the gate and the cap.
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
-    /// Cities they're in that don't pay them yet (HC5), by id.
+    /// Cities they're in that don't pay them anything new yet (HC5, HC13), by id.
     pub cities_not_earning: Vec<String>,
+    /// HC14: every pack that costs credits, and whether they have it.
+    pub packs: Vec<PackOffer>,
+    /// HC17: their bots, and how much each may spend a day.
+    pub bots: Vec<BotLimit>,
+    /// HC22: the latest things that paid them and that they spent, newest first.
+    pub history: Vec<CreditLine>,
 }
 
-/// HC5: when a city started paying this person, if it has. Only what happened from then on pays,
-/// so the 30 days can't be skipped by collecting for them afterwards.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PackOffer {
+    pub pack: &'static str,
+    pub cost: i64,
+    pub bought: bool,
+    /// Its season has passed, so it can't be bought (I57).
+    pub over: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BotLimit {
+    pub agent_id: String,
+    pub name: String,
+    pub daily: i64,
+    pub spent_today: i64,
+}
+
+fn worth(kind: CreditKind) -> i64 {
+    match kind {
+        CreditKind::Gathering => GATHERING_HC,
+        CreditKind::GoodTrip | CreditKind::HostedTrip => GOOD_TRIP_HC,
+    }
+}
+
+/// HC5 and HC13: when a city started paying this person, if it has. Only what happened from then
+/// on pays, so the 30 days can't be skipped by collecting for them afterwards.
 fn city_pays_from(
     db: &Db,
     city_id: &str,
@@ -48,46 +86,49 @@ fn city_pays_from(
     db.credit_gate_met_at(city_id, person_id, GATE_MEMBER_DAYS * DAY_SECS, now)
 }
 
-/// Works out a person's credits now (HC1 to HC7).
+/// Works out a person's credits now (HC1 to HC7, HC11 to HC15). Anything new that pays is written
+/// down first, so what's paid stays paid (HC12).
 pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> {
     let mut out = Credits { daily_cap: DAILY_CAP_HC, ..Credits::default() };
-    let mut sources = Vec::new();
+    let mut sources: Vec<(String, CreditSource)> = Vec::new();
     for city in db.cities_for_person(person_id)? {
         if let Some(from) = city_pays_from(db, &city.id, person_id, now)? {
             let paying = db.credit_sources(&city.id, person_id, now)?;
-            sources.extend(paying.into_iter().filter(|source| source.at >= from));
+            sources.extend(
+                paying
+                    .into_iter()
+                    .filter(|source| source.at >= from)
+                    .map(|source| (city.id.clone(), source)),
+            );
         } else {
             out.cities_not_earning.push(city.id);
         }
     }
-    // Earliest first across every city, so the cap (HC6) always keeps the same things.
-    sources.sort_by(|a, b| (a.at, a.kind, &a.source).cmp(&(b.at, b.kind, &b.source)));
-    let today = now.div_euclid(DAY_SECS);
-    let (mut day, mut paid_that_day) = (i64::MIN, 0);
-    for source in sources {
-        let source_day = source.at.div_euclid(DAY_SECS);
-        if source_day != day {
-            (day, paid_that_day) = (source_day, 0);
-        }
-        let worth = match source.kind {
-            CreditKind::Gathering => GATHERING_HC,
-            CreditKind::GoodTrip | CreditKind::HostedTrip => GOOD_TRIP_HC,
-        };
-        let paid = worth.min(DAILY_CAP_HC - paid_that_day);
-        if paid <= 0 {
-            continue;
-        }
-        paid_that_day += paid;
-        out.balance += paid;
-        if source_day == today {
-            out.earned_today += paid;
-        }
-        match source.kind {
-            CreditKind::Gathering => out.gatherings += 1,
-            CreditKind::GoodTrip => out.good_trips += 1,
-            CreditKind::HostedTrip => out.hosted_trips += 1,
-        }
-    }
+    db.settle_credits(person_id, &sources, worth, DAILY_CAP_HC, now)?;
+    let totals = db.credit_totals(person_id, now.div_euclid(DAY_SECS))?;
+    out.balance = totals.paid - totals.spent;
+    out.earned_today = totals.paid_today;
+    out.spent = totals.spent;
+    out.gatherings = totals.gatherings;
+    out.good_trips = totals.good_trips;
+    out.hosted_trips = totals.hosted_trips;
+    let bought = db.bought_packs(person_id)?;
+    out.packs = PACKS
+        .iter()
+        .filter(|pack| pack.cost > 0)
+        .map(|pack| PackOffer {
+            pack: pack.pack,
+            cost: pack.cost,
+            bought: bought.iter().any(|word| word == pack.pack),
+            over: pack.over,
+        })
+        .collect();
+    out.bots = db
+        .spend_limits(person_id, now)?
+        .into_iter()
+        .map(|(agent_id, name, daily, spent_today)| BotLimit { agent_id, name, daily, spent_today })
+        .collect();
+    out.history = db.credit_history(person_id, HISTORY_LINES)?;
     Ok(out)
 }
 
@@ -98,4 +139,121 @@ pub fn credits_of(db: &Db, caller: &Caller, now: i64) -> ApiResult<Credits> {
         return Err(ApiError::not_found());
     }
     Ok(credits(db, &caller.person_id, now)?)
+}
+
+/// HC14 to HC17: buys a pack that costs credits. A person buys for themselves. A bot buys for its
+/// owner, only with `asked`, the id of an `ask_owner` question it asked about this pack in the last
+/// day that its owner answered yes to, and only within the daily limit its owner set.
+pub fn spend(
+    db: &Db,
+    caller: &Caller,
+    word: &str,
+    asked: Option<&str>,
+    now: i64,
+) -> ApiResult<Credits> {
+    if caller.is_house {
+        return Err(ApiError::not_found());
+    }
+    let pack = pack_of(word)
+        .filter(|pack| pack.cost > 0)
+        .ok_or_else(|| ApiError::bad_request("that isn't a pack you can buy: see credits"))?;
+    if pack.over {
+        return Err(ApiError::conflict("that pack's season is over, so it can't be bought"));
+    }
+    if let Some(agent_id) = &caller.agent_id {
+        owner_said_yes(db, caller, agent_id, pack.pack, asked, now)?;
+    }
+    // What's paid but not written down yet counts, so work it out first.
+    credits(db, &caller.person_id, now)?;
+    match db.spend_credits(
+        &caller.person_id,
+        pack.pack,
+        pack.cost,
+        caller.agent_id.as_deref(),
+        now,
+    )? {
+        Spend::Spent { .. } => Ok(credits(db, &caller.person_id, now)?),
+        Spend::AlreadyHave => Err(ApiError::conflict("you already have that pack")),
+        Spend::TooFew { balance } => Err(ApiError::conflict(format!(
+            "that pack costs {} credits and the balance is {balance}",
+            pack.cost
+        ))),
+        Spend::OverBotLimit { left_today } => Err(ApiError::forbidden(format!(
+            "that's more than this bot may spend today ({left_today} left). Its owner sets the \
+             limit on their Your credits card"
+        ))),
+    }
+}
+
+/// HC17: a bot spends only on its owner's own yes. A check-in, a room message or a note never
+/// counts, because only `ask_owner` reaches the owner and nobody else can answer it.
+fn owner_said_yes(
+    db: &Db,
+    caller: &Caller,
+    agent_id: &str,
+    pack: &str,
+    asked: Option<&str>,
+    now: i64,
+) -> ApiResult<()> {
+    let refused = || {
+        ApiError::forbidden(format!(
+            "a bot spends its owner's credits only on their yes. Ask with ask_owner, naming the \
+             {pack} pack, then pass that question's id as asked once they say yes"
+        ))
+    };
+    let question = db.owner_question(asked.ok_or_else(refused)?)?.ok_or_else(refused)?;
+    let yes = question.answer.as_deref().is_some_and(said_yes);
+    let recent = question.answered_at.is_some_and(|at| now - at <= ASKED_FOR_SECS);
+    let about_it = question.question.to_lowercase().contains(pack);
+    if question.agent_id != agent_id
+        || question.owner_id != caller.person_id
+        || !yes
+        || !recent
+        || !about_it
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/// Whether an answer reads as a yes. Anything unclear is a no, so a bot has to ask again.
+fn said_yes(answer: &str) -> bool {
+    let first =
+        answer.trim().split(|c: char| !c.is_alphanumeric()).next().unwrap_or("").to_lowercase();
+    matches!(first.as_str(), "yes" | "y" | "yeah" | "yep" | "ok" | "okay" | "sure" | "buy")
+}
+
+/// HC17: an owner sets how much one of their bots may spend a day.
+pub fn set_bot_limit(
+    db: &Db,
+    caller: &Caller,
+    agent_id: &str,
+    daily: i64,
+    now: i64,
+) -> ApiResult<Credits> {
+    if caller.is_agent() {
+        return Err(ApiError::forbidden("only a bot's owner sets what it may spend"));
+    }
+    if !(0..=1_000).contains(&daily) {
+        return Err(ApiError::bad_request("a daily limit is from 0 to 1000 credits"));
+    }
+    if !db.set_spend_limit(&caller.person_id, agent_id, daily)? {
+        return Err(ApiError::not_found());
+    }
+    Ok(credits(db, &caller.person_id, now)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::said_yes;
+
+    #[test]
+    fn only_a_plain_yes_lets_a_bot_spend() {
+        for yes in ["Yes", "yes, buy it", "OK", "y", "Sure thing", "buy"] {
+            assert!(said_yes(yes), "{yes}");
+        }
+        for no in ["no", "not yet", "hold", "", "maybe yes", "nope", "yesterday"] {
+            assert!(!said_yes(no), "{no}");
+        }
+    }
 }

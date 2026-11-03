@@ -2,6 +2,8 @@
 //! rules in docs/looks.md. A comment such as `// C8` above a test names the rule it covers. Most of
 //! these are about what strangers, walk-ins, bots and the public can't do.
 
+mod support;
+
 use std::{collections::BTreeSet, time::Duration};
 
 use agenthangout::{
@@ -187,11 +189,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        Bot { id: text(&made["agent"]["id"]), token: text(&made["token"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn dress(&self, who: &Who, look: Value) -> Reply {
@@ -323,16 +322,16 @@ fn table<'a>(source: &'a str, name: &str) -> &'a str {
 #[tokio::test]
 async fn every_word_in_the_wardrobe_can_be_worn_and_nothing_else_can() {
     let server = Server::start().await;
-    let (_, ann) = server.someone("Ann").await;
     for part in PERSON_PARTS {
+        let (_, ann) = server.someone(&format!("Ann {}", part.part)).await;
         for choice in part.choices {
             let reply = server.dress(&ann, json!({ part.part: choice.choice })).await.ok();
             assert_eq!(reply["look"][part.part], choice.choice);
         }
     }
-    let (room, cy) = server.someone("Cy").await;
-    let scout = server.bot(&cy, &room, "Scout").await;
     for part in BOT_PARTS {
+        let (room, cy) = server.someone(&format!("Cy {}", part.part)).await;
+        let scout = server.bot(&cy, &room, "Scout").await;
         for choice in part.choices {
             let reply =
                 server.dress_bot(&cy, &scout, json!({ part.part: choice.choice })).await.ok();
@@ -858,6 +857,8 @@ async fn a_house_bot_goes_with_its_house_as_it_does_for_everything_else() {
         .ok();
     let home = Bot { id: text(&home["agent"]["id"]), token: text(&home["token"]) };
     server.dress_bot(&zed, &home, json!({ "hat": "top_hat" })).await.ok();
+    let denied = server.post(&home.token, "/mcp", json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"your_look", "arguments":{"look":{"hat":"crown"}}}})).await.ok();
+    assert_eq!(denied["result"]["isError"], true);
     assert_eq!(server.get(&zed.key, "/api/looks").await.ok()["bots"][0]["id"], home.id.as_str());
 
     server.delete(&ann.key, &format!("/api/houses/{house}/residents/{}", zed.id)).await.ok();
@@ -869,7 +870,7 @@ async fn a_house_bot_goes_with_its_house_as_it_does_for_everything_else() {
 // C8
 
 #[tokio::test]
-async fn a_bot_cant_change_any_look_and_has_no_tool_for_it() {
+async fn a_bot_cannot_use_the_human_look_routes() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let scout = server.bot(&ann, &room, "Scout").await;
@@ -897,12 +898,7 @@ async fn a_bot_cant_change_any_look_and_has_no_tool_for_it() {
         .map(|tool| text(&tool["name"]))
         .collect();
     assert!(!names.is_empty());
-    assert!(
-        names.iter().all(|name| !name.contains("look")
-            && !name.contains("dress")
-            && !name.contains("wardrobe")),
-        "{names:?}"
-    );
+    assert!(names.iter().any(|name| name == "your_look"), "{names:?}");
 }
 
 // C9
@@ -936,6 +932,8 @@ async fn a_person_can_make_sixty_changes_a_minute_across_themselves_and_their_bo
         server.get(&ann.key, "/api/looks").await.ok()["you"]["look"],
         json!({ "hat": "cap" })
     );
+    let denied = server.post(&scout.token, "/mcp", json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"your_look", "arguments":{"look":{"hat":"crown"}}}})).await.ok();
+    assert_eq!(denied["result"]["isError"], true);
     // It's one person's count.
     server.dress(&bo, json!({ "hat": "crown" })).await.ok();
 }
@@ -1168,7 +1166,15 @@ async fn a_guest_and_a_player_someone_claimed_have_no_look() {
     server.dress(&ann, json!({ "hat": "witch" })).await.ok();
     let wave = json!({ "action": "emote", "emote": "wave" });
     let guest = server.post("", "/api/public/join", json!({})).await.ok();
-    let claimed = server.post("", "/api/public/join", json!({})).await.ok();
+    // Preserve coverage for players claimed before crew-only onboarding.
+    let token = agenthangout::auth::new_guest_token();
+    let claim = agenthangout::auth::new_claim_code();
+    server.state.db.create_guest(&hash_secret(&token), &hash_secret(&claim), now()).unwrap();
+    assert!(matches!(
+        server.state.db.claim_player(&hash_secret(&claim), &ann.id, 20, 0).unwrap(),
+        agenthangout::db::Claimed::Done(_)
+    ));
+    let claimed = json!({ "player_token": token });
     for joined in [&guest, &claimed] {
         server
             .post(
@@ -1179,10 +1185,6 @@ async fn a_guest_and_a_player_someone_claimed_have_no_look() {
             .await
             .ok();
     }
-    server
-        .post(&ann.key, "/api/players/claim", json!({ "claim_code": claimed["claim_code"] }))
-        .await
-        .ok();
 
     let view = server.commons().await;
     let rows = view["players"].as_array().unwrap();
@@ -1336,4 +1338,30 @@ async fn the_wardrobe_gives_a_person_their_own_looks_and_only_theirs() {
 
     server.get(&scout.token, "/api/looks").await.refused(StatusCode::FORBIDDEN);
     server.get("", "/api/looks").await.refused(StatusCode::UNAUTHORIZED);
+}
+
+// C8: a bot chooses only its own look through the wardrobe tool.
+#[tokio::test]
+async fn a_bot_can_choose_its_own_look() {
+    let server = Server::start().await;
+    let (room, owner) = server.someone("Owner").await;
+    let bot = server.bot(&owner, &room, "Bot").await;
+    let other = server.bot(&owner, &room, "Other").await;
+    let wardrobe = server.tool(&bot.token, "your_look", json!({})).await;
+    assert!(wardrobe["parts"].is_array());
+    let changed = server
+        .tool(&bot.token, "your_look", json!({"look": {"chest": "star", "hat": "crown"}}))
+        .await;
+    assert_eq!(changed["look"]["chest"], "star");
+    server.tool(&bot.token, "your_look", json!({"id": other.id, "look": {"shell":"red"}})).await;
+    assert_eq!(server.stored(Wearer::Bot, &other.id), 0);
+    let person = server.post(&owner.key, "/mcp", json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"your_look", "arguments":{}}})).await.refused(StatusCode::FORBIDDEN);
+    assert!(text(&person["error"]).contains("bot token"));
+    let invalid = server.post(&bot.token, "/mcp", json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"your_look", "arguments":{"look":{"hat":"cap", "chest":"invalid"}}}})).await.ok();
+    assert_eq!(invalid["result"]["isError"], true);
+    let still = server.tool(&bot.token, "your_look", json!({})).await;
+    assert_eq!(still["look"]["hat"], "crown");
+    let reset = server.tool(&bot.token, "your_look", json!({"look":{"chest":null}})).await;
+    assert!(reset["look"]["chest"].is_null());
+    assert_eq!(server.snapshot(&owner.key, &room).await["looks"]["bots"][&bot.id]["hat"], "crown");
 }

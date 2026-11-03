@@ -273,7 +273,7 @@ impl Server {
         let body = self.post("/api/public/join", json!({})).ip(&ip).send().await.ok();
         Guest {
             token: body["player_token"].as_str().unwrap().to_string(),
-            claim: body["claim_code"].as_str().unwrap().to_string(),
+            claim: String::new(),
             name: body["name"].as_str().unwrap().to_string(),
         }
     }
@@ -365,18 +365,13 @@ impl Server {
     }
 
     async fn bot_in(&self, key: &str, person: &str, hangout: &str, name: &str) -> Bot {
-        let bot = self
-            .post(&format!("/api/hangouts/{hangout}/agents"), json!({ "name": name }))
-            .token(key)
-            .send()
-            .await
-            .ok();
+        let (agent, token) = support::legacy_bot(&self.state, person, hangout, name);
         Bot {
             key: key.to_string(),
             person: person.to_string(),
             hangout: hangout.to_string(),
-            token: bot["token"].as_str().unwrap().to_string(),
-            agent: bot["agent"]["id"].as_str().unwrap().to_string(),
+            token,
+            agent: agent.id,
         }
     }
 
@@ -2013,6 +2008,12 @@ async fn no_visit_to_a_private_page_or_route_is_ever_noticed_whatever_the_visito
         "/outside-decor.js",
         "/pets.js",
         "/favicon.svg",
+        "/favicon.ico",
+        "/favicon-32.png",
+        "/apple-touch-icon.png",
+        "/icon-192.png",
+        "/icon-512.png",
+        "/site.webmanifest",
         "/indexnow.txt",
         "/mcp",
         "/public",
@@ -2146,6 +2147,12 @@ async fn every_answer_to_every_method_on_every_page_asset_and_world_route_carrie
         "/passkey.js",
         "/plan-invite.js",
         "/favicon.svg",
+        "/favicon.ico",
+        "/favicon-32.png",
+        "/apple-touch-icon.png",
+        "/icon-192.png",
+        "/icon-512.png",
+        "/site.webmanifest",
         "/og.jpg",
         "/llms-full.txt",
         "/.well-known/mcp-registry-auth",
@@ -3007,15 +3014,8 @@ async fn ending_a_session_replacing_the_key_or_removing_a_passkey_stops_exactly_
     );
     assert_eq!(acts(&b).await, StatusCode::OK);
     spent += 1;
-    // A guest claimed on the way: it is Ann's now, and it has a token of its own.
-    let guest = server.guest().await;
-    let claimed = server
-        .post("/api/players/claim", json!({ "claim_code": guest.claim }))
-        .cookie(&b)
-        .send()
-        .await;
-    assert_eq!(claimed.status, StatusCode::OK, "{}", claimed.show());
-    let claimed_id = claimed.body["player"]["id"].as_i64().unwrap();
+    // Historical claimed players retain their independent token and revocation coverage.
+    let (guest, claimed_id) = legacy_claimed_player(&server.state.db, &ann.id);
     assert_eq!(server.act(&guest.token, COMMONS, wave()).await.status, StatusCode::OK);
     // Replacing the key ends every session, the old key, and starts one for the device that did it.
     let rotated = server.post("/api/key/rotate", json!({})).cookie(&b).send().await;
@@ -3105,58 +3105,39 @@ async fn ending_a_session_replacing_the_key_or_removing_a_passkey_stops_exactly_
             .send()
             .await
             .status,
-        StatusCode::NOT_FOUND
+        StatusCode::GONE
     );
 }
 
 // W10, W11
 #[tokio::test]
-async fn a_claim_code_is_dead_once_its_guest_has_idled_out_and_a_claimed_guest_never_idles_out() {
+async fn claiming_is_retired_guests_expire_and_historical_claimed_players_do_not() {
     let server = Server::start().await;
     let ann = server.person("Ann").await;
-    let (stale, nearly, fresh) = (server.guest().await, server.guest().await, server.guest().await);
+    let (stale, fresh) = (server.guest().await, server.guest().await);
+    let (legacy, _) = legacy_claimed_player(&server.state.db, &ann.id);
     let at = now();
-    for (guest, ago) in [(&stale, 7 * 86_400 + 60), (&nearly, 7 * 86_400 - 120)] {
-        let id = server.player_id(&guest.token).await;
-        last_seen(&server, &server.player_row(id), at, ago);
+    let id = server.player_id(&stale.token).await;
+    last_seen(&server, &server.player_row(id), at, 7 * 86_400 + 60);
+    for guest in [&stale, &fresh, &legacy] {
+        let refused = server
+            .post("/api/players/claim", json!({ "claim_code": guest.claim }))
+            .token(&ann.key)
+            .send()
+            .await;
+        assert_eq!(refused.status, StatusCode::GONE, "{}", refused.show());
     }
-    // A guest that idled out can't be claimed, and its token is dead.
-    let late = server
-        .post("/api/players/claim", json!({ "claim_code": stale.claim }))
-        .token(&ann.key)
-        .send()
-        .await;
-    assert_eq!(late.status, StatusCode::NOT_FOUND, "{}", late.show());
     assert_eq!(server.act(&stale.token, COMMONS, wave()).await.status, StatusCode::UNAUTHORIZED);
-    // One that was about to is claimed in time, and from then on it is the person's.
-    let in_time = server
-        .post("/api/players/claim", json!({ "claim_code": nearly.claim }))
-        .token(&ann.key)
-        .send()
-        .await;
-    assert_eq!(in_time.status, StatusCode::OK, "{}", in_time.show());
-    let month_on = at + 30 * 86_400;
     let headers = |token: &str| {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
         headers
     };
-    assert!(
-        worlds::player_from_headers(&server.state, &headers(&nearly.token), month_on).is_ok(),
-        "a claimed player idled out"
-    );
-    assert!(
-        worlds::player_from_headers(&server.state, &headers(&fresh.token), month_on).is_err(),
-        "a guest nobody claimed never idled out"
-    );
-    // Claimed, a guest still plays in The Commons with a bigger day.
-    server
-        .post("/api/players/claim", json!({ "claim_code": fresh.claim }))
-        .token(&ann.key)
-        .send()
-        .await
-        .ok();
-    assert_eq!(server.me(&fresh.token, COMMONS).await["moves_per_day"], 200);
+    let month_on = at + 30 * 86_400;
+    assert!(worlds::player_from_headers(&server.state, &headers(&legacy.token), month_on).is_ok());
+    assert!(worlds::player_from_headers(&server.state, &headers(&fresh.token), month_on).is_err());
+    assert_eq!(server.me(&legacy.token, COMMONS).await["moves_per_day"], 200);
+    assert_eq!(server.me(&fresh.token, COMMONS).await["moves_per_day"], 30);
 }
 
 // W1, W3, W4, W18
@@ -4754,4 +4735,17 @@ async fn the_guides_send_a_new_agent_to_look_and_tell_a_bot_to_file_a_bug() {
         let saw = text.contains("ile only what you saw yourself");
         assert!(saw, "{name} lets a bot file what it was told to");
     }
+}
+
+// Build pre-W11-retirement state directly; new HTTP guests cannot acquire an owner.
+fn legacy_claimed_player(db: &Db, person_id: &str) -> (Guest, i64) {
+    let token = auth::new_guest_token();
+    let claim = auth::new_claim_code();
+    let player =
+        db.create_guest(&auth::hash_secret(&token), &auth::hash_secret(&claim), now()).unwrap();
+    assert!(matches!(
+        db.claim_player(&auth::hash_secret(&claim), person_id, 20, 0).unwrap(),
+        agenthangout::db::Claimed::Done(_)
+    ));
+    (Guest { token, claim, name: String::new() }, player.id)
 }

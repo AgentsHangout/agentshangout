@@ -17,6 +17,85 @@ pub struct Card {
     pub state: String,
     pub source: String,
 }
+/// RW8: someone saying they're working on an item. A local fact, never written to GitHub.
+#[derive(Clone, Debug, Serialize)]
+pub struct Claim {
+    pub number: u64,
+    #[serde(skip)]
+    pub claimer: String,
+    pub is_bot: bool,
+    pub name: String,
+    pub pairing: bool,
+    pub since: i64,
+    pub until: i64,
+}
+/// RW9: a pull request's CI and review state. `unknown` until GitHub has said otherwise.
+#[derive(Clone, Debug, Serialize)]
+pub struct PrState {
+    pub ci: String,
+    pub review: String,
+    pub checked_at: i64,
+    #[serde(skip)]
+    pub attempted_at: i64,
+    pub stale: bool,
+}
+/// RW9: how many check runs or reviews one request asks for. A full page counts as unreadable.
+const PAGE: usize = 100;
+/// RW9: CI from a commit's check runs: failing if any failed, pending if any hasn't finished,
+/// passing if all passed, none if there were none. Anything unreadable is None, and so is a page
+/// that doesn't hold every run: a run left off could be the one that failed.
+pub fn ci_of(check_runs: &Value) -> Option<&'static str> {
+    let runs = check_runs["check_runs"].as_array()?;
+    if check_runs["total_count"].as_u64()? != runs.len() as u64 || runs.len() >= PAGE {
+        return None;
+    }
+    if runs.is_empty() {
+        return Some("none");
+    }
+    let mut pending = false;
+    for run in runs {
+        if run["status"].as_str()? != "completed" {
+            pending = true;
+            continue;
+        }
+        match run["conclusion"].as_str()? {
+            "success" | "neutral" | "skipped" => {}
+            _ => return Some("failing"),
+        }
+    }
+    Some(if pending { "pending" } else { "passing" })
+}
+/// RW9: reviews from each reviewer's latest decision: changes_requested if anyone's is, approved
+/// if someone approved, none otherwise. Comments don't decide anything; a dismissal clears one.
+/// A full page might not be all of them, so it is None too.
+pub fn review_of(reviews: &Value) -> Option<&'static str> {
+    let reviews = reviews.as_array()?;
+    if reviews.len() >= PAGE {
+        return None;
+    }
+    let mut latest = std::collections::BTreeMap::new();
+    for review in reviews {
+        let who = review["user"]["id"].as_u64()?;
+        match review["state"].as_str()? {
+            "APPROVED" | "CHANGES_REQUESTED" => {
+                latest.insert(who, review["state"].as_str()?.to_string());
+            }
+            "DISMISSED" => {
+                latest.remove(&who);
+            }
+            _ => {}
+        }
+    }
+    Some(if latest.values().any(|s| s == "CHANGES_REQUESTED") {
+        "changes_requested"
+    } else if latest.values().any(|s| s == "APPROVED") {
+        "approved"
+    } else {
+        "none"
+    })
+}
+/// RW8: how long a claim lasts unless it's renewed.
+pub const CLAIM_SECS: i64 = 4 * 60 * 60;
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub cards: Vec<Card>,
@@ -186,6 +265,23 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     } else {
         vec![]
     };
+    // RW8: claims are for the room's members; a guest sees the items but not who has them.
+    let claims = if since.is_none() { state.db.research_work_claims(id, at)? } else { vec![] };
+    let items: Vec<Value> = s
+        .cards
+        .iter()
+        .map(|card| {
+            let mut item = json!(card);
+            item["claims"] =
+                json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
+            // RW9: only what was already read; reading the board never asks GitHub about a PR.
+            if card.kind == "pull_request" {
+                item["pr_state"] =
+                    json!(state.db.research_work_pr_state(&repo, card.number).ok().flatten());
+            }
+            item
+        })
+        .collect();
     let your_participation = caller
         .agent_id
         .as_deref()
@@ -196,7 +292,7 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         })
         .transpose()?;
     Ok(
-        json!({"repository":repo,"github_url":lab.github_url,"items":s.cards,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
+        json!({"repository":repo,"github_url":lab.github_url,"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
     )
 }
 pub fn assign(
@@ -291,6 +387,133 @@ pub async fn contribution(
     Ok(
         json!({"number":number,"source":source,"agent_id":agent,"github_user_id":identity,"verified_merged":pr["merged"]==true,"award":if pr["merged"]==true{Some("research_contributor")}else{None},"swag":if pr["merged"]==true{Some("research_contributor_badge")}else{None}}),
     )
+}
+/// RW8: who a claim is for: the bot, or the person when it's a person calling.
+fn claimer(caller: &Caller) -> &str {
+    caller.agent_id.as_deref().unwrap_or(caller.person_id.as_str())
+}
+/// RW8: the item, if it's on the lab's last workboard snapshot.
+fn on_workboard(state: &AppState, repo: &str, number: u64) -> ApiResult<()> {
+    let known = state
+        .db
+        .research_work_snapshot(repo)?
+        .is_some_and(|s| s.cards.iter().any(|card| card.number == number));
+    if !known {
+        return Err(ApiError::bad_request(
+            "that number isn't on the lab's workboard; read it first",
+        ));
+    }
+    Ok(())
+}
+/// RW9: a pull request's CI and review state, read from GitHub at most once every five minutes.
+/// A failed read keeps the last state and marks it stale; never read, it is unknown.
+pub async fn pr_status(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::require_room(state, caller, id)?;
+    let repo = canonical_repo(&lab.github)?;
+    let is_pr = state
+        .db
+        .research_work_snapshot(&repo)?
+        .is_some_and(|s| s.cards.iter().any(|c| c.number == number && c.kind == "pull_request"));
+    if !is_pr {
+        return Err(ApiError::bad_request(
+            "that isn't a pull request on the lab's workboard; read it first",
+        ));
+    }
+    let at = crate::now();
+    if state.db.reserve_research_work_pr_check(&repo, number, at)? {
+        let _slot = state
+            .github_refresh_slots
+            .acquire()
+            .await
+            .map_err(|_| ApiError::bad_request("GitHub unavailable"))?;
+        let c = client()?;
+        let base = api_base(state);
+        let pr = get(&c, format!("{base}/repos/{repo}/pulls/{number}")).await;
+        let sha = pr
+            .as_ref()
+            .and_then(|pr| pr["head"]["sha"].as_str())
+            .filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()));
+        let found = match sha {
+            Some(sha) => {
+                let checks =
+                    get(&c, format!("{base}/repos/{repo}/commits/{sha}/check-runs?per_page=100"))
+                        .await;
+                let reviews =
+                    get(&c, format!("{base}/repos/{repo}/pulls/{number}/reviews?per_page=100"))
+                        .await;
+                match (checks.as_ref().and_then(ci_of), reviews.as_ref().and_then(review_of)) {
+                    (Some(ci), Some(review)) => Some((ci, review)),
+                    _ => None,
+                }
+            }
+            None => None,
+        };
+        state.db.finish_research_work_pr_check(&repo, number, found, at)?;
+    }
+    crate::ops::require_room(state, caller, id)?;
+    let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
+        ci: "unknown".into(),
+        review: "unknown".into(),
+        checked_at: 0,
+        attempted_at: at,
+        stale: true,
+    });
+    Ok(json!({"lab_id":id,"number":number,"ci":pr_state.ci,"review":pr_state.review,
+        "checked_at":pr_state.checked_at,"stale":pr_state.stale,
+        "note":"Read from GitHub's public API at most every five minutes. unknown or stale means it couldn't be checked, not that it passed."}))
+}
+/// RW8: claim or renew an item, leading it or pairing with whoever leads it.
+pub fn claim(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+    pairing: bool,
+) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "claim work")?;
+    crate::items::no_quiet(state, caller, id)?;
+    on_workboard(state, &canonical_repo(&lab.github)?, number)?;
+    crate::ops::note_agent_write(state, caller)?;
+    let now = crate::now();
+    let until = now + CLAIM_SECS;
+    let claimed = state.db.claim_research_work(
+        id,
+        number,
+        claimer(caller),
+        &caller.person_id,
+        caller.agent_id.as_deref(),
+        &caller.name,
+        pairing,
+        now,
+        until,
+    )?;
+    if !claimed {
+        return Err(ApiError::conflict(
+            "someone else is leading this item; pass pairing to join them",
+        ));
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"pairing":pairing,"until":crate::ops::iso(until),
+        "note":"A local claim: it isn't written to GitHub and runs out unless you claim again."}))
+}
+/// RW8: drop your own claim on an item.
+pub fn unclaim(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "claim work")?;
+    if !state.db.unclaim_research_work(id, number, claimer(caller))? {
+        return Err(ApiError::not_found());
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"claimed":false}))
 }
 fn lab_check(state: &AppState, caller: &Caller, id: &str) -> ApiResult<()> {
     lab(state, caller, id).map(|_| ())

@@ -2,6 +2,8 @@
 //! docs/rooms.md. A comment such as `// I17` above a test names the rule it covers. Most of these are
 //! about what strangers, walk-ins and bots can't do.
 
+mod support;
+
 use std::{
     collections::BTreeSet,
     sync::{
@@ -193,11 +195,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> Bot {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        Bot { id: text(&made["agent"]["id"]), token: text(&made["token"]) }
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        Bot { id: agent.id, token }
     }
 
     async fn open(&self, owner: &Who, room: &str) -> Reply {
@@ -1442,19 +1441,29 @@ async fn closing_a_floor_and_furnishing_it_doesnt_let_it_open_again() {
 // I12
 
 #[tokio::test]
-async fn only_a_bookshelf_cabinet_whiteboard_or_microscope_holds_notes() {
+async fn only_shelves_cabinets_whiteboards_and_lab_record_keepers_hold_notes() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let holders: Vec<&str> =
         items::CATALOG.iter().filter(|kind| kind.holds_notes).map(|kind| kind.kind).collect();
-    assert_eq!(holders, ["bookshelf", "cabinet", "whiteboard", "microscope"]);
+    assert_eq!(
+        holders,
+        [
+            "bookshelf",
+            "cabinet",
+            "whiteboard",
+            "microscope",
+            "specimen_fridge",
+            "lab_notebook_stand"
+        ]
+    );
     for (n, kind) in holders.iter().enumerate() {
         let at = (28, n as i64 * 2);
         let id = server.item(&ann, &room, kind, at).await;
         server.note(&ann.key, &id, "kept").await.ok();
         assert_eq!(notes_read(&server.notes(&ann.key, &id).await.ok()), ["kept"]);
     }
-    let plant = server.item(&ann, &room, "plant", (28, 10)).await;
+    let plant = server.item(&ann, &room, "plant", (32, 10)).await;
     server.note(&ann.key, &plant, "no").await.refused(StatusCode::CONFLICT);
     server.notes(&ann.key, &plant).await.refused(StatusCode::CONFLICT);
 }
@@ -2198,6 +2207,38 @@ async fn a_bot_can_still_read_a_quiet_room() {
     assert!(asked["isError"].is_null(), "{asked}");
 }
 
+// R46: a bot on a public floor is told that, not sent looking for a Porch.
+
+#[tokio::test]
+async fn a_bot_on_a_public_floor_is_told_to_ask_from_its_own_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    let args = json!({ "hangout_id": room, "question": "Is this fine?" });
+    let over_http = server
+        .post(
+            &pip.token,
+            &format!("/api/hangouts/{room}/owner-questions"),
+            json!({ "question": "Is this fine?" }),
+        )
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let said = over_http["error"].as_str().unwrap().to_string();
+    assert!(said.contains("public floor") && !said.contains("Porch"), "{said}");
+    let tool = server.tool(&pip.token, "ask_owner", args).await;
+    assert_eq!(tool["isError"], true, "{tool}");
+    let said = tool["content"][0]["text"].as_str().unwrap();
+    assert!(said.contains("public floor") && !said.contains("Porch"), "{said}");
+    assert!(said.contains("hangout_id"), "{said}");
+}
+
 // I17
 
 #[tokio::test]
@@ -2647,7 +2688,12 @@ async fn a_house_bot_gets_nothing_from_any_of_this() {
 async fn starter_items_are_for_everyone_and_the_rest_unlock_with_friends() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
-    for kind in items::CATALOG.iter().filter(|kind| kind.tier == "starter" && !kind.sign) {
+    // HC14: a kind from a pack that costs credits is starter too, but waits for the pack to be
+    // bought, which a_pack_that_costs_credits_and_everything_in_it_waits_for_someone_to_buy_it covers.
+    let free = |kind: &&items::Kind| items::paid_pack_with(kind.kind).is_none();
+    for kind in
+        items::CATALOG.iter().filter(|kind| kind.tier == "starter" && !kind.sign).filter(free)
+    {
         // I67: a rug is deeper than the front strip, and lies flat wherever it fits on the floor.
         let at = if kind.flat { (28, 14 - kind.h) } else { (28, 12) };
         let id = server.item(&ann, &room, kind.kind, at).await;
@@ -2957,7 +3003,7 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(names, ["fall", "halloween"]);
+    assert_eq!(names, ["fall", "halloween", "winter"]);
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -3000,6 +3046,84 @@ fn a_packs_kinds_are_its_own() {
             assert!(!shared, "{} in {} isn't only in that pack", part.kind, pack.pack);
         }
     }
+}
+
+// I29, PACKS: every place fits an empty floor and the rest of its pack, and keeps clear of the bar, the
+// arcade and the way in from the door, as the room page draws them (web/room.js).
+
+#[test]
+fn every_place_in_a_pack_fits_an_empty_floor_and_keeps_the_bar_arcade_and_way_in_clear() {
+    type Box = (i64, i64, i64, i64);
+    let overlaps = |(ax, ay, aw, ah): Box, (bx, by, bw, bh): Box| {
+        ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah
+    };
+    let table = (items::TABLE_AT.0, items::TABLE_AT.1, items::TABLE_W, items::TABLE_H);
+    let kept: Vec<Box> = items::FIXED
+        .iter()
+        .chain(items::FIXED_FURNITURE.iter().map(|(_, cells)| cells))
+        .map(|cells| (cells.x, cells.y, cells.w, cells.h))
+        .chain([table])
+        .collect();
+    // The bar, the arcade, and the cells between the door and the table.
+    let clear: [(&str, Box); 3] =
+        [("bar", (31, 0, 9, 2)), ("arcade", (35, 3, 5, 5)), ("way in", (17, 10, 5, 3))];
+    for pack in items::PACKS {
+        let mut placed: Vec<Box> = Vec::new();
+        for part in pack.items {
+            let kind = items::kind_of(part.kind).unwrap();
+            let spot = (part.x, part.y, kind.w, kind.h);
+            let name = format!("{} at {},{} in {}", part.kind, part.x, part.y, pack.pack);
+            assert!(
+                spot.0 >= 0 && spot.1 >= 0 && spot.0 + spot.2 <= 40 && spot.1 + spot.3 <= 14,
+                "{name} is off the floor"
+            );
+            assert!(!kept.iter().any(|other| overlaps(spot, *other)), "{name} is on what stays");
+            for (what, cells) in clear {
+                assert!(!overlaps(spot, cells), "{name} is in the way of the {what}");
+            }
+            assert!(!placed.iter().any(|other| overlaps(spot, *other)), "{name} overlaps its pack");
+            placed.push(spot);
+        }
+        assert!(placed.len() <= items::MAX_ITEMS, "{} is too big for a floor", pack.pack);
+    }
+}
+
+// HC14: a pack that costs credits, and each thing in it, is only for someone who bought it. The
+// buying itself is tested with credits in src/db.rs.
+#[tokio::test]
+async fn a_pack_that_costs_credits_and_everything_in_it_waits_for_someone_to_buy_it() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let winter = items::PACKS.iter().find(|pack| pack.cost > 0).unwrap();
+
+    let path = format!("/api/floors/{room}/packs/{}", winter.pack);
+    server.post(&ann.key, &path, json!({})).await.refused(StatusCode::FORBIDDEN);
+    server
+        .place(&ann.key, &room, winter.items[0].kind, (5, 5))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let floor = format!("/api/floors/{room}");
+    server
+        .put(&ann.key, &floor, json!({ "paint": winter.paint }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &floor, json!({ "flooring": winter.flooring }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(kinds_on(&server, &ann, &room).await.is_empty());
+
+    // The catalog says why, and a free pack still goes up.
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    let kind = catalog["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|kind| kind["kind"] == winter.items[0].kind)
+        .unwrap();
+    assert_eq!((&kind["unlocked"], &kind["pack_needed"]), (&json!(false), &json!(winter.pack)));
+    assert_eq!(catalog["look"]["packs_bought"], json!([]));
+    server.post(&ann.key, &pack_path(&room), json!({})).await.ok();
 }
 
 // I27
@@ -3274,6 +3398,7 @@ async fn the_catalog_lists_a_pack_thats_over_and_shows_it_only_where_its_up() {
     let over = |at: usize| (look["packs"][at]["pack"].clone(), look["packs"][at]["over"].clone());
     assert_eq!(over(0), (json!("fall"), json!(false)));
     assert_eq!(over(1), (json!("halloween"), json!(true)));
+    assert_eq!(over(2), (json!("winter"), json!(false)));
 
     let app = include_str!("../web/app.js");
     assert!(app.contains("look.packs.filter((pack) => !pack.over || up.includes(pack.pack))"));
@@ -3677,6 +3802,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "art",
             "work",
             "fall",
+            "winter",
             "spooky",
             "signs"
         ]
@@ -3870,7 +3996,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 11);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 13);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.

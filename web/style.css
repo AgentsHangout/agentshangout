@@ -207,6 +207,8 @@ input::placeholder { color: #8b7a5e; }
 .about dt:first-child { margin-top: 0; }
 .about dd { margin: 2px 0 0; color: #43321d; }
 .about a { color: #8a3a12; }
+.social-links { break-inside: avoid; }
+.social-links a { overflow-wrap: anywhere; }
 .about code { overflow-wrap: anywhere; background: rgba(120, 90, 44, .16); padding: 0 4px; border-radius: 2px; color: #2c1e11; }
 #app:not(:has(.home)):not(:empty) ~ .about { display: none; }
 
@@ -699,12 +701,11 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 }
 .city-card[hidden] { display: none; }
 .city-card-name { font-size: 14px; }
-.city-card.research-object { pointer-events: auto; border: 2px solid #72dec9; background: linear-gradient(135deg, #123b42, #182a37); box-shadow: 0 0 0 3px rgba(101, 222, 200, .15), 0 8px 24px rgba(0, 0, 0, .4); }
-.city-card-research { display: grid; gap: 4px; padding-bottom: 7px; margin-bottom: 3px; border-bottom: 1px solid #427b7c; }
-.city-card-research strong { color: #8affdc; font-size: 15px; }
-.city-card-research span { color: #c7e8e4; }
-.city-card-research a { color: #b8fff0; text-decoration: underline; overflow-wrap: anywhere; }
-.city-card-research a:focus-visible { outline: 2px solid #ffd27a; outline-offset: 3px; }
+.city-card.has-repository { pointer-events: auto; }
+.city-card a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
+.build-collections { margin-bottom: 12px; }
+.build-collections .field { margin: 0; }
+.build-collections select { max-width: 100%; }
 .city-card-home { color: #ffd27a; font-weight: 600; }
 .city-card-bot { color: #c9cfdc; }
 .city-card-bot.allowed { color: #8ee6b0; }
@@ -798,8 +799,8 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .passkey-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 10px; min-width: 0; }
 .passkey-main { display: grid; min-width: 0; flex: 1 1 160px; }
 .passkey-main strong, .passkey-main small { overflow-wrap: anywhere; }
-.add-passkey, .claim-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.add-passkey input, .claim-form input { flex: 1 1 160px; width: auto; min-width: 0; }
+.add-passkey { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.add-passkey input { flex: 1 1 160px; width: auto; min-width: 0; }
 
 /* Trust: the gate, rules and standing */
 
@@ -2103,6 +2104,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .board-block h3, .board-card h4 { margin: 0; }
 .board-card { margin: .2em 0 .4em; }
 .board-card p { margin: .2em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.research-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: .4em 0; }
+.research-tabs button { min-height: 44px; }
+.research-tabs button[aria-pressed="true"] { outline: 2px solid #8e2f18; outline-offset: -2px; font-weight: 600; }
+.research-stale { margin: .3em 0; padding: 4px 8px; border-left: 0; background: #fbe7b0; color: #4a3008; }
 .board-list form.stack { gap: .35em; }
 
 @media (max-width: 840px) {
@@ -2322,24 +2327,21 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   text-align: center !important;
 }
 
-/* Room facts and floor navigation live in More. Only access/rule warnings remain over the
-   scene; the desktop's name, clock, usage hint and crew legend add no phone navigation. */
+/* M8: room information is part of the phone sheets, never an overlay. */
 .apple-hig.wd-room > .wd-status { display: none !important; }
-.apple-hig.wd-room > .wd-status:has(.room-guest:not([hidden]), .room-quiet:not([hidden])) {
-  display: flex !important;
-  background: #f5eede !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  pointer-events: auto !important;
+.phone-room-notices { display: none; }
+.apple-hig .phone-room-notices:not([hidden]) { display: block; flex: 0 0 auto; }
+.apple-hig .game-panel-room .phone-room-notices { max-height: 25%; overflow-y: auto; }
+.apple-hig .room-notice {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #eee3ce;
+  color: #43321d;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
-.apple-hig.wd-room > .wd-status > :not(.room-guest):not(.room-quiet) { display: none !important; }
-.apple-hig.wd-room .wd-status .room-guest,
-.apple-hig.wd-room .wd-status .room-quiet {
-  white-space: normal;
-  background: none;
-  box-shadow: none;
-}
-.apple-hig.wd-room .wd-status [hidden] { display: none !important; }
 
 /* Apple HIG Bottom Tab Bar */
 .apple-hig .apple-tab-bar {

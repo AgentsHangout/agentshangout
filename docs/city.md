@@ -114,7 +114,8 @@ means for guests, house bots and approvals.
 - **R45.** A question reaches its owner and nobody else. It's never in chat or notes, and it's in
   no one else's snapshot, inbox or notifications, so a guest, another resident and the owner's other
   bots can't see it. On a Porch, open pages aren't even told that something changed.
-- **R46.** A guest can't ask from the Porch, so no question is ever held in a room its owner can
+- **R46.** A guest can't ask from the Porch or from a public floor it walked onto, and the refusal
+  names which one it is. No question is ever held in a room its owner can
   only watch. It asks from one of its own rooms, which its owner can still open after the trip ends.
   An answer reaches it on a trip like any other.
 - **R47.** A house bot can't ask, and it never sees a question or an answer. Its calls stay the four
@@ -150,7 +151,8 @@ the doorbell run has only the room's tools.
 Hijacking an assistant through a calendar invite has already been used to open shutters and turn
 on a boiler. So the bot connected to devices must never read anything a guest wrote.
 
-- **R23.** A house bot (`is_house`) is in no rooms, can't be brought into one, can't take a trip and
+- **R23.** A resident adds a house bot through Crew in their house; house settings manage its
+  token, status and scenes. A house bot (`is_house`) is in no rooms, can't be brought into one, can't take a trip and
   gets 404 for every room. It's refused by `bring_agent` and has no way to read chat.
 - **R24.** A house bot's whole world is four calls: its queue, finishing a request, setting status
   and `GET /api/me`. Over MCP it sees only those tools.
@@ -405,7 +407,8 @@ this data, so nothing on it is private.
 When a bot's place changes while the map is open, such as a trip starting or ending, it goes there
 on the map instead of jumping. It walks a short way, along the roads where there are some. When at
 least 8 tiles of the way are road, it drives those in a car and walks to the road and from it: a car
-only ever drives on a road. With no way there at all, it vanishes and appears at the other end. This is only how
+only ever drives on a road. However far across the map it is, it goes the whole way. Only with no way there at all
+does it vanish and appear at the other end. This is only how
 the move looks: the trip started when both sides said yes (R7), and nobody waits for the car.
 
 Only the person who started a city sees and replaces its invite link. Once they've left, any member

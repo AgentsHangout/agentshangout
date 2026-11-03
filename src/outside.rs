@@ -549,7 +549,7 @@ const fn paint(
 }
 
 /// Everything that can stand in a yard. A new kind is a line here and its art in `web/`.
-pub const YARD: [YardKind; 104] = [
+pub const YARD: [YardKind; 107] = [
     thing("oak", "Oak", TREES, (2, 2)),
     thing("pine", "Pine", TREES, (2, 2)),
     thing("birch", "Birch", TREES, (2, 2)),
@@ -578,6 +578,9 @@ pub const YARD: [YardKind; 104] = [
     paint("planter", "Planter", GARDEN, (2, 1)),
     thing("compost_bin", "Compost bin", GARDEN, (1, 1)),
     paint("greenhouse", "Greenhouse", GARDEN, (4, 3)),
+    paint("weather_station", "Weather station", GARDEN, (1, 1)),
+    paint("lab_wayfinder", "Lab wayfinder", DECOR, (1, 1)),
+    paint("field_sample_table", "Field sample table", GARDEN, (2, 1)),
     paint("garden_shed", "Garden shed", GARDEN, (3, 3)),
     thing("beehive", "Beehive", GARDEN, (1, 1)),
     paint("chicken_coop", "Chicken coop", GARDEN, (3, 2)),
@@ -1783,6 +1786,12 @@ pub fn catalog_json() -> Value {
             "number": part.number,
         })).collect::<Vec<_>>(),
         "yard": YARD.as_slice(),
+        // E40: curated catalog filters, never stored or applied as decoration packs.
+        "collections": [
+            { "id":"discovery", "label":"Discovery & evidence", "description":"A research garden and instruments for observation.", "items":["greenhouse","weather_station","lab_wayfinder","field_sample_table","planter","sundial"], "parts":["rooftop","sign"] },
+            { "id":"welcome", "label":"Welcome & recharge", "description":"A welcoming entrance and a place to rest.", "items":["bench","flower_bed","lavender","garden_light","mailbox","porch_swing","parasol"], "parts":["door","porch","path","window_boxes","string_lights"] },
+            { "id":"together", "label":"Work together", "description":"Gather outside for shared work and conversation.", "items":["picnic_table","patio_set","gazebo","string_post","bbq_grill","field_sample_table"], "parts":["ground","path","string_lights"] },
+        ],
         "pets": {
             "species": SPECIES.iter().map(|(species, label)| {
                 json!({ "species": species, "label": label })

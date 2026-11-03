@@ -1,6 +1,8 @@
 //! E1 to E31 in docs/events.md. A bot hears mentions, answers and moves in one call, and can
 //! subscribe the way the events extension describes.
 
+mod support;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -105,14 +107,10 @@ impl Server {
     }
 
     async fn bot(&self, owner: &str, room: &str, name: &str) -> (String, String) {
-        let reply = self
-            .post(owner, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        (
-            reply.body["token"].as_str().unwrap().to_string(),
-            reply.body["agent"]["id"].as_str().unwrap().to_string(),
-        )
+        let person =
+            self.state.authenticate(&agenthangout::auth::hash_secret(owner)).unwrap().unwrap();
+        let (agent, token) = support::legacy_bot(&self.state, &person.person_id, room, name);
+        (token, agent.id)
     }
 
     async fn mcp(&self, token: &str, id: Value, method: &str, params: Value) -> Reply {
@@ -2359,3 +2357,98 @@ async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
         .unwrap();
     assert_eq!(rings, 2, "every claimed mention is rung so a doorbell cannot send the burst twice");
 }
+
+// MC1 to MC3
+async fn listed(server: &Server, token: &str, path: &str, header: Option<&str>) -> Vec<Value> {
+    let mut request = server
+        .client
+        .post(format!("{}{path}", server.base))
+        .bearer_auth(token)
+        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }));
+    if let Some(value) = header {
+        request = request.header("X-Agentshangout-Tools", value);
+    }
+    let body: Value = request.send().await.unwrap().json().await.unwrap();
+    body["result"]["tools"].as_array().unwrap().clone()
+}
+
+fn names(tools: &[Value]) -> Vec<String> {
+    tools.iter().map(|tool| tool["name"].as_str().unwrap().to_string()).collect()
+}
+
+#[tokio::test]
+async fn tools_core_lists_a_small_set_and_the_default_stays_whole() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let full = listed(&server, &scout, "/mcp", None).await;
+    let full_names = names(&full);
+    // MC1: the default is every tool.
+    assert!(full.len() > 70, "{}", full.len());
+    for name in ["furnish_room", "build_studio", "list_research_labs", "credits"] {
+        assert!(full_names.contains(&name.to_string()), "{name}");
+    }
+    // MC2: the query parameter, and the header, each ask for the core set. It is the same
+    // tool definitions, in the same order, as the full list.
+    let by_query = listed(&server, &scout, "/mcp?tools=core", None).await;
+    let by_header = listed(&server, &scout, "/mcp", Some("Core")).await;
+    assert_eq!(by_query, by_header);
+    let core: Vec<&Value> =
+        full.iter().filter(|t| CORE.contains(&t["name"].as_str().unwrap())).collect();
+    assert_eq!(by_query.iter().collect::<Vec<_>>(), core);
+    for name in CORE {
+        assert!(names(&by_query).contains(&name.to_string()), "{name} is core");
+    }
+    assert_eq!(by_query.len(), CORE.len(), "every core name is a real tool");
+    // Anything else is the full list.
+    for path in ["/mcp?tools=all", "/mcp?tools=cores", "/mcp?x=core", "/mcp?tools="] {
+        assert_eq!(listed(&server, &scout, path, None).await.len(), full.len(), "{path}");
+    }
+    // The size budget: the core list is under 17,000 characters and under a third of the whole.
+    let size = |tools: &[Value]| serde_json::to_string(tools).unwrap().len();
+    println!("tools/list characters: full {}, core {}", size(&full), size(&by_query));
+    assert!(size(&by_query) < 17_000, "core is {} characters", size(&by_query));
+    assert!(size(&by_query) * 3 < size(&full), "core is {}, full {}", size(&by_query), size(&full));
+}
+
+#[tokio::test]
+async fn tools_core_changes_what_is_listed_and_never_what_may_be_called() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    // MC3: a tool outside the core set still works on the same URL.
+    let core = listed(&server, &scout, "/mcp?tools=core", None).await;
+    assert!(!names(&core).contains(&"credits".to_string()));
+    let reply = server
+        .post(
+            &scout,
+            "/mcp?tools=core",
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "credits", "arguments": {} } }),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert_ne!(reply.body["result"]["isError"], true, "{}", reply.body);
+}
+
+const CORE: [&str; 19] = [
+    "inbox",
+    "events_since",
+    "list_hangouts",
+    "read_room",
+    "say",
+    "set_thinking",
+    "ask_owner",
+    "withdraw_question",
+    "public_floors",
+    "go_out",
+    "come_back",
+    "go_to_room",
+    "where_is",
+    "use_item",
+    "follow",
+    "unfollow",
+    "check_in",
+    "answer_check_in",
+    "rsvp",
+];

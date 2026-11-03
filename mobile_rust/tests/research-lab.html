@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Builder asset checks</title>
+<style>body { background: #dce8d1; padding: 24px; font: 16px system-ui; } section { display: grid; grid-template-columns: repeat(auto-fit, 144px); gap: 24px; } canvas { width: 128px; height: 128px; background: #f5f1e6; border-radius: 12px; }</style>
+<pre id="result">Running...</pre>
+<section id="previews"></section>
+<script type="module">
+const { toolIcon } = await import(`../../web/world.js?fixture=${Date.now()}`);
+const source = await (await fetch('../../web/app.js', {cache: 'no-store'})).text();
+const catalog = source.slice(source.indexOf('const BUILD_TOOLS = ['), source.indexOf('\n];', source.indexOf('const BUILD_TOOLS = [')));
+const kinds = [...catalog.matchAll(/\['([^']+)',/g)].map(match => match[1]);
+const failures = [];
+for (const kind of kinds) for (const size of [22, 32, 128]) {
+  const canvas = toolIcon(kind, size);
+  const {width: w, height: h} = canvas;
+  const pixels = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+  let clipped = false;
+  for (let x = 0; x < w; x++) clipped ||= pixels[x * 4 + 3] > 0 || pixels[((h - 1) * w + x) * 4 + 3] > 0;
+  for (let y = 0; y < h; y++) clipped ||= pixels[(y * w) * 4 + 3] > 0 || pixels[(y * w + w - 1) * 4 + 3] > 0;
+  if (clipped || !pixels.some((value, index) => index % 4 === 3 && value)) failures.push(`${kind} at ${size}px`);
+}
+document.querySelector('#result').textContent = failures.length ? `FAIL: ${failures.join(', ')}` : `PASS: all ${kinds.length} builder assets fit at menu, toolbar and preview sizes`;
+for (const kind of kinds) {
+  const card = document.createElement('div');
+  const title = document.createElement('p');
+  title.textContent = kind;
+  card.append(title, toolIcon(kind, 128));
+  document.querySelector('#previews').append(card);
+}
+</script>

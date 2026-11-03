@@ -91,7 +91,7 @@ const numberOfHex = (text) => (/^#[0-9a-f]{6}$/i.test(text) ? parseInt(text.slic
 //   beside                    a media query: wide enough for a panel to stand beside the stage
 //   current(x, y)             what the map has for a tile, for when the server can't be asked
 //   changed(x, y, outside)    told what the server stored, so the map shows it at once (E27)
-export function outsideBuilder({ h, api, modal, popupMenu, formError, frame, world, panels, beside, say, current, changed }) {
+export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBuildCollection, collectionOffers, buildCollectionPicker, frame, world, panels, beside, say, current, changed }) {
   const coarse = matchMedia('(pointer: coarse)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const well = frame.host.parentElement;
@@ -102,6 +102,7 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, frame, wor
   let kind = 'house';
   let look = { door: 'L', variant: 0, pal: 0 };
   let catalog = null;
+  let collectionId = '';
   let yardKinds = new Map();
   // The last document the server took, and the one on the stage now, which is ahead of it while a change
   // is on its way.
@@ -1675,24 +1676,25 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, frame, wor
     if (!catalog) return;
     const focused = catalogEl.contains(document.activeElement) ? document.activeElement.name : null;
     tiles = new Map();
-    const parts = catalog.parts.filter((part) => part.kinds.includes(kind));
-    const sections = [];
+    const collection = selectedBuildCollection(catalog, collectionId);
+    const parts = catalog.parts.filter((part) => part.kinds.includes(kind) && collectionOffers(collection, 'parts', part.part));
+    const sections = [buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean);
     const templates = catalog.templates.filter((each) => each.kinds.includes(kind));
-    if (templates.length) sections.push(catalogGroup('Templates', tilesOf(templates.map(templateTile), true)));
+    if (!collection && templates.length) sections.push(catalogGroup('Templates', tilesOf(templates.map(templateTile), true)));
     const packs = (catalog.packs || []).filter((pack) => pack && pack.outside);
-    if (packs.length) sections.push(catalogGroup('Packs', tilesOf(packs.map(packTile), true)));
+    if (!collection && packs.length) sections.push(catalogGroup('Packs', tilesOf(packs.map(packTile), true)));
     for (const { group, label } of catalog.groups) {
       const mine = parts.filter((part) => part.group === group);
-      const yard = catalog.yard.filter((entry) => entry.group === group);
+      const yard = catalog.yard.filter((entry) => entry.group === group && collectionOffers(collection, 'items', entry.kind));
       const members = [];
-      if (group === 'size' && !hasNoBuilding(kind)) members.push(h('div', { class: 'outside-part' }, h('h4', {}, 'How big'), sizeTiles()));
+      if (!collection && group === 'size' && !hasNoBuilding(kind)) members.push(h('div', { class: 'outside-part' }, h('h4', {}, 'How big'), sizeTiles()));
       members.push(...mine.map(partBlock));
       if (yard.length) {
         members.push(h('div', { class: 'outside-part' },
           mine.length ? h('h4', {}, 'For the yard') : null,
           tilesOf(yard.map(yardTile))));
       }
-      if (group === 'pets') members.push(tilesOf(catalog.pets.species.map(speciesTile)));
+      if (!collection && group === 'pets') members.push(tilesOf(catalog.pets.species.map(speciesTile)));
       if (members.length) sections.push(catalogGroup(label, members));
     }
     catalogEl.replaceChildren(...sections);

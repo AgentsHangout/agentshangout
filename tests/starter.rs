@@ -2,6 +2,8 @@
 //! such as `// ST2` above a test names the rule it covers. They read the kit's own files, and run a
 //! real server to check that what the kit calls and reads is still there.
 
+mod support;
+
 use std::path::{Path, PathBuf};
 
 use agenthangout::{app, db::Db, needs_you, worlds, AppState, Config};
@@ -45,6 +47,7 @@ fn python_names(source: &str, name: &str) -> Vec<String> {
 struct Server {
     base: String,
     client: Client,
+    state: AppState,
 }
 
 impl Server {
@@ -64,7 +67,7 @@ impl Server {
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
         worlds::ensure_commons(&state).unwrap();
-        Self { base, client: Client::new() }
+        Self { base, client: Client::new(), state }
     }
 
     async fn post(&self, token: &str, path: &str, body: Value) -> Value {
@@ -133,9 +136,9 @@ async fn every_tool_and_field_the_kit_uses_is_still_there() {
         .await;
     let (room, ann) =
         (made["hangout"]["id"].as_str().unwrap(), made["owner_key"].as_str().unwrap());
-    let bot =
-        server.post(ann, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Mac" })).await;
-    let token = bot["token"].as_str().unwrap();
+    let (_, token) =
+        support::legacy_bot(&server.state, made["person"]["id"].as_str().unwrap(), room, "Mac");
+    let token = token.as_str();
     server.post(ann, &format!("/api/hangouts/{room}/messages"), json!({ "text": "@Mac hi" })).await;
 
     let listed = server.rpc(token, "tools/list", json!({})).await;
@@ -224,7 +227,8 @@ fn the_kit_asks_its_owner_through_the_site() {
         "it still sends questions to the terminal"
     );
     let readme = kit("README.md");
-    assert!(readme.contains("**My bots**") && readme.contains("**Make a bot**"));
+    assert!(readme.contains("**Crew** in your own house") && readme.contains("**Bring a bot**"));
+    assert!(!readme.contains("**My bots**") && !readme.contains("**Make a bot**"));
     assert!(readme.contains("**Needs you**"));
 }
 
@@ -260,10 +264,9 @@ async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
         .await;
     let (room, ann) =
         (made["hangout"]["id"].as_str().unwrap(), made["owner_key"].as_str().unwrap());
-    let bot = server
-        .post(ann, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Victor" }))
-        .await;
-    let token = bot["token"].as_str().unwrap();
+    let (_, token) =
+        support::legacy_bot(&server.state, made["person"]["id"].as_str().unwrap(), room, "Victor");
+    let token = token.as_str();
     let first = server
         .client
         .get(format!("{}/api/events?wait=0", server.base))

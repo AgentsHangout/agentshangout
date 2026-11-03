@@ -63,13 +63,39 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
         if v.lock().unwrap()["fail"] == true {
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})))
         } else {
-            (StatusCode::OK, Json(json!([{"number":9,"title":"Research idea","state":"open"}])))
+            (
+                StatusCode::OK,
+                Json(json!([
+                    {"number":9,"title":"Research idea","state":"open"},
+                    {"number":12,"title":"Fix the plots","state":"open","pull_request":{}}
+                ])),
+            )
         }
     }
     async fn pr(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
         Json(v.lock().unwrap().clone())
     }
+    // RW9: pull request 12's head, check runs and reviews, or a failure when pr_fail is set.
+    async fn pr12(State(v): State<Arc<Mutex<Value>>>) -> (StatusCode, Json<Value>) {
+        if v.lock().unwrap()["pr_fail"] == true {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
+        }
+        (StatusCode::OK, Json(json!({"number":12,"head":{"sha":"a".repeat(40)}})))
+    }
+    async fn checks(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
+        let runs = v.lock().unwrap()["checks"].clone();
+        let runs = if runs.is_null() { json!([]) } else { runs };
+        let total = runs.as_array().unwrap().len();
+        Json(json!({"check_runs": runs, "total_count": total}))
+    }
+    async fn reviews(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
+        let reviews = v.lock().unwrap()["reviews"].clone();
+        Json(if reviews.is_null() { json!([]) } else { reviews })
+    }
     let router = Router::new()
+        .route("/repos/org/repo/pulls/12", get(pr12))
+        .route("/repos/org/repo/commits/{sha}/check-runs", get(checks))
+        .route("/repos/org/repo/pulls/12/reviews", get(reviews))
         .route("/repos/org/repo", get(meta))
         .route("/repos/org/repo/issues", get(issues))
         .route("/repos/org/repo/pulls/7", get(pr))
@@ -272,4 +298,159 @@ async fn rw5_http_owner_preference_and_quiet_sign() {
             .unwrap_err();
     assert_eq!(error.status, StatusCode::FORBIDDEN);
     assert!(error.message.contains("quiet"));
+}
+#[tokio::test]
+async fn rw8_claims_are_local_lead_or_pair_and_run_out() {
+    let (state, owner, bot, _) = setup().await;
+    // The workboard has to be read once for item 9 to be claimable.
+    assert!(research_work::claim(&state, &bot, "lab", 9, false).is_err());
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"], json!([]));
+    assert!(research_work::claim(&state, &bot, "lab", 404, false).is_err(), "not on the board");
+
+    // The bot leads; its owner can't lead too, but can pair.
+    let led = research_work::claim(&state, &bot, "lab", 9, false).unwrap();
+    assert_eq!(led["pairing"], false);
+    let refused = research_work::claim(&state, &owner, "lab", 9, false).unwrap_err();
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    research_work::claim(&state, &owner, "lab", 9, true).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    let claims = read["items"][0]["claims"].as_array().unwrap().clone();
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        (claims[0]["name"].clone(), claims[0]["is_bot"].clone()),
+        (json!("Bot"), json!(true))
+    );
+    assert_eq!(claims[1]["pairing"], true);
+    // Renewing keeps when it started.
+    let since = claims[0]["since"].clone();
+    research_work::claim(&state, &bot, "lab", 9, false).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"][0]["since"], since);
+
+    // Unclaiming drops only your own, and a missing claim is not found.
+    research_work::unclaim(&state, &owner, "lab", 9).unwrap();
+    assert_eq!(
+        research_work::unclaim(&state, &owner, "lab", 9).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"].as_array().unwrap().len(), 1);
+
+    // Four hours on, the bot's claim has run out and the owner can lead.
+    state.db.age_research_work_claims("lab", research_work::CLAIM_SECS + 1).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"], json!([]));
+    research_work::claim(&state, &owner, "lab", 9, false).unwrap();
+
+    // A house bot, and someone outside the room, can't claim.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::claim(&state, &outsider, "lab", 9, true).is_err());
+    let house = auth::Caller { is_house: true, ..bot.clone() };
+    assert!(research_work::claim(&state, &house, "lab", 9, true).is_err());
+}
+#[test]
+fn rw9_ci_and_review_are_read_conservatively() {
+    let run = |status: &str, conclusion: Value| json!({"status":status,"conclusion":conclusion});
+    let ci = |runs: Value| {
+        let total = runs.as_array().unwrap().len();
+        research_work::ci_of(&json!({ "check_runs": runs, "total_count": total }))
+    };
+    assert_eq!(ci(json!([])), Some("none"));
+    assert_eq!(
+        ci(json!([run("completed", json!("success")), run("completed", json!("skipped"))])),
+        Some("passing")
+    );
+    assert_eq!(
+        ci(json!([run("completed", json!("success")), run("in_progress", Value::Null)])),
+        Some("pending")
+    );
+    assert_eq!(
+        ci(json!([run("in_progress", Value::Null), run("completed", json!("failure"))])),
+        Some("failing")
+    );
+    assert_eq!(ci(json!([run("completed", json!("cancelled"))])), Some("failing"));
+    assert_eq!(research_work::ci_of(&json!({"message":"rate limited"})), None);
+    // More runs than one page holds can't be read as passing: the missing one could have failed.
+    let passed = run("completed", json!("success"));
+    assert_eq!(research_work::ci_of(&json!({"check_runs":[passed.clone()],"total_count":2})), None);
+    let page = Value::Array(vec![passed.clone(); 100]);
+    assert_eq!(research_work::ci_of(&json!({"check_runs":page,"total_count":100})), None);
+    assert_eq!(research_work::ci_of(&json!({"check_runs":[passed]})), None, "no total");
+    let review = |who: u64, state: &str| json!({"user":{"id":who},"state":state});
+    let of = |reviews: Value| research_work::review_of(&reviews);
+    assert_eq!(of(json!([review(1, "COMMENTED")])), Some("none"));
+    assert_eq!(of(json!([review(1, "APPROVED"), review(2, "COMMENTED")])), Some("approved"));
+    assert_eq!(
+        of(json!([review(1, "APPROVED"), review(2, "CHANGES_REQUESTED")])),
+        Some("changes_requested")
+    );
+    // A reviewer's latest decision counts, and a dismissal clears theirs.
+    assert_eq!(
+        of(json!([review(2, "CHANGES_REQUESTED"), review(2, "APPROVED")])),
+        Some("approved")
+    );
+    assert_eq!(of(json!([review(2, "CHANGES_REQUESTED"), review(2, "DISMISSED")])), Some("none"));
+    assert_eq!(of(json!({"message":"not found"})), None);
+    // A full page of reviews might hide a later change request.
+    assert_eq!(of(Value::Array(vec![review(1, "APPROVED"); 100])), None);
+}
+#[tokio::test]
+async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_green() {
+    let (state, owner, _bot, upstream) = setup().await;
+    // Not before the board is read, and not for an issue.
+    assert!(research_work::pr_status(&state, &owner, "lab", 12).await.is_err());
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][1]["number"], 12);
+    assert!(read["items"][1]["pr_state"].is_null(), "reading the board never asks about a PR");
+    assert!(read["items"][0].get("pr_state").is_none(), "issues have no PR state");
+    assert!(research_work::pr_status(&state, &owner, "lab", 9).await.is_err());
+
+    // GitHub is down on the first read: unknown and stale, not passing.
+    upstream.lock().unwrap()["pr_fail"] = json!(true);
+    let down = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(
+        (down["ci"].clone(), down["review"].clone(), down["stale"].clone()),
+        (json!("unknown"), json!("unknown"), json!(true))
+    );
+
+    // Five minutes on, it reads passing and approved.
+    upstream.lock().unwrap()["pr_fail"] = json!(false);
+    upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"success"}]);
+    upstream.lock().unwrap()["reviews"] = json!([{"user":{"id":5},"state":"APPROVED"}]);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    let up = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(
+        (up["ci"].clone(), up["review"].clone(), up["stale"].clone()),
+        (json!("passing"), json!("approved"), json!(false))
+    );
+
+    // Within five minutes it doesn't ask GitHub again, even though CI has started failing.
+    upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"failure"}]);
+    let cached = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(cached["ci"], "passing");
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][1]["pr_state"]["ci"], "passing");
+
+    // Then a failed read keeps the last state but marks it stale.
+    upstream.lock().unwrap()["pr_fail"] = json!(true);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    let stale = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!((stale["ci"].clone(), stale["stale"].clone()), (json!("passing"), json!(true)));
+
+    // Someone outside the room can't read it.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::pr_status(&state, &outsider, "lab", 12).await.is_err());
 }

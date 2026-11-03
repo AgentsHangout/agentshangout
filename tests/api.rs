@@ -1,6 +1,8 @@
 //! Drives a real server over HTTP. The tests that matter most here are the ones proving what a
 //! bot can't do.
 
+mod support;
+
 use std::sync::{Arc, Mutex};
 
 use agenthangout::{
@@ -33,18 +35,31 @@ impl Server {
     }
 
     async fn start_with(create_code: Option<String>) -> Self {
+        Self::start_from(create_code, |config| AppState::new(Db::open(":memory:").unwrap(), config))
+            .await
+    }
+
+    /// Like `start`, but the write limiter reads `clock`, so a burst can't straddle a minute.
+    async fn start_with_write_clock(clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        Self::start_from(None, |config| {
+            AppState::with_write_clock(Db::open(":memory:").unwrap(), config, clock)
+        })
+        .await
+    }
+
+    async fn start_from(
+        create_code: Option<String>,
+        make: impl FnOnce(Config) -> AppState,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let state = AppState::new(
-            Db::open(":memory:").unwrap(),
-            Config {
-                public_url: base.clone(),
-                create_code,
-                allow_private_webhooks: true,
-                keeper_id: None,
-                god_ids: Vec::new(),
-            },
-        );
+        let state = make(Config {
+            public_url: base.clone(),
+            create_code,
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: Vec::new(),
+        });
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
         Self { base, client: Client::new(), state }
@@ -88,14 +103,10 @@ impl Server {
     }
 
     async fn bot(&self, owner: &str, room: &str, name: &str) -> (String, String) {
-        let reply = self
-            .post(owner, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        (
-            reply.body["token"].as_str().unwrap().to_string(),
-            reply.body["agent"]["id"].as_str().unwrap().to_string(),
-        )
+        let person =
+            self.state.authenticate(&agenthangout::auth::hash_secret(owner)).unwrap().unwrap();
+        let (agent, token) = support::legacy_bot(&self.state, &person.person_id, room, name);
+        (token, agent.id)
     }
 
     async fn propose(&self, token: &str, room: &str) -> String {
@@ -1343,7 +1354,8 @@ async fn only_a_bot_in_the_room_can_ask_and_a_bot_can_have_five_waiting() {
 
 #[tokio::test]
 async fn asking_counts_against_a_bots_write_limit() {
-    let server = Server::start().await;
+    // One limiter minute for the whole burst, even if the wall clock crosses a boundary (#306).
+    let server = Server::start_with_write_clock(|| 120).await;
     let room = server.room().await;
     let (claude, _) = server.bot(&room.justin, &room.id, "Claude").await;
     let messages = format!("/api/hangouts/{}/messages", room.id);
@@ -1745,4 +1757,85 @@ async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
 
     // There is nothing to ask for someone else's, and no credits without a caller.
     assert_eq!(server.get("", "/api/credits").await.status, StatusCode::UNAUTHORIZED);
+}
+
+// HC14, HC15 and HC17 over the wire: a spend the balance doesn't cover is refused, a bot needs its
+// owner's yes, and only an owner sets what their own bot may spend.
+#[tokio::test]
+async fn spending_and_bot_limits_are_the_callers_own() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let (scout, scout_id) = server.bot(&room.justin, &room.id, "Scout").await;
+    let (_, kevins_bot) = server.bot(&room.kevin, &room.id, "Rex").await;
+    let credits = server.get(&room.justin, "/api/credits").await.body;
+    let pack = credits["packs"][0]["pack"].as_str().unwrap().to_string();
+    assert_eq!(credits["bots"][0]["daily"], 0, "a bot starts able to spend nothing");
+
+    let broke = server.post(&room.justin, "/api/credits/spend", json!({ "pack": pack })).await;
+    assert_eq!(broke.status, StatusCode::CONFLICT, "{}", broke.body);
+    let free = server.post(&room.justin, "/api/credits/spend", json!({ "pack": "fall" })).await;
+    assert_eq!(free.status, StatusCode::BAD_REQUEST, "{}", free.body);
+    let unasked =
+        server.tool(&scout, "spend_credits", json!({ "pack": pack, "asked": "nope" })).await;
+    assert_eq!(unasked["isError"], true, "{unasked}");
+
+    let own = server
+        .put(&room.justin, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 25 }))
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.body);
+    assert_eq!(own.body["bots"][0]["daily"], 25);
+    let theirs = server
+        .put(&room.justin, &format!("/api/credits/bots/{kevins_bot}"), json!({ "daily": 25 }))
+        .await;
+    assert_eq!(theirs.status, StatusCode::NOT_FOUND, "{}", theirs.body);
+    let by_bot =
+        server.put(&scout, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 99 })).await;
+    assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.body);
+}
+
+// HC8: the site shows your own credits in your account panel, read from your own endpoint, and
+// every field the card shows is one the endpoint returns.
+#[tokio::test]
+async fn the_account_panel_shows_your_own_credits() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let parts = app.split_once("async function homeParts(me) {").unwrap().1;
+    assert!(
+        parts.contains("me ? api('/api/credits').catch(() => null) : null"),
+        "the panel doesn't read credits"
+    );
+    assert!(
+        parts.contains("account: me ? [accountCard, credits && creditsCard(credits)"),
+        "the card isn't in the account panel"
+    );
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    // HC8, HC14 and HC17: the card only ever calls the caller's own credit endpoints, none of which
+    // takes anyone's id but one of the caller's own bots.
+    let calls: Vec<&str> =
+        card.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
+    assert_eq!(
+        calls,
+        ["'/api/credits/spend'", "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`"],
+        "the card calls something other than its own credits"
+    );
+
+    let server = Server::start().await;
+    let room = server.room().await;
+    let credits = server.get(&room.justin, "/api/credits").await.body;
+    for field in [
+        "balance",
+        "earned_today",
+        "daily_cap",
+        "spent",
+        "packs",
+        "bots",
+        "history",
+        "gatherings",
+        "good_trips",
+        "hosted_trips",
+        "cities_not_earning",
+    ] {
+        assert!(card.contains(&format!("now.{field}")), "the card doesn't show {field}");
+        assert!(credits.get(field).is_some(), "/api/credits has no {field}");
+    }
 }

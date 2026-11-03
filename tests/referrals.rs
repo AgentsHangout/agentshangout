@@ -2,6 +2,8 @@
 //! over HTTP and are written from the rules in docs/referrals.md (F1 to F23 and the limits table).
 //! A comment such as `// F13` above a test names the rule it covers.
 
+mod support;
+
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -171,11 +173,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": "Scout" }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, "Scout");
+        token
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {

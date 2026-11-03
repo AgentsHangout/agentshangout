@@ -5,6 +5,8 @@
 //! The art tests at the bottom read the pages' source as text. They fail until every word in the
 //! catalog is drawn, and that is what they are for.
 
+mod support;
+
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},
@@ -165,11 +167,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> String {
-        let made = self
-            .post(&owner.key, &format!("/api/hangouts/{room}/agents"), json!({ "name": name }))
-            .await
-            .ok();
-        text(&made["token"])
+        let (_, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        token
     }
 
     async fn guest(&self) -> String {
@@ -2851,9 +2850,10 @@ fn every_rule_in_the_outside_doc_is_named_by_a_test() {
     // Rules are written beside what they're about, so this only wants every number once.
     let mut sorted = rules.clone();
     sorted.sort_unstable();
-    assert_eq!(sorted, (1..=38).collect::<Vec<u32>>(), "the rules should be E1 to E38");
+    assert_eq!(sorted, (1..=40).collect::<Vec<u32>>(), "the rules should be E1 to E40");
 
-    let tests = std::fs::read_to_string(format!("{root}/tests/outside.rs")).unwrap();
+    let mut tests = std::fs::read_to_string(format!("{root}/tests/outside.rs")).unwrap();
+    tests.push_str(&std::fs::read_to_string(format!("{root}/tests/build_collections.rs")).unwrap());
     let mut named: HashSet<u32> = HashSet::new();
     for line in tests.lines().map(str::trim_start).filter(|line| line.starts_with("// ")) {
         let mut before: Option<u32> = None;

@@ -423,7 +423,7 @@ struct Approve {
 }
 
 /// K17, K18, K20: the other bot's owner says yes first. Then the proposer's owner says yes with a
-/// room of theirs, and the apprentice is made there as their bot, with its token in this reply.
+/// house floor of theirs, and the apprentice is registered in its Crew with its token in this reply.
 async fn approve(
     State(state): State<AppState>,
     caller: Caller,
@@ -449,7 +449,7 @@ async fn approve(
         return Err(ApiError::conflict("the other bot's owner hasn't said yes yet"));
     }
     let hangout_id = body.hangout_id.ok_or_else(|| {
-        ApiError::bad_request("say which of your rooms the apprentice starts in, with hangout_id")
+        ApiError::bad_request("choose your own house Crew for the apprentice, with hangout_id")
     })?;
     let (Some(proposer_id), Some(partner_id)) = (&proposal.proposer_id, &proposal.partner_id)
     else {

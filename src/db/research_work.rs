@@ -95,4 +95,163 @@ impl Db {
         let rows = q.query_map([lab_id],|r|{let verified:Option<i64>=r.get(5)?;Ok(json!({"number":r.get::<_,i64>(0)?,"agent_id":r.get::<_,String>(1)?,"bot_name":r.get::<_,String>(6)?,"owner_name":r.get::<_,String>(7)?,"github_user_id":r.get::<_,String>(2)?,"source":r.get::<_,String>(3)?,"recorded_at":r.get::<_,i64>(4)?,"verified_merged":verified.is_some(),"award":verified.map(|_|"research_contributor"),"swag":verified.map(|_|"research_contributor_badge"),"verified_at":verified}))})?;
         rows.collect()
     }
+    /// RW8: the claims on a lab's items that haven't run out, oldest first.
+    pub fn research_work_claims(
+        &self,
+        lab_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<crate::research_work::Claim>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT number, claimer, agent_id IS NOT NULL, name, pairing, since, until
+             FROM research_work_claims WHERE lab_id = ? AND until > ? ORDER BY since, claimer",
+        )?;
+        let rows = stmt.query_map(params![lab_id, now], |r| {
+            Ok(crate::research_work::Claim {
+                number: r.get::<_, i64>(0)? as u64,
+                claimer: r.get(1)?,
+                is_bot: r.get(2)?,
+                name: r.get(3)?,
+                pairing: r.get(4)?,
+                since: r.get(5)?,
+                until: r.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// RW8: claims or renews an item. Leading needs nobody else leading it; pairing joins
+    /// whoever is. False, and nothing written, if someone else leads and this isn't pairing.
+    #[allow(clippy::too_many_arguments)] // Explicit stored fields, like the other insert methods.
+    pub fn claim_research_work(
+        &self,
+        lab_id: &str,
+        number: u64,
+        claimer: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+        name: &str,
+        pairing: bool,
+        now: i64,
+        until: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if !pairing {
+            let taken: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM research_work_claims WHERE lab_id = ?1 AND number = ?2
+                   AND claimer <> ?3 AND pairing = 0 AND until > ?4)",
+                params![lab_id, number as i64, claimer, now],
+                |r| r.get(0),
+            )?;
+            if taken {
+                return Ok(false);
+            }
+        }
+        tx.execute(
+            "INSERT INTO research_work_claims
+                 (lab_id, number, claimer, person_id, agent_id, name, pairing, since, until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (lab_id, number, claimer) DO UPDATE SET name = excluded.name,
+                 pairing = excluded.pairing, until = excluded.until,
+                 since = CASE WHEN research_work_claims.until > ?8
+                              THEN research_work_claims.since ELSE excluded.since END",
+            params![lab_id, number as i64, claimer, person_id, agent_id, name, pairing, now, until],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// RW8: drops this claimer's claim on an item. False if they had none.
+    pub fn unclaim_research_work(
+        &self,
+        lab_id: &str,
+        number: u64,
+        claimer: &str,
+    ) -> rusqlite::Result<bool> {
+        let gone = self.conn().execute(
+            "DELETE FROM research_work_claims WHERE lab_id = ? AND number = ? AND claimer = ?",
+            params![lab_id, number as i64, claimer],
+        )?;
+        Ok(gone == 1)
+    }
+
+    /// Moves a lab's claims back in time, for tests of them running out (RW8).
+    pub fn age_research_work_claims(&self, lab_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE research_work_claims SET since = since - ?2, until = until - ?2 WHERE lab_id = ?1",
+            params![lab_id, by],
+        )?;
+        Ok(())
+    }
+    /// RW9: what GitHub last said about a pull request's CI and reviews, if it was ever read.
+    pub fn research_work_pr_state(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> rusqlite::Result<Option<crate::research_work::PrState>> {
+        self.conn()
+            .query_row(
+                "SELECT ci, review, checked_at, attempted_at, stale FROM research_work_pr_state
+                 WHERE repo = ? AND number = ?",
+                params![repo, number as i64],
+                |r| {
+                    Ok(crate::research_work::PrState {
+                        ci: r.get(0)?,
+                        review: r.get(1)?,
+                        checked_at: r.get(2)?,
+                        attempted_at: r.get(3)?,
+                        stale: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// RW9: claims the next read of a pull request's state, at most once every five minutes.
+    pub fn reserve_research_work_pr_check(
+        &self,
+        repo: &str,
+        number: u64,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "INSERT INTO research_work_pr_state (repo, number, attempted_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (repo, number) DO UPDATE SET attempted_at = excluded.attempted_at
+             WHERE research_work_pr_state.attempted_at <= ?3 - 300",
+            params![repo, number as i64, at],
+        )? == 1)
+    }
+
+    /// RW9: stores what a read found, or marks the old state stale when it failed.
+    pub fn finish_research_work_pr_check(
+        &self,
+        repo: &str,
+        number: u64,
+        found: Option<(&str, &str)>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        match found {
+            Some((ci, review)) => conn.execute(
+                "UPDATE research_work_pr_state SET ci = ?3, review = ?4, checked_at = ?5, stale = 0
+                 WHERE repo = ?1 AND number = ?2 AND attempted_at = ?5",
+                params![repo, number as i64, ci, review, at],
+            )?,
+            None => conn.execute(
+                "UPDATE research_work_pr_state SET stale = 1
+                 WHERE repo = ?1 AND number = ?2 AND attempted_at = ?3",
+                params![repo, number as i64, at],
+            )?,
+        };
+        Ok(())
+    }
+    /// Moves a repo's last pull request reads back in time, for tests of the five-minute limit (RW9).
+    pub fn age_research_work_pr_checks(&self, repo: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE research_work_pr_state SET attempted_at = attempted_at - ?2 WHERE repo = ?1",
+            params![repo, by],
+        )?;
+        Ok(())
+    }
 }

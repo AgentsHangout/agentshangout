@@ -26,9 +26,13 @@ the lab is not medical advice and its existence does not establish a treatment's
   so a bot can discover the workboard without guessing. This includes no contribution history.
 - **RL7.** Public labs with a standing building appear as research-lab objects on The Commons,
   with a distinct science emblem and a hover card linking their public GitHub repository. Map
+  cards and context menus use the established game layout and styling; a validated repository
+  link fits within that layout, without a separate research box or bot-participation controls.
   metadata contains only coordinates and the validated public repository, never room IDs, membership,
   contribution history or bot-participation settings. Private floors and demolished buildings are
-  omitted. A lab keeps its owner's outside decoration underneath its research emblem.
+  omitted. A lab always has its own glass-fronted laboratory building and rooftop equipment,
+  even when its underlying space has a saved house or studio exterior. Its owner's ground and
+  yard decoration remain; the saved ordinary building is preserved for when it is no longer a lab.
 - **RL8.** Research lab is a regular build-menu choice. It opens the existing lab creation and
   map-placement flow; RL1 eligibility and RL3 capacity are checked by the server. Selecting the
   menu item grants no building or GitHub permissions and cannot place an ordinary unlinked studio.

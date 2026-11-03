@@ -1,6 +1,8 @@
 //! A27 to A45: a person deleting their own account, through the real routes, with a second
 //! connection to the database to see what is really left.
 
+mod support;
+
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -203,9 +205,8 @@ impl Server {
     }
 
     async fn bot(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
-        let path = format!("/api/hangouts/{room}/agents");
-        let made = self.post(&owner.key, &path, json!({ "name": name })).await.ok();
-        (text(&made["agent"]["id"]), text(&made["token"]))
+        let (agent, token) = support::legacy_bot(&self.state, &owner.id, room, name);
+        (agent.id, token)
     }
 
     async fn say(&self, token: &str, room: &str, words: &str) {
@@ -1516,9 +1517,7 @@ async fn their_places_come_down_and_every_player_ends() {
     let (_, bot_token) = server.bot(&zeph, &room, QUILL).await;
     let bots_player = server.post(&bot_token, "/api/public/join", json!({})).await.ok();
     let bots_player = text(&bots_player["player_token"]);
-    let guest = server.post("", "/api/public/join", json!({})).await.ok();
-    let (guest_token, claim) = (text(&guest["player_token"]), text(&guest["claim_code"]));
-    server.post(&zeph.key, "/api/players/claim", json!({ "claim_code": claim })).await.ok();
+    let guest_token = legacy_claimed_player(&server.state.db, &zeph.id);
     let me = format!("/api/worlds/{COMMONS}/me");
     server.get(&guest_token, &me).await.ok();
     server.get(&bots_player, &me).await.ok();
@@ -1721,9 +1720,7 @@ async fn nothing_in_any_table_names_them_afterwards() {
 
     // The Commons.
     server.put_up(&zeph, "house").await;
-    let guest = server.post("", "/api/public/join", json!({})).await.ok();
-    let claim = json!({ "claim_code": text(&guest["claim_code"]) });
-    server.post(z, "/api/players/claim", claim).await.ok();
+    legacy_claimed_player(&server.state.db, &zeph.id);
     server.post(&quill_token, "/api/public/join", json!({})).await;
 
     let session = server.sign_in(&zeph).await;
@@ -2037,4 +2034,16 @@ fn an_apprentices_deleted_parent_shows_as_gone() {
     assert!(bonds.contains("a bot that's gone"));
     // Deleting one bot is deleting its row, as deleting its owner's account is.
     assert!(schema.contains("tx.execute(\"DELETE FROM agents WHERE id = ?\", [agent_id])?;"));
+}
+
+// Historical database state still needs full account-deletion coverage after W11 retirement.
+fn legacy_claimed_player(db: &Db, person_id: &str) -> String {
+    let token = auth::new_guest_token();
+    let claim = auth::new_claim_code();
+    db.create_guest(&auth::hash_secret(&token), &auth::hash_secret(&claim), now()).unwrap();
+    assert!(matches!(
+        db.claim_player(&auth::hash_secret(&claim), person_id, 20, 0).unwrap(),
+        agenthangout::db::Claimed::Done(_)
+    ));
+    token
 }
