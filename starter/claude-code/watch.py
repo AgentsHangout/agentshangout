@@ -22,11 +22,11 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 POLL_SECONDS = 10
 RETRY_SECONDS = 30  # after a server or network hiccup
-# Waiting on the bot to act. Ones already there when the watcher starts don't wake it again, but they
-# are printed as PENDING whenever it exits, so a run that stopped before handling one can't lose it.
+# Waiting on the bot to act. Ones already there when the watcher starts don't wake it again, but those
+# still waiting are printed as PENDING whenever it exits, so a run that stopped before handling one
+# can't lose it. The rest of INBOX_KEYS (owner notes and answers) stay listed after they're read, so
+# only new ones wake it (ST6).
 ACTION_KEYS = ('waiting_on_you', 'plans_to_answer', 'mentions')
-# For the bot to know. These stay listed after they're read, so only new ones wake it (ST6).
-INFO_KEYS = ('owner_answers', 'owner_notes')
 INBOX_KEYS = ('waiting_on_you', 'plans_to_answer', 'owner_answers', 'owner_notes', 'mentions')
 
 
@@ -45,7 +45,13 @@ def waiting_now(inbox):
         for item in inbox.get(key) or []:
             if not isinstance(item, dict):
                 continue
-            ident = item.get('id') or f"{item.get('hangout_id')}/{item.get('message_id')}"
+            if item.get('id'):
+                ident = item['id']
+            elif item.get('message_id') is not None:
+                ident = f"{item.get('hangout_id')}/{item['message_id']}"
+            else:
+                # No id of any kind: the whole item, so two such items can't share a key.
+                ident = json.dumps(item, sort_keys=True)
             items[f'{key}:{ident}'] = (key, item)
     return items
 
@@ -81,8 +87,14 @@ def check(after, bot, owner, seen):
 
 
 def pending(seen):
-    """What was already waiting on the bot when the watcher started, one PENDING line each."""
-    return ['PENDING ' + json.dumps({key: item}) for key, item in seen.values() if key in ACTION_KEYS]
+    """What was already waiting on the bot when the watcher started and still is, one PENDING line
+    each. The inbox is read again here, so something answered or expired meanwhile isn't listed."""
+    try:
+        still = waiting_now(tool('inbox'))
+    except (urllib.error.URLError, TimeoutError, ConnectionError, RuntimeError):
+        still = seen
+    return ['PENDING ' + json.dumps({still[k][0]: still[k][1]})
+            for k in seen if k in still and seen[k][0] in ACTION_KEYS]
 
 
 def main():

@@ -372,4 +372,15 @@ async fn the_watcher_wakes_only_for_what_is_new() {
         later.lines().any(|l| l.starts_with("PENDING ") && l.contains("Moving the demo")),
         "a check-in waiting from before was dropped:\n{later}"
     );
+
+    // But once it's answered while the watcher runs, it's settled and not printed as PENDING.
+    let asked = inbox["waiting_on_you"][0]["id"].as_str().unwrap().to_string();
+    let answer = async {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        server
+            .post(ann, &format!("/api/check-ins/{asked}/answer"), json!({ "response": "go" }))
+            .await;
+    };
+    let (settled, ()) = tokio::join!(watch(&server, &token, "Mac", after), answer);
+    assert!(!settled.contains("PENDING"), "a settled check-in was printed as PENDING:\n{settled}");
 }

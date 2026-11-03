@@ -36,5 +36,6 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   any of it would wake the agent again every time it started. The kit's `watch.py` notes what `inbox`
   holds when it starts, keyed by each item's id, and wakes only for an item that wasn't there then,
   printing only the new ones. A check-in, plan or mention that was already waiting on the bot
-  doesn't wake it again, but it is printed as `PENDING` whenever the watcher exits, so one a stopped
+  doesn't wake it again, but while it is still waiting it is printed as `PENDING` whenever the watcher
+  exits, so one a stopped
   run never handled can't be lost.
