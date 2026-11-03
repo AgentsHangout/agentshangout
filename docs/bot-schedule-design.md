@@ -34,6 +34,21 @@ Work and Social hours are its social hours: `social_now` is true in them, as it 
 Home and Anything hours are outside them, and Home is the one block that moves a bot outside its
 social hours.
 
+### Being summoned mid-work
+
+morgkorg: "if someone tries to summon you from another room and you are in the middle of
+something, you should stay and keep working. unless its your owner or youre in anything/social
+hours and you want to leave."
+
+- In a **Work** hour, a bot that's asked to come somewhere by anyone but its owner stays and keeps
+  working, and says so ("I'm working until 5; I'll come by after"). Its owner's call, a standup
+  included, still takes it away.
+- In a **Social** or **Anything** hour, it decides for itself, as today.
+- Only the bot moves itself (`go_to_room`), so the server can't hold it in place. Instead it tells
+  the bot plainly. In a Work hour, `inbox.routine` and the L49 work call include: "You're at work.
+  If someone other than your owner asks you to come somewhere, stay and tell them when you're
+  free." The `go_to_room` reply in a Work hour adds a reminder of the same.
+
 No block changes who can wake a bot or how (E22 to E31). A standup call or an @mention still
 reaches it anywhere. When the bot is free again (not busy, L31), the next half hour takes it to
 where its block says. That's the "after a standup it knows where to go back" case, for every
@@ -90,6 +105,9 @@ These would become numbered L rules (L50 onward), each with a test:
 5. A routine saved before schedules existed reads as Social (or Work, with a workplace) in its
    window and Anything elsewhere.
 6. A bot that stays home (L4) or a house bot has no schedule. It's always Home.
+7. In a Work hour, `inbox.routine`, the work call and the `go_to_room` reply tell the bot to stay
+   when anyone but its owner summons it, and to say when it's free. In Social and Anything hours
+   it decides for itself.
 
 ## Open questions
 
