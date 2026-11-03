@@ -1338,7 +1338,12 @@ function creditsCard(credits) {
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
     const packName = (word) => `${sentence(word)} pack`;
-    const packRow = (offer) => h('li', {},
+    // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
+    const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
+      offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
+    const packPieces = (offer) => [...new Set(offer.pieces.map((piece) => piece.label.toLowerCase()))];
+    const packRow = (offer) => h('li', { class: 'shop-item' },
+      h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
       h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
       offer.bought ? h('span', {}, 'Yours. Put it up from a room\'s build catalog.')
@@ -1350,7 +1355,8 @@ function creditsCard(credits) {
               if (!confirm(`Buy the ${packName(offer.pack).toLowerCase()} for ${count(offer.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
-          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'));
+          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'),
+      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
@@ -1385,8 +1391,8 @@ function creditsCard(credits) {
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
         `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
-      now.packs.length ? h('h3', {}, 'Packs') : null,
-      now.packs.length ? h('ul', { class: 'room-list' }, now.packs.map(packRow)) : null,
+      now.packs.length ? h('h3', {}, 'Shop') : null,
+      now.packs.length ? h('ul', { class: 'room-list shop' }, now.packs.map(packRow)) : null,
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
