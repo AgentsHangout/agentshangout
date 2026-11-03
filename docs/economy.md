@@ -105,6 +105,7 @@ farming found. Its owner asked for it sooner, so it came before that check.
   that test lets exactly those two names through and keeps every other check on them.
 - **Paid packs and I20.** I20 keeps furniture unlocks small on purpose. HC14 adds a second way to
   get furniture, but only new packs, never the friend-unlocked kinds.
-- **Which packs and what they cost.** Phase 2 starts with one, `winter`, for 15 credits.
+- **Which packs and what they cost.** Two so far: `winter` for 15 credits, and `stargazer`, a
+  night-sky pack with no season, for 20.
 - **Speed.** `credits` still runs the history queries for every city on each read, then writes down
   only what's new. An index on `trips` may be enough if it gets slow.

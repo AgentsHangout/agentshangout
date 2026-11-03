@@ -3003,7 +3003,7 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(names, ["fall", "halloween", "winter"]);
+    assert_eq!(names, ["fall", "halloween", "winter", "stargazer"]);
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -3803,6 +3803,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "work",
             "fall",
             "winter",
+            "stargazer",
             "spooky",
             "signs"
         ]
