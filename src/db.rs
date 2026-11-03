@@ -1233,6 +1233,19 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
  verified_at INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number)
 );
+-- RW8: who said they're working on a workboard item, until it runs out. Local only.
+CREATE TABLE IF NOT EXISTS research_work_claims (
+ lab_id TEXT NOT NULL REFERENCES research_labs(space_id) ON DELETE CASCADE,
+ number INTEGER NOT NULL,
+ claimer TEXT NOT NULL,
+ person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ pairing INTEGER NOT NULL,
+ since INTEGER NOT NULL,
+ until INTEGER NOT NULL,
+ PRIMARY KEY(lab_id, number, claimer)
+);
 
 
 

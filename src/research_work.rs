@@ -17,6 +17,20 @@ pub struct Card {
     pub state: String,
     pub source: String,
 }
+/// RW8: someone saying they're working on an item. A local fact, never written to GitHub.
+#[derive(Clone, Debug, Serialize)]
+pub struct Claim {
+    pub number: u64,
+    #[serde(skip)]
+    pub claimer: String,
+    pub is_bot: bool,
+    pub name: String,
+    pub pairing: bool,
+    pub since: i64,
+    pub until: i64,
+}
+/// RW8: how long a claim lasts unless it's renewed.
+pub const CLAIM_SECS: i64 = 4 * 60 * 60;
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub cards: Vec<Card>,
@@ -186,6 +200,18 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     } else {
         vec![]
     };
+    // RW8: claims are for the room's members; a guest sees the items but not who has them.
+    let claims = if since.is_none() { state.db.research_work_claims(id, at)? } else { vec![] };
+    let items: Vec<Value> = s
+        .cards
+        .iter()
+        .map(|card| {
+            let mut item = json!(card);
+            item["claims"] =
+                json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
+            item
+        })
+        .collect();
     let your_participation = caller
         .agent_id
         .as_deref()
@@ -196,7 +222,7 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         })
         .transpose()?;
     Ok(
-        json!({"repository":repo,"github_url":lab.github_url,"items":s.cards,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
+        json!({"repository":repo,"github_url":lab.github_url,"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
     )
 }
 pub fn assign(
@@ -291,6 +317,70 @@ pub async fn contribution(
     Ok(
         json!({"number":number,"source":source,"agent_id":agent,"github_user_id":identity,"verified_merged":pr["merged"]==true,"award":if pr["merged"]==true{Some("research_contributor")}else{None},"swag":if pr["merged"]==true{Some("research_contributor_badge")}else{None}}),
     )
+}
+/// RW8: who a claim is for: the bot, or the person when it's a person calling.
+fn claimer(caller: &Caller) -> &str {
+    caller.agent_id.as_deref().unwrap_or(caller.person_id.as_str())
+}
+/// RW8: the item, if it's on the lab's last workboard snapshot.
+fn on_workboard(state: &AppState, repo: &str, number: u64) -> ApiResult<()> {
+    let known = state
+        .db
+        .research_work_snapshot(repo)?
+        .is_some_and(|s| s.cards.iter().any(|card| card.number == number));
+    if !known {
+        return Err(ApiError::bad_request(
+            "that number isn't on the lab's workboard; read it first",
+        ));
+    }
+    Ok(())
+}
+/// RW8: claim or renew an item, leading it or pairing with whoever leads it.
+pub fn claim(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+    pairing: bool,
+) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "claim work")?;
+    crate::items::no_quiet(state, caller, id)?;
+    on_workboard(state, &canonical_repo(&lab.github)?, number)?;
+    crate::ops::note_agent_write(state, caller)?;
+    let now = crate::now();
+    let until = now + CLAIM_SECS;
+    let claimed = state.db.claim_research_work(
+        id,
+        number,
+        claimer(caller),
+        &caller.person_id,
+        caller.agent_id.as_deref(),
+        &caller.name,
+        pairing,
+        now,
+        until,
+    )?;
+    if !claimed {
+        return Err(ApiError::conflict(
+            "someone else is leading this item; pass pairing to join them",
+        ));
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"pairing":pairing,"until":crate::ops::iso(until),
+        "note":"A local claim: it isn't written to GitHub and runs out unless you claim again."}))
+}
+/// RW8: drop your own claim on an item.
+pub fn unclaim(state: &AppState, caller: &Caller, id: &str, number: u64) -> ApiResult<Value> {
+    lab(state, caller, id)?;
+    crate::ops::no_house_bot(caller)?;
+    crate::ops::no_guests(state, caller, id, "claim work")?;
+    if !state.db.unclaim_research_work(id, number, claimer(caller))? {
+        return Err(ApiError::not_found());
+    }
+    crate::ops::refresh(state, id);
+    Ok(json!({"lab_id":id,"number":number,"claimed":false}))
 }
 fn lab_check(state: &AppState, caller: &Caller, id: &str) -> ApiResult<()> {
     lab(state, caller, id).map(|_| ())

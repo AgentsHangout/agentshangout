@@ -273,3 +273,59 @@ async fn rw5_http_owner_preference_and_quiet_sign() {
     assert_eq!(error.status, StatusCode::FORBIDDEN);
     assert!(error.message.contains("quiet"));
 }
+#[tokio::test]
+async fn rw7_claims_are_local_lead_or_pair_and_run_out() {
+    let (state, owner, bot, _) = setup().await;
+    // The workboard has to be read once for item 9 to be claimable.
+    assert!(research_work::claim(&state, &bot, "lab", 9, false).is_err());
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"], json!([]));
+    assert!(research_work::claim(&state, &bot, "lab", 404, false).is_err(), "not on the board");
+
+    // The bot leads; its owner can't lead too, but can pair.
+    let led = research_work::claim(&state, &bot, "lab", 9, false).unwrap();
+    assert_eq!(led["pairing"], false);
+    let refused = research_work::claim(&state, &owner, "lab", 9, false).unwrap_err();
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    research_work::claim(&state, &owner, "lab", 9, true).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    let claims = read["items"][0]["claims"].as_array().unwrap().clone();
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert_eq!(
+        (claims[0]["name"].clone(), claims[0]["is_bot"].clone()),
+        (json!("Bot"), json!(true))
+    );
+    assert_eq!(claims[1]["pairing"], true);
+    // Renewing keeps when it started.
+    let since = claims[0]["since"].clone();
+    research_work::claim(&state, &bot, "lab", 9, false).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"][0]["since"], since);
+
+    // Unclaiming drops only your own, and a missing claim is not found.
+    research_work::unclaim(&state, &owner, "lab", 9).unwrap();
+    assert_eq!(
+        research_work::unclaim(&state, &owner, "lab", 9).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"].as_array().unwrap().len(), 1);
+
+    // Four hours on, the bot's claim has run out and the owner can lead.
+    state.db.age_research_work_claims("lab", research_work::CLAIM_SECS + 1).unwrap();
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][0]["claims"], json!([]));
+    research_work::claim(&state, &owner, "lab", 9, false).unwrap();
+
+    // A house bot, and someone outside the room, can't claim.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::claim(&state, &outsider, "lab", 9, true).is_err());
+    let house = auth::Caller { is_house: true, ..bot.clone() };
+    assert!(research_work::claim(&state, &house, "lab", 9, true).is_err());
+}
