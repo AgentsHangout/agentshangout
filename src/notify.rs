@@ -389,7 +389,7 @@ pub fn send_result<F>(
 
 /// RP3: a repeating plan's cue, from the bot's own owner. There's no message to check it against,
 /// so it's sent while the bot isn't paused, still belongs to the plan's room, and the plan still
-/// repeats with that owner. One POST, no retry.
+/// repeats with that owner and isn't canceled. One POST, no retry.
 pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &str, owner_id: &str) {
     let (id, event, owner, room) = (
         agent_id.to_string(),
@@ -412,6 +412,8 @@ pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &st
                 .ok()
                 .flatten()
                 .is_some_and(|cadence| cadence.owner_id == owner && !cadence.paused)
+            // RP9: a plan canceled after its start was taken doesn't ring.
+            && state.db.event(&event).ok().flatten().is_some_and(|plan| plan.status != "cancelled")
     };
     send_checked(state, agent_id, notice, true, may, |_, _| {});
 }

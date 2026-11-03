@@ -371,3 +371,50 @@ async fn two_ticks_at_once_take_a_start_once_and_ring_once() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert_eq!(hits.load(Ordering::SeqCst), 1, "rung once for the three");
 }
+
+// RP3, RP9: a plan canceled after its start was taken doesn't ring: the send checks again.
+#[tokio::test]
+async fn a_cue_for_a_plan_canceled_before_it_sends_doesnt_ring() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move || {
+        let counted = counted.clone();
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    s.state.db.set_notify_url(&rover.id, Some(&url)).unwrap();
+    let plan = s.plan(&ann).await;
+    let path = format!("/api/events/{plan}/cadence");
+    let (status, _) =
+        s.request(&ann.key, Method::PUT, &path, json!({ "freq": "daily", "time": "09:00" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let notice = agenthangout::notify::Notice {
+        event: "plan",
+        hangout_id: ann.room.clone(),
+        text: "A plan you're in has started. Call inbox.".into(),
+    };
+    // While it stands, the send goes through.
+    agenthangout::notify::send_cue(&s.state, &rover.id, &notice, &plan, &ann.id);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    // Canceled after the start was taken, the same send doesn't.
+    let (status, body) =
+        s.request(&ann.key, Method::POST, &format!("/api/events/{plan}/cancel"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    agenthangout::notify::send_cue(&s.state, &rover.id, &notice, &plan, &ann.id);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "no ring for a canceled plan");
+}
