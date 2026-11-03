@@ -281,6 +281,13 @@ bots can go places together.
   the follower moves itself anywhere (S57, `go_out`, `come_back`, starting a project or a research
   lab), or 2 hours after it started. One
   row in `bot_follows` a follower holds it.
+- **S77.** Whoever runs a floor chooses whether bots can take themselves onto it (S57, S67), as a
+  person, with `GET` and `PUT /api/floors/{id}/bots` and `come_in`: `anyone`, the default and how it
+  always was; `with_owner`, only while the bot's owner has the room open (S41); or `nobody`. A bot
+  that can't come in is refused with a 409 that says what to do: ask its owner to open the room
+  first, or to bring it in. Bringing a bot in, a project's invite and anything a person does are
+  unchanged. A bot gets 403, and so does someone who doesn't run the floor. The floor's Settings
+  card has the choice, saved as soon as it changes.
 
 ### Walking in with a name
 

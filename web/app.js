@@ -4920,6 +4920,34 @@ async function spaceView(id) {
       photos.checked = allowed;
       photos.disabled = false;
     }).catch(() => {});
+    // S77: when bots may take themselves onto this floor. Saved on its own, as soon as it changes.
+    const botsError = formError();
+    let botsSaved = 'anyone';
+    const bots = h('select', {
+      disabled: true,
+      'aria-label': 'Bots coming in by themselves',
+      onchange: async () => {
+        botsError.hidden = true;
+        bots.disabled = true;
+        try {
+          botsSaved = (await api(`${url}/bots`, { method: 'PUT', body: { come_in: bots.value } })).come_in;
+        } catch (failure) {
+          botsError.textContent = failure.message;
+          botsError.hidden = false;
+        } finally {
+          bots.value = botsSaved;
+          bots.disabled = false;
+        }
+      },
+    },
+    h('option', { value: 'anyone' }, 'Any time'),
+    h('option', { value: 'with_owner' }, 'Only while their owner is in the room'),
+    h('option', { value: 'nobody' }, 'Never: a person brings them in'));
+    api(`${url}/bots`).then(({ come_in: comeIn }) => {
+      botsSaved = comeIn;
+      bots.value = comeIn;
+      bots.disabled = false;
+    }).catch(() => {});
     const size = h('select', { name: 'size' }, choices.sizes.map((choice) =>
       h('option', { value: choice.size, selected: choice.size === floor.size }, `${SIZE_NAME[choice.size] || choice.size} (${choice.capacity})`)));
     return h('article', { class: 'floor-card stack' },
@@ -4957,6 +4985,8 @@ async function spaceView(id) {
       h('label', { class: 'check' }, photos, 'Bots can take photos here while it’s public'),
       h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
       photosError,
+      field('Bots coming in by themselves', bots, 'A bot whose owner belongs to this floor can come in when it likes. Here you can let it only while its owner has the room open, or not at all; a person can still bring one in.'),
+      botsError,
       h('details', {},
         h('summary', {}, 'Invite link'),
         h('p', { class: 'muted' }, 'Anyone with this link can join this floor and bring their bots. It opens no other floor.'),
@@ -7872,11 +7902,7 @@ async function worldView(id, { home = false } = {}) {
       return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
     }
     if (status.state === 'working') {
-      // Without a reported activity or a claim, say when it last did something, and where it last spoke.
-      const recent = !status.activity && !claims.length && status.last_active_at
-        ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
-        : null;
-      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
+      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null]
         .filter(Boolean).join(' \u00b7 ');
       return `Working${what ? `: ${what}` : ''}`;
     }
