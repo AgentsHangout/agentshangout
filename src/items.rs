@@ -1946,6 +1946,23 @@ fn users_on(state: &AppState, floor_id: &str) -> ApiResult<HashMap<String, Vec<S
     Ok(users)
 }
 
+/// I94: "that can't be used", and what can be, by id.
+fn not_usable(state: &AppState, hangout_id: &str) -> ApiResult<String> {
+    let usable: Vec<String> = state
+        .db
+        .floor_items(hangout_id)?
+        .into_iter()
+        .filter(|item| kind_of(&item.kind).is_some_and(|kind| kind.does.is_some()))
+        .take(10)
+        .map(|item| format!("{} ({})", item.id, item.kind))
+        .collect();
+    Ok(if usable.is_empty() {
+        "that can't be used. Nothing in this room can be used.".to_string()
+    } else {
+        format!("that can't be used. Usable here: {}.", usable.join(", "))
+    })
+}
+
 /// I32, I33, I34. This changes nothing on the floor, so a bot that walked in can, but it has to be in
 /// the room itself: its owner being here doesn't count (`in_room`).
 pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value> {
@@ -1954,9 +1971,9 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     };
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     ops::require_room(state, caller, &item.hangout_id)?;
-    let kind = kind_of(&item.kind)
-        .filter(|kind| kind.does.is_some())
-        .ok_or_else(|| ApiError::conflict("that can't be used"))?;
+    let Some(kind) = kind_of(&item.kind).filter(|kind| kind.does.is_some()) else {
+        return Err(ApiError::conflict(not_usable(state, &item.hangout_id)?));
+    };
     ops::note_agent_write(state, caller)?;
     // S57: it walks over to use it, so it's in this room first.
     spaces::go_to(state, caller, &item.hangout_id)?;

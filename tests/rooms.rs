@@ -4022,7 +4022,11 @@ async fn only_what_the_catalog_lists_can_be_used() {
 
     for item in [&plant, &shelf] {
         let refused = server.use_item(&scout.token, item).await.refused(StatusCode::CONFLICT);
-        assert_eq!(refused["error"], "that can't be used");
+        // I94: and what can be, by id.
+        let words = text(&refused["error"]);
+        assert!(words.starts_with("that can't be used"), "{words}");
+        assert!(words.contains(&format!("{stool} (stool)")), "{words}");
+        assert!(!words.contains(&plant) && !words.contains(&shelf), "{words}");
     }
     let done = server.use_item(&scout.token, &stool).await.ok();
     assert_eq!(done["doing"], "sitting on the stool");

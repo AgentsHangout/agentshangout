@@ -195,6 +195,21 @@ input::placeholder { color: #8b7a5e; }
 .shop { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .shop-item .template-pic { margin-bottom: 6px; border-radius: 6px; overflow: hidden; }
 .shop-item p { margin: 4px 0 0; }
+/* The credits card's balance, big, with the same coin as the bar's. */
+.credit-balance { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.credit-balance strong { font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }
+.credit-balance .coin-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff3b0, #e8b730 55%, #a8770f);
+  box-shadow: inset 0 0 0 1px #7a5508;
+}
+.credit-today { display: grid; gap: 4px; margin: 0 0 12px; }
+.credit-today progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.credit-line strong { display: inline-block; min-width: 3.5ch; font-variant-numeric: tabular-nums; }
+.credit-in { color: var(--good); }
+.credit-out { color: var(--bad); }
 
 /* The home page's text for people and crawlers. It sits outside the app, so it steps aside when a
    room takes over the page. It reads as the game's manual: a paper sheet at the bottom of the desk. */
@@ -2838,6 +2853,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .bot-status.idle { color: var(--accent); }
 .bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }
 
+/* L44: a bot's picture at the start of its row in the Bots panel. */
+.bot-pic { flex: none; display: inline-flex; align-items: flex-end; justify-content: center; width: 40px; }
+.bot-pic canvas { image-rendering: pixelated; }
 /* Choices in Settings: a row with what it does, and a switch (A88). */
 .pref-group { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .pref-group h3 { margin: 0; font-size: 15px; }

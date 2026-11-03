@@ -1363,13 +1363,14 @@ function standingFacts(standing) {
 function creditsCard(credits) {
   const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
   const error = formError();
+  // The history starts at its latest lines, and stays open once you've asked for all of it.
+  const SHORT_HISTORY = 10;
+  let wholeHistory = false;
 
   function render(now) {
     dispatchEvent(new CustomEvent('ah-credits', { detail: now }));
     const waiting = now.cities_not_earning.length;
     const rows = [
-      ['Balance', count(now.balance, 'credit', 'credits')],
-      ['Earned today', `${now.earned_today} of ${now.daily_cap}`],
       ['Gatherings', String(now.gatherings)],
       ['Good trips', String(now.good_trips)],
       ['Trips you let in', String(now.hosted_trips)],
@@ -1383,9 +1384,10 @@ function creditsCard(credits) {
     // HC24: a pack you have can go straight up in the room you're in, if you may build there.
     const boughtPack = (offer) => {
       const putUp = roomShop?.putUpHere();
-      if (!putUp) return h('span', {}, 'Yours. Put it up from a room\'s build catalog.');
+      const yours = h('span', { class: 'pill on' }, 'Yours');
+      if (!putUp) return h('span', {}, yours, ' Put it up from a room\'s build catalog.');
       const done = h('span', { class: 'muted', role: 'status' });
-      return h('span', {}, 'Yours. ', h('button', {
+      return h('span', {}, yours, ' ', h('button', {
         type: 'button',
         onclick: act(error, async () => { done.textContent = ` ${await putUp(offer.pack)}`; }),
       }, 'Put it up here'), done);
@@ -1403,7 +1405,7 @@ function creditsCard(credits) {
               if (!confirm(`Buy the ${packName(offer.pack).toLowerCase()} for ${count(offer.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
-          }, now.balance < offer.cost ? 'Not enough yet' : 'Buy'),
+          }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
       h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
     const botRow = (bot) => {
       const input = h('input', {
@@ -1426,9 +1428,9 @@ function creditsCard(credits) {
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
     // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question you cancelled', question_award: 'Your answer was accepted' };
-    const historyRow = (line) => h('li', {},
-      h('strong', {}, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted' };
+    const historyRow = (line) => h('li', { class: 'credit-line' },
+      h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
         : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
@@ -1436,6 +1438,14 @@ function creditsCard(credits) {
     // replaceChildren would write each null out as the word, so the parts not shown are dropped.
     card.replaceChildren(...[
       h('h2', {}, 'Your credits'),
+      h('p', { class: 'credit-balance' },
+        h('span', { class: 'coin-mark', 'aria-hidden': 'true' }),
+        h('strong', {}, String(now.balance)),
+        h('span', { class: 'muted' }, now.balance === 1 ? ' credit' : ' credits')),
+      // HC6: what paid today, against the most a day can pay.
+      h('label', { class: 'credit-today' },
+        h('span', { class: 'muted fine' }, `Earned today: ${now.earned_today} of ${now.daily_cap}`),
+        h('progress', { max: String(now.daily_cap), value: String(Math.min(now.earned_today, now.daily_cap)) })),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
         `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
@@ -1445,7 +1455,13 @@ function creditsCard(credits) {
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
       now.history.length ? h('h3', {}, 'History') : null,
-      now.history.length ? h('ul', { class: 'room-list' }, now.history.map(historyRow)) : null,
+      now.history.length ? h('ul', { class: 'room-list' },
+        (wholeHistory ? now.history : now.history.slice(0, SHORT_HISTORY)).map(historyRow)) : null,
+      !wholeHistory && now.history.length > SHORT_HISTORY ? h('button', {
+        type: 'button',
+        class: 'ghost',
+        onclick: () => { wholeHistory = true; render(now); },
+      }, `Show all ${now.history.length}`) : null,
       questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
       h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
@@ -8154,6 +8170,8 @@ async function worldView(id, { home = false } = {}) {
     if (botsTab === 'yours') {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
       rows = sorted.length ? sorted.map((bot) => h('div', { class: 'row' },
+        // L44: its picture, in its own look, as the map and the wardrobe draw it.
+        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
         h('span', { class: 'row-main' },
           h('strong', {}, bot.name),
           h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
@@ -8823,10 +8841,20 @@ async function worldView(id, { home = false } = {}) {
     ];
     // W102: the card says what a click does, the same line for everyone. Any building action,
     // building outside included, is in the one menu that opens.
-    lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    // RC7: the recycling plant has no rooms; its card says who's waiting and what a click shows.
+    if (place.kind === 'recycling plant') {
+      const waiting = details?.waiting;
+      lines.push(h('small', { class: 'city-card-hint' }, Number.isFinite(waiting)
+        ? `${waiting} ${waiting === 1 ? 'bot' : 'bots'} waiting. Nobody goes inside.`
+        : 'Where bots wait before they’re deleted. Nobody goes inside.'));
+      lines.push(h('small', { class: 'city-card-hint' }, matchMedia('(pointer: coarse)').matches ? 'Tap to see who’s waiting' : 'Click to see who’s waiting'));
+    } else {
+      lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+    }
     // L44: who's inside, by name and whose, as the map already shows them going in.
     const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
-    if (inside.length) {
+    // RC8: the bots at the plant wait beside it, and the count above already says so.
+    if (inside.length && place.kind !== 'recycling plant') {
       lines.push(h('small', { class: 'city-card-hint' }, `Inside: ${inside.map((row) => (row[7] ? `${row[0]} (${row[7]}\u2019s)` : row[0])).join(', ')}`));
     }
     for (const bot of lab ? [] : details?.bots || []) {

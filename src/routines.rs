@@ -64,7 +64,12 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
     let now = now();
     let mut bots = Vec::new();
     let waits = crate::needs_you::waits_of(&state, &caller.person_id)?;
-    for agent in state.db.agents_of(&caller.person_id, now)? {
+    let agents = state.db.agents_of(&caller.person_id, now)?;
+    // L44: each one's picture, in its own look and its owner's color, as the map draws it.
+    let ids: Vec<String> = agents.iter().map(|agent| agent.id.clone()).collect();
+    let mut looks = worn(&state, Wearer::Bot, &ids)?;
+    let color = state.db.person(&caller.person_id)?.map(|person| person.color);
+    for agent in agents {
         if state.db.bot_home(&agent.id)?.is_some_and(|home| home.is_house) {
             continue;
         }
@@ -159,6 +164,8 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
         bots.push(json!({
             "id": agent.id,
             "name": agent.name,
+            "look": looks.remove(&agent.id).unwrap_or_default(),
+            "color": color,
             "status": status,
             "room": room_json,
             "place": place,

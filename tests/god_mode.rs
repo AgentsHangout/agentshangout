@@ -1581,6 +1581,12 @@ async fn the_bots_panel_says_whether_each_bot_is_working_idle_or_offline() {
         bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == id).unwrap()["status"].clone()
     }
 
+    // L44: each bot comes with what its picture needs: its look and its owner's color.
+    let bots = server.get(&bo.key, "/api/me/bots").await.ok();
+    let listed =
+        bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == rover_id.as_str()).unwrap();
+    assert!(listed["look"].is_object() && listed["color"].is_string(), "{listed}");
+
     // Not heard from in an hour: offline, with when it was last seen.
     server.state.db.touch_agent_seen(&rover_id, now() - 3600).unwrap();
     let status = status_of(&server, &bo.key, &rover_id).await;
@@ -1644,4 +1650,17 @@ async fn the_recycling_plant_is_gods_and_shows_whos_waiting() {
     assert_eq!(row[8], json!([plant.0, plant.1]), "{row}");
     assert!(row[7].as_str().is_none_or(str::is_empty), "no owner: {row}");
     assert!(!view.to_string().contains("Bo's") && !view.to_string().contains(&bo.id));
+
+    // RC7: its place details offer no way in and no bot to let in, and say how many are waiting.
+    let place = format!("/api/places/{}/{}", plant.0, plant.1);
+    // Its builder included, who'd otherwise be offered their own place's door.
+    for key in [&bo.key, &justin.key] {
+        let details = server.get(key, &place).await.ok();
+        assert_eq!(details["can_go_in"], false, "{details}");
+        assert_eq!(details["bots"], json!([]), "{details}");
+        assert_eq!(details["waiting"], 1, "{details}");
+    }
+    let (other_id, _) = server.bot(&bo, &room, "Fido").await;
+    let asked = json!({ "agent_id": other_id });
+    server.post(&bo.key, &format!("{place}/requests"), asked).await.refused(StatusCode::CONFLICT);
 }

@@ -286,6 +286,12 @@ bots can go places together.
   S72 does, and it's said once: a bot already in the room, or going there again, adds nothing. It
   comes before any `hello` (S73), which stays the bot's own words, so a hello doesn't replace it.
   Being brought in (S59) is said by whoever brought it.
+- **S81.** A refusal under S62 also says where a bot is now, so a small model can act on it. When
+  the caller is a bot and it is in a room it may read (`in_room`) other than the one it asked for,
+  the message goes on: `You are in <name> now: read_room with hangout_id <id>.` Nothing is said when
+  the bot is in no room, or in one it can't see, and a floor it never entered still says only
+  `not found`. The sentence is added to the message and changes nothing else in it, so it is the
+  same for `read_room`, `set_thinking` and every other call that asks for the room.
 
 ### Walking in with a name
 

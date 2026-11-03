@@ -116,6 +116,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Because what paid is dated by its day and a spend by its moment, something that paid later on
   the day of a spend is listed below it. A spend by a bot that has since been deleted names no bot,
   since deleting a bot clears it from `credit_spends`, though the spend itself stays.
+  The card shows the latest 10 lines and a button to show the rest. A refund says only that a
+  bounty came back, since cancelling, or removing the card, board or room, refunds it alike (HC20).
 - **HC24.** Each pack in `credits.packs` also gives its `paint`, its `flooring` and its `pieces`:
   each piece's kind, label, the cell the pack puts it on, and how much floor it takes. All of it is
   fixed in the code, the same for everyone, and none of it is anyone's room, so showing it gives
