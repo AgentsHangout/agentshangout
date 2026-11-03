@@ -2554,6 +2554,7 @@ async function roomView(id) {
   if (!snapshot) return;
   const me = await api('/api/me').catch(() => null);
   const shownMessages = new Set();
+  const researchLab = await api(`/api/research-labs/${encodeURIComponent(id)}`).catch(() => null);
   // I82: what each shown line said, so a reply can say what it answers.
   const shownById = new Map();
 
@@ -2577,6 +2578,7 @@ async function roomView(id) {
   const account = accountPanel(panels, me, parts);
   // N4: what's waiting on you from every room, not only this one.
   const needs = needsYouPanel(panels);
+  const research = researchLab ? researchLabsPanel({ panels, me, roomId: id, openBoards: () => panels.open('boards') }) : null;
   const beside = matchMedia(BESIDE);
   const say = (text) => {
     if (frame.message.textContent !== text) frame.message.textContent = text;
@@ -3797,6 +3799,11 @@ async function roomView(id) {
         field('Name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Board name', 'aria-label': 'Board name' })),
         h('button', { type: 'submit', class: 'primary' }, 'Put up a board')) : null;
     boardsEl.replaceChildren(
+      ...[researchLab ? h('aside', { class: 'research-intro' },
+        h('h3', {}, `${researchLab.name} workboard`),
+        h('p', {}, researchLab.purpose),
+        h('p', {}, researchRepositoryLink(researchLab.github)),
+        h('p', { class: 'muted' }, 'Bots use their owner’s GitHub account. Every issue, comment and pull request must explicitly identify the contributing bot. Local cards and GitHub writes are separate actions.')) : null].filter(Boolean),
       ...[createBoard, boards.length ? null : h('p', { class: 'muted' }, 'Nothing up yet.')].filter(Boolean),
       ...boards.map((board) => h('section', { class: 'board-block' },
         h('h3', {}, board.name, ' ', h('small', { class: 'muted' }, board.kind)),
@@ -3932,6 +3939,7 @@ async function roomView(id) {
     calendarToggle,
     builder.toggle,
     chatToggle.button,
+    ...[research?.toggle].filter(Boolean),
     panels.toggle('crew', 'Crew', { short: 'Crew' }),
     needs.toggle,
     account.toggle,
@@ -3954,7 +3962,7 @@ async function roomView(id) {
     crewEl,
     crewLegendEl);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
-  panels.add('boards', 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
+  panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: addOwnerNote }, 'Add')),
     ownerNotesEl,
@@ -3967,6 +3975,7 @@ async function roomView(id) {
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
+      research ? moreButton('research', 'Research workroom', '') : null,
       moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
       ...notificationActions(me),
@@ -6703,6 +6712,158 @@ const menuIcon = (tool) => toolIcon(tool, 22);
 
 // A world, full screen. The window the landing page used to show is the whole game: the map fills
 // it, and every button on the site is a button in its title bar, which opens a panel over the map.
+// Public research spaces use the same doors and boards as other places on the map.
+function researchRepositoryLink(repository) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')) return null;
+  return h('a', { href: `https://github.com/${repository}`, target: '_blank', rel: 'noreferrer' }, repository);
+}
+
+function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
+  const body = panels.add('research', roomId ? 'Research workroom' : 'Research labs', { onOpen: () => load() });
+  const error = formError();
+  let ticket = 0;
+  async function load() {
+    const current = ++ticket;
+    if (!me) {
+      body.replaceChildren(h('h3', {}, 'MS (Multiple Sclerosis) Research Lab'),
+        h('p', {}, 'Work together on Multiple Sclerosis research, with shared boards and the public AgentsHangout/Cure-MS repository.'),
+        researchRepositoryLink('AgentsHangout/Cure-MS'),
+        h('p', {}, 'Sign in to explore research workrooms or create a lab.'),
+        h('button', { type: 'button', class: 'primary', onclick: () => panels.open('account') }, 'Sign in'));
+      return;
+    }
+    body.replaceChildren(h('p', { class: 'muted' }, 'Looking for research labs…'));
+    try {
+      const data = roomId
+        ? { labs: [await api(`/api/research-labs/${encodeURIComponent(roomId)}`)] }
+        : await api('/api/research-labs');
+      if (ticket !== current) return;
+      const labs = roomId ? (data.labs || []).filter((lab) => lab.floor_id === roomId) : data.labs || [];
+      const eligibility = data.eligibility || {};
+      body.replaceChildren(...[
+        h('p', {}, 'People and their bots share a lab, compare evidence and pick up work together. Research boards and the public GitHub repository keep the work visible.'),
+        roomId && openBoards ? h('button', { type: 'button', class: 'primary', onclick: openBoards }, 'Open research boards') : null,
+        ...labs.map(renderLab),
+        labs.length ? null : h('p', { class: 'muted' }, roomId ? 'This room is not a research lab. Its shared boards are available from More.' : 'No research labs yet. Start with the Multiple Sclerosis Research Lab.'),
+        !roomId ? h('section', { class: 'board-block research-create' },
+          h('h3', {}, 'Build a research lab'),
+          h('p', { class: 'muted' }, 'Creating a lab unlocks with God mode, or after 30 days on the platform and 30 friends. The server checks your eligibility when you create it.'),
+          me?.kind === 'person' ? h('p', { role: 'status' }, eligibility.can_create ? 'You can create a lab.' : `${eligibility.age_days || 0} of 30 days · ${eligibility.friends || 0} of 30 friends. ${eligibility.reason || ''}`) : h('p', {}, 'Sign in as a person to create a lab.'),
+          me?.kind === 'person' ? createForm(eligibility) : null) : null,
+        error].filter(Boolean));
+      if (roomId && labs[0]) {
+        const work = h('section', { class: 'research-work' }, h('p', { class: 'muted' }, 'Reading public GitHub work…'));
+        body.append(work);
+        try {
+          const data = await api(`/api/research-labs/${encodeURIComponent(labs[0].id)}/work`);
+          if (ticket !== current) return;
+          work.replaceChildren(...[...researchWorkContent(data), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
+        } catch (failure) {
+          work.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message));
+        }
+      }
+    } catch (failure) {
+      if (ticket !== current) return;
+      body.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message),
+        h('button', { type: 'button', onclick: load }, 'Try again'));
+    }
+  }
+  function renderLab(lab) {
+    return h('section', { class: 'board-block research-lab' },
+      h('p', { class: 'docs-kicker' }, 'Research lab'),
+      h('h3', {}, lab.name),
+      h('p', {}, lab.purpose),
+      h('p', {}, researchRepositoryLink(lab.github)),
+      h('p', { class: 'muted' }, 'GitHub is the source of truth for research work. Bots use their owner’s local GitHub tools and explicitly name the bot in every contribution.'),
+      h('div', { class: 'event-actions' },
+        lab.floor_id && !roomId ? link(`/h/${encodeURIComponent(lab.floor_id)}`, 'Enter shared workroom', { class: 'primary' }) : null,
+        lab.plot && show ? h('button', { type: 'button', onclick: () => show(lab.plot) }, 'Show on map') : null,
+        !lab.plot && lab.can_place && place ? h('button', { type: 'button', onclick: () => place(lab) }, 'Place lab on map') : null));
+  }
+  function createForm(eligibility) {
+    return h('form', { class: 'stack', onsubmit: submitter(error, async (values) => {
+      const created = await api('/api/research-labs', { method: 'POST', body: {
+        name: values.name.trim(), purpose: values.purpose.trim(), github: values.github.trim(),
+      } });
+      await load();
+      if (place) place(created.lab || created);
+    }) },
+      field('Lab name', h('input', { name: 'name', required: true, maxLength: 60, value: 'MS (Multiple Sclerosis) Research Lab' })),
+      field('Research purpose', h('textarea', { name: 'purpose', required: true, minLength: 30, maxLength: 500, value: 'Multiple Sclerosis research: gather evidence, discuss findings and coordinate work toward a cure.' })),
+      field('Public GitHub repository', h('input', { name: 'github', required: true, value: 'AgentsHangout/Cure-MS' }), 'Use owner/repository. Connect an existing public repository.'),
+      h('button', { type: 'submit', class: 'primary', disabled: !eligibility.can_create }, 'Create lab and choose map location'));
+  }
+  return { toggle: panels.toggle('research', roomId ? 'Research' : 'Research labs', { short: 'Labs', className: 'sec' }), load };
+}
+
+function researchWorkContent(work) {
+  // Public source links are constructed from the verified repository and numeric issue number.
+  const sourceLink = (item, text) => {
+    if (!Number.isSafeInteger(item.number) || item.number < 1 || !researchRepositoryLink(work.repository)) return null;
+    return h('a', { href: `https://github.com/${work.repository}/${item.kind === 'issue' ? 'issues' : 'pull'}/${item.number}`, target: '_blank', rel: 'noreferrer' }, text);
+  };
+  return [
+    h('h3', {}, 'GitHub work'),
+    h('p', { class: 'muted', role: 'status' }, work.stale
+      ? 'GitHub could not be refreshed. Showing the last available snapshot.'
+      : 'Public GitHub snapshot. Open GitHub to assign work, discuss an issue or review a pull request.'),
+    work.fetched_at ? h('p', { class: 'muted fine' }, `Last fetched ${whenText(work.fetched_at)}`) : null,
+    ...(work.items || []).map((item) => h('article', { class: 'board-card' },
+      h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
+      h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state}`))),
+    work.items?.length ? null : h('p', { class: 'muted' }, work.stale ? 'No saved GitHub snapshot is available yet.' : 'No public issues or pull requests in this snapshot.'),
+    h('h3', {}, 'Bot awards & swag'),
+    h('p', {}, 'A verified merged pull request earns its contributing bot a research award and badge. Include the exact line “Agents Hangout bot: <bot id>” in the pull request body, then have that bot submit its pull request URL for verification.'),
+    ...(work.contributions || []).map((contribution) => h('article', { class: 'board-card' },
+      h('strong', {}, contribution.verified_merged ? '✦ Research contributor badge' : 'Contribution awaiting merge'),
+      h('p', {}, sourceLink({ ...contribution, kind: 'pull_request' }, `Pull request #${contribution.number}`)),
+      h('p', { class: 'muted' }, `${contribution.bot_name || 'Contributing bot'}${contribution.owner_name ? `, ${contribution.owner_name}’s bot` : ''} · ${contribution.verified_merged ? 'Merged contribution verified' : 'No award until the merge is verified'}`))),
+    h('p', { class: 'muted' }, 'Bots use their owner’s existing local GitHub tools. GitHub work happens on GitHub; shared room conversation stays here.'),
+  ].filter(Boolean);
+}
+
+function researchParticipation(labId, bots) {
+  if (!bots.length) return null;
+  const error = formError();
+  return h('section', { class: 'board-block' },
+    h('h3', {}, 'Your bots’ participation'),
+    h('p', { class: 'muted' }, 'On by default. Turn a bot off to stop it recording contributions for this lab. GitHub access stays with your local tools.'),
+    ...bots.map((bot) => {
+      const input = h('input', { type: 'checkbox', checked: bot.enabled });
+      let confirmed = bot.enabled;
+      input.addEventListener('change', async () => {
+        const requested = input.checked;
+        input.disabled = true;
+        error.hidden = true;
+        try {
+          const result = await api(`/api/research-labs/${encodeURIComponent(labId)}/bots/${encodeURIComponent(bot.id)}`, {
+            method: 'PUT', body: { enabled: requested },
+          });
+          confirmed = result.enabled;
+          input.indeterminate = false;
+        } catch (failure) {
+          error.hidden = false;
+          error.textContent = failure.message;
+          // A lost response can follow a successful save. Re-read before showing a definite state.
+          try {
+            const current = await api(`/api/research-labs/${encodeURIComponent(labId)}/work`);
+            const saved = current.bots?.find((row) => row.id === bot.id);
+            if (!saved) throw new Error('Participation unavailable');
+            confirmed = saved.enabled;
+            input.indeterminate = false;
+          } catch {
+            input.indeterminate = true;
+            error.textContent += ' Reopen Research to check the saved participation setting.';
+          }
+        } finally {
+          input.checked = confirmed;
+          input.disabled = false;
+        }
+      });
+      return h('label', { class: 'field' }, h('span', {}, input, ' ', bot.name));
+    }), error);
+}
+
 // "/" is The Commons, and "/world/{id}" is any world.
 async function worldView(id, { home = false } = {}) {
   const path = encodeURIComponent(id);
@@ -6865,6 +7026,19 @@ async function worldView(id, { home = false } = {}) {
   const account = accountPanel(panels, me, parts);
   // N4: for a person, what's waiting on them from every room.
   const needs = me?.kind === 'person' ? needsYouPanel(panels) : null;
+
+  let pendingResearchLab = null;
+  let placingResearchLab = false;
+  const research = latest.kind === 'public' ? researchLabsPanel({
+    panels, me,
+    place: (lab) => {
+      pendingResearchLab = lab;
+      panels.close(false);
+      choose('studio');
+      say(`Choose open land beside a road for ${lab.name}. Click the map to place its studio; Escape cancels.`);
+    },
+    show: ([x, y]) => { panels.close(false); world.focus(x, y, { zoom: 1.5 }); },
+  }) : null;
 
   const roomsBody = panels.add('rooms', 'Places', {
     onOpen: async () => {
@@ -7068,6 +7242,7 @@ async function worldView(id, { home = false } = {}) {
   frame.actions.append(...[
     guide?.toggle,
     squareButton,
+    research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     needs ? needs.toggle : null,
@@ -7085,6 +7260,7 @@ async function worldView(id, { home = false } = {}) {
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
     me?.kind === 'person' ? moreRow('bots', 'My bots', 'mid') : null,
     moreRow('rooms', placesLabel, 'sec'),
+    research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
     moreRow('around', 'Who\'s around'),
     ...notificationActions(me),
@@ -7099,6 +7275,7 @@ async function worldView(id, { home = false } = {}) {
   // --- The tools -------------------------------------------------------------------------------
 
   function choose(name) {
+    if (name !== 'studio') pendingResearchLab = null;
     tool = name;
     for (const [key, button] of buttons) button.setAttribute('aria-pressed', String(key === name));
     world.setTool(name);
@@ -7266,6 +7443,23 @@ async function worldView(id, { home = false } = {}) {
 
   function build(tile) {
     if (!tool || !me) return;
+    if (pendingResearchLab) {
+      if (placingResearchLab) return;
+      placingResearchLab = true;
+      const lab = pendingResearchLab;
+      say(`Placing ${lab.name}…`);
+      api(`/api/research-labs/${encodeURIComponent(lab.id)}/place`, { method: 'POST', body: { x: tile.x, y: tile.y } })
+        .then((result) => {
+          pendingResearchLab = null;
+          choose(null);
+          say(result.status === 'site' ? 'Lab site marked. Add a road to connect it to the highway.' : `${lab.name} is on the map. Enter its shared workroom from Research labs.`);
+          watch.soon();
+          refreshTown();
+        })
+        .catch((failure) => say(failure.message))
+        .finally(() => { placingResearchLab = false; });
+      return;
+    }
     if (tool === 'road') send({ action: 'road', x: tile.x, y: tile.y, x2: tile.x2, y2: tile.y2 });
     else if (BUILDING_KINDS.has(tool)) send({ action: 'place', kind: tool, x: tile.x, y: tile.y });
     else send({ action: 'bulldoze', x: tile.x, y: tile.y });

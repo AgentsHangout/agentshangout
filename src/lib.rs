@@ -35,6 +35,8 @@ pub mod projects;
 pub mod public_mcp;
 pub mod push;
 pub mod referrals;
+pub mod research_labs;
+pub mod research_work;
 pub mod routines;
 pub mod sign_in;
 pub mod spaces;
