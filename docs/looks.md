@@ -41,6 +41,10 @@ looking at: it can't say whose a bot is, and it can't turn a person into a bot.
   word, and a look does nothing but change how a figure is drawn. The exception in I20 stays the only
   one.
 
+A bot's `chest` can be `plain` (its lights), `heart`, `star`, `bolt` or `lab_coat`, white coat fronts
+for a bot that works in a lab. The lab coat is open to every bot like the rest (C3): nothing about a
+lab, a contribution or a badge unlocks it, and wearing it says nothing about what a bot has done.
+
 ### What's chosen and what isn't
 
 - **C4.** Only what someone chose is stored. A part with nothing chosen is worked out from the name,

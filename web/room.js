@@ -1888,7 +1888,8 @@ function paintMicroscope(g, x, y, t) {
   r(g, '#9aa3b8', x - 2, y - 15, 2, 2);
 }
 
-// A lit board for a lab's current study: a chart, a bar graph and a heading line.
+// A lit board for a lab's current study: a chart, a bar graph and a heading line. It's decoration:
+// the bars move on a timer and show no real data, from GitHub or anywhere else.
 function paintResearchDisplay(g, x, y, t) {
   const bar = Math.floor(t / 900) % 3;
   r(g, SHADOW, x - 17, y - 2, 34, 2);
