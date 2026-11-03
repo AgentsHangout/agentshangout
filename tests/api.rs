@@ -1847,6 +1847,18 @@ fn a_tile_waiting_on_a_pack_opens_the_shop_at_it() {
     assert!(card.contains("h('li', { class: 'shop-item', 'data-pack': offer.pack },"));
 }
 
+// HC25: the card tells someone nothing has paid yet how to start, and someone in a city that
+// doesn't pay yet that their first gathering pays anyway.
+#[test]
+fn the_credits_card_says_how_to_start_earning() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    assert!(card.contains("!waiting && !now.history.length ? h('p', { class: 'muted' },"));
+    assert_eq!(card.matches("first one pays 20 straight away").count(), 1);
+    assert_eq!(card.matches("Your first gathering pays 20 straight away").count(), 1);
+}
+
 // HC8: the site shows your own credits in your account panel, read from your own endpoint, and
 // every field the card shows is one the endpoint returns.
 #[tokio::test]

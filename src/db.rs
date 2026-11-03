@@ -15568,6 +15568,47 @@ mod tests {
         assert_eq!(credits_of(&db, "p1", 41 * CREDIT_DAY).balance, 40);
     }
 
+    // HC25: someone's first gathering pays without the city's gate, once, so a new person has a way
+    // to start. Every other gathering still waits for the gate, and there's no back pay.
+    #[test]
+    fn a_first_gathering_pays_before_the_city_gate_and_only_the_first() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        plan(&db, "second", "sq", 3 * CREDIT_DAY, "confirmed");
+
+        // Five days in, nobody has met the gate, but each person's first gathering has paid.
+        for person in ["p1", "p2"] {
+            let paid = credits_of(&db, person, 5 * CREDIT_DAY);
+            assert_eq!((paid.balance, paid.gatherings), (20, 1), "{person}");
+            assert_eq!(paid.cities_not_earning, ["c1"], "{person}");
+        }
+        // Working it out again doesn't make the second one a first.
+        assert_eq!(credits_of(&db, "p1", 6 * CREDIT_DAY).balance, 20);
+
+        // Past the gate, what happens from then on pays, and the second one never does.
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        let later = credits_of(&db, "p1", GATE + CREDIT_DAY);
+        assert_eq!((later.balance, later.gatherings), (40, 2));
+    }
+
+    // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make
+    // another first
+    #[test]
+    fn only_one_gathering_ever_pays_before_a_gate() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        assert_eq!(credits_of(&db, "p2", 3 * CREDIT_DAY).balance, 20);
+        db.remove_city_member("c1", "p2", "p2", 4 * CREDIT_DAY).unwrap();
+
+        city(&db, "c2", "sq2", "p1");
+        db.add_city_member("c2", "p2", 5 * CREDIT_DAY).unwrap();
+        plan(&db, "elsewhere", "sq2", 6 * CREDIT_DAY, "confirmed");
+        let paid = credits_of(&db, "p2", 7 * CREDIT_DAY);
+        assert_eq!((paid.balance, paid.gatherings), (20, 1));
+    }
+
     // HC2: F17 holds for credits too
     #[test]
     fn a_yes_through_a_plans_link_never_pays_the_person_who_gave_it() {

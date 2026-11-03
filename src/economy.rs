@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22 and HC24 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24 and HC25 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -108,17 +108,39 @@ fn city_pays_from(
 pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> {
     let mut out = Credits { daily_cap: DAILY_CAP_HC, ..Credits::default() };
     let mut sources: Vec<(String, CreditSource)> = Vec::new();
+    // HC25: until a gathering has paid someone, the first one they said yes to pays without the
+    // gate, so a new person has a way in. Once one has paid, every other gathering waits for it.
+    let first_gathering_open =
+        db.credit_totals(person_id, now.div_euclid(DAY_SECS))?.gatherings == 0;
+    let mut first_gathering: Option<(String, CreditSource)> = None;
     for city in db.cities_for_person(person_id)? {
-        if let Some(from) = city_pays_from(db, &city.id, person_id, now)? {
-            let paying = db.credit_sources(&city.id, person_id, now)?;
-            sources.extend(
-                paying
-                    .into_iter()
-                    .filter(|source| source.at >= from)
-                    .map(|source| (city.id.clone(), source)),
-            );
-        } else {
-            out.cities_not_earning.push(city.id);
+        let from = city_pays_from(db, &city.id, person_id, now)?;
+        if from.is_none() {
+            out.cities_not_earning.push(city.id.clone());
+        }
+        if from.is_none() && !first_gathering_open {
+            continue;
+        }
+        for source in db.credit_sources(&city.id, person_id, now)? {
+            if first_gathering_open
+                && source.kind == CreditKind::Gathering
+                && first_gathering.as_ref().is_none_or(|(_, first)| {
+                    (source.at, &source.source) < (first.at, &first.source)
+                })
+            {
+                first_gathering = Some((city.id.clone(), source.clone()));
+            }
+            if from.is_some_and(|from| source.at >= from) {
+                sources.push((city.id.clone(), source));
+            }
+        }
+    }
+    if let Some(first) = first_gathering {
+        if !sources
+            .iter()
+            .any(|(_, source)| source.kind == first.1.kind && source.source == first.1.source)
+        {
+            sources.push(first);
         }
     }
     db.settle_credits(person_id, &sources, worth, DAILY_CAP_HC, now)?;

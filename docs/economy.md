@@ -36,7 +36,7 @@ bot home.
 - **HC5.** A city pays someone only for what happens there after they meet its gate: 30 days in the
   city, and either a gathering there or someone in the city who vouches for them, whichever came
   first, with a vouch counting only as HC13 says. Nothing from before then is paid later, so waiting
-  out the 30 days earns nothing. Only the cities someone is in now pay anything new, and what's
+  out the 30 days earns nothing. The one exception is someone's first gathering (HC25). Only the cities someone is in now pay anything new, and what's
   already paid stays (HC12).
 - **HC6.** Nobody is credited more than 100 for things that happened on one UTC day. The earliest
   things that day count first, so the same ones always count.
@@ -124,6 +124,13 @@ farming found. Its owner asked for it sooner, so it came before that check.
   A room's build catalog shows a piece, paint, flooring or pack that's waiting on a pack still to
   buy as locked but pressable, and pressing it opens the shop at that pack. The coin opens the shop
   too (HC23).
+- **HC25.** Until a gathering has paid someone, the first one they said yes to pays without the
+  city's gate (HC5): 20, on its day, under the day's cap (HC6), counted as HC2 counts it. It's once
+  per person in all: once any gathering has paid them, every other one waits for the gate, and
+  leaving a city or joining another doesn't make a new first. Without it nobody could start, since
+  a gate takes 30 days and a funded question needs someone who already has credits (HC20). A plan
+  still needs other people's yes to be a gathering (R40), and a yes through a plan's link still
+  pays nothing (F17).
 
 ### For a maintainer to look at
 
