@@ -4354,6 +4354,7 @@ export class World {
     this.container = container;
     this.onTile = typeof options.onTile === 'function' ? options.onTile : null;
     this.onHover = typeof options.onHover === 'function' ? options.onHover : null;
+    this.clickable = typeof options.clickable === 'function' ? options.clickable : null;
     // Asked for when someone clicks a figure, right-clicks, or presses and holds. See `pickAt`.
     this.onPick = typeof options.onPick === 'function' ? options.onPick : null;
     // Told when the camera stops following a figure, and why: 'moved', 'gone' or 'other'.
@@ -4615,8 +4616,10 @@ export class World {
     const py = clientY - r.top;
     const ent = this.pickEntity(px, py);
     const tile = this.tileAtArt(...this.toArt(px, py));
-    if (via === 'click' && !ent) return false;
     if (!ent && !tile) return false;
+    // W102: a left click opens the same menu a right click does, but only on a figure or a place
+    // the page said is worth clicking. Bare land still takes a right click, so a click there pans.
+    if (via === 'click' && !ent && !(this.clickable && this.clickable(this.tileInfo(tile.x, tile.y)))) return false;
     this.menuAt = performance.now();
     this.hideTip();
     this.onPick({

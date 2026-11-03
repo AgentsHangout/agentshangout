@@ -723,7 +723,7 @@ async function homeParts(me) {
     h('h2', {}, 'Your spaces'),
     h('ul', { class: 'room-list' }, owned.map(spaceRow)),
     h('p', { class: 'muted' }, `Your house, and ${spaces.third.length} of ${spaces.limits.third_spaces} third spaces.`),
-    h('p', { class: 'muted' }, 'Every space is a building on the map. Build a house or a studio beside a road, then right-click it and choose Go in.'));
+    h('p', { class: 'muted' }, 'Every space is a building on the map. Build a house or a studio beside a road, then click it and choose Go in.'));
 
   // Public floors. Walk in opens the room, which is what walks someone in.
   const publicCard = publicFloors.length ? h('section', { class: 'card', 'aria-label': 'Public floors' },
@@ -2108,18 +2108,37 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       onHand: Boolean(hand && cell && overlaps({ x: cell.x - 1, y: cell.y - 1, w: 3, h: 3 }, hand)),
     };
   });
+  // W102: hovering something in a room says what a click does, in the same words the map uses.
+  const itemHint = (item, furniture) => {
+    if (furniture) return building ? 'Click for options' : '';
+    if (!item) return '';
+    if (building) return `${labelOf(item.kind)}. Click for options`;
+    return item.opens || item.holds_notes || item.kind === 'research_display' ? `${labelOf(item.kind)}. Click to open` : '';
+  };
   stage.addEventListener('pointermove', (event) => {
     if (!hand) {
       const item = under(event);
+      const furniture = building && !item ? room.furnitureAt(event.clientX, event.clientY) : null;
       const reachable = item
         ? building || item.holds_notes || item.kind === 'research_display'
-        : building && room.furnitureAt(event.clientX, event.clientY);
+        : building && furniture;
       stage.classList.toggle('over-item', Boolean(reachable));
+      stage.title = itemHint(item, furniture);
       return;
     }
+    stage.title = '';
     const cell = room.cellAt(event.clientX, event.clientY);
     if (cell) handTo(cell);
   });
+  function stageActivate(event) {
+    const item = under(event);
+    const furniture = building && !item ? room.furnitureAt(event.clientX, event.clientY) : null;
+    if (furniture) chooseFurniture(furniture, event);
+    else if (building) choose(item, event);
+    else if (item?.opens) openItemWorkspace(item);
+    else if (item?.holds_notes) openNotes(item);
+    else if (item?.kind === 'research_display') useDisplay();
+  }
   stage.addEventListener('click', (event) => {
     if (event.target.closest('button, a')) return;
     if (hand) {
@@ -2134,13 +2153,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       putDown();
       return;
     }
+    stageActivate(event);
+  });
+  // W102: a right click on something clickable does what a click does, not the browser's own menu.
+  stage.addEventListener('contextmenu', (event) => {
+    if (hand || event.target.closest('button, a')) return;
     const item = under(event);
-    const furniture = building && !item ? room.furnitureAt(event.clientX, event.clientY) : null;
-    if (furniture) chooseFurniture(furniture, event);
-    else if (building) choose(item, event);
-    else if (item?.opens) openItemWorkspace(item);
-    else if (item?.holds_notes) openNotes(item);
-    else if (item?.kind === 'research_display') useDisplay();
+    if (!itemHint(item, building && !item ? room.furnitureAt(event.clientX, event.clientY) : null)) return;
+    event.preventDefault();
+    stageActivate(event);
   });
 
   // The Build panel
@@ -7732,8 +7753,8 @@ async function worldView(id, { home = false } = {}) {
   const idle = frozen
     ? 'This world is frozen. Anyone can look around, and nothing here changes.'
     : me
-      ? 'Pick a tool, then click or drag on the map. Right-click a place, or press and hold, to go in.'
-      : 'You\'re looking around. Click a figure, right-click, or press and hold for a menu. Pick a tool and you\'ll be asked to sign in to build.';
+      ? 'Pick a tool, then click or drag on the map. Click a place to go in.'
+      : 'You\'re looking around. Click a figure or a place for a menu. Pick a tool and you\'ll be asked to sign in to build.';
 
   const hintNow = () => (tool ? BUILD_TOOLS.find(([key]) => key === tool)[2] : idle);
 
@@ -7924,7 +7945,7 @@ async function worldView(id, { home = false } = {}) {
     outside: ({ house }) => {
       if (house) {
         world.focus(house.x, house.y, { zoom: 1.5 });
-        say('Right-click your place, or press and hold on a touch screen, and choose Build outside.');
+        say('Click your place, or tap it on a touch screen, and choose Build outside.');
       } else {
         pick('house');
         say('Put up your house first.');
@@ -8331,7 +8352,9 @@ async function worldView(id, { home = false } = {}) {
       }
     }
     const owner = details.owner ? `${details.owner}\u2019s ${lab ? 'research lab' : KIND_WORDS[details.kind] || details.kind}` : spec.title;
-    return { ...spec, title: owner, items: own.length ? [...own, null, ...rest] : rest };
+    // W102: headed with the name the hover card shows, so it's plainly the same place.
+    const name = nameAt(t.x, t.y);
+    return { ...spec, title: name || owner, sub: name ? owner : spec.sub, items: own.length ? [...own, null, ...rest] : rest };
   }
 
   async function askIn(t, bot) {
@@ -8354,7 +8377,10 @@ async function worldView(id, { home = false } = {}) {
     if (spec && !figure && tile && me && me.kind === 'person' && !frozen && BUILDING_KINDS.has(tile.kind)) {
       spec = await placeMenu(tile, spec);
     }
-    if (spec) menu.open(spec, clientX, clientY, via);
+    if (spec) {
+      hidePlaceCard();
+      menu.open(spec, clientX, clientY, via);
+    }
   }
 
   // W64: nothing else starts one, and only the keeper is offered this.
@@ -8415,6 +8441,8 @@ async function worldView(id, { home = false } = {}) {
   const placeDetails = new Map();
   let hoveredPlace = null;
   let pointer = null;
+  // W102: what hovering a place promises about clicking it.
+  const placeClickHint = (touch) => `${touch ? 'Tap' : 'Click'} for what you can do here`;
   // W71, W73: `[x, y, owner, name]` for each place.
   const placeRow = (x, y) => (latest?.owners || []).find((row) => row[0] === x && row[1] === y) || null;
   const ownerAt = (x, y) => placeRow(x, y)?.[2] || null;
@@ -8471,9 +8499,10 @@ async function worldView(id, { home = false } = {}) {
       hoodAt(place.x, place.y) ? h('small', { class: 'city-card-hint' }, `In ${hoodAt(place.x, place.y)[0]}`) : null,
       // L34: what it's for, as plain text.
       details?.purpose ? h('span', { class: 'city-card-purpose' }, details.purpose) : null,
-      // A new owner would not otherwise find the builder, which is only in the menu.
-      details?.yours ? h('small', { class: 'city-card-hint' }, matchMedia('(pointer: coarse)').matches ? 'Press and hold to build outside' : 'Right-click to build outside') : null,
     ];
+    // W102: the card says what a click does, the same line for everyone. Any building action,
+    // building outside included, is in the one menu that opens.
+    lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
     // L44: who's inside, by name and whose, as the map already shows them going in.
     const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
     if (inside.length) {
@@ -8529,7 +8558,7 @@ async function worldView(id, { home = false } = {}) {
     if (hoveredPlace && me && me.kind === 'person') loadPlace(hoveredPlace);
   }
 
-  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name });
+  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name });
   frame.host.parentElement.classList.add('wd-hovercard');
   frame.host.parentElement.append(placeCard);
   world.canvas.addEventListener('pointermove', (event) => {
