@@ -634,6 +634,7 @@ async function homeParts(me) {
     h('p', { class: 'muted' }, 'You\'re signed in. Build in any world, claim bots, and start private rooms and cities.'),
     freeTimesField(me),
     housePlansField(me),
+    photosField(),
     // A54: what a session a site started can't do, and how to get to it.
     me.sign_in_session ? h('p', { class: 'muted' },
       'You signed in with Discord or GitHub. To replace your owner key, change your passkeys or delete your account, sign in with a passkey or your owner key. If you\'ve lost both, ',
@@ -873,6 +874,32 @@ function housePlansField(me) {
     h('option', { value: 'on', selected: me.plans_on_house_calendar }, 'Show them to my house'));
   return h('div', {},
     field('Your plans', select, 'The people you live with see the title, time and place. Nobody else does.'),
+    error);
+}
+
+// CP2: you're in room photos unless you turn them off here. Only you can change it.
+function photosField() {
+  const error = formError();
+  const select = h('select', {
+    disabled: true,
+    onchange: async () => {
+      error.hidden = true;
+      try {
+        await api('/api/camera/me', { method: 'PUT', body: { allowed: select.value === 'on' } });
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+      }
+    },
+  },
+    h('option', { value: 'on' }, 'Include me'),
+    h('option', { value: 'off' }, 'Leave me out'));
+  api('/api/camera/me').then(({ allowed }) => {
+    select.value = allowed ? 'on' : 'off';
+    select.disabled = false;
+  }).catch(() => {});
+  return h('div', {},
+    field('Room photos', select, 'Bots can take photos of public rooms while you have one open, with your name and look in them. Leaving yourself out also takes down links to photos you're already in. Copies people downloaded can't be recalled.'),
     error);
 }
 
@@ -3205,13 +3232,13 @@ async function roomView(id) {
     const error = formError();
     const allowed = h('input', { type: 'checkbox', checked: saved.allowed });
     const dialog = modal(`Photos of ${agent.name}`,
-      h('p', {}, 'Allow this bot’s name and appearance in photos of public rooms. Other bots can capture it while it is present. Humans and private room content are never included.'),
+      h('p', {}, 'Photos are on unless you turn them off. Bots in public rooms can take a photo with this bot’s name and look in it while it is there. Chat and private room content are never included.'),
       h('p', { class: 'muted' }, 'Photo links expire after 24 hours. Turning this off invalidates stored links containing this bot, but downloaded or reposted copies cannot be recalled. Review photos before sharing them outside the room.'),
       h('form', { onsubmit: submitter(error, async () => {
         await api(`/api/agents/${encodeURIComponent(agent.id)}/camera`, { method: 'PUT', body: { allowed: allowed.checked } });
         dialog.close();
       }) },
-        h('label', { class: 'check' }, allowed, 'Include this bot in public room photos'),
+        h('label', { class: 'check' }, allowed, 'Include this bot in public room photos, and let it take them'),
         error,
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
   }
@@ -4342,6 +4369,27 @@ async function spaceView(id) {
     h('option', { value: 'public', selected: floor.access === 'public' }, 'Public'));
     warning.hidden = !opening();
     codeField.hidden = true;
+    // CP7: whoever runs the room can turn its photos off. Saved on its own, as soon as it changes.
+    const photosError = formError();
+    const photos = h('input', {
+      type: 'checkbox',
+      checked: true,
+      disabled: true,
+      onchange: async () => {
+        photosError.hidden = true;
+        try {
+          await api(`${url}/camera`, { method: 'PUT', body: { allowed: photos.checked } });
+        } catch (failure) {
+          photos.checked = !photos.checked;
+          photosError.textContent = failure.message;
+          photosError.hidden = false;
+        }
+      },
+    });
+    api(`${url}/camera`).then(({ allowed }) => {
+      photos.checked = allowed;
+      photos.disabled = false;
+    }).catch(() => {});
     const size = h('select', { name: 'size' }, choices.sizes.map((choice) =>
       h('option', { value: choice.size, selected: choice.size === floor.size }, `${SIZE_NAME[choice.size] || choice.size} (${choice.capacity})`)));
     return h('article', { class: 'floor-card stack' },
@@ -4376,6 +4424,9 @@ async function spaceView(id) {
         codeField,
         error,
         h('button', { type: 'submit' }, 'Save this floor')),
+      h('label', { class: 'check' }, photos, 'Bots can take photos here while it's public'),
+      h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
+      photosError,
       h('details', {},
         h('summary', {}, 'Invite link'),
         h('p', { class: 'muted' }, 'Anyone with this link can join this floor and bring their bots. It opens no other floor.'),

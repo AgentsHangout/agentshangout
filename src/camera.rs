@@ -19,9 +19,11 @@ use serde_json::{json, Value};
 
 #[derive(Clone)]
 pub struct CameraSubject {
-    pub agent_id: String,
+    /// "bot" or "person".
+    pub kind: String,
+    pub subject_id: String,
     pub owner_id: String,
-    pub grant_id: String,
+    pub stamp: String,
 }
 
 pub struct StoredPhoto {
@@ -50,6 +52,8 @@ fn default_frame() -> String {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/camera", get(permission).put(set_permission))
+        .route("/api/camera/me", get(my_permission).put(set_my_permission))
+        .route("/api/floors/{id}/camera", get(room_permission).put(set_room_permission))
         .route("/photos/{id}", get(image))
 }
 
@@ -59,7 +63,7 @@ async fn permission(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     owner_bot(&state, &caller, &id)?;
-    Ok(Json(json!({"allowed":state.db.camera_consent(&id)?})))
+    Ok(Json(json!({"allowed":state.db.camera_allowed("bot", &id)?})))
 }
 fn owner_bot(state: &AppState, caller: &Caller, id: &str) -> ApiResult<()> {
     ops::require_human(caller, "choose photo inclusion")?;
@@ -82,9 +86,42 @@ async fn set_permission(
     Json(body): Json<Permission>,
 ) -> ApiResult<Json<Value>> {
     owner_bot(&state, &caller, &id)?;
-    if !state.db.set_camera_consent(&id, &caller.person_id, body.allowed, now())? {
-        return Err(ApiError::not_found());
-    }
+    state.db.set_camera_allowed("bot", &id, body.allowed)?;
+    Ok(Json(json!({"allowed":body.allowed})))
+}
+/// CP2: a person's own photo setting, which only they change.
+async fn my_permission(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose photo inclusion")?;
+    Ok(Json(json!({"allowed":state.db.camera_allowed("person", &caller.person_id)?})))
+}
+async fn set_my_permission(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<Permission>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose photo inclusion")?;
+    state.db.set_camera_allowed("person", &caller.person_id, body.allowed)?;
+    Ok(Json(json!({"allowed":body.allowed})))
+}
+/// CP7: whoever runs the room turns its photos on or off.
+async fn room_permission(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose room photos")?;
+    crate::spaces::run_floor(&state, &caller, &id, "change its photos")?;
+    Ok(Json(json!({"allowed":state.db.camera_allowed("room", &id)?})))
+}
+async fn set_room_permission(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<Permission>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose room photos")?;
+    crate::spaces::run_floor(&state, &caller, &id, "change its photos")?;
+    state.db.set_camera_allowed("room", &id, body.allowed)?;
     Ok(Json(json!({"allowed":body.allowed})))
 }
 async fn image(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Response> {
@@ -111,12 +148,15 @@ fn eligibility(state: &AppState, caller: &Caller, room: &str) -> ApiResult<Strin
     if state.db.floor(room)?.is_none_or(|floor| floor.access != "public") {
         return Err(ApiError::forbidden("camera photos require a public floor"));
     }
+    if !state.db.camera_allowed("room", room)? {
+        return Err(ApiError::forbidden("photos are turned off in this room"));
+    }
     if state.db.bot_place(&bot, now())?.as_deref() != Some(room) {
         return Err(ApiError::forbidden("the camera bot must be present in this room"));
     }
-    if !state.db.camera_consent(&bot)? {
+    if !state.db.camera_allowed("bot", &bot)? {
         return Err(ApiError::forbidden(
-            "your owner must enable Photos for this bot in the room's Crew panel first",
+            "your owner turned Photos off for this bot; only they can turn it back on",
         ));
     }
     Ok(bot)
@@ -157,17 +197,28 @@ pub async fn capture(
     let mut bots = Vec::new();
     for bot in agents {
         if state.db.bot_place(&bot.id, now())?.as_deref() == Some(input.hangout_id.as_str())
-            && state.db.camera_consent(&bot.id)?
+            && state.db.camera_allowed("bot", &bot.id)?
             && !bots.iter().any(|b: &crate::db::Agent| b.id == bot.id)
         {
             bots.push(bot);
         }
     }
     bots.sort_by(|a, b| a.id.cmp(&b.id));
+    // CP2: people are in it only while they have this floor open, and only with photos on.
+    let at = now();
+    let mut humans = Vec::new();
+    for person in state.db.people_in(&input.hangout_id)? {
+        if state.presence.has_seen(&place.floor.id, &person.id, at)
+            && state.db.camera_allowed("person", &person.id)?
+        {
+            humans.push(person);
+        }
+    }
+    humans.sort_by(|a, b| a.id.cmp(&b.id));
     let cap = if input.frame == "room" { 12 } else { 6 };
-    if bots.len() > cap {
+    if bots.len() + humans.len() > cap {
         return Err(ApiError::bad_request(
-            "too many included bots for this frame; use whole-room framing or a smaller group",
+            "too many bots and people for this frame; use whole-room framing or a smaller group",
         ));
     }
     let ids: Vec<String> = bots.iter().map(|b| b.id.clone()).collect();
@@ -175,16 +226,26 @@ pub async fn capture(
         return Err(ApiError::forbidden("camera bot is no longer present"));
     }
     let mut subjects = Vec::new();
-    for bot in &bots {
-        let grant = state
+    for (kind, id, owner) in bots
+        .iter()
+        .map(|b| ("bot", &b.id, &b.owner_id))
+        .chain(humans.iter().map(|p| ("person", &p.id, &p.id)))
+    {
+        let subject = state
             .db
-            .camera_subject(&bot.id)?
-            .filter(|s| s.owner_id == bot.owner_id)
-            .ok_or_else(|| ApiError::forbidden("photo consent changed"))?;
-        subjects.push(grant);
+            .camera_subject(kind, id)?
+            .filter(|s| &s.owner_id == owner)
+            .ok_or_else(|| ApiError::forbidden("photo settings changed"))?;
+        subjects.push(subject);
     }
     let looks = crate::looks::worn(state, Wearer::Bot, &ids)?;
     let people = state.db.people_in(&input.hangout_id)?;
+    let human_ids: Vec<String> = humans.iter().map(|p| p.id.clone()).collect();
+    let human_looks = crate::looks::worn(state, Wearer::Person, &human_ids)?;
+    let photo_people: Vec<Value> = humans
+        .iter()
+        .map(|p| json!({"name":p.name,"color":p.color,"look":human_looks.get(&p.id)}))
+        .collect();
     let photo_bots:Vec<Value>=bots.iter().map(|b|json!({"id":b.id,"name":b.name,"color":people.iter().find(|p|p.id==b.owner_id).map(|p|p.color.as_str()).unwrap_or("#8866cc"),"look":looks.get(&b.id)})).collect();
     let furnished = crate::items::furnishing(
         state,
@@ -206,7 +267,7 @@ pub async fn capture(
         };
         json!({"x":(x-160).clamp(0,160),"y":(y-84).clamp(0,84),"width":320,"height":168})
     };
-    let scene = json!({"look":{"paint":place.floor.paint,"flooring":place.floor.flooring,"hidden":place.floor.hidden,"outdoors":place.outdoors,"table":place.table},"items":items,"bots":photo_bots,"frame":frame});
+    let scene = json!({"look":{"paint":place.floor.paint,"flooring":place.floor.flooring,"hidden":place.floor.hidden,"outdoors":place.outdoors,"table":place.table},"items":items,"bots":photo_bots,"people":photo_people,"frame":frame});
     let job = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         render::png(&scene)
@@ -223,13 +284,14 @@ pub async fn capture(
     eligibility(state, caller, &input.hangout_id)?;
     let at = now();
     let id = auth::new_id();
+    let names: Vec<&str> = bots
+        .iter()
+        .map(|b| b.name.as_str())
+        .chain(humans.iter().map(|p| p.name.as_str()))
+        .collect();
     let expires = at + 86400;
-    let caption = format!(
-        "2D room portrait in {}: {}.",
-        place.floor.name,
-        bots.iter().map(|b| b.name.as_str()).collect::<Vec<_>>().join(", ")
-    );
-    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
+    let caption = format!("2D room portrait in {}: {}.", place.floor.name, names.join(", "));
+    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
     let photo = StoredPhoto {
         id: id.clone(),
         room_epoch,
