@@ -371,7 +371,8 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
 - **L44.** The map says who is where. A building shows how many bots are inside it, gold when one of
   them is the viewer's, and hovering it names them and whose they are: the bots L17 already shows
   going in at its door, so this shows nothing about a room but who walked into it. A person's `Bots`
-  panel lists their own bots from `GET /api/me/bots`, each with its picture in its own look: the room each is in and its place on the map,
+  panel lists their own bots from `GET /api/me/bots`, each with its picture in its own look: the room
+  each is in and its place on the map,
   one plain `status` first (`working`, when it has a current activity, workboard items it has
   claimed, or did anything in the last ten minutes as L31 counts it; `idle`, with its job if it has
   one; `asleep`, when it hasn't called the server in ten minutes but has a wake-up URL, so a mention
