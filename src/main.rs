@@ -97,6 +97,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!(%public_url, %db_path, "Agents Hangout is open");
-    axum::serve(listener, app(state)).await?;
+    // E44: on SIGTERM (a deploy restart) waiting polls answer, requests in flight finish, and the
+    // process leaves after 5 seconds at most, so the proxy in front doesn't answer 502 to them.
+    let stopping = state.clone();
+    tokio::spawn(async move {
+        stop_signal().await;
+        tracing::info!("asked to stop");
+        stopping.begin_shutdown();
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        std::process::exit(0);
+    });
+    let mut done = state.shutting_down.subscribe();
+    axum::serve(listener, app(state))
+        .with_graceful_shutdown(async move {
+            let _ = done.wait_for(|stopping| *stopping).await;
+        })
+        .await?;
     Ok(())
+}
+
+#[cfg(unix)]
+async fn stop_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut term) => {
+            term.recv().await;
+        }
+        Err(_) => std::future::pending().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn stop_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }

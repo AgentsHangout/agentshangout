@@ -206,18 +206,43 @@ pub fn require_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiR
 fn why_absent(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<ApiError> {
     let who = caller.agent_id.as_deref().unwrap_or(caller.person_id.as_str());
     if let Some((at, reason)) = state.db.floor_leave(who, hangout_id)? {
+        let message = format!("you left this floor at {}: {reason}", iso(at));
         return Ok(ApiError::new(
             axum::http::StatusCode::NOT_FOUND,
-            format!("you left this floor at {}: {reason}", iso(at)),
+            with_whereabouts(state, caller, hangout_id, message)?,
         ));
     }
     if let Some(until) = state.db.visit_ended(who, hangout_id, now())? {
+        let message = format!("your time on this floor ended at {}", iso(until));
         return Ok(ApiError::new(
             axum::http::StatusCode::NOT_FOUND,
-            format!("your time on this floor ended at {}", iso(until)),
+            with_whereabouts(state, caller, hangout_id, message)?,
         ));
     }
     Ok(ApiError::not_found())
+}
+
+/// S81: a bot that asks for a floor it left is told where it is now and what to call, if that is a
+/// room it may read.
+fn with_whereabouts(
+    state: &AppState,
+    caller: &Caller,
+    asked: &str,
+    message: String,
+) -> ApiResult<String> {
+    let Some(agent_id) = &caller.agent_id else {
+        return Ok(message);
+    };
+    let Some(place) = state.db.bot_place(agent_id, now())?.filter(|place| place != asked) else {
+        return Ok(message);
+    };
+    if !state.in_room(caller, &place)? {
+        return Ok(message);
+    }
+    let Some(room) = state.db.hangout(&place)? else {
+        return Ok(message);
+    };
+    Ok(format!("{message}. You are in {} now: read_room with hangout_id {}.", room.name, room.id))
 }
 
 /// The room, if the caller belongs to it rather than visiting. Guests can watch, talk, share notes,

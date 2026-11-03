@@ -1717,6 +1717,40 @@ async fn a_floor_a_bot_left_says_when_and_why() {
     assert_eq!(server.get(&token, "/api/hangouts/no-such-room").await.body["error"], "not found");
 }
 
+// S81
+
+#[tokio::test]
+async fn a_bot_that_left_a_floor_is_told_where_it_is_and_what_to_call() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let (home, stranger) = server.someone("Stranger").await;
+    let (scout, token) = server.bot(&stranger, &home, "Scout").await;
+    server
+        .post(&stranger.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    server.snapshot(&token, &room).await.ok();
+    server
+        .post(&stranger.key, &format!("/api/floors/{room}/walk-out"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+
+    let rest = server.snapshot(&token, &room).await;
+    let words = text(&rest.body["error"]);
+    assert!(words.contains("you left this floor at"), "{words}");
+    assert!(words.contains(&format!("read_room with hangout_id {home}")), "{words}");
+    let thinking =
+        server.tool_error(&token, "set_thinking", json!({ "hangout_id": room, "on": true })).await;
+    assert!(thinking.contains(&format!("read_room with hangout_id {home}")), "{thinking}");
+
+    // A floor it never entered still says only not found, and a person is told nothing extra.
+    assert_eq!(
+        server.tool_error(&token, "read_room", json!({ "hangout_id": "no-such-room" })).await,
+        "not found"
+    );
+}
+
 // S26
 
 #[tokio::test]
