@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19 and HC22 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::{
     auth::Caller,
-    db::{CreditKind, CreditSource, Db, Spend},
+    db::{CreditKind, CreditLine, CreditSource, Db, Spend},
     error::{ApiError, ApiResult},
     items::{pack_of, PACKS},
     ops::DAY_SECS,
@@ -23,6 +23,8 @@ pub const GOOD_TRIP_HC: i64 = 5;
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
 pub const GATE_MEMBER_DAYS: i64 = 30;
+/// HC22: how many lines of history `credits` returns.
+pub const HISTORY_LINES: i64 = 50;
 /// HC17: how long an owner's yes through `ask_owner` lets their bot spend.
 pub const ASKED_FOR_SECS: i64 = DAY_SECS;
 
@@ -45,6 +47,8 @@ pub struct Credits {
     pub packs: Vec<PackOffer>,
     /// HC17: their bots, and how much each may spend a day.
     pub bots: Vec<BotLimit>,
+    /// HC22: the latest things that paid them and that they spent, newest first.
+    pub history: Vec<CreditLine>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -124,6 +128,7 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
         .into_iter()
         .map(|(agent_id, name, daily, spent_today)| BotLimit { agent_id, name, daily, spent_today })
         .collect();
+    out.history = db.credit_history(person_id, HISTORY_LINES)?;
     Ok(out)
 }
 
