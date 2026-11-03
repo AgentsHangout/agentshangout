@@ -66,6 +66,17 @@ async fn send(
         ops::refresh(&state, floor);
     }
     let line = format!("{} sent {} to the recycling plant.", caller.name, agent.name);
+    // RC2: a trip it's on ends too, and the Porch it was on is told.
+    let away = state.db.live_trip(&id, at)?;
+    if state.db.end_trips_of_bot(&id, &caller.name, at)? > 0 {
+        if let Some(visited) =
+            away.map(|trip| state.db.house(&trip.house_id)).transpose()?.flatten()
+        {
+            ops::announce(&state, &visited.porch_id, &line)?;
+            crate::city::refresh_house(&state, &visited);
+            ops::refresh_city(&state, &visited.city_id);
+        }
+    }
     for room in &rooms {
         state.db.remove_agent_from_room(&room.id, &id)?;
         ops::announce(&state, &room.id, &line)?;

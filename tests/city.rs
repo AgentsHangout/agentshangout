@@ -7573,3 +7573,26 @@ async fn a_house_link_nobody_could_use_stays_good() {
         );
     }
 }
+
+// RC2: a bot on a trip that its owner sends to the recycling plant leaves the Porch it was on.
+#[tokio::test]
+async fn a_bot_on_a_trip_sent_to_the_recycling_plant_leaves_the_porch() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let rover = server.bot(&w.bo, &w.bo_home.living, "Rover").await;
+    let asked = server.ask_trip(&rover.token, None, &w.ann_home.id, "call", "", None).await;
+    let id = text(&asked.body["id"]);
+    server.answer_trip(&w.ann.key, &id, "yes").await;
+    assert_eq!(server.answer_trip(&w.bo.key, &id, "yes").await.body["status"], "here");
+
+    let sent =
+        server.post(&w.bo.key, &format!("/api/agents/{}/recycle", rover.id), json!({})).await;
+    assert_ok(&sent);
+    assert_eq!(server.get(&w.bo.key, &format!("/api/trips/{id}")).await.body["status"], "ended");
+    let porch = server.get(&w.ann.key, &format!("/api/hangouts/{}", w.ann_home.porch)).await;
+    assert!(
+        porch.body.to_string().contains("sent Rover to the recycling plant."),
+        "{}",
+        porch.body
+    );
+}
