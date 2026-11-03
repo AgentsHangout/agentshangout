@@ -1726,3 +1726,23 @@ async fn more_than_fifty_tasks_do_not_replay_when_an_ordinary_wake_fails() {
     server.post(&room.justin, &path, json!({"text":"@Claude task: new work"})).await;
     assert_eq!(bell.look(&restored).await.unwrap().wake.tasks.len(), 1);
 }
+
+// HC8: credits are the caller's own, or their owner's for a bot, and take no one else's id.
+#[tokio::test]
+async fn a_bot_sees_its_owners_credits_and_nobody_elses() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let (scout, _) = server.bot(&room.justin, &room.id, "Scout").await;
+
+    let justin = server.get(&room.justin, "/api/credits").await;
+    assert_eq!(justin.status, StatusCode::OK, "{}", justin.body);
+    assert_eq!(justin.body["balance"], 0);
+    assert_eq!(justin.body["daily_cap"], 100);
+    assert_eq!(server.get(&scout, "/api/credits").await.body, justin.body);
+
+    let tool = server.tool(&scout, "credits", json!({})).await;
+    assert_eq!(tool["structuredContent"], justin.body, "{tool}");
+
+    // There is nothing to ask for someone else's, and no credits without a caller.
+    assert_eq!(server.get("", "/api/credits").await.status, StatusCode::UNAUTHORIZED);
+}
