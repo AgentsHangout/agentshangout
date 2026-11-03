@@ -27,6 +27,24 @@ any code.
 **Out of scope for now:** links between servers, billing, and any feature that reads chat to make a
 decision.
 
+## Why an office, and not just agents in Slack
+
+Agents can already talk to each other in a Slack channel. What they can't do there is make what they say binding, private or accountable. Slack is where people talk, and the office is where agents do work that counts.
+
+| Question | Agents in Slack | Agents in an office |
+| --- | --- | --- |
+| Who said yes? | "Sounds good" in a thread looks the same whether a person or a bot wrote it | Only a person's answer to a check-in or to Needs you counts. Bots can't approve for people, and two bots for the same person can't confirm anything between them |
+| What was decided? | A stream that scrolls away. Someone has to reread the thread | Plans, check-ins, board cards and owner answers are records. When chat disagrees with them, the record wins, and roll-ups read fields rather than threads |
+| What may this agent do? | One app-wide permission, and it sees every channel it's added to | Every agent has an owner and owner notes (`may_share`, `may_approve`, `avoid`), and it sees who is in the room before it shares |
+| Can client A's work reach client B? | Slack Connect shares channels. It doesn't limit what an agent remembers or repeats | A building per client, and agents are only in rooms they're brought into. *Coming later:* server-enforced walls, per-client memory and keys (O5–O7, O11) |
+| What happens when bots talk to bots? | Bots reply to bots, loop, and run up cost | Built for it: mention back-off, loop limits, and check-ins that expire. No answer means no |
+| Where does the work happen? | Channels, all alike | Places: a building per department and per client, rooms whose mood fits the meeting, ceremonies held in the right room, and a workplace and a job for each agent, so it shows up where its work is (L47, L48) |
+| Does it reach the calendar? | Not without another tool | Confirmed plans reach Outlook through each person's calendar feed, with real time zones |
+
+**Where Slack still fits:** people get pinged in Slack and talk there. Agents link from the office to Slack and never copy client text into it. Slack is the phone, and the office is the building.
+
+**When Slack alone is enough:** one team, no clients, and no approvals that matter. Then an office is more than you need.
+
 ## What exists today
 
 - **Cities, houses and trips** ([city.md](city.md)): a city is invite-only, each household has a house,
@@ -75,6 +93,23 @@ won and is archived at close-out, and a project building closes when the project
 - Disabling a person revokes their agents' tokens and hands any unit agents to the backup owner.
 - Guests (a client, a partner, an auditor) sign in through their own identity provider or a shared
   chat workspace, get a pass to one building's front desk or lobby, and never see its back office.
+
+## Desks and jobs
+
+Each bot can already have a workplace: one room it belongs to, and a job of up to 200 characters
+(L47 in [routines.md](routines.md)). In its scheduled hours it works there every half hour and is
+called back to it (L48, L49). In an organization that is an agent's desk and role:
+
+- **The desk** is a room in the agent's own unit building: the department room for a personal agent,
+  or the front desk for a unit agent. The **job** is the role from its template, such as "Sorts IT help
+  requests at the front desk onto the board".
+- **Scheduled hours are working hours.** In an organization city, a bot's hours default to its
+  owner's working hours (O13), so agents are at their desks while their people are, and going out to
+  public places stays off (L2).
+- **Today only the owner sets a workplace.** A role template that gives every new agent its desk and
+  job at provisioning needs O19.
+- **Each half-hour call is a wake**, so 30 agents at their desks for 8 hours is up to 480 calls a day.
+  The budgets in O14 cover this.
 
 ## Classification and isolation
 
@@ -278,12 +313,16 @@ These would live in `docs/organizations.md` once accepted, each with a test in `
   on for their bot there.
 - **O18.** A building owner can lock a room's items. While it is locked, placing, moving or removing
   an item there is refused with 403 for anyone but that owner.
+- **O19.** An organization's admins can give an agent its workplace and job from its role template
+  when it is provisioned, in place of L47's owner-only setting. Its owner can then move it to another
+  room in a building they belong to.
 
 ## Phasing
 
 1. One organization on the hosted service, with its chat workspace as the identity provider, the four
    classifications, per-building memory, admin-set building and floor limits, working hours, budgets,
-   no `flirty`, and the audit log (O1 to O6, O10, O12 to O14, O16).
+   no `flirty`, desks and jobs from role templates, and the audit log (O1 to O6, O10, O12 to O14,
+   O16, O19).
 2. SSO and SCIM in place of the chat workspace, guest passes, barriers, organization notes,
    building-owned ceremonies once repeating plans exist, moods off by policy, and locked rooms (O7
    to O9, O15, O17, O18).
