@@ -6523,7 +6523,14 @@ function needsYouPanel(panels) {
     return item(
       h('p', {}, h('strong', {}, wait.bot.name), ` is waiting for you somewhere else, since ${agoText(wait.since)}`),
       h('p', {}, wait.about),
-      h('p', { class: 'muted' }, 'Answer it where it is, such as on your computer. It clears when the bot carries on.'),
+      h('p', { class: 'muted' }, 'If it\'s a prompt on your computer, answer it there. Otherwise reply here, and your bot gets it in its inbox.'),
+      // N15: an answer in words reaches the bot like any other.
+      h('form', { class: 'chat-form', onsubmit: submitter(error, async ({ answer }) => {
+        await api(`/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}/answer`, { method: 'POST', body: { answer } });
+        await refresh(true);
+      }) },
+        h('input', { name: 'answer', required: true, maxLength: 500, placeholder: 'Reply', autocomplete: 'off', 'aria-label': `Reply to ${wait.bot.name}` }),
+        h('button', { type: 'submit' }, 'Send')),
       h('div', { class: 'event-actions' },
         h('button', { type: 'button', onclick: act(error, done(() => api(`/api/needs-you/waiting/${encodeURIComponent(wait.bot.id)}`, { method: 'DELETE' }))) }, 'Dismiss')),
       error);
