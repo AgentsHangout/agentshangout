@@ -191,6 +191,10 @@ input::placeholder { color: #8b7a5e; }
 .card input, .card select, .card textarea { background: var(--bg); border-color: #7b6038; }
 .card input::placeholder { color: #98856a; }
 .room-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+/* HC24: a pack in the shop, drawn as it comes, above its name, price and what's in it. */
+.shop { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.shop-item .template-pic { margin-bottom: 6px; border-radius: 6px; overflow: hidden; }
+.shop-item p { margin: 4px 0 0; }
 
 /* The home page's text for people and crawlers. It sits outside the app, so it steps aside when a
    room takes over the page. It reads as the game's manual: a paper sheet at the bottom of the desk. */
@@ -2818,3 +2822,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .sched-social { background: #6a4c93; }
 .sched-home { background: #4a6b3a; }
 .sched-anything { background: var(--panel-2); }
+
+/* L44: a bot's status in the Bots panel. Words carry the meaning; color only helps scanning. */
+.bot-status { font-weight: 700; }
+.bot-status.working { color: var(--good); }
+.bot-status.idle { color: var(--accent); }
+.bot-status.asleep, .bot-status.offline { color: var(--muted); font-weight: 500; }

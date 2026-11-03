@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19 and HC22 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22 and HC24 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -11,7 +11,7 @@ use crate::{
     auth::Caller,
     db::{CreditKind, CreditLine, CreditSource, Db, Spend},
     error::{ApiError, ApiResult},
-    items::{pack_of, PACKS},
+    items::{kind_of, pack_of, PACKS},
     ops::DAY_SECS,
 };
 
@@ -60,6 +60,21 @@ pub struct PackOffer {
     pub bought: bool,
     /// Its season has passed, so it can't be bought (I57).
     pub over: bool,
+    /// HC24: what it looks like, so the shop can show it before it's bought.
+    pub paint: &'static str,
+    pub flooring: &'static str,
+    pub pieces: Vec<PackPiece>,
+}
+
+/// HC24: one piece of a pack, where the pack puts it, and how much floor it takes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PackPiece {
+    pub kind: &'static str,
+    pub label: &'static str,
+    pub x: i64,
+    pub y: i64,
+    pub w: i64,
+    pub h: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -124,6 +139,23 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             cost: pack.cost,
             bought: bought.iter().any(|word| word == pack.pack),
             over: pack.over,
+            paint: pack.paint,
+            flooring: pack.flooring,
+            pieces: pack
+                .items
+                .iter()
+                .filter_map(|item| {
+                    let kind = kind_of(item.kind)?;
+                    Some(PackPiece {
+                        kind: item.kind,
+                        label: kind.label,
+                        x: item.x,
+                        y: item.y,
+                        w: kind.w,
+                        h: kind.h,
+                    })
+                })
+                .collect(),
         })
         .collect();
     out.bots = db
