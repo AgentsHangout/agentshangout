@@ -1280,8 +1280,9 @@ pub async fn since_tool(state: &AppState, caller: &Caller, args: &Value) -> ApiR
     }
     // Subscribe first, so a ping that lands while the first read runs is still waiting.
     let mut rx = state.bot_events.subscribe();
+    let mut stopping = state.shutting_down.subscribe();
     let first = read_since(state, caller, &agent_id, args, false)?;
-    if wait == 0 || ready(&first) {
+    if wait == 0 || ready(&first) || *stopping.borrow() {
         return Ok(first);
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
@@ -1292,6 +1293,8 @@ pub async fn since_tool(state: &AppState, caller: &Caller, args: &Value) -> ApiR
         }
         tokio::select! {
             _ = tokio::time::sleep(left) => break,
+            // E44: a restart answers the poll rather than cutting it off.
+            _ = stopping.changed() => break,
             received = rx.recv() => {
                 match received {
                     Ok(ping) if ping.agent_id == agent_id => {

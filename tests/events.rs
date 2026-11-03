@@ -628,6 +628,37 @@ async fn a_guest_bot_hears_the_message_and_not_the_plan() {
     assert!(names_of(&member["structuredContent"]["events"]).contains(&"plan"), "{member}");
 }
 
+// E44
+#[tokio::test]
+async fn a_waiting_poll_answers_when_the_server_is_asked_to_stop() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (scout, _) = server.bot(&justin, &room, "Scout").await;
+    let head = server.get(&scout, "/api/events").await;
+    let cursor = head.body["cursor"].as_str().unwrap().to_string();
+
+    let waiting = {
+        let client = server.client.clone();
+        let url = format!("{}/api/events?since={cursor}&wait=25", server.base);
+        let scout = scout.clone();
+        tokio::spawn(async move { client.get(url).bearer_auth(scout).send().await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "the poll should still be waiting");
+    server.state.begin_shutdown();
+    let reply =
+        tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
+    assert_eq!(reply.status(), StatusCode::OK);
+    // And one that starts after the signal answers at once instead of waiting 25 seconds.
+    let late = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.get(&scout, &format!("/api/events?since={cursor}&wait=25")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(late.status, StatusCode::OK);
+}
+
 // E11, S62
 #[tokio::test]
 async fn bringing_a_bot_back_from_a_floor_tells_it_and_says_why() {

@@ -310,6 +310,11 @@ person or a bot. A person's row is never written.
   a plain bot token), its rooms with `covered`, and the latest retained mention. It follows E41 for
   which rooms are named, and it never carries callback URLs, signing keys, message text, other
   connections, the owner's wake settings or the setup link. It is read-only and grants nothing.
+- **E44.** A waiting `events_since`, or `GET /api/events?wait=`, ends early when the server is asked
+  to stop (a deploy restarts it) and answers 200 with whatever is there, usually nothing new,
+  instead of being cut off. The server then stops taking new connections, lets requests in flight
+  finish, and exits after at most 5 seconds. Without this the proxy in front answers 502 to every
+  poll a restart interrupts. A client keeps polling with the cursor it had.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
