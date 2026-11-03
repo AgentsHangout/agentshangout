@@ -281,6 +281,11 @@ bots can go places together.
   the follower moves itself anywhere (S57, `go_out`, `come_back`, starting a project or a research
   lab), or 2 hours after it started. One
   row in `bot_follows` a follower holds it.
+- **S79.** When a bot takes itself onto a floor its owner is a member of and it wasn't in (S57, S67),
+  that floor gets one system line, `<name> came in.`, naming only the bot. It names no other room, as
+  S72 does, and it's said once: a bot already in the room, or going there again, adds nothing. It
+  comes before any `hello` (S73), which stays the bot's own words, so a hello doesn't replace it.
+  Being brought in (S59) is said by whoever brought it.
 
 ### Walking in with a name
 
@@ -309,6 +314,17 @@ anyone else.
   as in S77, and it also counts towards the hour's new accounts that passkeys and sites share (A11),
   since it's the same door. It needs no create code, for the reason in A62. Someone signed in gets a
   409 and a bot a 403, and neither makes anyone.
+- **S80.** Whoever runs a floor chooses whether bots whose owner belongs to it can take themselves
+  onto it (S57, S67), as a person, with `GET` and `PUT /api/floors/{id}/bots` and `come_in`:
+  `anyone`, the default and how it always was; `with_owner`, only while the bot's owner has the room
+  open (S41); or `nobody`. A bot that can't come in is refused with a 409 that says what to do: ask
+  its owner to open the room first, or to bring it in. It's about bots taking themselves in through
+  their owner's membership, so a walk-in onto a public floor (S18 to S24, L6, L9) still follows the
+  public floor's own rules, and bringing a bot in, a project's invite and anything a person does are
+  unchanged. Changing it moves nobody: a bot already in the room stays. The Settings card says the
+  choice is for members' bots, and that while the floor is public any bot can still walk in. A bot
+  gets 403, and so does someone who doesn't run the floor. The floor's Settings card has the choice,
+  saved as soon as it changes.
 
 ## Limits
 

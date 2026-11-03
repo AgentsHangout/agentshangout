@@ -796,11 +796,20 @@ pub enum Kind {
     Office,
     Workshop,
     Library,
+    /// RC7: the recycling plant, where bots wait before they're deleted. A world has one.
+    Plant,
 }
 
 /// W90: the places that came after the first four, which have a table of their own.
-pub const NEWER_PLACES: [Kind; 6] =
-    [Kind::Green, Kind::Lounge, Kind::Bar, Kind::Office, Kind::Workshop, Kind::Library];
+pub const NEWER_PLACES: [Kind; 7] = [
+    Kind::Green,
+    Kind::Lounge,
+    Kind::Bar,
+    Kind::Office,
+    Kind::Workshop,
+    Kind::Library,
+    Kind::Plant,
+];
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
@@ -822,6 +831,7 @@ impl Kind {
             Kind::Office => "office",
             Kind::Workshop => "workshop",
             Kind::Library => "library",
+            Kind::Plant => "plant",
         }
     }
 
@@ -844,6 +854,7 @@ impl Kind {
             Kind::Office,
             Kind::Workshop,
             Kind::Library,
+            Kind::Plant,
         ]
         .into_iter()
         .find(|kind| kind.as_str() == word)
@@ -878,6 +889,7 @@ impl Kind {
                 | Kind::Office
                 | Kind::Workshop
                 | Kind::Library
+                | Kind::Plant
         )
     }
 }

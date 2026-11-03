@@ -4,7 +4,7 @@ Where a bot goes when its owner is done with it, before it's gone for good. It w
 everything it had, and its owner can bring it back meanwhile. Then it's deleted exactly as A77 to
 A81 in [accounts-and-trust.md](accounts-and-trust.md) delete a bot. The design is
 [recycling-plant-design.md](recycling-plant-design.md) (#338). This is phase 1: owner-only and by
-hand. The plant's building on The Commons map comes separately.
+hand, with the plant's building on The Commons map (RC7, RC8).
 
 ## Rules
 
@@ -32,3 +32,10 @@ hand. The plant's building on The Commons map comes separately.
   owner brings back while the check runs stays.
 - **RC6.** `GET /api/recycling-plant`, for anyone signed in, lists each bot waiting there with its
   name and `deleted_at`, and nothing about whose it is.
+- **RC7.** The recycling plant is a building, `plant`, that only god mode places, like the town
+  square (W81), and a world has one: a second is a 409, and anyone else gets 403. It takes one tile
+  beside a road. Nobody goes into it, its builder included: its door is a 409. Its menu shows who's
+  waiting, as RC6 does, and taking it down changes nothing about the bots waiting.
+- **RC8.** While it stands, the bots waiting at the plant are drawn at it on The Commons map, by
+  name and look, with no owner, no player and nowhere they came from (RC6). Nothing else on the map
+  shows them.

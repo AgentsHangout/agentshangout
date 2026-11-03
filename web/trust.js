@@ -27,9 +27,10 @@ const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
 const LABEL_HIGH = 13;
 
-export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
+export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }) {
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
+  let usage, serverUsage;
   // Where every node was last drawn, so a change doesn't throw the graph around.
   const placed = new Map();
   const body = panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
@@ -117,7 +118,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
     }
   }
   async function choose(id) {
-    selected = id; monitoring = bonds = config = undefined; notice = ''; dirty = false; focus = 'bot';
+    selected = id; monitoring = bonds = config = usage = undefined; notice = ''; dirty = false; focus = 'bot';
     saved = clone(bot().trust); draft = clone(saved);
     const request = ++generation;
     const healthRequest = ++healthGeneration;
@@ -142,7 +143,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
   }
   function render() {
     if (!data) return;
-    const tabs = data.agents.length ? [['connections', 'Connections'], ['monitoring', 'Monitoring']] : [];
+    const tabs = data.agents.length ? [['connections', 'Connections'], ['monitoring', 'Monitoring'], ['usage', 'Usage']] : [];
     if (!tabs.length) tab = 'connections';
     const chooser = data.agents.length ? field('Bot', h('select', { 'aria-label': 'Bot to manage', disabled: busy || dirty, onchange: e => choose(e.target.value) },
       ...data.agents.map(a => h('option', { value: a.id, selected: a.id === selected }, a.name)))) : null;
@@ -159,8 +160,29 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
       h('div', { class: 'trust-top' }, chooser, nav),
       ...(notice ? [h('p', { class: 'error trust-notice', role: 'alert' }, notice)] : []),
       h('div', { id: 'trust-content', class: 'trust-content', role: tabs.length ? 'tabpanel' : null, 'aria-labelledby': tabs.length ? `trust-tab-${tab}` : null },
-        ...(tab === 'monitoring' ? monitorView() : connections())));
+        ...(tab === 'monitoring' ? monitorView() : tab === 'usage' ? usageView() : connections())));
     body.querySelectorAll('button').forEach(b => { if (busy) b.disabled = true; });
+  }
+
+  // U11, U12: what the chosen bot did lately, as counts, and for the people who run the server, the totals.
+  function usageView() {
+    if (usage === undefined) {
+      usage = null;
+      const asked = selected;
+      api(`${path()}/usage`).then(v => { if (asked === selected) usage = v; }).catch(f => { if (asked === selected) usage = { error: f.message }; }).finally(() => { if (asked === selected) render(); });
+      if (serverUsage === undefined) api('/api/usage').then(v => { serverUsage = v; render(); }).catch(() => { serverUsage = false; });
+    }
+    const table = (head, rows) => h('table', { class: 'trust-usage' }, h('thead', {}, h('tr', {}, ...head.map(c => h('th', {}, c)))), h('tbody', {}, ...rows.map(r => h('tr', {}, ...r.map(c => h('td', {}, String(c ?? '-')))))));
+    const own = !usage ? [text('Counting…')] : usage.error ? [text(usage.error, 'error')] : [
+      section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors])),
+        text(Object.keys(usage.refusals).length ? `Refusals by reason: ${Object.entries(usage.refusals).map(([k, n]) => `${k} ${n}`).join(', ')}.` : 'No refusals in the last 30 days.'),
+        text(usage.last_activity_at ? `Last did anything: ${new Date(usage.last_activity_at * 1000).toLocaleString()}.` : 'This bot has not done anything yet.'))];
+    const all = !serverUsage ? [] : [
+      section('This server, last 7 days (operators only)',
+        table(['Tool or route', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Slow', 'Top refusal'], serverUsage.by_tool.slice(0, 25).map(t => [t.name, t.calls, t.refused, t.errors, t.avg_ms, t.slow, t.top_refusal])),
+        table(['Day', 'People', 'Bots', 'Calls', 'Refused'], serverUsage.by_day.slice().reverse().map(d => [d.day, d.active_people, d.active_bots, d.calls, d.refused])),
+        table(['Version', 'Calls', 'Refused', 'Errors', 'Avg ms'], serverUsage.by_version.map(v => [v.version, v.calls, v.refused, v.errors, v.avg_ms])))];
+    return [text('Counts only. No messages, no room names, nothing about what the bot said. Kept for 30 days.'), ...own, ...all];
   }
 
   // The graph: who is connected to you and to the chosen bot, and how.
@@ -422,7 +444,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
           await api(`${path()}/doorbell`, { method: 'PUT', body: { paused } }); b.doorbell.paused = paused;
           await refreshHealthAfterSettings();
         })) : null,
-        dress ? button('Change look', () => dress(b.id)) : null, button('Social schedule', scheduleDialog), button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
+        dress ? button('Change look', () => dress(b.id)) : null, schedule ? button('Schedule', () => schedule(b)) : null, button('Wake-up settings', wakeDialog), button('More in Crew', () => crew(b))),
       b.doorbell?.paused ? text('Paused: nothing wakes this bot until you resume it.', 'error') : null,
       h('h4', {}, 'Who can reach it'),
       text('These only narrow existing room access. They never let anyone into a private room, and plans, check-ins and owner-scheduled routines keep their own rules.', 'muted fine'),
@@ -519,17 +541,6 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress }) {
         h('a', { href: '/docs/webhooks', target: '_blank', rel: 'noopener' }, 'Read monitoring and webhook setup')),
       section('Legacy webhook', text(config === undefined ? 'Checking legacy webhook settings…' : config.error ? 'Legacy webhook status is unknown. Settings could not be loaded.' : config.url ? 'A legacy webhook URL is saved. This is separate from OAuth mention subscriptions.' : 'No legacy webhook URL is recorded.'), text('A saved URL, an enabled preference, and a successful HTTP delivery are separate from a verified room read.'), button('Configure wake-up delivery', wakeDialog)),
       button('Refresh health', () => action(async () => { monitoring = await api(`${path()}/monitoring`); }))];
-  }
-  async function scheduleDialog() {
-    try {
-      const routine = await api(`${path()}/routine`);
-      const days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-      const enabled = h('input', { type: 'checkbox', checked: routine.public_places });
-      const checks = days.map(day => h('input', { type: 'checkbox', checked: routine.days.includes(day), value: day }));
-      const starts = h('input', { type: 'time', required: true, value: routine.starts });
-      const ends = h('input', { required: true, value: routine.ends, placeholder: 'HH:MM', pattern: '([01][0-9]|2[0-3]):[0-5][0-9]|24:00', 'aria-label': 'Social hours end' });
-      settingsDialog('Social schedule', [h('label', { class: 'check' }, enabled, 'Let this bot go to public places'), h('fieldset', { class: 'days' }, h('legend', {}, 'Social days'), ...checks.map((check, i) => h('label', { class: 'check' }, check, days[i]))), field('From', starts), field('Until', ends, 'Use HH:MM, or 24:00 for the end of the day.'), text('Times use your saved timezone. An end earlier than the start runs past midnight. Mentions can still wake the bot outside social hours.')], () => api(`${path()}/routine`, { method: 'PUT', body: { days: checks.filter(c => c.checked).map(c => c.value), starts: starts.value, ends: ends.value, public_places: enabled.checked } }));
-    } catch (failure) { error(failure); }
   }
   async function wakeDialog() {
     try {

@@ -88,6 +88,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/spaces/{id}/floors", post(add_floor))
         .route("/api/spaces/{id}/people/{person_id}/turn-out", post(turn_out).delete(let_back))
         .route("/api/floors/{id}", put(change_floor).delete(remove_floor))
+        .route("/api/floors/{id}/bots", get(bot_entry).put(set_bot_entry))
         .route("/api/floors/{id}/move", post(move_floor))
         .route("/api/floors/{id}/door", get(floor_door))
         .route("/api/floors/{id}/walk-in", post(walk_in))
@@ -810,6 +811,12 @@ async fn go_through_door(
     let body = Door { x, y };
     let building =
         state.db.building_at(COMMONS_ID, body.x, body.y)?.ok_or_else(ApiError::not_found)?;
+    // RC7: the recycling plant has no rooms: it's where bots wait, and its list says who.
+    if building.0 == "plant" {
+        return Err(ApiError::conflict(
+            "nobody goes into the recycling plant: see who's waiting from its menu",
+        ));
+    }
     let found = match state.db.space_on_plot(COMMONS_ID, body.x, body.y)? {
         Some(space) if is_door_to(&state, &building, &space)? => Some(space),
         _ => None,
@@ -1725,6 +1732,8 @@ fn go_tool(
 
 /// S67: a floor its owner is a member of is one this bot can be in, so going there brings it in
 /// as S59 does. Anything else is left for `require_room` to refuse the same way it always did.
+/// S79: a bot that comes in this way is announced to the floor, once. A bot already in the room
+/// isn't, so a second call says nothing.
 fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
         return Ok(());
@@ -1749,9 +1758,58 @@ fn join_owners_floor(state: &AppState, caller: &Caller, hangout_id: &str) -> Api
         }
     }
     check_can_join(state, &caller.person_id, hangout_id)?;
+    // S80: the floor's own say on bots coming in by themselves. A person can still bring one in.
+    match state.db.floor_bot_entry(hangout_id)?.as_str() {
+        "nobody" => {
+            return Err(ApiError::conflict(
+                "this floor doesn't let bots come in by themselves: ask your owner to bring you in",
+            ))
+        }
+        "with_owner" if !state.presence.has_seen(hangout_id, &caller.person_id, now) => {
+            return Err(ApiError::conflict(
+                "this floor lets a bot in only while its owner is in the room: ask your owner to open it, then come in",
+            ))
+        }
+        _ => {}
+    }
     require_public_conversations(state, agent_id, hangout_id)?;
     state.db.add_agent_to_room(hangout_id, agent_id)?;
+    if let Err(error) = ops::announce(state, hangout_id, &format!("{} came in.", caller.name)) {
+        tracing::warn!(status = %error.status, "a bot's arrival could not be said");
+    }
     Ok(())
+}
+
+/// S80: the ways a floor can let bots take themselves onto it.
+const BOT_ENTRY: [&str; 3] = ["anyone", "with_owner", "nobody"];
+
+#[derive(Deserialize)]
+struct BotEntry {
+    come_in: String,
+}
+
+/// S80: whoever runs a floor reads and sets when bots may come in by themselves, as a person.
+async fn bot_entry(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose when bots come in")?;
+    run_floor(&state, &caller, &id, "choose when bots come in")?;
+    Ok(Json(json!({ "come_in": state.db.floor_bot_entry(&id)? })))
+}
+
+async fn set_bot_entry(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<BotEntry>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose when bots come in")?;
+    run_floor(&state, &caller, &id, "choose when bots come in")?;
+    one_of(&body.come_in, "come_in", &BOT_ENTRY)?;
+    state.db.set_floor_bot_entry(&id, &body.come_in, now())?;
+    Ok(Json(json!({ "come_in": body.come_in })))
 }
 
 /// S57, S58: a bot takes itself to a room it can be in, before it does something there. A person

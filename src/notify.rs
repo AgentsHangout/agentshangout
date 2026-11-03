@@ -380,6 +380,56 @@ pub fn send_result<F>(
 ) where
     F: FnOnce(&AppState, Posted) + Send + 'static,
 {
+    let id = agent_id.to_string();
+    let may = move |state: &AppState| {
+        crate::bot_trust::delivery_allowed(state, &id, &message_ids).unwrap_or(false)
+    };
+    send_checked(state, agent_id, notice, once, may, done);
+}
+
+/// RP3: a repeating plan's cue, from the bot's own owner. There's no message to check it against,
+/// so it's sent while the bot isn't paused, still belongs to the plan's room, and the plan still
+/// repeats with that owner and isn't canceled. One POST, no retry.
+pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &str, owner_id: &str) {
+    let (id, event, owner, room) = (
+        agent_id.to_string(),
+        event_id.to_string(),
+        owner_id.to_string(),
+        notice.hangout_id.clone(),
+    );
+    let may = move |state: &AppState| {
+        !state.db.doorbell_paused(&id).unwrap_or(true)
+            && state.db.belongs_to_room(&room, &id).unwrap_or(false)
+            && state
+                .db
+                .agent(&id, crate::now())
+                .ok()
+                .flatten()
+                .is_some_and(|bot| bot.owner_id == owner)
+            && state
+                .db
+                .cadence(&event)
+                .ok()
+                .flatten()
+                .is_some_and(|cadence| cadence.owner_id == owner && !cadence.paused)
+            // RP9: a plan canceled after its start was taken doesn't ring.
+            && state.db.event(&event).ok().flatten().is_some_and(|plan| plan.status != "cancelled")
+    };
+    send_checked(state, agent_id, notice, true, may, |_, _| {});
+}
+
+/// The send itself, with what decides whether it may still go, asked again before every try.
+fn send_checked<F, M>(
+    state: &AppState,
+    agent_id: &str,
+    notice: &Notice,
+    once: bool,
+    may: M,
+    done: F,
+) where
+    F: FnOnce(&AppState, Posted) + Send + 'static,
+    M: Fn(&AppState) -> bool + Send + Sync + 'static,
+{
     let Some(url) = state.db.notify_url(agent_id).ok().flatten() else {
         done(state, Posted::nothing("no_url"));
         return;
@@ -397,8 +447,7 @@ pub fn send_result<F>(
         let allowed = || {
             state.db.notify_url(&agent_id).ok().flatten().as_deref() == Some(url.as_str())
                 && state.db.notify_auth(&agent_id).ok().flatten() == auth
-                && crate::bot_trust::delivery_allowed(&state, &agent_id, &message_ids)
-                    .unwrap_or(false)
+                && may(&state)
         };
         for delay in RETRY_DELAYS {
             if !once {

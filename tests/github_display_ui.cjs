@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('web/app.js', 'utf8');
+const source = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 function extract(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `missing shipped function ${name}`);
@@ -30,6 +30,7 @@ const context = {
     const element = {
       tag, ...props, children, events: {},
       addEventListener(kind, handler) { this.events[kind] = handler; },
+      replaceChildren() {},
     };
     if (tag === 'input') inputs.push(element);
     return element;
@@ -39,7 +40,7 @@ const context = {
   confirm: () => false,
 };
 vm.createContext(context);
-vm.runInContext(`${extract('act')}\n${extract('signInCard')}\nthis.signInCard = signInCard;`, context);
+vm.runInContext(`${extract('act')}\n${extract('githubCardRows')}\n${extract('personCardBody')}\n${extract('signInCard')}\nthis.signInCard = signInCard;`, context);
 async function check() {
   context.signInCard({
     sign_in: [{ site: 'github', name: 'GitHub', linked: 'ann-codes' }],

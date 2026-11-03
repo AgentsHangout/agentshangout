@@ -9,6 +9,7 @@ pub mod bonds;
 pub mod bot_profile;
 pub mod bot_trust;
 pub mod brand;
+pub mod cadence;
 pub mod camera;
 pub mod city;
 pub mod clock;
@@ -51,6 +52,7 @@ pub mod travel;
 pub mod trust;
 pub mod tutorial;
 pub mod typing;
+pub mod usage;
 pub mod votes;
 pub mod web;
 pub mod world;
@@ -126,6 +128,8 @@ pub struct Shared {
     pub referrals: referrals::Limits,
     /// The limit on asking when people are free.
     pub closeness: closeness::Limits,
+    /// What the server did, counted for the people who run it and for a bot's owner (U1 to U12).
+    pub usage: usage::Usage,
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
@@ -218,6 +222,7 @@ impl AppState {
             worlds: worlds::Runtime::new(),
             referrals: referrals::Limits::new(),
             closeness: closeness::Limits::new(),
+            usage: usage::Usage::new(mcp::tool_names()),
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -270,11 +275,14 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
         .merge(camera::routes())
+        .merge(usage::routes())
         .merge(oauth::routes())
         .merge(web::routes())
         .route("/mcp", post(mcp::handle))
         .route("/public/mcp", post(public_mcp::handle))
         .fallback(web::not_found)
+        // Innermost, so it sees what the handler answered and the route it matched (U1).
+        .layer(middleware::from_fn_with_state(state.clone(), usage::observe))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), web::security_headers))
         // Outside everything that can refuse a request, so it reads what they leave (W88).

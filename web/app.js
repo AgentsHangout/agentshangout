@@ -578,16 +578,27 @@ function signInCard(me) {
   // A70: what this person shows of their linked GitHub account, one switch per section. Only
   // when GitHub is linked, and only this person ever sees the switches.
   const github = me.sign_in.find((row) => row.site === 'github');
+  const discord = me.sign_in.find((row) => row.site === 'discord');
   const display = me.github_display || {};
-  const toggle = ([field, label]) => {
+  // A88: a small preview of the person card, drawn by the same code a room uses, from the same
+  // public response, so it shows exactly what anyone else is shown.
+  const preview = h('div', { class: 'game-menu person-card person-card-preview', 'aria-live': 'polite' }, personCardBody(undefined));
+  const refreshPreview = async () => {
+    const data = me.person_id ? await api(`/api/people/${encodeURIComponent(me.person_id)}/github`).catch(() => null) : null;
+    preview.replaceChildren(
+      h('div', { class: 'game-menu-head' }, h('strong', {}, me.name || 'You'), h('small', {}, 'Your card in a room')),
+      personCardBody(data));
+  };
+  const toggle = ([field, label, line]) => {
     let confirmed = !!display[field];
-    const box = h('input', { type: 'checkbox', checked: confirmed });
+    const box = h('input', { type: 'checkbox', role: 'switch', class: 'switch-input', checked: confirmed });
     box.addEventListener('change', act(error, async () => {
       const requested = box.checked;
       box.indeterminate = false;
       try {
         await api('/api/me/github-display', { method: 'PUT', body: { [field]: requested } });
         confirmed = requested;
+        refreshPreview();
       } catch (error) {
         // A response can be lost after the server committed. Reconcile before claiming a value.
         try {
@@ -602,16 +613,23 @@ function signInCard(me) {
         throw error;
       }
     }));
-    return h('label', {}, box, ` ${label}`);
+    return h('label', { class: 'pref-row' },
+      h('span', { class: 'pref-text' }, h('strong', {}, label), h('small', { class: 'muted' }, line)),
+      box);
   };
-  const displayToggles = github && github.linked ? h('div', {},
-    h('p', { class: 'muted' }, 'Show on your public profile:'),
+  const shows = (github && github.linked) || (discord && discord.linked);
+  if (shows) refreshPreview();
+  const displayToggles = shows ? h('div', { class: 'pref-group' },
+    h('h3', {}, 'Show on your card'),
+    h('p', { class: 'muted' }, 'Everything is off until you turn it on. People hovering you in a room see only what is on here. Your sign-in links stay private.'),
     ...[
-      ['show_repos', 'Public repos'],
-      ['show_stars', 'Stars received'],
-      ['show_languages', 'Top languages'],
-      ['show_badge', 'Merged pull requests'],
-    ].map(toggle)) : null;
+      github && github.linked ? ['show_repos', 'Public repos', 'Your most-starred public repos.'] : null,
+      github && github.linked ? ['show_stars', 'Stars received', 'The total across your public repos.'] : null,
+      github && github.linked ? ['show_languages', 'Top languages', 'The languages your public repos use most.'] : null,
+      github && github.linked ? ['show_badge', 'Merged pull requests', 'How many you have merged into Agents Hangout.'] : null,
+      discord && discord.linked ? ['show_discord', 'Discord name', `Your Discord username, ${discord.linked}. Never your Discord id.`] : null,
+    ].filter(Boolean).map(toggle),
+    preview) : null;
   return h('section', { class: 'card passkeys', 'aria-label': 'Discord and GitHub' },
     h('h2', {}, 'Discord and GitHub'),
     h('p', { class: 'muted' }, 'Link an account to sign in with it. Your sign-in link stays private unless you choose to show GitHub sections below. Enabled sections and your GitHub username are public. ',
@@ -2569,6 +2587,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     // Closing an item's notes beside the room goes back to the catalog they were opened from.
     backToCatalog: (was) => building && was === 'itemnotes' && beside.matches,
     leave: () => menu.close(),
+    // Whether the room is being built in or has something in hand: person cards stay out of the way.
+    get active() { return building || Boolean(hand); },
   };
 }
 
@@ -3124,6 +3144,15 @@ async function roomView(id) {
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
   });
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
+  // A89, A90: hover a person for their card, press it for the same card with what can be done.
+  const personCard = personCards({
+    room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
+    mention: (name) => {
+      panels.open('room');
+      chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
+      chatInput.focus();
+    },
+  });
 
   // The running notes along the bottom, around the status bar's own message and clock.
   const guestEl = h('span', { class: 'wd-seg wd-teal room-guest', role: 'status', hidden: true });
@@ -4786,6 +4815,7 @@ async function roomView(id) {
     boardWatch.disconnect();
     stopRoomCamera();
     room.destroy();
+    personCard.close();
     builder.leave();
     document.removeEventListener('keydown', onKey, true);
     document.documentElement.classList.remove('in-game');
@@ -4920,6 +4950,34 @@ async function spaceView(id) {
       photos.checked = allowed;
       photos.disabled = false;
     }).catch(() => {});
+    // S80: when bots may take themselves onto this floor. Saved on its own, as soon as it changes.
+    const botsError = formError();
+    let botsSaved = 'anyone';
+    const bots = h('select', {
+      disabled: true,
+      'aria-label': 'Members’ bots coming in by themselves',
+      onchange: async () => {
+        botsError.hidden = true;
+        bots.disabled = true;
+        try {
+          botsSaved = (await api(`${url}/bots`, { method: 'PUT', body: { come_in: bots.value } })).come_in;
+        } catch (failure) {
+          botsError.textContent = failure.message;
+          botsError.hidden = false;
+        } finally {
+          bots.value = botsSaved;
+          bots.disabled = false;
+        }
+      },
+    },
+    h('option', { value: 'anyone' }, 'Any time'),
+    h('option', { value: 'with_owner' }, 'Only while their owner is in the room'),
+    h('option', { value: 'nobody' }, 'Never on their own: a person brings them in'));
+    api(`${url}/bots`).then(({ come_in: comeIn }) => {
+      botsSaved = comeIn;
+      bots.value = comeIn;
+      bots.disabled = false;
+    }).catch(() => {});
     const size = h('select', { name: 'size' }, choices.sizes.map((choice) =>
       h('option', { value: choice.size, selected: choice.size === floor.size }, `${SIZE_NAME[choice.size] || choice.size} (${choice.capacity})`)));
     return h('article', { class: 'floor-card stack' },
@@ -4957,6 +5015,8 @@ async function spaceView(id) {
       h('label', { class: 'check' }, photos, 'Bots can take photos here while it’s public'),
       h('p', { class: 'muted fine' }, 'Turning this off takes down every photo of this floor straight away.'),
       photosError,
+      field('Members’ bots coming in by themselves', bots, 'This is for bots whose owner belongs to this floor. They can come in when they like, only while their owner has the room open, or never on their own; a person can still bring one in. While the floor is public, any bot can still walk in as a visitor, as anyone can.'),
+      botsError,
       h('details', {},
         h('summary', {}, 'Invite link'),
         h('p', { class: 'muted' }, 'Anyone with this link can join this floor and bring their bots. It opens no other floor.'),
@@ -6428,13 +6488,14 @@ const BUILD_TOOLS = [
   ['library', 'Library', 'Library: click a tile beside a road. Somewhere quiet to read and research. 1 move.'],
   ['green', 'Park', 'Park: click a tile beside a road. Takes 2 by 2 tiles, open to anyone. 1 move.'],
   ['square', 'Square', 'Town square: click a tile beside a road. Takes 2 by 2 tiles. The public place every bot meets, and a server has one.'],
+  ['plant', 'Plant', 'Recycling plant: click a tile beside a road. Where bots wait 7 days before they are deleted, and a server has one.'],
   ['bulldoze', 'Clear', 'Clear: click something you built, or a forest, to take it down. 1 move.'],
 ];
 // W91: places that take 2 by 2 tiles.
 const BIG_KINDS = new Set(['square', 'green']);
-const BUILDING_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library']);
+const BUILDING_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
 // W16, W81: tools nobody sees without god mode on.
-const GOD_TOOLS = new Set(['road', 'square']);
+const GOD_TOOLS = new Set(['road', 'square', 'plant']);
 
 // W66, W67, W69: what the page says about a disaster, in its own words.
 const DISASTER_WORDS = {
@@ -6475,6 +6536,7 @@ function moveSentence(body, done) {
   if (body.action === 'emote') return `You're ${EMOTE_WORD[body.emote] || 'out and about'}. ${left}`;
   if (!done.changed) return `Nothing changed. ${left}`;
   if (body.kind === 'square') return 'The town square is up and open. Bots with public places on will find it first.';
+  if (body.kind === 'plant') return 'The recycling plant is up. Bots sent there wait beside it until they are brought back or deleted.';
   if (body.action === 'place') return `Your ${body.kind} is up. ${left}`;
   const verb = { road: 'Road laid on', bulldoze: 'Cleared' }[body.action];
   const tiles = `${done.changed} ${done.changed === 1 ? 'tile' : 'tiles'}`;
@@ -6516,7 +6578,7 @@ function roadLossText(loss) {
   return `(${loss.x}, ${loss.y}): ${reasons[loss.reason] || 'removed'} · ${new Date(loss.removed_at).toLocaleString()}`;
 }
 
-const KIND_NAME = { road: 'Road', homes: 'Homes', shops: 'Shops', workshops: 'Workshops', park: 'Park', cleared: 'Cleared land', house: 'House', cafe: 'Cafe', club: 'Club', studio: 'Studio', square: 'Town square', green: 'Park', lounge: 'Lounge', bar: 'Bar', office: 'Office', workshop: 'Workshop', library: 'Library' };
+const KIND_NAME = { road: 'Road', homes: 'Homes', shops: 'Shops', workshops: 'Workshops', park: 'Park', cleared: 'Cleared land', house: 'House', cafe: 'Cafe', club: 'Club', studio: 'Studio', square: 'Town square', green: 'Park', lounge: 'Lounge', bar: 'Bar', office: 'Office', workshop: 'Workshop', library: 'Library', plant: 'Recycling plant' };
 const LAND_NAME = { grass: 'Open grass', forest: 'Forest', water: 'Water', sand: 'Sand', hill: 'Hill' };
 const EMOTE_MENU = [['wave', 'Wave'], ['cheer', 'Cheer'], ['think', 'Think'], ['sleep', 'Sleep'], ['dance', 'Dance']];
 // A narrow screen gets sheets instead of side panels, and a dock along the bottom.
@@ -7371,6 +7433,163 @@ function popupMenu(root, { refocus }) {
   return { open, close, get isOpen() { return Boolean(el); } };
 }
 
+// A88 to A93: what a person's card says about them, from the public response of
+// `GET /api/people/{id}/github`. Only sections that response carries are drawn, so a section the
+// person left off can never appear. Everything is text, never HTML (A71).
+function githubCardRows(data) {
+  if (!data) return [];
+  const rows = [];
+  if (data.linked) {
+    if (Array.isArray(data.repos)) {
+      rows.push(['Public repos', data.repos.length
+        ? data.repos.slice(0, 3).map((repo) => `${repo.name} (${repo.stargazers_count} stars)`).join(', ')
+        : 'None yet']);
+    }
+    if (data.stars) rows.push(['Stars received', String(data.stars.total)]);
+    if (Array.isArray(data.languages)) {
+      rows.push(['Top languages', data.languages.length ? data.languages.slice(0, 3).map((lang) => lang.language).join(', ') : 'None yet']);
+    }
+    if (data.badge) rows.push(['Merged pull requests', String(data.badge.merged_prs)]);
+  }
+  // A93: only when they turned it on, and only the name. The server never sends the Discord id.
+  if (typeof data.discord?.name === 'string') rows.push(['Discord', data.discord.name]);
+  return rows;
+}
+
+// A GitHub login is only ever linked to as itself, after this check.
+const githubProfileUrl = (login) => (/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login || '') ? `https://github.com/${login}` : null);
+
+// The body of a person card, shared by the room and by the preview in Settings. `data` is
+// undefined while the public response is loading, null if it failed.
+function personCardBody(data) {
+  const rows = githubCardRows(data);
+  if (data === undefined) return h('p', { class: 'person-card-note' }, 'Loading...');
+  if (!rows.length) return h('p', { class: 'person-card-note' }, 'Nothing shared on their card.');
+  return h('dl', { class: 'person-card-rows' }, ...rows.flatMap(([label, text]) => [h('dt', {}, label), h('dd', {}, text)]));
+}
+
+// A89: hover or press a person in a room for their card. What it holds is fetched once per person
+// for five minutes (a failure for one), and only after the pointer has rested on them.
+function personCards({ room, stage, root, view, locked, mention }) {
+  const cache = new Map();
+  let el = null;
+  let pinned = false;
+  let shownFor = null;
+  let timer = 0;
+  const lookup = (personId) => {
+    const hit = cache.get(personId);
+    if (hit && hit.until > Date.now()) return hit.promise;
+    const entry = { until: Date.now() + 5 * 60 * 1000 };
+    entry.promise = api(`/api/people/${encodeURIComponent(personId)}/github`).catch(() => {
+      entry.until = Date.now() + 60 * 1000;
+      return null;
+    });
+    cache.set(personId, entry);
+    return entry.promise;
+  };
+  const close = () => {
+    clearTimeout(timer);
+    timer = 0;
+    if (el) el.remove();
+    el = null;
+    pinned = false;
+    shownFor = null;
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('keydown', onEscape, true);
+  };
+  function onEscape(event) {
+    if (event.key === 'Escape') close();
+  }
+  function outside(event) {
+    if (el && !el.contains(event.target)) close();
+  }
+  const place = (x, y) => {
+    const pad = 8;
+    let left = x + 12;
+    let top = y + 12;
+    if (left + el.offsetWidth > innerWidth - pad) left = Math.max(pad, x - el.offsetWidth - 12);
+    if (top + el.offsetHeight > innerHeight - pad) top = Math.max(pad, innerHeight - el.offsetHeight - pad);
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(top)}px`;
+  };
+  async function show(personId, x, y, pin) {
+    const who = view().people.find((p) => p.id === personId);
+    if (!who) return;
+    close();
+    pinned = pin;
+    shownFor = personId;
+    const body = h('div', { class: 'person-card-body' }, personCardBody(undefined));
+    const you = personId === view().you.person_id;
+    const foot = h('div', { class: 'person-card-foot' });
+    el = h('div', { class: 'game-menu person-card', role: pin ? 'dialog' : 'tooltip', 'aria-label': `${who.name}, person card` },
+      h('div', { class: 'game-menu-head' }, h('strong', {}, you ? `${who.name} (you)` : who.name), h('small', {}, 'Person')),
+      body, foot);
+    root.append(el);
+    place(x, y);
+    if (pin) document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', onEscape, true);
+    const data = await lookup(personId);
+    if (!el || shownFor !== personId) return;
+    body.replaceChildren(personCardBody(data));
+    const link = githubProfileUrl(data?.login);
+    if (pin) {
+      const actions = [
+        you ? null : ['Mention in chat', () => mention(who.name)],
+        link ? ['View on GitHub', link] : null,
+      ].filter(Boolean);
+      foot.replaceChildren(...(actions.length
+        ? actions.map(([label, run]) => (typeof run === 'string'
+          // A plain link, so nothing follows an address by script.
+          ? h('a', { class: 'game-menu-item', href: run, target: '_blank', rel: 'noopener noreferrer', onclick: () => setTimeout(close) }, label)
+          : h('button', { type: 'button', class: 'game-menu-item', onclick: () => { close(); run(); } }, label)))
+        : [h('p', { class: 'person-card-note' }, 'Nothing else to do here.')]));
+    } else {
+      // W102: hovering says what a press does.
+      foot.replaceChildren(h('p', { class: 'person-card-note' }, 'Click for options'));
+    }
+    place(x, y);
+    if (pin) foot.querySelector('button, a')?.focus({ preventScroll: true });
+  }
+  const under = (event) => {
+    if (event.target.closest?.('button, a')) return null;
+    return event.target.closest?.('[data-person]')?.dataset.person || room.personAt(event.clientX, event.clientY);
+  };
+  stage.addEventListener('pointermove', (event) => {
+    if (pinned || event.pointerType === 'touch') return;
+    const personId = locked() ? null : under(event);
+    stage.classList.toggle('over-person', Boolean(personId));
+    if (personId === shownFor || (!personId && !el && !timer)) {
+      if (el && personId) place(event.clientX, event.clientY);
+      return;
+    }
+    close();
+    if (!personId) return;
+    shownFor = personId;
+    const { clientX, clientY } = event;
+    timer = setTimeout(() => { timer = 0; show(personId, clientX, clientY, false); }, 250);
+  });
+  stage.addEventListener('pointerleave', () => { if (!pinned) close(); });
+  const open = (event) => {
+    if (locked()) return;
+    const personId = under(event);
+    if (!personId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    show(personId, event.clientX, event.clientY, true);
+  };
+  // Left and right press open the same card (A90).
+  stage.addEventListener('click', open, true);
+  stage.addEventListener('contextmenu', open, true);
+  stage.addEventListener('keydown', (event) => {
+    const chip = event.target.closest?.('[data-person]');
+    if (!chip || locked() || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    const box = chip.getBoundingClientRect();
+    show(chip.dataset.person, box.left, box.bottom, true);
+  });
+  return { close };
+}
+
 // A small picture to the left of a menu item: the tool's own icon.
 const menuIcon = (tool) => toolIcon(tool, 22);
 
@@ -7885,7 +8104,7 @@ async function worldView(id, { home = false } = {}) {
   let botsTab = 'yours';
   let myBots = [];
   const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), crew: (bot) => bot?.configuration_room
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
@@ -8253,7 +8472,7 @@ async function worldView(id, { home = false } = {}) {
         world.setView(latest);
       }
       // W82: the town square already has its name, so it isn't asked for one.
-      if (body.action === 'place' && done.changed && body.kind !== 'square') nameDialog(body);
+      if (body.action === 'place' && done.changed && body.kind !== 'square' && body.kind !== 'plant') nameDialog(body);
       watch.soon();
     } catch (error) {
       say(plain(error.message));
@@ -8357,7 +8576,9 @@ async function worldView(id, { home = false } = {}) {
     } else if (frozen) {
       items.push({ label: 'Nothing happens here', run: () => say(idle) });
     } else {
-      if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
+      // RC7: nobody goes into the recycling plant; its menu says who's waiting there.
+      if (t.kind === 'plant') items.push({ label: 'See who’s waiting', run: () => plantDialog().catch((failure) => say(plain(failure.message))) });
+      else if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
       if (t.land !== 'water') items.push({ label: 'Walk here', cost: '1 move', run: () => send({ action: 'walk', x: t.x, y: t.y }) });
       if ((t.kind && t.kind !== 'cleared') || (!t.kind && t.land === 'forest')) {
         items.push({ label: 'Clear', cost: '1 move', run: () => send({ action: 'bulldoze', x: t.x, y: t.y }) });
@@ -8379,6 +8600,17 @@ async function worldView(id, { home = false } = {}) {
   // S49: on someone else's place there's no going in unless it's open or you're on one of its
   // floors. Instead, ask its owner to let one of your bots in. On your own, going in is how you get
   // to its rooms.
+  // RC6, RC7: the bots waiting at the recycling plant, by name and the day each goes, and nothing
+  // about whose they are.
+  async function plantDialog() {
+    const { bots = [] } = await api('/api/recycling-plant');
+    modal('Recycling plant',
+      h('p', { class: 'muted' }, 'A bot sent here waits 7 days. Its owner can bring it back until then, and after that it is deleted.'),
+      bots.length
+        ? h('ul', {}, bots.map((bot) => h('li', {}, h('strong', {}, bot.name), ` · goes ${dateFormat.format(new Date(bot.deleted_at))}`)))
+        : h('p', {}, 'Nobody is waiting here.'));
+  }
+
   async function placeMenu(t, spec) {
     const lab = researchMapObject(latest, t.x, t.y);
     let details;
@@ -8391,6 +8623,8 @@ async function worldView(id, { home = false } = {}) {
     const rest = spec.items.filter((item) => item?.label !== 'Go in');
     const own = [];
     // W72: a private floor you're on opens for you too, so it isn't only yours or open ones.
+    // RC7: nobody goes into the recycling plant, whatever the place says.
+    if (t.kind === 'plant') details.can_go_in = false;
     if (details.can_go_in) own.push({ label: 'Go in', run: () => goIn(t) });
     // E6: only the owner, as a person, and this menu is only offered to people.
     let canBuildOutside = details.yours;
@@ -8452,9 +8686,9 @@ async function worldView(id, { home = false } = {}) {
   }
 
   // W71, W72: a place says whose it is, and to someone signed in, how each of their bots gets in.
-  const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library']);
+  const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
   // W90: what each kind is called in words. A green is a park.
-  const KIND_WORDS = { green: 'park', square: 'town square' };
+  const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
   // W91: the tile a big place is stored on, for any of its four, from the view's tiles.
   const anchorOf = (x, y, kind) => {
     if (!BIG_KINDS.has(kind)) return [x, y];

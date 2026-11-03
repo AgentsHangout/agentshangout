@@ -28,6 +28,8 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_trust;
+pub use cadence::Cadence;
+mod cadence;
 mod camera;
 mod github_display;
 mod oauth;
@@ -36,6 +38,7 @@ mod recycling;
 mod research_labs;
 mod research_work;
 mod room_mentions;
+mod usage;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 
@@ -1278,6 +1281,34 @@ CREATE TABLE IF NOT EXISTS research_work_watches (
  since INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, watcher)
 );
+-- RP1: a plan its owner made repeat. Phase 1: one time a day, on chosen weekdays.
+CREATE TABLE IF NOT EXISTS plan_cadences (
+ event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+ owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ days INTEGER NOT NULL,
+ time_min INTEGER NOT NULL,
+ offset_min INTEGER NOT NULL,
+ until_day INTEGER,
+ paused INTEGER NOT NULL DEFAULT 0,
+ since INTEGER NOT NULL
+);
+-- RP4: each start of a repeating plan, taken once, and what it did for each bot.
+CREATE TABLE IF NOT EXISTS plan_starts (
+ event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+ starts_at INTEGER NOT NULL,
+ handled_at INTEGER NOT NULL,
+ PRIMARY KEY (event_id, starts_at)
+);
+CREATE TABLE IF NOT EXISTS plan_start_bots (
+ event_id TEXT NOT NULL,
+ starts_at INTEGER NOT NULL,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ outcome TEXT NOT NULL CHECK (outcome IN ('cued', 'missed', 'paused', 'over_cap')),
+ rung_at INTEGER,
+ PRIMARY KEY (event_id, starts_at, agent_id),
+ FOREIGN KEY (event_id, starts_at) REFERENCES plan_starts(event_id, starts_at) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS plan_start_bots_by_bot ON plan_start_bots (agent_id, starts_at);
 -- RC2: a bot its owner sent to the recycling plant, and when. RC5 deletes it 7 days later.
 CREATE TABLE IF NOT EXISTS recycled_bots (
  agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
@@ -1505,6 +1536,12 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
+-- S80: whether bots may take themselves onto a floor: `anyone`, the default, has no row.
+CREATE TABLE IF NOT EXISTS floor_bot_entry (
+    hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    rule       TEXT NOT NULL CHECK (rule IN ('with_owner', 'nobody')),
+    set_at     INTEGER NOT NULL
+);
 -- L50: a bot's day, hour by hour: 24 letters (w, s, h, a) for every day, and for each weekday
 -- from Monday either 24 more or nothing, joined by commas.
 CREATE TABLE IF NOT EXISTS bot_schedules (
@@ -1513,6 +1550,43 @@ CREATE TABLE IF NOT EXISTS bot_schedules (
     days       TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- A93: a person's opt-in to show their Discord name on their card. It is bound to the Discord
+-- account that was linked when they said yes, so a replaced link starts hidden again.
+CREATE TABLE IF NOT EXISTS discord_display (
+    person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    account_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+-- U1 to U8: usage counts by hour, with no text, no ids of people and no room names. A bot's own daily
+-- totals go when the bot does.
+CREATE TABLE IF NOT EXISTS usage_hours (
+    hour    INTEGER NOT NULL,
+    surface TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    caller  TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    reason  TEXT NOT NULL,
+    version TEXT NOT NULL,
+    calls   INTEGER NOT NULL,
+    millis  INTEGER NOT NULL,
+    timed   INTEGER NOT NULL,
+    slow    INTEGER NOT NULL,
+    PRIMARY KEY (hour, surface, name, caller, outcome, reason, version)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS usage_days (
+    day    INTEGER PRIMARY KEY,
+    people INTEGER NOT NULL,
+    bots   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_bot_days (
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    day      INTEGER NOT NULL,
+    outcome  TEXT NOT NULL,
+    reason   TEXT NOT NULL,
+    calls    INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, day, outcome, reason)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS usage_bot_days_day ON usage_bot_days(day);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -4117,6 +4191,13 @@ impl Db {
                    WHERE l.person_id = ?1 AND l.site = ?2 AND l.account_id <> ?3)",
             [person_id, site, account_id],
         )?;
+        // A93: a different Discord account starts hidden until they say yes again, even going back to the first.
+        if site == "discord" {
+            tx.execute(
+                "DELETE FROM discord_display WHERE person_id = ? AND account_id <> ?",
+                [person_id, account_id],
+            )?;
+        }
         if site == "github" {
             let old: Option<String> = tx
                 .query_row(
@@ -4226,6 +4307,11 @@ impl Db {
             "DELETE FROM sign_in_links WHERE person_id = ? AND site = ?",
             [person_id, site],
         )?;
+        // A93: unlinking Discord takes the choice to show it along, so linking the same account
+        // again shows nothing until they say yes again.
+        if site == "discord" {
+            tx.execute("DELETE FROM discord_display WHERE person_id = ?", [person_id])?;
+        }
         if let Some(account_id) = github_account {
             tx.execute("DELETE FROM github_display_refresh_claims WHERE person_id=?", [person_id])?;
             tx.execute("DELETE FROM github_display WHERE person_id = ?", [person_id])?;
@@ -5950,6 +6036,39 @@ impl Db {
     }
 
     // Routines (L1 to L10)
+
+    /// S80: when bots may take themselves onto this floor: `anyone`, `with_owner` or `nobody`.
+    pub fn floor_bot_entry(&self, hangout_id: &str) -> rusqlite::Result<String> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT rule FROM floor_bot_entry WHERE hangout_id = ?",
+                [hangout_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "anyone".to_string()))
+    }
+
+    /// S80: sets it; `anyone` is the default, so it's no row.
+    pub fn set_floor_bot_entry(
+        &self,
+        hangout_id: &str,
+        rule: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        if rule == "anyone" {
+            conn.execute("DELETE FROM floor_bot_entry WHERE hangout_id = ?", [hangout_id])?;
+        } else {
+            conn.execute(
+                "INSERT INTO floor_bot_entry (hangout_id, rule, set_at) VALUES (?, ?, ?)
+                 ON CONFLICT (hangout_id) DO UPDATE SET rule = excluded.rule, set_at = excluded.set_at",
+                params![hangout_id, rule, now],
+            )?;
+        }
+        Ok(())
+    }
 
     /// L50: a bot's stored schedule, as `every_day` and `days`, if its owner saved one.
     pub fn bot_schedule(&self, agent_id: &str) -> rusqlite::Result<Option<(String, String)>> {
@@ -11269,6 +11388,16 @@ fn q_has_square(conn: &Connection, world_id: &str) -> rusqlite::Result<bool> {
     exists(conn, "SELECT 1 FROM world_squares WHERE world_id = ?", [world_id])
 }
 
+/// RC7: where this world's recycling plant stands, if it does.
+fn q_plant_at(conn: &Connection, world_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+    conn.query_row(
+        "SELECT x, y FROM world_more_places WHERE world_id = ? AND kind = 'plant' ORDER BY built_at LIMIT 1",
+        [world_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
 /// The tiles of a world, or only those inside a box (both corners included). The box is for
 /// planning one move: the planners look at the tiles in a move and the ones beside it, no further.
 fn q_tiles(conn: &Connection, world_id: &str, region: Option<[i64; 4]>) -> rusqlite::Result<Tiles> {
@@ -11712,6 +11841,11 @@ impl WorldTx<'_> {
         q_has_square(&self.tx, world_id)
     }
 
+    /// RC7: whether this world's recycling plant stands.
+    pub fn has_plant(&self, world_id: &str) -> rusqlite::Result<bool> {
+        Ok(q_plant_at(&self.tx, world_id)?.is_some())
+    }
+
     pub fn all_tiles(&self, world_id: &str) -> rusqlite::Result<Tiles> {
         q_tiles(&self.tx, world_id, None)
     }
@@ -11987,6 +12121,16 @@ impl Db {
         player_id: i64,
     ) -> rusqlite::Result<(i64, i64, i64)> {
         q_building_counts(&self.conn(), world_id, player_id)
+    }
+
+    /// RC7: whether the world's recycling plant stands.
+    pub fn has_plant(&self, world_id: &str) -> rusqlite::Result<bool> {
+        Ok(q_plant_at(&self.conn(), world_id)?.is_some())
+    }
+
+    /// RC7, RC8: where the world's recycling plant stands, if it does.
+    pub fn plant_at(&self, world_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+        q_plant_at(&self.conn(), world_id)
     }
 
     /// W81: whether this world's town square stands.

@@ -1,0 +1,634 @@
+//! Usage monitoring (docs/usage.md, U1 to U12): counts of what the server did, for the people who run
+//! it and for a bot's owner. Counts only. Nothing a person said, and nobody's history, goes in.
+
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    hash::{BuildHasher, RandomState},
+    sync::{Arc, Mutex, PoisonError},
+};
+
+use axum::{
+    extract::{MatchedPath, Path, Query, Request, State},
+    http::StatusCode,
+    middleware::Next,
+    response::Response,
+    routing::get,
+    Json, Router,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::{
+    auth::Caller,
+    error::{ApiError, ApiResult},
+    god_mode, now, AppState,
+};
+
+/// U8: how long counts are kept.
+pub const KEEP_DAYS: i64 = 30;
+/// U3: a call this slow (milliseconds) is counted as slow.
+const SLOW_MILLIS: u64 = 1000;
+/// The most distinct buckets held between two flushes, so nothing can grow memory without end.
+const MAX_BUCKETS: usize = 20_000;
+/// The most distinct people or bots held for one day.
+const MAX_ACTIVE: usize = 500_000;
+const UNKNOWN_TOOL: &str = "unknown_tool";
+
+/// U13: what a count is split by, for telling one release from the next. The binary doesn't know its
+/// release number (the tag is made after it is built), so this is the commit it was built from when
+/// the build says so, and `local` for a build on someone's machine.
+pub fn build() -> &'static str {
+    match option_env!("GITHUB_SHA") {
+        Some(sha) if sha.len() >= 12 => &sha[..12],
+        _ => "local",
+    }
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/usage", get(server_usage))
+        .route("/api/agents/{id}/usage", get(agent_usage))
+}
+
+/// Who made a call. It is used to count and then dropped (U5, U6).
+#[derive(Clone, Copy)]
+pub enum Who<'a> {
+    Person(&'a str),
+    Bot(&'a str),
+    Nobody,
+}
+
+impl Who<'_> {
+    fn label(self) -> &'static str {
+        match self {
+            Who::Person(_) => "person",
+            Who::Bot(_) => "bot",
+            Who::Nobody => "none",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Outcome {
+    Ok,
+    Refused,
+    Error,
+}
+
+impl Outcome {
+    fn label(self) -> &'static str {
+        match self {
+            Outcome::Ok => "ok",
+            Outcome::Refused => "refused",
+            Outcome::Error => "error",
+        }
+    }
+}
+
+/// U2: the reason for a refusal, from the status and never from the words.
+fn reason_of(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        400 | 422 => "bad_request",
+        401 => "unauthorized",
+        403 => "forbidden",
+        404 => "not_found",
+        409 => "conflict",
+        413 => "too_large",
+        429 => "rate_limited",
+        _ => "other",
+    }
+}
+
+fn outcome_of(status: StatusCode) -> (Outcome, &'static str) {
+    if status.is_server_error() {
+        (Outcome::Error, "server_error")
+    } else if status.is_client_error() {
+        (Outcome::Refused, reason_of(status))
+    } else {
+        (Outcome::Ok, "")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Key {
+    hour: i64,
+    surface: &'static str,
+    name: String,
+    caller: &'static str,
+    outcome: Outcome,
+    reason: &'static str,
+}
+
+#[derive(Default, Clone, Copy)]
+struct Count {
+    calls: i64,
+    millis: i64,
+    timed: i64,
+    slow: i64,
+}
+
+type BotKey = (String, i64, Outcome, &'static str);
+
+#[derive(Default)]
+struct Inner {
+    hours: HashMap<Key, Count>,
+    /// A bot's own totals for a day (U7, U11): agent, day, outcome and reason.
+    bots: HashMap<BotKey, i64>,
+    day: i64,
+    people: HashSet<u64>,
+    bots_seen: HashSet<u64>,
+    /// U5: made new each day, and never written anywhere.
+    salt: RandomState,
+    /// Days that ended before they were written: the day and the two numbers.
+    finished: Vec<(i64, i64, i64)>,
+}
+
+/// What is waiting to be written, taken out of memory in one go.
+#[derive(Default)]
+pub struct Pending {
+    hours: Vec<(Key, Count)>,
+    bots: Vec<(BotKey, i64)>,
+    days: Vec<(i64, i64, i64)>,
+}
+
+/// U5: the hash that stands for a person for one day is made with a value kept only here.
+pub struct Usage {
+    inner: Mutex<Inner>,
+    names: Vec<String>,
+}
+
+impl Usage {
+    pub fn new(names: Vec<String>) -> Self {
+        Self { inner: Mutex::new(Inner::default()), names }
+    }
+
+    /// U1: a tool name that is listed, and `unknown_tool` for anything else.
+    pub fn tool_name(&self, name: &str) -> String {
+        if self.names.iter().any(|known| known == name) {
+            name.to_string()
+        } else {
+            UNKNOWN_TOOL.to_string()
+        }
+    }
+
+    /// A request refused before it named a tool: bad credentials, another site's page (U1, U2).
+    pub fn record_rejected(&self, at: i64, surface: &'static str, who: Who, status: StatusCode) {
+        let (outcome, reason) = outcome_of(status);
+        self.record_outcome(at, surface, "rejected_request", who, outcome, reason, None);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// U4: one call, added in memory. `millis` is `None` for a wait that is meant to stay open (U3).
+    pub fn record(
+        &self,
+        at: i64,
+        surface: &'static str,
+        name: &str,
+        who: Who,
+        status: StatusCode,
+        millis: Option<u64>,
+    ) {
+        let (outcome, reason) = outcome_of(status);
+        self.record_outcome(at, surface, name, who, outcome, reason, millis);
+    }
+
+    /// The same for a tool, whose error goes to the model as a result with a status behind it.
+    pub fn record_tool(
+        &self,
+        at: i64,
+        surface: &'static str,
+        name: &str,
+        who: Who,
+        failure: Option<StatusCode>,
+        millis: Option<u64>,
+    ) {
+        let name = self.tool_name(name);
+        let (outcome, reason) = match failure.map(outcome_of) {
+            None => (Outcome::Ok, ""),
+            // A tool that returned an error is a refusal even when the status behind it is odd.
+            Some((Outcome::Ok, _)) => (Outcome::Refused, "other"),
+            Some(other) => other,
+        };
+        self.record_outcome(at, surface, &name, who, outcome, reason, millis);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_outcome(
+        &self,
+        at: i64,
+        surface: &'static str,
+        name: &str,
+        who: Who,
+        outcome: Outcome,
+        reason: &'static str,
+        millis: Option<u64>,
+    ) {
+        let day = at.div_euclid(86_400);
+        let mut inner = self.lock();
+        Self::roll_inner(&mut inner, day);
+        match who {
+            Who::Person(id) if inner.people.len() < MAX_ACTIVE => {
+                let hashed = inner.salt.hash_one(id);
+                inner.people.insert(hashed);
+            }
+            Who::Bot(id) if inner.bots_seen.len() < MAX_ACTIVE => {
+                let hashed = inner.salt.hash_one(id);
+                inner.bots_seen.insert(hashed);
+            }
+            _ => {}
+        }
+        let key = Key {
+            hour: at.div_euclid(3600),
+            surface,
+            name: name.to_string(),
+            caller: who.label(),
+            outcome,
+            reason,
+        };
+        if inner.hours.len() < MAX_BUCKETS || inner.hours.contains_key(&key) {
+            let count = inner.hours.entry(key).or_default();
+            count.calls += 1;
+            if let Some(millis) = millis {
+                count.millis += millis.min(3_600_000) as i64;
+                count.timed += 1;
+                count.slow += i64::from(millis >= SLOW_MILLIS);
+            }
+        }
+        if let Who::Bot(id) = who {
+            let key = (id.to_string(), day, outcome, reason);
+            if inner.bots.len() < MAX_BUCKETS || inner.bots.contains_key(&key) {
+                *inner.bots.entry(key).or_default() += 1;
+            }
+        }
+    }
+
+    /// U5: a new day writes down the old day's two numbers, empties the sets and changes the salt.
+    fn roll_inner(inner: &mut Inner, day: i64) {
+        if inner.day == day {
+            return;
+        }
+        if inner.day != 0 && (!inner.people.is_empty() || !inner.bots_seen.is_empty()) {
+            let finished = (inner.day, inner.people.len() as i64, inner.bots_seen.len() as i64);
+            inner.finished.push(finished);
+        }
+        inner.day = day;
+        inner.people = HashSet::new();
+        inner.bots_seen = HashSet::new();
+        inner.salt = RandomState::new();
+    }
+
+    /// U5: rolls the day over at a time with no request in it, so an idle server doesn't hold
+    /// yesterday's people past midnight.
+    pub fn roll(&self, at: i64) {
+        Self::roll_inner(&mut self.lock(), at.div_euclid(86_400));
+    }
+
+    /// How many people and bots are held for the day in memory.
+    pub fn held(&self) -> (usize, usize) {
+        let inner = self.lock();
+        (inner.people.len(), inner.bots_seen.len())
+    }
+
+    /// Takes what has been counted and not yet written.
+    fn take(&self) -> Pending {
+        let mut inner = self.lock();
+        let mut days = std::mem::take(&mut inner.finished);
+        if !inner.people.is_empty() || !inner.bots_seen.is_empty() {
+            days.push((inner.day, inner.people.len() as i64, inner.bots_seen.len() as i64));
+        }
+        Pending {
+            hours: std::mem::take(&mut inner.hours).into_iter().collect(),
+            bots: std::mem::take(&mut inner.bots).into_iter().collect(),
+            days,
+        }
+    }
+
+    /// U4: writes what has been counted. If the database refuses, those counts are lost.
+    pub fn flush(&self, state: &AppState) {
+        self.roll(now());
+        let pending = self.take();
+        if pending.hours.is_empty() && pending.bots.is_empty() && pending.days.is_empty() {
+            return;
+        }
+        let rows = UsageRows {
+            version: build(),
+            hours: pending
+                .hours
+                .iter()
+                .map(|(k, c)| HourRow {
+                    hour: k.hour,
+                    surface: k.surface,
+                    name: &k.name,
+                    caller: k.caller,
+                    outcome: k.outcome.label(),
+                    reason: k.reason,
+                    calls: c.calls,
+                    millis: c.millis,
+                    timed: c.timed,
+                    slow: c.slow,
+                })
+                .collect(),
+            bots: pending
+                .bots
+                .iter()
+                .map(|((agent, day, outcome, reason), calls)| {
+                    (agent.as_str(), *day, outcome.label(), *reason, *calls)
+                })
+                .collect(),
+            days: &pending.days,
+        };
+        if let Err(error) = state.db.write_usage(&rows) {
+            tracing::error!(%error, "usage counts could not be written");
+        }
+    }
+}
+
+pub struct HourRow<'a> {
+    pub hour: i64,
+    pub surface: &'a str,
+    pub name: &'a str,
+    pub caller: &'a str,
+    pub outcome: &'a str,
+    pub reason: &'a str,
+    pub calls: i64,
+    pub millis: i64,
+    pub timed: i64,
+    pub slow: i64,
+}
+
+/// What `Db::write_usage` takes: rows that borrow from the counts.
+pub struct UsageRows<'a> {
+    pub version: &'a str,
+    pub hours: Vec<HourRow<'a>>,
+    /// `(agent, day, outcome, reason, calls)`
+    pub bots: Vec<(&'a str, i64, &'a str, &'a str, i64)>,
+    /// `(day, people, bots)`
+    pub days: &'a [(i64, i64, i64)],
+}
+
+/// One row read back for the report, summed over its hours.
+pub struct StoredHour {
+    pub day: i64,
+    pub surface: String,
+    pub name: String,
+    pub version: String,
+    pub outcome: String,
+    pub reason: String,
+    pub calls: i64,
+    pub millis: i64,
+    pub timed: i64,
+    pub slow: i64,
+}
+
+/// Run at startup and every minute (U4, U8), as `camera::run_cleanup` is.
+pub async fn run(state: AppState) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        let worker = state.clone();
+        let done = tokio::task::spawn_blocking(move || {
+            worker.usage.flush(&worker);
+            worker.db.sweep_usage(now())
+        })
+        .await;
+        match done {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::error!(%error, "old usage counts could not be deleted"),
+            Err(error) => tracing::error!(%error, "usage worker failed"),
+        }
+    }
+}
+
+/// Filled by the `Caller` extractor, so the middleware learns who asked without asking again.
+#[derive(Clone, Default)]
+pub struct Seen(Arc<Mutex<Option<(bool, String)>>>);
+
+impl Seen {
+    pub fn set(&self, is_bot: bool, id: &str) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some((is_bot, id.to_string()));
+    }
+}
+
+/// U1, U3: counts every `/api/` request once, with its route pattern and the answer's status.
+pub async fn observe(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+    if !request.uri().path().starts_with("/api/") {
+        return next.run(request).await;
+    }
+    let name = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or_else(|| "unmatched".to_string(), |path| path.as_str().to_string());
+    let seen = Seen::default();
+    request.extensions_mut().insert(seen.clone());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let waits = name.ends_with("/stream") || name == "/api/events";
+    let millis = (!waits).then(|| started.elapsed().as_millis() as u64);
+    let who = seen.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let who = match &who {
+        Some((true, id)) => Who::Bot(id),
+        Some((false, id)) => Who::Person(id),
+        None => Who::Nobody,
+    };
+    state.usage.record(now(), "rest", &name, who, response.status(), millis);
+    response
+}
+
+#[derive(Deserialize)]
+struct Window {
+    days: Option<i64>,
+}
+
+/// A day number as `YYYY-MM-DD`.
+fn date(day: i64) -> String {
+    let z = day + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!("{:04}-{:02}-{:02}", if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[derive(Default)]
+struct Totals {
+    calls: i64,
+    refused: i64,
+    errors: i64,
+    millis: i64,
+    timed: i64,
+    slow: i64,
+    reasons: HashMap<String, i64>,
+}
+
+impl Totals {
+    fn add(&mut self, row: &StoredHour) {
+        self.calls += row.calls;
+        match row.outcome.as_str() {
+            "refused" => {
+                self.refused += row.calls;
+                *self.reasons.entry(row.reason.clone()).or_default() += row.calls;
+            }
+            "error" => self.errors += row.calls,
+            _ => {}
+        }
+        self.millis += row.millis;
+        self.timed += row.timed;
+        self.slow += row.slow;
+    }
+
+    fn json(&self) -> Value {
+        // The reason with the most refusals, and the first alphabetically when they tie.
+        let top = self
+            .reasons
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+            .map(|(reason, _)| reason.as_str());
+        json!({
+            "calls": self.calls,
+            "refused": self.refused,
+            "errors": self.errors,
+            "avg_ms": (self.timed > 0).then(|| self.millis / self.timed),
+            "slow": self.slow,
+            "top_refusal": top,
+        })
+    }
+}
+
+/// U9, U10: the totals for the people who run the server.
+async fn server_usage(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(window): Query<Window>,
+) -> ApiResult<Json<Value>> {
+    if caller.is_agent() || !god_mode::may_use(&state, &caller.person_id) {
+        return Err(ApiError::not_found());
+    }
+    let days = match window.days {
+        None | Some(7) => 7,
+        Some(30) => 30,
+        Some(_) => return Err(ApiError::bad_request("days is 7 or 30")),
+    };
+    state.usage.flush(&state);
+    let today = now().div_euclid(86_400);
+    let since = today - days + 1;
+    let rows = state.db.usage_hours(since)?;
+    let active = state.db.usage_days(since)?;
+    let mut tools: BTreeMap<(String, String), Totals> = BTreeMap::new();
+    let mut by_day: BTreeMap<i64, Totals> = BTreeMap::new();
+    let mut versions: BTreeMap<String, Totals> = BTreeMap::new();
+    for row in &rows {
+        tools.entry((row.surface.clone(), row.name.clone())).or_default().add(row);
+        by_day.entry(row.day).or_default().add(row);
+        versions.entry(row.version.clone()).or_default().add(row);
+    }
+    let active: HashMap<i64, (i64, i64)> =
+        active.into_iter().map(|(d, p, b)| (d, (p, b))).collect();
+    let mut tool_list: Vec<Value> = tools
+        .iter()
+        .map(|((surface, name), totals)| {
+            let mut value = totals.json();
+            value["surface"] = json!(surface);
+            value["name"] = json!(name);
+            value
+        })
+        .collect();
+    tool_list.sort_by(|a, b| b["calls"].as_i64().cmp(&a["calls"].as_i64()));
+    let day_list: Vec<Value> = (since..=today)
+        .map(|day| {
+            let totals = by_day.remove(&day).unwrap_or_default();
+            let (people, bots) = active.get(&day).copied().unwrap_or((0, 0));
+            let mut value = totals.json();
+            value["day"] = json!(date(day));
+            value["active_people"] = json!(people);
+            value["active_bots"] = json!(bots);
+            value
+        })
+        .collect();
+    let version_list: Vec<Value> = versions
+        .iter()
+        .map(|(version, totals)| {
+            let mut value = totals.json();
+            value["version"] = json!(version);
+            value
+        })
+        .collect();
+    Ok(Json(json!({
+        "days": days,
+        "running": build(),
+        "by_tool": tool_list,
+        "by_day": day_list,
+        "by_version": version_list,
+    })))
+}
+
+/// U11: a bot's own numbers, for its owner and for nobody else.
+async fn agent_usage(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if caller.is_agent() {
+        return Err(ApiError::not_found());
+    }
+    let agent = state.db.agent(&id, now())?.ok_or_else(ApiError::not_found)?;
+    if agent.owner_id != caller.person_id {
+        return Err(ApiError::not_found());
+    }
+    state.usage.flush(&state);
+    let today = now().div_euclid(86_400);
+    let since = today - KEEP_DAYS + 1;
+    let rows = state.db.usage_bot_days(&id, since)?;
+    let mut per_day: BTreeMap<i64, [i64; 3]> = BTreeMap::new();
+    let mut reasons: BTreeMap<String, i64> = BTreeMap::new();
+    for (day, outcome, reason, calls) in rows {
+        let slot = per_day.entry(day).or_default();
+        match outcome.as_str() {
+            "refused" => {
+                slot[1] += calls;
+                *reasons.entry(reason).or_default() += calls;
+            }
+            "error" => slot[2] += calls,
+            _ => slot[0] += calls,
+        }
+    }
+    let days: Vec<Value> = (since..=today)
+        .map(|day| {
+            let [ok, refused, errors] = per_day.get(&day).copied().unwrap_or_default();
+            json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors})
+        })
+        .collect();
+    let last = agent.last_active_at.max(agent.last_seen_at);
+    Ok(Json(json!({
+        "days": days,
+        "refusals": reasons,
+        "last_activity_at": last,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dates_come_out_right() {
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(date(19_723), "2024-01-01");
+        assert_eq!(date(19_782), "2024-02-29");
+    }
+
+    #[test]
+    fn reasons_come_from_the_status() {
+        assert_eq!(outcome_of(StatusCode::OK).0, Outcome::Ok);
+        assert_eq!(outcome_of(StatusCode::FORBIDDEN), (Outcome::Refused, "forbidden"));
+        assert_eq!(outcome_of(StatusCode::IM_A_TEAPOT), (Outcome::Refused, "other"));
+        assert_eq!(outcome_of(StatusCode::BAD_GATEWAY).0, Outcome::Error);
+    }
+}

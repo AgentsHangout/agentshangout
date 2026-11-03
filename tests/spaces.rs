@@ -2308,6 +2308,34 @@ async fn where_is_lets_a_bot_go_to_a_visible_floor_its_owner_is_in() {
     );
 }
 
+// S79
+#[tokio::test]
+async fn a_bot_that_takes_itself_onto_a_private_floor_is_announced_once_by_name_only() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let secret = text(&server.third_space(&ann, "Secret Lab").await.ok()["hangout"]["id"]);
+    let before = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+
+    let went = server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    let lines = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    let new: Vec<&String> = lines.iter().skip(before.len()).collect();
+    assert_eq!(new, ["Fern came in."], "{lines:?}");
+    // It names no other room.
+    assert!(!lines.iter().any(|line| line.contains("Secret Lab") || line.contains(&home)));
+
+    // Doing it again, or acting there, says nothing more.
+    server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
+    let again = Server::lines(&server.snapshot(&ann.key, &beach).await.ok());
+    assert_eq!(again.iter().filter(|line| line.contains("came in")).count(), 1, "{again:?}");
+
+    // The room it didn't go to hears nothing.
+    let other = Server::lines(&server.snapshot(&ann.key, &secret).await.ok());
+    assert!(!other.iter().any(|line| line.contains("Fern")), "{other:?}");
+}
+
 // S67
 #[tokio::test]
 async fn where_is_is_capped_at_thirty_lookups_a_minute() {
@@ -4219,4 +4247,61 @@ fn requests_to_come_in_are_answered_in_needs_you_and_not_a_button_of_their_own()
     assert!(css.contains(
         "@media (min-width: 1360px) {\n  .wd-map .game-more .wd-btn.sec { display: none; }"
     ));
+}
+
+// S80: whoever runs a floor chooses whether bots may take themselves onto it: any time, only while
+// their owner has the room open, or never. A person can still bring one in.
+#[tokio::test]
+async fn a_floor_chooses_when_bots_come_in_by_themselves() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let bo_room = text(&server.third_space(&bo, "Bo's den").await.ok()["hangout"]["id"]);
+    let (rover_id, rover) = server.bot(&bo, &bo_room, "Rover").await;
+    let path = format!("/api/floors/{room}/bots");
+    // The bot takes itself there with go_to_room (S57), and what comes back is the tool's answer.
+    let go = || async {
+        let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "go_to_room", "arguments": { "hangout_id": room } } });
+        server.post(&rover, "/mcp", call).await.ok()["result"].clone()
+    };
+
+    // The default lets it in, as before.
+    assert_eq!(server.get(&ann.key, &path).await.ok()["come_in"], "anyone");
+    // Only whoever runs the floor, as a person, sets it, and only to one of the three.
+    server.put(&bo.key, &path, json!({ "come_in": "nobody" })).await.refused(StatusCode::FORBIDDEN);
+    server.put(&rover, &path, json!({ "come_in": "nobody" })).await.refused(StatusCode::FORBIDDEN);
+    let bad = json!({ "come_in": "sometimes" });
+    server.put(&ann.key, &path, bad).await.refused(StatusCode::BAD_REQUEST);
+
+    // Never: it's refused with a reason it can act on.
+    server.put(&ann.key, &path, json!({ "come_in": "nobody" })).await.ok();
+    let refused = go().await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused.to_string().contains("ask your owner to bring you in"), "{refused}");
+    assert!(!server.state.db.belongs_to_room(&room, &rover_id).unwrap());
+
+    // Only with its owner: refused until Bo has the room open, then it comes in.
+    server.put(&ann.key, &path, json!({ "come_in": "with_owner" })).await.ok();
+    let refused = go().await;
+    assert!(refused.to_string().contains("while its owner is in the room"), "{refused}");
+    server.snapshot(&bo.key, &room).await.ok();
+    let went = go().await;
+    assert!(went["isError"].is_null(), "{went}");
+    assert!(server.state.db.belongs_to_room(&room, &rover_id).unwrap());
+
+    // Back to any time.
+    server.put(&ann.key, &path, json!({ "come_in": "anyone" })).await.ok();
+    assert_eq!(server.get(&ann.key, &path).await.ok()["come_in"], "anyone");
+
+    // It's about members' bots: on a public floor set to never, a stranger can still send their bot
+    // in as a visitor (S18, S24), while a member's bot still can't take itself in.
+    server.open(&ann, &room).await;
+    server.put(&ann.key, &path, json!({ "come_in": "nobody" })).await.ok();
+    let (cy_room, cy) = server.someone("Cy").await;
+    let (cy_bot, _) = server.bot(&cy, &cy_room, "Pip").await;
+    let walk = format!("/api/floors/{room}/walk-in");
+    server.post(&cy.key, &walk, json!({ "agent_id": cy_bot })).await.ok();
+    server.state.db.remove_agent_from_room(&room, &rover_id).unwrap();
+    assert!(go().await.to_string().contains("ask your owner to bring you in"));
 }

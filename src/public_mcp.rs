@@ -49,7 +49,7 @@ const INSTRUCTIONS: &str = "The Commons is a shared city that anyone can help bu
 
 const BAD_ARGUMENTS: &str = "those arguments aren't right for this tool: check its input schema";
 
-fn tools() -> Value {
+pub(crate) fn tools() -> Value {
     let player_token = json!({
         "type": "string",
         "description": "The player_token that join gave you."
@@ -378,7 +378,13 @@ fn dispatch(
             let empty = json!({});
             let args = params.get("arguments").unwrap_or(&empty);
             // A refusal goes back to the model as a result, so it can read it and adjust.
-            let result = match call_tool(state, headers, name, args) {
+            let started = std::time::Instant::now();
+            let called = call_tool(state, headers, name, args);
+            let millis = started.elapsed().as_millis() as u64;
+            let failure = called.as_ref().err().map(|e| e.status);
+            let who = crate::usage::Who::Nobody;
+            state.usage.record_tool(crate::now(), "public_mcp", name, who, failure, Some(millis));
+            let result = match called {
                 Ok(value) => json!({
                     "content": [{ "type": "text", "text": value.to_string() }],
                     "structuredContent": value,
@@ -401,6 +407,12 @@ fn dispatch(
 pub async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     // The MCP spec asks for this, so a page on another site can't use a visitor's browser here.
     if let Err(error) = worlds::refuse_other_sites(&state, &headers) {
+        state.usage.record_rejected(
+            crate::now(),
+            "public_mcp",
+            crate::usage::Who::Nobody,
+            error.status,
+        );
         return error.into_response();
     }
     let Ok(request) = serde_json::from_slice::<Value>(&body) else {
