@@ -3826,6 +3826,15 @@ async function roomView(id) {
               public_places: Boolean(values.public_places),
             },
           });
+          // L47: a workplace keeps it at its job instead of wandering.
+          const room = values.workplace || '';
+          const job = (values.job || '').trim();
+          const was = routine.workplace;
+          if (!room && was) {
+            await api(`/api/agents/${agent.id}/workplace`, { method: 'DELETE' });
+          } else if (room && (!was || was.room_id !== room || was.job !== job)) {
+            await api(`/api/agents/${agent.id}/workplace`, { method: 'PUT', body: { room_id: room, job } });
+          }
           dialog.close();
           await reload();
         }),
@@ -3836,6 +3845,11 @@ async function roomView(id) {
           h('input', { type: 'checkbox', name: `day_${day}`, checked: routine.days.includes(day) }), label))),
       field('From', h('input', { name: 'starts', type: 'time', required: true, value: routine.starts }), 'In your own time.'),
       field('Until', h('input', { name: 'ends', type: 'time', required: true, value: routine.ends === '24:00' ? '23:59' : routine.ends }), 'Earlier than From runs past midnight.'),
+      field('Workplace', h('select', { name: 'workplace' },
+        h('option', { value: '' }, 'None: it wanders in its social hours'),
+        (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
+        'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
+      field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
       error,
       h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
   }
