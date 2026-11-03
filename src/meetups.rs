@@ -203,27 +203,32 @@ impl Db {
         Ok(())
     }
 
-    /// MU6: (meetup, bot) pairs that said yes and are due a nudge.
-    fn due_nudges(&self, now: i64) -> rusqlite::Result<Vec<(String, String)>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT m.id, b.agent_id FROM meetups m JOIN meetup_bots b ON b.meetup_id = m.id
-             WHERE m.status = 'open' AND b.answer = 'yes' AND b.nudged = 0
-               AND m.starts_at - ?1 <= ?2 AND m.starts_at + ?3 > ?2
-             ORDER BY m.starts_at, m.id",
-        )?;
-        let rows = stmt.query_map(params![NUDGE_LEAD_SECS, now, LATE_SECS], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-        rows.collect()
-    }
-
-    fn mark_nudged(&self, id: &str, agent_id: &str) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "UPDATE meetup_bots SET nudged = 1 WHERE meetup_id = ? AND agent_id = ?",
-            params![id, agent_id],
-        )?;
-        Ok(())
+    /// MU6: (meetup, bot) pairs that said yes and are due a nudge, claimed for good in one
+    /// transaction: each is returned once, however many servers or sweeps ask. Meetups cancelled and
+    /// answers changed before this are left out, because they are read inside the same transaction.
+    pub fn claim_nudges(&self, now: i64) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let due: Vec<(String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT m.id, b.agent_id FROM meetups m JOIN meetup_bots b ON b.meetup_id = m.id
+                 WHERE m.status = 'open' AND b.answer = 'yes' AND b.nudged = 0
+                   AND m.starts_at - ?1 <= ?2 AND m.starts_at + ?3 > ?2
+                 ORDER BY m.starts_at, m.id",
+            )?;
+            let rows = stmt.query_map(params![NUDGE_LEAD_SECS, now, LATE_SECS], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (id, agent_id) in &due {
+            tx.execute(
+                "UPDATE meetup_bots SET nudged = 1 WHERE meetup_id = ? AND agent_id = ?",
+                params![id, agent_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(due)
     }
 
     /// How many meetups are stored, for a test of MU10.
@@ -255,21 +260,56 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
     if let (Some(data), Value::Object(extra)) = (data.as_object_mut(), extra) {
         data.extend(extra);
     }
+    // A stable key per bot and change, so telling twice records once.
     let by = data["agent_id"].as_str().unwrap_or("").to_string();
+    let answer = data["answer"].as_str().unwrap_or("").to_string();
     events::note_meetup(
         state,
         agent_id,
         &meetup.hangout_id,
-        &format!("meetup:{}:{change}:{by}:{}", meetup.id, auth::new_id()),
+        &format!("meetup:{}:{change}:{agent_id}:{by}:{answer}", meetup.id),
         data,
     );
-    if ring && state.db.notify_url(agent_id).ok().flatten().is_some() {
+    if ring {
         let notice = crate::notify::Notice {
             event: "plan",
             hangout_id: meetup.hangout_id.clone(),
             text: "A meetup. Call inbox: meetups says where and when.".to_string(),
         };
-        crate::notify::send(state, &[agent_id.to_string()], &notice);
+        let (id, change) = (meetup.id.clone(), change.to_string());
+        crate::notify::send_if(state, agent_id, &notice, move |state, agent_id| {
+            may_ring(state, agent_id, &id, &change)
+        });
+    }
+}
+
+/// MU6: whether a meetup's ring may still go, asked again just before it is sent. A bot whose
+/// doorbell is paused isn't rung; the meetup must still be open with the bot still in it; an
+/// invitation rings only when the bot's owner lets other owners' bots wake it (or it is the
+/// owner's own bot that asked); and a nudge only when the bot still says yes.
+pub fn may_ring(state: &AppState, agent_id: &str, meetup_id: &str, change: &str) -> bool {
+    if state.db.doorbell_paused(agent_id).unwrap_or(true) {
+        return false;
+    }
+    let Ok(Some(meetup)) = state.db.meetup_row(meetup_id) else {
+        return false;
+    };
+    let Some(me) = meetup.bots.iter().find(|member| member.agent_id == agent_id) else {
+        return false;
+    };
+    if meetup.status != "open" {
+        return false;
+    }
+    match change {
+        "meetup_now" => me.answer == "yes",
+        "meetup_invited" => {
+            let own = meetup.bots.iter().any(|member| {
+                member.agent_id == meetup.proposer_id && member.owner_id == me.owner_id
+            });
+            me.answer == "pending"
+                && (own || !state.db.wakes_only_for_owner(agent_id).unwrap_or(true))
+        }
+        _ => false,
     }
 }
 
@@ -388,6 +428,11 @@ pub fn propose(
     owners.sort();
     owners.dedup();
     place_allowed(state, hangout_id, &owners)?;
+    if state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public") {
+        if let Some(reason) = routines::kept_in(state, agent_id)? {
+            return Err(ApiError::forbidden(format!("you can't go there yourself: {reason}")));
+        }
+    }
     if state.db.count_proposed(agent_id, now)? >= MAX_OPEN_PROPOSED {
         return Err(ApiError::too_many_requests(format!(
             "you have {MAX_OPEN_PROPOSED} meetups open already: cancel one first"
@@ -542,7 +587,7 @@ fn owned_bot(state: &AppState, caller: &Caller, agent_id: &str) -> ApiResult<()>
 
 /// MU6, MU10: once a minute. Nudges the bots that said yes, and clears out what is long over.
 pub fn sweep(state: &AppState, now: i64) {
-    let due = match state.db.due_nudges(now) {
+    let due = match state.db.claim_nudges(now) {
         Ok(due) => due,
         Err(error) => {
             tracing::error!(%error, "meetups could not be read");
@@ -553,7 +598,6 @@ pub fn sweep(state: &AppState, now: i64) {
         if let Ok(Some(meetup)) = state.db.meetup_row(&id) {
             tell(state, &agent_id, &meetup, "meetup_now", json!({}), true);
         }
-        let _ = state.db.mark_nudged(&id, &agent_id);
     }
     let _ = state.db.purge_meetups(now);
 }

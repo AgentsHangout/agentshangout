@@ -382,3 +382,67 @@ async fn an_owner_sees_and_cancels_their_bots_meetups() {
     server.send(&town.bo.key, Method::DELETE, &rover_part, None).await.ok();
     assert_eq!(server.changes(&town.fern).await.last().unwrap(), "meetup_cancelled");
 }
+
+// MU6: a nudge is claimed before it is sent, so it is sent once.
+#[tokio::test]
+async fn two_sweeps_at_once_nudge_once_and_a_claimed_nudge_is_not_sent_again() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let id = text(&server.propose(&town, json!(["Fern"]), 60).await["id"]);
+    server.tool(&town.fern, "answer_meetup", json!({ "meetup_id": id, "answer": "yes" })).await;
+    let start = now() + 60 * 60;
+    let sweeps: Vec<_> = (0..4)
+        .map(|_| {
+            let state = server.state.clone();
+            tokio::task::spawn_blocking(move || meetups::sweep(&state, start - 60))
+        })
+        .collect();
+    for sweep in sweeps {
+        sweep.await.unwrap();
+    }
+    let nudges = |changes: Vec<String>| changes.iter().filter(|c| *c == "meetup_now").count();
+    assert_eq!(nudges(server.changes(&town.fern).await), 1);
+    assert_eq!(nudges(server.changes(&town.rover).await), 1);
+    meetups::sweep(&server.state, start);
+    assert_eq!(nudges(server.changes(&town.fern).await), 1);
+
+    // A claim made and never told (a crash between the two) is not told later: at most once.
+    let id = text(&server.propose(&town, json!(["Fern"]), 61).await["id"]);
+    server.tool(&town.fern, "answer_meetup", json!({ "meetup_id": id, "answer": "yes" })).await;
+    let start = now() + 61 * 60;
+    assert_eq!(server.state.db.claim_nudges(start - 60).unwrap().len(), 2);
+    meetups::sweep(&server.state, start - 60);
+    assert_eq!(nudges(server.changes(&town.fern).await), 1);
+}
+
+// MU6: a cancelled meetup is not nudged, and the ring is asked again before it goes.
+#[tokio::test]
+async fn a_cancelled_meetup_gives_no_nudge_and_a_paused_bot_is_not_rung() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let id = text(&server.propose(&town, json!(["Fern"]), 60).await["id"]);
+    server.tool(&town.fern, "answer_meetup", json!({ "meetup_id": id, "answer": "yes" })).await;
+    let start = now() + 60 * 60;
+
+    // An unanswered invitation may ring; once the bot says yes, only a nudge may.
+    assert!(!meetups::may_ring(&server.state, &town.fern_id, &id, "meetup_invited"));
+    assert!(meetups::may_ring(&server.state, &town.fern_id, &id, "meetup_now"));
+    server.state.db.set_doorbell_paused(&town.fern_id, true).unwrap();
+    assert!(!meetups::may_ring(&server.state, &town.fern_id, &id, "meetup_now"));
+    // Paused, it still gets the event.
+    meetups::sweep(&server.state, start - 60);
+    assert_eq!(server.changes(&town.fern).await.last().unwrap(), "meetup_now");
+    server.state.db.set_doorbell_paused(&town.fern_id, false).unwrap();
+    assert!(meetups::may_ring(&server.state, &town.fern_id, &id, "meetup_now"));
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": id })).await;
+    assert!(!meetups::may_ring(&server.state, &town.fern_id, &id, "meetup_now"));
+
+    // Cancelled before the sweep: nobody is nudged.
+    let other = text(&server.propose(&town, json!(["Fern"]), 90).await["id"]);
+    server.tool(&town.fern, "answer_meetup", json!({ "meetup_id": other, "answer": "yes" })).await;
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": other })).await;
+    let later = now() + 90 * 60;
+    assert!(server.state.db.claim_nudges(later - 60).unwrap().is_empty());
+}
