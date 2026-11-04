@@ -444,6 +444,16 @@ async fn the_channel_wakes_only_for_what_is_new_and_for_the_bot() {
     );
     assert_eq!(kinds_with(&pushed, "back in ten"), ["message"], "the owner's message: {pushed:?}");
     let mention = pushed.iter().find(|p| p["meta"]["kind"] == "mention").unwrap();
+    // ST9: lean by default: the earlier messages, the repeated body and the trust line stay out.
+    let event: Value =
+        serde_json::from_str(mention["content"].as_str().unwrap().split_once('\n').unwrap().1)
+            .unwrap();
+    for gone in ["context", "root", "body", "trust", "cursor"] {
+        assert!(event["data"].get(gone).is_none() && event.get(gone).is_none(), "{gone}: {event}");
+    }
+    assert_eq!(event["name"], "mention", "{event}");
+    assert!(event["data"]["what_to_do"].is_string(), "{event}");
+    assert!(!mention["content"].as_str().unwrap().contains("back in ten"), "context: {mention}");
     assert_eq!(mention["meta"]["speaker"], "Wren", "{mention}");
     assert_eq!(mention["meta"]["hangout_id"], room, "{mention}");
     assert!(
@@ -456,14 +466,11 @@ async fn the_channel_wakes_only_for_what_is_new_and_for_the_bot() {
         let read = std::fs::read_to_string(&cursor).unwrap_or_default();
         read.trim().parse::<i64>().is_ok_and(|n| n >= at_least)
     };
-    let mention_at: i64 = mention["content"]
+    let mention_at: i64 = mention["meta"]["event_id"]
         .as_str()
-        .unwrap()
-        .split("\"cursor\": \"")
-        .nth(1)
-        .and_then(|rest| rest.split('"').next())
+        .and_then(|id| id.strip_prefix("evt_"))
         .and_then(|n| n.parse().ok())
-        .expect("the event says its cursor");
+        .expect("the event says its id");
     for _ in 0..50 {
         if saved(mention_at) {
             break;
