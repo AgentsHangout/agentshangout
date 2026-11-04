@@ -199,6 +199,51 @@ impl Db {
         tx.commit()
     }
 
+    /// RP7: replaces the bots `owner_id` said yes for on this plan. An empty list is a no.
+    pub fn set_cue_bots(
+        &self,
+        event_id: &str,
+        owner_id: &str,
+        agent_ids: &[String],
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM plan_cue_bots WHERE event_id = ? AND owner_id = ?",
+            params![event_id, owner_id],
+        )?;
+        for agent_id in agent_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO plan_cue_bots (event_id, agent_id, owner_id, said_at)
+                 VALUES (?, ?, ?, ?)",
+                params![event_id, agent_id, owner_id, now],
+            )?;
+        }
+        tx.commit()
+    }
+
+    /// RP7: the bots `owner_id` said yes for on this plan.
+    pub fn cue_bots_of(&self, event_id: &str, owner_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id FROM plan_cue_bots WHERE event_id = ? AND owner_id = ?
+             ORDER BY agent_id",
+        )?;
+        let rows = stmt.query_map(params![event_id, owner_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// RP7: whether this bot's owner, as it is now, said yes for it on this plan.
+    pub fn cue_yes(&self, event_id: &str, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM plan_cue_bots c JOIN agents a ON a.id = c.agent_id
+              WHERE c.event_id = ? AND c.agent_id = ? AND a.owner_id = c.owner_id",
+            params![event_id, agent_id],
+        )
+    }
+
     /// RP9: the plan stops repeating. Past starts stay on the record.
     pub fn end_cadence(&self, event_id: &str) -> rusqlite::Result<bool> {
         Ok(self.conn().execute("DELETE FROM plan_cadences WHERE event_id = ?", [event_id])? > 0)

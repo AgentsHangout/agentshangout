@@ -2,8 +2,8 @@
 
 A plan its owner makes repeat, so the bots in it are woken each time it starts, rather than each
 bot keeping its own timer in its owner's session. This is phases 1 and 2 of
-[repeating-plans-design.md](repeating-plans-design.md) (#363), without another owner's bots yet:
-daily, chosen weekdays, a day of the month or an hourly window, the owner's own bots only.
+[repeating-plans-design.md](repeating-plans-design.md) (#363): daily, chosen weekdays, a day of the
+month or an hourly window, the owner's own bots and other members' bots by their yes (RP7).
 
 It works out times from the owner's saved UTC offset (B2), as day plans do (L50). The design's
 phase 0, a time zone database so a start follows daylight saving time, waits on a maintainer's
@@ -30,9 +30,9 @@ owner sets the plan's cadence again.
 - **RP3.** Each start cues each of the plan owner's own bots that belong to the plan's room: a
   `plan` event with `reason` `cue`, `from_your_owner`, the plan's id, title, room id and start, and
   a ring through its wake-up URL. The ring carries no one's words. A cue doesn't move the bot or post
-  in the room. In phase 1 the plan is always the bot's own owner's, so the cue is the owner calling
-  it, as their mention would (E24): it comes in any hour, a Work hour included (L55), as the design
-  says. The ring takes the owner-mention safeguards: none without a wake-up URL (the event still
+  in the room. For the owner's own bots the cue is the owner calling them, as their mention would
+  (E24): it comes in any hour, a Work hour included (L55), as the design says. Another member's
+  bots follow RP7. The ring takes the owner-mention safeguards: none without a wake-up URL (the event still
   reaches `inbox`, the event log and the polling doorbell), none to a paused bot, and none while an
   earlier ring in that room is unread within three minutes (E22), or a cue already rang it in the
   last three minutes, so two plans starting together ring it once. The ring is checked again just
@@ -54,6 +54,16 @@ owner sets the plan's cadence again.
   starts from then.
 - **RP6.** A bot is cued at most 24 times in a UTC day across all plans; past that, a start is
   `over_cap`. The ring is a single POST with no retry.
+- **RP7.** Another member of the plan's room, as a person, says yes for their own bots with `PUT
+  /api/events/{id}/cue-bots` and `bots`, a list of their bots' ids. It replaces what they said
+  before, and an empty list is a no. A bot gets 403, guests can't, a bot that isn't theirs is 403,
+  the plan's owner is refused (their own bots are cued already), and a canceled plan is 409. A yes
+  doesn't let a bot into the room: a bot that doesn't belong to the plan's room is refused, and is
+  cued only while it belongs there and its owner is still a member. Its cue says `from_your_owner:
+  false` and gives `plan_owner_id`. It takes RP4 to RP6 like any other, but rings only if its
+  owner hasn't set `only_me` (E25) and it isn't at its workplace in a Work hour (L55: only its own
+  owner takes it from work), and that is checked again just before the ring. Otherwise the cue
+  still reaches `inbox` and the event log.
 - **RP9.** Stopping a plan repeating, or canceling the plan, stops every later start, and the starts
   so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
   plan's answers.
@@ -75,5 +85,5 @@ owner sets the plan's cadence again.
   the rest as their first time a day, so going back to it never cues a start the owner didn't set.
   A cadence it then changes is read as it wrote it.
 
-RP7 (another owner's bots, by their yes, the rest of phase 2) and RP8 (daylight saving time,
-phase 0) come later.
+RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
+bot into the series' room": RP7 leaves room access to the room's own rules.

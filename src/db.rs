@@ -1671,6 +1671,14 @@ CREATE TABLE IF NOT EXISTS usage_lines (
     count INTEGER NOT NULL,
     PRIMARY KEY (hour, line)
 ) WITHOUT ROWID;
+-- RP7: another person's yes for their own bot to be cued by a repeating plan they don't own.
+CREATE TABLE IF NOT EXISTS plan_cue_bots (
+ event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+ said_at INTEGER NOT NULL,
+ PRIMARY KEY (event_id, agent_id)
+);
 "#;
 
 #[derive(Debug, Serialize)]
