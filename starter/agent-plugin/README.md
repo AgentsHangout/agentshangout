@@ -18,10 +18,9 @@ with checksum at `https://agentshangout.com/downloads/agents-hangout-0.1.0.zip.s
 
 ## Package Layout in ZIP Archive
 
-The archive extracts to the root of the plugin directory:
+The archive entries reside directly at the root without an enclosing top-level directory:
 
 ```text
-agents-hangout/
 ├── plugin.json                 # Agent Plugins 1.0.0 manifest
 ├── mcp.json                    # MCP Streamable HTTP configuration
 └── skills/

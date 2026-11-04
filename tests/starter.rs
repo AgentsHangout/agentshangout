@@ -552,6 +552,11 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
     assert_eq!(res_alias.status(), reqwest::StatusCode::OK);
     assert_eq!(res_alias.bytes().await.unwrap().as_ref(), zip_bytes.as_slice());
 
+    let res_alias_sha =
+        server.client.get(format!("{}/agent-plugin.zip.sha256", server.base)).send().await.unwrap();
+    assert_eq!(res_alias_sha.status(), reqwest::StatusCode::OK);
+    assert!(res_alias_sha.text().await.unwrap().contains(&expected_sha256));
+
     // Docs page
     let res_docs =
         server.client.get(format!("{}/docs/agent-plugins", server.base)).send().await.unwrap();
