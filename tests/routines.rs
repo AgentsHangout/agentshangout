@@ -307,7 +307,7 @@ async fn a_bot_reads_its_routine_in_inbox_and_its_doorbell_in_me() {
     assert_eq!(me["notify_url_set"], false, "{me}");
 }
 
-// L7, L8
+// L7, L8, L59
 #[tokio::test]
 async fn out_a_bot_is_a_walk_in_until_its_hours_end() {
     let server = Server::start().await;
@@ -315,16 +315,10 @@ async fn out_a_bot_is_a_walk_in_until_its_hours_end() {
     server.always_out(&town).await;
     let went = server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
 
-    // Its hours end at midnight UTC, Bo having no clock saved, unless 12 hours come first.
+    // Hours that run on into the next day don't end at midnight (L59), so it's the 12 hours.
     let now = now();
-    let expected = ((now / DAY + 1) * DAY).min(now + 12 * 3600);
-    let until = time::OffsetDateTime::parse(
-        &text(&went["until"]),
-        &time::format_description::well_known::Rfc3339,
-    )
-    .unwrap()
-    .unix_timestamp();
-    assert!((until - expected).abs() <= 2, "{until} vs {expected}");
+    let until = until_of(&went);
+    assert!((until - (now + 12 * 3600)).abs() <= 2, "{until} vs {}", now + 12 * 3600);
 
     // A walk-in can't ask a check-in (S20).
     server
@@ -334,6 +328,64 @@ async fn out_a_bot_is_a_walk_in_until_its_hours_end() {
             json!({ "hangout_id": town.cafe, "about": "May I wake everyone?" }),
         )
         .await;
+}
+
+fn until_of(went: &Value) -> i64 {
+    time::OffsetDateTime::parse(
+        &text(&went["until"]),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap()
+    .unix_timestamp()
+}
+
+impl Server {
+    /// Bo's clock set so it is half past eleven at night for them now. Returns the offset.
+    async fn near_midnight(&self, town: &Town) -> i64 {
+        let secs = (23 * 3600 + 1800 - now().rem_euclid(DAY)).rem_euclid(DAY);
+        let minutes = if secs / 60 > 840 { secs / 60 - 1440 } else { secs / 60 };
+        let clock = json!({ "time_zone": "Etc/UTC", "utc_offset_minutes": minutes });
+        self.put(&town.bo.key, "/api/clock", clock).await.ok();
+        minutes
+    }
+
+    async fn plan(&self, town: &Town, hours: &[(usize, &str)], rest: &str) {
+        let mut day = vec![rest; 24];
+        for (hour, block) in hours {
+            day[*hour] = block;
+        }
+        let path = format!("/api/agents/{}/schedule", town.rover_id);
+        self.put(&town.bo.key, &path, json!({ "every_day": day })).await.ok();
+    }
+}
+
+// L59
+#[tokio::test]
+async fn a_walk_in_goes_on_past_its_owners_midnight_until_the_plan_says_home() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let offset = server.near_midnight(&town).await;
+    // Social now and after midnight, Anything at one, Home at two: out until two, their time.
+    server.plan(&town, &[(1, "anything"), (2, "home")], "social").await;
+    let went = server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let local = now() + offset * 60;
+    let two = (local.div_euclid(DAY) + 1) * DAY + 2 * 3600 - offset * 60;
+    let until = until_of(&went);
+    assert!((until - two).abs() <= 2, "{until} vs {two}: it goes home when its plan does");
+}
+
+// L59
+#[tokio::test]
+async fn an_anything_hour_doesnt_end_a_walk_in_and_no_home_hour_means_the_usual_cap() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.near_midnight(&town).await;
+    server.plan(&town, &[(0, "anything"), (1, "anything")], "social").await;
+    let went = server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let until = until_of(&went);
+    assert!((until - (now() + 12 * 3600)).abs() <= 2, "{until}");
 }
 
 // L9

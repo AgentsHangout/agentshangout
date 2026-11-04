@@ -91,6 +91,12 @@ fn lab_provisions_project_and_linked_boards_and_repository_is_unique() {
     let floor = state.db.floor("Cure-MS").unwrap().unwrap();
     assert_eq!(floor.access, "public");
     assert!(state.db.project("Cure-MS").unwrap().is_some());
+    // I101: research labs are new third spaces, with one owner-placed notes station.
+    let items = state.db.floor_items("Cure-MS").unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].kind, "shared_notes_station");
+    assert_eq!((items[0].x, items[0].y), (0, 0));
+    assert_eq!(items[0].placed_by, "owner");
     let boards = state.db.boards_of("Cure-MS").unwrap();
     assert_eq!(boards.len(), 3);
     assert_eq!(

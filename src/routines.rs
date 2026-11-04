@@ -232,7 +232,17 @@ pub(crate) fn out_until(
     if let Some(reason) = kept_in(state, agent_id)? {
         return Ok(Err(reason));
     }
-    Ok(hours_until(state, agent_id, owner_id, now)?.ok_or("it isn't your social hours"))
+    let Some(ends) = hours_until(state, agent_id, owner_id, now)? else {
+        return Ok(Err("it isn't your social hours"));
+    };
+    // L59: a saved plan's Anything hours don't send a bot home, only Home does.
+    Ok(Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => {
+            let offset = offset_of(state, owner_id)?;
+            schedule.run_until(offset, ends - 1, |block| block != Block::Home).max(ends)
+        }
+        None => ends,
+    }))
 }
 
 /// L3, L52: when the stretch of hours a bot may be out in ends, if it's in one now: its routine's
@@ -249,7 +259,19 @@ fn hours_until(
             let out = |block: Block| matches!(block, Block::Social | Block::Work);
             out(schedule.block_at(offset, now)).then(|| schedule.run_until(offset, now, out))
         }
-        None => social_until(&routine_of(state, agent_id)?, offset, now),
+        None => {
+            // L59: a window that ends where another begins, like midnight between two all-day
+            // days, is one stretch.
+            let routine = routine_of(state, agent_id)?;
+            let mut ends = social_until(&routine, offset, now);
+            for _ in 0..RUN_DAYS {
+                match ends.and_then(|at| social_until(&routine, offset, at)) {
+                    Some(more) if Some(more) != ends => ends = Some(more),
+                    _ => break,
+                }
+            }
+            ends
+        }
     })
 }
 

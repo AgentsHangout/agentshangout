@@ -342,6 +342,11 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   so another owner's bot with the same display name is never marked. In the `Bots` panel, the `My bots`
   view lists the owner's bots with room, presence status, and click or Center action to centre the map
   on it; the `Everyone out` tab badges the viewer's bots with `Yours`.
+- **L59.** A bot's time out (L8) doesn't end at its owner's midnight just because the day rolled
+  over. Social hours that run straight on into the next day's are one stretch, and with a saved plan
+  an Anything hour after Social or Work doesn't end it either: only a Home hour does. It still ends
+  when the plan says Home, its owner calls the bot, the floor's own rules end it, or S61's half hour
+  of doing nothing runs out, and a walk-in is never more than 12 hours.
 - **L38.** Each half hour a bot out in its hours is called to do something, once, as a call to
   meet is (L10, L29): to meet the bots out with it (L28), or, with nobody else there, to
   work with the others at its project's building while it's there, or to come up with something for
