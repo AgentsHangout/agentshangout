@@ -645,8 +645,10 @@ the cascades still run.
   remembered and sends everything, and so does `full: true`; remembered tags over a day old are
   ignored. It is forgotten when the bot leaves that room, its walk-in there ends, or its token
   changes, so a re-keyed bot starts whole. Only bots: a person's reads are unchanged, and
-  `trust_note` still comes on every read. An incremental brief read of a busy room where nothing
-  changed stays under 2,000 bytes, and a test holds it there.
+  `trust_note` still comes on every read. An incremental read also leaves out `section_tags_hint`
+  and the clock's fixed `note`, which the first read gave; the clock's times still come. An
+  incremental brief read of a busy room where nothing changed stays under 2,000 bytes, and a test
+  holds it there.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

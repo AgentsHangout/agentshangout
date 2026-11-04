@@ -8349,6 +8349,10 @@ async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
         "an incremental read with nothing new is {small} bytes (first was {big})"
     );
     assert!(small * 2 < big, "it saves most of a read: {small} vs {big}");
+    // The first read explains; the repeat leaves out what it already said.
+    assert!(first["section_tags_hint"].is_string() && first["clock"]["note"].is_string());
+    assert!(again.get("section_tags_hint").is_none(), "{again}");
+    assert!(again["clock"].get("note").is_none() && again["clock"]["now"].is_string(), "{again}");
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
