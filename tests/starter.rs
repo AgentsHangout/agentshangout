@@ -27,7 +27,9 @@ fn every_file(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            every_file(&path, found);
+            if path.file_name().is_some_and(|n| n != "__pycache__") {
+                every_file(&path, found);
+            }
         } else {
             found.push(path);
         }
@@ -302,14 +304,15 @@ async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
 async fn watch(server: &Server, token: &str, bot: &str, after: i64) -> String {
     let (base, token, bot) = (server.base.clone(), token.to_string(), bot.to_string());
     tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("python3")
-            .arg("-I")
+        let py = if cfg!(windows) { "python" } else { "python3" };
+        let out = std::process::Command::new(py)
+            .args(["-I", "-B"])
             .arg(Path::new(KIT).join("watch.py"))
             .args([&after.to_string(), "0.01", &bot])
             .env("AGENTSHANGOUT_TOKEN", &token)
             .env("AGENTSHANGOUT_URL", &base)
             .output()
-            .expect("python3 runs");
+            .expect("python runs");
         format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
     })
     .await
@@ -383,4 +386,202 @@ async fn the_watcher_wakes_only_for_what_is_new() {
     };
     let (settled, ()) = tokio::join!(watch(&server, &token, "Mac", after), answer);
     assert!(!settled.contains("PENDING"), "a settled check-in was printed as PENDING:\n{settled}");
+}
+
+// ST7
+#[tokio::test]
+async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets() {
+    use sha2::{Digest, Sha256};
+
+    // Run builder script directly in test to guarantee no drift in CI
+    let py = if cfg!(windows) { "python" } else { "python3" };
+    let builder = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build_plugin_zip.py"));
+    let out = std::process::Command::new(py)
+        .args(["-B"])
+        .arg(builder)
+        .output()
+        .expect("python runs builder");
+    assert!(
+        out.status.success(),
+        "builder failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Verify standalone validation under python -S without third-party site-packages
+    let out_no_site = std::process::Command::new(py)
+        .args(["-B", "-S"])
+        .arg(builder)
+        .output()
+        .expect("python runs builder without site packages");
+    assert!(
+        out_no_site.status.success(),
+        "builder failed under python -S:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out_no_site.stdout),
+        String::from_utf8_lossy(&out_no_site.stderr)
+    );
+
+    // Verify fallback validator strictly rejects non-conforming types such as author: 42
+    let bad_check = std::process::Command::new(py)
+        .args([
+            "-B",
+            "-S",
+            "-c",
+            "import sys, json; from scripts.build_plugin_zip import validate_instance; s = json.load(open('schemas/agent-plugin/plugin.schema.json')); p = json.load(open('starter/agent-plugin/plugin.json')); p['author'] = 42; validate_instance(p, s)",
+        ])
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR")))
+        .output()
+        .expect("python runs bad check");
+    assert!(!bad_check.status.success(), "fallback validator permitted author: 42");
+
+    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/starter/agent-plugin"));
+    let schemas_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/schemas/agent-plugin"));
+
+    let plugin_json: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("plugin.json")).unwrap()).unwrap();
+    let mcp_json: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+    let plugin_schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("plugin.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let mcp_schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("mcp.schema.json")).unwrap(),
+    )
+    .unwrap();
+
+    // Verify against vendored official schemas
+    assert_eq!(plugin_json["$schema"], plugin_schema["$id"]);
+    assert_eq!(plugin_json["name"], "agents-hangout");
+    assert_eq!(plugin_json["version"], "0.1.0");
+    assert!(plugin_json["description"].as_str().is_some_and(|s| !s.is_empty()));
+
+    assert_eq!(mcp_json["$schema"], mcp_schema["$id"]);
+    let server_cfg = &mcp_json["mcpServers"]["agents-hangout"];
+    assert_eq!(server_cfg["type"], "streamable-http");
+    assert_eq!(server_cfg["url"], "https://agentshangout.com/mcp");
+    assert!(server_cfg.get("headers").and_then(|h| h.get("Authorization")).is_none());
+
+    // Verify no credentials or oauth tokens
+    let mut files = Vec::new();
+    every_file(dir, &mut files);
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        assert!(!text.contains("ah_owner_"), "{}: owner key", file.display());
+        assert!(
+            !text.contains("ah_refresh_") && !text.contains("ah_oauth_"),
+            "{}: oauth token",
+            file.display()
+        );
+    }
+
+    // Verify ZIP bytes and SHA-256
+    let zip_bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/web/downloads/agents-hangout-0.1.0.zip"
+    ))
+    .unwrap();
+    let expected_sha256: String =
+        Sha256::digest(&zip_bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let published_sha_file = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/web/downloads/agents-hangout-0.1.0.zip.sha256"
+    ))
+    .unwrap();
+    assert!(published_sha_file.starts_with(&expected_sha256));
+
+    // Verify ZIP archive header and entries
+    assert!(zip_bytes.starts_with(b"PK\x03\x04"), "not a valid zip archive");
+
+    // Scan ZIP entry filenames: must not contain path traversal and must contain package files
+    let mut cursor = 0;
+    let mut entry_names = Vec::new();
+    while cursor + 30 <= zip_bytes.len() {
+        if &zip_bytes[cursor..cursor + 4] == b"PK\x03\x04" {
+            let name_len =
+                u16::from_le_bytes([zip_bytes[cursor + 26], zip_bytes[cursor + 27]]) as usize;
+            let extra_len =
+                u16::from_le_bytes([zip_bytes[cursor + 28], zip_bytes[cursor + 29]]) as usize;
+            let comp_size = u32::from_le_bytes([
+                zip_bytes[cursor + 18],
+                zip_bytes[cursor + 19],
+                zip_bytes[cursor + 20],
+                zip_bytes[cursor + 21],
+            ]) as usize;
+            let name_bytes = &zip_bytes[cursor + 30..cursor + 30 + name_len];
+            let name = std::str::from_utf8(name_bytes).unwrap();
+            assert!(!name.starts_with('/') && !name.contains(".."), "illegal entry: {name}");
+            entry_names.push(name.to_string());
+            cursor += 30 + name_len + extra_len + comp_size;
+        } else {
+            break;
+        }
+    }
+    assert!(entry_names.contains(&"plugin.json".to_string()));
+    assert!(entry_names.contains(&"mcp.json".to_string()));
+    assert!(entry_names.contains(&"skills/agents-hangout/SKILL.md".to_string()));
+
+    // Verify HTTP routes on the live server
+    let server = Server::start().await;
+    let res = server
+        .client
+        .get(format!("{}/downloads/agents-hangout-0.1.0.zip", server.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.headers().get("content-type").unwrap(), "application/zip");
+    assert_eq!(
+        res.headers().get("content-disposition").unwrap(),
+        "attachment; filename=\"agents-hangout-0.1.0.zip\""
+    );
+    assert_eq!(res.bytes().await.unwrap().as_ref(), zip_bytes.as_slice());
+
+    let res_sha = server
+        .client
+        .get(format!("{}/downloads/agents-hangout-0.1.0.zip.sha256", server.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res_sha.status(), reqwest::StatusCode::OK);
+    assert_eq!(res_sha.headers().get("content-type").unwrap(), "text/plain; charset=utf-8");
+    assert!(res_sha.text().await.unwrap().contains(&expected_sha256));
+
+    let res_alias =
+        server.client.get(format!("{}/agent-plugin.zip", server.base)).send().await.unwrap();
+    assert_eq!(res_alias.status(), reqwest::StatusCode::OK);
+    assert_eq!(res_alias.bytes().await.unwrap().as_ref(), zip_bytes.as_slice());
+
+    let res_alias_sha =
+        server.client.get(format!("{}/agent-plugin.zip.sha256", server.base)).send().await.unwrap();
+    assert_eq!(res_alias_sha.status(), reqwest::StatusCode::OK);
+    assert!(res_alias_sha.text().await.unwrap().contains(&expected_sha256));
+
+    // Docs page
+    let res_docs =
+        server.client.get(format!("{}/docs/agent-plugins", server.base)).send().await.unwrap();
+    assert_eq!(res_docs.status(), reqwest::StatusCode::OK);
+    let docs_html = res_docs.text().await.unwrap();
+    assert!(docs_html.contains("Crew") && docs_html.contains("house"));
+    assert!(docs_html.contains(&expected_sha256));
+    assert!(docs_html.contains("/downloads/agents-hangout-0.1.0.zip"));
+
+    // Verify unauthenticated MCP fails cleanly with 401
+    let unauth_mcp = server
+        .client
+        .post(format!("{}/mcp", server.base))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "Cursor", "version": "0.45.0" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_mcp.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
