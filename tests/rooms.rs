@@ -6239,6 +6239,108 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
+// I112: a calendar stand counts the upcoming plans this caller can see, and nothing more.
+#[tokio::test]
+async fn a_calendar_stand_counts_upcoming_plans_for_those_who_can_see_them() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let stand = server.item(&ann, &room, "calendar_stand", spot(0)).await;
+    server.item(&ann, &room, "plant", spot(2)).await;
+    let stand_of = |read: &Value| -> Value {
+        let found: Vec<&Value> = read["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["kind"] == "calendar_stand")
+            .collect();
+        assert_eq!(found.len(), 1, "{read}");
+        found[0].clone()
+    };
+
+    let empty = stand_of(&server.read_room(&scout.token, &room).await);
+    assert_eq!(empty["id"], stand);
+    assert_eq!(empty["opens"], "calendar");
+    assert_eq!(empty["plans"], 0, "{empty}");
+
+    let title = "Secret taco summit";
+    let args = json!({ "hangout_id": room, "title": title, "starts_at": LATER });
+    server.tool(&scout.token, "propose_hangout", args).await;
+    let read = server.read_room(&scout.token, &room).await;
+    assert_eq!(stand_of(&read)["plans"], 1, "{read}");
+    assert_eq!(stand_of(&read)["id"], stand, "repeated reads keep the id");
+    assert!(!stand_of(&read).to_string().contains(title));
+    assert_eq!(read["calendar"].as_array().unwrap().len(), 1);
+    // Other items carry no plans.
+    assert!(read["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["kind"] == "plant" && i.get("plans").is_none()));
+
+    // Moving it keeps the id and the count; removing it removes the count and keeps the plan.
+    server.change(&ann.key, &stand, json!({ "x": spot(6).0, "y": spot(6).1 })).await.ok();
+    let moved = stand_of(&server.read_room(&scout.token, &room).await);
+    assert_eq!((moved["id"].clone(), moved["plans"].clone()), (json!(stand), json!(1)));
+    server.remove(&ann.key, &stand).await.ok();
+    let gone = server.read_room(&scout.token, &room).await;
+    assert!(gone["items"].as_array().unwrap().iter().all(|i| i["kind"] != "calendar_stand"));
+    assert_eq!(gone["calendar"].as_array().unwrap().len(), 1);
+}
+
+// I112: a walk-in guest sees no plans, so the stand counts none; brief reads keep a stable count.
+#[tokio::test]
+async fn a_calendar_stand_counts_none_for_a_guest_and_is_stable_in_brief_reads() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.item(&ann, &room, "calendar_stand", spot(0)).await;
+    server
+        .tool(
+            &scout.token,
+            "propose_hangout",
+            json!({ "hangout_id": room, "title": "Picnic", "starts_at": LATER }),
+        )
+        .await;
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    let guest = server.read_room(&pip.token, &room).await;
+    let stand = guest["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "calendar_stand")
+        .unwrap()
+        .clone();
+    assert_eq!(stand["plans"], 0, "{guest}");
+
+    let brief = |token: String| {
+        let server = &server;
+        let room = room.clone();
+        async move {
+            server.tool(&token, "read_room", json!({ "hangout_id": room, "brief": true })).await
+                ["structuredContent"]
+                .clone()
+        }
+    };
+    let first = brief(scout.token.clone()).await;
+    let second = brief(scout.token.clone()).await;
+    assert_eq!(first["section_tags"], second["section_tags"]);
+    let brief_stand = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "calendar_stand")
+        .unwrap()
+        .clone();
+    assert_eq!(brief_stand["plans"], 1, "{first}");
+}
+
 // I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it
 // sends out the walk-ins it names.
 #[tokio::test]

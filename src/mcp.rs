@@ -1921,7 +1921,14 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }))
         .collect::<Vec<_>>());
     let calendar_val = json!(calendar_json(&snapshot, clock.as_ref()));
-    let items_val = json!(snapshot.furnishing.items.iter().map(|item| if brief { json!({
+    // I112: a calendar stand counts the upcoming plans in the events this caller already gets.
+    let with_plans = |item: &crate::items::PlacedItem, mut shown: Value| -> Value {
+        if item.kind == "calendar_stand" {
+            shown["plans"] = json!(snapshot.events.len() as i64);
+        }
+        shown
+    };
+    let items_val = json!(snapshot.furnishing.items.iter().map(|item| with_plans(item, if brief { json!({
         "id": item.id,
         "kind": item.kind,
         "x": item.x,
@@ -1946,7 +1953,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
         "does": item.does,
         "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
-    }) }).collect::<Vec<_>>());
+    }) })).collect::<Vec<_>>());
 
     let section_tag = |value: &Value| -> String {
         crate::auth::hash_secret(&value.to_string())[..16].to_string()
