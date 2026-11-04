@@ -8551,7 +8551,7 @@ async function worldView(id, { home = false } = {}) {
             h('small', { class: 'muted' }, bot.next
               ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
               : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
-          // Its actions wrap together on a line of their own, under its name, rather than one by one.
+          // Its actions move as one block: beside its text when there's room, else together below.
           h('span', { class: 'row-actions bot-actions' },
             focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
             bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
