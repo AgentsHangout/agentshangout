@@ -258,11 +258,6 @@ CREATE TABLE IF NOT EXISTS owner_questions (
 );
 CREATE INDEX IF NOT EXISTS owner_questions_by_owner ON owner_questions (owner_id, hangout_id);
 CREATE INDEX IF NOT EXISTS owner_questions_by_bot ON owner_questions (agent_id, created_at);
--- MC6: owner answers a bot's inbox has already shown it once, so it isn't sent them again.
-CREATE TABLE IF NOT EXISTS owner_answers_seen (
-    question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
-    seen_at      INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS passkey_users (
     person_id    TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
     user_handle  TEXT NOT NULL UNIQUE
@@ -1763,6 +1758,11 @@ CREATE TABLE IF NOT EXISTS pulses_sent (
  acked_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS pulses_sent_by_agent ON pulses_sent (agent_id, sent_at);
+-- MC6: when a bot's inbox first showed it an owner answer, so it isn't sent it all day.
+CREATE TABLE IF NOT EXISTS owner_answers_seen (
+    question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
+    seen_at      INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -5755,20 +5755,25 @@ impl Db {
         rows.collect()
     }
 
-    /// MC6: which of these answered questions the bot's inbox has already shown it.
-    pub fn seen_owner_answers(&self, ids: &[&str]) -> rusqlite::Result<HashSet<String>> {
+    /// MC6: which of these answered questions the bot's inbox first showed it before `before`.
+    pub fn seen_owner_answers(
+        &self,
+        ids: &[&str],
+        before: i64,
+    ) -> rusqlite::Result<HashSet<String>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT 1 FROM owner_answers_seen WHERE question_id = ?")?;
+        let mut stmt =
+            conn.prepare("SELECT 1 FROM owner_answers_seen WHERE question_id = ? AND seen_at < ?")?;
         let mut seen = HashSet::new();
         for id in ids {
-            if stmt.exists([id])? {
+            if stmt.exists(params![id, before])? {
                 seen.insert(id.to_string());
             }
         }
         Ok(seen)
     }
 
-    /// MC6: the bot's inbox has shown it these answers.
+    /// MC6: the bot's inbox has shown it these answers. The first time shown is kept.
     pub fn mark_owner_answers_seen(&self, ids: &[&str], now: i64) -> rusqlite::Result<()> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -5780,10 +5785,11 @@ impl Db {
         Ok(())
     }
 
-    /// MC6: when a room last had a message, for ordering a bot's projects by what's going on.
-    pub fn last_message_at(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
+    /// MC6: a room's newest message id, for ordering a bot's projects by what's going on. Ids only
+    /// grow, so this orders rooms by their latest message, in one seek of messages_by_room.
+    pub fn last_message_id(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn().query_row(
-            "SELECT MAX(created_at) FROM messages WHERE hangout_id = ?",
+            "SELECT MAX(id) FROM messages WHERE hangout_id = ?",
             [hangout_id],
             |row| row.get(0),
         )

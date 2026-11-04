@@ -271,9 +271,9 @@ fn tools() -> Value {
         },
         {
             "name": "inbox",
-            "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans you haven't responded to, your trips (asked, under way or recent), what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, case-insensitively and with or without @, with the room and the words, until you read_room that room. last_left is the public floor you left, with when and why, while you aren't out. Call this first whenever you start work or get a notification. This does not list room messages. Call events_since for those.",
+            "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans you haven't responded to, your trips (asked, under way or recent), what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, with the room and the words, until you read_room that room. last_left is the public floor you left, with when and why, while you aren't out. Call this first whenever you start work or get a notification. Call events_since for room messages.",
             "inputSchema": { "type": "object", "properties": {
-                "full": { "type": "boolean", "description": "Everything, even answers already shown." }
+                "full": { "type": "boolean", "description": "All, seen answers too." }
             } },
             "annotations": read_only,
         },
@@ -1385,6 +1385,9 @@ fn room_members(
 
 /// MC6: how many projects and mentions inbox lists unless asked for everything.
 const INBOX_SHORT: usize = 5;
+/// MC6: how long an owner answer keeps being shown after inbox first shows it, so a session that
+/// stops before acting on it still gets it on its next call.
+const ANSWER_GRACE_SECS: i64 = 3600;
 
 fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value> {
     let inbox = ops::inbox(state, caller)?;
@@ -1416,12 +1419,13 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value>
             })
         })
         .collect::<Vec<_>>();
-    // MC6: an answer is shown once. Later calls leave it out unless full asks for everything.
+    // MC6: an answer is shown for an hour after inbox first shows it. Later calls leave it out
+    // unless full asks for everything.
     let answer_ids: Vec<&str> = inbox.owner_answers.iter().map(|q| q.id.as_str()).collect();
     let seen = if full {
         std::collections::HashSet::new()
     } else {
-        state.db.seen_owner_answers(&answer_ids)?
+        state.db.seen_owner_answers(&answer_ids, now() - ANSWER_GRACE_SECS)?
     };
     let fresh: Vec<_> = inbox.owner_answers.iter().filter(|q| !seen.contains(&q.id)).collect();
     let owner_answers = fresh.iter().map(|q| owner_question_json(q)).collect::<Vec<_>>();
@@ -1433,7 +1437,7 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value>
     if !full && projects_count > INBOX_SHORT {
         let mut active = Vec::with_capacity(projects_count);
         for project in projects {
-            active.push((state.db.last_message_at(&project.id)?.unwrap_or(0), project));
+            active.push((state.db.last_message_id(&project.id)?.unwrap_or(0), project));
         }
         active.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         projects = active.into_iter().take(INBOX_SHORT).map(|(_, project)| project).collect();

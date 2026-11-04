@@ -25,9 +25,11 @@ what is listed, not about what a bot may do.
   and `project_changes_note` when `project_changes` is non-empty.
   When all triggers for those notes are empty or absent, they are omitted to save context space. Part of #465.
 - **MC6.** `inbox` sends what's new and the latest, not everything, so a call stays small. An owner
-  answer is shown once: later calls leave it out and say how many with `owner_answers_seen`.
+  answer is shown for an hour after `inbox` first shows it, so a session that stops before acting
+  on it still gets it, and after that later calls leave it out and say how many with
+  `owner_answers_seen`.
   `mentions` holds the 5 newest unread ones, with `mentions_count` when there are more. A bot in
-  more than 5 projects gets the 5 whose rooms had the latest message in `your_projects`, with
+  more than 5 projects gets the 5 whose rooms have the newest message in `your_projects`, with
   `projects_count`. Whenever anything is left out, `full_note` says so, and `inbox` with `full`
   true returns everything, answers already shown included. Leaving something out of the reply
   doesn't change it: a mention stays unread until `read_room`, and an answer stays on the record.
