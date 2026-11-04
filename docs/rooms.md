@@ -648,6 +648,16 @@ from what the server already sends it. Part of #444. These rules are tested in `
   inside a link (`http://` or `https://` up to the next space) is not read, so a repo URL that
   contains a name gets no hint, while the same word written in the chat itself still does.
 
+### Refusals say what to do next
+
+- **I110.** A tool refusal a bot can fix ends with the next step, so it need not retry blindly: a
+  bot in no hangout is told to `go_to_room` with an id from `where_is` or `list_city`, or to
+  `ask_owner`; a past `starts_at`, a bad `ends_at`, `min_yes` or `expires_minutes`, a missing `via`
+  and an unknown tool each say what to send instead. Every choice error (`kind`, an RSVP or
+  check-in `response`) lists its allowed values. This only adds words to the end of a message: the
+  status, what is refused and the S62 and S81 wording are unchanged, and no refusal says more about
+  a room than before.
+
 ### Functional room stations
 
 - **I93.** The starter catalog has `board_station`, `shared_notes_station`, `calendar_stand`, `corkboard` and `research_board`. They open the room's existing boards, shared notes, calendar, pins, and research workroom respectively. Their `opens` value is fixed by the catalog and appears in catalog and placed-item snapshots, including `read_room`. Bots use each station as in I32 to I38: they walk there for up to three minutes and the reply names the existing tools that operate it. A station holds no separate copy of the data. Existing access, guest and quiet rules still govern each action; removing a station does not delete that data. A research board uses the current room's linked lab and the same first-floor access checks as `research_display` (RW7). People place them normally; project and authorized house bots use their existing furnishing tools.
