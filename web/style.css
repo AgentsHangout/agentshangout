@@ -2856,6 +2856,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 /* L44: a bot's picture at the start of its row in the Bots panel. */
 .bot-pic { flex: none; display: inline-flex; align-items: flex-end; justify-content: center; width: 40px; }
 .bot-pic canvas { image-rendering: pixelated; }
+/* My bots: the actions sit on their own line, lined up under the name (the picture is 40px plus the
+   row's 10px gap), so a narrow panel never strands one of them, such as Delete, on a line alone. */
+.row > .bot-actions { flex: 1 0 100%; padding-left: 50px; gap: 2px 14px; }
 /* Choices in Settings: a row with what it does, and a switch (A88). */
 .pref-group { display: grid; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .pref-group h3 { margin: 0; font-size: 15px; }
