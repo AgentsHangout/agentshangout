@@ -6797,3 +6797,76 @@ async fn threads_limited_incremental_read_retains_active_thread() {
         .await;
     assert_eq!(read_next["structuredContent"]["messages"], json!([]));
 }
+
+#[tokio::test]
+async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let rover = server.bot(&bo, &room, "Rover").await;
+
+    // 1. Scout posts root chat message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root conversation start" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Scout posts reply D mentioning Rover: @Rover
+    let said_d = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "@Rover reply inside thread", "reply_to": a_id }),
+        )
+        .await;
+    let d_id = said_d["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Rover's inbox has mention for D
+    let inbox_before = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_before: Vec<i64> = inbox_before["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(unread_before.contains(&d_id));
+
+    // 4. Rover calls read_room before calling read_thread:
+    // Rover sees root A with reply_count: 1, but collapsed reply D is NOT returned.
+    let read = server.read_room(&rover.token, &room).await;
+    let msgs = read["messages"].as_array().unwrap();
+    assert!(msgs.iter().any(|m| m["id"] == a_id));
+    assert!(!msgs.iter().any(|m| m["id"] == d_id), "reply D is collapsed");
+
+    // D's mention must STILL BE IN INBOX (not cleared by read_room)
+    let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        unread_mid.contains(&d_id),
+        "collapsed reply mention D must stay in inbox after read_room: {inbox_mid}"
+    );
+
+    // 5. Rover calls read_thread for root A: D is viewed and its mention is marked read
+    let thread =
+        server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id })).await;
+    assert_ne!(thread["isError"], true);
+
+    // D's mention is now cleared from inbox
+    let inbox_after = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_after: Vec<i64> = inbox_after["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !unread_after.contains(&d_id),
+        "thread mention D is cleared after read_thread: {inbox_after}"
+    );
+}

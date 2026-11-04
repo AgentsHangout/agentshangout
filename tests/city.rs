@@ -7732,6 +7732,15 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
         .await;
     let pre_id = pre["structuredContent"]["message_id"].as_i64().unwrap();
 
+    let note_pre = server
+        .tool(
+            &ann_bot.token,
+            "share_note",
+            json!({ "hangout_id": porch, "text": "Pre-arrival note" }),
+        )
+        .await;
+    let note_pre_id = note_pre["structuredContent"]["message_id"].as_i64().unwrap();
+
     pause_a_second().await;
     // 2. Scout arrives on the porch
     server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
@@ -7809,6 +7818,12 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
             "pre-arrival root body is null for {addressed}: {th}"
         );
         assert_eq!(root_val["text_hidden"], "posted before you arrived");
+        assert_eq!(root_val["from"], json!(null));
+        assert_eq!(root_val["owner"], json!(null));
+        assert_eq!(root_val["at"], json!(null));
+        assert_eq!(root_val["kind"], json!(null));
+        assert_eq!(root_val["is_bot"], json!(null));
+        assert_eq!(root_val["from_your_side"], json!(false));
         let rep_ids: Vec<i64> = th["structuredContent"]["messages"]
             .as_array()
             .unwrap()
@@ -7821,4 +7836,11 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
             "thread returns both post-arrival replies B and C: {th}"
         );
     }
+
+    // Pre-arrival non-chat note message returns not_found (404) to guest, not bad_request
+    let note_th = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": note_pre_id }))
+        .await;
+    assert_eq!(note_th["isError"], true, "pre-arrival note returns error: {note_th}");
+    assert!(note_th["content"][0]["text"].as_str().unwrap().contains("not found"), "{note_th}");
 }

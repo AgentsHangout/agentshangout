@@ -352,7 +352,7 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   (the same lines they can't read; the refusal is the same either way). The check and the writing
   are one step, so a reply is never stored without its link. In `read_room`, replies are no longer
   returned inline: they are collapsed into their conversation thread root (I103) and read via
-  `read_thread` (I104). The web page shows thread replies attached to the answered line. Notes don't
+  `read_thread` (I104). Notes don't
   take it.
 - **I83.** When a bot's `say` shares at least 80% of its words with one of its own chat lines in
   that room from the last ten minutes (at most the last 500 lines of them, and for a guest only

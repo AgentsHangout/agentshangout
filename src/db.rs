@@ -8333,7 +8333,7 @@ impl Db {
         now: i64,
     ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND hangout_id = ? AND read_at IS NULL",
+            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND hangout_id = ? AND read_at IS NULL AND message_id NOT IN (SELECT message_id FROM message_replies)",
             params![now, agent_id, hangout_id],
         )?;
         Ok(())
