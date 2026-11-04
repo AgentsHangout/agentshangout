@@ -6393,3 +6393,114 @@ async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() 
     assert_eq!(all.as_object().unwrap().len(), 7);
     assert!(all.to_string().len() < 700, "{all}");
 }
+
+// I102: the missed-work pulse on a bot's next tool result.
+
+struct Waiting {
+    server: Server,
+    conn: rusqlite::Connection,
+    room: String,
+    ann: Who,
+    scout: Bot,
+    pip: Bot,
+}
+
+async fn waiting_world() -> Waiting {
+    let path = std::env::temp_dir().join(format!("waiting-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&ann, &room, "Pip").await;
+    Waiting { server, conn, room, ann, scout, pip }
+}
+
+impl Waiting {
+    async fn mention(&self, words: &str) {
+        let args = json!({ "hangout_id": self.room, "text": format!("@Scout {words}") });
+        let said = self.server.tool(&self.pip.token, "say", args).await;
+        assert!(said["isError"].is_null(), "{said}");
+    }
+
+    fn age(&self, seconds: i64) {
+        self.conn.execute("UPDATE mentions SET created_at = created_at - ?", [seconds]).unwrap();
+    }
+
+    async fn waiting(&self, tool: &str, args: Value) -> Value {
+        let reply = self.server.tool(&self.scout.token, tool, args).await;
+        reply["structuredContent"]["waiting"].clone()
+    }
+}
+
+#[tokio::test]
+async fn a_mention_unread_for_ten_minutes_shows_up_on_the_next_result() {
+    let w = waiting_world().await;
+    w.mention("secret-words-here").await;
+    // Fresh: nothing yet.
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null());
+    w.age(601);
+    w.mention("another-secret").await;
+    let pulse = w.waiting("list_hangouts", json!({})).await;
+    assert_eq!(pulse["mentions"], 1, "{pulse}");
+    assert_eq!(pulse["oldest_room"], "Ann's room", "{pulse}");
+    // The inbox lists them already, so it carries no second copy.
+    assert!(w.waiting("inbox", json!({})).await.is_null());
+    // Counts and a room name, no words.
+    let pulse = w.waiting("list_hangouts", json!({})).await.to_string();
+    assert!(!pulse.contains("secret"), "{pulse}");
+    assert!(!pulse.contains("message"), "{pulse}");
+}
+
+#[tokio::test]
+async fn reading_the_room_clears_the_pulse_and_zero_is_left_out() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+    let read = w.server.read_room(&w.scout.token, &w.room).await;
+    assert!(read.get("waiting").is_none(), "{read}");
+    let after = w.server.tool(&w.scout.token, "list_hangouts", json!({})).await;
+    assert!(after["structuredContent"].get("waiting").is_none(), "{after}");
+    let brief = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({"hangout_id": w.room, "brief": true}))
+        .await;
+    assert!(brief["structuredContent"].get("waiting").is_none(), "{brief}");
+}
+
+#[tokio::test]
+async fn only_the_owner_can_turn_the_pulse_off() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_pulse"], true);
+    // The bot cannot, and a stranger cannot.
+    w.server
+        .put(&w.scout.token, &path, json!({ "waiting_pulse": false }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let (_, eve) = w.server.someone("Eve").await;
+    w.server
+        .put(&eve.key, &path, json!({ "waiting_pulse": false }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": false })).await.ok();
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null());
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_pulse"], false);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": true })).await.ok();
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+}
+
+#[tokio::test]
+async fn a_room_the_bot_is_not_in_is_not_named() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    w.conn.execute("DELETE FROM room_agents WHERE agent_id = ?", [&w.scout.id]).unwrap();
+    let pulse = w.waiting("list_hangouts", json!({})).await;
+    assert_eq!(pulse["mentions"], 1, "{pulse}");
+    assert!(pulse.get("oldest_room").is_none(), "{pulse}");
+    assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
+}

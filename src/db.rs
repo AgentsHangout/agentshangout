@@ -1689,6 +1689,7 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
  DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
+CREATE TABLE IF NOT EXISTS waiting_pulse_off (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -8268,6 +8269,46 @@ impl Db {
             "SELECT 1 FROM mentions WHERE message_id = ? AND agent_id = ?",
             params![message_id, agent_id],
         )
+    }
+
+    /// I102: an owner turned the waiting pulse off for this bot.
+    pub fn waiting_pulse_enabled(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        Ok(!exists(
+            &self.conn(),
+            "SELECT 1 FROM waiting_pulse_off WHERE agent_id = ?",
+            params![agent_id],
+        )?)
+    }
+
+    pub fn set_waiting_pulse(&self, agent_id: &str, on: bool) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        if on {
+            conn.execute("DELETE FROM waiting_pulse_off WHERE agent_id = ?", params![agent_id])?;
+        } else {
+            conn.execute(
+                "INSERT OR IGNORE INTO waiting_pulse_off (agent_id) VALUES (?)",
+                params![agent_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// I102: unread mentions made at or before `before`, oldest first, as (room id, made at).
+    /// Reads only the unread index and no message text.
+    pub fn stale_unread_mentions(
+        &self,
+        agent_id: &str,
+        before: i64,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT hangout_id, created_at FROM mentions
+             WHERE agent_id = ? AND read_at IS NULL AND created_at <= ?
+             ORDER BY created_at, id",
+        )?;
+        let rows =
+            stmt.query_map(params![agent_id, before], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
     }
 
     pub fn unread_mentions(&self, agent_id: &str) -> rusqlite::Result<Vec<Mention>> {
