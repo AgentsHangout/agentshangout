@@ -2,7 +2,8 @@
 """Build and validate the portable Agent Plugins 1.0.0 ZIP package for Agents Hangout.
 
 Performs schema validation against pinned official schemas, secret scanning,
-deterministic ZIP archive packaging, and SHA-256 checksum generation.
+deterministic ZIP archive packaging with pinned UNIX platform metadata, and
+SHA-256 checksum generation.
 """
 
 import hashlib
@@ -22,32 +23,51 @@ SHA256_PATH = os.path.join(OUTPUT_DIR, f"{ZIP_NAME}.sha256")
 
 TOKEN_REGEX = re.compile(r"ah_bot_[A-Za-z0-9_-]{16,}")
 OWNER_REGEX = re.compile(r"ah_owner_[A-Za-z0-9_-]{16,}")
+OAUTH_REGEX = re.compile(r"ah_(?:oauth|refresh|code)_[A-Za-z0-9_-]{16,}")
 
 
 def validate_schemas():
     plugin_path = os.path.join(PLUGIN_DIR, "plugin.json")
     mcp_path = os.path.join(PLUGIN_DIR, "mcp.json")
+    plugin_schema_path = os.path.join(SCHEMAS_DIR, "plugin.schema.json")
+    mcp_schema_path = os.path.join(SCHEMAS_DIR, "mcp.schema.json")
 
     with open(plugin_path, "r", encoding="utf-8") as f:
         plugin = json.load(f)
     with open(mcp_path, "r", encoding="utf-8") as f:
         mcp = json.load(f)
+    with open(plugin_schema_path, "r", encoding="utf-8") as f:
+        plugin_schema = json.load(f)
+    with open(mcp_schema_path, "r", encoding="utf-8") as f:
+        mcp_schema = json.load(f)
 
-    # 1. plugin.json checks
-    if plugin.get("$schema") != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json":
+    # Validate with jsonschema engine when available
+    try:
+        import jsonschema
+
+        jsonschema.validate(instance=plugin, schema=plugin_schema)
+        jsonschema.validate(instance=mcp, schema=mcp_schema)
+        print("[OK] Verified plugin.json and mcp.json against vendored schemas using jsonschema engine")
+    except ImportError:
+        pass
+
+    # Built-in strict assertions against vendored schema definitions
+    if plugin.get("$schema") != plugin_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"):
         raise ValueError(f"Invalid plugin.json $schema: {plugin.get('$schema')}")
+    name_pattern = plugin_schema.get("properties", {}).get("name", {}).get("pattern", r"^[a-z0-9]+(-[a-z0-9]+)*$")
     name = plugin.get("name")
-    if not name or not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", name):
+    if not name or not re.match(name_pattern, name):
         raise ValueError(f"Invalid plugin name: {name}")
+    version_pattern = plugin_schema.get("properties", {}).get("version", {}).get("pattern", r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
     version = plugin.get("version")
-    if not version or not re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version):
+    if not version or not re.match(version_pattern, version):
         raise ValueError(f"Invalid semver version: {version}")
     if not plugin.get("description"):
         raise ValueError("Missing plugin description")
     print("[OK] plugin.json strictly matches Agent Plugins 1.0.0 manifest schema")
 
-    # 2. mcp.json checks
-    if mcp.get("$schema") != "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json":
+    # mcp.json checks
+    if mcp.get("$schema") != mcp_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"):
         raise ValueError(f"Invalid mcp.json $schema: {mcp.get('$schema')}")
     servers = mcp.get("mcpServers", {})
     if not servers:
@@ -58,7 +78,6 @@ def validate_schemas():
         url = cfg.get("url")
         if not url or not url.startswith("https://"):
             raise ValueError(f"Server {s_name} URL must be secure HTTPS: {url}")
-        # Ensure no bundled authorization headers in headers dict
         headers = cfg.get("headers", {})
         for h_key in headers:
             if h_key.lower() == "authorization":
@@ -76,6 +95,8 @@ def scan_for_secrets():
                     raise ValueError(f"Credential detected in {path}: contains bot token pattern")
                 if OWNER_REGEX.search(content):
                     raise ValueError(f"Credential detected in {path}: contains owner token pattern")
+                if OAUTH_REGEX.search(content):
+                    raise ValueError(f"Credential detected in {path}: contains oauth/refresh token pattern")
                 if "Bearer ah_bot_" in content or "Bearer ah_owner_" in content:
                     raise ValueError(f"Bearer token literal detected in {path}")
     print("[OK] Secret check passed: no bundled credentials or tokens found")
@@ -99,7 +120,7 @@ def build_zip():
         if arc.startswith("/") or ".." in arc:
             raise ValueError(f"Illegal archive path: {arc}")
 
-    # Build ZIP with ZIP_DEFLATED
+    # Build ZIP with ZIP_DEFLATED and pinned Unix metadata (create_system=3)
     if os.path.exists(ZIP_PATH):
         os.remove(ZIP_PATH)
 
@@ -110,6 +131,7 @@ def build_zip():
                 data = f.read()
             zinfo = zipfile.ZipInfo(arc, fixed_time)
             zinfo.compress_type = zipfile.ZIP_DEFLATED
+            zinfo.create_system = 3  # Force UNIX system attribute for cross-platform reproducibility
             zinfo.external_attr = 0o644 << 16
             zf.writestr(zinfo, data)
 

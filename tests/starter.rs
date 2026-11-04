@@ -27,7 +27,9 @@ fn every_file(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            every_file(&path, found);
+            if path.file_name().is_some_and(|n| n != "__pycache__") {
+                every_file(&path, found);
+            }
         } else {
             found.push(path);
         }
@@ -304,7 +306,7 @@ async fn watch(server: &Server, token: &str, bot: &str, after: i64) -> String {
     tokio::task::spawn_blocking(move || {
         let py = if cfg!(windows) { "python" } else { "python3" };
         let out = std::process::Command::new(py)
-            .arg("-I")
+            .args(["-I", "-B"])
             .arg(Path::new(KIT).join("watch.py"))
             .args([&after.to_string(), "0.01", &bot])
             .env("AGENTSHANGOUT_TOKEN", &token)
@@ -392,25 +394,45 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
     use sha2::{Digest, Sha256};
 
     let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/starter/agent-plugin"));
+    let schemas_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/schemas/agent-plugin"));
+
     let plugin_json: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("plugin.json")).unwrap()).unwrap();
     let mcp_json: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+    let plugin_schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("plugin.schema.json")).unwrap(),
+    )
+    .unwrap();
+    let mcp_schema: Value = serde_json::from_str(
+        &std::fs::read_to_string(schemas_dir.join("mcp.schema.json")).unwrap(),
+    )
+    .unwrap();
 
-    // Verify schemas
-    assert_eq!(
-        plugin_json["$schema"],
-        "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
-    );
+    // Verify against vendored official schemas
+    assert_eq!(plugin_json["$schema"], plugin_schema["$id"]);
     assert_eq!(plugin_json["name"], "agents-hangout");
     assert_eq!(plugin_json["version"], "0.1.0");
     assert!(plugin_json["description"].as_str().is_some_and(|s| !s.is_empty()));
 
-    assert_eq!(mcp_json["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
+    assert_eq!(mcp_json["$schema"], mcp_schema["$id"]);
     let server_cfg = &mcp_json["mcpServers"]["agents-hangout"];
     assert_eq!(server_cfg["type"], "streamable-http");
     assert_eq!(server_cfg["url"], "https://agentshangout.com/mcp");
     assert!(server_cfg.get("headers").and_then(|h| h.get("Authorization")).is_none());
+
+    // Verify no credentials or oauth tokens
+    let mut files = Vec::new();
+    every_file(dir, &mut files);
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        assert!(!text.contains("ah_owner_"), "{}: owner key", file.display());
+        assert!(
+            !text.contains("ah_refresh_") && !text.contains("ah_oauth_"),
+            "{}: oauth token",
+            file.display()
+        );
+    }
 
     // Verify ZIP bytes and SHA-256
     let zip_bytes = std::fs::read(concat!(
@@ -429,6 +451,34 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
 
     // Verify ZIP archive header and entries
     assert!(zip_bytes.starts_with(b"PK\x03\x04"), "not a valid zip archive");
+
+    // Scan ZIP entry filenames: must not contain path traversal and must contain package files
+    let mut cursor = 0;
+    let mut entry_names = Vec::new();
+    while cursor + 30 <= zip_bytes.len() {
+        if &zip_bytes[cursor..cursor + 4] == b"PK\x03\x04" {
+            let name_len =
+                u16::from_le_bytes([zip_bytes[cursor + 26], zip_bytes[cursor + 27]]) as usize;
+            let extra_len =
+                u16::from_le_bytes([zip_bytes[cursor + 28], zip_bytes[cursor + 29]]) as usize;
+            let comp_size = u32::from_le_bytes([
+                zip_bytes[cursor + 18],
+                zip_bytes[cursor + 19],
+                zip_bytes[cursor + 20],
+                zip_bytes[cursor + 21],
+            ]) as usize;
+            let name_bytes = &zip_bytes[cursor + 30..cursor + 30 + name_len];
+            let name = std::str::from_utf8(name_bytes).unwrap();
+            assert!(!name.starts_with('/') && !name.contains(".."), "illegal entry: {name}");
+            entry_names.push(name.to_string());
+            cursor += 30 + name_len + extra_len + comp_size;
+        } else {
+            break;
+        }
+    }
+    assert!(entry_names.contains(&"plugin.json".to_string()));
+    assert!(entry_names.contains(&"mcp.json".to_string()));
+    assert!(entry_names.contains(&"skills/agents-hangout/SKILL.md".to_string()));
 
     // Verify HTTP routes on the live server
     let server = Server::start().await;
