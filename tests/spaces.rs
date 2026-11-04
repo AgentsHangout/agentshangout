@@ -4343,3 +4343,164 @@ async fn a_floor_chooses_when_bots_come_in_by_themselves() {
     server.state.db.remove_agent_from_room(&room, &rover_id).unwrap();
     assert!(go().await.to_string().contains("ask your owner to bring you in"));
 }
+
+// S84
+
+#[tokio::test]
+async fn visitors_see_earlier_chat_only_from_when_it_was_turned_on() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_, stranger) = server.someone("Stranger").await;
+    let history = format!("/api/floors/{room}/history");
+    let set = |on: bool| json!({ "visitors_see_earlier": on });
+    let earlier = |snapshot: &Value| Server::lines(snapshot);
+
+    // Off by default, and a private floor has no visitors to show it to.
+    assert_eq!(server.get(&ann.key, &history).await.ok()["visitors_see_earlier"], false);
+    server.put(&ann.key, &history, set(true)).await.refused(StatusCode::CONFLICT);
+    server.say(&ann.key, &room, "said while private").await.ok();
+    server.open(&ann, &room).await;
+    server.say(&ann.key, &room, "said before it was on").await.ok();
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/notes"), json!({ "text": "a note" }))
+        .await
+        .ok();
+
+    // Only who runs the floor, as a person.
+    let (_, rover) = server.bot(&ann, &room, "Rover").await;
+    server.put(&rover, &history, set(true)).await.refused(StatusCode::FORBIDDEN);
+    assert!(!server.put(&stranger.key, &history, set(true)).await.status.is_success());
+
+    let on = server.put(&ann.key, &history, set(true)).await.ok();
+    assert_eq!(on["visitors_see_earlier"], true);
+    assert!(earlier(&server.snapshot(&ann.key, &room).await.ok())
+        .iter()
+        .any(|line| line.contains("can read the last day of chat")));
+    server.say(&ann.key, &room, "A").await.ok();
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/notes"), json!({ "text": "a later note" }))
+        .await
+        .ok();
+
+    // A walk-in sees the chat since it went on, and nothing before it: no private chat, no system
+    // line, no note.
+    server.walk_in(&stranger, &room).await.ok();
+    let seen = server.snapshot(&stranger.key, &room).await.ok();
+    assert_eq!(earlier(&seen), ["A"]);
+    assert_eq!(seen["notes"], json!([]));
+    assert_eq!(seen["visitor_history"], true);
+    let read =
+        server.get(&stranger.key, &format!("/api/hangouts/{room}/messages?after=0")).await.ok();
+    assert_eq!(earlier(&read), ["A"]);
+    // A bot sent in reads it the same way, and is told what it can see.
+    let (own_room, sam) = server.someone("Sam").await;
+    let (scout, scout_token) = server.bot(&sam, &own_room, "Scout").await;
+    server
+        .post(&sam.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let read_room = server.read_room(&scout_token, &room).await;
+    assert_eq!(read_room["visitor_history"], true);
+    assert!(read_room["messages"].to_string().contains("\"A\""), "{read_room}");
+    assert!(!read_room["messages"].to_string().contains("before it was on"));
+    assert!(text(&read_room["before_you_arrived"]).contains("last day of chat"));
+
+    // Off, B, on again, C: someone walking in now sees only C.
+    server.put(&ann.key, &history, set(false)).await.ok();
+    server.say(&ann.key, &room, "B").await.ok();
+    server.put(&ann.key, &history, set(true)).await.ok();
+    server.say(&ann.key, &room, "C").await.ok();
+    let (_, cy) = server.someone("Cy").await;
+    server.walk_in(&cy, &room).await.ok();
+    assert_eq!(earlier(&server.snapshot(&cy.key, &room).await.ok()), ["C"]);
+
+    // Going private clears it, so opening again shows nothing from before.
+    server
+        .put(
+            &ann.key,
+            &format!("/api/floors/{room}"),
+            json!({ "access": "private", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    assert_eq!(server.get(&ann.key, &history).await.ok()["visitors_see_earlier"], false);
+    server.open(&ann, &room).await;
+    let (_, di) = server.someone("Di").await;
+    server.walk_in(&di, &room).await.ok();
+    let fresh = server.snapshot(&di.key, &room).await.ok();
+    assert!(earlier(&fresh).is_empty(), "{:?}", earlier(&fresh));
+    assert_eq!(fresh["visitor_history"], false);
+    assert!(server.state.db.visitor_history(&room).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn visitors_see_at_most_the_last_50_lines_of_the_last_day() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let history = format!("/api/floors/{room}/history");
+    server.put(&ann.key, &history, json!({ "visitors_see_earlier": true })).await.ok();
+    for n in 0..55 {
+        server.say(&ann.key, &room, &format!("line {n}")).await.ok();
+    }
+    let (_, stranger) = server.someone("Stranger").await;
+    server.walk_in(&stranger, &room).await.ok();
+    let seen = Server::lines(&server.snapshot(&stranger.key, &room).await.ok());
+    assert_eq!(seen.len(), 50);
+    assert_eq!((seen[0].as_str(), seen[49].as_str()), ("line 5", "line 54"));
+
+    // A day on, none of it is shown to someone new.
+    server.state.db.age_messages(&room, 86_400 + 60).unwrap();
+    let (_, late) = server.someone("Late").await;
+    server.walk_in(&late, &room).await.ok();
+    assert!(Server::lines(&server.snapshot(&late.key, &room).await.ok()).is_empty());
+}
+
+#[tokio::test]
+async fn visitor_history_leaves_threads_mentions_and_early_walk_ins_at_arrival() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let history = format!("/api/floors/{room}/history");
+    let set = |on: bool| json!({ "visitors_see_earlier": on });
+
+    // A private floor takes no row, even straight into the database.
+    assert!(!server.state.db.set_visitor_history(&room, true, now()).unwrap());
+    assert!(server.state.db.visitor_history(&room).unwrap().is_none());
+
+    // Someone who walked in before it went on sees what came after, once, and nothing before.
+    server.open(&ann, &room).await;
+    server.say(&ann.key, &room, "before anyone came").await.ok();
+    let (_, bo) = server.someone("Bo").await;
+    server.walk_in(&bo, &room).await.ok();
+    server.put(&ann.key, &history, set(true)).await.ok();
+    let a = server.say(&ann.key, &room, "A").await.ok();
+    let a_id = a["id"].as_i64().unwrap();
+    server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/messages"),
+            json!({ "text": "A-reply", "reply_to": a_id }),
+        )
+        .await
+        .ok();
+    let bo_sees = Server::lines(&server.snapshot(&bo.key, &room).await.ok());
+    assert_eq!(bo_sees.iter().filter(|line| *line == "A").count(), 1, "{bo_sees:?}");
+    assert!(!bo_sees.iter().any(|line| line == "before anyone came"), "{bo_sees:?}");
+
+    // A bot that walks in later sees A in read_room, but its thread and its mentions still start
+    // from its arrival.
+    let (own_room, sam) = server.someone("Sam").await;
+    let (scout, scout_token) = server.bot(&sam, &own_room, "Scout").await;
+    server
+        .post(&sam.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    assert!(server.read_room(&scout_token, &room).await["messages"].to_string().contains("\"A\""));
+    server
+        .tool_error(&scout_token, "read_thread", json!({ "hangout_id": room, "root": a_id }))
+        .await;
+    server.say(&ann.key, &room, "@Scout hi").await.ok();
+    let events = server.get(&scout_token, "/api/events?since=0").await.ok().to_string();
+    assert!(events.contains("@Scout hi"), "{events}");
+    assert!(!events.contains("\"A\"") && !events.contains("A-reply"), "{events}");
+}

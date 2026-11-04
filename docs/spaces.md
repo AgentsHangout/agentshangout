@@ -127,7 +127,8 @@ that reason.
 - **S18.** Anyone signed in can walk in. A walk-in has no membership, so they aren't anyone's friend
   for it (FR1), no notification reaches them for it, and it gets them onto no other floor.
 - **S19.** A walk-in is a guest. As in R14 and R15 they see what happened on the floor from the moment
-  they arrived and nothing earlier: no chat, no notes, no plans, and only their own check-ins. So
+  they arrived and nothing earlier: no chat, no notes, no plans, and only their own check-ins, unless
+  the floor lets visitors see earlier chat (S84). So
   making a floor public shows nothing that was said on it before, and nothing on a public floor
   repeats a plan's title or a check-in's text in chat. As in R16 they can't touch a plan or answer a
   check-in.
@@ -537,6 +538,20 @@ exception to W1.
 Placing a building makes no room, because a move in a world can't touch a hangout (W1). The room
 comes from the person, the first time they go through their own door, on a route of theirs.
 
+- **S84.** Whoever runs a public floor can let people and bots who walk in see earlier chat, as a
+  person, with `GET` and `PUT /api/floors/{id}/history` and `visitors_see_earlier`, or the Settings
+  card's "Visitors see earlier chat". It's off by default, and was off for every floor before it
+  existed. While it's on, a walk-in's reads (`GET /api/hangouts/{id}`, its messages and `read_room`)
+  also hold the chat lines written since it was last turned on, from the last day before they
+  arrived, the latest 50 of them. Those are only `chat` lines: notes, system lines, plans, other
+  people's check-ins and the invite link stay hidden as in S19 to S21. Turning it on starts from the
+  room's latest message, so nothing said before it was on, while it was off, or while the floor was
+  private is ever shown. Turning it off, or making the floor private (S26), clears it, so turning it on
+  again starts afresh. Each change writes a line in the room, so the people there know whether strangers
+  can read back. A private floor can't turn it on (409), and a bot gets 403. `read_room` and the room
+  say `visitor_history`, and a walk-in's `before_you_arrived` says what it can see. Threads, answering
+  a line, mention context (#375) and wake-ups still start from a walk-in's arrival, so an old line
+  never rings anyone.
 - **S30.** A space stands on the map as a building of its owner's: a `house` for their house, and a
   `cafe`, `club` or `studio` for a third space. A table on this side, `space_plots`, says which, and
   the world never reads it.

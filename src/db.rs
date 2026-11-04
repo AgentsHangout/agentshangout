@@ -1544,6 +1544,13 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
+-- S84: a public floor whose visitors see earlier chat, from the message after `after_id` on. No
+-- row is off, the default, and going private or turning it off deletes the row.
+CREATE TABLE IF NOT EXISTS floor_visitor_history (
+    hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    after_id   INTEGER NOT NULL,
+    since      INTEGER NOT NULL
+);
 -- S80: whether bots may take themselves onto a floor: `anyone`, the default, has no row.
 CREATE TABLE IF NOT EXISTS floor_bot_entry (
     hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -3834,7 +3841,10 @@ fn remove_empty_households(
 /// A35: the floor a space began with can't go while the space stands, so nobody can reach this one
 /// and nothing is left on it to reach.
 fn shut_first_floor(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    for table in ["messages", "events", "check_ins", "floor_items", "floor_visits"] {
+    // S84: going private takes visitors' history with it, as changing a floor does.
+    for table in
+        ["messages", "events", "check_ins", "floor_items", "floor_visits", "floor_visitor_history"]
+    {
         conn.execute(&format!("DELETE FROM {table} WHERE hangout_id = ?"), [id])?;
     }
     conn.execute("UPDATE floors SET access = 'private' WHERE hangout_id = ?", [id])?;
@@ -6228,6 +6238,78 @@ impl Db {
 
     // Routines (L1 to L10)
 
+    /// S84: since when visitors to this floor see earlier chat, as `(after_id, since)`, if they do.
+    /// Only while the floor is public, whatever else left a row behind.
+    pub fn visitor_history(&self, hangout_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT v.after_id, v.since FROM floor_visitor_history v
+                 JOIN floors f ON f.hangout_id = v.hangout_id AND f.access = 'public'
+                 WHERE v.hangout_id = ?",
+                [hangout_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// S84: turns it on from the room's latest message, keeping an earlier start, or off. Returns
+    /// whether this changed it.
+    pub fn set_visitor_history(
+        &self,
+        hangout_id: &str,
+        on: bool,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        Ok(if on {
+            // Only onto a floor that is public as it's written, so going private can't slip between.
+            conn.execute(
+                "INSERT OR IGNORE INTO floor_visitor_history (hangout_id, after_id, since)
+                 SELECT ?1, (SELECT COALESCE(MAX(id), 0) FROM messages), ?2
+                 WHERE EXISTS (SELECT 1 FROM floors WHERE hangout_id = ?1 AND access = 'public')",
+                params![hangout_id, now],
+            )?
+        } else {
+            conn.execute("DELETE FROM floor_visitor_history WHERE hangout_id = ?", [hangout_id])?
+        } > 0)
+    }
+
+    /// S84: chat a walk-in sees from before they arrived: chat lines only, after `after_id` and
+    /// written from `from` up to their arrival, the latest `limit` of them, oldest first.
+    pub fn chat_before_arrival(
+        &self,
+        hangout_id: &str,
+        after_id: i64,
+        from: i64,
+        arrived: i64,
+        after: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages
+             WHERE hangout_id = ? AND kind = 'chat' AND id > ? AND id > ?
+               AND created_at >= ? AND created_at <= ?
+             ORDER BY id DESC LIMIT ?"
+        ))?;
+        let rows = stmt.query_map(
+            params![hangout_id, after_id, after, from, arrived, limit],
+            message_from_row,
+        )?;
+        let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// For tests: moves a room's messages `by` seconds into the past.
+    pub fn age_messages(&self, hangout_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE messages SET created_at = created_at - ?2 WHERE hangout_id = ?1",
+            params![hangout_id, by],
+        )?;
+        Ok(())
+    }
+
     /// S80: when bots may take themselves onto this floor: `anyone`, `with_owner` or `nobody`.
     pub fn floor_bot_entry(&self, hangout_id: &str) -> rusqlite::Result<String> {
         Ok(self
@@ -7100,6 +7182,8 @@ impl Db {
                 params![change.id, crate::now()],
             )?;
             tx.execute("DELETE FROM floor_visits WHERE hangout_id = ?", [change.id])?;
+            // S84: and visitors' history, so opening it again starts that afresh too.
+            tx.execute("DELETE FROM floor_visitor_history WHERE hangout_id = ?", [change.id])?;
         }
         tx.execute(
             "UPDATE floors SET access = COALESCE(?2, access), size = COALESCE(?3, size),

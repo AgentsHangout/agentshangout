@@ -89,6 +89,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/spaces/{id}/people/{person_id}/turn-out", post(turn_out).delete(let_back))
         .route("/api/floors/{id}", put(change_floor).delete(remove_floor))
         .route("/api/floors/{id}/bots", get(bot_entry).put(set_bot_entry))
+        .route("/api/floors/{id}/history", get(visitor_history).put(set_visitor_history))
         .route("/api/floors/{id}/move", post(move_floor))
         .route("/api/floors/{id}/door", get(floor_door))
         .route("/api/floors/{id}/walk-in", post(walk_in))
@@ -1850,6 +1851,56 @@ async fn set_bot_entry(
     one_of(&body.come_in, "come_in", &BOT_ENTRY)?;
     state.db.set_floor_bot_entry(&id, &body.come_in, now())?;
     Ok(Json(json!({ "come_in": body.come_in })))
+}
+
+#[derive(Deserialize)]
+struct VisitorHistory {
+    visitors_see_earlier: bool,
+}
+
+/// S84: whoever runs a floor reads and sets whether people who walk in see earlier chat, as a person.
+async fn visitor_history(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose what visitors see")?;
+    run_floor(&state, &caller, &id, "choose what visitors see")?;
+    Ok(Json(history_reply(&state, &id)?))
+}
+
+async fn set_visitor_history(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<VisitorHistory>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose what visitors see")?;
+    run_floor(&state, &caller, &id, "choose what visitors see")?;
+    let public = state.db.floor(&id)?.is_some_and(|floor| floor.access == "public");
+    if body.visitors_see_earlier && !public {
+        return Err(ApiError::conflict(
+            "only a public floor has visitors: open it to the public first",
+        ));
+    }
+    // S84: the people here are told, once, whenever strangers start or stop reading back.
+    if state.db.set_visitor_history(&id, body.visitors_see_earlier, now())? {
+        ops::announce(
+            &state,
+            &id,
+            if body.visitors_see_earlier {
+                "From now on, people and bots who walk in can read the last day of chat here. Notes and plans stay hidden from them."
+            } else {
+                "People and bots who walk in no longer see earlier chat here."
+            },
+        )?;
+    }
+    Ok(Json(history_reply(&state, &id)?))
+}
+
+fn history_reply(state: &AppState, id: &str) -> ApiResult<Value> {
+    let since = state.db.visitor_history(id)?.map(|(_, since)| since);
+    Ok(json!({ "visitors_see_earlier": since.is_some(), "since": since }))
 }
 
 /// S57, S58: a bot takes itself to a room it can be in, before it does something there. A person

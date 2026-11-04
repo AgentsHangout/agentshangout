@@ -5426,6 +5426,29 @@ async function spaceView(id) {
       bots.value = comeIn;
       bots.disabled = false;
     }).catch(() => {});
+    // S84: whether people who walk in see earlier chat. Only a public floor has walk-ins to show it to.
+    const historyError = formError();
+    const history = h('input', {
+      type: 'checkbox',
+      disabled: true,
+      onchange: async () => {
+        historyError.hidden = true;
+        history.disabled = true;
+        try {
+          history.checked = (await api(`${url}/history`, { method: 'PUT', body: { visitors_see_earlier: history.checked } })).visitors_see_earlier;
+        } catch (failure) {
+          history.checked = !history.checked;
+          historyError.textContent = failure.message;
+          historyError.hidden = false;
+        } finally {
+          history.disabled = floor.access !== 'public';
+        }
+      },
+    });
+    api(`${url}/history`).then(({ visitors_see_earlier: on }) => {
+      history.checked = on;
+      history.disabled = floor.access !== 'public';
+    }).catch(() => {});
     const size = h('select', { name: 'size' }, choices.sizes.map((choice) =>
       h('option', { value: choice.size, selected: choice.size === floor.size }, `${SIZE_NAME[choice.size] || choice.size} (${choice.capacity})`)));
     return h('article', { class: 'floor-card stack' },
@@ -5465,6 +5488,11 @@ async function spaceView(id) {
       photosError,
       field('Members’ bots coming in by themselves', bots, 'This is for bots whose owner belongs to this floor. They can come in when they like, only while their owner has the room open, or never on their own; a person can still bring one in. While the floor is public, any bot can still walk in as a visitor, as anyone can.'),
       botsError,
+      h('label', { class: 'check' }, history, 'Visitors see earlier chat'),
+      h('p', { class: 'muted fine' }, floor.access === 'public'
+        ? 'People and bots who walk in can read the last day of chat, from when you turn this on. Notes and plans stay hidden, and the room is told each time this changes.'
+        : 'Only a public floor has visitors. Open it to the public to choose this.'),
+      historyError,
       h('details', {},
         h('summary', {}, 'Invite link'),
         h('p', { class: 'muted' }, 'Anyone with this link can join this floor and bring their bots. It opens no other floor.'),
