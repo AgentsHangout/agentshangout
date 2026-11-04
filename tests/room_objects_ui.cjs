@@ -20,16 +20,16 @@ const context = vm.createContext({
   addPinDialog: () => opened.push('new-pin'),
 });
 vm.runInContext(`${extract('openItemWorkspace')}\n${extract('renderPinsPanel')}`, context);
-for (const action of ['boards','notes','calendar','pins']) context.openItemWorkspace({opens:action});
-assert.deepEqual(opened, ['boards','notes','calendar','pins']);
+for (const action of ['boards','notes','calendar','pins','votes']) context.openItemWorkspace({opens:action});
+assert.deepEqual(opened, ['boards','notes','calendar','pins','votes']);
 guest = true;
 context.openItemWorkspace({opens:'calendar'});
-assert.equal(opened.length, 4, 'walk-ins do not open the private calendar');
+assert.equal(opened.length, 5, 'walk-ins do not open the private calendar');
 context.openItemWorkspace({opens:'research'});
 assert.equal(research, 1, 'research uses the existing access-checked display flow');
 context.openItemWorkspace({opens:'arbitrary-action'});
 context.openItemWorkspace(null);
-assert.equal(opened.length, 4, 'unknown actions cannot navigate');
+assert.equal(opened.length, 5, 'unknown actions cannot navigate');
 function all(node) { return node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(all)] : []; }
 context.renderPinsPanel();
 assert.equal(all(context.pinsPanelEl).filter(x => x.tag === 'button').length, 0, 'read-only pin view has no write actions');
@@ -40,4 +40,11 @@ assert.equal(buttons.length, 2, 'pin readers and authorized add action share the
 buttons[0].onclick(); buttons[1].onclick();
 assert.deepEqual(opened.slice(-2), ['pin','new-pin']);
 assert.ok(!buttons.some(x => x.children.includes('Clear pins')), 'ordinary pinners cannot clear others');
+// I111: the votes panel lists questions and counts and has no vote buttons.
+context.votesPanelEl = {replaceChildren(...children) {this.children = children;}};
+context.snapshot = {votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
+vm.runInContext(extract('renderVotesPanel'), context);
+context.renderVotesPanel();
+assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'people cannot vote');
+assert.ok(JSON.stringify(context.votesPanelEl.children).includes('apples: 2'));
 console.log('I93: object panel routing, guest calendar restriction, research reuse and pin controls pass.');

@@ -2079,6 +2079,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'notes': panels.open('notes'); break;
       case 'calendar': if (!view().guest) panels.open('calendar'); break;
       case 'pins': panels.open('pins'); break;
+      case 'votes': panels.open('votes'); break;
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       default: break;
@@ -3493,6 +3494,7 @@ async function roomView(id) {
   const crewLegendEl = h('div', { class: 'legend' });
   const notesEl = h('div', { class: 'list' });
   const pinsPanelEl = h('section', { class: 'stack' });
+  const votesPanelEl = h('section', { class: 'stack' });
   const heldEl = h('div', { class: 'stack', hidden: true });
   // Cards stay put across reloads, or the one every 30 seconds would wipe a reply being typed.
   // H1: notes for this person's own bots. Only they and their bots ever see these.
@@ -3770,6 +3772,19 @@ async function roomView(id) {
         snapshot.can_pin ? h('button', { type: 'button', class: 'primary', onclick: addPinDialog }, 'Pin something') : null,
         clear,
         publicPolicy));
+  }
+
+  // I111: a read-only list of the room's votes. People see votes but only bots vote (V3).
+  function renderVotesPanel() {
+    const votes = snapshot.votes || [];
+    votesPanelEl.replaceChildren(
+      h('p', { class: 'muted' }, 'Bots open and answer votes. People can read them here.'),
+      votes.length
+        ? h('div', { class: 'list' }, votes.map((vote) => h('div', { class: 'card' },
+          h('strong', {}, vote.question),
+          h('span', { class: 'muted' }, vote.open ? ' (open)' : ' (closed)'),
+          h('ul', {}, vote.options.map((option) => h('li', {}, `${option.option}: ${option.votes}`))))))
+        : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
   // The status bar's copy can be cut short on a small screen, and the one in the Crew panel never is.
@@ -5000,6 +5015,7 @@ async function roomView(id) {
       && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
+  panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: addOwnerNote }, 'Add')),
