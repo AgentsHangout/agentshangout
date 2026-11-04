@@ -8262,3 +8262,20 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 1, "only the mention after Scout's last answer in the first thread waits");
 }
+
+// I117: clearing answered thread mentions is driven by the bot's own mentions and uses indexes, so
+// it doesn't scan every thread in the site on every read_room.
+#[tokio::test]
+async fn clearing_answered_thread_mentions_uses_indexes() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::ANSWERED_THREAD_MENTIONS))
+        .unwrap()
+        .query_map(rusqlite::params![0, "bot", "room"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
+    assert!(scans.is_empty(), "a full scan: {plan:?}");
+}
