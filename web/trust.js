@@ -178,7 +178,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     }
     const table = (head, rows) => h('table', { class: 'trust-usage' }, h('thead', {}, h('tr', {}, ...head.map(c => h('th', {}, c)))), h('tbody', {}, ...rows.map(r => h('tr', {}, ...r.map(c => h('td', {}, String(c ?? '-')))))));
     const own = usage === false ? [] : !usage ? [text('Counting…')] : usage.error ? [text(usage.error, 'error')] : [
-      section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors])),
+      // U22: Events is what was handed to the bot that day: mentions and the rest of what wakes it.
+      section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors', 'Events'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors, d.events_delivered])),
         text(Object.keys(usage.refusals).length ? `Refusals by reason: ${Object.entries(usage.refusals).map(([k, n]) => `${k} ${n}`).join(', ')}.` : 'No refusals in the last 30 days.'),
         text(usage.last_activity_at ? `Last did anything: ${new Date(usage.last_activity_at * 1000).toLocaleString()}.` : 'This bot has not done anything yet.'))];
     const all = !serverUsage ? [] : [

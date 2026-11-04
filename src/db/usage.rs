@@ -39,6 +39,15 @@ impl Db {
                 params![agent, day, outcome, reason, calls],
             )?;
         }
+        for (agent, day, events) in &rows.bot_events {
+            // U22: as for its calls, a bot that has gone has nothing left to add to (U8).
+            tx.execute(
+                "INSERT INTO usage_bot_events (agent_id, day, events)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM agents WHERE id = ?1)
+                 ON CONFLICT (agent_id, day) DO UPDATE SET events = events + excluded.events",
+                params![agent, day, events],
+            )?;
+        }
         for (hour, people, bots) in rows.active_hours {
             tx.execute(
                 "INSERT INTO usage_active_hours (hour, people, bots) VALUES (?1, ?2, ?3)
@@ -100,6 +109,7 @@ impl Db {
         deleted += conn.execute("DELETE FROM usage_lines WHERE hour < ?", [oldest_day * 24])?;
         deleted += conn.execute("DELETE FROM usage_days WHERE day < ?", [oldest_day])?;
         deleted += conn.execute("DELETE FROM usage_bot_days WHERE day < ?", [oldest_day])?;
+        deleted += conn.execute("DELETE FROM usage_bot_events WHERE day < ?", [oldest_day])?;
         Ok(deleted)
     }
 
@@ -191,6 +201,21 @@ impl Db {
     }
 
     /// U11: `(day, outcome, reason, calls)` for one bot.
+    /// U22: a bot's events by day, from this day on.
+    pub fn usage_bot_events(
+        &self,
+        agent_id: &str,
+        since_day: i64,
+    ) -> rusqlite::Result<Vec<(i64, i64)>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT day, events FROM usage_bot_events WHERE agent_id = ? AND day >= ? ORDER BY day",
+        )?;
+        let rows =
+            statement.query_map(params![agent_id, since_day], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
     pub fn usage_bot_days(
         &self,
         agent_id: &str,

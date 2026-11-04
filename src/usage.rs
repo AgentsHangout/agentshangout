@@ -180,6 +180,8 @@ struct Inner {
     latency: HashMap<LatencyKey, [i64; BUCKETS]>,
     /// U17: the counts that are not a tool or a route, by hour.
     lines: HashMap<(i64, &'static str), i64>,
+    /// U22: events handed to each bot, by bot and day.
+    bot_events: HashMap<(String, i64), i64>,
     day: i64,
     people: HashSet<u64>,
     bots_seen: HashSet<u64>,
@@ -204,6 +206,7 @@ pub struct Pending {
     active_hours: Vec<(i64, i64, i64)>,
     lines: Vec<((i64, &'static str), i64)>,
     latency: Vec<(LatencyKey, [i64; BUCKETS])>,
+    bot_events: Vec<((String, i64), i64)>,
 }
 
 /// U5: the hash that stands for a person for one day is made with a value kept only here.
@@ -384,6 +387,24 @@ impl Usage {
         *inner.lines.entry((at.div_euclid(3600), line)).or_default() += n;
     }
 
+    /// U17, U22: `n` events handed to a bot, counted for the server and for the bot's own day.
+    pub fn note_events(&self, at: i64, agent_id: &str, n: i64) {
+        self.note_line(at, "events_delivered", n);
+        if n <= 0 {
+            return;
+        }
+        let key = (agent_id.to_string(), at.div_euclid(86_400));
+        let mut inner = self.lock();
+        if inner.bot_events.len() < MAX_BUCKETS || inner.bot_events.contains_key(&key) {
+            *inner.bot_events.entry(key).or_default() += n;
+        }
+    }
+
+    /// How many bot-days of events are waiting in memory.
+    pub fn held_bot_events(&self) -> usize {
+        self.lock().bot_events.len()
+    }
+
     /// How many people and bots are held for the current hour in memory.
     pub fn held_hour(&self) -> (usize, usize) {
         let inner = self.lock();
@@ -423,6 +444,7 @@ impl Usage {
             latency: std::mem::take(&mut inner.latency).into_iter().collect(),
             hours: std::mem::take(&mut inner.hours).into_iter().collect(),
             bots: std::mem::take(&mut inner.bots).into_iter().collect(),
+            bot_events: std::mem::take(&mut inner.bot_events).into_iter().collect(),
             days,
         }
     }
@@ -437,6 +459,7 @@ impl Usage {
             && pending.active_hours.is_empty()
             && pending.lines.is_empty()
             && pending.latency.is_empty()
+            && pending.bot_events.is_empty()
         {
             return;
         }
@@ -473,6 +496,11 @@ impl Usage {
                 .iter()
                 .map(|((hour, surface, name), hist)| (*hour, *surface, name.as_str(), *hist))
                 .collect(),
+            bot_events: pending
+                .bot_events
+                .iter()
+                .map(|((agent, day), events)| (agent.as_str(), *day, *events))
+                .collect(),
         };
         if let Err(error) = state.db.write_usage(&rows) {
             tracing::error!(%error, "usage counts could not be written");
@@ -508,6 +536,8 @@ pub struct UsageRows<'a> {
     pub lines: Vec<(i64, &'a str, i64)>,
     /// U16: `(hour, surface, name, buckets)`
     pub latency: Vec<(i64, &'a str, &'a str, [i64; BUCKETS])>,
+    /// U22: `(agent, day, events)`
+    pub bot_events: Vec<(&'a str, i64, i64)>,
 }
 
 /// U16: one hour's response-time buckets for a tool or route.
@@ -807,6 +837,7 @@ async fn agent_usage(
     let today = now().div_euclid(86_400);
     let since = today - KEEP_DAYS + 1;
     let rows = state.db.usage_bot_days(&id, since)?;
+    let events: BTreeMap<i64, i64> = state.db.usage_bot_events(&id, since)?.into_iter().collect();
     let mut per_day: BTreeMap<i64, [i64; 3]> = BTreeMap::new();
     let mut reasons: BTreeMap<String, i64> = BTreeMap::new();
     for (day, outcome, reason, calls) in rows {
@@ -823,7 +854,8 @@ async fn agent_usage(
     let days: Vec<Value> = (since..=today)
         .map(|day| {
             let [ok, refused, errors] = per_day.get(&day).copied().unwrap_or_default();
-            json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors})
+            let events = events.get(&day).copied().unwrap_or_default();
+            json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors, "events_delivered": events})
         })
         .collect();
     let last = agent.last_active_at.max(agent.last_seen_at);

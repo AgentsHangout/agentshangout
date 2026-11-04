@@ -733,3 +733,76 @@ async fn the_new_numbers_are_deleted_after_thirty_days() {
     assert_eq!(f.state.db.usage_latency(0).unwrap()[0].hist[2], 8);
     assert_eq!(f.state.db.usage_lines(0).unwrap()[0].2, 4);
 }
+
+// U22
+#[tokio::test]
+async fn the_events_handed_to_a_bot_are_counted_for_its_owner_alone() {
+    let f = Fixture::new().await;
+    let said = f
+        .call("bob", Method::POST, "/api/hangouts/shared/messages", json!({"text": "@a hello"}))
+        .await;
+    assert_eq!(said.0, StatusCode::OK, "{}", said.1);
+    let (status, events) = f.get("a", "/api/events").await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    let delivered = events["events"].as_array().unwrap().len() as i64;
+    assert!(delivered >= 1, "{events}");
+
+    let (status, usage) = f.get("alice", "/api/agents/a/usage").await;
+    assert_eq!(status, StatusCode::OK, "{usage}");
+    let days = usage["days"].as_array().unwrap();
+    assert_eq!(days.last().unwrap()["events_delivered"], delivered, "{usage}");
+    assert!(days.iter().rev().skip(1).all(|day| day["events_delivered"] == 0), "{usage}");
+    // The server's line counts them too, and bot b got none.
+    assert_eq!(f.get("alice", "/api/usage").await.1["lines"]["events_delivered"], delivered);
+    assert_eq!(f.state.db.usage_bot_events("b", 0).unwrap(), vec![]);
+    // Only the owner reads it, and it goes with the bot (U8).
+    assert_eq!(f.get("bob", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("a", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    f.state.db.delete_agent("a").unwrap();
+    assert!(f.state.db.usage_bot_events("a", 0).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_bots_events_older_than_thirty_days_are_deleted() {
+    let f = Fixture::new().await;
+    let at = now();
+    let write = |day: i64| {
+        f.state
+            .db
+            .write_usage(&UsageRows {
+                version: "x",
+                bot_events: vec![("a", day, 4)],
+                ..Default::default()
+            })
+            .unwrap();
+    };
+    write((at - 31 * DAY).div_euclid(DAY));
+    write((at - 29 * DAY).div_euclid(DAY));
+    // A bot that has gone gets nothing written.
+    f.state
+        .db
+        .write_usage(&UsageRows {
+            version: "x",
+            bot_events: vec![("gone", 0, 1)],
+            ..Default::default()
+        })
+        .unwrap();
+    f.state.db.sweep_usage(at).unwrap();
+    assert_eq!(
+        f.state.db.usage_bot_events("a", 0).unwrap(),
+        vec![((at - 29 * DAY).div_euclid(DAY), 4)]
+    );
+    assert!(f.state.db.usage_bot_events("gone", 0).unwrap().is_empty());
+}
+
+#[test]
+fn memory_for_a_bots_events_is_bounded() {
+    let usage = agenthangout::usage::Usage::new(Vec::new());
+    for n in 0..25_000 {
+        usage.note_events(0, &format!("bot{n}"), 1);
+    }
+    assert_eq!(usage.held_bot_events(), 20_000);
+    // A bot already held keeps counting.
+    usage.note_events(0, "bot1", 1);
+    assert_eq!(usage.held_bot_events(), 20_000);
+}
