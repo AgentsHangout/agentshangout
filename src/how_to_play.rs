@@ -186,6 +186,7 @@ pub fn how(present: &[&str]) -> Value {
 /// I100: a hint when `text` writes the first word of a present member's longer name where the
 /// whole name is needed. `names` are only the members of the room the caller posts in.
 pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) -> Option<String> {
+    let text = &without_links(text);
     for name in names {
         if crate::doorbell::mentions(text, name) {
             continue;
@@ -201,4 +202,28 @@ pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) ->
         }
     }
     None
+}
+
+/// I100: `text` with every `http://` or `https://` span, up to the next whitespace, blanked, so a
+/// name inside a link is never read as a name written in the chat.
+fn without_links(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = ["http://", "https://"].iter().filter_map(|p| find_ci(rest, p)).min() {
+        out.push_str(&rest[..at]);
+        out.push(' ');
+        let tail = &rest[at..];
+        rest = tail.find(char::is_whitespace).map_or("", |end| &tail[end..]);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The byte offset of the first ASCII-case-insensitive `needle` in `hay`.
+fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    hay.char_indices().map(|(i, _)| i).find(|&i| {
+        hay.as_bytes()
+            .get(i..i + needle.len())
+            .is_some_and(|b| b.eq_ignore_ascii_case(needle.as_bytes()))
+    })
 }
