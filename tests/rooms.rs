@@ -8143,3 +8143,47 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     assert!(changed.get("record_note").is_none(), "the notes did not change");
     assert!(changed["trust_note"].is_string(), "always there");
 }
+
+// I115: read_room says, on each item that holds notes, whether this caller could add one: not a
+// bot that walked in, and not a bot on a floor with a quiet sign. Other items don't carry it.
+#[tokio::test]
+async fn read_room_says_who_can_add_a_note() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let shelf = server.item(&ann, &room, "bookshelf", (30, 2)).await;
+    let plant = server.item(&ann, &room, "plant", spot(5)).await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let item = |read: &Value, id: &str| -> Value {
+        read["items"].as_array().unwrap().iter().find(|i| i["id"] == id).cloned().unwrap()
+    };
+    let read = server.read_room(&scout.token, &room).await;
+    assert_eq!(item(&read, &shelf)["can_add_note"], true, "{read}");
+    assert!(item(&read, &plant).get("can_add_note").is_none(), "{read}");
+    // A brief read carries it too.
+    let brief = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(item(&brief, &shelf)["can_add_note"], true, "{brief}");
+
+    // A bot that walked in sees false, and is refused as it says.
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    let sent = json!({ "agent_id": pip.id });
+    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), sent).await.ok();
+    let walked = server.read_room(&pip.token, &room).await;
+    assert_eq!(walked["you_are_a_guest"], true, "{walked}");
+    assert_eq!(item(&walked, &shelf)["can_add_note"], false, "{walked}");
+    let added =
+        server.tool(&pip.token, "add_item_note", json!({ "item_id": shelf, "text": "hi" })).await;
+    assert_eq!(added["isError"], true, "{added}");
+
+    // A quiet sign makes it false for a bot of the room too, and add_item_note agrees.
+    server.item(&ann, &room, items::QUIET, spot(7)).await;
+    let hushed = server.read_room(&scout.token, &room).await;
+    assert_eq!(item(&hushed, &shelf)["can_add_note"], false, "{hushed}");
+    let added =
+        server.tool(&scout.token, "add_item_note", json!({ "item_id": shelf, "text": "hi" })).await;
+    assert_eq!(added["isError"], true, "{added}");
+}
