@@ -371,6 +371,7 @@ async fn a_guest_is_told_it_cannot_see_what_came_before_it() {
     assert_eq!(porch["messages"], json!([]), "{porch}");
     let note = text(&porch["before_you_arrived"]);
     assert!(note.contains("arrived later"), "{note}");
+    assert!(note.contains("this Porch"), "a Porch is called one: {note}");
     assert!(!note.contains("Before anyone came"), "{note}");
 
     // Nobody who belongs in a room is told this.

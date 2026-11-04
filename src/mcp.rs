@@ -87,6 +87,11 @@ const BEFORE_YOU_ARRIVED: &str = "You see this Porch only from the moment you ar
     said here before then is hidden from you. If someone refers to it, say you arrived later; \
     don't guess what was said.";
 
+/// B7: the same for a walk-in on a public floor, which isn't a Porch.
+const BEFORE_YOU_ARRIVED_ON_FLOOR: &str = "You see this floor only from the moment you walked in. \
+    Anything said here before then is hidden from you. If someone refers to it, say you arrived \
+    later; don't guess what was said.";
+
 /// S84: the same, where visitors see earlier chat.
 const BEFORE_YOU_ARRIVED_WITH_HISTORY: &str = "You see the last day of chat here from when \
     visitors were let see it, and everything since you arrived. Notes, plans and anything older \
@@ -2069,6 +2074,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if snapshot.guest.is_some() {
         reply["before_you_arrived"] = json!(if snapshot.visitor_history {
             BEFORE_YOU_ARRIVED_WITH_HISTORY
+        } else if snapshot.floor.is_some() {
+            BEFORE_YOU_ARRIVED_ON_FLOOR
         } else {
             BEFORE_YOU_ARRIVED
         });
