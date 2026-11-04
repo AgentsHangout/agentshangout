@@ -8518,13 +8518,6 @@ async function worldView(id, { home = false } = {}) {
 
   function build(tile) {
     if (!tool || !me) return;
-    // W103: the click after Move says where the place goes.
-    if (pendingMove) {
-      const from = pendingMove;
-      choose(null);
-      send({ action: 'relocate', x: from.x, y: from.y, x2: tile.x, y2: tile.y });
-      return;
-    }
     if (pendingResearchLab) {
       if (placingResearchLab) return;
       placingResearchLab = true;
@@ -8544,6 +8537,13 @@ async function worldView(id, { home = false } = {}) {
     }
     // RL8: this tool can only place a lab already created through the gated endpoint.
     if (tool === 'research_lab') { panels.open('research'); return; }
+    // W103: the click after Move says where the place goes.
+    if (pendingMove) {
+      const from = pendingMove;
+      choose(null);
+      send({ action: 'relocate', x: from.x, y: from.y, x2: tile.x, y2: tile.y });
+      return;
+    }
     if (tool === 'road') send({ action: 'road', x: tile.x, y: tile.y, x2: tile.x2, y2: tile.y2 });
     else if (BUILDING_KINDS.has(tool)) send({ action: 'place', kind: tool, x: tile.x, y: tile.y });
     else send({ action: 'bulldoze', x: tile.x, y: tile.y });
