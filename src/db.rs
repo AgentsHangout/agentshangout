@@ -1646,6 +1646,31 @@ CREATE TABLE IF NOT EXISTS plan_cadence_shapes (
  window_to INTEGER,
  since INTEGER NOT NULL
 );
+-- U14 to U21: usage phase 2. Counts only, as in phase 1: people and bots active in an hour (the
+-- number), response times as a fixed list of bucket counts, and events, long-polls and webhooks.
+CREATE TABLE IF NOT EXISTS usage_active_hours (
+    hour   INTEGER PRIMARY KEY,
+    people INTEGER NOT NULL,
+    bots   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_latency (
+    hour    INTEGER NOT NULL,
+    surface TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    version TEXT NOT NULL,
+    b0 INTEGER NOT NULL DEFAULT 0, b1 INTEGER NOT NULL DEFAULT 0, b2 INTEGER NOT NULL DEFAULT 0,
+    b3 INTEGER NOT NULL DEFAULT 0, b4 INTEGER NOT NULL DEFAULT 0, b5 INTEGER NOT NULL DEFAULT 0,
+    b6 INTEGER NOT NULL DEFAULT 0, b7 INTEGER NOT NULL DEFAULT 0, b8 INTEGER NOT NULL DEFAULT 0,
+    b9 INTEGER NOT NULL DEFAULT 0, b10 INTEGER NOT NULL DEFAULT 0, b11 INTEGER NOT NULL DEFAULT 0,
+    b12 INTEGER NOT NULL DEFAULT 0, b13 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour, surface, name, version)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS usage_lines (
+    hour  INTEGER NOT NULL,
+    line  TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (hour, line)
+) WITHOUT ROWID;
 "#;
 
 #[derive(Debug, Serialize)]

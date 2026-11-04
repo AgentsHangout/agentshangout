@@ -143,7 +143,9 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
   }
   function render() {
     if (!data) return;
-    const tabs = data.agents.length ? [['connections', 'Connections'], ['monitoring', 'Monitoring'], ['usage', 'Usage']] : [];
+    // U21: someone who runs the server reaches the server totals even with no bots of their own.
+    const operator = me?.god_mode !== undefined && me?.god_mode !== null;
+    const tabs = data.agents.length ? [['connections', 'Connections'], ['monitoring', 'Monitoring'], ['usage', 'Usage']] : operator ? [['connections', 'Connections'], ['usage', 'Usage']] : [];
     if (!tabs.length) tab = 'connections';
     const chooser = data.agents.length ? field('Bot', h('select', { 'aria-label': 'Bot to manage', disabled: busy || dirty, onchange: e => choose(e.target.value) },
       ...data.agents.map(a => h('option', { value: a.id, selected: a.id === selected }, a.name)))) : null;
@@ -167,22 +169,27 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
   // U11, U12: what the chosen bot did lately, as counts, and for the people who run the server, the totals.
   function usageView() {
     if (usage === undefined) {
-      usage = null;
       const asked = selected;
-      api(`${path()}/usage`).then(v => { if (asked === selected) usage = v; }).catch(f => { if (asked === selected) usage = { error: f.message }; }).finally(() => { if (asked === selected) render(); });
+      if (asked) {
+        usage = null;
+        api(`${path()}/usage`).then(v => { if (asked === selected) usage = v; }).catch(f => { if (asked === selected) usage = { error: f.message }; }).finally(() => { if (asked === selected) render(); });
+      } else usage = false;
       if (serverUsage === undefined) api('/api/usage').then(v => { serverUsage = v; render(); }).catch(() => { serverUsage = false; });
     }
     const table = (head, rows) => h('table', { class: 'trust-usage' }, h('thead', {}, h('tr', {}, ...head.map(c => h('th', {}, c)))), h('tbody', {}, ...rows.map(r => h('tr', {}, ...r.map(c => h('td', {}, String(c ?? '-')))))));
-    const own = !usage ? [text('Counting…')] : usage.error ? [text(usage.error, 'error')] : [
+    const own = usage === false ? [] : !usage ? [text('Counting…')] : usage.error ? [text(usage.error, 'error')] : [
       section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors])),
         text(Object.keys(usage.refusals).length ? `Refusals by reason: ${Object.entries(usage.refusals).map(([k, n]) => `${k} ${n}`).join(', ')}.` : 'No refusals in the last 30 days.'),
         text(usage.last_activity_at ? `Last did anything: ${new Date(usage.last_activity_at * 1000).toLocaleString()}.` : 'This bot has not done anything yet.'))];
     const all = !serverUsage ? [] : [
       section('This server, last 7 days (operators only)',
-        table(['Tool or route', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Slow', 'Top refusal'], serverUsage.by_tool.slice(0, 25).map(t => [t.name, t.calls, t.refused, t.errors, t.avg_ms, t.slow, t.top_refusal])),
-        table(['Day', 'People', 'Bots', 'Calls', 'Refused'], serverUsage.by_day.slice().reverse().map(d => [d.day, d.active_people, d.active_bots, d.calls, d.refused])),
-        table(['Version', 'Calls', 'Refused', 'Errors', 'Avg ms'], serverUsage.by_version.map(v => [v.version, v.calls, v.refused, v.errors, v.avg_ms])))];
-    return [text('Counts only. No messages, no room names, nothing about what the bot said. Kept for 30 days.'), ...own, ...all];
+        text(serverUsage.lines ? `Events delivered ${serverUsage.lines.events_delivered}, long-polls ${serverUsage.lines.long_polls}, webhook POSTs ${serverUsage.lines.webhooks_sent} (${serverUsage.lines.webhooks_failed} failed).` : ''),
+        table(['Tool or route', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Median ms', 'p90 ms', 'Slow', 'Top refusal'], serverUsage.by_tool.slice(0, 25).map(t => [t.name, t.calls, t.refused, t.errors, t.avg_ms, t.p50_ms, t.p90_ms, t.slow, t.top_refusal])),
+        table(['Day', 'People', 'Bots', 'Calls', 'Refused', 'Median ms', 'p90 ms', 'Events', 'Long-polls', 'Webhooks', 'Failed'], serverUsage.by_day.slice().reverse().map(d => [d.day, d.active_people, d.active_bots, d.calls, d.refused, d.p50_ms, d.p90_ms, d.lines?.events_delivered, d.lines?.long_polls, d.lines?.webhooks_sent, d.lines?.webhooks_failed])),
+        text('Last 24 hours (UTC)'),
+        table(['Hour', 'People', 'Bots', 'Calls', 'Refused', 'Median ms', 'p90 ms'], (serverUsage.by_hour || []).slice(-24).reverse().map(d => [d.hour.slice(5, 16).replace('T', ' '), d.active_people, d.active_bots, d.calls, d.refused, d.p50_ms, d.p90_ms])),
+        table(['Version', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Median ms', 'p90 ms'], serverUsage.by_version.map(v => [v.version, v.calls, v.refused, v.errors, v.avg_ms, v.p50_ms, v.p90_ms])))];
+    return [text(selected ? 'Counts only. No messages, no room names, nothing about what the bot said. Kept for 30 days.' : 'Counts only. No messages, no room names, nobody’s history. Kept for 30 days.'), ...own, ...all];
   }
 
   // The graph: who is connected to you and to the chosen bot, and how.

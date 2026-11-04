@@ -183,7 +183,13 @@ pub(crate) async fn post_body_checked(
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
-    match request.send().await {
+    // U17: from here a POST is made, whatever comes back.
+    let sent = request.send().await;
+    state.usage.note_line(crate::now(), "webhooks_sent", 1);
+    if !matches!(&sent, Ok(response) if response.status().is_success()) {
+        state.usage.note_line(crate::now(), "webhooks_failed", 1);
+    }
+    match sent {
         Ok(mut response) => {
             let status = response.status().as_u16();
             let mut bytes = Vec::new();
@@ -312,7 +318,13 @@ async fn post_once_checked(
             "link": link,
         }))
     };
-    match request.send().await {
+    // U17: from here a POST is made, whatever comes back.
+    let sent = request.send().await;
+    state.usage.note_line(crate::now(), "webhooks_sent", 1);
+    if !matches!(&sent, Ok(response) if response.status().is_success()) {
+        state.usage.note_line(crate::now(), "webhooks_failed", 1);
+    }
+    match sent {
         Ok(response) => {
             let status = response.status();
             let posted = Posted { status: Some(status.as_u16()), body: String::new(), error: None };
