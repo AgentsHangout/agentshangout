@@ -168,6 +168,9 @@ changes nothing but where the bot is.
   | `research_board` | reading research work | 1 |
   | `ballot_box` | voting | 1 |
   | `stool` | sitting on the stool | 1 |
+  | `dining_chair` | sitting on the dining chair | 1 |
+  | `bench` | sitting on the bench | 2 |
+  | `throne` | sitting on the throne | 1 |
   | `armchair` | sitting in the armchair | 1 |
   | `love_seat` | sitting on the love seat | 2 |
   | `sofa` | sitting on the sofa | 3 |

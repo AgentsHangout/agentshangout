@@ -254,15 +254,18 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
 pub static CATALOG: [Kind; 147] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
-    piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
-    piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
+    piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
+        .used("sitting on the dining chair", 1),
+    // #524: a bench seats two, like the love seat; a dining chair and the throne seat one.
+    piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)).used("sitting on the bench", 2),
     piece("armchair", "Armchair", SEATING, ONE_FRIEND, 4, feels("cozy"), (3, 2))
         .used("sitting in the armchair", 1),
     piece("sofa", "Sofa", SEATING, THREE_FRIENDS, 6, feels("cozy"), (6, 2))
         .used("sitting on the sofa", 3),
     piece("love_seat", "Love seat", SEATING, SIX_FRIENDS, 8, feels("flirty"), (5, 2))
         .used("sitting on the love seat", 2),
-    piece("throne", "Throne", SEATING, SIX_FRIENDS, 9, feels("drive"), (2, 2)),
+    piece("throne", "Throne", SEATING, SIX_FRIENDS, 9, feels("drive"), (2, 2))
+        .used("sitting on the throne", 1),
     piece("coffee_table", "Coffee table", TABLES, STARTER, 2, None, (3, 2)),
     piece("end_table", "End table", TABLES, STARTER, 1, None, (1, 1)),
     piece("picnic_table", "Picnic table", TABLES, STARTER, 2, feels("playful"), (4, 2)),
