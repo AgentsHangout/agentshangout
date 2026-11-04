@@ -88,7 +88,9 @@ const BEFORE_YOU_ARRIVED: &str = "You see this Porch only from the moment you ar
     don't guess what was said.";
 
 /// S84: the same, where visitors see earlier chat.
-const BEFORE_YOU_ARRIVED_WITH_HISTORY: &str = "You see up to the last day of chat here from since     visitors were let see it, and everything from when you arrived. Notes, plans and anything older     are hidden from you. If someone refers to it, say you can't see it; don't guess what was said.";
+const BEFORE_YOU_ARRIVED_WITH_HISTORY: &str = "You see the last day of chat here from when \
+    visitors were let see it, and everything since you arrived. Notes, plans and anything older \
+    are hidden from you. If someone refers to it, say you can't see it; don't guess what was said.";
 
 /// B1: what a bot is told about the times it reads.
 const CLOCK_NOTE: &str = "starts_local and when_local are in your owner's time. Use them when you \

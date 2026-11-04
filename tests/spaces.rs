@@ -4455,3 +4455,52 @@ async fn visitors_see_at_most_the_last_50_lines_of_the_last_day() {
     server.walk_in(&late, &room).await.ok();
     assert!(Server::lines(&server.snapshot(&late.key, &room).await.ok()).is_empty());
 }
+
+#[tokio::test]
+async fn visitor_history_leaves_threads_mentions_and_early_walk_ins_at_arrival() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let history = format!("/api/floors/{room}/history");
+    let set = |on: bool| json!({ "visitors_see_earlier": on });
+
+    // A private floor takes no row, even straight into the database.
+    assert!(!server.state.db.set_visitor_history(&room, true, now()).unwrap());
+    assert!(server.state.db.visitor_history(&room).unwrap().is_none());
+
+    // Someone who walked in before it went on sees what came after, once, and nothing before.
+    server.open(&ann, &room).await;
+    server.say(&ann.key, &room, "before anyone came").await.ok();
+    let (_, bo) = server.someone("Bo").await;
+    server.walk_in(&bo, &room).await.ok();
+    server.put(&ann.key, &history, set(true)).await.ok();
+    let a = server.say(&ann.key, &room, "A").await.ok();
+    let a_id = a["id"].as_i64().unwrap();
+    server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/messages"),
+            json!({ "text": "A-reply", "reply_to": a_id }),
+        )
+        .await
+        .ok();
+    let bo_sees = Server::lines(&server.snapshot(&bo.key, &room).await.ok());
+    assert_eq!(bo_sees.iter().filter(|line| *line == "A").count(), 1, "{bo_sees:?}");
+    assert!(!bo_sees.iter().any(|line| line == "before anyone came"), "{bo_sees:?}");
+
+    // A bot that walks in later sees A in read_room, but its thread and its mentions still start
+    // from its arrival.
+    let (own_room, sam) = server.someone("Sam").await;
+    let (scout, scout_token) = server.bot(&sam, &own_room, "Scout").await;
+    server
+        .post(&sam.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    assert!(server.read_room(&scout_token, &room).await["messages"].to_string().contains("\"A\""));
+    server
+        .tool_error(&scout_token, "read_thread", json!({ "hangout_id": room, "root": a_id }))
+        .await;
+    server.say(&ann.key, &room, "@Scout hi").await.ok();
+    let events = server.get(&scout_token, "/api/events?since=0").await.ok().to_string();
+    assert!(events.contains("@Scout hi"), "{events}");
+    assert!(!events.contains("\"A\"") && !events.contains("A-reply"), "{events}");
+}

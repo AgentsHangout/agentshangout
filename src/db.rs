@@ -3841,7 +3841,10 @@ fn remove_empty_households(
 /// A35: the floor a space began with can't go while the space stands, so nobody can reach this one
 /// and nothing is left on it to reach.
 fn shut_first_floor(conn: &Connection, id: &str) -> rusqlite::Result<()> {
-    for table in ["messages", "events", "check_ins", "floor_items", "floor_visits"] {
+    // S84: going private takes visitors' history with it, as changing a floor does.
+    for table in
+        ["messages", "events", "check_ins", "floor_items", "floor_visits", "floor_visitor_history"]
+    {
         conn.execute(&format!("DELETE FROM {table} WHERE hangout_id = ?"), [id])?;
     }
     conn.execute("UPDATE floors SET access = 'private' WHERE hangout_id = ?", [id])?;
@@ -6236,10 +6239,13 @@ impl Db {
     // Routines (L1 to L10)
 
     /// S84: since when visitors to this floor see earlier chat, as `(after_id, since)`, if they do.
+    /// Only while the floor is public, whatever else left a row behind.
     pub fn visitor_history(&self, hangout_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
         self.conn()
             .query_row(
-                "SELECT after_id, since FROM floor_visitor_history WHERE hangout_id = ?",
+                "SELECT v.after_id, v.since FROM floor_visitor_history v
+                 JOIN floors f ON f.hangout_id = v.hangout_id AND f.access = 'public'
+                 WHERE v.hangout_id = ?",
                 [hangout_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -6256,9 +6262,11 @@ impl Db {
     ) -> rusqlite::Result<bool> {
         let conn = self.conn();
         Ok(if on {
+            // Only onto a floor that is public as it's written, so going private can't slip between.
             conn.execute(
                 "INSERT OR IGNORE INTO floor_visitor_history (hangout_id, after_id, since)
-                 SELECT ?1, COALESCE(MAX(id), 0), ?2 FROM messages",
+                 SELECT ?1, (SELECT COALESCE(MAX(id), 0) FROM messages), ?2
+                 WHERE EXISTS (SELECT 1 FROM floors WHERE hangout_id = ?1 AND access = 'public')",
                 params![hangout_id, now],
             )?
         } else {
