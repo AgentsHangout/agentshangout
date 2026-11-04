@@ -1647,7 +1647,7 @@ pub fn doorbell_check(state: &AppState, caller: &Caller) -> ApiResult<bool> {
     Ok(paused)
 }
 
-/// I102: only the bot's owner turns its waiting pulse on or off.
+/// I107: only the bot's owner turns its waiting pulse on or off.
 pub fn set_waiting_pulse(
     state: &AppState,
     caller: &Caller,

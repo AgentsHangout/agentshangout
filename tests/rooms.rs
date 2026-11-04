@@ -6394,7 +6394,7 @@ async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() 
     assert!(all.to_string().len() < 700, "{all}");
 }
 
-// I102: the missed-work pulse on a bot's next tool result.
+// I107: the missed-work pulse on a bot's next tool result.
 
 struct Waiting {
     server: Server,

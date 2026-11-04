@@ -2094,10 +2094,10 @@ pub fn open_collaboration_board(
     }))
 }
 
-/// I102: how long a mention sits unread before the next tool result says so.
+/// I107: how long a mention sits unread before the next tool result says so.
 const WAITING_AFTER_SECONDS: i64 = 600;
 
-/// I102: `{mentions, oldest_room?}` when a mention has gone unread for over ten minutes, else
+/// I107: `{mentions, oldest_room?}` when a mention has gone unread for over ten minutes, else
 /// nothing. Counts only, never message text. The room is named only if the bot is in it.
 fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     let agent_id = caller.agent_id.as_deref().filter(|_| !caller.is_house)?;

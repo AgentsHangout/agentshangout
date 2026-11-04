@@ -8271,7 +8271,7 @@ impl Db {
         )
     }
 
-    /// I102: an owner turned the waiting pulse off for this bot.
+    /// I107: an owner turned the waiting pulse off for this bot.
     pub fn waiting_pulse_enabled(&self, agent_id: &str) -> rusqlite::Result<bool> {
         Ok(!exists(
             &self.conn(),
@@ -8293,7 +8293,7 @@ impl Db {
         Ok(())
     }
 
-    /// I102: unread mentions made at or before `before`, oldest first, as (room id, made at).
+    /// I107: unread mentions made at or before `before`, oldest first, as (room id, made at).
     /// Reads only the unread index and no message text.
     pub fn stale_unread_mentions(
         &self,
