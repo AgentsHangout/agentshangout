@@ -1731,9 +1731,20 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     newer.sort_by_key(|message| thread_activity(message.id));
 
     let limit = optional_limit(args, 200)?;
-    let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);
-    let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
+    let (roots, kept) = if after > 0 {
+        if let Some(lim) = limit {
+            let count = lim.min(newer.len());
+            let taken: Vec<&crate::db::Message> = newer.into_iter().take(count).collect();
+            (taken, 0)
+        } else {
+            (newer, 0)
+        }
+    } else {
+        let kept = limit.map_or(0, |lim| newer.len().saturating_sub(lim));
+        let taken: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
+        (taken, kept)
+    };
     let last_message_id = roots.iter().map(|m| thread_activity(m.id)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
@@ -1937,26 +1948,16 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     if root.kind != "chat" {
         return Err(ApiError::bad_request("not a chat thread"));
     }
-    let guest = state.guest_visit(caller, &hangout.id)?;
-    let mut root_visible = true;
     if let Some(canonical) = state.db.thread_root_for(root.id)? {
         if canonical != root.id {
-            if let Ok(Some(can_msg)) = state.db.message(canonical) {
-                let can_visible = match &guest {
-                    Some(visit) => can_msg.created_at > visit.since,
-                    None => true,
-                };
-                if can_visible {
-                    root = can_msg;
-                }
-            }
+            root = state.db.message(canonical)?.ok_or_else(ApiError::not_found)?;
         }
     }
-    if let Some(visit) = &guest {
-        if root.created_at <= visit.since {
-            root_visible = false;
-        }
-    }
+    let guest = state.guest_visit(caller, &hangout.id)?;
+    let root_visible = match &guest {
+        Some(visit) => root.created_at > visit.since,
+        None => true,
+    };
     let after = args["after"].as_i64().unwrap_or(0);
     let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
     let mut replies =

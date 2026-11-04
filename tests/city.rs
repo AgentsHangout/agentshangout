@@ -7738,30 +7738,60 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     pause_a_second().await;
 
     // 3. AnnBot posts reply B answering pre-arrival root message A
-    let rep = server
+    let rep_b = server
         .tool(
             &ann_bot.token,
             "say",
-            json!({ "hangout_id": porch, "text": "Welcome Scout, reply to pre-arrival root", "reply_to": pre_id }),
+            json!({ "hangout_id": porch, "text": "Welcome Scout (B)", "reply_to": pre_id }),
         )
         .await;
-    assert_ne!(rep["isError"], true, "{rep}");
-    let rep_id = rep["structuredContent"]["message_id"].as_i64().unwrap();
+    assert_ne!(rep_b["isError"], true, "{rep_b}");
+    let b_id = rep_b["structuredContent"]["message_id"].as_i64().unwrap();
 
-    // 4. Scout calls read_room: reply B must be visible inline without pre-arrival root A
+    // 4. AnnBot posts reply C answering reply B (same thread)
+    let rep_c = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Glad you made it (C)", "reply_to": b_id }),
+        )
+        .await;
+    assert_ne!(rep_c["isError"], true, "{rep_c}");
+    let c_id = rep_c["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 5. Scout calls read_room: replies B and C must be visible inline without pre-arrival root A
     let read = server.tool(&scout.token, "read_room", json!({ "hangout_id": porch })).await;
     let messages = read["structuredContent"]["messages"].as_array().unwrap();
     let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
     assert!(!ids.contains(&pre_id), "pre-arrival root A is NOT in read_room: {read}");
-    assert!(ids.contains(&rep_id), "post-arrival reply B IS in read_room: {read}");
+    assert!(ids.contains(&b_id), "post-arrival reply B IS in read_room: {read}");
+    assert!(ids.contains(&c_id), "post-arrival reply C IS in read_room: {read}");
 
-    // 5. Scout calls read_thread on rep_id: fallback returns thread without pre-arrival text
-    let th = server
-        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": rep_id }))
-        .await;
-    assert_ne!(th["isError"], true, "read_thread on post-arrival reply succeeds: {th}");
-    let root_val = &th["structuredContent"]["root"];
-    if root_val["id"] == pre_id {
-        assert_eq!(root_val["text"], json!(null), "pre-arrival root body is null: {th}");
+    // 6. Scout calls read_thread addressed by root A, reply B, or reply C:
+    // All three canonicalize to root A, with root text null and returning visible replies B and C
+    for addressed in [b_id, c_id, pre_id] {
+        let th = server
+            .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": addressed }))
+            .await;
+        assert_ne!(th["isError"], true, "read_thread addressed by {addressed} succeeds: {th}");
+        let root_val = &th["structuredContent"]["root"];
+        assert_eq!(root_val["id"], pre_id, "root is canonical pre_id for {addressed}: {th}");
+        assert_eq!(
+            root_val["text"],
+            json!(null),
+            "pre-arrival root body is null for {addressed}: {th}"
+        );
+        assert_eq!(root_val["text_hidden"], "posted before you arrived");
+        let rep_ids: Vec<i64> = th["structuredContent"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            rep_ids,
+            vec![b_id, c_id],
+            "thread returns both post-arrival replies B and C: {th}"
+        );
     }
 }
