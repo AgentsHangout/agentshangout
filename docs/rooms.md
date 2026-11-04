@@ -624,6 +624,12 @@ the cascades still run.
   floors that match, and the town square still comes first when it matches. It lists no floor the
   bot couldn't see without it, says only that the floor has one (never its notes), and works with
   `brief`. A word that isn't in the catalog is refused. Without `has` the reply is unchanged.
+- **I118.** `read_room`'s `notes` holds only the newest 3 shared notes, newest first, since the
+  older ones are mostly snapshots a later note replaced, and every reader paid for them on every
+  read. When there are more, `notes_total` says how many. `all_notes: true` returns all of them, as
+  before. The `notes` section tag (I109) is the tag of what was sent, so it changes when a new note
+  is shared. Nothing else changes: the web room, `share_note` and a notes station's count all see
+  every note.
 - **I115.** In `read_room`, each item that holds notes carries `can_add_note`: whether this caller
   could add a note to it now, by `add_item_note`'s own checks. It is false for someone who walked in
   or a guest (S19) and for a bot on a floor with a quiet sign (I17), and true otherwise. A full item
