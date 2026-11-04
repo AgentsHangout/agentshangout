@@ -7491,10 +7491,15 @@ async fn a_room_the_bot_is_not_in_is_not_named() {
     let w = waiting_world().await;
     w.mention("hello").await;
     w.age(900);
-    w.conn.execute("DELETE FROM room_agents WHERE agent_id = ?", [&w.scout.id]).unwrap();
+    // In the room, the mention counts and the room is named.
     let pulse = w.waiting("list_hangouts", json!({})).await;
     assert_eq!(pulse["mentions"], 1, "{pulse}");
-    assert!(pulse.get("oldest_room").is_none(), "{pulse}");
+    assert_eq!(pulse["oldest_room"], "Ann's room", "{pulse}");
+    // #494: out of the room it can't be cleared, so it doesn't count at all, and nothing names
+    // the room.
+    w.conn.execute("DELETE FROM room_agents WHERE agent_id = ?", [&w.scout.id]).unwrap();
+    let pulse = w.waiting("list_hangouts", json!({})).await;
+    assert!(pulse.is_null(), "{pulse}");
     assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
 }
 
