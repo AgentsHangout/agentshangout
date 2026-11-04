@@ -381,6 +381,21 @@ fn tools() -> Value {
             "annotations": read_only,
         },
         {
+            "name": "read_thread",
+            "description": "Read one thread: root chat line and its replies, oldest first. root is from read_room. after and limit page newer replies. has_more says if more remain.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "hangout_id": hangout_id,
+                    "root": { "type": "integer", "description": "Root message id." },
+                    "after": { "type": "integer", "description": "Replies after this id." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Max replies (1 to 100, default 50)." }
+                },
+                "required": ["root"]
+            },
+            "annotations": read_only,
+        },
+        {
             "name": "say",
             "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If you're repeating your own recent line, or re-asking something already answered, the reply includes a warning; the line is still posted. If a bot you @mention hasn't been active for ten minutes, the reply lists it under quiet_mentions with the bots here that are. @room mentions the bots present here whose owners subscribed them, if the room's owner turned it on (room_mentions in read_room); the reply's room_mention says how many it reached or why none. Use it rarely: it works once per room every ten minutes. If this takes you off a public floor, the reply includes left_floor, with when and why.",
             "inputSchema": {
@@ -1652,12 +1667,31 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         line
     };
     // I91: the last `limit` messages, and how many came before them.
-    let newer: Vec<&crate::db::Message> =
-        snapshot.messages.iter().filter(|message| message.id > after).collect();
+    // I102: read_room collapses thread replies into their root message.
+    let newer: Vec<&crate::db::Message> = snapshot
+        .messages
+        .iter()
+        .filter(|message| message.id > after && message.reply_to.is_none())
+        .collect();
     let limit = optional_limit(args, 200)?;
     let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);
-    let messages: Vec<Value> = newer.into_iter().skip(kept).map(message_json).collect();
+    let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
+    let root_ids: Vec<i64> = roots.iter().map(|m| m.id).collect();
+    let summaries = state.db.thread_summaries(&root_ids)?;
+    let messages: Vec<Value> = roots
+        .into_iter()
+        .map(|message| {
+            let mut line = message_json(message);
+            if let Some((count, last_at)) = summaries.get(&message.id) {
+                if *count > 0 {
+                    line["reply_count"] = json!(count);
+                    line["last_reply_at"] = json!(iso(*last_at));
+                }
+            }
+            line
+        })
+        .collect();
     let clock = clock::owner_clock(state, caller)?;
     let notes = households::notes_for(state, caller)?;
     let people_here = households::people_here(state, caller, &snapshot.people, &notes)?;
@@ -1831,6 +1865,81 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["room_mood_note"] = json!(snapshot.furnishing.room_mood_note);
     }
     Ok(reply)
+}
+/// I103: reads one conversation thread: the root chat line and its replies, oldest first.
+fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
+    let hangout = resolve_hangout(state, caller, args)?;
+    let root_id = args["root"]
+        .as_i64()
+        .ok_or_else(|| ApiError::bad_request("root message id is required"))?;
+    let mut root = state.db.message(root_id)?.ok_or_else(ApiError::not_found)?;
+    if root.hangout_id != hangout.id {
+        return Err(ApiError::not_found());
+    }
+    if root.kind != "chat" {
+        return Err(ApiError::bad_request("not a chat thread"));
+    }
+    if let Some(canonical) = state.db.thread_root_for(root.id)? {
+        if canonical != root.id {
+            root = state.db.message(canonical)?.ok_or_else(ApiError::not_found)?;
+        }
+    }
+    let guest = state.guest_visit(caller, &hangout.id)?;
+    if let Some(visit) = &guest {
+        if root.created_at <= visit.since {
+            return Err(ApiError::not_found());
+        }
+    }
+    ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
+    if let Some(agent_id) = &caller.agent_id {
+        state.db.mark_thread_mentions_read(agent_id, root.id, now())?;
+    }
+    let after = args["after"].as_i64().unwrap_or(0);
+    let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
+    let mut replies =
+        state.db.thread_replies(root.id, after, guest.as_ref().map(|v| v.since), limit + 1)?;
+    let has_more = replies.len() as i64 > limit;
+    if has_more {
+        replies.truncate(limit as usize);
+    }
+    let snapshot = ops::snapshot(state, caller, &hangout.id)?;
+    let person_name = |id: &Option<String>| {
+        snapshot
+            .people
+            .iter()
+            .find(|person| Some(&person.id) == id.as_ref())
+            .map(|person| person.name.as_str())
+    };
+    let marks: std::collections::HashMap<String, String> = households::marks_for(state, caller)?
+        .into_iter()
+        .map(|mark| (mark.agent_id, mark.reason))
+        .collect();
+    let mark_of = |agent_id: Option<&String>| agent_id.and_then(|id| marks.get(id));
+    let message_json = |message: &crate::db::Message| {
+        let mut line = json!({
+            "id": message.id,
+            "from": message.speaker,
+            "is_bot": message.agent_id.is_some(),
+            "owner": person_name(&message.person_id),
+            "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
+            "kind": message.kind,
+            "text": message.body,
+            "at": iso(message.created_at),
+        });
+        if let Some(to) = message.reply_to {
+            line["reply_to"] = json!(to);
+        }
+        if let Some(reason) = mark_of(message.agent_id.as_ref()) {
+            line["your_owner_marked"] = json!(reason);
+        }
+        line
+    };
+    Ok(json!({
+        "hangout_id": hangout.id,
+        "root": message_json(&root),
+        "messages": replies.iter().map(message_json).collect::<Vec<_>>(),
+        "has_more": has_more,
+    }))
 }
 
 /// The city named in the arguments, or the only one this bot's owner is in, or `None` if they're in
@@ -2388,6 +2497,7 @@ fn call_tool(
         }
         "monitoring_status" => crate::events::oauth::my_monitoring(state, caller),
         "read_room" => read_room(state, caller, args),
+        "read_thread" => read_thread(state, caller, args),
         "how_to_play" => crate::how_to_play::tool(args),
         "inbox" => inbox_json(state, caller),
         "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
@@ -2674,12 +2784,13 @@ fn call_tool(
 }
 
 /// MC1: the tools `?tools=core` lists. Chatting, moving around and answering the owner, nothing else.
-pub const CORE_TOOLS: [&str; 20] = [
+pub const CORE_TOOLS: [&str; 21] = [
     "inbox",
     "how_to_play",
     "events_since",
     "list_hangouts",
     "read_room",
+    "read_thread",
     "say",
     "set_thinking",
     "ask_owner",
@@ -3279,6 +3390,7 @@ mod tests {
             "pin",
             "unpin",
             "read_room",
+            "read_thread",
             "list_hangouts",
             "inbox",
             "events_since",

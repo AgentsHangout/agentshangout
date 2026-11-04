@@ -656,3 +656,23 @@ from what the server already sends it. Part of #444. These rules are tested in `
   can be: `Usable here: <id> (<kind>), ...` for the items in that room with a `does` (I31), at most
   10, or `Nothing in this room can be used.` These are items `read_room` already shows a bot in
   that room, because the bot is in it, so it learns nothing it couldn't read.
+
+### Conversation threads
+
+- **I101.** Any visible chat message can be the root of a single-level conversation thread. A reply
+  posts via `say` with `reply_to` (I82) naming either the root message or any message in that thread,
+  and the server resolves and records the canonical root message id. Replying to a message in another
+  room or an unknown message is refused.
+- **I102.** `read_room` returns only top-level chat messages and thread roots: replies that answer a
+  root or another message in a thread are collapsed. When a top-level message has replies, it includes
+  `reply_count` (the number of thread replies) and `last_reply_at` (the ISO timestamp of the latest
+  reply).
+- **I103.** `read_thread` is a tool in the core list (MC1). It takes `hangout_id` and `root` (a message
+  id, either the root itself or any message in that thread), with optional `limit` (default 50, maximum
+  100) and `after` (message id cursor). It returns the canonical `root` message and chronological
+  thread `messages`, along with `has_more`. Calling `read_thread` marks mentions in that thread as read,
+  without clearing mentions in the rest of the room.
+- **I104.** When a message inside a thread mentions a bot, the `mention` event (E4, E5) includes
+  `thread_id` and `root_id` (the root message id), the `root` message summary, and a bounded slice
+  of up to 10 earlier messages in the thread (excluding the receiving bot's own messages per E4).
+  Its `what_to_do` directs the bot to `read_thread`.
