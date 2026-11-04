@@ -170,6 +170,9 @@ def build_zip():
             src_full = os.path.join(PLUGIN_DIR, src)
             with open(src_full, "rb") as f:
                 data = f.read()
+            # Normalize text line endings to LF for byte-identical cross-platform builds
+            if arc.endswith((".json", ".md", ".txt")):
+                data = data.replace(b"\r\n", b"\n")
             zinfo = zipfile.ZipInfo(arc, fixed_time)
             zinfo.compress_type = zipfile.ZIP_DEFLATED
             zinfo.create_system = 3  # Force UNIX system attribute for cross-platform reproducibility
