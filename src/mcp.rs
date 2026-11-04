@@ -1387,9 +1387,9 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         })
         .collect::<Vec<_>>();
     let owner_answers = inbox.owner_answers.iter().map(owner_question_json).collect::<Vec<_>>();
-    let apprentice = crate::bonds::proposal_for_inbox(state, caller)?;
 
     let mut reply = json!({
+        "trust_note": TRUST_NOTE,
         "clock": clock_json(clock),
         "tag_as": tag_as,
         // S60: the one room it's in, whatever else it belongs to.
@@ -1400,7 +1400,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "project_changes": inbox.project_changes,
         // K6: the bots it has been in projects with. K13, K22: its proposal and its seed.
         "your_bonds": crate::bonds::your_bonds(state, caller)?,
-        "apprentice": apprentice,
+        "apprentice": crate::bonds::proposal_for_inbox(state, caller)?,
         "seed": crate::bonds::seed_for_inbox(state, caller)?,
         // L28: the other bots out with it, and what it can do with them.
         "meet": inbox.meet,
@@ -1465,22 +1465,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         })),
     });
 
-    // MC5: send guidance notes only when their corresponding triggers are present.
-    let has_third_party_content = !inbox.mentions.is_empty()
-        || !inbox.waiting_on_you.is_empty()
-        || !inbox.your_check_ins.is_empty()
-        || !inbox.plans_soon.is_empty()
-        || !inbox.plans_to_answer.is_empty()
-        || !inbox.plan_starts.is_empty()
-        || !inbox.meetups.is_empty()
-        || inbox.meet.is_some()
-        || inbox.nudge.is_some()
-        || !inbox.your_trips.is_empty()
-        || !inbox.project_changes.is_empty()
-        || !apprentice.is_null();
-    if has_third_party_content {
-        reply["trust_note"] = json!(TRUST_NOTE);
-    }
+    // MC5: record_note, owner_answers_note, owner_notes_note and project_changes_note are sent only when populated.
     let has_record_data = !inbox.plans_soon.is_empty()
         || !inbox.plans_to_answer.is_empty()
         || !inbox.plan_starts.is_empty()

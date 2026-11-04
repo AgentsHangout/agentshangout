@@ -517,42 +517,24 @@ async fn mc5_inbox_guidance_notes_present_only_with_relevant_fields() {
     let server = Server::start().await;
     let town = server.town().await;
 
-    // 1. Empty inbox: no trust_note, record_note, owner_answers_note, owner_notes_note, or project_changes_note.
+    // 1. Empty inbox: trust_note is always present; record_note, owner_answers_note, owner_notes_note,
+    // and project_changes_note are omitted when their triggers are empty.
     let empty = server.tool(&town.scout, "inbox", json!({})).await;
-    assert!(empty.get("trust_note").is_none(), "{empty}");
+    assert!(empty["trust_note"].is_string(), "trust_note is always sent in inbox");
     assert!(empty.get("record_note").is_none(), "{empty}");
     assert!(empty.get("owner_answers_note").is_none(), "{empty}");
     assert!(empty.get("owner_notes_note").is_none(), "{empty}");
     assert!(empty.get("project_changes_note").is_none(), "{empty}");
 
-    // 2. trust_note present when there's an unread mention.
-    server
-        .post(
-            &town.ann.key,
-            &format!("/api/hangouts/{}/messages", town.square),
-            json!({ "text": "@Scout hello" }),
-        )
-        .await
-        .ok();
-    let with_mention = server.tool(&town.scout, "inbox", json!({})).await;
-    assert!(with_mention["trust_note"].is_string());
-    assert!(with_mention.get("record_note").is_none());
-
-    // Clear mention by reading the room.
-    server.tool(&town.scout, "read_room", json!({ "hangout_id": town.square })).await;
-    let cleared = server.tool(&town.scout, "inbox", json!({})).await;
-    assert!(cleared.get("trust_note").is_none());
-
-    // 3. trust_note and record_note present when there's a check-in in waiting_on_you.
+    // 2. record_note present when there's an incoming check-in in waiting_on_you.
     let don = server.bot(&town.bo, &town.square, "Don").await;
     let asked = server.tool(&town.scout, "check_in", json!({ "about": "Check lunch" })).await;
     let check_in_id = text(&asked["id"]);
     let don_inbox = server.tool(&don, "inbox", json!({})).await;
     assert_eq!(don_inbox["waiting_on_you"][0]["about"], "Check lunch");
-    assert!(don_inbox["trust_note"].is_string(), "trust_note present on check-in");
     assert!(don_inbox["record_note"].is_string(), "record_note present on check-in");
 
-    // 4. trust_note and record_note present on answered check-in with third-party note.
+    // 3. record_note present on answered check-in with third-party note.
     server
         .tool(
             &don,
@@ -567,26 +549,26 @@ async fn mc5_inbox_guidance_notes_present_only_with_relevant_fields() {
     let scout_inbox = server.tool(&town.scout, "inbox", json!({})).await;
     assert_eq!(scout_inbox["your_check_ins"][0]["status"], "hold");
     assert_eq!(scout_inbox["your_check_ins"][0]["note"], "Please move lunch to noon.");
-    assert!(
-        scout_inbox["trust_note"].is_string(),
-        "trust_note present on answered check-in with note"
-    );
     assert!(scout_inbox["record_note"].is_string(), "record_note present on check-in answer");
 
-    // 5. RSVPed plan in plans_soon: trust_note and record_note present.
+    // 4. RSVPed plan in plans_soon triggers record_note with competing trigger lists empty.
+    let isolated = Server::start().await;
+    let iso_town = isolated.town().await;
     let tomorrow = now() + DAY;
-    let soon = server.plan_at(&town.bo, &town.square, tomorrow).await;
-    server
-        .post(&town.ann.key, &format!("/api/events/{soon}/rsvp"), json!({ "response": "yes" }))
+    let soon = isolated.plan_at(&iso_town.bo, &iso_town.square, tomorrow).await;
+    isolated
+        .post(&iso_town.ann.key, &format!("/api/events/{soon}/rsvp"), json!({ "response": "yes" }))
         .await
         .ok();
-    let (_, planner_token) = server.bot_with_id(&town.ann, &town.square, "PlannerBot").await;
-    let planner_inbox = server.tool(&planner_token, "inbox", json!({})).await;
-    assert_eq!(planner_inbox["plans_soon"][0]["id"], soon.as_str());
-    assert!(planner_inbox["trust_note"].is_string(), "trust_note present on plans_soon");
-    assert!(planner_inbox["record_note"].is_string(), "record_note present on plans_soon");
+    let iso_inbox = isolated.tool(&iso_town.scout, "inbox", json!({})).await;
+    assert_eq!(iso_inbox["plans_soon"][0]["id"], soon.as_str());
+    assert!(iso_inbox["plans_to_answer"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["your_check_ins"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["waiting_on_you"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["owner_answers"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["record_note"].is_string(), "record_note present from plans_soon alone");
 
-    // 6. project_changes_note both ways.
+    // 5. project_changes_note both ways.
     let started = server
         .tool(
             &town.scout,
