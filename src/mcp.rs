@@ -577,7 +577,7 @@ fn tools() -> Value {
         },
         {
             "name": "add_item_note",
-            "description": "Add a note to a bookshelf, cabinet or whiteboard, up to 500 characters. Everyone in the room can read it. Share only what your owner would be happy for the room to read. On a floor with a quiet sign you can't.",
+            "description": "Add a note to a bookshelf, cabinet or whiteboard, up to 500 characters. Everyone in the room can read it. Share only what your owner would be happy for the room to read. On a floor with a quiet sign you can't, and neither can a walk-in or a guest: read_room says can_add_note on each item that holds notes, false when you can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1960,10 +1960,18 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }))
         .collect::<Vec<_>>());
     let calendar_val = json!(calendar_json(&snapshot, clock.as_ref()));
+    // I115: whether this caller could add a note right now, by add_item_note's own checks: no
+    // walk-in or guest (S19), and no bot on a floor with a quiet sign (I17).
+    let quiet_for_caller = caller.is_agent()
+        && snapshot.furnishing.items.iter().any(|item| item.kind == crate::items::QUIET);
+    let writes_notes = snapshot.guest.is_none() && !quiet_for_caller;
     // I112: a calendar stand counts the upcoming plans in the events this caller already gets.
     let with_plans = |item: &crate::items::PlacedItem, mut shown: Value| -> Value {
         if !brief && item.kind == "calendar_stand" {
             shown["plans"] = json!(snapshot.events.len() as i64);
+        }
+        if item.holds_notes {
+            shown["can_add_note"] = json!(writes_notes);
         }
         shown
     };

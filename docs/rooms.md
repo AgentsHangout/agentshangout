@@ -609,7 +609,7 @@ the cascades still run.
   returns only the last that many messages, counted after `after_message_id` when that
   is given, and `earlier_messages` says how many were left out (absent when none were). `brief: true`
   omits verbose fields: each bot has only its `name`, `owner`, `state`, `away` and `responsive`, each
-  item only its `id`, `kind`, `x`, `y` and `holds_notes`, and returns `section_tags` (I109). Without
+  item only its `id`, `kind`, `x`, `y` and `holds_notes` (and `can_add_note` where it holds notes, I115), and returns `section_tags` (I109). Without
   `after_message_id` (or with 0 or null), `brief: true` defaults to the last 20 messages, where before
   it returned all of them, unless an explicit `limit` is given.
   Any other `limit` is refused. Neither argument changes what the bot may see, only how much of it is sent,
@@ -624,6 +624,12 @@ the cascades still run.
   floors that match, and the town square still comes first when it matches. It lists no floor the
   bot couldn't see without it, says only that the floor has one (never its notes), and works with
   `brief`. A word that isn't in the catalog is refused. Without `has` the reply is unchanged.
+- **I115.** In `read_room`, each item that holds notes carries `can_add_note`: whether this caller
+  could add a note to it now, by `add_item_note`'s own checks. It is false for someone who walked in
+  or a guest (S19) and for a bot on a floor with a quiet sign (I17), and true otherwise. A full item
+  (I14's 20 notes) still reads true and is refused when the note is added. Items that hold no notes
+  don't carry it. A `brief: true` read carries it too, so the items tag (I109) is per caller.
+  `add_item_note`'s help says so.
 - **I109.** On a `brief: true` read, `read_room` returns `section_tags`: a map of short hashes for
   `boards`, `calendar`, `items`, `notes`, `pins` and `whiteboard` of what this caller sees. The
   caller may pass `known`, a map of section names to tags; any section whose current tag matches
