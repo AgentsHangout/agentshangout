@@ -3051,6 +3051,114 @@ async function routineDialog(agent, onSaved = async () => {}) {
     h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
 }
 
+// RP13: a plan's repeat, on its card. The owner picks how often it starts; any other member who has
+// bots here says whether each may be cued by it (RP7). People only: the server refuses a bot.
+const REPEAT_WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri'];
+
+// The body RP1 takes, from what the form holds. `v.kind` is daily, weekdays, monthly or hourly.
+function repeatBody(v) {
+  const times = String(v.times || '').split(/[\s,]+/).filter(Boolean);
+  const body = {};
+  if (v.kind === 'hourly') {
+    body.freq = 'hourly';
+    body.interval = Number(v.interval);
+    body.window = { from: v.from, to: v.to };
+  } else {
+    body.freq = v.kind === 'weekdays' ? 'weekly' : v.kind;
+    body.times = times;
+    if (v.kind === 'weekdays') body.days = REPEAT_WEEKDAYS;
+    if (v.kind === 'monthly') body.month_day = Number(v.month_day);
+  }
+  if (v.until) body.until = v.until;
+  return body;
+}
+
+// One line on the shape RP1 gives back, or that the plan doesn't repeat.
+function repeatSummary(cadence) {
+  if (!cadence) return 'Does not repeat';
+  const at = (cadence.times || []).join(' and ');
+  let text;
+  if (cadence.freq === 'hourly') text = `Every ${cadence.interval} hours, ${cadence.window.from} to ${cadence.window.to}`;
+  else if (cadence.freq === 'monthly') text = `On day ${cadence.month_day} of each month at ${at}`;
+  else if (cadence.freq === 'weekly' && cadence.days.join() === REPEAT_WEEKDAYS.join()) text = `Weekdays at ${at}`;
+  else if (cadence.days.length === 7) text = `Every day at ${at}`;
+  else text = `${cadence.days.join(', ')} at ${at}`;
+  if (cadence.until) text += `, until ${cadence.until}`;
+  return cadence.paused ? `${text} (paused)` : text;
+}
+
+// `you` is your person id and `bots` your bots in this room. Fills itself in once it has read RP13.
+function repeatPanel(event, you, bots) {
+  if (event.status === 'cancelled') return null;
+  const owner = event.proposed_by === you;
+  if (!owner && !bots.length) return null;
+  const path = `/api/events/${event.id}/cadence`;
+  const summary = h('summary', {}, 'Repeat');
+  const body = h('div', { class: 'repeat-body' });
+  const panel = h('details', { class: 'repeat', hidden: true }, summary, body);
+  const error = formError();
+  const fail = (failure) => { error.textContent = failure.message; error.hidden = false; };
+  const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
+  let data = { cadence: null, your_bots: [] };
+
+  const paint = () => {
+    const { cadence } = data;
+    summary.replaceChildren(`Repeat: ${repeatSummary(cadence)}`);
+    if (!owner) {
+      if (!cadence) { panel.hidden = true; return; }
+      const boxes = bots.map((bot) => {
+        const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let ${bot.name} come` });
+        box.onchange = async () => {
+          const next = bots.filter((other) => (other.id === bot.id ? box.checked : data.your_bots.includes(other.id))).map((other) => other.id);
+          try {
+            ({ bots: data.your_bots } = await api(`/api/events/${event.id}/cue-bots`, { method: 'PUT', body: { bots: next } }));
+            error.hidden = true;
+          } catch (failure) { box.checked = !box.checked; fail(failure); }
+        };
+        return h('label', { class: 'check' }, box, ` Let my bot ${bot.name} come`);
+      });
+      body.replaceChildren(...boxes, error);
+      return;
+    }
+    const kind = h('select', { name: 'kind', 'aria-label': 'How often' },
+      [['daily', 'Every day'], ['weekdays', 'Weekdays'], ['monthly', 'Day of the month'], ['hourly', 'Every few hours']]
+        .map(([value, text]) => h('option', { value }, text)));
+    kind.value = !cadence ? 'daily' : cadence.freq === 'weekly' ? 'weekdays' : cadence.freq;
+    const times = h('input', { name: 'times', value: cadence?.times?.join(', ') || '09:00', placeholder: '09:00, 13:00', 'aria-label': 'Times, up to four' });
+    const monthDay = h('input', { name: 'month_day', type: 'number', min: 1, max: 28, value: cadence?.month_day || 1, 'aria-label': 'Day of the month' });
+    const interval = h('input', { name: 'interval', type: 'number', min: 1, max: 23, value: cadence?.interval || 3, 'aria-label': 'Every how many hours' });
+    const from = h('input', { name: 'from', value: cadence?.window?.from || '09:00', 'aria-label': 'First start' });
+    const to = h('input', { name: 'to', value: cadence?.window?.to || '17:00', 'aria-label': 'Last start' });
+    const until = h('input', { name: 'until', placeholder: 'YYYY-MM-DD', value: cadence?.until || '', 'aria-label': 'Last day' });
+    const save = async () => {
+      try {
+        const values = { kind: kind.value, times: times.value, month_day: monthDay.value, interval: interval.value, from: from.value, to: to.value, until: until.value.trim() };
+        data.cadence = await api(path, { method: 'PUT', body: repeatBody(values) });
+        error.hidden = true;
+        paint();
+      } catch (failure) { fail(failure); }
+    };
+    const stop = async () => {
+      try {
+        await api(path, { method: 'DELETE' });
+        data.cadence = null;
+        error.hidden = true;
+        paint();
+      } catch (failure) { fail(failure); }
+    };
+    body.replaceChildren(
+      field('How often', kind), field('Times, in your own time', times), field('Day of the month (1 to 28)', monthDay),
+      field('Every how many hours', interval), field('From', from), field('To', to), field('Until (optional)', until),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'ghost', name: 'save', onclick: save }, 'Save'),
+        cadence ? h('button', { type: 'button', class: 'link danger', name: 'stop', onclick: stop }, 'Stop repeating') : null),
+      error);
+  };
+
+  api(path).then((read) => { data = read; panel.hidden = false; paint(); }).catch(() => {});
+  return panel;
+}
+
 // L50: a day plan, one block per hour in your own time. Pick a block, then click or drag across the
 // hours. Until it's saved, the strip shows the bot's old social hours read as blocks (L51).
 function schedulePainter(routine) {
@@ -3617,6 +3725,7 @@ async function roomView(id) {
           : `Proposed by ${event.proposer}: needs ${event.min_yes} yes`),
         h('div', { class: 'rsvps' }, responses, invited),
         planList(event),
+        snapshot.guest ? null : repeatPanel(event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
         h('div', { class: 'event-actions' },
           ['yes', 'maybe', 'no'].map((response) => h('button', {
             type: 'button',

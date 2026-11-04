@@ -832,3 +832,42 @@ async fn another_owners_cue_doesnt_ring_a_bot_at_work() {
     settle().await;
     assert_eq!(hits.load(Ordering::SeqCst), 1, "rung out of Work hours");
 }
+
+// RP13: a member reads whether the plan repeats and which of their bots they said yes for; a bot, a
+// stranger and a plan that doesn't repeat are handled.
+#[tokio::test]
+async fn a_member_reads_a_plans_repeat_and_their_own_yes() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = member_of(&s, &ann.room, "Bo").await;
+    let cy = s.owner("Cy").await;
+    let (_, rover_token) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let (spot, _) = support::legacy_bot(&s.state, &bo.id, &ann.room, "Spot");
+    let plan = s.plan(&ann).await;
+    let path = format!("/api/events/{plan}/cadence");
+
+    let (status, reply) = s.request(&bo.key, Method::GET, &path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert!(reply["cadence"].is_null());
+    assert_eq!(reply["your_bots"], json!([]));
+
+    let daily = json!({ "freq": "daily", "times": ["09:00", "13:00"] });
+    assert_eq!(s.request(&ann.key, Method::PUT, &path, daily).await.0, StatusCode::OK);
+    let cue = format!("/api/events/{plan}/cue-bots");
+    let yes = json!({ "bots": [spot.id] });
+    assert_eq!(s.request(&bo.key, Method::PUT, &cue, yes).await.0, StatusCode::OK);
+
+    let (status, reply) = s.request(&bo.key, Method::GET, &path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["cadence"]["freq"], "daily");
+    assert_eq!(reply["cadence"]["times"], json!(["09:00", "13:00"]));
+    assert_eq!(reply["your_bots"], json!([spot.id]));
+    let (_, mine) = s.request(&ann.key, Method::GET, &path, json!(null)).await;
+    assert_eq!(mine["your_bots"], json!([]), "Ann sees only her own yes");
+
+    assert_eq!(
+        s.request(&rover_token, Method::GET, &path, json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(s.request(&cy.key, Method::GET, &path, json!(null)).await.0, StatusCode::OK);
+}

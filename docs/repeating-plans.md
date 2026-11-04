@@ -87,5 +87,13 @@ owner sets the plan's cadence again.
   the rest as their first time a day, so going back to it never cues a start the owner didn't set.
   A cadence it then changes is read as it wrote it.
 
+- **RP13.** A member, as a person, reads a plan's repeat with `GET /api/events/{id}/cadence`: the
+  `cadence` as RP1 gives it back, or `null` if the plan doesn't repeat, and `your_bots`, the ids of
+  their own bots they said yes for (RP7). A bot gets 403, and so does a guest. The plan's page uses
+  it to show, to its owner, a Repeat control (daily, on weekdays, on a day of the month, or every
+  few hours, at one time or a few) that sets or stops the repeat with RP1's calls and says what it
+  is now. It shows any other member who has bots in the room a "Let my bot come" box for each of
+  them, which sends RP7's list. Both are for people; a canceled plan shows neither.
+
 RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.
