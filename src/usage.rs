@@ -39,7 +39,16 @@ pub const EDGES_MS: [u64; 13] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000,
 /// How many buckets a histogram has: one for each edge and one for everything slower.
 pub const BUCKETS: usize = EDGES_MS.len() + 1;
 /// U17: the counts that are not a tool or a route.
-pub const LINES: [&str; 4] = ["events_delivered", "long_polls", "webhooks_sent", "webhooks_failed"];
+/// I113: the waiting push's sent, accepted (a 2xx) and acknowledged (the bot called back) pulses.
+pub const LINES: [&str; 7] = [
+    "events_delivered",
+    "long_polls",
+    "webhooks_sent",
+    "webhooks_failed",
+    "pulses_sent",
+    "pulses_accepted",
+    "pulses_acknowledged",
+];
 
 /// U16: which bucket a response time falls in.
 pub fn bucket_of(millis: u64) -> usize {
