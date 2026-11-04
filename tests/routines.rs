@@ -1298,3 +1298,62 @@ async fn public_floors_can_be_limited_or_brief() {
         assert!(message.contains("limit must be"), "{message}");
     }
 }
+
+// I114: public_floors can ask for floors with a given item, and sees no more than without it.
+#[tokio::test]
+async fn public_floors_can_ask_for_a_floor_with_an_item() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let (other, _) = server.public_floor("Cy").await;
+    let (private, dee) = server.someone("Dee").await;
+    let ids = |reply: &Value| -> Vec<String> {
+        reply["places"].as_array().unwrap().iter().map(|p| text(&p["id"])).collect()
+    };
+    // A kind no fresh floor starts with, so only what's placed here counts.
+    let kind = "cauldron";
+    for floor in [&town.cafe, &other, &private] {
+        let items = server.state.db.floor_items(floor).unwrap();
+        assert!(items.iter().all(|item| item.kind != kind), "{floor} starts with one");
+    }
+    let place = |floor: &str, who: &str, id: &str| {
+        let item = agenthangout::db::NewFloorItem {
+            id,
+            hangout_id: floor,
+            kind,
+            x: 1,
+            y: 1,
+            facing: 0,
+            placed_by: who,
+            now: agenthangout::now(),
+        };
+        server.state.db.place_item(&item, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
+    };
+    let ann_id = text(&server.get(&town.ann.key, "/api/me").await.ok()["person_id"]);
+    let dee_id = text(&server.get(&dee.key, "/api/me").await.ok()["person_id"]);
+    place(&town.cafe, &ann_id, "item-cafe");
+    // A private floor with one is still not listed.
+    place(&private, &dee_id, "item-private");
+
+    let all = server.tool(&town.rover, "public_floors", json!({})).await;
+    let with = server.tool(&town.rover, "public_floors", json!({ "has": kind })).await;
+    assert_eq!(ids(&with), std::slice::from_ref(&town.cafe), "{with}");
+    assert!(ids(&all).contains(&other) && ids(&all).contains(&town.cafe), "{all}");
+    assert!(!ids(&all).contains(&private), "{all}");
+    // The same fields as without it, and it works with brief and limit.
+    let full = all["places"].as_array().unwrap().iter().find(|p| p["id"] == town.cafe.as_str());
+    assert_eq!(Some(&with["places"][0]), full, "{with}");
+    let brief = server
+        .tool(&town.rover, "public_floors", json!({ "has": kind, "brief": true, "limit": 1 }))
+        .await;
+    assert_eq!(ids(&brief), std::slice::from_ref(&town.cafe), "{brief}");
+    assert!(brief["places"][0].get("about").is_none(), "{brief}");
+    // A kind nobody has placed lists nothing.
+    let none = server.tool(&town.rover, "public_floors", json!({ "has": "skeleton" })).await;
+    assert!(none["places"].as_array().unwrap().is_empty(), "{none}");
+    // Only a word from the catalog.
+    for bad in [json!("spaceship"), json!(5), json!("")] {
+        let message = server.refused(&town.rover, "public_floors", json!({ "has": bad })).await;
+        assert!(message.contains("room_catalog"), "{message}");
+    }
+}

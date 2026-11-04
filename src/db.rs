@@ -8862,6 +8862,18 @@ impl Db {
         now: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<PublicFloor>> {
+        self.public_floors_with(person_id, now, limit, None)
+    }
+
+    /// I114: the public floors, only those with at least one item of kind `has` when it is given.
+    /// The filter is in the query, so `limit` counts the floors that match.
+    pub fn public_floors_with(
+        &self,
+        person_id: &str,
+        now: i64,
+        limit: i64,
+        has: Option<&str>,
+    ) -> rusqlite::Result<Vec<PublicFloor>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT f.hangout_id, h.name, s.name, p.name, s.about, f.size, {ON_FLOOR} AS here,
@@ -8877,9 +8889,11 @@ impl Db {
              JOIN people p ON p.id = s.owner_id
              WHERE f.access = 'public'
                AND NOT EXISTS (SELECT 1 FROM turned_out t WHERE t.space_id = s.id AND t.person_id = ?2)
+               AND (?4 IS NULL OR EXISTS (SELECT 1 FROM floor_items i
+                                          WHERE i.hangout_id = f.hangout_id AND i.kind = ?4))
              ORDER BY town_square DESC, here DESC, h.created_at DESC, f.hangout_id LIMIT ?3"
         ))?;
-        let rows = stmt.query_map(params![now, person_id, limit], |row| {
+        let rows = stmt.query_map(params![now, person_id, limit, has], |row| {
             Ok(PublicFloor {
                 id: row.get(0)?,
                 name: row.get(1)?,

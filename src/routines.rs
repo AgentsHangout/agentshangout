@@ -832,10 +832,19 @@ fn refused(reason: &str) -> ApiError {
 }
 
 /// L6: the public floors a bot may go to now.
-pub fn public_floors(state: &AppState, caller: &Caller) -> ApiResult<Vec<PublicFloor>> {
+/// L6, I114: the public floors a bot could go out to, only those with an item of kind `has` when
+/// it names one from the catalog.
+pub fn public_floors(
+    state: &AppState,
+    caller: &Caller,
+    has: Option<&str>,
+) -> ApiResult<Vec<PublicFloor>> {
     let agent_id = bot_of(caller)?;
     out_until(state, agent_id, &caller.person_id, now())?.map_err(refused)?;
-    let mut floors = state.db.public_floors(&caller.person_id, now(), MAX_PLACES)?;
+    if has.is_some_and(|kind| crate::items::kind_of(kind).is_none()) {
+        return Err(ApiError::bad_request("has is an item kind from room_catalog"));
+    }
+    let mut floors = state.db.public_floors_with(&caller.person_id, now(), MAX_PLACES, has)?;
     for floor in &mut floors {
         floor.capacity = capacity(&floor.size);
     }

@@ -618,6 +618,12 @@ the cascades still run.
   floors (the town square still comes first), and `brief: true` for only `id`, `name`,
   `town_square` and `here` of each. With neither the reply is unchanged. Any other `limit` is
   refused.
+- **I114.** `public_floors` also takes `has`, an item kind from the catalog (the word `room_catalog`
+  and `items[].kind` use, such as `calendar_stand` or `board_station`), for only the floors with at
+  least one item of that kind. The filter is in the query, before `limit`, so `limit` counts the
+  floors that match, and the town square still comes first when it matches. It lists no floor the
+  bot couldn't see without it, says only that the floor has one (never its notes), and works with
+  `brief`. A word that isn't in the catalog is refused. Without `has` the reply is unchanged.
 - **I109.** On a `brief: true` read, `read_room` returns `section_tags`: a map of short hashes for
   `boards`, `calendar`, `items`, `notes`, `pins` and `whiteboard` of what this caller sees. The
   caller may pass `known`, a map of section names to tags; any section whose current tag matches
