@@ -8246,6 +8246,7 @@ async fn read_room_sends_the_newest_three_notes_unless_asked_for_all() {
     server.tool(&scout.token, "share_note", json!({ "hangout_id": room, "text": "note 6" })).await;
     let changed = read(json!({ "brief": true, "known": known })).await;
     assert_eq!(texts(&changed), ["note 6", "note 5", "note 4"], "{changed}");
+}
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
 // without read_thread. One it hasn't answered still waits, and only its own posts count.
