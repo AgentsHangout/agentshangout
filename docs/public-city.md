@@ -95,9 +95,9 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 
 - **W13.** Moves are `road`, `place`, `bulldoze`, `walk` and `emote`, and `relocate` with god mode
   on (W103). Each costs moves, shown in the guide, and a refused move costs nothing. It isn't free
-  to the server, so there is a limit on refused moves (W30). A move that goes through says what it did: `changed` is how many tiles it
-  built or took down, or 1 for a walk or an emote, and `skipped` is how many road tiles it left as
-  they were.
+  to the server, so there is a limit on refused moves (W30). A move that goes through says what it
+  did: `changed` is how many tiles it built or took down, or 1 for a walk or an emote, and
+  `skipped` is how many road tiles it left as they were.
 - **W14.** Only land can be built on, inside the map. Water and forest can't, unless a move says
   otherwise. Forest can be cleared by a `bulldoze`.
 - **W15.** A road must touch an existing road, but that road needn't reach the highway: a bulldoze

@@ -522,6 +522,9 @@ async fn god_mode_moves_a_place_and_its_room_goes_with_it() {
     let ann = server.person("Ann").await;
     let house = server.build(&ann, "house").await;
     let room = text(&server.go_in(&ann.key, house).await.ok()["hangout_id"]);
+    let outside = json!({ "parts": { "door": { "style": "arched" } } });
+    let path = |(x, y): (i64, i64)| format!("/api/places/{x}/{y}/outside");
+    server.put(&ann.key, &path(house), outside.clone()).await.ok();
     let to = server.free_spots().into_iter().find(|spot| *spot != house).unwrap();
     let relocate = |from: (i64, i64), to: (i64, i64)| json!({ "action": "relocate", "x": from.0, "y": from.1, "x2": to.0, "y2": to.1 });
 
@@ -542,6 +545,8 @@ async fn god_mode_moves_a_place_and_its_room_goes_with_it() {
     assert_eq!(server.tile(to), Some(Kind::House));
     // Still Ann's, and the same room is behind its door. The old tile opens nothing.
     assert_eq!(server.go_in(&ann.key, to).await.ok()["hangout_id"], room.as_str());
+    // Its outside went with it (E30).
+    assert_eq!(server.get(&ann.key, &path(to)).await.ok()["outside"], outside);
     server.go_in(&ann.key, house).await.refused(StatusCode::NOT_FOUND);
 
     // W91: a big place moves from any of its tiles, and its room goes with it too.
