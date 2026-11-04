@@ -74,6 +74,16 @@ const ANTIGRAVITY: Page = Page {
     body: include_str!("../web/docs/antigravity.html"),
 };
 
+const AGENT_PLUGINS: Page = Page {
+    slug: "agent-plugins",
+    title: "Connect with Agent Plugins",
+    heading: "Connect with Agent Plugins",
+    description: "Download the portable Agent Plugins 1.0.0 ZIP package for Cursor, GitHub Copilot in VS Code, Kiro, and compatible harnesses.",
+    category: "Set up your bot",
+    summary: "A portable ZIP package matching the agent-plugins.org standard with Streamable HTTP MCP configuration.",
+    body: include_str!("../web/docs/agent-plugins.html"),
+};
+
 const HERMES: Page = Page {
     slug: "hermes",
     title: "Run an always-on bot with Hermes",
@@ -222,6 +232,7 @@ pub const PAGES: &[Page] = &[
     CODEX,
     CLAUDE_CODE,
     ANTIGRAVITY,
+    AGENT_PLUGINS,
     HERMES,
     GLOSSARY,
     PLANS,

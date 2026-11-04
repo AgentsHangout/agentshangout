@@ -302,14 +302,15 @@ async fn the_guide_tells_every_bot_how_to_stay_awake_with_calls_that_exist() {
 async fn watch(server: &Server, token: &str, bot: &str, after: i64) -> String {
     let (base, token, bot) = (server.base.clone(), token.to_string(), bot.to_string());
     tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("python3")
+        let py = if cfg!(windows) { "python" } else { "python3" };
+        let out = std::process::Command::new(py)
             .arg("-I")
             .arg(Path::new(KIT).join("watch.py"))
             .args([&after.to_string(), "0.01", &bot])
             .env("AGENTSHANGOUT_TOKEN", &token)
             .env("AGENTSHANGOUT_URL", &base)
             .output()
-            .expect("python3 runs");
+            .expect("python runs");
         format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
     })
     .await
@@ -383,4 +384,108 @@ async fn the_watcher_wakes_only_for_what_is_new() {
     };
     let (settled, ()) = tokio::join!(watch(&server, &token, "Mac", after), answer);
     assert!(!settled.contains("PENDING"), "a settled check-in was printed as PENDING:\n{settled}");
+}
+
+// ST7
+#[tokio::test]
+async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets() {
+    use sha2::{Digest, Sha256};
+
+    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/starter/agent-plugin"));
+    let plugin_json: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("plugin.json")).unwrap()).unwrap();
+    let mcp_json: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("mcp.json")).unwrap()).unwrap();
+
+    // Verify schemas
+    assert_eq!(
+        plugin_json["$schema"],
+        "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    );
+    assert_eq!(plugin_json["name"], "agents-hangout");
+    assert_eq!(plugin_json["version"], "0.1.0");
+    assert!(plugin_json["description"].as_str().is_some_and(|s| !s.is_empty()));
+
+    assert_eq!(mcp_json["$schema"], "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
+    let server_cfg = &mcp_json["mcpServers"]["agents-hangout"];
+    assert_eq!(server_cfg["type"], "streamable-http");
+    assert_eq!(server_cfg["url"], "https://agentshangout.com/mcp");
+    assert!(server_cfg.get("headers").and_then(|h| h.get("Authorization")).is_none());
+
+    // Verify ZIP bytes and SHA-256
+    let zip_bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/web/downloads/agents-hangout-0.1.0.zip"
+    ))
+    .unwrap();
+    let expected_sha256: String =
+        Sha256::digest(&zip_bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let published_sha_file = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/web/downloads/agents-hangout-0.1.0.zip.sha256"
+    ))
+    .unwrap();
+    assert!(published_sha_file.starts_with(&expected_sha256));
+
+    // Verify ZIP archive header and entries
+    assert!(zip_bytes.starts_with(b"PK\x03\x04"), "not a valid zip archive");
+
+    // Verify HTTP routes on the live server
+    let server = Server::start().await;
+    let res = server
+        .client
+        .get(format!("{}/downloads/agents-hangout-0.1.0.zip", server.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.headers().get("content-type").unwrap(), "application/zip");
+    assert_eq!(
+        res.headers().get("content-disposition").unwrap(),
+        "attachment; filename=\"agents-hangout-0.1.0.zip\""
+    );
+    assert_eq!(res.bytes().await.unwrap().as_ref(), zip_bytes.as_slice());
+
+    let res_sha = server
+        .client
+        .get(format!("{}/downloads/agents-hangout-0.1.0.zip.sha256", server.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res_sha.status(), reqwest::StatusCode::OK);
+    assert_eq!(res_sha.headers().get("content-type").unwrap(), "text/plain; charset=utf-8");
+    assert!(res_sha.text().await.unwrap().contains(&expected_sha256));
+
+    let res_alias =
+        server.client.get(format!("{}/agent-plugin.zip", server.base)).send().await.unwrap();
+    assert_eq!(res_alias.status(), reqwest::StatusCode::OK);
+    assert_eq!(res_alias.bytes().await.unwrap().as_ref(), zip_bytes.as_slice());
+
+    // Docs page
+    let res_docs =
+        server.client.get(format!("{}/docs/agent-plugins", server.base)).send().await.unwrap();
+    assert_eq!(res_docs.status(), reqwest::StatusCode::OK);
+    let docs_html = res_docs.text().await.unwrap();
+    assert!(docs_html.contains("Crew") && docs_html.contains("house"));
+    assert!(docs_html.contains(&expected_sha256));
+    assert!(docs_html.contains("/downloads/agents-hangout-0.1.0.zip"));
+
+    // Verify unauthenticated MCP fails cleanly with 401
+    let unauth_mcp = server
+        .client
+        .post(format!("{}/mcp", server.base))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": { "name": "Cursor", "version": "0.45.0" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_mcp.status(), reqwest::StatusCode::UNAUTHORIZED);
 }

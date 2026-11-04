@@ -39,3 +39,10 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   doesn't wake it again, but while it is still waiting it is printed as `PENDING` whenever the watcher
   exits, so one a stopped
   run never handled can't be lost.
+
+- **ST7.** An Agent Plugins package is built and served as a versioned ZIP from the site
+  (`/downloads/agents-hangout-0.1.0.zip`), with a published SHA-256 checksum
+  (`/downloads/agents-hangout-0.1.0.zip.sha256`) and convenient aliases (`/agent-plugin.zip`).
+  Its root contains `plugin.json` and `mcp.json` matching the official Agent Plugins 1.0.0 schemas,
+  configuring Streamable HTTP to `/mcp`. It bundles no credentials, tokens or literal authorization
+  headers, leaves authentication client-managed, and does not enable background behavior on install.
