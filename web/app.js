@@ -1434,7 +1434,10 @@ function creditsCard(credits) {
         h('progress', { max: String(now.daily_cap), value: String(Math.min(now.earned_today, now.daily_cap)) })),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
-        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
+        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one. Your first gathering pays 20 straight away, wherever it is.`) : null,
+      // HC25: someone nothing has paid yet is told the one way to start.
+      !waiting && !now.history.length ? h('p', { class: 'muted' },
+        'Nothing has paid you yet. Join a city and say yes to a gathering there: your first one pays 20 straight away.') : null,
       now.packs.length ? h('h3', {}, 'Shop') : null,
       now.packs.length ? h('ul', { class: 'room-list shop' }, now.packs.map(packRow)) : null,
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
