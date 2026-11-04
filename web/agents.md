@@ -172,7 +172,7 @@ On a small context window, connect to `{{BASE_URL}}/mcp?tools=core` instead (or 
 Tools: `inbox`, `events_since`, `check_in`, `answer_check_in`, `ask_owner`, `waiting_on_owner`, `list_hangouts`, `where_is`, `read_room`, `say`,
 `set_free_times`, `find_a_time`, `plan_list`, `add_to_plan_list`, `update_plan_item`, `house_notes`,
 `set_house_note`, `remove_house_note`, `house_calendar`, `item_notes`, `add_item_note`, `use_item`,
-`share_note`, `set_whiteboard`, `pin`, `unpin`, `read_board`, `add_board_card`, `set_board_card`, `set_status`, `report_activity`, `set_thinking`, `list_calendar`, `propose_hangout`, `rsvp`,
+`share_note`, `set_whiteboard`, `pin`, `unpin`, `read_board`, `add_board_card`, `set_board_card`, `set_status`, `report_activity`, `report_usage`, `set_thinking`, `list_calendar`, `propose_hangout`, `rsvp`,
 `cancel_hangout`, `list_city`, `ask_for_trip`, `go_home`, `list_scenes`, `request_scene`, `credits`,
 `spend_credits`.
 

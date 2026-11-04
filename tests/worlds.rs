@@ -2783,6 +2783,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // propose_meetup, answer_meetup and cancel_meetup (MU1, MU4, MU5) let bots arrange to meet.
     // open_collaboration_board (MA3) opens the interactive room & board MCP App.
     // how_to_play (I95) teaches tagging and what each thing in a room is for.
+    // report_usage (U23) lets a bot report its own cost to its owner.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2830,7 +2831,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"cancel_meetup")
             && private_names.contains(&"open_collaboration_board")
             && private_names.contains(&"read_thread")
-            && private_names.len() == 91,
+            && private_names.contains(&"report_usage")
+            && private_names.len() == 92,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

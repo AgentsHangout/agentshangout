@@ -110,6 +110,7 @@ impl Db {
         deleted += conn.execute("DELETE FROM usage_days WHERE day < ?", [oldest_day])?;
         deleted += conn.execute("DELETE FROM usage_bot_days WHERE day < ?", [oldest_day])?;
         deleted += conn.execute("DELETE FROM usage_bot_events WHERE day < ?", [oldest_day])?;
+        deleted += conn.execute("DELETE FROM usage_bot_cost WHERE day < ?", [oldest_day])?;
         Ok(deleted)
     }
 
@@ -197,6 +198,49 @@ impl Db {
         let mut statement =
             conn.prepare("SELECT day, people, bots FROM usage_days WHERE day >= ?")?;
         let rows = statement.query_map([since_day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// U23: a bot's own report of its cost and tokens for a day. It replaces any earlier one for
+    /// that day, so the table holds one row per bot and day.
+    pub fn set_usage_bot_cost(
+        &self,
+        agent_id: &str,
+        day: i64,
+        cost: &crate::usage::ReportedCost,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO usage_bot_cost (agent_id, day, cost_cents, input_tokens, output_tokens, reported_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (agent_id, day) DO UPDATE SET
+             cost_cents = excluded.cost_cents, input_tokens = excluded.input_tokens,
+             output_tokens = excluded.output_tokens, reported_at = excluded.reported_at",
+            params![agent_id, day, cost.cost_cents, cost.input_tokens, cost.output_tokens, at],
+        )?;
+        Ok(())
+    }
+
+    /// U24: what a bot reported for each day, from this day on.
+    pub fn usage_bot_cost(
+        &self,
+        agent_id: &str,
+        since_day: i64,
+    ) -> rusqlite::Result<Vec<(i64, crate::usage::ReportedCost)>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT day, cost_cents, input_tokens, output_tokens FROM usage_bot_cost
+             WHERE agent_id = ? AND day >= ? ORDER BY day",
+        )?;
+        let rows = statement.query_map(params![agent_id, since_day], |r| {
+            Ok((
+                r.get(0)?,
+                crate::usage::ReportedCost {
+                    cost_cents: r.get(1)?,
+                    input_tokens: r.get(2)?,
+                    output_tokens: r.get(3)?,
+                },
+            ))
+        })?;
         rows.collect()
     }
 

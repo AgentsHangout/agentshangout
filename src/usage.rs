@@ -838,6 +838,8 @@ async fn agent_usage(
     let since = today - KEEP_DAYS + 1;
     let rows = state.db.usage_bot_days(&id, since)?;
     let events: BTreeMap<i64, i64> = state.db.usage_bot_events(&id, since)?.into_iter().collect();
+    let costs: BTreeMap<i64, ReportedCost> =
+        state.db.usage_bot_cost(&id, since)?.into_iter().collect();
     let mut per_day: BTreeMap<i64, [i64; 3]> = BTreeMap::new();
     let mut reasons: BTreeMap<String, i64> = BTreeMap::new();
     for (day, outcome, reason, calls) in rows {
@@ -855,15 +857,82 @@ async fn agent_usage(
         .map(|day| {
             let [ok, refused, errors] = per_day.get(&day).copied().unwrap_or_default();
             let events = events.get(&day).copied().unwrap_or_default();
-            json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors, "events_delivered": events})
+            // U24: what the bot said it cost that day, or null when it said nothing.
+            let cost = costs.get(&day);
+            json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors, "events_delivered": events,
+                "reported_cost_cents": cost.map(|c| c.cost_cents),
+                "reported_input_tokens": cost.and_then(|c| c.input_tokens),
+                "reported_output_tokens": cost.and_then(|c| c.output_tokens)})
         })
         .collect();
     let last = agent.last_active_at.max(agent.last_seen_at);
+    // U24: each day is at most MAX_COST_CENTS, so 30 of them can't overflow.
+    let total = (!costs.is_empty()).then(|| costs.values().map(|c| c.cost_cents).sum::<i64>());
     Ok(Json(json!({
         "days": days,
         "refusals": reasons,
         "last_activity_at": last,
+        "reported_cost_cents_30d": total,
+        "cost_note": COST_NOTE,
     })))
+}
+
+/// U23: what a bot says its own model cost and tokens were on one day.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReportedCost {
+    pub cost_cents: i64,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+}
+
+/// U23: the most a bot may report for one day, in cents ($1,000), and in tokens of each kind.
+pub const MAX_COST_CENTS: i64 = 100_000;
+pub const MAX_TOKENS: i64 = 10_000_000_000;
+/// U24: said with every cost, since the server never sees the bot's model or its bill.
+pub const COST_NOTE: &str =
+    "Cost and tokens are reported by the bot itself. The server can't check them.";
+
+/// U23: `report_usage`. A bot reports its running cost and tokens for today, or for yesterday, in
+/// UTC; the latest report for the day replaces the earlier ones. Only a bot may, and only for itself.
+pub fn report(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
+    let agent_id = caller
+        .agent_id
+        .as_deref()
+        .ok_or_else(|| ApiError::forbidden("only a bot reports its usage"))?;
+    let whole = |key: &str, most: i64| -> ApiResult<Option<i64>> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => match value.as_i64() {
+                Some(n) if (0..=most).contains(&n) => Ok(Some(n)),
+                _ => {
+                    Err(ApiError::bad_request(format!("{key} is a whole number from 0 to {most}")))
+                }
+            },
+        }
+    };
+    let cost_cents = whole("cost_cents", MAX_COST_CENTS)?
+        .ok_or_else(|| ApiError::bad_request("cost_cents is required"))?;
+    let cost = ReportedCost {
+        cost_cents,
+        input_tokens: whole("input_tokens", MAX_TOKENS)?,
+        output_tokens: whole("output_tokens", MAX_TOKENS)?,
+    };
+    let at = now();
+    let today = at.div_euclid(86_400);
+    let day = match args.get("day") {
+        None | Some(Value::Null) => today,
+        Some(value) => match value.as_str() {
+            Some(text) if text == date(today) => today,
+            Some(text) if text == date(today - 1) => today - 1,
+            _ => {
+                return Err(ApiError::bad_request(
+                    "day is today or yesterday in UTC, as YYYY-MM-DD",
+                ))
+            }
+        },
+    };
+    state.db.set_usage_bot_cost(agent_id, day, &cost, at)?;
+    Ok(json!({ "ok": true, "day": date(day), "cost_cents": cost.cost_cents, "note": COST_NOTE }))
 }
 
 #[cfg(test)]
