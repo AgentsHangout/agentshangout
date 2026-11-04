@@ -1,7 +1,7 @@
-//! RP1 to RP9: plans that repeat, phase 1 (docs/repeating-plans.md, from the design in
-//! docs/repeating-plans-design.md). A plan's owner gives it a time of day and weekdays. Each start
-//! cues the owner's own bots in the plan's room once, through the doorbell, and every start is on
-//! the record with what it did for each bot.
+//! RP1 to RP11: plans that repeat (docs/repeating-plans.md, from the design in
+//! docs/repeating-plans-design.md). A plan's owner gives it weekdays and times of day, a day of the
+//! month, or an hourly window. Each start cues the owner's own bots in the plan's room once, through
+//! the doorbell, and every start is on the record with what it did for each bot.
 
 use axum::{
     extract::{Path, State},
@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::Caller,
-    db::Cadence,
+    db::{Cadence, Shape},
     error::{ApiError, ApiResult},
     now,
     ops::{self, iso, DAY_SECS},
@@ -29,6 +29,10 @@ pub const DAILY_CUES: i64 = 24;
 pub const MAX_CADENCES: i64 = 20;
 /// RP3: after a cue rings a bot, the next cue in this long doesn't ring it again (as E22's hold).
 const CUE_RING_SECS: i64 = 3 * 60;
+/// RP10: the most times a day a plan can start at.
+const MAX_TIMES: usize = 4;
+/// RP10: times closer than this would start a plan twice in an hour.
+const MIN_GAP_MIN: i64 = 60;
 /// How far back the loop looks for starts it hasn't handled, so a long outage still ends.
 const LOOK_BACK_SECS: i64 = 7 * DAY_SECS;
 
@@ -39,17 +43,36 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CadenceInput {
-    /// `daily` or `weekly`.
+    /// `daily`, `weekly`, `monthly` or `hourly`.
     freq: String,
     #[serde(default)]
     days: Vec<String>,
-    /// `HH:MM`, in the owner's own time.
-    time: String,
+    /// `HH:MM`, in the owner's own time. One time; `times` gives up to four.
+    #[serde(default)]
+    time: Option<String>,
+    #[serde(default)]
+    times: Vec<String>,
+    /// RP10: a monthly plan's day, 1 to 28.
+    #[serde(default)]
+    month_day: Option<i64>,
+    /// RP11: an hourly plan's step, in hours.
+    #[serde(default)]
+    interval: Option<i64>,
+    /// RP11: an hourly plan's first and last possible start.
+    #[serde(default)]
+    window: Option<WindowInput>,
     /// `YYYY-MM-DD`, the last day that can have a start, in the owner's own time.
     #[serde(default)]
     until: Option<String>,
     #[serde(default)]
     paused: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowInput {
+    from: String,
+    to: String,
 }
 
 /// A local day number from `YYYY-MM-DD`, counted from 1 January 1970.
@@ -93,8 +116,45 @@ fn civil(day: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-/// RP2: a cadence from what the owner sent, or a bad request naming the field.
-fn parse(input: &CadenceInput) -> ApiResult<(i64, i64, Option<i64>)> {
+/// Minutes after midnight from `HH:MM` on a 24-hour clock.
+fn minute_of(time: &str) -> Option<i64> {
+    time.split_once(':')
+        .and_then(|(h, m)| Some((h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)))
+        .filter(|(h, m)| time.len() == 5 && (0..24).contains(h) && (0..60).contains(m))
+        .map(|(h, m)| h * 60 + m)
+}
+
+/// RP10: one to four times, earliest first, at least an hour apart. When a start day can follow
+/// another, the last time of one day and the first of the next must be an hour apart too.
+fn parse_times(input: &CadenceInput, next_day_too: bool) -> ApiResult<Vec<i64>> {
+    let given: Vec<&String> = input.time.iter().chain(&input.times).collect();
+    if input.time.is_some() && !input.times.is_empty() {
+        return Err(ApiError::bad_request("send time or times, not both"));
+    }
+    if given.is_empty() {
+        return Err(ApiError::bad_request("time is HH:MM, in your own time"));
+    }
+    if given.len() > MAX_TIMES {
+        return Err(ApiError::bad_request(format!("at most {MAX_TIMES} times a day")));
+    }
+    let mut times = given
+        .into_iter()
+        .map(|time| minute_of(time))
+        .collect::<Option<Vec<i64>>>()
+        .ok_or_else(|| ApiError::bad_request("time is HH:MM, in your own time"))?;
+    times.sort_unstable();
+    let too_close = times.windows(2).any(|pair| pair[1] - pair[0] < MIN_GAP_MIN)
+        || (next_day_too
+            && times.len() > 1
+            && times[0] + DAY_SECS / 60 - times[times.len() - 1] < MIN_GAP_MIN);
+    if too_close {
+        return Err(ApiError::bad_request("times are at least an hour apart"));
+    }
+    Ok(times)
+}
+
+/// RP2, RP10, RP11: a cadence from what the owner sent, or a bad request naming the field.
+fn parse(input: &CadenceInput) -> ApiResult<(i64, Shape, Option<i64>)> {
     let mut days = 0;
     for day in &input.days {
         let index = DAYS
@@ -103,33 +163,69 @@ fn parse(input: &CadenceInput) -> ApiResult<(i64, i64, Option<i64>)> {
             .ok_or_else(|| ApiError::bad_request("days are mon, tue, wed, thu, fri, sat or sun"))?;
         days |= 1 << index;
     }
-    let days = match input.freq.as_str() {
-        "daily" if days == 0 => 127,
-        "daily" => days,
-        "weekly" if days == 0 => {
-            return Err(ApiError::bad_request("a weekly plan needs days"));
+    let hourly = input.freq == "hourly";
+    if !hourly && input.interval.is_some() {
+        return Err(ApiError::bad_request("interval is for hourly plans"));
+    }
+    if !hourly && input.window.is_some() {
+        return Err(ApiError::bad_request("window is for hourly plans"));
+    }
+    if input.freq != "monthly" && input.month_day.is_some() {
+        return Err(ApiError::bad_request("month_day is for monthly plans"));
+    }
+    // Whether some start day is followed by another, Sunday then Monday included.
+    let next_day_too = |days: i64| days & (((days << 1) | (days >> 6)) & 127) != 0;
+    let (days, shape) = match input.freq.as_str() {
+        "daily" | "weekly" => {
+            let weekly = input.freq == "weekly";
+            let days = match days {
+                0 if weekly => return Err(ApiError::bad_request("a weekly plan needs days")),
+                0 => 127,
+                days => days,
+            };
+            (days, Shape::Days { weekly, times: parse_times(input, next_day_too(days))? })
         }
-        "weekly" => days,
-        _ => {
-            return Err(ApiError::bad_request(
-                "freq is daily or weekly; hourly and monthly come later",
-            ));
+        "monthly" => {
+            if days != 0 {
+                return Err(ApiError::bad_request("a monthly plan has a month_day, not days"));
+            }
+            let month_day =
+                input.month_day.filter(|day| (1..=28).contains(day)).ok_or_else(|| {
+                    ApiError::bad_request("month_day is 1 to 28, so every month has it")
+                })?;
+            (0, Shape::Monthly { month_day, times: parse_times(input, false)? })
         }
+        "hourly" => {
+            if input.time.is_some() || !input.times.is_empty() {
+                return Err(ApiError::bad_request(
+                    "an hourly plan has an interval and a window, not times",
+                ));
+            }
+            let every_hours = input
+                .interval
+                .filter(|hours| (1..24).contains(hours))
+                .ok_or_else(|| ApiError::bad_request("interval is 1 to 23 hours"))?;
+            let window = input
+                .window
+                .as_ref()
+                .ok_or_else(|| ApiError::bad_request("an hourly plan needs a window"))?;
+            let (from, to) = minute_of(&window.from)
+                .zip(minute_of(&window.to))
+                .filter(|(from, to)| from < to)
+                .ok_or_else(|| {
+                    ApiError::bad_request("window is from and to, HH:MM, with to after from")
+                })?;
+            (if days == 0 { 127 } else { days }, Shape::Hourly { every_hours, from, to })
+        }
+        _ => return Err(ApiError::bad_request("freq is daily, weekly, monthly or hourly")),
     };
-    let time_min = input
-        .time
-        .split_once(':')
-        .and_then(|(h, m)| Some((h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)))
-        .filter(|(h, m)| input.time.len() == 5 && (0..24).contains(h) && (0..60).contains(m))
-        .map(|(h, m)| h * 60 + m)
-        .ok_or_else(|| ApiError::bad_request("time is HH:MM, in your own time"))?;
     let until_day = match &input.until {
         None => None,
         Some(date) => {
             Some(day_of(date).ok_or_else(|| ApiError::bad_request("until is YYYY-MM-DD"))?)
         }
     };
-    Ok((days, time_min, until_day))
+    Ok((days, shape, until_day))
 }
 
 /// RP1: only the plan's owner, as a person, in its room. The owner's saved offset is copied in, so
@@ -149,7 +245,7 @@ async fn set(
     if event.status == "cancelled" {
         return Err(ApiError::conflict("this plan was canceled"));
     }
-    let (days, time_min, until_day) = parse(&input)?;
+    let (days, shape, until_day) = parse(&input)?;
     let now = now();
     let offset_min =
         state.db.person_clock(&caller.person_id)?.map_or(0, |clock| clock.utc_offset_minutes);
@@ -164,7 +260,7 @@ async fn set(
         event_id: id.clone(),
         owner_id: caller.person_id.clone(),
         days,
-        time_min,
+        shape,
         offset_min,
         until_day,
         paused: input.paused,
@@ -197,21 +293,25 @@ async fn end(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// The start on a local day, as a UTC instant, if that day has one.
-fn start_on(cadence: &Cadence, local_day: i64) -> Option<i64> {
-    let weekday = (local_day + 3).rem_euclid(7);
-    if cadence.days & (1 << weekday) == 0
-        || cadence.until_day.is_some_and(|until| local_day > until)
-    {
-        return None;
+/// The starts on a local day, as UTC instants, earliest first.
+fn starts_on(cadence: &Cadence, local_day: i64) -> Vec<i64> {
+    let on = match cadence.shape {
+        Shape::Monthly { month_day, .. } => civil(local_day).2 == month_day,
+        Shape::Days { .. } | Shape::Hourly { .. } => {
+            cadence.days & (1 << (local_day + 3).rem_euclid(7)) != 0
+        }
+    };
+    if !on || cadence.until_day.is_some_and(|until| local_day > until) {
+        return Vec::new();
     }
-    Some(local_day * DAY_SECS + cadence.time_min * 60 - cadence.offset_min * 60)
+    let midnight = local_day * DAY_SECS - cadence.offset_min * 60;
+    cadence.shape.times().into_iter().map(|time| midnight + time * 60).collect()
 }
 
-/// RP1: the next start after `now`, if there is one.
+/// RP1: the next start after `now`, if there is one. A monthly plan's is at most a month away.
 pub fn next_start(cadence: &Cadence, now: i64) -> Option<i64> {
     let today = (now + cadence.offset_min * 60).div_euclid(DAY_SECS);
-    (today..today + 8).filter_map(|day| start_on(cadence, day)).find(|start| *start > now)
+    (today..today + 32).flat_map(|day| starts_on(cadence, day)).find(|start| *start > now)
 }
 
 /// RP4: the starts up to `now` that this cadence has had since it was set, oldest first, no further
@@ -221,7 +321,7 @@ fn due_starts(cadence: &Cadence, now: i64) -> Vec<i64> {
     let first = (from + cadence.offset_min * 60).div_euclid(DAY_SECS);
     let last = (now + cadence.offset_min * 60).div_euclid(DAY_SECS);
     (first..=last)
-        .filter_map(|day| start_on(cadence, day))
+        .flat_map(|day| starts_on(cadence, day))
         .filter(|start| *start >= from && *start <= now)
         .collect()
 }
@@ -233,10 +333,14 @@ fn cadence_json(cadence: &Cadence, now: i64) -> Value {
         .filter(|(i, _)| cadence.days & (1 << i) != 0)
         .map(|(_, name)| *name)
         .collect();
-    json!({
+    let clock = |min: i64| format!("{:02}:{:02}", min / 60, min % 60);
+    let times: Vec<String> = cadence.shape.times().into_iter().map(clock).collect();
+    let mut reply = json!({
         "event_id": cadence.event_id,
+        "freq": cadence.shape.freq(),
         "days": days,
-        "time": format!("{:02}:{:02}", cadence.time_min / 60, cadence.time_min % 60),
+        "time": times.first(),
+        "times": times,
         "utc_offset_min": cadence.offset_min,
         "until": cadence.until_day.map(|day| {
             let (y, m, d) = civil(day);
@@ -244,7 +348,16 @@ fn cadence_json(cadence: &Cadence, now: i64) -> Value {
         }),
         "paused": cadence.paused,
         "next_start": next_start(cadence, now).filter(|_| !cadence.paused).map(iso),
-    })
+    });
+    match cadence.shape {
+        Shape::Monthly { month_day, .. } => reply["month_day"] = json!(month_day),
+        Shape::Hourly { every_hours, from, to } => {
+            reply["interval"] = json!(every_hours);
+            reply["window"] = json!({ "from": clock(from), "to": clock(to) });
+        }
+        Shape::Days { .. } => {}
+    }
+    reply
 }
 
 /// RP3 to RP6: handles every start that's due, once each. `now` comes in so tests set the clock.
@@ -369,29 +482,86 @@ mod tests {
         }
     }
 
-    #[test]
-    fn starts_fall_on_the_chosen_days_at_the_owners_time() {
+    fn weekdays_at_nine() -> Cadence {
         // 9 am, six hours behind UTC, on weekdays.
-        let cadence = Cadence {
+        Cadence {
             event_id: "e".into(),
             owner_id: "o".into(),
             days: 0b001_1111,
-            time_min: 9 * 60,
+            shape: Shape::Days { weekly: true, times: vec![9 * 60] },
             offset_min: -360,
             until_day: None,
             paused: false,
             since: 0,
-        };
+        }
+    }
+
+    #[test]
+    fn starts_fall_on_the_chosen_days_at_the_owners_time() {
+        let cadence = weekdays_at_nine();
         // Tuesday 3 November 2026 is day 20 760; 9 am there is 15:00 UTC.
         let tuesday = 20_760 * DAY_SECS;
-        assert_eq!(start_on(&cadence, 20_760), Some(tuesday + 15 * 3600));
+        assert_eq!(starts_on(&cadence, 20_760), vec![tuesday + 15 * 3600]);
         // Saturday has none.
-        assert_eq!(start_on(&cadence, 20_764), None);
+        assert!(starts_on(&cadence, 20_764).is_empty());
         // The next start after Friday's is Monday's.
-        let friday = start_on(&cadence, 20_763).unwrap();
-        assert_eq!(next_start(&cadence, friday), start_on(&cadence, 20_766));
+        let friday = starts_on(&cadence, 20_763)[0];
+        assert_eq!(next_start(&cadence, friday), Some(starts_on(&cadence, 20_766)[0]));
         // Until is inclusive.
         let until = Cadence { until_day: Some(20_760), ..cadence.clone() };
-        assert!(start_on(&until, 20_760).is_some() && start_on(&until, 20_761).is_none());
+        assert!(!starts_on(&until, 20_760).is_empty() && starts_on(&until, 20_761).is_empty());
+    }
+
+    // RP10: several times a day, and a day of the month.
+    #[test]
+    fn several_times_a_day_and_monthly_days_start_at_each_time() {
+        let twice = Cadence {
+            shape: Shape::Days { weekly: false, times: vec![9 * 60, 13 * 60 + 30] },
+            days: 127,
+            ..weekdays_at_nine()
+        };
+        let tuesday = 20_760 * DAY_SECS;
+        assert_eq!(
+            starts_on(&twice, 20_760),
+            vec![tuesday + 15 * 3600, tuesday + 19 * 3600 + 30 * 60]
+        );
+        // The next start after the 9 am one is the 1:30 pm one, the same day.
+        assert_eq!(next_start(&twice, tuesday + 15 * 3600), Some(tuesday + 19 * 3600 + 1800));
+
+        let monthly = Cadence {
+            days: 0,
+            shape: Shape::Monthly { month_day: 15, times: vec![10 * 60] },
+            ..weekdays_at_nine()
+        };
+        // 15 November 2026 is a Sunday, and a monthly plan doesn't care.
+        let fifteenth = day_of("2026-11-15").unwrap();
+        assert_eq!(starts_on(&monthly, fifteenth), vec![fifteenth * DAY_SECS + 16 * 3600]);
+        assert!(starts_on(&monthly, fifteenth + 1).is_empty());
+        // From the 16th, the next is 15 December, 30 days on.
+        let december = day_of("2026-12-15").unwrap();
+        assert_eq!(
+            next_start(&monthly, (fifteenth + 1) * DAY_SECS),
+            Some(december * DAY_SECS + 16 * 3600)
+        );
+    }
+
+    // RP11: anchored at the window's start and stepped by the interval, the end included.
+    #[test]
+    fn hourly_starts_step_from_the_window_start() {
+        let lab = Cadence {
+            shape: Shape::Hourly { every_hours: 3, from: 9 * 60, to: 17 * 60 },
+            ..weekdays_at_nine()
+        };
+        let tuesday = 20_760 * DAY_SECS + 6 * 3600;
+        assert_eq!(
+            starts_on(&lab, 20_760),
+            vec![tuesday + 9 * 3600, tuesday + 12 * 3600, tuesday + 15 * 3600]
+        );
+        let four = Cadence {
+            shape: Shape::Hourly { every_hours: 4, from: 9 * 60, to: 17 * 60 },
+            ..lab.clone()
+        };
+        assert_eq!(starts_on(&four, 20_760).last(), Some(&(tuesday + 17 * 3600)));
+        assert!(starts_on(&lab, 20_764).is_empty());
     }
 }

@@ -28,7 +28,7 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_trust;
-pub use cadence::Cadence;
+pub use cadence::{Cadence, Shape};
 mod cadence;
 mod camera;
 mod github_display;
@@ -1289,7 +1289,7 @@ CREATE TABLE IF NOT EXISTS research_work_watches (
  since INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, watcher)
 );
--- RP1: a plan its owner made repeat. Phase 1: one time a day, on chosen weekdays.
+-- RP1: a plan its owner made repeat. RP12: the rest of its shape is in plan_cadence_shapes.
 CREATE TABLE IF NOT EXISTS plan_cadences (
  event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
  owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
@@ -1630,6 +1630,21 @@ CREATE TABLE IF NOT EXISTS meetup_ring_reservations (
     hangout_id  TEXT NOT NULL,
     reserved_at INTEGER NOT NULL,
     PRIMARY KEY (agent_id, hangout_id)
+);
+-- RP10, RP11: a repeating plan's shape beyond phase 1's one time a day. `plan_cadences` keeps the
+-- first time, and no days for monthly or hourly, so a binary from before this cues nothing it can't
+-- read. A row counts only while its `since` matches the cadence's, so an edit made by that older
+-- binary isn't overruled by a stale shape.
+CREATE TABLE IF NOT EXISTS plan_cadence_shapes (
+ event_id TEXT PRIMARY KEY REFERENCES plan_cadences(event_id) ON DELETE CASCADE,
+ freq TEXT NOT NULL CHECK (freq IN ('daily', 'weekly', 'monthly', 'hourly')),
+ days INTEGER NOT NULL,
+ times TEXT NOT NULL,
+ month_day INTEGER,
+ every_hours INTEGER,
+ window_from INTEGER,
+ window_to INTEGER,
+ since INTEGER NOT NULL
 );
 "#;
 
