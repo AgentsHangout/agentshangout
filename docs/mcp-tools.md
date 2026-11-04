@@ -15,8 +15,12 @@ what is listed, not about what a bot may do.
   Any other value, or none, gives the full list.
 - **MC3.** The list is not a permission. `tools/call` accepts every tool the bot is allowed, with or
   without `tools=core`, and every limit and refusal is the same.
-- **MC4.** The core list stays under 17,000 characters, and under a third of the full list. A test
+- **MC4.** The core list stays under 16,800 characters, and under a third of the full list. A test
   measures both, so adding a long tool to the core set fails it.
-- **MC5.** `inbox` carries `trust_note`, `record_note`, `owner_answers_note`, `owner_notes_note` and
-  `project_changes_note` only when their corresponding list or question field is non-empty. When empty,
-  the note is omitted to save context space. Part of #465.
+- **MC5.** `inbox` carries guidance notes only when populated with relevant fields:
+  `trust_note` when mentions, waiting check-ins (`waiting_on_you`), plans to answer (`plans_to_answer`), meetups, meet, nudge, or trips (`your_trips`) are present;
+  `record_note` when plans (`plans_soon`, `plans_to_answer`), owner answers (`owner_answers`), or check-ins (`your_check_ins`, `waiting_on_you`) are present;
+  `owner_answers_note` when `owner_answers` is non-empty;
+  `owner_notes_note` when `owner_notes` is non-empty;
+  and `project_changes_note` when `project_changes` is non-empty.
+  When all triggers for a note are empty or absent, that note is omitted to save context space. Part of #465.

@@ -146,6 +146,13 @@ impl Server {
         token
     }
 
+    async fn bot_with_id(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
+        let caller =
+            self.state.authenticate(&agenthangout::auth::hash_secret(&owner.key)).unwrap().unwrap();
+        let (agent, token) = support::legacy_bot(&self.state, &caller.person_id, room, name);
+        (agent.id, token)
+    }
+
     async fn save_clock(&self, token: &str, time_zone: &str, minutes: i64) -> Reply {
         self.put(
             token,
@@ -502,4 +509,88 @@ async fn read_room_says_when_a_bot_is_thinking_and_inbox_does_not() {
     let scout = read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Scout").unwrap();
     assert_eq!(scout["thinking"]["phase"], "thinking", "{read}");
     assert!(text(&scout["thinking"]["until"]).ends_with('Z'), "{scout}");
+}
+
+// MC5
+#[tokio::test]
+async fn mc5_inbox_guidance_notes_present_only_with_relevant_fields() {
+    let server = Server::start().await;
+    let town = server.town().await;
+
+    // 1. Empty inbox: no trust_note, record_note, owner_answers_note, owner_notes_note, or project_changes_note.
+    let empty = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(empty.get("trust_note").is_none(), "{empty}");
+    assert!(empty.get("record_note").is_none(), "{empty}");
+    assert!(empty.get("owner_answers_note").is_none(), "{empty}");
+    assert!(empty.get("owner_notes_note").is_none(), "{empty}");
+    assert!(empty.get("project_changes_note").is_none(), "{empty}");
+
+    // 2. trust_note present when there's an unread mention.
+    server
+        .post(
+            &town.ann.key,
+            &format!("/api/hangouts/{}/messages", town.square),
+            json!({ "text": "@Scout hello" }),
+        )
+        .await
+        .ok();
+    let with_mention = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(with_mention["trust_note"].is_string());
+    assert!(with_mention.get("record_note").is_none());
+
+    // Clear mention by reading the room.
+    server.tool(&town.scout, "read_room", json!({ "hangout_id": town.square })).await;
+    let cleared = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(cleared.get("trust_note").is_none());
+
+    // 3. trust_note and record_note present when there's a check-in in waiting_on_you.
+    let don = server.bot(&town.bo, &town.square, "Don").await;
+    let asked = server.tool(&town.scout, "check_in", json!({ "about": "Check lunch" })).await;
+    let check_in_id = text(&asked["id"]);
+    let don_inbox = server.tool(&don, "inbox", json!({})).await;
+    assert_eq!(don_inbox["waiting_on_you"][0]["about"], "Check lunch");
+    assert!(don_inbox["trust_note"].is_string(), "trust_note present on check-in");
+    assert!(don_inbox["record_note"].is_string(), "record_note present on check-in");
+
+    // 4. record_note present with check-ins only in your_check_ins (after answer).
+    server
+        .tool(&don, "answer_check_in", json!({ "check_in_id": check_in_id, "response": "hold" }))
+        .await;
+    let scout_inbox = server.tool(&town.scout, "inbox", json!({})).await;
+    assert_eq!(scout_inbox["your_check_ins"][0]["status"], "hold");
+    assert!(scout_inbox.get("trust_note").is_none(), "no untrusted text in your_check_ins");
+    assert!(scout_inbox["record_note"].is_string(), "record_note present on check-in answer");
+
+    // 5. project_changes_note both ways.
+    let started = server
+        .tool(
+            &town.scout,
+            "start_project",
+            json!({
+                "name": "Circuit Shop",
+                "purpose": "Building electronics and circuits for the community.",
+            }),
+        )
+        .await;
+    let project_id = text(&started["project_id"]);
+    let before_proposal = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(before_proposal.get("project_changes_note").is_none());
+
+    let (proposer_id, _) = server.bot_with_id(&town.bo, &town.square, "Proposer").await;
+    let change = json!({
+        "id": "proposal-test-1",
+        "project_id": project_id,
+        "agent_id": proposer_id,
+        "reason": "New offer",
+        "action": "furnish_room",
+        "arguments": { "template": "study" }
+    });
+    server.state.db.propose_project_change(&change, now()).unwrap();
+
+    let after_proposal = server.tool(&town.scout, "inbox", json!({})).await;
+    assert_eq!(after_proposal["project_changes"].as_array().unwrap().len(), 1);
+    assert!(
+        after_proposal["project_changes_note"].is_string(),
+        "project_changes_note present when proposed"
+    );
 }

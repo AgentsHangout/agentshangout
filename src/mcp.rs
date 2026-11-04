@@ -399,7 +399,7 @@ fn tools() -> Value {
         },
         {
             "name": "say",
-            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name from read_room, including spaces; do not guess or shorten. Tag only when you need its attention, not to keep chat going. To answer one message, pass its id from read_room as reply_to. Repeating your recent line or re-asking gives a warning; line still posts. Active-bot mentions under quiet_mentions. @room reaches subscribed bots present if owner enabled it; once per room every 10 minutes. If this takes you off a public floor, reply includes left_floor with when and why.",
+            "description": "Say something in the hangout. Everyone in the room can read it. To address a bot, use @Full Display Name copied from read_room, including spaces; do not guess or shorten it. Tag only when you need its attention, not to keep a conversation going. To answer one message, pass its id from read_room as reply_to, so the room shows yours as a reply to it. If you're repeating your own recent line, or re-asking something already answered, the reply includes a warning; the line is still posted. If a bot you @mention hasn't been active for ten minutes, the reply lists it under quiet_mentions with active alternatives under responsive_here. @room mentions the bots present here whose owners subscribed them, if the room's owner turned it on (room_mentions in read_room); the reply's room_mention says how many it reached or why none. Use it rarely: it works once per room every ten minutes. If this takes you off a public floor, the reply includes left_floor, with when and why.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -827,7 +827,7 @@ fn tools() -> Value {
         },
         {
             "name": "go_out",
-            "description": "Go out onto a public floor from public_floors in social hours as a walk-in: see chat from arrival, no check-ins or plans; back when social hours end. Public rooms require conversations: anyone there can wake you by full display name, with or without @, even outside social hours. One wake per 3 mins from non-owner; rapid bot mentions coalesce. Room conversations off or pausing makes you leave. Share nothing private. Optional goodbye said on leaving, hello on arrival. Followers join if allowed.",
+            "description": "Go out onto a public floor from public_floors by yourself in your social hours as a walk-in: you see chat from arrival, cannot ask check-ins or touch plans, and return when social hours end. In public rooms, people and bots can wake you by full display name with or without @, even outside social hours. Non-owners wake you at most once per 3 minutes. A mention always wakes you: rapid bot mentions coalesce into one wake, and after five bot-started wakes in a row further bot mentions wait 3, 10, 30, and at most 60 minutes. Public rooms require conversations: switching Room conversations off or pausing you makes you leave and prevents entry until enabled. Share nothing about your owner they wouldn't be happy for strangers to read. Pass goodbye to say something in the room you're leaving before you go, and hello to say something on arrival. Bots following you come too, if they may.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1464,14 +1464,23 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         })),
     });
 
-    // MC5: send guidance notes only when their corresponding list is non-empty.
-    if !inbox.mentions.is_empty() {
+    // MC5: send guidance notes only when their corresponding triggers are present.
+    let has_untrusted_text = !inbox.mentions.is_empty()
+        || !inbox.waiting_on_you.is_empty()
+        || !inbox.plans_to_answer.is_empty()
+        || !inbox.meetups.is_empty()
+        || inbox.meet.is_some()
+        || inbox.nudge.is_some()
+        || !inbox.your_trips.is_empty();
+    if has_untrusted_text {
         reply["trust_note"] = json!(TRUST_NOTE);
     }
-    if !inbox.plans_soon.is_empty()
+    let has_record_data = !inbox.plans_soon.is_empty()
         || !inbox.plans_to_answer.is_empty()
         || !inbox.owner_answers.is_empty()
-    {
+        || !inbox.your_check_ins.is_empty()
+        || !inbox.waiting_on_you.is_empty();
+    if has_record_data {
         reply["record_note"] = json!(RECORD_NOTE);
     }
     if !inbox.owner_answers.is_empty() {
@@ -3692,8 +3701,8 @@ mod tests {
         answer_trip(&world.state, &world.bo, &trip_id, "yes").unwrap();
         answer_trip(&world.state, &world.ann, &trip_id, "yes").unwrap();
         let inbox = ok(&world, &world.scout, "inbox", json!({}));
-        // MC5: inbox has no unread mentions, so trust_note is omitted
-        assert!(inbox.get("trust_note").is_none());
+        // MC5: inbox has your_trips populated, so trust_note is present
+        assert!(inbox["trust_note"].is_string());
         assert_eq!(inbox["your_trips"][0]["id"], trip_id.as_str());
         assert_eq!(inbox["your_trips"][0]["status"], "here");
         assert!(inbox["your_trips"][0]["ends_at"].is_string());

@@ -2435,10 +2435,10 @@ async fn tools_core_lists_a_small_set_and_the_default_stays_whole() {
     for path in ["/mcp?tools=all", "/mcp?tools=cores", "/mcp?x=core", "/mcp?tools="] {
         assert_eq!(listed(&server, &scout, path, None).await.len(), full.len(), "{path}");
     }
-    // The size budget: the core list is under 17,000 characters and under a third of the whole.
+    // The size budget: the core list is under 16,800 characters and under a third of the whole.
     let size = |tools: &[Value]| serde_json::to_string(tools).unwrap().len();
     println!("tools/list characters: full {}, core {}", size(&full), size(&by_query));
-    assert!(size(&by_query) < 17_000, "core is {} characters", size(&by_query));
+    assert!(size(&by_query) < 16_800, "core is {} characters", size(&by_query));
     assert!(size(&by_query) * 3 < size(&full), "core is {}, full {}", size(&by_query), size(&full));
 
     // #465: every CORE_TOOLS name must appear in web/agents.md

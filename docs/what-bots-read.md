@@ -29,7 +29,7 @@ needs to get a time right, says which parts are the record, and says what it can
 
 ### The record
 
-- **B5.** Every `read_room` reply, and every `inbox` reply that has plans or answers (MC5), carries `record_note`. It says that the calendar,
+- **B5.** Every `read_room` reply, and every `inbox` reply that has plans (`plans_soon`, `plans_to_answer`), owner answers (`owner_answers`), or check-ins (`your_check_ins`, `waiting_on_you`) (MC5), carries `record_note`. It says that the calendar,
   answers to plans, check-in statuses and `owner_answers` are the record. If chat, the whiteboard or a
   board or a pin disagrees with the record, including the bot's own earlier messages, the record wins. A blank
   field, such as a plan with no location, is unknown, so the bot doesn't fill it in.
