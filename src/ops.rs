@@ -53,7 +53,7 @@ pub(crate) const QUESTION_LAPSE_SECS: i64 = 7 * DAY_SECS;
 const MAX_OPEN_QUESTIONS: i64 = 5;
 
 /// I110: said when a bot that is in no hangout calls something that needs one.
-pub(crate) const NO_HANGOUTS: &str = "you aren't in any hangouts yet; call go_to_room with a hangout_id      from where_is or list_city, or ask_owner to add you";
+pub(crate) const NO_HANGOUTS: &str = "you aren't in any hangouts yet; call go_to_room with a hangout_id from where_is or list_city, or ask_owner to add you";
 
 pub fn clean(text: &str, field: &str, max_chars: usize) -> ApiResult<String> {
     let text = text.trim();
