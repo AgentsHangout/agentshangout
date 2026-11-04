@@ -1979,7 +1979,7 @@ pub struct Snapshot {
     pub bots_without_moods: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
-    /// I113: transient human composer hints, never returned to bots.
+    /// I108: transient human composer hints, never returned to bots.
     pub typing: Vec<crate::typing::Indicator>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,

@@ -5861,7 +5861,7 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
-// I113: typing is a transient, human-only signal in the room, never a chat line.
+// I108: typing is a transient, human-only signal in the room, never a chat line.
 #[tokio::test]
 async fn human_typing_is_room_scoped_and_clears_on_chat() {
     let server = Server::start().await;
@@ -7907,4 +7907,80 @@ async fn a_pulse_the_bot_answers_is_counted_acknowledged() {
     agenthangout::pulse::tick(state, later + 700).unwrap();
     let rows = state.db.pulses_of(&w.scout.id).unwrap();
     assert_eq!(rows[0].2, Some(later + 600), "{rows:?}");
+}
+
+// I113: only mentions the bot's own wake settings would let ring count (only_me and wake trust,
+// and only rooms it's still in), so a stranger can't make its URL fire every hour; and a house bot
+// never gets a pulse.
+#[tokio::test]
+async fn a_pulse_counts_only_mentions_that_could_have_woken_the_bot() {
+    let w = waiting_world().await;
+    let (url, got) = pulse_hook().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some(&url)).unwrap();
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    let quiet = |w: &Waiting| {
+        w.conn.execute("UPDATE agents SET last_seen_at = ?", [agenthangout::now() - 3600]).unwrap();
+    };
+
+    // only_me: Pip's mention could never ring Scout, so it starts no pulse.
+    state.db.set_wakes_only_for_owner(&w.scout.id, true).unwrap();
+    w.mention("from another bot").await;
+    w.age(31 * 60);
+    quiet(&w);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 0, "only_me");
+    // Its owner's own mention could, so that one does.
+    let said = w
+        .server
+        .post(
+            &w.ann.key,
+            &format!("/api/hangouts/{}/messages", w.room),
+            json!({ "text": "@Scout ping" }),
+        )
+        .await;
+    assert!(said.status.is_success(), "{}", said.body);
+    w.age(31 * 60);
+    quiet(&w);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 1, "the owner's");
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert!(
+        pulses(&got)[0]["text"].as_str().unwrap().starts_with("1 mention"),
+        "only the owner's counts"
+    );
+}
+
+#[tokio::test]
+async fn no_pulse_for_a_bot_that_left_the_room_or_a_house_bot() {
+    let w = waiting_world().await;
+    let (url, got) = pulse_hook().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some(&url)).unwrap();
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    w.mention("hello").await;
+    w.age(31 * 60);
+    let quiet = |w: &Waiting| {
+        w.conn.execute("UPDATE agents SET last_seen_at = ?", [agenthangout::now() - 3600]).unwrap();
+    };
+
+    // Out of the room, its mention there can't ring it.
+    state.db.remove_agent_from_room(&w.room, &w.scout.id).unwrap();
+    quiet(&w);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 0, "left the room");
+    state.db.add_agent_to_room(&w.room, &w.scout.id).unwrap();
+
+    // A house bot is left out altogether. Its house needn't exist for this check.
+    w.conn.pragma_update(None, "foreign_keys", false).unwrap();
+    w.conn
+        .execute(
+            "INSERT INTO bot_homes (agent_id, house_id, stays_home, is_house) VALUES (?, 'h', 0, 1)
+             ON CONFLICT (agent_id) DO UPDATE SET is_house = 1",
+            [&w.scout.id],
+        )
+        .unwrap();
+    quiet(&w);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 0, "a house bot");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(pulses(&got).is_empty());
 }

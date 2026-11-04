@@ -42,6 +42,19 @@ fn may_pulse(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiR
         && !crate::routines::chosen_home_hour(state, agent_id, owner_id, now)?)
 }
 
+/// I113: the unread mentions that could have woken this bot, by the same checks a ring uses
+/// (`delivery_allowed`: only_me, its wake trust, still in that room): message id, room and when,
+/// oldest first. A stranger's mention the bot's settings would never let ring starts no pulse.
+fn trusted_unread(state: &AppState, agent_id: &str) -> ApiResult<Vec<(i64, String, i64)>> {
+    let mut kept = Vec::new();
+    for (message_id, room, at) in state.db.unread_mention_times(agent_id)? {
+        if crate::bot_trust::delivery_allowed(state, agent_id, &[message_id])? {
+            kept.push((message_id, room, at));
+        }
+    }
+    Ok(kept)
+}
+
 fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<bool> {
     let id = &bot.agent_id;
     if bot.last_seen_at.is_some_and(|seen| now - seen < QUIET_SECS)
@@ -49,13 +62,14 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
     {
         return Ok(false);
     }
-    let (mentions, oldest) = state.db.stale_unread_mentions(id, now - QUIET_SECS)?;
-    let (Some(oldest), Some(newest)) = (oldest, state.db.newest_unread_mention(id)?) else {
+    let unread = trusted_unread(state, id)?;
+    let stale: Vec<&(i64, String, i64)> =
+        unread.iter().filter(|(_, _, at)| *at <= now - QUIET_SECS).collect();
+    let (Some(oldest), Some(newest)) = (stale.first(), unread.iter().map(|(_, _, at)| *at).max())
+    else {
         return Ok(false);
     };
-    if mentions == 0 {
-        return Ok(false);
-    }
+    let mentions = stale.len();
     let Some(pulse_id) = state.db.claim_pulse(id, newest, EVERY_SECS, now)? else {
         return Ok(false);
     };
@@ -64,7 +78,7 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
         .db
         .hangouts_for_agent(id, now)?
         .into_iter()
-        .find(|room| room.id == oldest)
+        .find(|room| room.id == oldest.1)
         .map(|room| room.id)
         .unwrap_or_default();
     let notice = Notice {
@@ -76,7 +90,6 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
             if mentions == 1 { "mention" } else { "mentions" }
         ),
     };
-    state.usage.note_line(now, "pulses_sent", 1);
     let owner = bot.owner_id.clone();
     let check = id.clone();
     crate::notify::send_if(
@@ -84,14 +97,20 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
         id,
         &notice,
         move |state, _| {
+            // Still allowed, and still something unread it would let ring: reading the room, or a
+            // change to its wake settings, in the meantime ends it.
             let at = crate::now();
-            // Still allowed, and still something unread: reading the room in the meantime ends it.
             may_pulse(state, &check, &owner, at).unwrap_or(false)
-                && state.db.newest_unread_mention(&check).is_ok_and(|newest| newest.is_some())
+                && trusted_unread(state, &check).is_ok_and(|unread| !unread.is_empty())
         },
         move |state, _, posted| {
             let accepted = posted.accepted();
             let _ = state.db.note_pulse_answer(pulse_id, accepted);
+            // Counted only when a POST was made, not when it was stopped before one.
+            let made = posted.status.is_some() || !matches!(posted.error, Some("no_url" | "trust"));
+            if made {
+                state.usage.note_line(crate::now(), "pulses_sent", 1);
+            }
             if accepted {
                 state.usage.note_line(crate::now(), "pulses_accepted", 1);
             }

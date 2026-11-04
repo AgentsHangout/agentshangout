@@ -705,17 +705,19 @@ from what the server already sends it. Part of #444. These rules are tested in `
   /api/agents/{id}/notify` and `{"waiting_push": true}`, beside I107's `waiting_pulse` (shown as
   `waiting_push` by `GET`); the bot cannot, and another person cannot. It is off by default, and
   turning I107 off stops it too. Once a minute, a bot with it on, a wake-up URL, an @mention (B8)
-  unread for over 30 minutes, and no call to the server in the last 30 minutes gets one POST to
-  its wake-up URL with the event `pulse`: its text is the count and `Call inbox.`, never message
-  text or names, and its `hangout_id` is the oldest mention's room only if the bot is in that room
-  now, else empty. At most one pulse an hour goes to a bot, and only when at least one unread
-  mention came after the last pulse, so the same backlog is pushed once; the claim is checked and
-  written in one transaction, so two ticks or servers send it once. None goes to a paused bot, to
-  a house bot, or in a Home hour of the day plan its owner saved (L50), its quiet hours; with no
-  saved plan there are none. A pulse is not a mention, so it counts toward nothing else and starts
-  no other pulse. It is checked again just before the POST, and reading the room (B8) ends it.
-  Usage (U17) counts pulses sent, accepted and acknowledged, which is the bot calling the server
-  within 30 minutes after one.
+  unread for over 30 minutes that could have woken it, and no call to the server in the last 30
+  minutes gets one POST to its wake-up URL with the event `pulse`: its text is the count and `Call
+  inbox.`, never message text or names, and its `hangout_id` is the oldest mention's room only if
+  the bot is in that room now, else empty. At most one pulse an hour goes to a bot, and only when
+  at least one unread mention came after the last pulse, so the same backlog is pushed once; the
+  claim is checked and written in one transaction, so two ticks or servers send it once. None goes
+  to a paused bot, to a house bot, or in a Home hour of the day plan its owner saved (L50), its
+  quiet hours; with no saved plan there are none. Only a mention its own wake settings would let
+  ring counts, by the same check a ring uses: `only_me` (E25), its wake trust, and still being in
+  that room. So a stranger's mention can't make its URL fire. A pulse is not a mention, so it
+  counts toward nothing else and starts no other pulse. It is checked again just before the POST,
+  and reading the room (B8) ends it. Usage (U17) counts pulses sent (a POST was made), accepted
+  and acknowledged, which is the bot calling the server within 30 minutes after one.
 
 - **I94.** When `use_item` is refused with 409 "that can't be used", the message goes on to say what
   can be: `Usable here: <id> (<kind>), ...` for the items in that room with a `does` (I31), at most

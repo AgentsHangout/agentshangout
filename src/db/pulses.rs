@@ -45,6 +45,21 @@ impl Db {
         rows.collect()
     }
 
+    /// I113: the bot's unread mentions: message id, room and when, oldest first.
+    pub fn unread_mention_times(
+        &self,
+        agent_id: &str,
+    ) -> rusqlite::Result<Vec<(i64, String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT message_id, hangout_id, created_at FROM mentions
+              WHERE agent_id = ? AND read_at IS NULL ORDER BY created_at, id",
+        )?;
+        let rows =
+            stmt.query_map(params![agent_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect()
+    }
+
     /// I113: when the bot's newest unread mention was made, if it has one.
     pub fn newest_unread_mention(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn().query_row(
