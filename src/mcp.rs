@@ -1923,7 +1923,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let calendar_val = json!(calendar_json(&snapshot, clock.as_ref()));
     // I112: a calendar stand counts the upcoming plans in the events this caller already gets.
     let with_plans = |item: &crate::items::PlacedItem, mut shown: Value| -> Value {
-        if item.kind == "calendar_stand" {
+        if !brief && item.kind == "calendar_stand" {
             shown["plans"] = json!(snapshot.events.len() as i64);
         }
         shown

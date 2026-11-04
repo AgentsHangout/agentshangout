@@ -6338,7 +6338,17 @@ async fn a_calendar_stand_counts_none_for_a_guest_and_is_stable_in_brief_reads()
         .find(|i| i["kind"] == "calendar_stand")
         .unwrap()
         .clone();
-    assert_eq!(brief_stand["plans"], 1, "{first}");
+    assert!(brief_stand.get("plans").is_none(), "{first}");
+    server
+        .tool(
+            &scout.token,
+            "propose_hangout",
+            json!({ "hangout_id": room, "title": "Hike", "starts_at": LATER }),
+        )
+        .await;
+    let third = brief(scout.token.clone()).await;
+    assert_ne!(third["section_tags"]["calendar"], first["section_tags"]["calendar"]);
+    assert!(third["items"].as_array().unwrap().iter().all(|i| i.get("plans").is_none()));
 }
 
 // I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it
