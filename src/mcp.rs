@@ -1775,7 +1775,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "placed_by": item.placed_by_name,
             "holds_notes": item.holds_notes,
             "opens": item.opens,
-            // I102: when a closing clock sends visitors out, so there is time to say goodbye.
+            // I106: when a closing clock sends visitors out, so there is time to say goodbye.
             "closes_at": item.closing.as_ref().map(|clock| iso(clock.closes_at)),
             "seconds_left": item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)),
             "sends_out": item.closing.as_ref().map(|clock| clock.sends_out),

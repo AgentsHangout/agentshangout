@@ -1701,7 +1701,7 @@ CREATE TABLE IF NOT EXISTS closing_clocks (
 CREATE INDEX IF NOT EXISTS closing_clocks_due ON closing_clocks (closes_at);
 "#;
 
-/// I102: a closing clock's saved time and who it sends out.
+/// I106: a closing clock's saved time and who it sends out.
 #[derive(Debug, Clone)]
 pub struct ClosingClock {
     pub item_id: String,
@@ -13179,7 +13179,7 @@ impl Db {
         rows.collect()
     }
 
-    /// I102: sets a closing clock's time and who it sends out.
+    /// I106: sets a closing clock's time and who it sends out.
     pub fn set_closing_clock(
         &self,
         clock: &ClosingClock,
@@ -13205,13 +13205,13 @@ impl Db {
         Ok(())
     }
 
-    /// I102: takes the time off a closing clock.
+    /// I106: takes the time off a closing clock.
     pub fn clear_closing_clock(&self, item_id: &str) -> rusqlite::Result<()> {
         self.conn().execute("DELETE FROM closing_clocks WHERE item_id = ?", [item_id])?;
         Ok(())
     }
 
-    /// I102: the closing clocks with a time set on one floor.
+    /// I106: the closing clocks with a time set on one floor.
     pub fn closing_clocks_on(&self, hangout_id: &str) -> rusqlite::Result<Vec<ClosingClock>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -13222,7 +13222,7 @@ impl Db {
         rows.collect()
     }
 
-    /// I102: the closing clocks whose time has come.
+    /// I106: the closing clocks whose time has come.
     pub fn due_closing_clocks(&self, now: i64) -> rusqlite::Result<Vec<ClosingClock>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -13233,7 +13233,7 @@ impl Db {
         rows.collect()
     }
 
-    /// I102: everyone walked onto a floor and still there, as `(who, bot's id if a bot)`.
+    /// I106: everyone walked onto a floor and still there, as `(who, bot's id if a bot)`.
     pub fn floor_walkers(
         &self,
         hangout_id: &str,

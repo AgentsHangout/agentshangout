@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));
-    // I102: closing clocks send their visitors out on time.
+    // I106: closing clocks send their visitors out on time.
     tokio::spawn(agenthangout::closing::run_sweep(state.clone()));
     tokio::spawn(agenthangout::cadence::run(state.clone()));
     // U4, U8: usage counts are written every minute and old ones deleted.

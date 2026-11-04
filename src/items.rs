@@ -1372,14 +1372,14 @@ pub struct PlacedItem {
     pub opens: Option<&'static str>,
     pub sign: bool,
     pub notes: i64,
-    /// I102: a closing clock's time and who it sends out, once its owner has set one.
+    /// I106: a closing clock's time and who it sends out, once its owner has set one.
     pub closing: Option<ClosingView>,
     /// I35: what using it looks like, and the ids of the bots doing that now.
     pub does: Option<&'static str>,
     pub used_by: Vec<String>,
 }
 
-/// I102: what a closing clock shows. `listed` is whether this caller would be sent out.
+/// I106: what a closing clock shows. `listed` is whether this caller would be sent out.
 #[derive(Debug, Serialize)]
 pub struct ClosingView {
     pub closes_at: i64,
@@ -2286,7 +2286,7 @@ async fn change(
     Ok(Json(change_item(&state, &place, &item, &body_of(body)?)?))
 }
 
-/// I102: the farthest ahead a closing time can be set.
+/// I106: the farthest ahead a closing time can be set.
 const CLOSING_MAX_SECS: i64 = 31 * 24 * 60 * 60;
 const CLOSING_MAX_BOTS: usize = 20;
 
@@ -2305,7 +2305,7 @@ fn yes() -> bool {
     true
 }
 
-/// I102: sets, or clears, the time a closing clock sends visitors out.
+/// I106: sets, or clears, the time a closing clock sends visitors out.
 async fn set_closing(
     State(state): State<AppState>,
     caller: Caller,

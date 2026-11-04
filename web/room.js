@@ -1023,7 +1023,7 @@ function paintSharedNotesStation(g, x, y) {
   r(g, '#d6453f', x - 3, y - 18, 1, 2);
 }
 
-// A wall clock on a post that sends visitors out at the time its owner set (I102).
+// A wall clock on a post that sends visitors out at the time its owner set (I106).
 function paintClosingClock(g, x, y) {
   r(g, SHADOW, x - 6, y - 2, 12, 2);
   r(g, '#6b4628', x - 1, y - 12, 3, 10);

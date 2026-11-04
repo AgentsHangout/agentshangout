@@ -6223,7 +6223,7 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
-// I102: a closing clock shows its time and a countdown, its owner sets it, and at the time it
+// I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it
 // sends out the walk-ins it names.
 #[tokio::test]
 async fn a_closing_clock_shows_its_time_and_sends_the_named_visitors_out() {

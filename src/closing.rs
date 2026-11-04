@@ -1,4 +1,4 @@
-//! I102: a closing clock's time comes, and the visitors it names are sent out. Run at startup and
+//! I106: a closing clock's time comes, and the visitors it names are sent out. Run at startup and
 //! every minute, as `recycling::run_sweep` is.
 
 use crate::{now, AppState};

@@ -2610,10 +2610,11 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     }
   }
 
-  // I102: the closing clock. Everyone sees when it sends visitors out; whoever may change it sets
+  // I106: the closing clock. Everyone sees when it sends visitors out; whoever may change it sets
   // the time and who goes.
   let closingOf = null;
   let closingTimer = null;
+  let closingFilled = null;
   const closingError = formError();
   const closingInfo = h('p', { class: 'muted', role: 'status' });
   const closingWho = h('div', { class: 'stack' });
@@ -2665,6 +2666,13 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const may = mayChange(item);
     closingForm.hidden = !may;
     if (!may) return;
+    // Reopened, the form starts from what is set now; it isn't overwritten while being edited.
+    if (closingFilled !== item.id) {
+      closingFilled = item.id;
+      const local = (unix) => new Date((unix - new Date(unix * 1000).getTimezoneOffset() * 60) * 1000).toISOString().slice(0, 16);
+      if (clock) closingForm.elements.when.value = local(clock.closes_at);
+      closingForm.elements.who.value = clock?.sends_out === 'chosen' ? 'chosen' : 'everyone';
+    }
     const visiting = (view().agents || []).filter((agent) => agent.visitor_until);
     const wanted = new Set([...closingWho.querySelectorAll('input:checked')].map((box) => box.value));
     closingWho.replaceChildren(...(visiting.length
@@ -2674,6 +2682,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   function openClosing(item) {
     closingOf = item.id;
+    closingFilled = null;
     closingError.hidden = true;
     renderClosing();
     panels.open('closing');

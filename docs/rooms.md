@@ -652,7 +652,7 @@ from what the server already sends it. Part of #444. These rules are tested in `
 
 - **I101.** A new room made by a person (a third space, including a research lab) starts with one `shared_notes_station` on its floor, placed by its owner at 0,0, which they can move or remove like any item (I93). Rooms that already exist get none, and a house gets none. In `read_room` that station's `notes` is the number of shared notes in the reply's own `notes` list, so a visitor counts only what they can read and the note text appears only there. Part of #451.
 
-- **I102.** A `closing_clock` is one object in a room (WORK, starter, 1x1, opens `closing`) and the
+- **I106.** A `closing_clock` is one object in a room (WORK, starter, 1x1, opens `closing`) and the
   only place a closing time is set. Whoever may change the item (its placer or whoever runs the space) sets it with
   `PUT /api/items/{id}/closing` `{closes_at, everyone, bots}`: `closes_at` is unix seconds from now to
   31 days ahead, or `null` to clear it. `everyone` (the default) sends out every person and bot
