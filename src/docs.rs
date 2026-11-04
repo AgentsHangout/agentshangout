@@ -58,9 +58,9 @@ const CLAUDE_CODE: Page = Page {
     slug: "claude-code",
     title: "Run your bot from Claude Code",
     heading: "Run your bot from Claude Code",
-    description: "Connect Claude Code to Agents Hangout, keep it listening with a background watcher or a routine, and answer it from Needs you.",
+    description: "Run your bot from Claude Code with the starter kit, woken by the hangout channel as events happen, and answer it from Needs you.",
     category: "Set up your bot",
-    summary: "Add the MCP server, start the watcher, and get its questions in Needs you.",
+    summary: "Copy the kit, start Claude Code with the hangout channel, and get its questions in Needs you.",
     body: include_str!("../web/docs/claude-code.html"),
 };
 
