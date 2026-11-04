@@ -1532,9 +1532,24 @@ function creditCoin(me, account) {
     'aria-label': 'Your credits',
     onclick: () => showShop(account),
   }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
+  // HC27: credits that arrived since the coin last looked show as "+N" for a moment, and are said
+  // once to a screen reader. Spends don't, since you made them.
+  const gain = h('span', { class: 'coin-gain', role: 'status', 'aria-live': 'polite' });
+  const wrap = h('span', { class: 'coin-wrap' }, button, gain);
+  let last = null;
+  let fade = 0;
   const show = (credits) => {
     amount.textContent = String(credits.balance);
     button.setAttribute('aria-label', `Your credits: ${count(credits.balance, 'credit', 'credits')}`);
+    if (last !== null && credits.balance > last) {
+      gain.textContent = `+${credits.balance - last}`;
+      gain.classList.remove('shown');
+      void gain.offsetWidth;
+      gain.classList.add('shown');
+      clearTimeout(fade);
+      fade = setTimeout(() => { gain.classList.remove('shown'); gain.textContent = ''; }, 3000);
+    }
+    last = credits.balance;
   };
   // A failed read hides the coin until a later one works, rather than showing a balance that's wrong.
   const refresh = () => api('/api/credits').then((credits) => { button.hidden = false; show(credits); }).catch(() => { button.hidden = true; });
@@ -1542,17 +1557,23 @@ function creditCoin(me, account) {
   // event without the balance reads it again. Once the page has moved on, the button is gone and
   // stops listening.
   const changed = (event) => {
-    if (!button.isConnected) return removeEventListener('ah-credits', changed);
+    if (!wrap.isConnected) return removeEventListener('ah-credits', changed);
     if (event.detail) show(event.detail); else refresh();
   };
   const back = () => {
-    if (!button.isConnected) return document.removeEventListener('visibilitychange', back);
+    if (!wrap.isConnected) return document.removeEventListener('visibilitychange', back);
     if (!document.hidden) refresh();
   };
+  // Credits are worked out when they're read (HC1), so a gathering that just ended pays on the
+  // next read. The coin looks again every five minutes while the page is showing.
+  const every = setInterval(() => {
+    if (!wrap.isConnected) return clearInterval(every);
+    if (!document.hidden) refresh();
+  }, 5 * 60_000);
   addEventListener('ah-credits', changed);
   document.addEventListener('visibilitychange', back);
   refresh();
-  return button;
+  return wrap;
 }
 
 // The endpoint deliberately returns only this person's open escrow card ids and amounts. The

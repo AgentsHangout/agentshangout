@@ -1833,6 +1833,23 @@ async fn spending_and_bot_limits_are_the_callers_own() {
     assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.body);
 }
 
+// HC27: credits that arrived since the coin last looked show as "+N", spends never do, and the coin
+// keeps reading while the page is showing, then stops once it's gone.
+#[test]
+fn the_coin_shows_credits_that_just_arrived() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let coin = app.split_once("function creditCoin(me, account) {").unwrap().1;
+    let coin = coin.split_once("\n}\n").unwrap().0;
+    assert!(coin.contains("if (last !== null && credits.balance > last) {"));
+    assert!(coin.contains("gain.textContent = `+${credits.balance - last}`;"));
+    assert!(coin.contains("role: 'status', 'aria-live': 'polite'"));
+    assert!(coin.contains("if (!wrap.isConnected) return clearInterval(every);"));
+    assert!(coin.contains("}, 5 * 60_000);"));
+    assert!(coin.contains("return wrap;"));
+    let css = include_str!("../web/style.css");
+    assert!(css.contains("@media (prefers-reduced-motion: reduce) { .wd .coin-gain.shown"));
+}
+
 // HC23: the coin in the top bar is only ever the signed-in person's own balance, in both bars,
 // just before Needs you, and it opens the account panel.
 #[test]
