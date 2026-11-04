@@ -2105,11 +2105,12 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
         return None;
     }
     let at = now();
-    let stale = state.db.stale_unread_mentions(agent_id, at - WAITING_AFTER_SECONDS).ok()?;
-    let (oldest, _) = stale.first()?;
-    let mut pulse = json!({ "mentions": stale.len() });
+    let (count, oldest) =
+        state.db.stale_unread_mentions(agent_id, at - WAITING_AFTER_SECONDS).ok()?;
+    let oldest = oldest?;
+    let mut pulse = json!({ "mentions": count });
     let room = state.db.hangouts_for_agent(agent_id, at).ok()?;
-    if let Some(room) = room.iter().find(|room| &room.id == oldest) {
+    if let Some(room) = room.iter().find(|room| room.id == oldest) {
         pulse["oldest_room"] = json!(room.name);
     }
     Some(pulse)

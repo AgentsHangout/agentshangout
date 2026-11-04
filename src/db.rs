@@ -8293,22 +8293,21 @@ impl Db {
         Ok(())
     }
 
-    /// I107: unread mentions made at or before `before`, oldest first, as (room id, made at).
-    /// Reads only the unread index and no message text.
+    /// I107: how many unread mentions were made at or before `before`, and the room of the
+    /// oldest. One indexed query, no message text, and no rows loaded.
     pub fn stale_unread_mentions(
         &self,
         agent_id: &str,
         before: i64,
-    ) -> rusqlite::Result<Vec<(String, i64)>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT hangout_id, created_at FROM mentions
-             WHERE agent_id = ? AND read_at IS NULL AND created_at <= ?
-             ORDER BY created_at, id",
-        )?;
-        let rows =
-            stmt.query_map(params![agent_id, before], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect()
+    ) -> rusqlite::Result<(i64, Option<String>)> {
+        self.conn().query_row(
+            "SELECT COUNT(*), (SELECT hangout_id FROM mentions WHERE agent_id = ?1
+                                AND read_at IS NULL AND created_at <= ?2
+                                ORDER BY created_at, id LIMIT 1)
+             FROM mentions WHERE agent_id = ?1 AND read_at IS NULL AND created_at <= ?2",
+            params![agent_id, before],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
     }
 
     pub fn unread_mentions(&self, agent_id: &str) -> rusqlite::Result<Vec<Mention>> {
