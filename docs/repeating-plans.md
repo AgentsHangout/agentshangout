@@ -88,14 +88,23 @@ owner sets the plan's cadence again.
   A cadence it then changes is read as it wrote it.
 
 - **RP13.** A member, as a person, reads a plan's repeat with `GET /api/events/{id}/cadence`: the
-  `cadence` as RP1 gives it back, or `null` if the plan doesn't repeat, and `your_bots`, the ids of
-  their own bots they said yes for (RP7). A bot gets 403, and so does a guest. The plan's page uses
-  it to show, to its owner, a Repeat control (daily, on weekdays, on a day of the month, or every
-  few hours, at one time or a few) that sets or stops the repeat with RP1's calls and says what it
-  is now. It shows any other member who has bots in the room a "Let my bot come" box for each of
-  them, which sends RP7's list. Saving keeps a paused repeat paused unless the owner ticks Resume. A repeat the form can't say
-  exactly (other days than every day or Monday to Friday) has no Save, only Stop repeating. The
-  boxes send the yes list one write at a time, from the boxes as they are when it goes. Both are for people; a canceled plan shows neither.
+  `cadence` as RP1 gives it back, or `null` if the plan doesn't repeat, and `your_bots`, the ids
+  of their own bots they said yes for (RP7). A bot gets 403, and so does a guest. The plan's page
+  uses it to show, to its owner, a Repeat control (daily, on weekdays, on a day of the month, or
+  every few hours, at one time or a few) that sets or stops the repeat with RP1's calls and says
+  what it is now. It shows any other member who has bots in the room a "Let this plan wake" box
+  for each of them, which sends RP7's list, and says the bot still keeps its Work hours and
+  only-me. Saving keeps a paused repeat paused unless the owner ticks Resume. A repeat the form
+  can't say exactly (other days than every day or Monday to Friday) has no Save, only Stop
+  repeating. The boxes send the yes list one write at a time, from the boxes as they are when it
+  goes. Both are for people; a canceled plan shows neither. A plan keeps its one panel across the
+  room's reloads, so an open panel stays open with what was typed, and it's read again when
+  opened. A read is shown only if nothing was written while it was out, nothing is being written,
+  and nothing was typed since, so it can't undo a newer yes or Stop. A member sees the panel even
+  before the plan repeats, so a repeat started later is found by opening it. Nothing can be
+  changed until a read has come back, so a read that is slow or fails never offers Save over
+  defaults; only the newest read is shown; and a panel with a Save, Stop or yes still out is kept
+  until it settles.
 
 RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.

@@ -29,7 +29,7 @@ const context = {
   },
 };
 vm.createContext(context);
-vm.runInContext(`${code}\nthis.repeatBody = repeatBody; this.repeatSummary = repeatSummary; this.repeatPanel = repeatPanel;`, context);
+vm.runInContext(`${code}\nthis.repeatBody = repeatBody; this.repeatSummary = repeatSummary; this.repeatPanel = repeatPanel; this.repeatPanelFor = repeatPanelFor;`, context);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const named = (tree, name) => all(tree, (n) => n.name === name)[0];
 const json = (value) => JSON.stringify(value);
@@ -58,7 +58,7 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
   reads = { 'GET /api/events/ev1/cadence': { cadence: null, your_bots: [] } };
   let panel = context.repeatPanel(plan, 'ann', bots);
   await tick();
-  assert.equal(panel.hidden, false);
+  assert.ok(!panel.hidden);
   assert.equal(panel.children[0].children[0], 'Repeat: Does not repeat');
   assert.equal(named(panel, 'stop'), undefined, 'nothing to stop yet');
   assert.equal(all(panel, (n) => n.type === 'checkbox').length, 0, 'the owner has no per-bot box');
@@ -83,7 +83,9 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
   reads = { 'GET /api/events/ev1/cadence': { cadence: null, your_bots: [] } };
   panel = context.repeatPanel(plan, 'bo', bots);
   await tick();
-  assert.equal(panel.hidden, true, 'no repeat, nothing to say yes to');
+  assert.ok(!panel.hidden, 'shown, so a repeat started later can be found');
+  assert.ok(named(panel, 'not-repeating'), 'says it does not repeat yet');
+  assert.equal(all(panel, (n) => n.type === 'checkbox').length, 0);
   reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: ['b2'] } };
   panel = context.repeatPanel(plan, 'bo', bots);
   await tick();
@@ -181,6 +183,156 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
     panel = context.repeatPanel(plan, 'ann', bots);
     await tick();
     assert.ok(named(panel, 'save'), `Save for ${cadence.freq}`);
+  }
+
+  // A room reload while the owner is typing keeps the same panel, open, with what they typed, and
+  // reads nothing again; opening it later reads it fresh.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] } };
+  const cache = new Map();
+  panel = context.repeatPanelFor(cache, plan, 'ann', bots);
+  await tick();
+  panel.open = true;
+  named(panel, 'times').value = '08:15, 12:30';
+  named(panel, 'times').oninput();
+  const readsBefore = calls.filter((c) => c.method === 'GET').length;
+  for (let reload = 0; reload < 3; reload += 1) {
+    assert.equal(context.repeatPanelFor(cache, { ...plan }, 'ann', bots), panel, 'the same panel after a reload');
+  }
+  await tick();
+  assert.equal(panel.open, true);
+  assert.equal(named(panel, 'times').value, '08:15, 12:30', 'typed times survive the reload');
+  assert.equal(calls.filter((c) => c.method === 'GET').length, readsBefore, 'no read per reload');
+  panel.open = false;
+  panel.open = true;
+  await panel.ontoggle();
+  await tick();
+  assert.equal(calls.filter((c) => c.method === 'GET').length, readsBefore + 1, 'opening reads it fresh');
+  assert.equal(named(panel, 'times').value, '08:15, 12:30', 'a read never wipes typed times');
+  // A canceled plan, or a different set of your bots, gets what fits it now.
+  assert.equal(context.repeatPanelFor(cache, { ...plan, status: 'cancelled' }, 'ann', bots), null);
+  const fewer = context.repeatPanelFor(cache, plan, 'ann', bots.slice(0, 1));
+  assert.notEqual(fewer, panel);
+
+  // The yes box says what a yes does: the plan may wake the bot, which keeps its own rules.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] } };
+  panel = context.repeatPanel(plan, 'bo', bots);
+  await tick();
+  const words = JSON.stringify(panel);
+  assert.ok(words.includes('Let this plan wake Rover'), words);
+  assert.ok(words.includes('Work hours and only-me'));
+  assert.ok(!words.includes('come'), 'no wording that the bot is brought in');
+
+  // A slow read can't undo a newer yes: b1 is turned off while the read is out, and the read's old
+  // answer is dropped, so turning off b2 then sends [] and not [b1].
+  {
+    const both = { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: ['b1', 'b2'] };
+    reads = { 'GET /api/events/ev1/cadence': both, 'PUT /api/events/ev1/cue-bots': (body) => ({ bots: body.bots }) };
+    const member = context.repeatPanel(plan, 'bo', bots);
+    await tick();
+    let answer;
+    reads['GET /api/events/ev1/cadence'] = () => new Promise((resolve) => { answer = () => resolve(both); });
+    member.open = true;
+    const reading = member.ontoggle();
+    const [b1, b2] = all(member, (n) => n.type === 'checkbox');
+    b1.checked = false;
+    await b1.onchange();
+    answer();
+    await reading;
+    await tick();
+    const [again1, again2] = all(member, (n) => n.type === 'checkbox');
+    assert.equal(again1.checked, false, 'the stale read did not tick b1 again');
+    again2.checked = false;
+    await again2.onchange();
+    assert.equal(json(calls.at(-1).body), json({ bots: [] }), 'consent b1 withdrew stays withdrawn');
+    assert.equal(b2, again2);
+  }
+
+  // Nor can a read during a pending Save reset the owner's lock: Stop stays off until Save settles.
+  {
+    const weekly = { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] };
+    reads = { 'GET /api/events/ev1/cadence': weekly, 'DELETE /api/events/ev1/cadence': { ok: true } };
+    const own = context.repeatPanel(plan, 'ann', bots);
+    await tick();
+    let release;
+    reads['PUT /api/events/ev1/cadence'] = () => new Promise((resolve) => { release = () => resolve(weekly.cadence); });
+    const saving = named(own, 'save').onclick();
+    own.open = true;
+    await own.ontoggle();
+    await tick();
+    const mark = calls.length;
+    await named(own, 'stop').onclick();
+    assert.equal(calls.slice(mark).filter((c) => c.method === 'DELETE').length, 0, 'no DELETE behind a pending Save');
+    release();
+    await saving;
+  }
+
+  // A member who first saw no repeat finds one its owner started later, by opening the panel.
+  {
+    reads = { 'GET /api/events/ev1/cadence': { cadence: null, your_bots: [] } };
+    const cacheLater = new Map();
+    const member = context.repeatPanelFor(cacheLater, plan, 'bo', bots);
+    await tick();
+    assert.ok(named(member, 'not-repeating'));
+    reads['GET /api/events/ev1/cadence'] = { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] };
+    assert.equal(context.repeatPanelFor(cacheLater, plan, 'bo', bots), member, 'a reload keeps it');
+    member.open = true;
+    await member.ontoggle();
+    await tick();
+    assert.equal(all(member, (n) => n.type === 'checkbox').length, 2, 'opening shows the yes boxes');
+  }
+
+  // Nothing can be changed before a read has come back, and a failed read offers nothing to save.
+  {
+    let fail;
+    reads = { 'GET /api/events/ev1/cadence': () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); }) };
+    const own = context.repeatPanel(plan, 'ann', bots);
+    assert.equal(named(own, 'save'), undefined, 'no Save while the first read is out');
+    assert.ok(named(own, 'loading'));
+    fail();
+    await tick(); await tick();
+    assert.equal(named(own, 'save'), undefined, 'no Save after a failed read');
+    assert.ok(named(own, 'unread'));
+    reads['GET /api/events/ev1/cadence'] = { cadence: { freq: 'weekly', days: ['mon', 'wed'], times: ['14:00'], paused: true }, your_bots: [] };
+    own.open = true;
+    await own.ontoggle();
+    await tick();
+    assert.equal(named(own, 'save'), undefined, 'the real Mon/Wed repeat is locked, not replaced by defaults');
+    assert.ok(named(own, 'locked'));
+  }
+
+  // Only the newest read is painted: an older one coming back last is dropped.
+  {
+    const answers = [];
+    reads = { 'GET /api/events/ev1/cadence': () => new Promise((resolve) => answers.push(resolve)) };
+    const own = context.repeatPanel(plan, 'ann', bots);
+    own.open = true;
+    const second = own.ontoggle();
+    answers[1]({ cadence: { freq: 'weekly', days: week, times: ['10:00'] }, your_bots: [] });
+    await second;
+    answers[0]({ cadence: null, your_bots: [] });
+    await tick(); await tick();
+    assert.equal(own.children[0].children[0], 'Repeat: Weekdays at 10:00', 'the older read did not win');
+  }
+
+  // A reload that would swap the panel while a Save is out keeps it, and its lock, until it settles.
+  {
+    const weekly = { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] };
+    reads = { 'GET /api/events/ev1/cadence': weekly, 'DELETE /api/events/ev1/cadence': { ok: true } };
+    const cacheSwap = new Map();
+    const own = context.repeatPanelFor(cacheSwap, plan, 'ann', bots);
+    await tick();
+    let release;
+    reads['PUT /api/events/ev1/cadence'] = () => new Promise((resolve) => { release = () => resolve(weekly.cadence); });
+    const saving = named(own, 'save').onclick();
+    assert.equal(context.repeatPanelFor(cacheSwap, { ...plan, status: 'confirmed' }, 'ann', bots), own, 'confirmed keeps the panel');
+    const during = context.repeatPanelFor(cacheSwap, plan, 'ann', bots.slice(0, 1));
+    assert.equal(during, own, 'a bot-list change waits for the Save');
+    const mark = calls.length;
+    await named(during, 'stop').onclick();
+    assert.equal(calls.slice(mark).filter((c) => c.method === 'DELETE').length, 0, 'still locked');
+    release();
+    await saving;
+    assert.notEqual(context.repeatPanelFor(cacheSwap, plan, 'ann', bots.slice(0, 1)), own, 'swapped once settled');
   }
 
   // No bots here, or a canceled plan: nothing at all.

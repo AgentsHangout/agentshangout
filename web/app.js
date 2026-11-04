@@ -3210,17 +3210,49 @@ function repeatPanel(event, you, bots) {
   const path = `/api/events/${event.id}/cadence`;
   const summary = h('summary', {}, 'Repeat');
   const body = h('div', { class: 'repeat-body' });
-  const panel = h('details', { class: 'repeat', hidden: true }, summary, body);
   const error = formError();
   const fail = (failure) => { error.textContent = failure.message; error.hidden = false; };
   const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
   let data = { cadence: null, your_bots: [] };
+  // A read is only painted if nothing was written while it was out and nothing is being written
+  // now, and the owner hasn't typed into the form since it was drawn. So a slow read can't undo a
+  // newer yes or Stop, and opening the panel again never wipes what was typed.
+  let writing = 0;
+  let writes = 0;
+  let typed = false;
+  // Nothing can be changed until a read has come back: a pending or failed first read must never
+  // offer Save over defaults that would replace the real repeat. Only the newest read is painted.
+  let loaded = false;
+  let readsSent = 0;
+  const write = async (action) => {
+    writing += 1;
+    writes += 1;
+    try { return await action(); } finally { writing -= 1; }
+  };
+  const load = () => {
+    const before = writes;
+    const sent = ++readsSent;
+    return api(path).then((read) => {
+      if (sent !== readsSent || writing || writes !== before || typed) return;
+      data = read;
+      loaded = true;
+      paint();
+    }).catch(() => {
+      if (sent !== readsSent || loaded) return;
+      body.replaceChildren(h('p', { class: 'muted', name: 'unread' }, 'Couldn\'t read this plan\'s repeat. Close and open this to try again.'));
+    });
+  };
+  // Every member who can answer sees it, repeating or not, and opening it reads it again: so a repeat
+  // its owner starts later can be found without reading on every room reload (see repeatPanelFor).
+  const panel = h('details', { class: 'repeat', ontoggle: () => { if (panel.open) load(); } }, summary, body);
+  // repeatPanelFor keeps this panel, and its lock, while anything it sent is still out.
+  panel.pending = () => writing > 0;
   // One yes-list write at a time, each built from the boxes as they are when it goes, so a quick
   // second click can't be sent behind a first that was built from older boxes.
   const checks = [];
   let sending = false;
   let again = false;
-  const send = async () => {
+  const send = () => write(async () => {
     if (sending) { again = true; return; }
     sending = true;
     try {
@@ -3236,47 +3268,59 @@ function repeatPanel(event, you, bots) {
       fail(failure);
     }
     sending = false;
+  });
+  // One owner request at a time, across repaints: Save and Stop are both off until it settles, so a
+  // late Save can't bring back a repeat that Stop just ended.
+  let busy = false;
+  let buttons = [];
+  const only = (action) => async () => {
+    if (busy) return;
+    busy = true;
+    buttons.forEach((button) => { button.disabled = true; });
+    try { await write(action); } finally {
+      busy = false;
+      buttons.forEach((button) => { button.disabled = false; });
+    }
   };
 
   const paint = () => {
-    const { cadence } = data;
-    summary.replaceChildren(`Repeat: ${repeatSummary(cadence)}`);
-    if (!owner) {
-      if (!cadence) { panel.hidden = true; return; }
-      checks.length = 0;
-      const boxes = bots.map((bot) => {
-        const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let ${bot.name} come` });
-        box.onchange = send;
-        checks.push({ bot, box });
-        return h('label', { class: 'check' }, box, ` Let my bot ${bot.name} come`);
-      });
-      body.replaceChildren(...boxes, error);
+    if (!loaded) {
+      body.replaceChildren(h('p', { class: 'muted', name: 'loading' }, 'Reading this plan\'s repeat…'));
       return;
     }
-    const kind = h('select', { name: 'kind', 'aria-label': 'How often' },
+    const { cadence } = data;
+    typed = false;
+    summary.replaceChildren(`Repeat: ${repeatSummary(cadence)}`);
+    if (!owner) {
+      checks.length = 0;
+      if (!cadence) {
+        body.replaceChildren(h('p', { class: 'muted', name: 'not-repeating' }, 'This plan doesn\'t repeat. If its owner makes it repeat, you can let it wake your bots here.'));
+        return;
+      }
+      const boxes = bots.map((bot) => {
+        // RP7: a yes lets this plan wake a bot already in the room. It doesn't move it or let it in.
+        const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let this plan wake ${bot.name}` });
+        box.onchange = send;
+        checks.push({ bot, box });
+        return h('label', { class: 'check' }, box, ` Let this plan wake ${bot.name}`);
+      });
+      const note = h('p', { class: 'muted' }, 'Each time it starts. Your bot still keeps its Work hours and only-me.');
+      body.replaceChildren(...boxes, note, error);
+      return;
+    }
+    const edited = () => { typed = true; };
+    const input = (props) => h('input', { ...props, oninput: edited });
+    const kind = h('select', { name: 'kind', 'aria-label': 'How often', onchange: edited },
       [['daily', 'Every day'], ['weekdays', 'Weekdays'], ['monthly', 'Day of the month'], ['hourly', 'Every few hours']]
         .map(([value, text]) => h('option', { value }, text)));
     kind.value = !cadence ? 'daily' : cadence.freq === 'weekly' ? 'weekdays' : cadence.freq;
-    const times = h('input', { name: 'times', value: cadence?.times?.join(', ') || '09:00', placeholder: '09:00, 13:00', 'aria-label': 'Times, up to four' });
-    const monthDay = h('input', { name: 'month_day', type: 'number', min: 1, max: 28, value: cadence?.month_day || 1, 'aria-label': 'Day of the month' });
-    const interval = h('input', { name: 'interval', type: 'number', min: 1, max: 23, value: cadence?.interval || 3, 'aria-label': 'Every how many hours' });
-    const from = h('input', { name: 'from', value: cadence?.window?.from || '09:00', 'aria-label': 'First start' });
-    const to = h('input', { name: 'to', value: cadence?.window?.to || '17:00', 'aria-label': 'Last start' });
-    const until = h('input', { name: 'until', placeholder: 'YYYY-MM-DD', value: cadence?.until || '', 'aria-label': 'Last day' });
-    const resume = h('input', { type: 'checkbox', name: 'resume', 'aria-label': 'Resume' });
-    // One owner request at a time: Save and Stop are both off until it settles, so a late Save can't
-    // bring back a repeat that Stop just ended.
-    let busy = false;
-    const buttons = [];
-    const only = (action) => async () => {
-      if (busy) return;
-      busy = true;
-      buttons.forEach((button) => { button.disabled = true; });
-      try { await action(); } finally {
-        busy = false;
-        buttons.forEach((button) => { button.disabled = false; });
-      }
-    };
+    const times = input({ name: 'times', value: cadence?.times?.join(', ') || '09:00', placeholder: '09:00, 13:00', 'aria-label': 'Times, up to four' });
+    const monthDay = input({ name: 'month_day', type: 'number', min: 1, max: 28, value: cadence?.month_day || 1, 'aria-label': 'Day of the month' });
+    const interval = input({ name: 'interval', type: 'number', min: 1, max: 23, value: cadence?.interval || 3, 'aria-label': 'Every how many hours' });
+    const from = input({ name: 'from', value: cadence?.window?.from || '09:00', 'aria-label': 'First start' });
+    const to = input({ name: 'to', value: cadence?.window?.to || '17:00', 'aria-label': 'Last start' });
+    const until = input({ name: 'until', placeholder: 'YYYY-MM-DD', value: cadence?.until || '', 'aria-label': 'Last day' });
+    const resume = h('input', { type: 'checkbox', name: 'resume', 'aria-label': 'Resume', onchange: edited });
     const save = only(async () => {
       try {
         const values = { paused: Boolean(cadence?.paused) && !resume.checked, kind: kind.value, times: times.value, month_day: monthDay.value, interval: interval.value, from: from.value, to: to.value, until: until.value.trim() };
@@ -3293,8 +3337,9 @@ function repeatPanel(event, you, bots) {
         paint();
       } catch (failure) { fail(failure); }
     });
+    buttons = [];
     const button = (kind, name, onclick, text) => {
-      const made = h('button', { type: 'button', class: kind, name, onclick }, text);
+      const made = h('button', { type: 'button', class: kind, name, onclick, disabled: busy }, text);
       buttons.push(made);
       return made;
     };
@@ -3316,7 +3361,23 @@ function repeatPanel(event, you, bots) {
       error);
   };
 
-  api(path).then((read) => { data = read; panel.hidden = false; paint(); }).catch(() => {});
+  paint();
+  load();
+  return panel;
+}
+
+// The room reloads every 30 seconds and on most changes, and each reload draws every plan card
+// again. A plan keeps the one Repeat panel it had, so an open panel stays open with what the owner
+// typed, and nothing is read again until it's opened. A new panel is made only when what it shows
+// for changes: whether the plan is canceled, or which of your bots are in the room. While the kept
+// panel still has a Save, Stop or yes out, it stays until that settles, so its lock isn't lost to a
+// fresh panel. `cache` is a Map.
+function repeatPanelFor(cache, event, you, bots) {
+  const key = [event.status === 'cancelled', you, ...bots.map((bot) => bot.id)].join('|');
+  const kept = cache.get(event.id);
+  if (kept && (kept.key === key || kept.panel?.pending?.())) return kept.panel;
+  const panel = repeatPanel(event, you, bots);
+  cache.set(event.id, { key, panel });
   return panel;
 }
 
@@ -3872,6 +3933,8 @@ async function roomView(id) {
     return h('div', { class: 'plan-list' }, rows.length ? h('ul', { class: 'room-list' }, rows) : null, form, error);
   }
 
+  const repeatPanels = new Map();
+
   function eventCard(event) {
     const mine = event.rsvps.find((rsvp) => rsvp.person_id === snapshot.you.person_id);
     const confirmed = event.status === 'confirmed';
@@ -3905,7 +3968,7 @@ async function roomView(id) {
           : `Proposed by ${event.proposer}: needs ${event.min_yes} yes`),
         h('div', { class: 'rsvps' }, responses, invited),
         planList(event),
-        snapshot.guest ? null : repeatPanel(event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
+        snapshot.guest ? null : repeatPanelFor(repeatPanels, event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
         h('div', { class: 'event-actions' },
           ['yes', 'maybe', 'no'].map((response) => h('button', {
             type: 'button',
@@ -3927,6 +3990,9 @@ async function roomView(id) {
   }
 
   function renderCalendar() {
+    // Plans no longer listed let go of their Repeat panels.
+    const listed = new Set(snapshot.events.map((event) => event.id));
+    [...repeatPanels.keys()].filter((id) => !listed.has(id)).forEach((id) => repeatPanels.delete(id));
     calendarEl.replaceChildren(...(snapshot.events.length
       ? snapshot.events.map(eventCard)
       : [h('p', { class: 'muted' }, 'Nothing planned. Ask your bots to find a time, or propose something.')]));
