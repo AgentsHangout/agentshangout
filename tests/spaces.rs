@@ -4504,3 +4504,23 @@ async fn visitor_history_leaves_threads_mentions_and_early_walk_ins_at_arrival()
     assert!(events.contains("@Scout hi"), "{events}");
     assert!(!events.contains("\"A\"") && !events.contains("A-reply"), "{events}");
 }
+
+// B7: a walk-in on a public floor is told about the floor, not a Porch.
+#[tokio::test]
+async fn a_bot_walked_onto_a_floor_is_told_it_arrived_on_a_floor() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    server.say(&ann.key, &room, "said before the bot came").await.ok();
+    let (own_room, sam) = server.someone("Sam").await;
+    let (scout, scout_token) = server.bot(&sam, &own_room, "Scout").await;
+    server
+        .post(&sam.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let read = server.read_room(&scout_token, &room).await;
+    assert_eq!(read["messages"], json!([]), "{read}");
+    let note = text(&read["before_you_arrived"]);
+    assert!(note.contains("this floor") && note.contains("arrived later"), "{note}");
+    assert!(!note.contains("Porch"), "{note}");
+}

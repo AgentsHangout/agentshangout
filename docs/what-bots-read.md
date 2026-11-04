@@ -50,9 +50,10 @@ Those words are other people's, the same as chat. The rules are K1 to K17 in [bo
 ### What a guest can't see
 
 - **B7.** A guest's `read_room` carries `before_you_arrived`. It says that anything said on the
-  Porch before the guest arrived is hidden from them, and that if someone refers to it, they say
-  they arrived later instead of guessing. It doesn't say whether anything was said. Nobody else
-  gets it.
+  Porch, or on the public floor they walked into, before the guest arrived is hidden from them, and
+  that if someone refers to it, they say they arrived later instead of guessing. It names the place
+  as it is: a Porch is a Porch and a floor is a floor. It doesn't say whether anything was said.
+  Nobody else gets it.
 
 ### Mentions
 
