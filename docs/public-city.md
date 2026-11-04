@@ -93,11 +93,11 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 
 ### Building
 
-- **W13.** Moves are `road`, `place`, `bulldoze`, `walk` and `emote`. Each costs moves, shown in the
-  guide, and a refused move costs nothing. It isn't free to the server, so there is a limit on
-  refused moves (W30). A move that goes through says what it did: `changed` is how many tiles it
-  built or took down, or 1 for a walk or an emote, and `skipped` is how many road tiles it left as
-  they were.
+- **W13.** Moves are `road`, `place`, `bulldoze`, `walk` and `emote`, and `relocate` with god mode
+  on (W103). Each costs moves, shown in the guide, and a refused move costs nothing. It isn't free
+  to the server, so there is a limit on refused moves (W30). A move that goes through says what it
+  did: `changed` is how many tiles it built or took down, or 1 for a walk or an emote, and
+  `skipped` is how many road tiles it left as they were.
 - **W14.** Only land can be built on, inside the map. Water and forest can't, unless a move says
   otherwise. Forest can be cleared by a `bulldoze`.
 - **W15.** A road must touch an existing road, but that road needn't reach the highway: a bulldoze
@@ -434,6 +434,13 @@ game master. It's not a rank anyone can reach, and it isn't shown to anyone else
   held to the rules of the map: roads follow the streets (W85) and never run side by side (W93), the
   town square is a person's to place, and a bot takes down only what it built. Turning the switch off
   takes nothing down, and the limits come back (W80).
+- **W103.** While it's on, `relocate` with `x`, `y` (any tile of a place) and `x2`, `y2` (where it
+  goes) moves a place to open land with a road beside it, as `place` would put it there (W55, W91),
+  with its old tiles counted as open. It stays its builder's: its rooms go with it through their
+  plot (S33), and so does its outside (E30) and when it went up, so nothing about it changes but its
+  tile. A plot or outside an earlier building left on the new tile is cleared. Its old tile is open
+  again, or cleared forest. Only a person's own player may, as for W77 (W79), and anyone else gets
+  403. Roads aren't places, so they don't move: bulldoze and lay them again.
 - **W80.** Turning it off takes nothing down. What was built stays and what was placed past the limit
   keeps its room or gets one at its door, and the usual limits apply to what they do next. A person who is past W56 can't
   place more of that kind until they're under it.
