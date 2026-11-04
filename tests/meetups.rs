@@ -562,6 +562,14 @@ async fn a_meetup_ring_is_held_as_a_mention_ring_is() {
 
 /// A wake-up URL that answers `status` to every POST, counting them.
 async fn status_hook(status: u16) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    slow_hook(status, 0).await
+}
+
+/// As `status_hook`, answering after `delay_ms`, so a second ring can come while one is in flight.
+async fn slow_hook(
+    status: u16,
+    delay_ms: u64,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -581,6 +589,7 @@ async fn status_hook(status: u16) -> (String, std::sync::Arc<std::sync::atomic::
                     }
                 }
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 let reply = format!(
                     "HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 );
@@ -628,6 +637,10 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(!held(&town.fern_id), "a denied ring starts no cooldown");
+    assert!(
+        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        "a denied ring starts no cooldown (reservation)"
+    );
 
     // A non-2xx answer: posted, not accepted, not recorded.
     set_trust(&server, &town.ann, &town.fern_id, "participants", "participants").await;
@@ -638,6 +651,10 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(!held(&town.fern_id), "a failed ring starts no cooldown");
+    assert!(
+        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        "a failed ring starts no cooldown (reservation)"
+    );
 
     // Nothing listening: same.
     let dead = {
@@ -646,9 +663,20 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     };
     watch(&dead).await;
     let made = server.propose(&town, json!(["Fern"]), 30).await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // A refused connection can take a few seconds to fail on some systems.
+    for _ in 0..100 {
+        let pending = server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now());
+        if !pending.unwrap() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
     assert!(!held(&town.fern_id), "an unreachable URL starts no cooldown");
+    assert!(
+        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        "an unreachable URL starts no cooldown (reservation)"
+    );
 
     // An accepted ring does, and a person's mention would then be held for three minutes.
     let (url, hits) = status_hook(200).await;
@@ -761,4 +789,84 @@ async fn a_cancellation_through_another_connection_beats_a_claimed_nudge() {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{file}{suffix}"));
     }
+}
+
+// MU11: of two rings due at once for one bot and room, exactly one is reserved.
+#[tokio::test]
+async fn two_rings_due_at_once_reserve_once() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let (bot, room) = (town.fern_id.clone(), town.cafe.clone());
+    let at = now();
+    let tries: Vec<_> = (0..8)
+        .map(|_| {
+            let (state, bot, room) = (server.state.clone(), bot.clone(), room.clone());
+            tokio::task::spawn_blocking(move || {
+                state.db.reserve_meetup_ring(&bot, &room, at - 180, at).unwrap()
+            })
+        })
+        .collect();
+    let mut won = 0;
+    for t in tries {
+        won += usize::from(t.await.unwrap());
+    }
+    assert_eq!(won, 1);
+    assert!(server.state.db.meetup_ring_reserved(&bot, &room, at).unwrap());
+    // Released, it can be taken again; settled as accepted, it holds for three minutes instead.
+    server.state.db.release_meetup_ring(&bot, &room).unwrap();
+    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at - 180, at).unwrap());
+    server.state.db.note_meetup_wake(&bot, &room, at).unwrap();
+    assert!(!server.state.db.meetup_ring_reserved(&bot, &room, at).unwrap());
+    assert!(!server.state.db.reserve_meetup_ring(&bot, &room, at + 60 - 180, at + 60).unwrap());
+    // A stale reservation (a callback that never settled) frees itself.
+    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 200).unwrap());
+    assert!(server.state.db.reserve_meetup_ring(&town.pip_id, &room, at - 180, at).unwrap());
+    assert!(!server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 201).unwrap());
+    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 330).unwrap());
+}
+
+// MU11: a second meetup due while the first ring is in flight sends nothing; if the first fails,
+// the next one rings.
+#[tokio::test]
+async fn one_ring_at_a_time_and_a_failed_one_lets_the_next_through() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let watch = async |url: &str| {
+        server
+            .send(
+                &town.ann.key,
+                Method::PUT,
+                &format!("/api/agents/{}/notify", town.fern_id),
+                Some(json!({ "url": url })),
+            )
+            .await
+            .ok();
+    };
+    let pause = async |ms: u64| tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    let posts =
+        |hits: &std::sync::atomic::AtomicUsize| hits.load(std::sync::atomic::Ordering::SeqCst);
+
+    // Two invitations back to back, the first answered slowly with 200: one POST, then the
+    // cooldown holds the room.
+    let (url, hits) = slow_hook(200, 800).await;
+    watch(&url).await;
+    server.propose(&town, json!(["Fern"]), 30).await;
+    server.propose(&town, json!(["Fern"]), 40).await;
+    pause(1500).await;
+    assert_eq!(posts(&hits), 1);
+    assert!(meetups::ring_held(&server.state, &town.fern_id, &town.cafe, now()));
+
+    // A first ring that fails gives the room back: the next invitation rings.
+    server.state.db.delete_wake_accepts(&town.fern_id).unwrap();
+    let (url, hits) = slow_hook(500, 300).await;
+    watch(&url).await;
+    let third = server.propose(&town, json!(["Fern"]), 50).await;
+    pause(1000).await;
+    assert_eq!(posts(&hits), 1);
+    assert!(!meetups::ring_held(&server.state, &town.fern_id, &town.cafe, now()));
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": third["id"] })).await;
+    let again = server.propose(&town, json!(["Fern"]), 60).await;
+    pause(1000).await;
+    assert_eq!(posts(&hits), 2, "{again}");
 }
