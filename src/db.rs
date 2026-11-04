@@ -6876,7 +6876,7 @@ impl Db {
         Ok(())
     }
 
-    /// L39: count only held third spaces, using the same ownership rules as project creation.
+    /// L60: count only held third spaces, using the same ownership rules as project creation.
     pub fn third_space_count(&self, owner_id: &str) -> rusqlite::Result<i64> {
         self.conn().query_row(
             &format!(
@@ -13391,7 +13391,7 @@ impl Db {
         rows.collect()
     }
 
-    // Asking to let a bot in (S49 to S52)
+    // Asking to let a bot in (S82, S50 to S52)
 
     /// S52: the latest request for this bot at this space since `since` that's waiting or was turned
     /// down: its id and status.
@@ -13535,7 +13535,7 @@ impl Db {
         Ok(())
     }
 
-    /// L18: the player a bot plays The Commons with, if it has one.
+    /// L59: the player a bot plays The Commons with, if it has one.
     pub fn player_of_agent(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn()
             .query_row(
@@ -13546,7 +13546,7 @@ impl Db {
             .optional()
     }
 
-    /// L18: where a person's house stands in a world, if it does.
+    /// L59: where a person's house stands in a world, if it does.
     pub fn house_of_person(
         &self,
         world_id: &str,

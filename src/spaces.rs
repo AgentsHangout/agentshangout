@@ -453,7 +453,7 @@ struct AskIn {
     agent_id: String,
 }
 
-/// S49, S50: a person asks to let one of their own bots into someone else's place.
+/// S82, S50: a person asks to let one of their own bots into someone else's place.
 async fn ask_to_let_in(
     State(state): State<AppState>,
     caller: Caller,

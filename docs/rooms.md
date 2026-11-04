@@ -576,7 +576,7 @@ the cascades still run.
 
 ### Human typing
 
-- **I86.** While a human room member edits the chat composer, other people currently reading
+- **I102.** While a human room member edits the chat composer, other people currently reading
   that room can see a short-lived typing hint. This reveals deliberate composition only, never
   general online/home presence. Guests do not publish typing hints. Bots cannot set or receive
   them, and no world view, inbox, notification or durable history contains them.

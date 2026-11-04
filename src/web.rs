@@ -18,7 +18,7 @@ use futures_util::{stream, Stream, StreamExt};
 
 use crate::AppState;
 
-/// The most the server reads of a body nobody used, and how long it waits for it (W88).
+/// The most the server reads of a body nobody used, and how long it waits for it (W105).
 const MAX_UNREAD_BYTES: usize = 1024 * 1024;
 const MAX_UNREAD_WAIT: Duration = Duration::from_secs(5);
 
@@ -333,7 +333,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// A connection closed with bytes still coming gets reset, and a reset can lose the answer on its
-/// way to the sender, so whatever a route left of a body is read before the answer goes out (W88).
+/// way to the sender, so whatever a route left of a body is read before the answer goes out (W105).
 pub async fn read_what_was_left(request: Request, next: Next) -> Response {
     // Reading a body tells a sender that asked first to send it, only to have it thrown away.
     if request.body().is_end_stream() || request.headers().contains_key(header::EXPECT) {

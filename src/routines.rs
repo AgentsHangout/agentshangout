@@ -1095,7 +1095,7 @@ fn not_out_reason(
 /// L17: who The Commons shows at its places, by name, beside each building's door. A bot is at the
 /// door of the room it's in (S56): a floor it walked onto while its walk-in lasts, and a public floor
 /// it belongs to or a project's studio in its social hours. C14: what it's wearing goes with the name.
-/// L17, L18: a bot at a place: its name, the tile by the door, its look, where it comes from, and
+/// L17, L59: a bot at a place: its name, the tile by the door, its look, where it comes from, and
 /// the player of its own that isn't on the street while it's there.
 pub struct BotAtPlace {
     pub name: String,
@@ -1164,7 +1164,7 @@ pub fn bots_at_places_and_cut(
             tiles.get(&pos).is_some_and(|tile| tile.kind == crate::world::Kind::Road).then_some(pos)
         });
         let (x, y) = road.unwrap_or((x, y));
-        // L18: from where its own player stands, or else its owner's house.
+        // L59: from where its own player stands, or else its owner's house.
         let player = state.db.player_of_agent(&agent_id)?;
         let from = match player.and_then(|id| street.get(&id).copied()) {
             Some(pos) => Some(pos),

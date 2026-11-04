@@ -2875,7 +2875,7 @@ function wardrobe({ panels, mayDress, reload }) {
   };
 }
 
-// I86: only booleans leave the composer. Serialize start/stop requests in order.
+// I102: only booleans leave the composer. Serialize start/stop requests in order.
 function humanTypingComposer(input, send) {
   let active = false, lastSent = 0, idle = null, stopped = false, generation = 0;
   let pending = Promise.resolve();
@@ -8680,7 +8680,7 @@ async function worldView(id, { home = false } = {}) {
     return { title: `Tile ${t.x}, ${t.y}`, sub: what, items };
   }
 
-  // S49: on someone else's place there's no going in unless it's open or you're on one of its
+  // S82: on someone else's place there's no going in unless it's open or you're on one of its
   // floors. Instead, ask its owner to let one of your bots in. On your own, going in is how you get
   // to its rooms.
   // RC6, RC7: the bots waiting at the recycling plant, by name and the day each goes, and nothing

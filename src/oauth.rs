@@ -1,4 +1,4 @@
-//! A65-A70: OAuth grants authorize one bot, only on the MCP resource.
+//! A65-A69, A94: OAuth grants authorize one bot, only on the MCP resource.
 use crate::{
     auth::{self, Caller},
     error::{ApiError, ApiResult},
@@ -179,7 +179,7 @@ fn valid_redirect(raw: &str) -> bool {
         && u.password().is_none()
         && u.fragment().is_none()
 }
-/// A70: an RFC 8252 loopback callback, for a client running on the owner's own computer.
+/// A94: an RFC 8252 loopback callback, for a client running on the owner's own computer.
 fn loopback(u: &Url) -> bool {
     u.scheme() == "http"
         && u.port().is_some()

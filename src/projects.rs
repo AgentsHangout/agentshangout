@@ -26,7 +26,7 @@ pub(crate) fn may_take_part(state: &AppState, agent_id: &str) -> ApiResult<bool>
     Ok(!state.db.bot_home(agent_id)?.is_some_and(|home| home.stays_home || home.is_house))
 }
 
-/// L39: report only the caller's owner's quota, without naming their other rooms.
+/// L60: report only the caller's owner's quota, without naming their other rooms.
 pub fn capacity(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     let used = state.db.third_space_count(&caller.person_id)?;
     let exempt = crate::god_mode::is_on(state, &caller.person_id)?;
