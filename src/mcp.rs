@@ -1692,6 +1692,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // stays in inbox until the bot itself catches up here.
     if let Some(agent_id) = &caller.agent_id {
         state.db.mark_mentions_read(agent_id, &hangout.id, now())?;
+        // I117: and the thread replies it has since answered in their thread.
+        state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
     }
     let after = args["after_message_id"].as_i64().unwrap_or(0);
     let person_name = |id: &Option<String>| {
@@ -2892,6 +2894,10 @@ fn call_tool(
             let reply_to = if name == "say" { reply_to_arg(args)? } else { None };
             let text = text_arg(args, "text")?;
             let message = ops::post_reply(state, caller, &hangout.id, kind, text, reply_to)?;
+            // I117: answering in a thread clears the mentions there that came before the answer.
+            if let (Some(agent_id), Some(_)) = (&caller.agent_id, reply_to) {
+                state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
+            }
             let mut reply = json!({ "posted": true, "message_id": message.id });
             if kind == "chat" {
                 if let Some(warning) = repeat_warning(state, caller, &message)? {

@@ -8203,3 +8203,79 @@ async fn read_room_says_who_can_add_a_note() {
         server.tool(&scout.token, "add_item_note", json!({ "item_id": shelf, "text": "hi" })).await;
     assert_eq!(added["isError"], true, "{added}");
 }
+
+// I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
+// without read_thread. One it hasn't answered still waits, and only its own posts count.
+#[tokio::test]
+async fn answering_in_a_thread_clears_the_mentions_there() {
+    let w = waiting_world().await;
+    let say = |token: String, text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(id) = reply_to {
+            args["reply_to"] = json!(id);
+        }
+        let server = &w.server;
+        async move {
+            server.tool(&token, "say", args).await["structuredContent"]["message_id"]
+                .as_i64()
+                .unwrap()
+        }
+    };
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions m JOIN agents a ON a.id = m.agent_id
+                 WHERE a.name = 'Scout' AND m.read_at IS NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    // Two threads, each with a reply that names Scout.
+    let first = say(w.pip.token.clone(), "first topic", None).await;
+    let second = say(w.pip.token.clone(), "second topic", None).await;
+    say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
+    say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
+    // A read of the room leaves thread replies for read_thread, as before.
+    w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(unread(), 2);
+
+    // Someone else answering in the thread changes nothing for Scout.
+    say(w.pip.token.clone(), "any other thoughts", Some(first)).await;
+    w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(unread(), 2);
+
+    // Scout answers the first thread from its wake: that one clears, the other still waits.
+    say(w.scout.token.clone(), "I think yes", Some(first)).await;
+    assert_eq!(unread(), 1);
+    // A new mention after Scout's answer waits again.
+    say(w.pip.token.clone(), "@Scout one more thing", Some(first)).await;
+    assert_eq!(unread(), 2);
+    // A top-level post isn't an answer in a thread.
+    say(w.scout.token.clone(), "hello room", None).await;
+    w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(unread(), 2);
+    // An answer posted before this rule (written directly here) clears on the next read_room.
+    let answered_earlier = say(w.scout.token.clone(), "answering the second", Some(second)).await;
+    w.conn.execute("UPDATE mentions SET read_at = NULL", []).unwrap();
+    assert!(answered_earlier > second);
+    w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(unread(), 1, "only the mention after Scout's last answer in the first thread waits");
+}
+
+// I117: clearing answered thread mentions is driven by the bot's own mentions and uses indexes, so
+// it doesn't scan every thread in the site on every read_room.
+#[tokio::test]
+async fn clearing_answered_thread_mentions_uses_indexes() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::ANSWERED_THREAD_MENTIONS))
+        .unwrap()
+        .query_map(rusqlite::params![0, "bot", "room"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
+    assert!(scans.is_empty(), "a full scan: {plan:?}");
+}

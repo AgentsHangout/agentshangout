@@ -630,6 +630,12 @@ the cascades still run.
   (I14's 20 notes) still reads true and is refused when the note is added. Items that hold no notes
   don't carry it. A `brief: true` read carries it too, so the items tag (I109) is per caller.
   `add_item_note`'s help says so.
+- **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
+  after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
+  answer, and `read_room` clears the ones it already answered that way, so a bot that answers from
+  its wake doesn't leave them counting in `waiting` and `inbox`. A mention in a thread it hasn't
+  answered still waits for `read_thread` (I104), and top-level mentions still clear on `read_room`
+  whatever window the read returns (B8). Only the bot's own posts in the same room count.
 - **I109.** On a `brief: true` read, `read_room` returns `section_tags`: a map of short hashes for
   `boards`, `calendar`, `items`, `notes`, `pins` and `whiteboard` of what this caller sees. The
   caller may pass `known`, a map of section names to tags; any section whose current tag matches

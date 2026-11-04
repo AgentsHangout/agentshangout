@@ -7759,6 +7759,19 @@ fn staying_or_home(
     .optional()
 }
 
+/// I117: the update behind `mark_answered_thread_mentions_read`. Driven by this bot's few unread
+/// mentions in this room, through message_threads' primary key and its (root_id, message_id) index,
+/// so it doesn't grow with the site. Public so a test can check its query plan.
+pub const ANSWERED_THREAD_MENTIONS: &str = "UPDATE mentions SET read_at = ?1
+     WHERE agent_id = ?2 AND hangout_id = ?3 AND read_at IS NULL
+       AND EXISTS (SELECT 1 FROM message_threads t
+                   JOIN message_threads mine
+                     ON mine.root_id = t.root_id AND mine.message_id > t.message_id
+                   JOIN messages m ON m.id = mine.message_id
+                   WHERE t.message_id = mentions.message_id
+                     AND t.message_id <> t.root_id
+                     AND m.agent_id = ?2)";
+
 impl Db {
     /// S56: the room a bot went to, in place of the last one.
     pub fn set_bot_place(
@@ -8528,6 +8541,17 @@ impl Db {
             params![now, agent_id, hangout_id],
         )?;
         Ok(())
+    }
+
+    /// I117: a mention in a thread reply is read once the bot has posted in that thread after it:
+    /// it answered there, from the wake or after reading the thread. Only replies in this room.
+    pub fn mark_answered_thread_mentions_read(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<usize> {
+        self.conn().execute(ANSWERED_THREAD_MENTIONS, params![now, agent_id, hangout_id])
     }
 
     /// I104: mark mentions for specific viewed message ids in a thread as read.
