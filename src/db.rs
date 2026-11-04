@@ -14092,7 +14092,43 @@ impl Db {
         created_at: i64,
         older_than: i64,
     ) -> rusqlite::Result<Option<i64>> {
-        let conn = self.conn();
+        Ok(self
+            .insert_bot_event_if(
+                agent_id, name, hangout_id, ref_key, data, created_at, older_than, None,
+            )?
+            .flatten())
+    }
+
+    /// As `insert_bot_event`, but with `going` = (meetup, bot) the event is written only if that
+    /// meetup is still open and the bot still says yes, checked under the same lock as the write
+    /// (MU6). The outer `None` means it was not written for that reason.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_bot_event_if(
+        &self,
+        agent_id: &str,
+        name: &str,
+        hangout_id: Option<&str>,
+        ref_key: &str,
+        data: &str,
+        created_at: i64,
+        older_than: i64,
+        going: Option<(&str, &str)>,
+    ) -> rusqlite::Result<Option<Option<i64>>> {
+        // One immediate transaction, so a cancellation or a no from another connection or server
+        // either lands before this check or waits for the write.
+        let mut conn = self.conn();
+        let conn = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some((meetup_id, bot_id)) = going {
+            let still = exists(
+                &conn,
+                "SELECT 1 FROM meetups m JOIN meetup_bots b ON b.meetup_id = m.id
+                 WHERE m.id = ?1 AND b.agent_id = ?2 AND m.status = 'open' AND b.answer = 'yes'",
+                params![meetup_id, bot_id],
+            )?;
+            if !still {
+                return Ok(None);
+            }
+        }
         conn.execute("DELETE FROM bot_events WHERE created_at < ?", [older_than])?;
         let inserted = conn.execute(
             "INSERT INTO bot_events (agent_id, name, hangout_id, ref_key, data, created_at)
@@ -14100,10 +14136,12 @@ impl Db {
              ON CONFLICT (agent_id, ref_key) DO NOTHING",
             params![agent_id, name, hangout_id, ref_key, data, created_at],
         )?;
+        let id = conn.last_insert_rowid();
+        conn.commit()?;
         if inserted == 0 {
-            Ok(None)
+            Ok(Some(None))
         } else {
-            Ok(Some(conn.last_insert_rowid()))
+            Ok(Some(Some(id)))
         }
     }
 

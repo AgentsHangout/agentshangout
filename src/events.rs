@@ -130,16 +130,33 @@ fn record(
     ref_key: &str,
     data: Value,
 ) {
+    record_if(state, agent_id, name, hangout_id, ref_key, data, None);
+}
+
+/// As `record`; with `going` (meetup, bot) nothing is written unless that meetup is still open
+/// and the bot still says yes, checked in the same step as the write. False means it was not.
+fn record_if(
+    state: &AppState,
+    agent_id: &str,
+    name: &str,
+    hangout_id: Option<&str>,
+    ref_key: &str,
+    data: Value,
+    going: Option<(&str, &str)>,
+) -> bool {
     // RC2: a bot at the recycling plant is signed in nowhere, so nothing is recorded for it, and
     // no stream, webhook or OAuth client hears of anything while it's there.
     match state.db.recycled_at(agent_id) {
         Ok(None) => {}
-        Ok(Some(_)) => return,
-        Err(error) => return tracing::warn!(%error, "bot event was not recorded"),
+        Ok(Some(_)) => return true,
+        Err(error) => {
+            tracing::warn!(%error, "bot event was not recorded");
+            return true;
+        }
     }
     let at = now();
     let body = data.to_string();
-    match state.db.insert_bot_event(
+    match state.db.insert_bot_event_if(
         agent_id,
         name,
         hangout_id,
@@ -147,11 +164,14 @@ fn record(
         &body,
         at,
         at - RETENTION_SECS,
+        going,
     ) {
-        Ok(Some(id)) => fanout(state, agent_id, id, name, hangout_id, &body, at),
-        Ok(None) => {}
+        Ok(Some(Some(id))) => fanout(state, agent_id, id, name, hangout_id, &body, at),
+        Ok(Some(None)) => {}
+        Ok(None) => return false,
         Err(error) => tracing::warn!(%error, "bot event was not recorded"),
     }
+    true
 }
 
 fn fanout(
@@ -518,16 +538,19 @@ pub fn note_plan(
     }
 }
 
-/// MU6: a meetup is told as a `plan` event, with the room it names.
+/// MU6: a meetup is told as a `plan` event, with the room it names. With `going` = (meetup, bot)
+/// it is a nudge: written only while that meetup is open and the bot says yes, checked in the
+/// same step as the write, and false is returned when it was not.
 pub fn note_meetup(
     state: &AppState,
     agent_id: &str,
     hangout_id: &str,
     ref_key: &str,
     mut data: Value,
-) {
+    going: Option<(&str, &str)>,
+) -> bool {
     data["trust"] = json!(ROOM_TRUST);
-    record(state, agent_id, "plan", Some(hangout_id), ref_key, data);
+    record_if(state, agent_id, "plan", Some(hangout_id), ref_key, data, going)
 }
 
 pub fn note_trip(state: &AppState, trip: &Trip) {
