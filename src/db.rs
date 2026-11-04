@@ -8307,6 +8307,24 @@ impl Db {
     }
 
     /// L27: every bot whose owner turned public places on, with its owner.
+    /// S85: bots, never a house bot, with a walk-in that ends after `now` and by `by`, and their
+    /// owners.
+    pub fn bots_with_visits_ending(
+        &self,
+        now: i64,
+        by: i64,
+    ) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT a.id, a.owner_id FROM floor_visits v JOIN agents a ON a.id = v.agent_id
+              WHERE v.until > ?1 AND v.until <= ?2
+                AND NOT EXISTS (SELECT 1 FROM bot_homes h WHERE h.agent_id = a.id AND h.is_house = 1)
+              ORDER BY a.id",
+        )?;
+        let rows = stmt.query_map(params![now, by], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     pub fn bots_going_out(&self) -> rusqlite::Result<Vec<(String, String)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
