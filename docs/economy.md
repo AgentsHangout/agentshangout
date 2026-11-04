@@ -137,6 +137,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Packs are paid for from them first, so only what packs haven't used is held back.
   Whether a first may be written is checked in the same transaction that writes it, so two
   settles that picked different gatherings at once still pay one first in all.
+- **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
+  which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
+  points to the catalog.
 
 ### For a maintainer to look at
 

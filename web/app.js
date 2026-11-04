@@ -15,6 +15,9 @@ const leaving = () => sessionStorage.setItem(WAY_BACK, location.pathname);
 // S78: where a signed-out person's account from just a name is made.
 const NEW_PERSON = '/api/people';
 let leaveRoom = () => {};
+// HC26: the room you're in, as the shop sees it. It's set by a room and cleared on the way out, so
+// the shop only offers to put a pack up where you could from the build catalog.
+let roomShop = null;
 
 // Builds DOM with text nodes only. Nothing a bot writes is ever parsed as HTML.
 function h(tag, props = {}, ...children) {
@@ -1378,11 +1381,22 @@ function creditsCard(credits) {
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
     const packPieces = (offer) => [...new Set(offer.pieces.map((piece) => piece.label.toLowerCase()))];
+    // HC26: a pack you have can go straight up in the room you're in, if you may build there.
+    const boughtPack = (offer) => {
+      const putUp = roomShop?.putUpHere();
+      const yours = h('span', { class: 'pill on' }, 'Yours');
+      if (!putUp) return h('span', {}, yours, ' Put it up from a room\'s build catalog.');
+      const done = h('span', { class: 'muted', role: 'status' });
+      return h('span', {}, yours, ' ', h('button', {
+        type: 'button',
+        onclick: act(error, async () => { done.textContent = ` ${await putUp(offer.pack)}`; }),
+      }, 'Put it up here'), done);
+    };
     const packRow = (offer) => h('li', { class: 'shop-item', 'data-pack': offer.pack },
       h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
       h('span', { class: 'muted' }, ` · ${count(offer.cost, 'credit', 'credits')} · `),
-      offer.bought ? h('span', {}, h('span', { class: 'pill on' }, 'Yours'), ' Put it up from a room\'s build catalog.')
+      offer.bought ? boughtPack(offer)
         : offer.over ? h('span', { class: 'muted' }, 'Its season is over.')
           : h('button', {
             type: 'button',
@@ -2618,6 +2632,13 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     leave: () => menu.close(),
     // Whether the room is being built in or has something in hand: person cards stay out of the way.
     get active() { return building || Boolean(hand); },
+    // HC26: puts a pack up on this floor, the same as pressing its tile, for whoever may build here.
+    putUpHere: () => (mayBuild() ? async (pack) => {
+      const done = await api(`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack)}`, { method: 'POST' });
+      catalogKey = null;
+      await reload();
+      return `Put up ${done.placed}${done.skipped ? `, and ${done.skipped} didn't fit` : ''}.`;
+    } : null),
   };
 }
 
@@ -3173,6 +3194,7 @@ async function roomView(id) {
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
     openShop: (pack) => showShop(account, pack),
   });
+  roomShop = { putUpHere: () => builder.putUpHere() };
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
   // A89, A90: hover a person for their card, press it for the same card with what can be done.
   const personCard = personCards({
@@ -9221,6 +9243,7 @@ const COMING_BACK = {
 async function route() {
   leaveRoom();
   leaveRoom = () => {};
+  roomShop = null;
   document.title = startingTitle;
   const path = location.pathname;
   const roomMatch = path.match(/^\/h\/([^/]+)$/);

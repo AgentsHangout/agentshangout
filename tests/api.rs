@@ -1859,6 +1859,32 @@ fn the_credits_card_says_how_to_start_earning() {
     assert_eq!(card.matches("Your first gathering pays 20 straight away").count(), 1);
 }
 
+// HC26: a pack you have can go up in the room you're in from the shop, but only where you could put
+// it up from the build catalog, the same way, and never once you've left that room.
+#[test]
+fn the_shop_puts_a_pack_up_here_only_where_you_may_build() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let build = app.split_once("function buildMode({").unwrap().1;
+    let put = build.split_once("putUpHere: () => (mayBuild() ? async (pack) => {").unwrap().1;
+    let put = put.split_once("} : null),").unwrap().0;
+    let calls: Vec<&str> =
+        put.split("api(").skip(1).map(|call| call.split(',').next().unwrap()).collect();
+    assert_eq!(
+        calls,
+        ["`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack)}`"],
+        "the shop puts a pack up some other way than the catalog does"
+    );
+    let route = app.split_once("async function route() {").unwrap().1;
+    let route = route.split_once("\n}\n").unwrap().0;
+    assert!(route.contains("roomShop = null;"), "the shop still puts packs up after you leave");
+    let room = app.split_once("async function roomView(").unwrap().1;
+    assert!(room.contains("roomShop = { putUpHere: () => builder.putUpHere() };"));
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    assert!(card.contains("const putUp = roomShop?.putUpHere();"));
+    assert!(card.contains("offer.bought ? boughtPack(offer)"));
+}
+
 // HC8: the site shows your own credits in your account panel, read from your own endpoint, and
 // every field the card shows is one the endpoint returns.
 #[tokio::test]
