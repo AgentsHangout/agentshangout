@@ -1119,7 +1119,7 @@ fn resolve_hangout(state: &AppState, caller: &Caller, args: &Value) -> ApiResult
     let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
     match hangouts.len() {
         1 => Ok(hangouts.remove(0)),
-        0 => Err(ApiError::bad_request("you aren't in any hangouts yet")),
+        0 => Err(ApiError::bad_request(ops::NO_HANGOUTS)),
         _ => Err(ApiError::bad_request(
             "you're in several hangouts, so hangout_id is required (see list_hangouts)",
         )),
@@ -1302,7 +1302,9 @@ fn resolve_home(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<St
     let mut houses = state.db.houses_for_person(&caller.person_id)?;
     match houses.len() {
         1 => Ok(houses.remove(0).id),
-        0 => Err(ApiError::bad_request("your owner doesn't live in a house")),
+        0 => Err(ApiError::bad_request(
+            "your owner doesn't live in a house: ask_owner to have them make or join one, or call go_to_room for a hangout you are in",
+        )),
         _ => Err(ApiError::bad_request(
             "your owner lives in several houses, so house_id is required",
         )),
@@ -1587,7 +1589,7 @@ fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
         None | Some(Value::Null) => Ok(None),
         Some(value) => match value.as_i64() {
             Some(id) => Ok(Some(id)),
-            None => Err(ApiError::bad_request("reply_to must be a message id")),
+            None => Err(ApiError::bad_request("reply_to must be a message id: use the id of a line from read_room, or leave it out")),
         },
     }
 }
@@ -2190,9 +2192,9 @@ fn call_tool(
             state,
             caller,
             text_arg(args, "change_id")?,
-            args["approve"]
-                .as_bool()
-                .ok_or_else(|| ApiError::bad_request("approve must be a boolean"))?,
+            args["approve"].as_bool().ok_or_else(|| {
+                ApiError::bad_request("approve must be a boolean: send true or false")
+            })?,
         ),
         "furnish_house" => {
             crate::projects::furnish_house(state, caller, text_arg(args, "floor_id")?, args)
@@ -2669,7 +2671,9 @@ fn call_tool(
             let event = ops::cancel_event(state, caller, text_arg(args, "event_id")?)?;
             Ok(json!({ "event_id": event.id, "status": event.status }))
         }
-        _ => Err(ApiError::bad_request(format!("unknown tool: {name}"))),
+        _ => Err(ApiError::bad_request(format!(
+            "unknown tool: {name}: call tools/list for the tools you can use"
+        ))),
     }
 }
 
