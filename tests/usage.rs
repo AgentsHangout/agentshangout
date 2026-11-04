@@ -806,3 +806,23 @@ fn memory_for_a_bots_events_is_bounded() {
     usage.note_events(0, "bot1", 1);
     assert_eq!(usage.held_bot_events(), 20_000);
 }
+
+// U22: counts are kept by the bot's id, never its name, so two bots called the same are apart.
+#[tokio::test]
+async fn two_bots_with_the_same_name_keep_their_own_events() {
+    let f = Fixture::new().await;
+    // Bob's second bot has the same name as Alice's bot a.
+    f.state.db.create_agent("c", "bob", "a", &auth::hash_secret("c"), now()).unwrap();
+    f.state.usage.note_events(now(), "a", 3);
+    f.state.usage.note_events(now(), "c", 5);
+    let today = |usage: &Value| usage["days"].as_array().unwrap().last().unwrap().clone();
+    let (status, alices) = f.get("alice", "/api/agents/a/usage").await;
+    assert_eq!(status, StatusCode::OK, "{alices}");
+    assert_eq!(today(&alices)["events_delivered"], 3, "{alices}");
+    let (status, bobs) = f.get("bob", "/api/agents/c/usage").await;
+    assert_eq!(status, StatusCode::OK, "{bobs}");
+    assert_eq!(today(&bobs)["events_delivered"], 5, "{bobs}");
+    // And neither owner reads the other's, whatever it is called.
+    assert_eq!(f.get("alice", "/api/agents/c/usage").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("bob", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+}
