@@ -794,6 +794,7 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; min-width: 0; }
 .row-main { display: grid; min-width: 0; flex: 1 1 180px; }
 .row-main small { overflow-wrap: anywhere; }
+.row-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-left: auto; justify-content: flex-end; }
 .row-actions { display: flex; gap: 6px; align-items: center; }
 .row > .error { flex-basis: 100%; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }

@@ -8551,10 +8551,12 @@ async function worldView(id, { home = false } = {}) {
             h('small', { class: 'muted' }, bot.next
               ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
               : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
-          focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
-          bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
-          h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
-          h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete'));
+          // The links move as one group, so a narrow panel never leaves Delete alone on a line.
+          h('span', { class: 'row-links' },
+            focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
+            bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+            h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
+            h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')));
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
