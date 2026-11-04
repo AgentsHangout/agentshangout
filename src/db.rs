@@ -1689,14 +1689,25 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
  DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
--- I101: 1-level conversation threads keyed by the root message id.
+-- I102: 1-level conversation threads keyed by the root message id.
 CREATE TABLE IF NOT EXISTS message_threads (
     message_id   INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     root_id      INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS message_threads_root ON message_threads (root_id, message_id);
-INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT reply_to, reply_to FROM message_replies;
-INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT message_id, reply_to FROM message_replies;
+INSERT OR IGNORE INTO message_threads (message_id, root_id)
+WITH RECURSIVE roots(child_id, ancestor_id) AS (
+    SELECT message_id, reply_to FROM message_replies
+    UNION ALL
+    SELECT r.child_id, m.reply_to
+    FROM roots r
+    JOIN message_replies m ON m.message_id = r.ancestor_id
+)
+SELECT child_id, ancestor_id
+FROM roots
+WHERE ancestor_id NOT IN (SELECT message_id FROM message_replies);
+INSERT OR IGNORE INTO message_threads (message_id, root_id)
+SELECT root_id, root_id FROM message_threads;
 "#;
 
 #[derive(Debug, Serialize)]
@@ -2236,7 +2247,7 @@ pub struct Message {
     /// I82: the chat line in the same room this one answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<i64>,
-    /// I101: the root chat line of this message's thread.
+    /// I102: the root chat line of this message's thread.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_root: Option<i64>,
 }
@@ -8328,7 +8339,7 @@ impl Db {
         Ok(())
     }
 
-    /// I103: mark mentions for specific viewed message ids in a thread as read.
+    /// I104: mark mentions for specific viewed message ids in a thread as read.
     pub fn mark_thread_mentions_read(
         &self,
         agent_id: &str,
@@ -9898,7 +9909,7 @@ impl Db {
         rows.collect()
     }
 
-    /// I101: fetches a single message by id.
+    /// I102: fetches a single message by id.
     pub fn message(&self, id: i64) -> rusqlite::Result<Option<Message>> {
         let conn = self.conn();
         conn.query_row(
@@ -9909,7 +9920,7 @@ impl Db {
         .optional()
     }
 
-    /// I101: the canonical thread root for a message, if it is in a thread.
+    /// I102: the canonical thread root for a message, if it is in a thread.
     pub fn thread_root_for(&self, message_id: i64) -> rusqlite::Result<Option<i64>> {
         let conn = self.conn();
         conn.query_row(
@@ -9920,7 +9931,7 @@ impl Db {
         .optional()
     }
 
-    /// I102: reply count and latest reply timestamp for root messages.
+    /// I103: reply count and latest reply timestamp for root messages.
     pub fn thread_summaries(
         &self,
         root_ids: &[i64],
@@ -9949,7 +9960,7 @@ impl Db {
         Ok(map)
     }
 
-    /// I103: replies in a thread after `after`, oldest first.
+    /// I104: replies in a thread after `after`, oldest first.
     pub fn thread_replies(
         &self,
         root_id: i64,
@@ -9972,7 +9983,7 @@ impl Db {
         rows.collect()
     }
 
-    /// I104: messages in a thread before `before_id`, oldest first (bounded slice for mentions).
+    /// I105: messages in a thread before `before_id`, oldest first (bounded slice for mentions).
     pub fn thread_messages_before(
         &self,
         root_id: i64,
@@ -15246,44 +15257,34 @@ mod tests {
     }
 
     #[test]
-    fn legacy_message_replies_backfill_into_message_threads() {
+    fn legacy_message_replies_backfill_chains_via_schema() {
         let db = Db::open(":memory:").unwrap();
         db.create_person("p1", "Ann", "key", "feed", 0).unwrap();
         db.create_hangout("h1", "Living", "code", "p1", 0).unwrap();
-        let m1 = db
-            .insert_message(&NewMessage {
-                hangout_id: "h1",
-                person_id: Some("p1"),
-                agent_id: None,
-                speaker: "Ann",
-                kind: "chat",
-                body: "Root",
-                now: 10,
-            })
-            .unwrap();
-        let m2 = db
-            .insert_message(&NewMessage {
-                hangout_id: "h1",
-                person_id: Some("p1"),
-                agent_id: None,
-                speaker: "Ann",
-                kind: "chat",
-                body: "Reply",
-                now: 20,
-            })
-            .unwrap();
+        // Insert messages & replies mimicking pre-upgrade database state
         db.conn()
-            .execute(
-                "INSERT OR REPLACE INTO message_replies (message_id, reply_to) VALUES (?, ?)",
-                params![m2.id, m1.id],
+            .execute_batch(
+                "INSERT INTO messages (id, hangout_id, speaker, kind, body, created_at) VALUES
+                 (1, 'h1', 'A', 'chat', 'root', 10),
+                 (2, 'h1', 'A', 'chat', 'r1', 20),
+                 (3, 'h1', 'A', 'chat', 'r2', 30),
+                 (4, 'h1', 'A', 'chat', 'r3', 40);
+                 INSERT INTO message_replies (message_id, reply_to) VALUES (2, 1), (3, 2), (4, 3);
+                 DELETE FROM message_threads;",
             )
             .unwrap();
-        db.conn().execute_batch(
-            "INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT reply_to, reply_to FROM message_replies;
-             INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT message_id, reply_to FROM message_replies;",
-        ).unwrap();
-        assert_eq!(db.thread_root_for(m1.id).unwrap(), Some(m1.id));
-        assert_eq!(db.thread_root_for(m2.id).unwrap(), Some(m1.id));
+        // Run SCHEMA itself to execute the backfill
+        db.conn().execute_batch(SCHEMA).unwrap();
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare("SELECT message_id, root_id FROM message_threads ORDER BY message_id")
+            .unwrap();
+        let rows: Vec<(i64, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows, vec![(1, 1), (2, 1), (3, 1), (4, 1)]);
     }
 
     #[test]

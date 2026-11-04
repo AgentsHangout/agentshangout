@@ -1667,7 +1667,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         line
     };
     // I91: the last `limit` messages, and how many came before them.
-    // I102: read_room collapses thread replies into their root message.
+    // I103: read_room collapses thread replies into their root message.
     let mut all_roots: Vec<crate::db::Message> =
         snapshot.messages.iter().filter(|message| message.reply_to.is_none()).cloned().collect();
     let existing_root_ids: std::collections::HashSet<i64> =
@@ -1682,6 +1682,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 }
                 if !existing_root_ids.contains(&root_id) {
                     missing_root_ids.insert(root_id);
+                    if missing_root_ids.len() >= 50 {
+                        break;
+                    }
                 }
             }
         }
@@ -1712,6 +1715,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);
     let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
+    let last_message_id =
+        roots.iter().map(|m| m.id).chain(snapshot.messages.iter().map(|m| m.id)).max().unwrap_or(0);
     let root_ids: Vec<i64> = roots.iter().map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
     let messages: Vec<Value> = roots
@@ -1828,7 +1833,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "event_id": invitee.event_id,
             "name": invitee.name,
         })).collect::<Vec<_>>(),
-        "last_message_id": snapshot.messages.last().map_or(0, |message| message.id),
+        "last_message_id": last_message_id,
         "items": snapshot.furnishing.items.iter().map(|item| if brief { json!({
             "id": item.id,
             "kind": item.kind,
@@ -1901,7 +1906,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     Ok(reply)
 }
-/// I103: reads one conversation thread: the root chat line and its replies, oldest first.
+/// I104: reads one conversation thread: the root chat line and its replies, oldest first.
 fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let hangout = resolve_hangout(state, caller, args)?;
     let root_id = args["root"]
