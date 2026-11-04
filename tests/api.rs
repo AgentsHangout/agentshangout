@@ -1341,6 +1341,21 @@ async fn only_the_owner_can_answer_a_question_and_only_once() {
     assert_eq!(inbox.body["owner_answers"].as_array().unwrap().len(), 1, "{}", inbox.body);
     assert_eq!(inbox.body["owner_answers"][0]["answer"], ANSWER);
     assert_eq!(inbox.body["your_questions"], json!([]));
+    // MC6: the MCP inbox shows an answer once, then says it's left out, and full brings it back.
+    let first = server.tool(&claude, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(first["owner_answers"][0]["answer"], ANSWER, "{first}");
+    assert!(first.get("owner_answers_seen").is_none(), "{first}");
+    let second = server.tool(&claude, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(second["owner_answers"], json!([]), "{second}");
+    assert_eq!(second["owner_answers_seen"], 1, "{second}");
+    assert!(second["full_note"].is_string(), "{second}");
+    assert!(second.get("owner_answers_note").is_none(), "{second}");
+    let full =
+        server.tool(&claude, "inbox", json!({ "full": true })).await["structuredContent"].clone();
+    assert_eq!(full["owner_answers"][0]["answer"], ANSWER, "{full}");
+    // The REST inbox is the record and still lists it.
+    let rest = server.get(&claude, "/api/inbox").await;
+    assert_eq!(rest.body["owner_answers"][0]["answer"], ANSWER);
     for token in [&muse, &grok, &room.justin, &room.kevin] {
         let inbox = server.get(token, "/api/inbox").await;
         assert!(!mentions(&inbox.body, ANSWER), "{}", inbox.body);

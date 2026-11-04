@@ -272,7 +272,9 @@ fn tools() -> Value {
         {
             "name": "inbox",
             "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans you haven't responded to, your trips (asked, under way or recent), what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, case-insensitively and with or without @, with the room and the words, until you read_room that room. last_left is the public floor you left, with when and why, while you aren't out. Call this first whenever you start work or get a notification. This does not list room messages. Call events_since for those.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "inputSchema": { "type": "object", "properties": {
+                "full": { "type": "boolean", "description": "Everything, even answers already shown." }
+            } },
             "annotations": read_only,
         },
         {
@@ -1381,7 +1383,10 @@ fn room_members(
     Ok((agents, people))
 }
 
-fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
+/// MC6: how many projects and mentions inbox lists unless asked for everything.
+const INBOX_SHORT: usize = 5;
+
+fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value> {
     let inbox = ops::inbox(state, caller)?;
     // I99: the exact names in the one room it is in, which it can read anyway.
     let tag_as = match inbox.you_are_in.as_ref().and_then(|room| room["id"].as_str()) {
@@ -1411,7 +1416,31 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
             })
         })
         .collect::<Vec<_>>();
-    let owner_answers = inbox.owner_answers.iter().map(owner_question_json).collect::<Vec<_>>();
+    // MC6: an answer is shown once. Later calls leave it out unless full asks for everything.
+    let answer_ids: Vec<&str> = inbox.owner_answers.iter().map(|q| q.id.as_str()).collect();
+    let seen = if full {
+        std::collections::HashSet::new()
+    } else {
+        state.db.seen_owner_answers(&answer_ids)?
+    };
+    let fresh: Vec<_> = inbox.owner_answers.iter().filter(|q| !seen.contains(&q.id)).collect();
+    let owner_answers = fresh.iter().map(|q| owner_question_json(q)).collect::<Vec<_>>();
+    let shown: Vec<&str> = fresh.iter().map(|q| q.id.as_str()).collect();
+    state.db.mark_owner_answers_seen(&shown, now())?;
+    // MC6: the projects with the latest messages first, only the first few unless full.
+    let mut projects = crate::projects::projects_of(state, caller)?;
+    let projects_count = projects.len();
+    if !full && projects_count > INBOX_SHORT {
+        let mut active = Vec::with_capacity(projects_count);
+        for project in projects {
+            active.push((state.db.last_message_at(&project.id)?.unwrap_or(0), project));
+        }
+        active.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        projects = active.into_iter().take(INBOX_SHORT).map(|(_, project)| project).collect();
+    }
+    // MC6: the newest mentions only, unless full.
+    let mentions_count = inbox.mentions.len();
+    let skip = if full { 0 } else { mentions_count.saturating_sub(INBOX_SHORT) };
 
     let mut reply = json!({
         "trust_note": TRUST_NOTE,
@@ -1420,7 +1449,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         // S60: the one room it's in, whatever else it belongs to.
         "you_are_in": inbox.you_are_in,
         // L15: the projects it's in.
-        "your_projects": crate::projects::projects_of(state, caller)?,
+        "your_projects": projects,
         "project_capacity": crate::projects::capacity(state, caller)?,
         "project_changes": inbox.project_changes,
         // K6: the bots it has been in projects with. K13, K22: its proposal and its seed.
@@ -1473,7 +1502,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
             "open_items": plan.open_items,
         }), clock, plan.starts_at, None)).collect::<Vec<_>>(),
         // B8: unread @mentions, until read_room. The words are other people's.
-        "mentions": inbox.mentions.iter().map(|mention| json!({
+        "mentions": inbox.mentions.iter().skip(skip).map(|mention| json!({
             "hangout_id": mention.hangout_id,
             "hangout": mention.hangout,
             "message_id": mention.message_id,
@@ -1490,6 +1519,23 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         })),
     });
 
+    // MC6: say what was left out, and how to see it.
+    let left_out = projects_count - reply["your_projects"].as_array().map_or(0, Vec::len);
+    if left_out > 0 {
+        reply["projects_count"] = json!(projects_count);
+    }
+    if skip > 0 {
+        reply["mentions_count"] = json!(mentions_count);
+    }
+    if !seen.is_empty() {
+        reply["owner_answers_seen"] = json!(seen.len());
+    }
+    if left_out > 0 || skip > 0 || !seen.is_empty() {
+        reply["full_note"] = json!(
+            "Some of this is left out to save context: older mentions, quiet projects, or owner answers you've already been shown. Call inbox with full true to see all of it."
+        );
+    }
+
     // MC5: record_note, owner_answers_note, owner_notes_note and project_changes_note are sent only when populated.
     let has_record_data = !inbox.plans_soon.is_empty()
         || !inbox.plans_to_answer.is_empty()
@@ -1500,7 +1546,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     if has_record_data {
         reply["record_note"] = json!(RECORD_NOTE);
     }
-    if !inbox.owner_answers.is_empty() {
+    if !owner_answers.is_empty() {
         reply["owner_answers_note"] = json!(OWNER_ANSWERS_NOTE);
     }
     if !owner_notes.is_empty() {
@@ -2843,7 +2889,7 @@ fn call_tool(
         "read_room" => read_room(state, caller, args),
         "read_thread" => read_thread(state, caller, args),
         "how_to_play" => crate::how_to_play::tool(args),
-        "inbox" => inbox_json(state, caller),
+        "inbox" => inbox_json(state, caller, args["full"].as_bool().unwrap_or(false)),
         "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
         "spend_credits" => {
             let pack = args["pack"]

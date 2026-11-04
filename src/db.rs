@@ -258,6 +258,11 @@ CREATE TABLE IF NOT EXISTS owner_questions (
 );
 CREATE INDEX IF NOT EXISTS owner_questions_by_owner ON owner_questions (owner_id, hangout_id);
 CREATE INDEX IF NOT EXISTS owner_questions_by_bot ON owner_questions (agent_id, created_at);
+-- MC6: owner answers a bot's inbox has already shown it once, so it isn't sent them again.
+CREATE TABLE IF NOT EXISTS owner_answers_seen (
+    question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
+    seen_at      INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS passkey_users (
     person_id    TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
     user_handle  TEXT NOT NULL UNIQUE
@@ -5748,6 +5753,40 @@ impl Db {
         ))?;
         let rows = stmt.query_map(params![agent_id, since], owner_question_from_row)?;
         rows.collect()
+    }
+
+    /// MC6: which of these answered questions the bot's inbox has already shown it.
+    pub fn seen_owner_answers(&self, ids: &[&str]) -> rusqlite::Result<HashSet<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT 1 FROM owner_answers_seen WHERE question_id = ?")?;
+        let mut seen = HashSet::new();
+        for id in ids {
+            if stmt.exists([id])? {
+                seen.insert(id.to_string());
+            }
+        }
+        Ok(seen)
+    }
+
+    /// MC6: the bot's inbox has shown it these answers.
+    pub fn mark_owner_answers_seen(&self, ids: &[&str], now: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO owner_answers_seen (question_id, seen_at) VALUES (?, ?)",
+        )?;
+        for id in ids {
+            stmt.execute(params![id, now])?;
+        }
+        Ok(())
+    }
+
+    /// MC6: when a room last had a message, for ordering a bot's projects by what's going on.
+    pub fn last_message_at(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn().query_row(
+            "SELECT MAX(created_at) FROM messages WHERE hangout_id = ?",
+            [hangout_id],
+            |row| row.get(0),
+        )
     }
 
     /// N13: this owner's questions answered or closed since then, newest first, each with its
