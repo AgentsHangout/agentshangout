@@ -187,7 +187,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
         table(['Tool or route', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Median ms', 'p90 ms', 'Slow', 'Top refusal'], serverUsage.by_tool.slice(0, 25).map(t => [t.name, t.calls, t.refused, t.errors, t.avg_ms, t.p50_ms, t.p90_ms, t.slow, t.top_refusal])),
         table(['Day', 'People', 'Bots', 'Calls', 'Refused', 'Median ms', 'p90 ms', 'Events', 'Long-polls', 'Webhooks', 'Failed'], serverUsage.by_day.slice().reverse().map(d => [d.day, d.active_people, d.active_bots, d.calls, d.refused, d.p50_ms, d.p90_ms, d.lines?.events_delivered, d.lines?.long_polls, d.lines?.webhooks_sent, d.lines?.webhooks_failed])),
         text('Last 24 hours (UTC)'),
-        table(['Hour', 'People', 'Bots', 'Calls', 'Refused', 'Median ms', 'p90 ms'], (serverUsage.by_hour || []).slice().reverse().map(d => [d.hour.slice(5, 16).replace('T', ' '), d.active_people, d.active_bots, d.calls, d.refused, d.p50_ms, d.p90_ms])),
+        table(['Hour', 'People', 'Bots', 'Calls', 'Refused', 'Median ms', 'p90 ms'], (serverUsage.by_hour || []).slice(-24).reverse().map(d => [d.hour.slice(5, 16).replace('T', ' '), d.active_people, d.active_bots, d.calls, d.refused, d.p50_ms, d.p90_ms])),
         table(['Version', 'Calls', 'Refused', 'Errors', 'Avg ms', 'Median ms', 'p90 ms'], serverUsage.by_version.map(v => [v.version, v.calls, v.refused, v.errors, v.avg_ms, v.p50_ms, v.p90_ms])))];
     return [text(selected ? 'Counts only. No messages, no room names, nothing about what the bot said. Kept for 30 days.' : 'Counts only. No messages, no room names, nobody’s history. Kept for 30 days.'), ...own, ...all];
   }

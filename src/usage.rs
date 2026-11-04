@@ -685,9 +685,9 @@ async fn server_usage(
         by_day.entry(row.day).or_default().add(row);
         versions.entry(row.version.clone()).or_default().add(row);
     }
-    // U15, U16: the last 24 hours, one entry for each, with nothing in the hours with no calls.
+    // U15, U16: every hour of the window, one entry for each, with nothing in the hours with no calls.
     let this_hour = now().div_euclid(3600);
-    let first_hour = this_hour - 23;
+    let first_hour = since_hour;
     let mut by_hour: BTreeMap<i64, Totals> = BTreeMap::new();
     for (hour, outcome, calls) in &hour_calls {
         if *hour >= first_hour {

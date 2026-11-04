@@ -438,9 +438,13 @@ async fn people_and_bots_are_counted_for_each_hour() {
     let mut stored = f.state.db.usage_active_hours(first).unwrap();
     stored.sort();
     assert_eq!(stored[0], (first, 2, 4));
-    // The report has the last 24 hours, one entry each.
+    // The report has every hour of the window, one entry each: 7 days back, and 30 when asked.
     let (_, report) = f.get("alice", "/api/usage").await;
-    assert_eq!(report["by_hour"].as_array().unwrap().len(), 24);
+    let hours = report["by_hour"].as_array().unwrap().len() as i64;
+    let first_day = now().div_euclid(DAY) - 6;
+    assert_eq!(hours, now_hour + 1 - first_day * 24);
+    let (_, month) = f.get("alice", "/api/usage?days=30").await;
+    assert!(month["by_hour"].as_array().unwrap().len() as i64 > 29 * 24);
     let row = hour_row(&report, first);
     assert_eq!((row["active_people"].as_i64(), row["active_bots"].as_i64()), (Some(2), Some(4)));
     assert_eq!(row["calls"], 4);
