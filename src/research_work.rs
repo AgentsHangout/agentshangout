@@ -53,10 +53,46 @@ pub const MAX_WATCHES: i64 = 50;
 pub struct PrState {
     pub ci: String,
     pub review: String,
+    /// RW12: who's still asked to review, as GitHub last said: logins, and team slugs.
+    pub requested: Vec<String>,
+    pub requested_teams: Vec<String>,
     pub checked_at: i64,
     #[serde(skip)]
     pub attempted_at: i64,
     pub stale: bool,
+}
+/// RW12: who a pull request still asks for a review. GitHub drops someone from it once they've
+/// reviewed, so this is who hasn't, and a submitted review is `review` (RW9).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Requested {
+    pub people: Vec<String>,
+    pub teams: Vec<String>,
+}
+/// RW12: how many requested reviewers, and how many teams, are kept.
+const MAX_REQUESTED: usize = 20;
+/// RW12: who a pull request still asks for a review, from GitHub's own fields on it. Both lists are
+/// always there on a pull request, so one missing, or a name GitHub wouldn't allow, is unreadable.
+pub fn requested_of(pr: &Value) -> Option<Requested> {
+    let names = |list: &Value, key: &str, most: usize| -> Option<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in list.as_array()? {
+            let name = entry[key].as_str()?;
+            let fine = !name.is_empty()
+                && name.len() <= most
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+            if !fine {
+                return None;
+            }
+            if out.len() < MAX_REQUESTED {
+                out.push(name.to_string());
+            }
+        }
+        Some(out)
+    };
+    Some(Requested {
+        people: names(&pr["requested_reviewers"], "login", 39)?,
+        teams: names(&pr["requested_teams"], "slug", 100)?,
+    })
 }
 /// RW9: how many check runs or reviews one request asks for. A full page counts as unreadable.
 const PAGE: usize = 100;
@@ -560,18 +596,30 @@ pub async fn pr_status(
                 let reviews =
                     get(&c, format!("{base}/repos/{repo}/pulls/{number}/reviews?per_page=100"))
                         .await;
-                match (checks.as_ref().and_then(ci_of), reviews.as_ref().and_then(review_of)) {
-                    (Some(ci), Some(review)) => Some((ci, review)),
+                let requested = pr.as_ref().and_then(requested_of);
+                match (
+                    checks.as_ref().and_then(ci_of),
+                    reviews.as_ref().and_then(review_of),
+                    requested,
+                ) {
+                    (Some(ci), Some(review), Some(requested)) => Some((ci, review, requested)),
                     _ => None,
                 }
             }
             None => None,
         };
         let was = state.db.research_work_pr_state(&repo, number)?;
-        state.db.finish_research_work_pr_check(&repo, number, found, at)?;
+        state.db.finish_research_work_pr_check(
+            &repo,
+            number,
+            found.as_ref().map(|(ci, review, requested)| (*ci, *review, requested)),
+            at,
+        )?;
         // RW11: a change from something already known. A first read, or one that failed, tells
         // nobody anything.
-        if let (Some(was), Some((ci, review))) = (was, found) {
+        if let (Some(was), Some((ci, review, _))) =
+            (was, found.as_ref().map(|(c, r, q)| (*c, *r, q)))
+        {
             let card = state
                 .db
                 .research_work_snapshot(&repo)?
@@ -591,11 +639,14 @@ pub async fn pr_status(
     let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
         ci: "unknown".into(),
         review: "unknown".into(),
+        requested: vec![],
+        requested_teams: vec![],
         checked_at: 0,
         attempted_at: at,
         stale: true,
     });
     Ok(json!({"lab_id":id,"number":number,"ci":pr_state.ci,"review":pr_state.review,
+        "requested":pr_state.requested,"requested_teams":pr_state.requested_teams,
         "checked_at":pr_state.checked_at,"stale":pr_state.stale,
         "note":"Read from GitHub's public API at most every five minutes. unknown or stale means it couldn't be checked, not that it passed."}))
 }

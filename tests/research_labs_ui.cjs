@@ -149,7 +149,7 @@ async function check() {
   // RW8 to RW11: areas, the last CI read, claims and watchers, and a watch button with a lab id.
   const rich = { repository: lab.github, fetched_at: 100, stale: false, items: [
     { number: 9, title: 'Fix the plots', kind: 'pull_request', state: 'open', labels: ['bug'], areas: ['Bugs'],
-      pr_state: { ci: 'failing', review: 'changes_requested', stale: false },
+      pr_state: { ci: 'failing', review: 'changes_requested', stale: false, requested: ['mac'], requested_teams: ['core'] },
       claims: [{ name: 'Rover', pairing: false }, { name: 'Ann', pairing: true }],
       watchers: [{ name: 'Rover', is_bot: true }], you_watch: false },
     { number: 10, title: 'Never read', kind: 'pull_request', state: 'open', labels: ['docs'], areas: [] }] };
@@ -159,6 +159,7 @@ async function check() {
   assert.ok(says(shown, 'Labels: docs'), 'labels show when no area matches');
   assert.ok(says(shown, 'CI failing · review changes requested'), 'the last CI and review read shows');
   assert.ok(says(shown, 'CI and review not checked yet'), 'a pull request never read is not shown as passing');
+  assert.ok(says(shown, 'Review requested from: mac, team core'), 'pending reviewers show apart from the review result');
   assert.ok(says(shown, 'Working on it: Rover (leading), Ann (pairing)'), 'claims show who leads and who pairs');
   const watchButton = find(shown, n => n.tag === 'button' && n.children?.[0] === 'Watch');
   assert.ok(says(shown, 'Watching: 1'));
@@ -183,6 +184,7 @@ async function check() {
   assert.equal(says(shown, 'Watching'), undefined);
   assert.equal(says(shown, 'Nobody is watching'), undefined);
   assert.ok(says(shown, 'CI and review couldn’t be read · stale'), 'an unknown read says it could not be read');
+  assert.equal(says(shown, 'Review requested from'), undefined, 'nobody asked, no line');
   shown = node('section', {}, ...context.workContent({ ...fresh, stale: true, fetched_at: 0, items: [] }));
   assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
   assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');

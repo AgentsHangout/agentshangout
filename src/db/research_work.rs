@@ -309,13 +309,20 @@ impl Db {
     ) -> rusqlite::Result<Option<crate::research_work::PrState>> {
         self.conn()
             .query_row(
-                "SELECT ci, review, checked_at, attempted_at, stale FROM research_work_pr_state
-                 WHERE repo = ? AND number = ?",
+                "SELECT s.ci, s.review, s.checked_at, s.attempted_at, s.stale,
+                        COALESCE(q.people_json, '[]'), COALESCE(q.teams_json, '[]')
+                 FROM research_work_pr_state s
+                 LEFT JOIN research_work_pr_requests q ON q.repo = s.repo AND q.number = s.number
+                 WHERE s.repo = ? AND s.number = ?",
                 params![repo, number as i64],
                 |r| {
+                    let people: String = r.get(5)?;
+                    let teams: String = r.get(6)?;
                     Ok(crate::research_work::PrState {
                         ci: r.get(0)?,
                         review: r.get(1)?,
+                        requested: serde_json::from_str(&people).unwrap_or_default(),
+                        requested_teams: serde_json::from_str(&teams).unwrap_or_default(),
                         checked_at: r.get(2)?,
                         attempted_at: r.get(3)?,
                         stale: r.get(4)?,
@@ -345,16 +352,35 @@ impl Db {
         &self,
         repo: &str,
         number: u64,
-        found: Option<(&str, &str)>,
+        found: Option<(&str, &str, &crate::research_work::Requested)>,
         at: i64,
     ) -> rusqlite::Result<()> {
-        let conn = self.conn();
+        let mut conn = self.conn();
         match found {
-            Some((ci, review)) => conn.execute(
-                "UPDATE research_work_pr_state SET ci = ?3, review = ?4, checked_at = ?5, stale = 0
-                 WHERE repo = ?1 AND number = ?2 AND attempted_at = ?5",
-                params![repo, number as i64, ci, review, at],
-            )?,
+            Some((ci, review, requested)) => {
+                // RW12: who's still asked goes with the state it was read with, or not at all.
+                let tx = conn.transaction()?;
+                let stored = tx.execute(
+                    "UPDATE research_work_pr_state SET ci = ?3, review = ?4, checked_at = ?5, stale = 0
+                     WHERE repo = ?1 AND number = ?2 AND attempted_at = ?5",
+                    params![repo, number as i64, ci, review, at],
+                )?;
+                if stored == 1 {
+                    tx.execute(
+                        "INSERT INTO research_work_pr_requests (repo, number, people_json, teams_json)
+                         VALUES (?1, ?2, ?3, ?4) ON CONFLICT (repo, number) DO UPDATE SET
+                         people_json = excluded.people_json, teams_json = excluded.teams_json",
+                        params![
+                            repo,
+                            number as i64,
+                            serde_json::to_string(&requested.people).unwrap_or_default(),
+                            serde_json::to_string(&requested.teams).unwrap_or_default()
+                        ],
+                    )?;
+                }
+                tx.commit()?;
+                stored
+            }
             None => conn.execute(
                 "UPDATE research_work_pr_state SET stale = 1
                  WHERE repo = ?1 AND number = ?2 AND attempted_at = ?3",

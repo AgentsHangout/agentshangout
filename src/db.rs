@@ -1247,6 +1247,14 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
  PRIMARY KEY(lab_id, number)
 );
 -- RW9: a pull request's CI and review state as GitHub last reported it, read on request.
+-- RW12: who a pull request still asks for a review, as GitHub last said: logins and team slugs.
+CREATE TABLE IF NOT EXISTS research_work_pr_requests (
+ repo TEXT NOT NULL,
+ number INTEGER NOT NULL,
+ people_json TEXT NOT NULL DEFAULT '[]',
+ teams_json TEXT NOT NULL DEFAULT '[]',
+ PRIMARY KEY(repo, number)
+);
 CREATE TABLE IF NOT EXISTS research_work_pr_state (
  repo TEXT NOT NULL,
  number INTEGER NOT NULL,
