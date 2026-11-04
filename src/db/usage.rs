@@ -1,5 +1,5 @@
 use super::*;
-use crate::usage::{StoredHour, UsageRows, KEEP_DAYS};
+use crate::usage::{StoredHour, StoredLatency, UsageRows, BUCKETS, KEEP_DAYS};
 
 impl Db {
     /// U4: adds counted calls to their hour, bot-day and day.
@@ -39,6 +39,43 @@ impl Db {
                 params![agent, day, outcome, reason, calls],
             )?;
         }
+        for (hour, people, bots) in rows.active_hours {
+            tx.execute(
+                "INSERT INTO usage_active_hours (hour, people, bots) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hour) DO UPDATE SET people = MAX(people, excluded.people),
+                     bots = MAX(bots, excluded.bots)",
+                params![hour, people, bots],
+            )?;
+        }
+        for (hour, line, count) in &rows.lines {
+            tx.execute(
+                "INSERT INTO usage_lines (hour, line, count) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (hour, line) DO UPDATE SET count = count + excluded.count",
+                params![hour, line, count],
+            )?;
+        }
+        for (hour, surface, name, hist) in &rows.latency {
+            let mut values: Vec<rusqlite::types::Value> = vec![
+                (*hour).into(),
+                (*surface).to_string().into(),
+                (*name).to_string().into(),
+                rows.version.to_string().into(),
+            ];
+            values.extend(hist.iter().map(|n| rusqlite::types::Value::from(*n)));
+            let columns: String = (0..BUCKETS).map(|i| format!(", b{i}")).collect();
+            let marks: String = (0..BUCKETS).map(|i| format!(", ?{}", i + 5)).collect();
+            let adds: Vec<String> =
+                (0..BUCKETS).map(|i| format!("b{i} = b{i} + excluded.b{i}")).collect();
+            tx.execute(
+                &format!(
+                    "INSERT INTO usage_latency (hour, surface, name, version{columns})
+                     VALUES (?1, ?2, ?3, ?4{marks})
+                     ON CONFLICT (hour, surface, name, version) DO UPDATE SET {}",
+                    adds.join(", ")
+                ),
+                rusqlite::params_from_iter(values),
+            )?;
+        }
         for (day, people, bots) in rows.days {
             // U5: after a restart the day carries on from the larger number.
             tx.execute(
@@ -57,6 +94,10 @@ impl Db {
         let conn = self.conn();
         let mut deleted =
             conn.execute("DELETE FROM usage_hours WHERE hour < ?", [oldest_day * 24])?;
+        deleted +=
+            conn.execute("DELETE FROM usage_active_hours WHERE hour < ?", [oldest_day * 24])?;
+        deleted += conn.execute("DELETE FROM usage_latency WHERE hour < ?", [oldest_day * 24])?;
+        deleted += conn.execute("DELETE FROM usage_lines WHERE hour < ?", [oldest_day * 24])?;
         deleted += conn.execute("DELETE FROM usage_days WHERE day < ?", [oldest_day])?;
         deleted += conn.execute("DELETE FROM usage_bot_days WHERE day < ?", [oldest_day])?;
         Ok(deleted)
@@ -83,6 +124,58 @@ impl Db {
                 millis: r.get(7)?,
                 timed: r.get(8)?,
                 slow: r.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// U15: `(hour, outcome, calls)` from this hour on, for the per hour view.
+    pub fn usage_hour_calls(&self, since_hour: i64) -> rusqlite::Result<Vec<(i64, String, i64)>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT hour, outcome, SUM(calls) FROM usage_hours WHERE hour >= ?
+             GROUP BY hour, outcome",
+        )?;
+        let rows = statement.query_map([since_hour], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// U15: `(hour, people, bots)` from this hour on.
+    pub fn usage_active_hours(&self, since_hour: i64) -> rusqlite::Result<Vec<(i64, i64, i64)>> {
+        let conn = self.conn();
+        let mut statement =
+            conn.prepare("SELECT hour, people, bots FROM usage_active_hours WHERE hour >= ?")?;
+        let rows = statement.query_map([since_hour], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// U17: `(hour, line, count)` from this hour on.
+    pub fn usage_lines(&self, since_hour: i64) -> rusqlite::Result<Vec<(i64, String, i64)>> {
+        let conn = self.conn();
+        let mut statement =
+            conn.prepare("SELECT hour, line, count FROM usage_lines WHERE hour >= ?")?;
+        let rows = statement.query_map([since_hour], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// U16: the response-time buckets from this hour on.
+    pub fn usage_latency(&self, since_hour: i64) -> rusqlite::Result<Vec<StoredLatency>> {
+        let conn = self.conn();
+        let columns: String = (0..BUCKETS).map(|i| format!(", b{i}")).collect();
+        let mut statement = conn.prepare(&format!(
+            "SELECT hour, surface, name, version{columns} FROM usage_latency WHERE hour >= ?"
+        ))?;
+        let rows = statement.query_map([since_hour], |r| {
+            let mut hist = [0i64; BUCKETS];
+            for (i, slot) in hist.iter_mut().enumerate() {
+                *slot = r.get(4 + i)?;
+            }
+            Ok(StoredLatency {
+                hour: r.get(0)?,
+                surface: r.get(1)?,
+                name: r.get(2)?,
+                version: r.get(3)?,
+                hist,
             })
         })?;
         rows.collect()

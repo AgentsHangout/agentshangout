@@ -59,7 +59,33 @@ const AGENT_GUIDE: &str = include_str!("../web/agents.md");
 const OG_IMAGE: &[u8] = include_bytes!("../web/og.jpg");
 const AI_CATALOG: &str = include_str!("../web/ai-catalog.json");
 const SERVER_CARD: &str = include_str!("../web/server-card.json");
+const BOT_SERVER_CARD: &str = include_str!("../web/bot-server-card.json");
 const MCP_REGISTRY_AUTH: &str = include_str!("../web/mcp-registry-auth.txt");
+const AGENT_PLUGIN_ZIP: &[u8] = include_bytes!("../web/downloads/agents-hangout-0.1.0.zip");
+const AGENT_PLUGIN_SHA256: &str = include_str!("../web/downloads/agents-hangout-0.1.0.zip.sha256");
+
+fn download_zip() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "application/zip"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"agents-hangout-0.1.0.zip\""),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        AGENT_PLUGIN_ZIP,
+    )
+        .into_response()
+}
+
+fn download_sha256() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        AGENT_PLUGIN_SHA256,
+    )
+        .into_response()
+}
 
 /// Where an agent that opens the home page reads about this place. The same for everyone (W38).
 const HOME_LINKS: &str = "</llms.txt>; rel=\"describedby\"; type=\"text/plain\", \
@@ -138,6 +164,10 @@ async fn agent_guide_as_text(State(state): State<AppState>) -> Response {
 
 async fn ai_catalog(State(state): State<AppState>) -> Response {
     discoverable(&state, "application/ai-catalog+json", AI_CATALOG)
+}
+
+async fn bot_server_card(State(state): State<AppState>) -> Response {
+    discoverable(&state, "application/mcp-server-card+json", BOT_SERVER_CARD)
 }
 
 async fn server_card(State(state): State<AppState>) -> Response {
@@ -289,10 +319,17 @@ pub fn routes() -> Router<AppState> {
         .route("/indexnow.txt", get(|| async { asset("text/plain; charset=utf-8", INDEXNOW_KEY) }))
         .route("/.well-known/ai-catalog.json", get(ai_catalog).options(discovery_preflight))
         .route("/public/mcp/server-card", get(server_card).options(discovery_preflight))
+        .route("/mcp/server-card", get(bot_server_card).options(discovery_preflight))
         .route(
             "/.well-known/mcp-registry-auth",
             get(|| async { asset("text/plain; charset=utf-8", MCP_REGISTRY_AUTH) }),
         )
+        .route("/downloads/agents-hangout-0.1.0.zip", get(|| async { download_zip() }))
+        .route("/downloads/agents-hangout-0.1.0.zip.sha256", get(|| async { download_sha256() }))
+        .route("/downloads/agents-hangout.zip", get(|| async { download_zip() }))
+        .route("/downloads/agents-hangout.zip.sha256", get(|| async { download_sha256() }))
+        .route("/agent-plugin.zip", get(|| async { download_zip() }))
+        .route("/agent-plugin.zip.sha256", get(|| async { download_sha256() }))
 }
 
 /// A connection closed with bytes still coming gets reset, and a reset can lose the answer on its

@@ -28,7 +28,7 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_trust;
-pub use cadence::Cadence;
+pub use cadence::{Cadence, Shape};
 mod cadence;
 mod camera;
 mod github_display;
@@ -1247,6 +1247,14 @@ CREATE TABLE IF NOT EXISTS research_work_awards (
  PRIMARY KEY(lab_id, number)
 );
 -- RW9: a pull request's CI and review state as GitHub last reported it, read on request.
+-- RW12: who a pull request still asks for a review, as GitHub last said: logins and team slugs.
+CREATE TABLE IF NOT EXISTS research_work_pr_requests (
+ repo TEXT NOT NULL,
+ number INTEGER NOT NULL,
+ people_json TEXT NOT NULL DEFAULT '[]',
+ teams_json TEXT NOT NULL DEFAULT '[]',
+ PRIMARY KEY(repo, number)
+);
 CREATE TABLE IF NOT EXISTS research_work_pr_state (
  repo TEXT NOT NULL,
  number INTEGER NOT NULL,
@@ -1281,7 +1289,7 @@ CREATE TABLE IF NOT EXISTS research_work_watches (
  since INTEGER NOT NULL,
  PRIMARY KEY(lab_id, number, watcher)
 );
--- RP1: a plan its owner made repeat. Phase 1: one time a day, on chosen weekdays.
+-- RP1: a plan its owner made repeat. RP12: the rest of its shape is in plan_cadence_shapes.
 CREATE TABLE IF NOT EXISTS plan_cadences (
  event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
  owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
@@ -1606,6 +1614,63 @@ CREATE TABLE IF NOT EXISTS meetup_bots (
     PRIMARY KEY (meetup_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS meetup_bots_by_agent ON meetup_bots (agent_id);
+-- MU11: the same, owned by a random token that only its sender can settle. This replaces
+-- meetup_ring_reservations, which nothing writes any more.
+CREATE TABLE IF NOT EXISTS meetup_ring_claims (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL,
+    token       TEXT NOT NULL,
+    reserved_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
+-- MU11: a meetup ring being delivered holds the next one for that bot and room until it is
+-- accepted (then it is a wake_accepts row), fails (then it is released) or goes stale.
+CREATE TABLE IF NOT EXISTS meetup_ring_reservations (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL,
+    reserved_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
+-- RP10, RP11: a repeating plan's shape beyond phase 1's one time a day. `plan_cadences` keeps the
+-- first time, and no days for monthly or hourly, so a binary from before this cues nothing it can't
+-- read. A row counts only while its `since` matches the cadence's, so an edit made by that older
+-- binary isn't overruled by a stale shape.
+CREATE TABLE IF NOT EXISTS plan_cadence_shapes (
+ event_id TEXT PRIMARY KEY REFERENCES plan_cadences(event_id) ON DELETE CASCADE,
+ freq TEXT NOT NULL CHECK (freq IN ('daily', 'weekly', 'monthly', 'hourly')),
+ days INTEGER NOT NULL,
+ times TEXT NOT NULL,
+ month_day INTEGER,
+ every_hours INTEGER,
+ window_from INTEGER,
+ window_to INTEGER,
+ since INTEGER NOT NULL
+);
+-- U14 to U21: usage phase 2. Counts only, as in phase 1: people and bots active in an hour (the
+-- number), response times as a fixed list of bucket counts, and events, long-polls and webhooks.
+CREATE TABLE IF NOT EXISTS usage_active_hours (
+    hour   INTEGER PRIMARY KEY,
+    people INTEGER NOT NULL,
+    bots   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_latency (
+    hour    INTEGER NOT NULL,
+    surface TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    version TEXT NOT NULL,
+    b0 INTEGER NOT NULL DEFAULT 0, b1 INTEGER NOT NULL DEFAULT 0, b2 INTEGER NOT NULL DEFAULT 0,
+    b3 INTEGER NOT NULL DEFAULT 0, b4 INTEGER NOT NULL DEFAULT 0, b5 INTEGER NOT NULL DEFAULT 0,
+    b6 INTEGER NOT NULL DEFAULT 0, b7 INTEGER NOT NULL DEFAULT 0, b8 INTEGER NOT NULL DEFAULT 0,
+    b9 INTEGER NOT NULL DEFAULT 0, b10 INTEGER NOT NULL DEFAULT 0, b11 INTEGER NOT NULL DEFAULT 0,
+    b12 INTEGER NOT NULL DEFAULT 0, b13 INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour, surface, name, version)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS usage_lines (
+    hour  INTEGER NOT NULL,
+    line  TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (hour, line)
+) WITHOUT ROWID;
 "#;
 
 #[derive(Debug, Serialize)]
@@ -2731,6 +2796,10 @@ fn answer_refusal(
     }
     Ok(Ok(bounty))
 }
+
+/// HC25: how `credit_paid.source_id` marks a first gathering that paid without the city's gate.
+/// Those credits buy packs, but a funded question can't be paid for with them.
+pub const FIRST_GATHERING: &str = "first:";
 
 /// HC22: one line of someone's credit history, from `credit_paid`, `credit_spends` or a funded
 /// question that came back or paid (HC20).
@@ -10553,8 +10622,19 @@ impl Db {
             let mut paid = tx.prepare(
                 "SELECT 1 FROM credit_paid WHERE kind = ? AND source_id = ? AND person_id = ?",
             )?;
+            // HC25: whether a first gathering may be written is decided here, inside the same
+            // transaction that writes it, so two settles that picked different first gatherings
+            // can't both pay: only one `first:` credit is ever written per person.
+            let mut gathering_paid = tx
+                .prepare("SELECT 1 FROM credit_paid WHERE kind = 'gathering' AND person_id = ?")?
+                .exists([person_id])?;
             for (city_id, source) in sorted {
                 if paid.exists(params![source.kind.word(), source.source, person_id])? {
+                    continue;
+                }
+                let is_first = source.kind == CreditKind::Gathering
+                    && source.source.starts_with(FIRST_GATHERING);
+                if is_first && gathering_paid {
                     continue;
                 }
                 let day = source.at.div_euclid(crate::ops::DAY_SECS);
@@ -10573,6 +10653,9 @@ impl Db {
                     now
                 ])?;
                 *so_far += amount;
+                if is_first {
+                    gathering_paid = true;
+                }
             }
         }
         tx.commit()
@@ -10690,6 +10773,22 @@ impl Db {
         let balance: i64 = tx.query_row("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded') OR (recipient_id=?1 AND status='paid'))", [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
+        }
+        // HC25: a first gathering's credits never fund a question, or throwaway accounts could each
+        // collect one and pass it all to one person. Packs are paid for from them first, so only
+        // what packs haven't used is held back.
+        let held: i64 = tx.query_row(
+            "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
+                            WHERE person_id=?1 AND source_id LIKE ?2)
+                         - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
+                            WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
+            params![sponsor, format!("{FIRST_GATHERING}%")],
+            |r| r.get(0),
+        )?;
+        if balance - held < amount {
+            return Ok(Some(
+                "credits from your first gathering buy packs but can't fund a question",
+            ));
         }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
         tx.execute(
@@ -11876,6 +11975,58 @@ impl WorldTx<'_> {
         now: i64,
     ) -> rusqlite::Result<()> {
         q_write_changes(&self.tx, world_id, changes, now, "bulldoze")
+    }
+
+    /// W103: a place moved by god mode. Its rooms (S33), its outside (E30) and when it went up go
+    /// with it, so nothing about it changes but its tile. A room or outside left on the new tile by
+    /// a building that once stood there is cleared first, as S33 says it would never open again.
+    pub fn relocate_place(
+        &self,
+        world_id: &str,
+        from: Pos,
+        to: Pos,
+        changes: &[Change],
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let was: Option<(String, i64, i64)> = self
+            .tx
+            .query_row(
+                "SELECT kind, player_id, built_at FROM world_every_place
+                  WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+                params![world_id, from.0, from.1],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        self.tx.execute(
+            "DELETE FROM space_plots WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+            params![world_id, to.0, to.1],
+        )?;
+        self.tx.execute(
+            "UPDATE space_plots SET x = ?4, y = ?5 WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+            params![world_id, from.0, from.1, to.0, to.1],
+        )?;
+        if let Some((kind, player, _)) = &was {
+            self.tx.execute(
+                "DELETE FROM place_outsides
+                  WHERE world_id = ?1 AND player_id = ?2 AND kind = ?3 AND x = ?4 AND y = ?5",
+                params![world_id, player, kind, to.0, to.1],
+            )?;
+            self.tx.execute(
+                "UPDATE place_outsides SET x = ?6, y = ?7
+                  WHERE world_id = ?1 AND player_id = ?2 AND kind = ?3 AND x = ?4 AND y = ?5",
+                params![world_id, player, kind, from.0, from.1, to.0, to.1],
+            )?;
+        }
+        q_write_changes(&self.tx, world_id, changes, now, "relocate")?;
+        if let Some((_, _, built_at)) = was {
+            for table in ["world_buildings", "world_squares", "world_more_places"] {
+                self.tx.execute(
+                    &format!("UPDATE {table} SET built_at = ?4 WHERE world_id = ?1 AND x = ?2 AND y = ?3"),
+                    params![world_id, to.0, to.1, built_at],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn write_changes_because(
@@ -14092,7 +14243,43 @@ impl Db {
         created_at: i64,
         older_than: i64,
     ) -> rusqlite::Result<Option<i64>> {
-        let conn = self.conn();
+        Ok(self
+            .insert_bot_event_if(
+                agent_id, name, hangout_id, ref_key, data, created_at, older_than, None,
+            )?
+            .flatten())
+    }
+
+    /// As `insert_bot_event`, but with `going` = (meetup, bot) the event is written only if that
+    /// meetup is still open and the bot still says yes, checked under the same lock as the write
+    /// (MU6). The outer `None` means it was not written for that reason.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_bot_event_if(
+        &self,
+        agent_id: &str,
+        name: &str,
+        hangout_id: Option<&str>,
+        ref_key: &str,
+        data: &str,
+        created_at: i64,
+        older_than: i64,
+        going: Option<(&str, &str)>,
+    ) -> rusqlite::Result<Option<Option<i64>>> {
+        // One immediate transaction, so a cancellation or a no from another connection or server
+        // either lands before this check or waits for the write.
+        let mut conn = self.conn();
+        let conn = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some((meetup_id, bot_id)) = going {
+            let still = exists(
+                &conn,
+                "SELECT 1 FROM meetups m JOIN meetup_bots b ON b.meetup_id = m.id
+                 WHERE m.id = ?1 AND b.agent_id = ?2 AND m.status = 'open' AND b.answer = 'yes'",
+                params![meetup_id, bot_id],
+            )?;
+            if !still {
+                return Ok(None);
+            }
+        }
         conn.execute("DELETE FROM bot_events WHERE created_at < ?", [older_than])?;
         let inserted = conn.execute(
             "INSERT INTO bot_events (agent_id, name, hangout_id, ref_key, data, created_at)
@@ -14100,10 +14287,12 @@ impl Db {
              ON CONFLICT (agent_id, ref_key) DO NOTHING",
             params![agent_id, name, hangout_id, ref_key, data, created_at],
         )?;
+        let id = conn.last_insert_rowid();
+        conn.commit()?;
         if inserted == 0 {
-            Ok(None)
+            Ok(Some(None))
         } else {
-            Ok(Some(conn.last_insert_rowid()))
+            Ok(Some(Some(id)))
         }
     }
 
@@ -15585,6 +15774,175 @@ mod tests {
             assert!(paid.cities_not_earning.is_empty());
         }
         assert_eq!(credits_of(&db, "p1", 41 * CREDIT_DAY).balance, 40);
+    }
+
+    // HC25: someone's first gathering pays without the city's gate, once, so a new person has a way
+    // to start. Every other gathering still waits for the gate, and there's no back pay.
+    #[test]
+    fn a_first_gathering_pays_before_the_city_gate_and_only_the_first() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        plan(&db, "second", "sq", 3 * CREDIT_DAY, "confirmed");
+
+        // Five days in, nobody has met the gate, but each person's first gathering has paid.
+        for person in ["p1", "p2"] {
+            let paid = credits_of(&db, person, 5 * CREDIT_DAY);
+            assert_eq!((paid.balance, paid.gatherings), (20, 1), "{person}");
+            assert_eq!(paid.cities_not_earning, ["c1"], "{person}");
+        }
+        // Working it out again doesn't make the second one a first.
+        assert_eq!(credits_of(&db, "p1", 6 * CREDIT_DAY).balance, 20);
+
+        // Past the gate, what happens from then on pays, and the second one never does.
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        let later = credits_of(&db, "p1", GATE + CREDIT_DAY);
+        assert_eq!((later.balance, later.gatherings), (40, 2));
+    }
+
+    // HC25: a first gathering's credits buy packs, but throwaway accounts can't pass them on through a
+    // funded question (HC20). What paid once the gate was met can.
+    #[test]
+    fn a_first_gatherings_credits_buy_packs_but_never_fund_a_question() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Question','','p1',0,0)", []).unwrap();
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        let paid = credits_of(&db, "p1", 3 * CREDIT_DAY);
+        assert_eq!(paid.balance, 20);
+        assert_eq!(
+            db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
+            Some("credits from your first gathering buy packs but can't fund a question")
+        );
+        assert!(db.open_questions("p1").unwrap().is_empty());
+
+        // Once the gate is met, what pays from then on can fund one, and the first still can't.
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
+        assert_eq!(
+            db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
+            Some("credits from your first gathering buy packs but can't fund a question")
+        );
+        assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
+
+        // And they still buy a pack.
+        let pack = a_pack_for_sale();
+        let after =
+            crate::economy::spend(&db, &ann(None), pack.pack, None, GATE + CREDIT_DAY).unwrap();
+        assert_eq!(after.balance, 20 - pack.cost);
+    }
+
+    // HC25: packs are paid for from a first gathering's credits first, so spending them on a pack
+    // doesn't keep holding back what pays later
+    #[test]
+    fn a_pack_uses_up_a_first_gatherings_credits_before_later_ones() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Question','','p1',0,0)", []).unwrap();
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        assert_eq!(credits_of(&db, "p1", 3 * CREDIT_DAY).balance, 20);
+        let pack = a_pack_for_sale();
+        crate::economy::spend(&db, &ann(None), pack.pack, None, 3 * CREDIT_DAY).unwrap();
+
+        plan(&db, "after", "sq", GATE + 100, "confirmed");
+        let now = GATE + CREDIT_DAY;
+        assert_eq!(credits_of(&db, "p1", now).balance, 40 - pack.cost);
+        // What's left of the first 20 is still held back, and all of the later 20 can fund one.
+        let held = 20 - pack.cost;
+        assert!(db.fund_question("b1", "q1", "p1", 21, now).unwrap().is_some());
+        assert_eq!(db.fund_question("b2", "q1", "p1", 20, now).unwrap(), None);
+        assert_eq!(credits_of(&db, "p1", now).balance, held);
+    }
+
+    // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make
+    // another first
+    #[test]
+    fn only_one_gathering_ever_pays_before_a_gate() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        plan(&db, "first", "sq", 2 * CREDIT_DAY, "confirmed");
+        assert_eq!(credits_of(&db, "p2", 3 * CREDIT_DAY).balance, 20);
+        db.remove_city_member("c1", "p2", "p2", 4 * CREDIT_DAY).unwrap();
+
+        city(&db, "c2", "sq2", "p1");
+        db.add_city_member("c2", "p2", 5 * CREDIT_DAY).unwrap();
+        plan(&db, "elsewhere", "sq2", 6 * CREDIT_DAY, "confirmed");
+        let paid = credits_of(&db, "p2", 7 * CREDIT_DAY);
+        assert_eq!((paid.balance, paid.gatherings), (20, 1));
+    }
+
+    // HC25: two settles that each picked a different first gathering (one saw the plan before it
+    // was confirmed, the other after) must pay one first in all, not one each. The check and the
+    // write share a transaction, so it holds on two connections racing too.
+    #[test]
+    fn two_settles_pick_different_first_gatherings_but_only_one_first_is_ever_paid() {
+        fn gathering(source: &str, at: i64) -> (String, CreditSource) {
+            (
+                "c1".to_string(),
+                CreditSource {
+                    kind: CreditKind::Gathering,
+                    source: format!("{FIRST_GATHERING}{source}"),
+                    at,
+                },
+            )
+        }
+        fn firsts(db: &Db) -> i64 {
+            db.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM credit_paid WHERE person_id = 'p1' AND source_id LIKE 'first:%'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+        let worth = |_| 20;
+
+        // One after the other: the second settle has already chosen a different gathering.
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.settle_credits("p1", &[gathering("a", 2 * CREDIT_DAY)], worth, 100, 3 * CREDIT_DAY)
+            .unwrap();
+        db.settle_credits("p1", &[gathering("b", 2 * CREDIT_DAY + 5)], worth, 100, 3 * CREDIT_DAY)
+            .unwrap();
+        assert_eq!((firsts(&db), db.credit_totals("p1", 3).unwrap().paid), (1, 20));
+
+        // At the same moment, on two connections to one file.
+        let path = std::env::temp_dir().join(format!("hc25-race-{}.db", std::process::id()));
+        let path_str = path.to_str().unwrap().to_string();
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
+        let first = Db::open(&path_str).unwrap();
+        two_houses(&first);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let (path_str, barrier) = (path_str.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let db = Db::open(&path_str).unwrap();
+                    barrier.wait();
+                    db.settle_credits(
+                        "p1",
+                        &[gathering(name, 2 * CREDIT_DAY)],
+                        |_| 20,
+                        100,
+                        3 * CREDIT_DAY,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!((firsts(&first), first.credit_totals("p1", 3).unwrap().paid), (1, 20));
+        drop(first);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
     }
 
     // HC2: F17 holds for credits too

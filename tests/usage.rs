@@ -1,4 +1,4 @@
-//! Tests for the usage counts, written from the rules in docs/usage.md (U1 to U12). A comment such as
+//! Tests for the usage counts, written from the rules in docs/usage.md (U1 to U21). A comment such as
 //! `// U6` above a test names the rule it covers.
 mod support;
 
@@ -85,6 +85,14 @@ impl Fixture {
         assert_eq!(status, StatusCode::OK, "{reply}");
         reply["result"].clone()
     }
+}
+
+/// The four fixed names of U17 and the route of the events read hold the letters of a person's name
+/// ("events"), so they are taken out before looking for the people. Nothing else is.
+fn without_line_names(output: &str) -> String {
+    agenthangout::usage::LINES
+        .iter()
+        .fold(output.replace("/api/events", ""), |text, name| text.replace(name, ""))
 }
 
 fn row<'a>(report: &'a Value, list: &str, key: &str, name: &str) -> &'a Value {
@@ -180,6 +188,7 @@ async fn no_text_names_or_secrets_are_in_the_output() {
     let (_, server) = f.get("alice", "/api/usage?days=30").await;
     let (_, bot) = f.get("alice", "/api/agents/a/usage").await;
     for output in [server.to_string(), bot.to_string()] {
+        let output = without_line_names(&output);
         for forbidden in [
             said,
             "Secret Plans",
@@ -276,6 +285,7 @@ async fn counts_older_than_thirty_days_are_deleted() {
                 }],
                 bots: vec![("a", at.div_euclid(DAY), "ok", "", 5)],
                 days: &days,
+                ..Default::default()
             })
             .unwrap();
     };
@@ -372,4 +382,301 @@ async fn public_world_tool_calls_are_counted() {
         (public["surface"].as_str(), public["calls"].as_i64()),
         (Some("public_mcp"), Some(1))
     );
+}
+
+fn hour_row(report: &Value, hour: i64) -> &Value {
+    let stamp = format!("{}T{:02}:00Z", civil_date(hour.div_euclid(24)), hour.rem_euclid(24));
+    report["by_hour"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["hour"] == stamp.as_str())
+        .unwrap_or_else(|| panic!("no hour {stamp} in {report}"))
+}
+
+/// A day number as a date, worked out here so the test does not lean on the code it checks.
+fn civil_date(day: i64) -> String {
+    let z = day + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+// U15
+#[tokio::test]
+async fn people_and_bots_are_counted_for_each_hour() {
+    use agenthangout::usage::Who;
+    let f = Fixture::new().await;
+    let now_hour = now().div_euclid(3600);
+    let (first, second) = (now_hour - 2, now_hour - 1);
+    let at = |hour: i64| hour * 3600 + 5;
+    for who in [Who::Person("alice"), Who::Person("bob"), Who::Person("alice"), Who::Bot("a")] {
+        f.state.usage.record(at(first), "rest", "/api/me", who, StatusCode::OK, Some(1));
+    }
+    assert_eq!(f.state.usage.held_hour(), (2, 1));
+    // The next hour starts from nothing, so alice counts again there and only there.
+    f.state.usage.record(at(second), "rest", "/api/me", Who::Person("alice"), StatusCode::OK, None);
+    assert_eq!(f.state.usage.held_hour(), (1, 0));
+    f.state.usage.flush(&f.state);
+    let mut stored = f.state.db.usage_active_hours(0).unwrap();
+    stored.retain(|(hour, _, _)| *hour == first || *hour == second);
+    stored.sort();
+    // Only two numbers for each hour were written.
+    assert_eq!(stored, vec![(first, 2, 1), (second, 1, 0)]);
+    // After a restart the hour carries on from the larger number.
+    let again = [(first, 1, 4)];
+    f.state
+        .db
+        .write_usage(&UsageRows { version: "x", active_hours: &again, ..Default::default() })
+        .unwrap();
+    let mut stored = f.state.db.usage_active_hours(first).unwrap();
+    stored.sort();
+    assert_eq!(stored[0], (first, 2, 4));
+    // The report has every hour of the window, one entry each: 7 days back, and 30 when asked.
+    let (_, report) = f.get("alice", "/api/usage").await;
+    let hours = report["by_hour"].as_array().unwrap().len() as i64;
+    let first_day = now().div_euclid(DAY) - 6;
+    assert_eq!(hours, now_hour + 1 - first_day * 24);
+    let (_, month) = f.get("alice", "/api/usage?days=30").await;
+    assert!(month["by_hour"].as_array().unwrap().len() as i64 > 29 * 24);
+    let row = hour_row(&report, first);
+    assert_eq!((row["active_people"].as_i64(), row["active_bots"].as_i64()), (Some(2), Some(4)));
+    assert_eq!(row["calls"], 4);
+    assert_eq!(hour_row(&report, second)["active_people"], 1);
+}
+
+// U15
+#[tokio::test]
+async fn an_idle_server_lets_go_of_the_hour_when_it_ends() {
+    use agenthangout::usage::Who;
+    let f = Fixture::new().await;
+    let earlier = now() - 7200;
+    f.state.usage.record(earlier, "rest", "/api/me", Who::Person("alice"), StatusCode::OK, None);
+    f.state.usage.record(earlier, "rest", "/api/me", Who::Bot("a"), StatusCode::OK, None);
+    assert_eq!(f.state.usage.held_hour(), (1, 1));
+    // No request comes in. The minute timer rolls the hour.
+    f.state.usage.roll(now());
+    assert_eq!(f.state.usage.held_hour(), (0, 0));
+    f.state.usage.flush(&f.state);
+    let stored = f.state.db.usage_active_hours(0).unwrap();
+    assert_eq!(stored, vec![(earlier.div_euclid(3600), 1, 1)]);
+}
+
+// U16
+#[test]
+fn response_times_fall_in_fixed_buckets() {
+    use agenthangout::usage::{bucket_of, percentile, BUCKETS, EDGES_MS};
+    assert_eq!(bucket_of(0), 0);
+    assert_eq!(bucket_of(1), 0);
+    assert_eq!(bucket_of(2), 1);
+    assert_eq!(bucket_of(3), 2);
+    assert_eq!(bucket_of(10_000), EDGES_MS.len() - 1);
+    assert_eq!(bucket_of(10_001), EDGES_MS.len());
+    assert_eq!(bucket_of(u64::MAX), BUCKETS - 1);
+    let mut hist = [0i64; BUCKETS];
+    assert_eq!(percentile(&hist, 0.5), None);
+    hist[bucket_of(3)] = 60;
+    hist[bucket_of(40)] = 30;
+    hist[bucket_of(3000)] = 10;
+    assert_eq!(percentile(&hist, 0.5), Some(5));
+    assert_eq!(percentile(&hist, 0.9), Some(50));
+    assert_eq!(percentile(&hist, 0.99), Some(5000));
+    // Never lower than the truth, and off by no more than the bucket.
+    let mut one = [0i64; BUCKETS];
+    one[bucket_of(130)] = 1;
+    assert_eq!(percentile(&one, 0.5), Some(200));
+    // A time over the last edge reads as the last edge.
+    let mut slow = [0i64; BUCKETS];
+    slow[bucket_of(99_999)] = 3;
+    assert_eq!(percentile(&slow, 0.5), Some(10_000));
+}
+
+// U16
+#[tokio::test]
+async fn the_report_has_a_median_and_a_90th_percentile_from_buckets() {
+    use agenthangout::usage::Who;
+    let f = Fixture::new().await;
+    let at = now();
+    let times = std::iter::repeat_n(3u64, 60)
+        .chain(std::iter::repeat_n(40, 30))
+        .chain(std::iter::repeat_n(3000, 10));
+    for millis in times {
+        f.state.usage.record(at, "rest", "/api/probe", Who::Nobody, StatusCode::OK, Some(millis));
+    }
+    // A wait that stays open adds no time.
+    f.state.usage.record(at, "rest", "/api/probe", Who::Nobody, StatusCode::OK, None);
+    let (_, report) = f.get("alice", "/api/usage").await;
+    let probe = row(&report, "by_tool", "name", "/api/probe");
+    assert_eq!(probe["calls"], 101);
+    assert_eq!((probe["p50_ms"].as_u64(), probe["p90_ms"].as_u64()), (Some(5), Some(50)));
+    let today = report["by_day"].as_array().unwrap().last().unwrap().clone();
+    assert!(today["p50_ms"].is_u64() && today["p90_ms"].is_u64(), "{today}");
+    assert!(report["by_version"][0]["p50_ms"].is_u64());
+    assert!(hour_row(&report, at.div_euclid(3600))["p90_ms"].is_u64());
+    // What is stored is 14 numbers for the hour, not the times.
+    let stored = f.state.db.usage_latency(0).unwrap();
+    let probe = stored.iter().find(|r| r.name == "/api/probe").unwrap();
+    assert_eq!(probe.hist.iter().sum::<i64>(), 100);
+}
+
+// U18
+#[tokio::test]
+async fn memory_for_response_times_and_counts_is_bounded() {
+    use agenthangout::usage::{Who, BUCKETS};
+    let f = Fixture::new().await;
+    let at = now();
+    // A hundred thousand calls to one route are one histogram.
+    for _ in 0..100_000 {
+        f.state.usage.record(at, "rest", "/api/one", Who::Nobody, StatusCode::OK, Some(7));
+    }
+    assert_eq!(f.state.usage.held_counts().0, 1);
+    assert_eq!(std::mem::size_of::<[i64; BUCKETS]>(), 14 * 8);
+    // Names without end stop at the cap, and the ones already there keep counting.
+    for n in 0..25_000 {
+        let name = format!("/api/n{n}");
+        f.state.usage.record(at, "rest", &name, Who::Nobody, StatusCode::OK, Some(7));
+    }
+    let (histograms, _) = f.state.usage.held_counts();
+    assert!(histograms <= 20_000, "{histograms}");
+    f.state.usage.record(at, "rest", "/api/one", Who::Nobody, StatusCode::OK, Some(7));
+    // Lines are four names, whatever happens.
+    for _ in 0..1000 {
+        f.state.usage.note_line(at, "events_delivered", 1);
+    }
+    assert_eq!(f.state.usage.held_counts().1, 1);
+    f.state.usage.flush(&f.state);
+    assert_eq!(f.state.usage.held_counts(), (0, 0));
+    let stored = f.state.db.usage_latency(0).unwrap();
+    let one = stored.iter().find(|r| r.name == "/api/one").unwrap();
+    assert_eq!(one.hist.iter().sum::<i64>(), 100_001);
+}
+
+async fn receiver() -> String {
+    use axum::{http::StatusCode as Code, routing::post, Router};
+    let router = Router::new()
+        .route("/ok", post(|| async { Code::NO_CONTENT }))
+        .route("/bad", post(|| async { Code::INTERNAL_SERVER_ERROR }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    base
+}
+
+// U17
+#[tokio::test]
+async fn events_long_polls_and_webhooks_are_counted_on_their_own() {
+    let f = Fixture::new().await;
+    // An event for bot a: bob speaks to it by name in the room they share.
+    let said = f
+        .call("bob", Method::POST, "/api/hangouts/shared/messages", json!({"text": "@a hello"}))
+        .await;
+    assert_eq!(said.0, StatusCode::OK, "{}", said.1);
+    let (status, events) = f.get("a", "/api/events").await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    let delivered = events["events"].as_array().unwrap().len() as i64;
+    assert!(delivered >= 1, "{events}");
+    let cursor = events["cursor"].as_str().unwrap().to_string();
+    // A read that does not wait is not a long-poll. One that waits and finds nothing still is.
+    assert_eq!(f.get("a", &format!("/api/events?since={cursor}")).await.0, StatusCode::OK);
+    let waited = f.get("a", &format!("/api/events?since={cursor}&wait=1")).await;
+    assert_eq!(waited.0, StatusCode::OK, "{}", waited.1);
+    // A refused request is not served.
+    assert_ne!(f.get("a", "/api/events?since=nope&wait=1").await.0, StatusCode::OK);
+    // Webhooks: one answered, one refused with a 500, one nobody answers.
+    let base = receiver().await;
+    for path in ["ok", "bad"] {
+        agenthangout::notify::test_wake_up(&f.state, &format!("{base}/{path}"), None).await;
+    }
+    agenthangout::notify::test_wake_up(&f.state, "http://127.0.0.1:9/nobody", None).await;
+
+    let (_, report) = f.get("alice", "/api/usage").await;
+    let lines = &report["lines"];
+    assert_eq!(lines["events_delivered"], delivered, "{report}");
+    assert_eq!(lines["long_polls"], 1, "{report}");
+    assert_eq!(lines["webhooks_sent"], 3, "{report}");
+    assert_eq!(lines["webhooks_failed"], 2, "{report}");
+    let today = report["by_day"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(today["lines"], *lines);
+    // Only the four names are in the database.
+    let names: std::collections::BTreeSet<String> =
+        f.state.db.usage_lines(0).unwrap().into_iter().map(|(_, name, _)| name).collect();
+    assert!(names.iter().all(|name| agenthangout::usage::LINES.contains(&name.as_str())));
+}
+
+// U6, U14
+#[tokio::test]
+async fn the_new_numbers_hold_no_text_names_or_ids() {
+    let f = Fixture::new().await;
+    let said = "GREEN-HERON-MESSAGE";
+    f.call("bob", Method::POST, "/api/hangouts/shared/messages", json!({"text": said})).await;
+    f.tool("a", "say", json!({"hangout_id": "shared", "text": said})).await;
+    f.get("a", "/api/events").await;
+    f.get("eve", "/api/hangouts/secret").await;
+    f.get("eve", "/api/hangouts/nothing-like-it").await;
+    let (_, server) = f.get("alice", "/api/usage?days=30").await;
+    let output = without_line_names(&server.to_string());
+    for forbidden in [
+        said,
+        "Secret Plans",
+        "secret-code",
+        "shared-code",
+        "feed-",
+        "ah_bot_",
+        "eve",
+        "bob",
+        "nothing-like-it",
+    ] {
+        assert!(!output.contains(forbidden), "{forbidden} in {output}");
+    }
+    // What was stored for the hour is the route pattern and numbers.
+    for stored in f.state.db.usage_latency(0).unwrap() {
+        assert!(!format!("{} {}", stored.name, stored.version).contains("nothing-like-it"));
+        assert!(matches!(stored.surface.as_str(), "rest" | "mcp" | "public_mcp"));
+    }
+    // The hour's two numbers are numbers, and nothing else is kept about who they were.
+    for (_, people, bots) in f.state.db.usage_active_hours(0).unwrap() {
+        assert!(people >= 0 && bots >= 0);
+    }
+    // Still only for the people on the list.
+    assert_eq!(f.get("bob", "/api/usage").await.0, StatusCode::NOT_FOUND);
+}
+
+// U20
+#[tokio::test]
+async fn the_new_numbers_are_deleted_after_thirty_days() {
+    let f = Fixture::new().await;
+    let at = now();
+    let write = |at: i64| {
+        let hour = at.div_euclid(3600);
+        let hours = [(hour, 3, 1)];
+        let mut hist = [0i64; agenthangout::usage::BUCKETS];
+        hist[2] = 4;
+        f.state
+            .db
+            .write_usage(&UsageRows {
+                version: "0.0.1",
+                active_hours: &hours,
+                lines: vec![(hour, "long_polls", 2)],
+                latency: vec![(hour, "rest", "/api/me", hist)],
+                ..Default::default()
+            })
+            .unwrap();
+    };
+    write(at - 31 * DAY);
+    write(at - 29 * DAY);
+    assert_eq!(f.state.db.usage_active_hours(0).unwrap().len(), 2);
+    f.state.db.sweep_usage(at).unwrap();
+    assert_eq!(f.state.db.usage_active_hours(0).unwrap().len(), 1);
+    assert_eq!(f.state.db.usage_lines(0).unwrap().len(), 1);
+    assert_eq!(f.state.db.usage_latency(0).unwrap().len(), 1);
+    // Written twice, the buckets add up.
+    write(at - 29 * DAY);
+    assert_eq!(f.state.db.usage_latency(0).unwrap()[0].hist[2], 8);
+    assert_eq!(f.state.db.usage_lines(0).unwrap()[0].2, 4);
 }

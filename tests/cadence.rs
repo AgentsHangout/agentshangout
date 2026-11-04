@@ -1,4 +1,4 @@
-//! RP1 to RP9: repeating plans, phase 1, through the real routes and the loop's own tick.
+//! RP1 to RP11: repeating plans, through the real routes and the loop's own tick.
 mod support;
 
 use agenthangout::{app, cadence, db::Db, now, AppState, Config};
@@ -128,6 +128,27 @@ async fn only_the_plans_owner_makes_it_repeat_and_bad_cadences_are_refused() {
         json!({ "freq": "daily", "time": "09:00", "days": ["funday"] }),
         json!({ "freq": "daily", "time": "09:00", "until": "2020-01-01" }),
         json!({ "freq": "daily", "time": "09:00", "until": "2031-04-31" }),
+        json!({ "freq": "yearly", "time": "09:00" }),
+        // RP10: times.
+        json!({ "freq": "daily" }),
+        json!({ "freq": "daily", "time": "09:00", "times": ["13:00"] }),
+        json!({ "freq": "daily", "times": ["08:00", "10:00", "12:00", "14:00", "16:00"] }),
+        json!({ "freq": "daily", "times": ["09:00", "09:30"] }),
+        json!({ "freq": "daily", "times": ["00:10", "23:30"] }),
+        json!({ "freq": "daily", "time": "09:00", "interval": 2 }),
+        json!({ "freq": "daily", "time": "09:00", "month_day": 1 }),
+        // RP10: a monthly day.
+        json!({ "freq": "monthly", "time": "10:00" }),
+        json!({ "freq": "monthly", "time": "10:00", "month_day": 29 }),
+        json!({ "freq": "monthly", "time": "10:00", "month_day": 0 }),
+        json!({ "freq": "monthly", "time": "10:00", "month_day": 1, "days": ["mon"] }),
+        // RP11: an hourly window.
+        json!({ "freq": "hourly", "interval": 3 }),
+        json!({ "freq": "hourly", "window": { "from": "09:00", "to": "17:00" } }),
+        json!({ "freq": "hourly", "interval": 0, "window": { "from": "09:00", "to": "17:00" } }),
+        json!({ "freq": "hourly", "interval": 24, "window": { "from": "09:00", "to": "17:00" } }),
+        json!({ "freq": "hourly", "interval": 3, "window": { "from": "17:00", "to": "09:00" } }),
+        json!({ "freq": "hourly", "interval": 3, "window": { "from": "9", "to": "17:00" } }),
     ] {
         let (status, body) = s.request(&ann.key, Method::PUT, &path, bad.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} {body}");
@@ -135,8 +156,87 @@ async fn only_the_plans_owner_makes_it_repeat_and_bad_cadences_are_refused() {
     let (status, set) = s.request(&ann.key, Method::PUT, &path, daily).await;
     assert_eq!(status, StatusCode::OK, "{set}");
     assert_eq!(set["time"], "09:00");
+    assert_eq!(set["freq"], "daily");
     assert_eq!(set["days"].as_array().unwrap().len(), 7);
     assert!(set["next_start"].is_string(), "{set}");
+}
+
+// RP10, RP11: several times a day, a day of the month and an hourly window, each read back.
+#[tokio::test]
+async fn new_shapes_are_set_and_read_back() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let plan = s.plan(&ann).await;
+    let path = format!("/api/events/{plan}/cadence");
+
+    // Days that never follow each other can hold times under an hour apart across midnight.
+    let (status, set) = s
+        .request(
+            &ann.key,
+            Method::PUT,
+            &path,
+            json!({ "freq": "weekly", "days": ["mon", "thu"], "times": ["23:30", "00:10"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["times"], json!(["00:10", "23:30"]));
+    assert_eq!(set["time"], "00:10");
+
+    let (status, set) = s
+        .request(
+            &ann.key,
+            Method::PUT,
+            &path,
+            json!({ "freq": "monthly", "month_day": 1, "times": ["10:00"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["freq"], "monthly");
+    assert_eq!(set["month_day"], 1);
+    assert_eq!(set["days"], json!([]));
+    assert!(set["next_start"].as_str().unwrap().contains("-01T10:00"), "{set}");
+
+    let hourly = json!({
+        "freq": "hourly", "interval": 3, "days": ["mon", "tue", "wed", "thu", "fri"],
+        "window": { "from": "09:00", "to": "17:00" }
+    });
+    let (status, set) = s.request(&ann.key, Method::PUT, &path, hourly).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["freq"], "hourly");
+    assert_eq!(set["interval"], 3);
+    assert_eq!(set["window"], json!({ "from": "09:00", "to": "17:00" }));
+    assert_eq!(set["times"], json!(["09:00", "12:00", "15:00"]));
+    assert_eq!(s.state.db.cadence(&plan).unwrap().unwrap().days, 0b001_1111);
+}
+
+// RP10, RP11, RP4: each start of the day cues once, keyed on its own UTC start.
+#[tokio::test]
+async fn every_start_in_a_day_cues_once() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let plan = s.plan(&ann).await;
+    let path = format!("/api/events/{plan}/cadence");
+    let twice = json!({ "freq": "daily", "times": ["09:00", "13:00"] });
+    assert_eq!(s.request(&ann.key, Method::PUT, &path, twice).await.0, StatusCode::OK);
+    let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 1);
+    assert_eq!(cadence::tick(&s.state, nine + 3 * 3600).unwrap(), 0, "not 1 pm yet");
+    assert_eq!(cadence::tick(&s.state, nine + 4 * 3600 + 60).unwrap(), 1);
+    assert_eq!(s.outcomes(&rover.id), ["cued", "cued"]);
+
+    // Every four hours from 9 to 5 is 9, 1 and 5, the window's end included.
+    let hourly =
+        json!({ "freq": "hourly", "interval": 4, "window": { "from": "09:00", "to": "17:00" } });
+    assert_eq!(s.request(&ann.key, Method::PUT, &path, hourly).await.0, StatusCode::OK);
+    let next = nine + DAY;
+    s.pin(next);
+    for hour in [0, 4, 8] {
+        assert_eq!(cadence::tick(&s.state, next + hour * 3600 + 60).unwrap(), 1, "{hour}");
+    }
+    assert_eq!(cadence::tick(&s.state, next + 12 * 3600 + 60).unwrap(), 0);
+    assert_eq!(s.outcomes(&rover.id).len(), 5);
 }
 
 // RP3, RP4, RP5: each start cues the owner's bot in the room once, and a late one is missed.

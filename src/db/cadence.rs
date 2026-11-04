@@ -1,15 +1,14 @@
 //! RP1 to RP9: plans that repeat, and what each start did for each bot (docs/repeating-plans.md).
 use super::*;
 
-/// RP1: how a plan repeats, in phase 1: one time a day, on chosen weekdays.
+/// RP1: how a plan repeats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cadence {
     pub event_id: String,
     pub owner_id: String,
-    /// Bits from Monday (1) to Sunday (64). Every day is 127.
+    /// Bits from Monday (1) to Sunday (64). Every day is 127. A monthly plan has none.
     pub days: i64,
-    /// Minutes after the owner's midnight.
-    pub time_min: i64,
+    pub shape: Shape,
     /// The owner's saved offset from UTC when it was set (B2).
     pub offset_min: i64,
     /// The last local day, counted from 1 January 1970, that can have a start. Inclusive.
@@ -19,31 +18,103 @@ pub struct Cadence {
     pub since: i64,
 }
 
+/// RP1, RP10, RP11: when in a day a plan starts. Times are minutes after the owner's midnight.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// On `days`, at each of 1 to 4 times, earliest first. `weekly` only says how it was asked for.
+    Days { weekly: bool, times: Vec<i64> },
+    /// On this day of the month, 1 to 28, at each of 1 to 4 times, earliest first.
+    Monthly { month_day: i64, times: Vec<i64> },
+    /// On `days`, every `every_hours` hours from `from`, while it's no later than `to`.
+    Hourly { every_hours: i64, from: i64, to: i64 },
+}
+
+impl Shape {
+    pub fn freq(&self) -> &'static str {
+        match self {
+            Shape::Days { weekly: false, .. } => "daily",
+            Shape::Days { weekly: true, .. } => "weekly",
+            Shape::Monthly { .. } => "monthly",
+            Shape::Hourly { .. } => "hourly",
+        }
+    }
+
+    /// Its starts in one day, earliest first.
+    pub fn times(&self) -> Vec<i64> {
+        match self {
+            Shape::Days { times, .. } | Shape::Monthly { times, .. } => times.clone(),
+            Shape::Hourly { every_hours, from, to } => {
+                // RP11 keeps it 1 or more; max(1) only stops a bad row from panicking the loop.
+                (*from..=*to).step_by((*every_hours).max(1) as usize * 60).collect()
+            }
+        }
+    }
+}
+
+type ShapeRow = (String, i64, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i64);
+
 fn cadence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cadence> {
+    let mut days: i64 = row.get(2)?;
+    let time_min: i64 = row.get(3)?;
+    let since: i64 = row.get(7)?;
+    let stored: Option<ShapeRow> = match row.get::<_, Option<String>>(8)? {
+        Some(freq) => Some((
+            freq,
+            row.get(9)?,
+            row.get(10)?,
+            row.get(11)?,
+            row.get(12)?,
+            row.get(13)?,
+            row.get(14)?,
+            row.get(15)?,
+        )),
+        None => None,
+    };
+    let shape = match stored {
+        // A shape set by this binary, and not since changed by an older one.
+        Some((freq, shape_days, times, month_day, every_hours, from, to, shape_since))
+            if shape_since == since =>
+        {
+            days = shape_days;
+            let times: Vec<i64> = times.split(',').filter_map(|t| t.parse().ok()).collect();
+            match (freq.as_str(), month_day, every_hours, from, to) {
+                ("monthly", Some(month_day), ..) => Shape::Monthly { month_day, times },
+                ("hourly", _, Some(every_hours), Some(from), Some(to)) => {
+                    Shape::Hourly { every_hours, from, to }
+                }
+                (freq, ..) => Shape::Days { weekly: freq == "weekly", times },
+            }
+        }
+        // Phase 1's one time a day.
+        _ => Shape::Days { weekly: days != 127, times: vec![time_min] },
+    };
     Ok(Cadence {
         event_id: row.get(0)?,
         owner_id: row.get(1)?,
-        days: row.get(2)?,
-        time_min: row.get(3)?,
+        days,
+        shape,
         offset_min: row.get(4)?,
         until_day: row.get(5)?,
         paused: row.get(6)?,
-        since: row.get(7)?,
+        since,
     })
 }
 
 /// RP5: one of a bot's starts: the plan's id, title and room, when it started, and what it did.
 pub type BotStart = (String, String, String, i64, String);
 
-const CADENCE_COLS: &str =
-    "event_id, owner_id, days, time_min, offset_min, until_day, paused, since";
+const CADENCE_COLS: &str = "c.event_id, c.owner_id, c.days, c.time_min, c.offset_min, c.until_day,
+     c.paused, c.since, s.freq, s.days, s.times, s.month_day, s.every_hours, s.window_from,
+     s.window_to, s.since";
+const CADENCE_FROM: &str =
+    "plan_cadences c LEFT JOIN plan_cadence_shapes s ON s.event_id = c.event_id";
 
 impl Db {
     /// RP1: the plan's cadence, if it repeats.
     pub fn cadence(&self, event_id: &str) -> rusqlite::Result<Option<Cadence>> {
         self.conn()
             .query_row(
-                &format!("SELECT {CADENCE_COLS} FROM plan_cadences WHERE event_id = ?"),
+                &format!("SELECT {CADENCE_COLS} FROM {CADENCE_FROM} WHERE c.event_id = ?"),
                 [event_id],
                 cadence_from_row,
             )
@@ -54,7 +125,7 @@ impl Db {
     pub fn running_cadences(&self) -> rusqlite::Result<Vec<Cadence>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "SELECT {CADENCE_COLS} FROM plan_cadences WHERE paused = 0 ORDER BY event_id"
+            "SELECT {CADENCE_COLS} FROM {CADENCE_FROM} WHERE c.paused = 0 ORDER BY c.event_id"
         ))?;
         let rows = stmt.query_map([], cadence_from_row)?;
         rows.collect()
@@ -69,9 +140,25 @@ impl Db {
         )
     }
 
-    /// RP1: sets or replaces a plan's cadence.
+    /// RP1: sets or replaces a plan's cadence, and its shape in the same transaction.
     pub fn set_cadence(&self, cadence: &Cadence) -> rusqlite::Result<()> {
-        self.conn().execute(
+        let times = cadence.shape.times();
+        // What a binary from before RP10 reads: the first time, and no days for a shape it can't
+        // follow, so it cues nothing rather than the wrong thing.
+        let legacy_days = match cadence.shape {
+            Shape::Days { .. } => cadence.days,
+            Shape::Monthly { .. } | Shape::Hourly { .. } => 0,
+        };
+        let (month_day, every_hours, from, to) = match cadence.shape {
+            Shape::Days { .. } => (None, None, None, None),
+            Shape::Monthly { month_day, .. } => (Some(month_day), None, None, None),
+            Shape::Hourly { every_hours, from, to } => {
+                (None, Some(every_hours), Some(from), Some(to))
+            }
+        };
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
             "INSERT INTO plan_cadences
                  (event_id, owner_id, days, time_min, offset_min, until_day, paused, since)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -81,15 +168,35 @@ impl Db {
             params![
                 cadence.event_id,
                 cadence.owner_id,
-                cadence.days,
-                cadence.time_min,
+                legacy_days,
+                times.first().copied().unwrap_or(0),
                 cadence.offset_min,
                 cadence.until_day,
                 cadence.paused,
                 cadence.since
             ],
         )?;
-        Ok(())
+        tx.execute(
+            "INSERT INTO plan_cadence_shapes (event_id, freq, days, times, month_day, every_hours,
+                 window_from, window_to, since)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (event_id) DO UPDATE SET freq = excluded.freq, days = excluded.days,
+                 times = excluded.times, month_day = excluded.month_day,
+                 every_hours = excluded.every_hours, window_from = excluded.window_from,
+                 window_to = excluded.window_to, since = excluded.since",
+            params![
+                cadence.event_id,
+                cadence.shape.freq(),
+                cadence.days,
+                times.iter().map(i64::to_string).collect::<Vec<_>>().join(","),
+                month_day,
+                every_hours,
+                from,
+                to,
+                cadence.since
+            ],
+        )?;
+        tx.commit()
     }
 
     /// RP9: the plan stops repeating. Past starts stay on the record.
@@ -203,5 +310,48 @@ impl Db {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?;
         rows.collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn monthly(since: i64) -> Cadence {
+        Cadence {
+            event_id: "e".into(),
+            owner_id: "o".into(),
+            days: 0,
+            shape: Shape::Monthly { month_day: 1, times: vec![600, 900] },
+            offset_min: 0,
+            until_day: None,
+            paused: false,
+            since,
+        }
+    }
+
+    // RP10: a binary from before the shapes reads no days for a monthly plan, so it cues nothing;
+    // and once it changes the cadence, its own one time a day counts, not the stale shape.
+    #[test]
+    fn an_older_binary_reads_a_safe_cadence_and_its_edits_win() {
+        let db = Db::open(":memory:").unwrap();
+        db.conn().pragma_update(None, "foreign_keys", false).unwrap();
+        db.set_cadence(&monthly(100)).unwrap();
+        assert_eq!(db.cadence("e").unwrap(), Some(monthly(100)));
+        let (days, time_min): (i64, i64) = db
+            .conn()
+            .query_row("SELECT days, time_min FROM plan_cadences", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((days, time_min), (0, 600));
+
+        // What the older binary's set_cadence writes: its own columns only.
+        db.conn()
+            .execute("UPDATE plan_cadences SET days = 127, time_min = 540, since = 200", [])
+            .unwrap();
+        let read = db.cadence("e").unwrap().unwrap();
+        assert_eq!(read.days, 127);
+        assert_eq!(read.shape, Shape::Days { weekly: false, times: vec![540] });
     }
 }

@@ -515,6 +515,54 @@ async fn god_mode_has_every_place_now_past_the_limits_and_for_nothing() {
     assert_eq!(server.tile(road), Some(Kind::Road));
 }
 
+// W103
+#[tokio::test]
+async fn god_mode_moves_a_place_and_its_room_goes_with_it() {
+    let (server, justin, _) = Server::start().await;
+    let ann = server.person("Ann").await;
+    let house = server.build(&ann, "house").await;
+    let room = text(&server.go_in(&ann.key, house).await.ok()["hangout_id"]);
+    let outside = json!({ "parts": { "door": { "style": "arched" } } });
+    let path = |(x, y): (i64, i64)| format!("/api/places/{x}/{y}/outside");
+    server.put(&ann.key, &path(house), outside.clone()).await.ok();
+    let to = server.free_spots().into_iter().find(|spot| *spot != house).unwrap();
+    let relocate = |from: (i64, i64), to: (i64, i64)| json!({ "action": "relocate", "x": from.0, "y": from.1, "x2": to.0, "y2": to.1 });
+
+    // Not for its builder, and not with the switch off.
+    server.act(&ann.key, relocate(house, to)).await.refused(StatusCode::FORBIDDEN);
+    server.act(&justin.key, relocate(house, to)).await.refused(StatusCode::FORBIDDEN);
+    server.switch(&justin, true).await;
+    // Where it goes needs x2 and y2, open land and a road beside it.
+    let half = json!({ "action": "relocate", "x": house.0, "y": house.1, "x2": to.0 });
+    server.act(&justin.key, half).await.refused(StatusCode::BAD_REQUEST);
+    server.act(&justin.key, relocate(house, house)).await.refused(StatusCode::BAD_REQUEST);
+    let road = server.highway_tile();
+    server.act(&justin.key, relocate(house, road)).await.refused(StatusCode::BAD_REQUEST);
+    server.act(&justin.key, relocate(road, to)).await.refused(StatusCode::BAD_REQUEST);
+
+    assert_eq!(server.act(&justin.key, relocate(house, to)).await.ok()["cost"], 0);
+    assert_eq!(server.tile(house), None);
+    assert_eq!(server.tile(to), Some(Kind::House));
+    // Still Ann's, and the same room is behind its door. The old tile opens nothing.
+    assert_eq!(server.go_in(&ann.key, to).await.ok()["hangout_id"], room.as_str());
+    // Its outside went with it (E30).
+    assert_eq!(server.get(&ann.key, &path(to)).await.ok()["outside"], outside);
+    server.go_in(&ann.key, house).await.refused(StatusCode::NOT_FOUND);
+
+    // W91: a big place moves from any of its tiles, and its room goes with it too.
+    let (square, square_room) = server.town_square(&justin).await;
+    let footprint = |(x, y): (i64, i64)| [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
+    let away = server
+        .big_spots()
+        .into_iter()
+        .find(|spot| footprint(*spot).iter().all(|cell| !footprint(square).contains(cell)))
+        .unwrap();
+    server.act(&justin.key, relocate((square.0 + 1, square.1 + 1), away)).await.ok();
+    assert_eq!(server.tile(square), None);
+    assert_eq!(server.tile(away), Some(Kind::Square));
+    assert_eq!(server.go_in(&justin.key, away).await.ok()["hangout_id"], square_room.as_str());
+}
+
 // W77
 #[tokio::test]
 async fn god_mode_takes_down_what_anyone_built_and_their_room_waits_for_them() {
@@ -1057,6 +1105,42 @@ lines",
     server.state.db.add_agent_to_room(&office, &rover_id).unwrap();
     let cleared = server.send(&bo.key, Method::DELETE, &path, None).await.ok();
     assert!(cleared["workplace"].is_null(), "{cleared}");
+}
+
+// L57: a bot quiet at its workplace in a Work hour isn't sent home after S61's half hour.
+#[tokio::test]
+async fn a_bot_quiet_at_work_stays_at_work() {
+    let (server, _, _) = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, _) = server.bot(&bo, &home, "Rover").await;
+    let (pip_id, _) = server.bot(&bo, &home, "Pip").await;
+    let office = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Office", "create_code": CODE }))
+        .await
+        .ok();
+    let office = text(&office["hangout"]["id"]);
+    for bot in [&rover_id, &pip_id] {
+        server.all_day(&bo, bot, true).await;
+        server.state.db.add_agent_to_room(&office, bot).unwrap();
+    }
+    let job = json!({ "room_id": office, "job": "Building Agents Hangout" });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/workplace"), job).await.ok();
+    // Both went to the office 20 minutes ago and have done nothing since; only Rover works there.
+    let start = now();
+    for bot in [&rover_id, &pip_id] {
+        server.state.db.set_bot_place(bot, &office, start - 20 * 60).unwrap();
+    }
+    agenthangout::travel::sweep(&server.state, start);
+    let at = |bot: &str, when: i64| server.state.db.bot_place(bot, when).unwrap();
+    // Fifteen minutes on, past S61's half hour, Rover is still at work and Pip has gone home.
+    assert_eq!(at(&rover_id, start + 15 * 60).as_deref(), Some(office.as_str()));
+    assert_ne!(at(&pip_id, start + 15 * 60).as_deref(), Some(office.as_str()));
+
+    // Once its hours aren't Work hours, nothing starts its half hour again, and it runs out.
+    let social = json!({ "every_day": vec!["social"; 24] });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/schedule"), social).await.ok();
+    agenthangout::travel::sweep(&server.state, start + 20 * 60);
+    assert_ne!(at(&rover_id, start + 31 * 60).as_deref(), Some(office.as_str()));
 }
 
 // L41, L9

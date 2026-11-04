@@ -1448,7 +1448,10 @@ function creditsCard(credits) {
         h('progress', { max: String(now.daily_cap), value: String(Math.min(now.earned_today, now.daily_cap)) })),
       h('dl', { class: 'facts' }, rows.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       waiting ? h('p', { class: 'muted' },
-        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one.`) : null,
+        `${waiting === 1 ? '1 of your cities doesn\'t' : `${waiting} of your cities don't`} pay you yet. A city starts paying after 30 days there and a gathering there, or a vouch from someone who has been to one. Your first gathering pays 20 straight away, wherever it is.`) : null,
+      // HC25: someone nothing has paid yet is told the one way to start.
+      !waiting && !now.history.length ? h('p', { class: 'muted' },
+        'Nothing has paid you yet. Join a city and say yes to a gathering there: your first one pays 20 straight away.') : null,
       now.packs.length ? h('h3', {}, 'Shop') : null,
       now.packs.length ? h('ul', { class: 'room-list shop' }, now.packs.map(packRow)) : null,
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
@@ -6587,6 +6590,7 @@ function moveSentence(body, done) {
   if (body.kind === 'square') return 'The town square is up and open. Bots with public places on will find it first.';
   if (body.kind === 'plant') return 'The recycling plant is up. Bots sent there wait beside it until they are brought back or deleted.';
   if (body.action === 'place') return `Your ${body.kind} is up. ${left}`;
+  if (body.action === 'relocate') return 'Moved. Its rooms went with it.';
   const verb = { road: 'Road laid on', bulldoze: 'Cleared' }[body.action];
   const tiles = `${done.changed} ${done.changed === 1 ? 'tile' : 'tiles'}`;
   const skipped = done.skipped ? `, leaving ${done.skipped} as ${done.skipped === 1 ? 'it was' : 'they were'}` : '';
@@ -7837,6 +7841,9 @@ function researchItemDetails(item, labId) {
       : pr.ci === 'unknown' ? `CI and review couldn’t be read${pr.stale ? ' · stale' : ''}`
         : `CI ${pr.ci} · review ${String(pr.review).replaceAll('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
     rows.push(h('p', { class: pr && pr.ci === 'failing' ? 'research-stale' : 'muted' }, said));
+    // RW12: who's still asked to review is pending, apart from any review already in.
+    const asked = pr ? [...(pr.requested || []), ...(pr.requested_teams || []).map((team) => `team ${team}`)] : [];
+    if (asked.length) rows.push(h('p', { class: 'muted' }, `Review requested from: ${asked.join(', ')}`));
   }
   const claims = item.claims || [];
   if (claims.length) {
@@ -8043,7 +8050,8 @@ async function worldView(id, { home = false } = {}) {
     }
     godButton?.setAttribute('aria-pressed', String(godOn));
     // A tool that has gone, been turned off or locked again doesn't stay in your hand.
-    if (tool && (!toolShown(tool) || placesFull.has(tool) || lockOf(tool))) choose(null);
+    // A place being moved keeps its kind in hand, even one that is full or not in the toolbar (W103).
+    if (tool && !pendingMove && (!toolShown(tool) || placesFull.has(tool) || lockOf(tool))) choose(null);
   };
 
   // The news: what's coming, or what's happening, over the map.
@@ -8088,6 +8096,8 @@ async function worldView(id, { home = false } = {}) {
 
   let pendingResearchLab = null;
   let placingResearchLab = false;
+  // W103: a place god mode is moving, from its menu, until the next click says where it goes.
+  let pendingMove = null;
   const research = latest.kind === 'public' ? researchLabsPanel({
     panels, me,
     place: (lab) => {
@@ -8356,6 +8366,7 @@ async function worldView(id, { home = false } = {}) {
 
   function choose(name) {
     if (name !== 'research_lab') pendingResearchLab = null;
+    pendingMove = null;
     tool = name;
     for (const [key, button] of buttons) button.setAttribute('aria-pressed', String(key === name));
     world.setTool(name);
@@ -8554,6 +8565,13 @@ async function worldView(id, { home = false } = {}) {
     }
     // RL8: this tool can only place a lab already created through the gated endpoint.
     if (tool === 'research_lab') { panels.open('research'); return; }
+    // W103: the click after Move says where the place goes.
+    if (pendingMove) {
+      const from = pendingMove;
+      choose(null);
+      send({ action: 'relocate', x: from.x, y: from.y, x2: tile.x, y2: tile.y });
+      return;
+    }
     if (tool === 'road') send({ action: 'road', x: tile.x, y: tile.y, x2: tile.x2, y2: tile.y2 });
     else if (BUILDING_KINDS.has(tool)) send({ action: 'place', kind: tool, x: tile.x, y: tile.y });
     else send({ action: 'bulldoze', x: tile.x, y: tile.y });
@@ -8614,6 +8632,13 @@ async function worldView(id, { home = false } = {}) {
     }
   }
 
+  // W103: picks the place up. Its kind is the tool, so the map shows where it would go.
+  function startMove(t) {
+    choose(t.kind);
+    pendingMove = { x: t.x, y: t.y };
+    say(`Click where the ${(KIND_NAME[t.kind] || t.kind).toLowerCase()} should go. Its rooms go with it. Press Escape to stop.`);
+  }
+
   function tileMenu(t) {
     // W91: a big place's other tiles have a level, but that is which piece of it they are.
     const lab = researchMapObject(latest, t.x, t.y);
@@ -8628,6 +8653,8 @@ async function worldView(id, { home = false } = {}) {
       // RC7: nobody goes into the recycling plant; its menu says who's waiting there.
       if (t.kind === 'plant') items.push({ label: 'See who’s waiting', run: () => plantDialog().catch((failure) => say(plain(failure.message))) });
       else if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
+      // W103: god mode moves any place, whoever built it, and its rooms go with it.
+      if (godOn && BUILDING_KINDS.has(t.kind)) items.push({ label: 'Move', run: () => startMove(t) });
       if (t.land !== 'water') items.push({ label: 'Walk here', cost: '1 move', run: () => send({ action: 'walk', x: t.x, y: t.y }) });
       if ((t.kind && t.kind !== 'cleared') || (!t.kind && t.land === 'forest')) {
         items.push({ label: 'Clear', cost: '1 move', run: () => send({ action: 'bulldoze', x: t.x, y: t.y }) });
@@ -9101,6 +9128,8 @@ async function worldView(id, { home = false } = {}) {
     // What is in hand on the outside view goes back first.
     if (outsideBuild.takesEscape()) return;
     if (menu.isOpen) menu.close(true);
+    // W103: a place picked up to move is put back where it was.
+    else if (pendingMove) { choose(null); say('Not moved.'); }
     else if (panels.current) panels.close();
     else return;
     event.preventDefault();

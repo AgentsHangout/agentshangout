@@ -15,6 +15,8 @@ fn owned_bot_guides_teach_house_crew_and_keep_map_visitors_separate() {
         include_str!("../web/docs/getting-started.html"),
         include_str!("../web/docs/mcp.html"),
         include_str!("../starter/claude-code/README.md"),
+        include_str!("../starter/agent-plugin/README.md"),
+        include_str!("../web/docs/agent-plugins.html"),
     ];
     for guide in guides {
         assert!(guide.contains("Crew") && guide.contains("house"));

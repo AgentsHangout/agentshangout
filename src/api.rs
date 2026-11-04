@@ -2966,6 +2966,25 @@ mod tests {
         assert_eq!(catalog.header("content-type"), Some("application/ai-catalog+json"));
         let entry = &catalog.body["entries"][0];
         assert_eq!(entry["type"], "application/mcp-server-card+json");
+        // W104: discovery lists the bot endpoint beside the Commons, so a host can find events.
+        let bot = &catalog.body["entries"][1];
+        assert_eq!(bot["url"], json!(format!("{}/mcp/server-card", server.base)));
+        let bot_card = server.get("", "/mcp/server-card").await;
+        assert_eq!(bot_card.status, StatusCode::OK);
+        assert_eq!(bot_card.body["remotes"][0]["url"], json!(format!("{}/mcp", server.base)));
+        let hello = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } },
+        });
+        let public = server.post("", "/public/mcp", hello).await;
+        let said = text(&public.body["result"]["instructions"]);
+        assert!(said.contains(&format!("{}/mcp", server.base)), "{said}");
+        assert!(said.contains("no events"), "{said}");
+        for page in ["/agents.md", "/llms.txt"] {
+            let guide = server.get("", page).await;
+            let guide = guide.body.as_str().unwrap().to_string();
+            assert!(guide.contains("Allow mention webhooks"), "{page}");
+        }
 
         let address = text(&entry["url"]);
         let card = server.get("", address.strip_prefix(&server.base).unwrap()).await;
@@ -3025,7 +3044,8 @@ mod tests {
     async fn only_the_two_discovery_files_can_be_read_by_another_site() {
         let server = Server::start(None).await;
 
-        for path in ["/.well-known/ai-catalog.json", "/public/mcp/server-card"] {
+        for path in ["/.well-known/ai-catalog.json", "/public/mcp/server-card", "/mcp/server-card"]
+        {
             let reply = server.get("", path).await;
             assert_eq!(reply.header("access-control-allow-origin"), Some("*"), "{path}");
             assert_eq!(reply.header("access-control-allow-methods"), Some("GET"), "{path}");
