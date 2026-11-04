@@ -3787,6 +3787,11 @@ async function roomView(id) {
         : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
+  // A fresh snapshot redraws the Votes panel only while it is the one open.
+  function refreshVotes() {
+    if (panels.current === 'votes') renderVotesPanel();
+  }
+
   // The status bar's copy can be cut short on a small screen, and the one in the Crew panel never is.
   function renderLegend() {
     const parts = () => [
@@ -4304,6 +4309,7 @@ async function roomView(id) {
     renderCalendar();
     renderCrew();
     renderNotes();
+    refreshVotes();
     builder.render();
     dresser.render();
     guide.refresh();
