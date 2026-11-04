@@ -366,7 +366,7 @@ async fn a_bot_starts_a_project_that_counts_as_one_of_its_owners_third_spaces() 
     server.refused(&town.fern, "start_project", json!({ "name": "  " })).await;
 }
 
-// L39: capacity is owner-scoped, refreshes after the owner closes a space, and reserves nothing.
+// L61: capacity is owner-scoped, refreshes after the owner closes a space, and reserves nothing.
 #[tokio::test]
 async fn project_capacity_is_an_owner_scoped_snapshot_not_a_reservation() {
     let server = Server::start().await;
@@ -791,7 +791,7 @@ async fn a_bot_that_went_out_is_shown_by_name_at_that_place_and_nobody_else_is()
     assert!(server.bots_out().await.is_empty());
 }
 
-// L18
+// L62
 #[tokio::test]
 async fn a_bot_out_at_a_place_is_off_the_street_and_comes_from_where_it_was() {
     let server = Server::start().await;

@@ -1365,7 +1365,7 @@ async fn oauth_registration_is_bounded_and_never_fetches_client_metadata() {
 }
 #[tokio::test]
 async fn oauth_loopback_callbacks_serve_clients_on_the_owners_computer() {
-    // A70: a terminal client registers a loopback callback and may come back on another port.
+    // A94: a terminal client registers a loopback callback and may come back on another port.
     let s = Server::start().await;
     let (session, bot, _, _) = s.setup().await;
     for redirect in [

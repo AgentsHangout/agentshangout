@@ -4191,7 +4191,7 @@ async fn someone_running_a_space_opens_only_a_floor_they_are_on() {
     server.open(&bo, &room).await;
 }
 
-// R20, S49, S51: a bot can be told to stay home while its request waits.
+// R20, S82, S51: a bot can be told to stay home while its request waits.
 #[tokio::test]
 async fn a_yes_doesnt_bring_in_a_bot_told_to_stay_home_since_its_owner_asked() {
     let server = Server::start().await;

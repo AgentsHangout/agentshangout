@@ -1,4 +1,4 @@
-//! Ephemeral human composer hints (I86). No draft text, database rows, bot wakes or history.
+//! Ephemeral human composer hints (I108). No draft text, database rows, bot wakes or history.
 use crate::{
     auth::Caller,
     error::{ApiError, ApiResult},

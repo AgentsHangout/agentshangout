@@ -5332,7 +5332,7 @@ async fn deleting_the_commons_row_starts_it_again_and_leaves_everyone_else_alone
     let _ = std::fs::remove_file(&path);
 }
 
-// W73
+// W108
 #[test]
 fn a_map_paints_its_land_in_the_same_step_that_sizes_it() {
     // Sizing a canvas wipes it, and a resize is heard after the frame is drawn, so the browser shows

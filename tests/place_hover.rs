@@ -370,7 +370,7 @@ async fn every_place_has_a_name_its_owner_or_its_project_gave_it() {
     assert!(theirs["space_id"].is_null(), "{theirs}");
 }
 
-// S49, S50, S51, S52
+// S82, S50, S51, S52
 #[tokio::test]
 async fn a_person_asks_to_let_their_bot_into_someone_elses_place_and_the_owner_decides() {
     let server = Server::start().await;
@@ -442,7 +442,7 @@ async fn a_person_asks_to_let_their_bot_into_someone_elses_place_and_the_owner_d
     assert_eq!(server.get(&ann.key, "/api/place-requests").await.ok()["requests"], json!([]));
 }
 
-// S49, S51, S27
+// S82, S51, S27
 #[tokio::test]
 async fn someone_turned_out_of_a_place_cant_ask_and_a_yes_doesnt_bring_them_back() {
     let server = Server::start().await;

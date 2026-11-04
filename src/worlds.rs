@@ -1814,7 +1814,7 @@ pub fn my_world(state: &AppState, caller: &Caller) -> ApiResult<Value> {
 /// `[id, name, x, y, emote, kind, look]`, where `kind` is `person` or `agent` (W53), and `look` is
 /// null for a player with nobody's look to wear (C14).
 type PlayerOut = (i64, String, u16, u16, Option<&'static str>, &'static str, Option<Look>);
-/// L17, L18: `[name, x, y, look, fx, fy]` for a bot at a place.
+/// L17, L62: `[name, x, y, look, fx, fy]` for a bot at a place.
 /// L17: and last, an open-air place's tile, where the bot stays, or null for a building it's inside.
 type BotOutRow =
     (String, u16, u16, Look, Option<u16>, Option<u16>, Option<[u16; 2]>, String, [u16; 2]);
@@ -1854,7 +1854,7 @@ struct ViewOut<'a> {
     research_labs: Option<Vec<ResearchLabOut>>,
     /// L17: `[name, x, y, look]` of the bots out at The Commons' places, by their own names (C14).
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// L18: and `fx, fy`, where it comes from, or nulls.
+    /// L62: and `fx, fy`, where it comes from, or nulls.
     bots_out: Option<Vec<BotOutRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disaster: Option<DisasterOut>,
@@ -2026,7 +2026,7 @@ fn build_view(state: &AppState, world_id: &str, now: i64) -> ApiResult<Cached> {
                 })
             })
             .collect();
-        // L18: a bot at a place isn't on the street too, and comes from where it stood.
+        // L62: a bot at a place isn't on the street too, and comes from where it stood.
         let street = snapshot.players.iter().map(|player| (player.id, player.pos)).collect();
         let at_places = crate::routines::bots_at_places(state, &snapshot.tiles, &street, now)?;
         let inside: std::collections::HashSet<i64> =

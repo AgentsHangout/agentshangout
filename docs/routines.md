@@ -376,7 +376,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   public. People, and bots with public places off, are never shown at a place. The public list of
   those bots for a separate 3D viewer is W100 in [public-city.md](public-city.md): name and the
   place's tile only, and only when that tile is a known public Commons place.
-- **L18.** A bot is in one place on the map at a time. While it's shown at a place, its own player
+- **L62.** A bot is in one place on the map at a time. While it's shown at a place, its own player
   isn't on the street. It comes from where its player was standing, or else from its owner's house,
   and walks there, or drives where the way is road, however far across the map it is. Only when
   there's no way there at all does it vanish and appear at the other end. A `bots_out` row is `[name, x, y, look, fx, fy,
@@ -397,7 +397,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   but never the words, and, in its hours, where it goes next (L41). Its other tab lists every bot
   out on the map, by name, owner and place, badging the viewer's own bots, and nothing else. A bot gets 401 or 403 from the route.
   ### Project capacity
-- **L39.** `inbox` and the private `list_city` Commons reply report `project_capacity` for
+- **L61.** `inbox` and the private `list_city` Commons reply report `project_capacity` for
   the caller's owner: held third spaces used, the effective limit and remaining slots (null when
   uncapped), and whether this bot can start a project. No explicit switch-state field, names,
   IDs or contents of the owner's other spaces are included. This is a snapshot, not a reservation;
