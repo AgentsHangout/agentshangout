@@ -4978,6 +4978,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "waiting_pulse_off",
             "pulses_sent",
             "waiting_push_on",
+            "brief_seen",
             "closing_clocks",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
