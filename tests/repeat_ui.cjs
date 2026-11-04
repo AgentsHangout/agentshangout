@@ -98,6 +98,70 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
   await boxes[1].onchange();
   assert.equal(json(calls.at(-1).body), json({ bots: ['b1'] }));
 
+  // Quick opt-outs: the last write matches the boxes, whatever order the answers come in.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: ['b1', 'b2'] } };
+  panel = context.repeatPanel(plan, 'bo', bots);
+  await tick();
+  const pair = all(panel, (n) => n.type === 'checkbox');
+  assert.deepEqual(pair.map((b) => b.checked), [true, true]);
+  const waiting = [];
+  reads['PUT /api/events/ev1/cue-bots'] = (body) => new Promise((resolve) => waiting.push(() => resolve({ bots: body.bots })));
+  const before = calls.length;
+  pair[0].checked = false;
+  const first = pair[0].onchange();
+  pair[1].checked = false;
+  const second = pair[1].onchange();
+  await tick();
+  assert.equal(calls.length - before, 1, 'one write in flight at a time');
+  waiting.shift()();
+  await tick();
+  waiting.shift()();
+  await Promise.all([first, second]);
+  const puts = calls.slice(before);
+  assert.equal(puts.length, 2);
+  assert.equal(json(puts.at(-1).body), json({ bots: [] }), 'the last write matches the boxes');
+
+  // Save keeps a paused repeat paused unless Resume is ticked.
+  const pausedRead = { freq: 'daily', days: [...week, 'sat', 'sun'], times: ['09:00'], paused: true };
+  reads = { 'GET /api/events/ev1/cadence': { cadence: pausedRead, your_bots: [] } };
+  panel = context.repeatPanel(plan, 'ann', bots);
+  await tick();
+  reads['PUT /api/events/ev1/cadence'] = (body) => ({ ...pausedRead, paused: Boolean(body.paused) });
+  await named(panel, 'save').onclick();
+  assert.equal(calls.at(-1).body.paused, true);
+  assert.ok(panel.children[0].children[0].includes('(paused)'));
+  named(panel, 'resume').checked = true;
+  await named(panel, 'save').onclick();
+  assert.equal(calls.at(-1).body.paused, undefined, 'Resume sends not paused');
+  assert.equal(context.repeatBody({ kind: 'daily', times: '09:00' }).paused, undefined);
+
+  // A repeat the form can't say exactly is not rewritten: no Save, only Stop.
+  const odd = [
+    { freq: 'weekly', days: ['mon', 'wed'], times: ['09:00'] },
+    { freq: 'daily', days: week, times: ['09:00'] },
+    { freq: 'hourly', days: week, times: [], interval: 3, window: { from: '09:00', to: '17:00' } },
+  ];
+  for (const cadence of odd) {
+    reads = { 'GET /api/events/ev1/cadence': { cadence, your_bots: [] } };
+    panel = context.repeatPanel(plan, 'ann', bots);
+    await tick();
+    assert.equal(named(panel, 'save'), undefined, `no Save for ${cadence.freq} on ${cadence.days}`);
+    assert.ok(named(panel, 'locked'));
+    assert.ok(named(panel, 'stop'));
+  }
+  const fine = [
+    { freq: 'weekly', days: week, times: ['09:00'] },
+    { freq: 'daily', days: [...week, 'sat', 'sun'], times: ['09:00'] },
+    { freq: 'monthly', days: [], times: ['09:00'], month_day: 3 },
+    { freq: 'hourly', days: [...week, 'sat', 'sun'], times: [], interval: 3, window: { from: '09:00', to: '17:00' } },
+  ];
+  for (const cadence of fine) {
+    reads = { 'GET /api/events/ev1/cadence': { cadence, your_bots: [] } };
+    panel = context.repeatPanel(plan, 'ann', bots);
+    await tick();
+    assert.ok(named(panel, 'save'), `Save for ${cadence.freq}`);
+  }
+
   // No bots here, or a canceled plan: nothing at all.
   assert.equal(context.repeatPanel(plan, 'bo', []), null);
   assert.equal(context.repeatPanel({ ...plan, status: 'cancelled' }, 'ann', bots), null);

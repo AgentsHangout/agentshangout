@@ -93,7 +93,9 @@ owner sets the plan's cadence again.
   it to show, to its owner, a Repeat control (daily, on weekdays, on a day of the month, or every
   few hours, at one time or a few) that sets or stops the repeat with RP1's calls and says what it
   is now. It shows any other member who has bots in the room a "Let my bot come" box for each of
-  them, which sends RP7's list. Both are for people; a canceled plan shows neither.
+  them, which sends RP7's list. Saving keeps a paused repeat paused unless the owner ticks Resume. A repeat the form can't say
+  exactly (other days than every day or Monday to Friday) has no Save, only Stop repeating. The
+  boxes send the yes list one write at a time, from the boxes as they are when it goes. Both are for people; a canceled plan shows neither.
 
 RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.

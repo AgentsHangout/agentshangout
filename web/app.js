@@ -3172,7 +3172,19 @@ function repeatBody(v) {
     if (v.kind === 'monthly') body.month_day = Number(v.month_day);
   }
   if (v.until) body.until = v.until;
+  // Saving never resumes a paused repeat on its own; only the owner's Resume does.
+  if (v.paused) body.paused = true;
   return body;
+}
+
+// Whether the form can say this repeat exactly. One with days the form can't pick (Mon and Wed, or
+// weekdays on a daily or hourly plan) is left alone: it can be stopped or replaced, not rewritten.
+function repeatEditable(cadence) {
+  if (!cadence) return true;
+  const days = cadence.days || [];
+  if (cadence.freq === 'monthly') return true;
+  if (cadence.freq === 'weekly') return days.join() === REPEAT_WEEKDAYS.join();
+  return days.length === 7;
 }
 
 // One line on the shape RP1 gives back, or that the plan doesn't repeat.
@@ -3202,21 +3214,39 @@ function repeatPanel(event, you, bots) {
   const fail = (failure) => { error.textContent = failure.message; error.hidden = false; };
   const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
   let data = { cadence: null, your_bots: [] };
+  // One yes-list write at a time, each built from the boxes as they are when it goes, so a quick
+  // second click can't be sent behind a first that was built from older boxes.
+  const checks = [];
+  let sending = false;
+  let again = false;
+  const send = async () => {
+    if (sending) { again = true; return; }
+    sending = true;
+    try {
+      do {
+        again = false;
+        const next = checks.filter(({ box }) => box.checked).map(({ bot }) => bot.id);
+        ({ bots: data.your_bots } = await api(`/api/events/${event.id}/cue-bots`, { method: 'PUT', body: { bots: next } }));
+        error.hidden = true;
+      } while (again);
+    } catch (failure) {
+      again = false;
+      checks.forEach(({ bot, box }) => { box.checked = data.your_bots.includes(bot.id); });
+      fail(failure);
+    }
+    sending = false;
+  };
 
   const paint = () => {
     const { cadence } = data;
     summary.replaceChildren(`Repeat: ${repeatSummary(cadence)}`);
     if (!owner) {
       if (!cadence) { panel.hidden = true; return; }
+      checks.length = 0;
       const boxes = bots.map((bot) => {
         const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let ${bot.name} come` });
-        box.onchange = async () => {
-          const next = bots.filter((other) => (other.id === bot.id ? box.checked : data.your_bots.includes(other.id))).map((other) => other.id);
-          try {
-            ({ bots: data.your_bots } = await api(`/api/events/${event.id}/cue-bots`, { method: 'PUT', body: { bots: next } }));
-            error.hidden = true;
-          } catch (failure) { box.checked = !box.checked; fail(failure); }
-        };
+        box.onchange = send;
+        checks.push({ bot, box });
         return h('label', { class: 'check' }, box, ` Let my bot ${bot.name} come`);
       });
       body.replaceChildren(...boxes, error);
@@ -3232,9 +3262,10 @@ function repeatPanel(event, you, bots) {
     const from = h('input', { name: 'from', value: cadence?.window?.from || '09:00', 'aria-label': 'First start' });
     const to = h('input', { name: 'to', value: cadence?.window?.to || '17:00', 'aria-label': 'Last start' });
     const until = h('input', { name: 'until', placeholder: 'YYYY-MM-DD', value: cadence?.until || '', 'aria-label': 'Last day' });
+    const resume = h('input', { type: 'checkbox', name: 'resume', 'aria-label': 'Resume' });
     const save = async () => {
       try {
-        const values = { kind: kind.value, times: times.value, month_day: monthDay.value, interval: interval.value, from: from.value, to: to.value, until: until.value.trim() };
+        const values = { paused: Boolean(cadence?.paused) && !resume.checked, kind: kind.value, times: times.value, month_day: monthDay.value, interval: interval.value, from: from.value, to: to.value, until: until.value.trim() };
         data.cadence = await api(path, { method: 'PUT', body: repeatBody(values) });
         error.hidden = true;
         paint();
@@ -3248,7 +3279,15 @@ function repeatPanel(event, you, bots) {
         paint();
       } catch (failure) { fail(failure); }
     };
+    if (!repeatEditable(cadence)) {
+      body.replaceChildren(
+        h('p', { class: 'muted', name: 'locked' }, 'This repeat was set elsewhere, with days this form cannot show. Stop repeating, or set a new one.'),
+        h('button', { type: 'button', class: 'link danger', name: 'stop', onclick: stop }, 'Stop repeating'),
+        error);
+      return;
+    }
     body.replaceChildren(
+      cadence?.paused ? h('label', { class: 'check' }, resume, ' Resume (it is paused)') : null,
       field('How often', kind), field('Times, in your own time', times), field('Day of the month (1 to 28)', monthDay),
       field('Every how many hours', interval), field('From', from), field('To', to), field('Until (optional)', until),
       h('div', { class: 'event-actions' },
