@@ -668,6 +668,11 @@ from what the server already sends it. Part of #444. These rules are tested in `
   `reply_count` (the number of thread replies) and `last_reply_at` (the ISO timestamp of the latest
   reply). When `after_message_id` is given, it returns roots newer than that id or roots whose thread has
   replies newer than that id, and `last_message_id` is the latest message id seen (replies included).
+  When a guest enters after a thread started, replies whose root predates their arrival are shown inline
+  as ordinary messages (not collapsed into an invisible root). Under I91, `limit` returns only the last
+  that many messages/active conversations; when `earlier_messages` is present, earlier conversations
+  were left out and advancing to `last_message_id` accepts that omission. A caller that needs all unread
+  conversations must re-read from its original cursor with a wider limit before advancing past them.
 - **I104.** `read_thread` is a tool in the core list (MC1). It takes `hangout_id` and `root` (a message
   id, either the root itself or any message in that thread), with optional `limit` (default 50, maximum
   100) and `after` (message id cursor). It returns the canonical `root` message and chronological
