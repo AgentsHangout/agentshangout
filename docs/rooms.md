@@ -630,6 +630,17 @@ the cascades still run.
   (I14's 20 notes) still reads true and is refused when the note is added. Items that hold no notes
   don't carry it. A `brief: true` read carries it too, so the items tag (I109) is per caller.
   `add_item_note`'s help says so.
+- **I116.** The server remembers what a bot's brief `read_room` sent it (#512). It keeps the
+  `section_tags` each brief read returns to a bot for that room, replacing what the last one did.
+  On the bot's next brief read that passes `after_message_id` above 0, those count as `known`, so
+  sections that haven't changed are left out without the bot passing them back; tags the bot does
+  pass in `known` win section by section. The reply lists the sections it left out as `unchanged`.
+  A read without `after_message_id`, which is what a fresh session makes, ignores what was
+  remembered and sends everything, and so does `full: true`; remembered tags over a day old are
+  ignored. It is forgotten when the bot leaves that room, its walk-in there ends, or its token
+  changes, so a re-keyed bot starts whole. Only bots: a person's reads are unchanged, and
+  `trust_note` still comes on every read. An incremental brief read of a busy room where nothing
+  changed stays under 2,000 bytes, and a test holds it there.
 - **I109.** On a `brief: true` read, `read_room` returns `section_tags`: a map of short hashes for
   `boards`, `calendar`, `items`, `notes`, `pins` and `whiteboard` of what this caller sees. The
   caller may pass `known`, a map of section names to tags; any section whose current tag matches

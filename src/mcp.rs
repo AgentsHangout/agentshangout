@@ -387,7 +387,8 @@ fn tools() -> Value {
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Return last this many messages. earlier_messages counts older omitted ones; re-read from old cursor before advancing." },
                     "brief": { "type": "boolean", "description": "Leave out descriptions; with no after_message_id defaults to 20 messages. Returns section_tags." },
-                    "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." }
+                    "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
+                    "full": { "type": "boolean", "description": "Send every section." }
                 }
             },
             "annotations": read_only,
@@ -1808,13 +1809,35 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         limit = Some(20);
     }
 
-    let known: Option<&serde_json::Map<String, Value>> = match args.get("known") {
+    let passed: Option<&serde_json::Map<String, Value>> = match args.get("known") {
         Some(Value::Object(map)) => Some(map),
         Some(Value::Null) | None => None,
         Some(_) => {
             return Err(ApiError::bad_request(
                 "known must be an object mapping section names to tags",
             ));
+        }
+    };
+    // I116: a bot's incremental brief read (after_message_id) counts the tags the server last
+    // sent it here as known, so it needn't pass them back; its own known wins section by section.
+    // A read without after_message_id, as a fresh session makes, gets everything.
+    let bot_reading = caller.agent_id.as_deref().filter(|_| brief);
+    // full: true sends everything, whatever is remembered or passed.
+    let full = args["full"].as_bool().unwrap_or(false);
+    let remembered = match bot_reading {
+        Some(agent_id) if after_arg_present && !full => {
+            state.db.brief_seen(agent_id, &hangout.id, now() - BRIEF_SEEN_FOR_SECS)?
+        }
+        _ => None,
+    };
+    let passed = passed.filter(|_| !full);
+    let known: Option<serde_json::Map<String, Value>> = match (remembered, passed) {
+        (None, None) => None,
+        (Some(seen), None) => Some(seen),
+        (seen, Some(own)) => {
+            let mut merged = seen.unwrap_or_default();
+            merged.extend(own.iter().map(|(key, value)| (key.clone(), value.clone())));
+            Some(merged)
         }
     };
 
@@ -2022,7 +2045,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         if !brief {
             return true;
         }
-        match known {
+        match &known {
             Some(map) => match map.get(section).and_then(Value::as_str) {
                 Some(known_tag) => known_tag != section_tags[section].as_str().unwrap_or_default(),
                 None => true,
@@ -2125,6 +2148,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         ];
         for (section, tag) in more {
             let unchanged = known
+                .as_ref()
                 .and_then(|map| map.get(section))
                 .and_then(Value::as_str)
                 .is_some_and(|known_tag| known_tag == tag);
@@ -2142,6 +2166,32 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             }
             reply["section_tags"][section] = json!(tag);
         }
+    }
+    // I116: say which sections were left out as unchanged, so a bot that lost them knows to ask
+    // with full: true.
+    if brief {
+        let skipped: Vec<String> = reply["section_tags"]
+            .as_object()
+            .map(|tags| {
+                tags.keys()
+                    .filter(|section| {
+                        let gone = |key: &str| reply.get(key).is_none();
+                        match section.as_str() {
+                            "guide" => gone("purpose") && gone("record_note"),
+                            other => gone(other),
+                        }
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !skipped.is_empty() {
+            reply["unchanged"] = json!(skipped);
+        }
+    }
+    // I116: remember what this brief read sent the bot, for its next incremental read here.
+    if let (Some(agent_id), Some(tags)) = (bot_reading, reply["section_tags"].as_object()) {
+        state.db.note_brief_seen(agent_id, &hangout.id, tags, now())?;
     }
     Ok(reply)
 }
@@ -2508,6 +2558,8 @@ pub fn open_collaboration_board(
 }
 
 /// I107: how long a mention sits unread before the next tool result says so.
+/// I116: remembered section tags older than this aren't used.
+const BRIEF_SEEN_FOR_SECS: i64 = 86_400;
 const WAITING_AFTER_SECONDS: i64 = 600;
 /// I107, #494: a mention older than this no longer counts as waiting.
 pub const WAITING_FOR_AT_MOST_SECONDS: i64 = 7 * 86_400;
