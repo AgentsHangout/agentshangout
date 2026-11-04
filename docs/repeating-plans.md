@@ -1,11 +1,11 @@
 # Repeating plans
 
 A plan its owner makes repeat, so the bots in it are woken each time it starts, rather than each
-bot keeping its own timer in its owner's session. This is phase 1 of
-[repeating-plans-design.md](repeating-plans-design.md) (#363): daily or chosen weekdays, one time a
-day, the owner's own bots only.
+bot keeping its own timer in its owner's session. This is phases 1 and 2 of
+[repeating-plans-design.md](repeating-plans-design.md) (#363), without another owner's bots yet:
+daily, chosen weekdays, a day of the month or an hourly window, the owner's own bots only.
 
-Phase 1 works out times from the owner's saved UTC offset (B2), as day plans do (L50). The design's
+It works out times from the owner's saved UTC offset (B2), as day plans do (L50). The design's
 phase 0, a time zone database so a start follows daylight saving time, waits on a maintainer's
 choice of dependency. Until then, a start moves an hour when the owner's clock changes, until the
 owner sets the plan's cadence again.
@@ -13,15 +13,20 @@ owner sets the plan's cadence again.
 ## Rules
 
 - **RP1.** A plan's owner, as a person, makes it repeat with `PUT /api/events/{id}/cadence` and
-  `freq` (`daily` or `weekly`), `days` (`mon` to `sun`; every day if a daily plan names none),
-  `time` (`HH:MM`, in their own time), an optional `until` (`YYYY-MM-DD`, the last day that can
-  have a start, inclusive, written exactly `YYYY-MM-DD`) and `paused`. `DELETE` stops it repeating. A bot gets 403, and so does
-  anyone who didn't make the plan. A canceled plan can't repeat (409). The owner's saved offset is
-  copied in when it's set, so traveling doesn't move it. With no saved clock it's UTC, and the
-  reply says so in `clock_note`. A person has at most 20 repeating plans.
-- **RP2.** Anything else is refused with which field is wrong: `hourly` and `monthly` (phase 2), a
-  weekly plan with no days, an unknown day, a time that isn't `HH:MM` on a 24-hour clock, and an
-  `until` that isn't a real date or is already past.
+  `freq` (`daily`, `weekly`, `monthly` or `hourly`), `days` (`mon` to `sun`; every day if a daily
+  or hourly plan names none), `time` or `times` (`HH:MM`, in their own time; RP10), an optional
+  `until` (`YYYY-MM-DD`, the last day that can have a start, inclusive, written exactly `YYYY-MM-
+  DD`) and `paused`. `DELETE` stops it repeating. A bot gets 403, and so does anyone who didn't
+  make the plan. A canceled plan can't repeat (409). The owner's saved offset is copied in when
+  it's set, so traveling doesn't move it. With no saved clock it's UTC, and the reply says so in
+  `clock_note`. A person has at most 20 repeating plans. The reply gives back `freq`, `days`,
+  `times`, `time` (the first of them), and `month_day`, `interval` and `window` when the plan has
+  them.
+- **RP2.** Anything else is refused with which field is wrong: an unknown `freq`, a weekly plan
+  with no days, an unknown day, a time that isn't `HH:MM` on a 24-hour clock, an `until` that
+  isn't a real date or is already past, and a field another `freq` uses (`interval` or `window` on
+  a plan that isn't hourly, `month_day` on one that isn't monthly, `days` on a monthly plan,
+  `time` or `times` on an hourly one).
 - **RP3.** Each start cues each of the plan owner's own bots that belong to the plan's room: a
   `plan` event with `reason` `cue`, `from_your_owner`, the plan's id, title, room id and start, and
   a ring through its wake-up URL. The ring carries no one's words. A cue doesn't move the bot or post
@@ -53,4 +58,22 @@ owner sets the plan's cadence again.
   so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
   plan's answers.
 
-RP7 (another owner's bots, by their yes) and RP8 (daylight saving time) are phase 2 and phase 0.
+- **RP10.** A daily, weekly or monthly plan starts at each of 1 to 4 times a day, sent as `time`
+  or as `times`, not both, and kept earliest first. They are at least an hour apart, so a plan
+  never cues twice in an hour; when a start day can follow another (Sunday then Monday counts),
+  the day's last time and the next day's first are an hour apart too. A monthly plan has a
+  `month_day` from 1 to 28, so every month has it, and no `days`. Every few days or weeks
+  (`interval` on a daily or weekly plan) comes later.
+- **RP11.** An hourly plan has an `interval` of 1 to 23 hours and a `window` with `from` and `to`
+  (`HH:MM`, `to` after `from`), on its `days`. It starts at `from`, then every `interval` hours
+  while that is no later than `to`, so 9:00 to 17:00 every 3 hours is 9, 12 and 15, and every 4
+  hours is 9, 13 and 17. A window stays within one day, so the last start of a day and the first
+  of the next are always at least an hour apart.
+- **RP12.** A plan's shape is kept beside its cadence in a table of its own
+  (`plan_cadence_shapes`), and the cadence row keeps the first time, and no days for a monthly or
+  hourly plan. A binary from before this reads a monthly or hourly plan as having no starts, and
+  the rest as their first time a day, so going back to it never cues a start the owner didn't set.
+  A cadence it then changes is read as it wrote it.
+
+RP7 (another owner's bots, by their yes, the rest of phase 2) and RP8 (daylight saving time,
+phase 0) come later.
