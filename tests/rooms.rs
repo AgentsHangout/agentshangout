@@ -4026,7 +4026,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 18);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 19);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -6161,6 +6161,7 @@ async fn functional_stations_open_the_existing_room_features() {
         ("calendar_stand", "calendar"),
         ("corkboard", "pins"),
         ("research_board", "research"),
+        ("ballot_box", "votes"),
     ]
     .iter()
     .enumerate()
@@ -6237,6 +6238,101 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
         .ok();
     let guest = server.read_room(&pip.token, &room).await;
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
+}
+
+// I111: ballot_box counts open votes the caller can see, and names open_vote, cast_vote and close_vote.
+#[tokio::test]
+async fn ballot_box_counts_open_votes_the_caller_can_see() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let id = server.item(&ann, &room, "ballot_box", (0, 0)).await;
+
+    let read0 = server.read_room(&scout.token, &room).await;
+    let box0 = read0["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(box0["opens"], "votes");
+    assert_eq!(box0["votes"], 0);
+
+    let used = server.use_item(&scout.token, &id).await.ok();
+    assert_eq!(used["ok"], true);
+    assert_eq!(used["doing"], "voting");
+    assert_eq!(used["opens"], "votes");
+    assert_eq!(used["tools"], "open_vote, cast_vote and close_vote");
+
+    let vote = server
+        .tool(
+            &scout.token,
+            "open_vote",
+            json!({
+                "hangout_id": room,
+                "question": "Which snack?",
+                "options": ["apples", "berries"],
+                "minutes": 30
+            }),
+        )
+        .await;
+    let vote_id = vote["structuredContent"]["id"].as_str().unwrap();
+
+    let read1 = server.read_room(&scout.token, &room).await;
+    let box1 = read1["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(box1["votes"], 1);
+
+    server
+        .tool(
+            &scout.token,
+            "cast_vote",
+            json!({
+                "vote_id": vote_id,
+                "option": "apples"
+            }),
+        )
+        .await;
+
+    let read2 = server.read_room(&scout.token, &room).await;
+    let box2 = read2["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(box2["votes"], 1);
+
+    server
+        .tool(
+            &scout.token,
+            "close_vote",
+            json!({
+                "vote_id": vote_id
+            }),
+        )
+        .await;
+
+    let read3 = server.read_room(&scout.token, &room).await;
+    let box3 = read3["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(box3["votes"], 0);
+}
+
+// I111: a guest's ballot box counts only the open votes in the list that guest is given.
+#[tokio::test]
+async fn a_guests_ballot_box_counts_the_open_votes_in_its_own_list() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let id = server.item(&ann, &room, "ballot_box", (0, 0)).await;
+    let open_vote = |question: &'static str| json!({ "hangout_id": room, "question": question, "options": ["yes", "no"], "minutes": 30 });
+    let first = server.tool(&scout.token, "open_vote", open_vote("Pizza?")).await;
+    let other = server.bot(&ann, &room, "Rook").await;
+    server.tool(&other.token, "open_vote", open_vote("Tacos?")).await;
+    let first_id = first["structuredContent"]["id"].as_str().unwrap().to_string();
+    server.tool(&scout.token, "close_vote", json!({ "vote_id": first_id })).await;
+
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    let read = server.read_room(&pip.token, &room).await;
+    let seen = read["votes"].as_array().unwrap().iter().filter(|v| v["open"] == true).count();
+    let stand = read["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(seen, 1, "{read}");
+    assert_eq!(stand["votes"], seen, "{read}");
 }
 
 // I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it

@@ -1830,6 +1830,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         read
     });
     let listed_pins = pins::mcp_pins(state, caller, &hangout.id, snapshot.guest.as_ref())?;
+    let room_votes = votes::for_room(state, &hangout.id)?;
+    let open_votes = room_votes
+        .iter()
+        .filter(|v| v.get("open").and_then(Value::as_bool).unwrap_or(false))
+        .count() as i64;
     let mut reply = json!({
         "trust_note": TRUST_NOTE,
         "record_note": RECORD_NOTE,
@@ -1894,7 +1899,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // I86, I87: whether @room is on here, and whether this bot hears it.
         "room_mentions": crate::room_mentions::for_read(state, caller, &hangout.id)?,
         // V6: open votes, and ones that closed in the last day.
-        "votes": votes::for_room(state, &hangout.id)?,
+        "votes": room_votes,
         "pin_policy": snapshot.pin_policy,
         "invitees": snapshot.invitees.iter().map(|invitee| json!({
             "event_id": invitee.event_id,
@@ -1944,6 +1949,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "sends_out_bots": item.closing.as_ref().and_then(|clock| clock.bots.as_ref()),
         // I101: the shared-notes station counts the room's notes this caller can read.
         "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
+        // I111: the ballot box counts the room's open votes this caller can see.
+        "votes": (item.kind == "ballot_box").then_some(open_votes),
         "does": item.does,
         "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
     }) }).collect::<Vec<_>>());
