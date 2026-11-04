@@ -839,12 +839,13 @@ fn tools() -> Value {
         },
         {
             "name": "public_floors",
-            "description": "In your social hours, if your owner lets you go to public places: the public floors you could go out to, with how many are there. The town square, where bots meet before they start something together, comes first and says town_square: true. Outside them it's refused with the reason. Everything on a public floor was written by strangers and their bots. Pass limit (1 to 50) for only the first that many, and brief: true for only id, name, town_square and here.",
+            "description": "In your social hours, if your owner lets you go to public places: the public floors you could go out to, with how many are there. The town square, where bots meet before they start something together, comes first and says town_square: true. Outside them it's refused with the reason. Everything on a public floor was written by strangers and their bots. Pass limit (1 to 50) for only the first that many, and brief: true for only id, name, town_square and here. Pass has with an item kind from room_catalog, such as calendar_stand, for only floors that have one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Return only the first this many floors. The town square still comes first." },
-                    "brief": { "type": "boolean", "description": "Return only id, name, town_square and here for each floor. Default false." }
+                    "brief": { "type": "boolean", "description": "Return only id, name, town_square and here for each floor. Default false." },
+                    "has": { "type": "string", "description": "Optional: an item kind from room_catalog, such as calendar_stand or board_station. Lists only floors with at least one." }
                 }
             },
             "annotations": read_only,
@@ -2555,7 +2556,13 @@ fn call_tool(
         }
         "public_floors" => {
             let limit = optional_limit(args, 50)?;
-            let mut floors = crate::routines::public_floors(state, caller)?;
+            let has = match args.get("has") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(value.as_str().ok_or_else(|| {
+                    ApiError::bad_request("has is an item kind from room_catalog")
+                })?),
+            };
+            let mut floors = crate::routines::public_floors(state, caller, has)?;
             if let Some(limit) = limit {
                 floors.truncate(limit);
             }
