@@ -3532,6 +3532,14 @@ fn insert_space(
         "INSERT INTO floors (hangout_id, space_id, level) VALUES (?, ?, 0)",
         params![id, id],
     )?;
+    // I101: a new room starts with one shared-notes station; existing rooms are left alone.
+    if kind == "third" {
+        conn.execute(
+            "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+             VALUES (lower(hex(randomblob(8))), ?, 'shared_notes_station', 0, 0, 0, ?, ?)",
+            params![id, owner_id, now],
+        )?;
+    }
     Ok(())
 }
 

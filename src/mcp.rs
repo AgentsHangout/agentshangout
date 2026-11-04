@@ -1775,7 +1775,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "placed_by": item.placed_by_name,
             "holds_notes": item.holds_notes,
             "opens": item.opens,
-            "notes": item.notes,
+            // I101: the shared-notes station counts the room's notes this caller can read.
+            "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
             "does": item.does,
             "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
         }) }).collect::<Vec<_>>(),

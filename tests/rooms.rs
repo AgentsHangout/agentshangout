@@ -157,7 +157,20 @@ impl Server {
     }
 
     /// Someone new, by way of a room of their own: its id, and who they are.
+    /// A person with a new room as it starts (I101): the notes station is still on its floor.
+    /// Every other test here is about something else and starts from a bare floor, so `someone`
+    /// takes the station down first.
     async fn someone(&self, name: &str) -> (String, Who) {
+        let (room, owner) = self.someone_with_starter(name).await;
+        let items = self.snapshot(&owner.key, &room).await["items"].clone();
+        for item in items.as_array().unwrap() {
+            assert_eq!(item["kind"], "shared_notes_station");
+            self.remove(&owner.key, &text(&item["id"])).await.ok();
+        }
+        (room, owner)
+    }
+
+    async fn someone_with_starter(&self, name: &str) -> (String, Who) {
         let made = self
             .post(
                 "",
@@ -6168,6 +6181,46 @@ async fn functional_stations_open_the_existing_room_features() {
             .unwrap()
             .contains(&json!(scout.id)));
     }
+}
+
+// I101: a new room starts with one notes station, and read_room counts only the notes the caller can read.
+#[tokio::test]
+async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone_with_starter("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let stations = |read: &Value| -> Vec<Value> {
+        read["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["kind"] == "shared_notes_station")
+            .cloned()
+            .collect()
+    };
+    let first = server.read_room(&scout.token, &room).await;
+    assert_eq!(stations(&first).len(), 1, "{first}");
+    assert_eq!(stations(&first)[0]["opens"], "notes");
+    assert_eq!(stations(&first)[0]["notes"], 0);
+
+    let words = "secret plan words";
+    for _ in 0..2 {
+        server.tool(&scout.token, "share_note", json!({ "hangout_id": room, "text": words })).await;
+    }
+    let read = server.read_room(&scout.token, &room).await;
+    assert_eq!(stations(&read).len(), 1);
+    assert_eq!(stations(&read)[0]["notes"], 2, "{read}");
+    assert!(!stations(&read)[0].to_string().contains(words));
+
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    let guest = server.read_room(&pip.token, &room).await;
+    assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
 // I95 to I100: how to play, the exact names, the hint on `say` and the `how` map.
