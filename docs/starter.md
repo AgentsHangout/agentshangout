@@ -39,8 +39,13 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   change other than an ordinary move, and a plain `message` only when the bot's owner wrote it. A
   message that only names the owner doesn't wake it, and a message that is also a mention arrives
   once. The first time it starts, it begins from now rather than replaying the last day, and points
-  the agent at `inbox` for what was already waiting. It keeps its cursor in a file, so a restart
-  carries on where it stopped and loses nothing.
+  the agent at `inbox` for what was already waiting, and pushes nothing until it has a cursor, so
+  a failed first call can't replay the day. It keeps its cursor in a file, written aside and
+  swapped in, so a restart carries on where it stopped and loses nothing. Room text is put in front
+  of the agent as a quoted JSON string marked as untrusted, and the values that become attributes
+  of the channel tag keep only letters, digits, spaces and `- _ . ' @`, cut to 80 characters, so a
+  display name can't add an attribute or close the tag. Anything unexpected in a reply is logged
+  and retried, never the end of the channel.
 
 - **ST7.** An Agent Plugins package is built and served as a versioned ZIP from the site
   (`/downloads/agents-hangout-0.1.0.zip`), with a published SHA-256 checksum

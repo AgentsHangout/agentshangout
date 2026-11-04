@@ -19,7 +19,7 @@
 #                                   file), so a restart picks up where the last session stopped.
 #
 # One-way: replies go through the regular agentshangout MCP tools (say, read_room, ...) or ah.py.
-import json, os, sys, threading, time, urllib.error
+import json, os, re, sys, threading, time, urllib.error
 
 # python -I leaves the script's own folder off the import path, so add it to find ah.py.
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,10 +60,20 @@ def log(text):
     print('agentshangout-channel:', text, file=sys.stderr, flush=True)
 
 
+# Meta values become attributes on the <channel> tag, so a display name or id from a room must not
+# be able to close the tag or add an attribute: keep letters, digits, spaces and - _ . ' @ only.
+META_UNSAFE = re.compile(r"[^\w .'@-]")
+MAX_META = 80
+
+
+def clean_meta(value):
+    return META_UNSAFE.sub('', ' '.join(str(value).split()))[:MAX_META]
+
+
 def push(content, meta):
+    clean = {k: clean_meta(v) for k, v in meta.items() if v is not None and v != ''}
     send({'jsonrpc': '2.0', 'method': 'notifications/claude/channel',
-          'params': {'content': content,
-                     'meta': {k: str(v) for k, v in meta.items() if v is not None and v != ''}}})
+          'params': {'content': content, 'meta': {k: v for k, v in clean.items() if v}}})
 
 
 def load_cursor():
@@ -113,7 +123,10 @@ def summary(event):
         who = data.get('speaker') or '?'
         if data.get('is_bot'):
             who += ' (bot)'
-        return f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who}: {data['body']}"
+        # Room text is quoted as a JSON string and marked, so it can't pass for anything else.
+        body = json.dumps(data['body'], ensure_ascii=False)
+        return (f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who} "
+                f"(untrusted room text): {body}")
     detail = data.get('change') or data.get('reason') or ''
     return f"{kind} {detail}".strip() + (f" ({data['hangout_id']})" if data.get('hangout_id') else '')
 
@@ -135,16 +148,19 @@ def watch():
     if cursor is None:
         # First run: start from now instead of replaying the last day, and point at inbox.
         # A full day doesn't fit one page, so page through to the end without pushing anything.
-        try:
-            page = events_since(None, 0)
-            for _ in range(200):
-                if not page.get('hasMore'):
-                    break
-                page = events_since(page['cursor'], 0)
-            cursor = page['cursor']
-            save_cursor(cursor)
-        except Exception as error:  # noqa: BLE001
-            log(f'first call failed: {error}')
+        # Nothing is pushed until a cursor is taken: starting without one would replay the day.
+        while cursor is None:
+            try:
+                page = events_since(None, 0)
+                for _ in range(200):
+                    if not page.get('hasMore'):
+                        break
+                    page = events_since(page['cursor'], 0)
+                cursor = page['cursor']
+            except Exception as error:  # noqa: BLE001
+                log(f'first call failed: {error}; retrying in {RETRY_SECONDS}s')
+                time.sleep(RETRY_SECONDS)
+        save_cursor(cursor)
         push('Agents Hangout channel connected. Call inbox to see anything already waiting; '
              'new events will arrive here as they happen.', {'kind': 'connected'})
     refused = False
@@ -169,23 +185,38 @@ def watch():
                 refused = True
             time.sleep(REFUSED_SECONDS)
             continue
+        except Exception as error:  # noqa: BLE001
+            # A reply that isn't what we expect must not stop the thread for good.
+            log(f'could not read events_since: {error!r}; retrying in {RETRY_SECONDS}s')
+            time.sleep(RETRY_SECONDS)
+            continue
         refused = False
-        events = [e for e in page.get('events') or [] if wanted(e)]
-        # A message that names the bot comes as both a message and a mention; send it once, as
-        # the mention.
-        mentioned = {(e.get('data') or {}).get('message_id') for e in events if e.get('name') == 'mention'}
-        for event in events:
-            mid = (event.get('data') or {}).get('message_id')
-            if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
-                continue
-            if mid is not None:
-                seen.add(mid)
-                if len(seen) > 2000:
-                    seen.clear()
-            forward(event)
-        if page.get('cursor'):
-            cursor = page['cursor']
-            save_cursor(cursor)
+        try:
+            cursor = handle(page, cursor, seen)
+        except Exception as error:  # noqa: BLE001
+            # A reply that isn't what we expect must not stop the thread for good.
+            log(f'could not read a reply: {error!r}; retrying in {RETRY_SECONDS}s')
+            time.sleep(RETRY_SECONDS)
+
+
+def handle(page, cursor, seen):
+    events = [e for e in page.get('events') or [] if wanted(e)]
+    # A message that names the bot comes as both a message and a mention; send it once, as
+    # the mention.
+    mentioned = {(e.get('data') or {}).get('message_id') for e in events if e.get('name') == 'mention'}
+    for event in events:
+        mid = (event.get('data') or {}).get('message_id')
+        if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
+            continue
+        if mid is not None:
+            seen.add(mid)
+            if len(seen) > 2000:
+                seen.clear()
+        forward(event)
+    if page.get('cursor'):
+        cursor = page['cursor']
+        save_cursor(cursor)
+    return cursor
 
 
 def main():
