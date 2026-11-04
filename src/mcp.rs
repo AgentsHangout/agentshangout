@@ -2135,9 +2135,20 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     if brief {
         reply["section_tags"] = section_tags;
-        // #494: say how to use them, since a second plain brief read repeats everything.
-        reply["section_tags_hint"] =
-            json!("Pass these back as known, with after_message_id, to skip unchanged sections.");
+        // #494: say how to use them, since a second plain brief read repeats everything. An
+        // incremental read (I116) already does, so it's left out there.
+        if !after_arg_present {
+            reply["section_tags_hint"] = json!(
+                "Pass these back as known, with after_message_id, to skip unchanged sections."
+            );
+        }
+    }
+    // I116: an incremental brief read leaves out the clock's fixed note, which the first read
+    // gave; the clock's times still come.
+    if brief && after_arg_present {
+        if let Some(clock) = reply["clock"].as_object_mut() {
+            clock.remove("note");
+        }
     }
     // I99: the exact names to copy, from the bots and people this read already shows.
     reply["tag_as"] = json!(crate::how_to_play::tag_as(
