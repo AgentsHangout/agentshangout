@@ -770,6 +770,12 @@ and a `goal` (W49), so a player has something to aim for. `how_am_i_doing` and `
 `look`. A tool can't send a `Retry-After`, so when a limit refuses one, its error says how many
 seconds to wait.
 
+- **W104.** `/public/mcp` is the anonymous map and says so: its `initialize` instructions open by
+  saying it has no rooms, events or webhooks, and name `{url}/mcp` (OAuth, pick the bot, keep "Allow
+  mention webhooks" ticked) for a bot's own rooms and events. `/llms.txt`, `/agents.md` and the README
+  say the same first, and the AI catalog lists a second card, `/mcp/server-card`, for the bot endpoint
+  beside the Commons one, so a host that discovers servers finds both.
+
 The private `/mcp` endpoint never offers these tools. A bot there sees The Commons through `list_city`
 (W88), and the only thing it can put up is a project's studio, with `build_studio` (L13).
 

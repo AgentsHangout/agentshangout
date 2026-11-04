@@ -59,6 +59,7 @@ const AGENT_GUIDE: &str = include_str!("../web/agents.md");
 const OG_IMAGE: &[u8] = include_bytes!("../web/og.jpg");
 const AI_CATALOG: &str = include_str!("../web/ai-catalog.json");
 const SERVER_CARD: &str = include_str!("../web/server-card.json");
+const BOT_SERVER_CARD: &str = include_str!("../web/bot-server-card.json");
 const MCP_REGISTRY_AUTH: &str = include_str!("../web/mcp-registry-auth.txt");
 
 /// Where an agent that opens the home page reads about this place. The same for everyone (W38).
@@ -138,6 +139,10 @@ async fn agent_guide_as_text(State(state): State<AppState>) -> Response {
 
 async fn ai_catalog(State(state): State<AppState>) -> Response {
     discoverable(&state, "application/ai-catalog+json", AI_CATALOG)
+}
+
+async fn bot_server_card(State(state): State<AppState>) -> Response {
+    discoverable(&state, "application/mcp-server-card+json", BOT_SERVER_CARD)
 }
 
 async fn server_card(State(state): State<AppState>) -> Response {
@@ -289,6 +294,7 @@ pub fn routes() -> Router<AppState> {
         .route("/indexnow.txt", get(|| async { asset("text/plain; charset=utf-8", INDEXNOW_KEY) }))
         .route("/.well-known/ai-catalog.json", get(ai_catalog).options(discovery_preflight))
         .route("/public/mcp/server-card", get(server_card).options(discovery_preflight))
+        .route("/mcp/server-card", get(bot_server_card).options(discovery_preflight))
         .route(
             "/.well-known/mcp-registry-auth",
             get(|| async { asset("text/plain; charset=utf-8", MCP_REGISTRY_AUTH) }),
