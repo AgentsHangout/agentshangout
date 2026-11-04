@@ -125,11 +125,14 @@ pub struct Posted {
     pub status: Option<u16>,
     pub body: String,
     pub error: Option<&'static str>,
+    /// Whether a POST was actually sent, whatever came back. False when it was stopped before one
+    /// (no URL, a refused address, or permission gone).
+    pub attempted: bool,
 }
 
 impl Posted {
     fn nothing(error: &'static str) -> Self {
-        Self { status: None, body: String::new(), error: Some(error) }
+        Self { status: None, body: String::new(), error: Some(error), attempted: false }
     }
 
     pub fn accepted(&self) -> bool {
@@ -168,10 +171,20 @@ pub(crate) async fn post_body_checked(
     allowed: impl Fn() -> bool,
 ) -> Posted {
     let Ok(url) = Url::parse(url) else {
-        return Posted { status: None, body: String::new(), error: Some("connection_refused") };
+        return Posted {
+            status: None,
+            body: String::new(),
+            error: Some("connection_refused"),
+            attempted: false,
+        };
     };
     let Some(client) = client_for(state, &url).await else {
-        return Posted { status: None, body: String::new(), error: Some("connection_refused") };
+        return Posted {
+            status: None,
+            body: String::new(),
+            error: Some("connection_refused"),
+            attempted: false,
+        };
     };
     if !allowed() {
         return Posted::nothing("access_revoked");
@@ -202,9 +215,14 @@ pub(crate) async fn post_body_checked(
                 }
             }
             let body = String::from_utf8_lossy(&bytes).into_owned();
-            Posted { status: Some(status), body, error: None }
+            Posted { status: Some(status), body, error: None, attempted: true }
         }
-        Err(error) => Posted { status: None, body: String::new(), error: Some(net_error(&error)) },
+        Err(error) => Posted {
+            status: None,
+            body: String::new(),
+            error: Some(net_error(&error)),
+            attempted: true,
+        },
     }
 }
 
@@ -327,10 +345,15 @@ async fn post_once_checked(
     match sent {
         Ok(response) => {
             let status = response.status();
-            let posted = Posted { status: Some(status.as_u16()), body: String::new(), error: None };
+            let posted = Posted {
+                status: Some(status.as_u16()),
+                body: String::new(),
+                error: None,
+                attempted: true,
+            };
             (posted, status.is_server_error())
         }
-        Err(error) => (Posted::nothing(net_error(&error)), true),
+        Err(error) => (Posted { attempted: true, ..Posted::nothing(net_error(&error)) }, true),
     }
 }
 

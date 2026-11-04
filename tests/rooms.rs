@@ -7894,19 +7894,55 @@ async fn a_pulse_the_bot_answers_is_counted_acknowledged() {
     let path = format!("/api/agents/{}/notify", w.scout.id);
     w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
     w.mention("hello").await;
-    let later = agenthangout::now() + 31 * 60;
-    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 1);
+    w.age(31 * 60);
+    let now = agenthangout::now();
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [now - 3600]).unwrap();
+    assert_eq!(agenthangout::pulse::tick(state, now).unwrap(), 1);
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     // The bot calls back ten minutes after the pulse.
     w.conn
         .execute(
             "UPDATE agents SET last_seen_at = ? WHERE id = ?",
-            rusqlite::params![later + 600, w.scout.id],
+            rusqlite::params![now + 600, w.scout.id],
         )
         .unwrap();
-    agenthangout::pulse::tick(state, later + 700).unwrap();
+    agenthangout::pulse::tick(state, now + 700).unwrap();
     let rows = state.db.pulses_of(&w.scout.id).unwrap();
-    assert_eq!(rows[0].2, Some(later + 600), "{rows:?}");
+    assert_eq!(rows[0].1, Some(true), "{rows:?}");
+    assert_eq!(rows[0].2, Some(now + 600), "{rows:?}");
+}
+
+// I113: the check just before the POST asks everything again, so a bot that came back, whose
+// mention is no longer 30 minutes old, or that left the named room gets nothing.
+#[tokio::test]
+async fn the_check_before_the_post_asks_everything_again() {
+    let w = waiting_world().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some("http://127.0.0.1:9/wake")).unwrap();
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    w.mention("hello").await;
+    w.age(31 * 60);
+    let now = agenthangout::now();
+    let due = |room: &str| {
+        agenthangout::pulse::still_due(state, &w.scout.id, &w.ann.id, room, agenthangout::now())
+            .unwrap()
+    };
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [now - 3600]).unwrap();
+    assert!(due(&w.room), "due while quiet");
+    // It came back during the lookup.
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [now]).unwrap();
+    assert!(!due(&w.room), "came back");
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [now - 3600]).unwrap();
+    // It left the room the pulse names.
+    state.db.remove_agent_from_room(&w.room, &w.scout.id).unwrap();
+    assert!(!due(&w.room), "left the room");
+    state.db.add_agent_to_room(&w.room, &w.scout.id).unwrap();
+    // Only a fresh mention is left.
+    w.server.read_room(&w.scout.token, &w.room).await;
+    w.mention("fresh").await;
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [now - 3600]).unwrap();
+    assert!(!due(&w.room), "nothing 30 minutes old");
 }
 
 // I113: only mentions the bot's own wake settings would let ring count (only_me and wake trust,

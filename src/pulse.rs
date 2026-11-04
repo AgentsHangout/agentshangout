@@ -55,6 +55,27 @@ fn trusted_unread(state: &AppState, agent_id: &str) -> ApiResult<Vec<(i64, Strin
     Ok(kept)
 }
 
+/// I113: everything that made the pulse due, asked again just before the POST, since the DNS
+/// lookup can take a while: still allowed, still quiet, a mention it would let ring still unread
+/// for over 30 minutes, and still in the room the pulse names. A bot that came back, read the room
+/// or left it in the meantime gets nothing.
+pub fn still_due(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    room: &str,
+    at: i64,
+) -> ApiResult<bool> {
+    let Some(bot) = state.db.agent(agent_id, at)? else {
+        return Ok(false);
+    };
+    Ok(may_pulse(state, agent_id, owner_id, at)?
+        && bot.last_seen_at.is_none_or(|seen| at - seen >= QUIET_SECS)
+        && trusted_unread(state, agent_id)?.iter().any(|(_, _, made)| *made <= at - QUIET_SECS)
+        && (room.is_empty()
+            || state.db.hangouts_for_agent(agent_id, at)?.iter().any(|r| r.id == room)))
+}
+
 fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<bool> {
     let id = &bot.agent_id;
     if bot.last_seen_at.is_some_and(|seen| now - seen < QUIET_SECS)
@@ -92,23 +113,17 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
     };
     let owner = bot.owner_id.clone();
     let check = id.clone();
+    let room_now = notice.hangout_id.clone();
     crate::notify::send_if(
         state,
         id,
         &notice,
-        move |state, _| {
-            // Still allowed, and still something unread it would let ring: reading the room, or a
-            // change to its wake settings, in the meantime ends it.
-            let at = crate::now();
-            may_pulse(state, &check, &owner, at).unwrap_or(false)
-                && trusted_unread(state, &check).is_ok_and(|unread| !unread.is_empty())
-        },
+        move |state, _| still_due(state, &check, &owner, &room_now, crate::now()).unwrap_or(false),
         move |state, _, posted| {
             let accepted = posted.accepted();
             let _ = state.db.note_pulse_answer(pulse_id, accepted);
             // Counted only when a POST was made, not when it was stopped before one.
-            let made = posted.status.is_some() || !matches!(posted.error, Some("no_url" | "trust"));
-            if made {
+            if posted.attempted {
                 state.usage.note_line(crate::now(), "pulses_sent", 1);
             }
             if accepted {
