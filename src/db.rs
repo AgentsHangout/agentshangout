@@ -10557,8 +10557,19 @@ impl Db {
             let mut paid = tx.prepare(
                 "SELECT 1 FROM credit_paid WHERE kind = ? AND source_id = ? AND person_id = ?",
             )?;
+            // HC25: whether a first gathering may be written is decided here, inside the same
+            // transaction that writes it, so two settles that picked different first gatherings
+            // can't both pay: only one `first:` credit is ever written per person.
+            let mut gathering_paid = tx
+                .prepare("SELECT 1 FROM credit_paid WHERE kind = 'gathering' AND person_id = ?")?
+                .exists([person_id])?;
             for (city_id, source) in sorted {
                 if paid.exists(params![source.kind.word(), source.source, person_id])? {
+                    continue;
+                }
+                let is_first = source.kind == CreditKind::Gathering
+                    && source.source.starts_with(FIRST_GATHERING);
+                if is_first && gathering_paid {
                     continue;
                 }
                 let day = source.at.div_euclid(crate::ops::DAY_SECS);
@@ -10577,6 +10588,9 @@ impl Db {
                     now
                 ])?;
                 *so_far += amount;
+                if is_first {
+                    gathering_paid = true;
+                }
             }
         }
         tx.commit()
@@ -15702,6 +15716,78 @@ mod tests {
         plan(&db, "elsewhere", "sq2", 6 * CREDIT_DAY, "confirmed");
         let paid = credits_of(&db, "p2", 7 * CREDIT_DAY);
         assert_eq!((paid.balance, paid.gatherings), (20, 1));
+    }
+
+    // HC25: two settles that each picked a different first gathering (one saw the plan before it
+    // was confirmed, the other after) must pay one first in all, not one each. The check and the
+    // write share a transaction, so it holds on two connections racing too.
+    #[test]
+    fn two_settles_pick_different_first_gatherings_but_only_one_first_is_ever_paid() {
+        fn gathering(source: &str, at: i64) -> (String, CreditSource) {
+            (
+                "c1".to_string(),
+                CreditSource {
+                    kind: CreditKind::Gathering,
+                    source: format!("{FIRST_GATHERING}{source}"),
+                    at,
+                },
+            )
+        }
+        fn firsts(db: &Db) -> i64 {
+            db.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM credit_paid WHERE person_id = 'p1' AND source_id LIKE 'first:%'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+        let worth = |_| 20;
+
+        // One after the other: the second settle has already chosen a different gathering.
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.settle_credits("p1", &[gathering("a", 2 * CREDIT_DAY)], worth, 100, 3 * CREDIT_DAY)
+            .unwrap();
+        db.settle_credits("p1", &[gathering("b", 2 * CREDIT_DAY + 5)], worth, 100, 3 * CREDIT_DAY)
+            .unwrap();
+        assert_eq!((firsts(&db), db.credit_totals("p1", 3).unwrap().paid), (1, 20));
+
+        // At the same moment, on two connections to one file.
+        let path = std::env::temp_dir().join(format!("hc25-race-{}.db", std::process::id()));
+        let path_str = path.to_str().unwrap().to_string();
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
+        let first = Db::open(&path_str).unwrap();
+        two_houses(&first);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let (path_str, barrier) = (path_str.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let db = Db::open(&path_str).unwrap();
+                    barrier.wait();
+                    db.settle_credits(
+                        "p1",
+                        &[gathering(name, 2 * CREDIT_DAY)],
+                        |_| 20,
+                        100,
+                        3 * CREDIT_DAY,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!((firsts(&first), first.credit_totals("p1", 3).unwrap().paid), (1, 20));
+        drop(first);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
     }
 
     // HC2: F17 holds for credits too
