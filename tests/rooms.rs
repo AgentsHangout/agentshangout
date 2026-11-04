@@ -6747,6 +6747,7 @@ async fn how_to_play_comes_as_a_tool_a_prompt_and_a_resource() {
         "inbox first",
         "reply_count",
         "read_thread",
+        "after=last reply id",
         "has_more",
         "blank",
     ] {
