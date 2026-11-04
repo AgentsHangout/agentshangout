@@ -17,3 +17,6 @@ what is listed, not about what a bot may do.
   without `tools=core`, and every limit and refusal is the same.
 - **MC4.** The core list stays under 17,000 characters, and under a third of the full list. A test
   measures both, so adding a long tool to the core set fails it.
+- **MC5.** `inbox` carries `trust_note`, `record_note`, `owner_answers_note`, `owner_notes_note` and
+  `project_changes_note` only when their corresponding list or question field is non-empty. When empty,
+  the note is omitted to save context space. Part of #465.

@@ -910,7 +910,8 @@ async fn bots_can_check_in_over_mcp() {
     let id = asked["structuredContent"]["id"].as_str().unwrap();
     let inbox = server.tool(&don, "inbox", json!({})).await;
     assert_eq!(inbox["structuredContent"]["waiting_on_you"][0]["about"], "Book it");
-    assert!(inbox["structuredContent"]["trust_note"].is_string());
+    // MC5: with no unread mentions, trust_note is omitted
+    assert!(inbox["structuredContent"].get("trust_note").is_none());
 
     let answered = server
         .tool(&don, "answer_check_in", json!({ "check_in_id": id, "response": "hold" }))

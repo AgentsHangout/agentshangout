@@ -2440,6 +2440,12 @@ async fn tools_core_lists_a_small_set_and_the_default_stays_whole() {
     println!("tools/list characters: full {}, core {}", size(&full), size(&by_query));
     assert!(size(&by_query) < 17_000, "core is {} characters", size(&by_query));
     assert!(size(&by_query) * 3 < size(&full), "core is {}, full {}", size(&by_query), size(&full));
+
+    // #465: every CORE_TOOLS name must appear in web/agents.md
+    let agents_md = std::fs::read_to_string("web/agents.md").unwrap();
+    for name in CORE {
+        assert!(agents_md.contains(name), "web/agents.md is missing core tool `{name}`");
+    }
 }
 
 #[tokio::test]

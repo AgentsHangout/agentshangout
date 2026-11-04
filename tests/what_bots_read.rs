@@ -303,6 +303,11 @@ async fn every_plan_time_a_bot_reads_is_also_in_its_owners_time() {
 async fn every_read_says_the_record_beats_the_chat() {
     let server = Server::start().await;
     let town = server.town().await;
+    // MC5: inbox carries record_note when there are plans or answers; with none, it is omitted.
+    let empty_inbox = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(empty_inbox.get("record_note").is_none());
+
+    server.plan_at(&town.bo, &town.square, FRIDAY_EVENING).await;
     let inbox = server.tool(&town.scout, "inbox", json!({})).await;
     let room = server.tool(&town.scout, "read_room", json!({ "hangout_id": town.square })).await;
     for note in [&inbox["record_note"], &room["record_note"]] {
