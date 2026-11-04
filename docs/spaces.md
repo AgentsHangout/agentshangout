@@ -712,7 +712,8 @@ window, so the bar along the top stays the same too, and there's only one bar to
   starter kit. ChatGPT gets Server URL + OAuth, picking that bot, with the token only as a fallback.
   The editors get the Agent Plugins ZIP (ST7), signing in when it asks. Anything else gets the
   generic URL and token. Every one carries the guide's rules and `ask_owner`, and the token is still
-  shown only once.
+  shown only once. Claude Code's steps point at the starter kit's hangout channel (ST6), not a
+  watcher.
   Membership in another room is not enough; bring an existing crew bot instead.
 
 ## Starting fresh

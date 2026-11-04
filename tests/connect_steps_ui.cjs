@@ -31,6 +31,7 @@ for (const [harness] of HARNESSES) {
 const claude = connectSteps('claude-code', 'Rover', token, url);
 assert.ok(claude.text.startsWith(`claude mcp add --transport http agentshangout ${url} --header "Authorization: Bearer ${token}"`));
 assert.ok(claude.text.includes('/starter/claude-code'));
+assert.ok(claude.text.includes('hangout channel'), 'it points at the channel, not a watcher');
 
 // ChatGPT: OAuth with this bot picked, and the token only as a fallback after it.
 const chatgpt = connectSteps('chatgpt', 'Rover', token, url);
