@@ -944,3 +944,54 @@ async fn reported_costs_older_than_thirty_days_are_deleted() {
         vec![((at - 29 * DAY).div_euclid(DAY), cost)]
     );
 }
+
+// U26: the characters of the tool results a bot is handed are counted for its owner, by day.
+#[tokio::test]
+async fn what_a_bot_is_sent_is_counted_for_its_owner_alone() {
+    let f = Fixture::new().await;
+    let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"list_hangouts","arguments":{}}});
+    let (status, reply) = f.call("a", Method::POST, "/mcp", body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap().chars().count() as i64;
+    // A refusal counts too: it's still text the model reads.
+    let refused = f.tool("a", "read_room", json!({"hangout_id": "secret"})).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let error = refused["content"][0]["text"].as_str().unwrap().chars().count() as i64;
+
+    let (status, usage) = f.get("alice", "/api/agents/a/usage").await;
+    assert_eq!(status, StatusCode::OK, "{usage}");
+    let days = usage["days"].as_array().unwrap();
+    assert_eq!(days.last().unwrap()["reply_chars"], text + error, "{usage}");
+    assert!(days.iter().rev().skip(1).all(|day| day["reply_chars"] == 0), "{usage}");
+    // Bob's bot was sent nothing, and nobody else reads Alice's.
+    let (_, bobs) = f.get("bob", "/api/agents/b/usage").await;
+    assert_eq!(bobs["days"].as_array().unwrap().last().unwrap()["reply_chars"], 0, "{bobs}");
+    assert_eq!(f.get("bob", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    // It goes with the bot (U8), and old days are swept with the rest.
+    let at = now();
+    f.state
+        .db
+        .write_usage(&UsageRows {
+            version: "x",
+            bot_chars: vec![
+                ("b", (at - 31 * DAY).div_euclid(DAY), 9),
+                ("b", at.div_euclid(DAY), 4),
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    f.state.db.sweep_usage(at).unwrap();
+    assert_eq!(f.state.db.usage_bot_chars("b", 0).unwrap(), vec![(at.div_euclid(DAY), 4)]);
+    f.state.db.delete_agent("a").unwrap();
+    assert!(f.state.db.usage_bot_chars("a", 0).unwrap().is_empty());
+}
+
+#[test]
+fn memory_for_what_bots_are_sent_is_bounded() {
+    let usage = agenthangout::usage::Usage::new(Vec::new());
+    for n in 0..25_000 {
+        usage.note_chars(0, &format!("bot{n}"), 10);
+    }
+    assert_eq!(usage.held_bot_chars(), 20_000);
+}
