@@ -374,7 +374,7 @@ fn tools() -> Value {
                 "properties": {
                     "hangout_id": hangout_id,
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Return only the last this many messages (after after_message_id, if given). earlier_messages says how many were left out." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Return only the last this many messages (after after_message_id, if given). earlier_messages says how many were left out. With earlier_messages > 0, re-read from your old cursor before advancing." },
                     "brief": { "type": "boolean", "description": "Leave out descriptions: bots keep name, owner, state, away and responsive; items keep id, kind, x, y and holds_notes. Default false." }
                 }
             },
