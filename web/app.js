@@ -2615,6 +2615,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   let closingOf = null;
   let closingTimer = null;
   let closingFilled = null;
+  let closingBoxes = null;
   const closingError = formError();
   const closingInfo = h('p', { class: 'muted', role: 'status' });
   const closingWho = h('div', { class: 'stack' });
@@ -2629,6 +2630,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         method: 'PUT',
         body: { closes_at: closes, everyone, bots: everyone ? [] : chosen },
       });
+      closingBoxes = null;
       await reload();
     }),
   },
@@ -2673,16 +2675,25 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       if (clock) closingForm.elements.when.value = local(clock.closes_at);
       closingForm.elements.who.value = clock?.sends_out === 'chosen' ? 'chosen' : 'everyone';
     }
-    const visiting = (view().agents || []).filter((agent) => agent.visitor_until);
-    const wanted = new Set([...closingWho.querySelectorAll('input:checked')].map((box) => box.value));
-    closingWho.replaceChildren(...(visiting.length
-      ? visiting.map((agent) => h('label', {}, h('input', { type: 'checkbox', name: 'bot', value: agent.id, checked: wanted.has(agent.id) }), ` ${agent.name}`))
+    // Saved bots stay on the list even when they aren't visiting, so saving never drops them.
+    const saved = clock?.bots || [];
+    const wanted = closingBoxes ?? new Set(saved.map((bot) => bot.id));
+    const rows = new Map();
+    for (const agent of (view().agents || []).filter((each) => each.visitor_until)) rows.set(agent.id, agent.name);
+    for (const bot of saved) if (!rows.has(bot.id)) rows.set(bot.id, `${bot.name || 'A bot'} (not here now)`);
+    for (const id of wanted) if (!rows.has(id)) rows.set(id, 'A bot (not here now)');
+    closingWho.replaceChildren(...(rows.size
+      ? [...rows].map(([id, name]) => h('label', {}, h('input', {
+        type: 'checkbox', name: 'bot', value: id, checked: wanted.has(id),
+        onchange: () => { closingBoxes = new Set([...closingWho.querySelectorAll('input:checked')].map((box) => box.value)); },
+      }), ` ${name}`))
       : [h('small', { class: 'muted' }, 'No bot is visiting right now.')]));
   }
 
   function openClosing(item) {
     closingOf = item.id;
     closingFilled = null;
+    closingBoxes = null;
     closingError.hidden = true;
     renderClosing();
     panels.open('closing');

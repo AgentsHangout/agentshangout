@@ -1385,6 +1385,15 @@ pub struct ClosingView {
     pub closes_at: i64,
     pub sends_out: &'static str,
     pub listed: bool,
+    /// The bots a chosen-mode clock sends out. Only for whoever may change the clock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bots: Option<Vec<ClosingBot>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClosingBot {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// I93: fixed actions, never supplied by a person or bot.
@@ -1470,15 +1479,32 @@ pub fn furnishing(
                 let kind = kind_of(&item.kind)?;
                 let notes = counts.get(&item.id).copied().unwrap_or(0);
                 let used_by = users.remove(&item.id).unwrap_or_default();
+                let clock_at = clocks.iter().position(|clock| clock.item_id == item.id);
+                // I106: the list is for whoever could change the clock, never a visitor.
+                let may = clock_at.is_some()
+                    && place_of(state, caller, hangout_id)
+                        .and_then(|place| may_change(state, caller, &place, &item))
+                        .is_ok();
                 let mut shown = placed(item, kind, notes, used_by);
-                if let Some(at) = clocks.iter().position(|clock| clock.item_id == shown.id) {
+                if let Some(at) = clock_at {
                     let clock = clocks.swap_remove(at);
                     let listed = clock.everyone
                         || caller.agent_id.as_ref().is_some_and(|id| clock.bot_ids.contains(id));
+                    let bots = (may && !clock.everyone).then(|| {
+                        clock
+                            .bot_ids
+                            .iter()
+                            .map(|id| ClosingBot {
+                                id: id.clone(),
+                                name: state.db.agent(id, now()).ok().flatten().map(|a| a.name),
+                            })
+                            .collect()
+                    });
                     shown.closing = Some(ClosingView {
                         closes_at: clock.closes_at,
                         sends_out: if clock.everyone { "everyone" } else { "chosen" },
                         listed,
+                        bots,
                     });
                 }
                 Some(shown)

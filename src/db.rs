@@ -13241,7 +13241,12 @@ impl Db {
     ) -> rusqlite::Result<Vec<(String, Option<String>)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT who, agent_id FROM floor_visits WHERE hangout_id = ?1 AND until > ?2",
+            "SELECT v.who, v.agent_id FROM floor_visits v
+             WHERE v.hangout_id = ?1 AND v.until > ?2
+               AND NOT EXISTS (SELECT 1 FROM members m
+                               WHERE m.hangout_id = v.hangout_id AND m.person_id = v.person_id)
+               AND NOT EXISTS (SELECT 1 FROM room_agents r
+                               WHERE r.hangout_id = v.hangout_id AND r.agent_id = v.agent_id)",
         )?;
         let rows =
             stmt.query_map(params![hangout_id, now], |row| Ok((row.get(0)?, row.get(1)?)))?;

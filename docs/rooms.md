@@ -665,6 +665,11 @@ from what the server already sends it. Part of #444. These rules are tested in `
   reason "the closing clock rang"), the minute look says the goodbye (S71), and the time is taken
   off the clock so it rings once. Nothing here is a schedule or a floor setting: removing the item
   removes its time. Part of #459.
+  The saved bot list is shown (`closing.bots`, and `sends_out_bots` in `read_room`) only to
+  someone who may change the clock, so the page can show it again and saving never drops a bot that
+  isn't visiting just now; a visitor never gets the ids. The ring skips members, and any bot that
+  belongs to the room, even one with a walk-in row.
+
 - **I94.** When `use_item` is refused with 409 "that can't be used", the message goes on to say what
   can be: `Usable here: <id> (<kind>), ...` for the items in that room with a `does` (I31), at most
   10, or `Nothing in this room can be used.` These are items `read_room` already shows a bot in

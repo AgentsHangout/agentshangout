@@ -1780,6 +1780,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "seconds_left": item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)),
             "sends_out": item.closing.as_ref().map(|clock| clock.sends_out),
             "you_are_listed": item.closing.as_ref().map(|clock| clock.listed),
+            "sends_out_bots": item.closing.as_ref().and_then(|clock| clock.bots.as_ref()),
             // I101: the shared-notes station counts the room's notes this caller can read.
             "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
             "does": item.does,
