@@ -189,8 +189,9 @@ pub fn how(present: &[&str]) -> Value {
     Value::Object(map)
 }
 
-/// I100: a hint when `text` writes the first word of a present member's longer name where the
-/// whole name is needed. `names` are only the members of the room the caller posts in.
+/// I100: a hint when `text` tags the first word of a present member's longer name (`@Mac` for
+/// `Mac Smith`) where the whole name is needed. `names` are only the members of the room the caller
+/// posts in.
 pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) -> Option<String> {
     let text = &without_links(text);
     for name in names {
@@ -201,13 +202,29 @@ pub fn untagged_hint<'a>(text: &str, names: impl Iterator<Item = &'a String>) ->
         else {
             continue;
         };
-        if first.chars().count() >= 3 && crate::doorbell::mentions(text, first) {
+        if first.chars().count() >= 3 && tagged(text, first) {
             return Some(format!(
                 "you wrote {first} but their name is {name}, so they won't be woken; write @{name}"
             ));
         }
     }
     None
+}
+
+/// I100: whether `text` writes `word` as a tag: `@` then the word, in any case, and not inside an
+/// email address or a longer word. A bare word isn't a try at a tag, and neither is one run on into
+/// `-`, `/` or `'`, such as `@AgentsHangout-Agent`, `@AgentsHangout/agentshangout` or `@Mac's`.
+fn tagged(text: &str, word: &str) -> bool {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let text = text.to_lowercase();
+    let tag = format!("@{}", word.to_lowercase());
+    text.match_indices(&tag).any(|(start, _)| {
+        let after = &text[start + tag.len()..];
+        !text[..start].ends_with(is_word)
+            && !after.starts_with(|c: char| {
+                is_word(c) || matches!(c, '@' | '-' | '/' | '\'' | '\u{2019}')
+            })
+    })
 }
 
 /// I100: `text` with every `http://` or `https://` span, up to the next whitespace, blanked, so a
