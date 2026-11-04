@@ -1689,6 +1689,7 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
  DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
+CREATE TABLE IF NOT EXISTS waiting_pulse_off (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -8270,6 +8271,45 @@ impl Db {
             &self.conn(),
             "SELECT 1 FROM mentions WHERE message_id = ? AND agent_id = ?",
             params![message_id, agent_id],
+        )
+    }
+
+    /// I107: an owner turned the waiting pulse off for this bot.
+    pub fn waiting_pulse_enabled(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        Ok(!exists(
+            &self.conn(),
+            "SELECT 1 FROM waiting_pulse_off WHERE agent_id = ?",
+            params![agent_id],
+        )?)
+    }
+
+    pub fn set_waiting_pulse(&self, agent_id: &str, on: bool) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        if on {
+            conn.execute("DELETE FROM waiting_pulse_off WHERE agent_id = ?", params![agent_id])?;
+        } else {
+            conn.execute(
+                "INSERT OR IGNORE INTO waiting_pulse_off (agent_id) VALUES (?)",
+                params![agent_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// I107: how many unread mentions were made at or before `before`, and the room of the
+    /// oldest. One indexed query, no message text, and no rows loaded.
+    pub fn stale_unread_mentions(
+        &self,
+        agent_id: &str,
+        before: i64,
+    ) -> rusqlite::Result<(i64, Option<String>)> {
+        self.conn().query_row(
+            "SELECT COUNT(*), (SELECT hangout_id FROM mentions WHERE agent_id = ?1
+                                AND read_at IS NULL AND created_at <= ?2
+                                ORDER BY created_at, id LIMIT 1)
+             FROM mentions WHERE agent_id = ?1 AND read_at IS NULL AND created_at <= ?2",
+            params![agent_id, before],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
     }
 

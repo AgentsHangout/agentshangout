@@ -1647,6 +1647,18 @@ pub fn doorbell_check(state: &AppState, caller: &Caller) -> ApiResult<bool> {
     Ok(paused)
 }
 
+/// I107: only the bot's owner turns its waiting pulse on or off.
+pub fn set_waiting_pulse(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    on: bool,
+) -> ApiResult<()> {
+    own_agent(state, caller, agent_id, "change a bot's waiting pulse")?;
+    state.db.set_waiting_pulse(agent_id, on)?;
+    Ok(())
+}
+
 pub fn set_doorbell_paused(
     state: &AppState,
     caller: &Caller,
@@ -1815,7 +1827,8 @@ pub fn agent_notify(
         })
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "url": url, "auth": auth, "only_me": only_me,
-        "trusted_bots": trusted_bots, "available_bots": available_bots, "decisions": decisions }))
+        "trusted_bots": trusted_bots, "available_bots": available_bots, "decisions": decisions,
+        "waiting_pulse": state.db.waiting_pulse_enabled(agent_id)? }))
 }
 
 /// E31: what the owner reads. The message itself is never in here.
