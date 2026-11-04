@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 146] = [
+pub static CATALOG: [Kind; 147] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -358,6 +358,7 @@ pub static CATALOG: [Kind; 146] = [
         .used("looking at pins", 1),
     piece("research_board", "Research board", WORK, STARTER, 2, feels("inspired"), (2, 1))
         .used("reading research work", 1),
+    piece("ballot_box", "Ballot box", WORK, STARTER, 2, feels("drive"), (1, 1)).used("voting", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1405,6 +1406,7 @@ fn opens(kind: &str) -> Option<&'static str> {
         "calendar_stand" => Some("calendar"),
         "corkboard" => Some("pins"),
         "research_board" => Some("research"),
+        "ballot_box" => Some("votes"),
         _ => None,
     }
 }
@@ -2050,6 +2052,7 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
             "calendar" => "list_calendar, propose_hangout and rsvp",
             "pins" => "read_room, pin and unpin",
             "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
+            "votes" => "open_vote, cast_vote and close_vote",
             _ => unreachable!(),
         };
         reply["opens"] = json!(action);

@@ -1082,6 +1082,19 @@ function paintResearchBoard(g, x, y) {
   r(g, '#f4f1e8', x - 2, y - 14, 10, 2);
 }
 
+// A wooden ballot box with a brass latch and paper slot for room votes (I111).
+function paintBallotBox(g, x, y) {
+  r(g, SHADOW, x - 7, y - 2, 14, 2);
+  r(g, '#6b4628', x - 5, y - 6, 10, 4);
+  r(g, '#8a5c37', x - 6, y - 7, 12, 2);
+  r(g, '#52341b', x - 6, y - 17, 12, 10);
+  r(g, '#6b4628', x - 5, y - 16, 10, 8);
+  r(g, '#8a5c37', x - 7, y - 19, 14, 3);
+  r(g, '#2b180d', x - 3, y - 19, 6, 1);
+  r(g, '#f4f1e8', x - 2, y - 21, 4, 3);
+  r(g, '#d4af37', x - 1, y - 13, 2, 3);
+}
+
 function paintEasel(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
   r(g, '#6b4628', x - 9, y - 13, 2, 11);
@@ -4170,6 +4183,7 @@ const ITEMS = {
   calendar_stand: { paint: paintCalendarStand, side: edgeOf(17, '#f4f1e8', '#6b4628'), rise: 26 },
   corkboard: { paint: paintCorkboard, side: edgeOf(25, '#d89a6c', '#4a3120'), rise: 31 },
   research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
+  ballot_box: { paint: paintBallotBox, side: edgeOf(16, '#8a5c37', '#6b4628'), rise: 21 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },
   armchair: {
@@ -4409,6 +4423,7 @@ const USES = {
   calendar_stand: { spots: 1, pose: 'stand', hands: true },
   corkboard: { spots: 1, pose: 'stand', hands: true },
   research_board: { spots: 1, pose: 'stand', hands: true },
+  ballot_box: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },
