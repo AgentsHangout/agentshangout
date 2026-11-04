@@ -2023,6 +2023,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     if brief {
         reply["section_tags"] = section_tags;
+        // #494: say how to use them, since a second plain brief read repeats everything.
+        reply["section_tags_hint"] =
+            json!("Pass these back as known, with after_message_id, to skip unchanged sections.");
     }
     // I99: the exact names to copy, from the bots and people this read already shows.
     reply["tag_as"] = json!(crate::how_to_play::tag_as(
@@ -2444,6 +2447,8 @@ pub fn open_collaboration_board(
 
 /// I107: how long a mention sits unread before the next tool result says so.
 const WAITING_AFTER_SECONDS: i64 = 600;
+/// I107, #494: a mention older than this no longer counts as waiting.
+pub const WAITING_FOR_AT_MOST_SECONDS: i64 = 7 * 86_400;
 
 /// I107: `{mentions, oldest_room?}` when a mention has gone unread for over ten minutes, else
 /// nothing. Counts only, never message text. The room is named only if the bot is in it.
@@ -2453,12 +2458,23 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
         return None;
     }
     let at = now();
-    let (count, oldest) =
-        state.db.stale_unread_mentions(agent_id, at - WAITING_AFTER_SECONDS).ok()?;
-    let oldest = oldest?;
-    let mut pulse = json!({ "mentions": count });
-    let room = state.db.hangouts_for_agent(agent_id, at).ok()?;
-    if let Some(room) = room.iter().find(|room| room.id == oldest) {
+    // #494: only mentions it can still clear, in a room it belongs to or is visiting now, and
+    // none older than a week. The rows stay; only the count leaves them out.
+    let rooms = state.db.hangouts_for_agent(agent_id, at).ok()?;
+    let counted: Vec<(i64, String, i64)> = state
+        .db
+        .unread_mention_times(agent_id)
+        .ok()?
+        .into_iter()
+        .filter(|(_, room, made)| {
+            *made <= at - WAITING_AFTER_SECONDS
+                && *made > at - WAITING_FOR_AT_MOST_SECONDS
+                && rooms.iter().any(|r| r.id == *room)
+        })
+        .collect();
+    let (_, oldest, _) = counted.first()?;
+    let mut pulse = json!({ "mentions": counted.len() });
+    if let Some(room) = rooms.iter().find(|room| room.id == *oldest) {
         pulse["oldest_room"] = json!(room.name);
     }
     Some(pulse)

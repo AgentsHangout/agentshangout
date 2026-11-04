@@ -45,9 +45,17 @@ fn may_pulse(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiR
 /// I113: the unread mentions that could have woken this bot, by the same checks a ring uses
 /// (`delivery_allowed`: only_me, its wake trust, still in that room): message id, room and when,
 /// oldest first. A stranger's mention the bot's settings would never let ring starts no pulse.
-fn trusted_unread(state: &AppState, agent_id: &str) -> ApiResult<Vec<(i64, String, i64)>> {
+fn trusted_unread(
+    state: &AppState,
+    agent_id: &str,
+    now: i64,
+) -> ApiResult<Vec<(i64, String, i64)>> {
     let mut kept = Vec::new();
     for (message_id, room, at) in state.db.unread_mention_times(agent_id)? {
+        // #494: a mention over a week old no longer counts, as for I107.
+        if at <= now - crate::mcp::WAITING_FOR_AT_MOST_SECONDS {
+            continue;
+        }
         if crate::bot_trust::delivery_allowed(state, agent_id, &[message_id])? {
             kept.push((message_id, room, at));
         }
@@ -71,7 +79,7 @@ pub fn still_due(
     };
     Ok(may_pulse(state, agent_id, owner_id, at)?
         && bot.last_seen_at.is_none_or(|seen| at - seen >= QUIET_SECS)
-        && trusted_unread(state, agent_id)?.iter().any(|(_, _, made)| *made <= at - QUIET_SECS)
+        && trusted_unread(state, agent_id, at)?.iter().any(|(_, _, made)| *made <= at - QUIET_SECS)
         && (room.is_empty()
             || state.db.hangouts_for_agent(agent_id, at)?.iter().any(|r| r.id == room)))
 }
@@ -83,7 +91,7 @@ fn pulse_one(state: &AppState, bot: &crate::db::PushBot, now: i64) -> ApiResult<
     {
         return Ok(false);
     }
-    let unread = trusted_unread(state, id)?;
+    let unread = trusted_unread(state, id, now)?;
     let stale: Vec<&(i64, String, i64)> =
         unread.iter().filter(|(_, _, at)| *at <= now - QUIET_SECS).collect();
     let (Some(oldest), Some(newest)) = (stale.first(), unread.iter().map(|(_, _, at)| *at).max())

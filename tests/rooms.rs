@@ -8054,3 +8054,39 @@ async fn no_pulse_for_a_bot_that_left_the_room_or_a_house_bot() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(pulses(&got).is_empty());
 }
+
+// I107, #494: waiting counts only mentions the bot can still clear: in a room it belongs to or is
+// visiting now, and no older than a week. The mention rows themselves stay.
+#[tokio::test]
+async fn waiting_leaves_out_mentions_the_bot_cannot_clear() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(601);
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+
+    // Out of the room, it can't read it, so the mention doesn't count.
+    let state = &w.server.state;
+    state.db.remove_agent_from_room(&w.room, &w.scout.id).unwrap();
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null(), "a room it left");
+    state.db.add_agent_to_room(&w.room, &w.scout.id).unwrap();
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1, "back in, it counts");
+
+    // Over a week old, it drops out of the count, but inbox still lists it.
+    w.age(7 * 86_400);
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null(), "over a week old");
+    let inbox = w.server.tool(&w.scout.token, "inbox", json!({})).await;
+    assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 1);
+}
+
+// I91, #494: a brief read says how to use its section_tags.
+#[tokio::test]
+async fn a_brief_read_says_to_pass_section_tags_back() {
+    let w = waiting_world().await;
+    let args = json!({ "hangout_id": w.room, "brief": true });
+    let brief = w.server.tool(&w.scout.token, "read_room", args).await["structuredContent"].clone();
+    assert!(brief["section_tags"].is_object(), "{brief}");
+    let hint = brief["section_tags_hint"].as_str().unwrap();
+    assert!(hint.contains("known") && hint.contains("after_message_id"), "{hint}");
+    let full = w.server.read_room(&w.scout.token, &w.room).await;
+    assert!(full.get("section_tags_hint").is_none(), "only on a brief read");
+}
