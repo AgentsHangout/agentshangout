@@ -978,6 +978,7 @@ enum Parsed {
     Road(Span),
     Place(Kind, i64, i64),
     Bulldoze(i64, i64),
+    Relocate((i64, i64), (i64, i64)),
     Walk(i64, i64),
     Emote(&'static str),
 }
@@ -1028,6 +1029,14 @@ fn parse_move(mv: &Move) -> Result<Parsed, &'static str> {
             let (x, y) = point()?;
             Ok(Parsed::Bulldoze(x, y))
         }
+        "relocate" => {
+            only(&["x", "y", "x2", "y2"])?;
+            let (x, y) = point()?;
+            let (Some(x2), Some(y2)) = (mv.x2, mv.y2) else {
+                return Err("relocate needs x2 and y2, where it goes");
+            };
+            Ok(Parsed::Relocate((x, y), (x2, y2)))
+        }
         "walk" => {
             only(&["x", "y"])?;
             let (x, y) = point()?;
@@ -1042,7 +1051,7 @@ fn parse_move(mv: &Move) -> Result<Parsed, &'static str> {
                 .ok_or("that isn't an emote: wave, cheer, think, sleep or dance")?;
             Ok(Parsed::Emote(word))
         }
-        _ => Err("that isn't a move: road, place, bulldoze, walk or emote"),
+        _ => Err("that isn't a move: road, place, bulldoze, relocate, walk or emote"),
     }
 }
 
@@ -1132,6 +1141,8 @@ fn apply_move(
         return Err(world_is_busy(now));
     }
     let builder = player.id as u64;
+    // W103: where a moved place stood and where it went.
+    let mut relocated = None;
 
     let (changes, cost, skipped) = match parsed {
         Parsed::Walk(x, y) => {
@@ -1220,6 +1231,17 @@ fn apply_move(
                 plan_parts(planned)?
             }
         }
+        Parsed::Relocate(from, to) => {
+            // W103: moving a place is for a person's own hands, with god mode on (W79).
+            if player.kind() != PlayerKind::Person || !god {
+                return Err(ApiError::forbidden("only someone with god mode on can move a place"));
+            }
+            let tiles = tx.all_tiles(&world.id)?;
+            let (at, to, plan) =
+                world::plan_relocate(land, &tiles, *from, *to).map_err(ApiError::bad_request)?;
+            relocated = Some((at, to));
+            (plan.changes, plan.cost, plan.skipped)
+        }
     };
     // W76, W95: nothing costs anything with god mode on, a person's or their bots'.
     let cost = if god || unlimited { 0 } else { cost };
@@ -1245,6 +1267,11 @@ fn apply_move(
             }
         }
         Parsed::Emote(word) => tx.set_emote(&world.id, player.id, word)?,
+        Parsed::Relocate(..) => {
+            if let Some((from, to)) = relocated {
+                tx.relocate_place(&world.id, from, to, &changes, now)?;
+            }
+        }
         _ => tx.write_changes(&world.id, &changes, now)?,
     }
     // W61: the wait starts with a person's first house, and bulldozing it doesn't start it again.

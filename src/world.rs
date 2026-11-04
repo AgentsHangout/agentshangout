@@ -1556,6 +1556,54 @@ pub fn plan_god_bulldoze_tile(land: &Land, tiles: &Tiles, player: u64, x: i64, y
     clear_tile(land, tiles, player, (x, y), &allowed, "the highway stays where it is")
 }
 
+/// W103: god mode moves a place, from any of its tiles, to open land with a road beside it. It stays
+/// its builder's, so the plan takes it off its tile and puts the same place up at `to`, as W55 and
+/// W91 would place it there with its old tiles already gone. Returns where it stood and where it goes.
+pub fn plan_relocate(
+    land: &Land,
+    tiles: &Tiles,
+    (x, y): (i64, i64),
+    (x2, y2): (i64, i64),
+) -> Result<(Pos, Pos, Plan), &'static str> {
+    let at = land.locate(x, y).ok_or(OFF_MAP)?;
+    let Some(&tile) = tiles.get(&at) else {
+        return Err("there is no place there to move");
+    };
+    if !tile.kind.is_building() {
+        return Err("only a place can be moved");
+    }
+    // W91: a big place's other tiles are pieces of it, so it moves from the tile it's stored on.
+    let from = if tile.level == 0 {
+        at
+    } else {
+        [(1, 0), (0, 1), (1, 1)]
+            .iter()
+            .filter_map(|&(dx, dy)| Some((at.0.checked_sub(dx)?, at.1.checked_sub(dy)?)))
+            .find(|pos| tiles.get(pos).is_some_and(|t| t.kind == tile.kind && t.level == 0))
+            .ok_or("only a place can be moved")?
+    };
+    let Some(player) = tile.player else {
+        return Err("only a place can be moved");
+    };
+    let mut rest = tiles.clone();
+    for cell in footprint(tile.kind, from) {
+        rest.remove(&cell);
+    }
+    let placed = plan_place(land, &rest, player, tile.kind, x2, y2)?;
+    let to = placed.changes.first().map(Change::pos).ok_or(OFF_MAP)?;
+    if to == from {
+        return Err("it is already there");
+    }
+    let off = if land.at(from) == Some(Ground::Forest) {
+        Change::Set(from, Tile { kind: Kind::Cleared, level: 0, player: Some(player) })
+    } else {
+        Change::Remove(from)
+    };
+    let mut changes = vec![off];
+    changes.extend(placed.changes);
+    Ok((from, to, Plan { changes, cost: 0, skipped: 0 }))
+}
+
 /// What taking a tile down does, if `allowed` says it may come down.
 fn clear_tile(
     land: &Land,

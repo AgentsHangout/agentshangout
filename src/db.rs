@@ -11878,6 +11878,58 @@ impl WorldTx<'_> {
         q_write_changes(&self.tx, world_id, changes, now, "bulldoze")
     }
 
+    /// W103: a place moved by god mode. Its rooms (S33), its outside (E30) and when it went up go
+    /// with it, so nothing about it changes but its tile. A room or outside left on the new tile by
+    /// a building that once stood there is cleared first, as S33 says it would never open again.
+    pub fn relocate_place(
+        &self,
+        world_id: &str,
+        from: Pos,
+        to: Pos,
+        changes: &[Change],
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let was: Option<(String, i64, i64)> = self
+            .tx
+            .query_row(
+                "SELECT kind, player_id, built_at FROM world_every_place
+                  WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+                params![world_id, from.0, from.1],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        self.tx.execute(
+            "DELETE FROM space_plots WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+            params![world_id, to.0, to.1],
+        )?;
+        self.tx.execute(
+            "UPDATE space_plots SET x = ?4, y = ?5 WHERE world_id = ?1 AND x = ?2 AND y = ?3",
+            params![world_id, from.0, from.1, to.0, to.1],
+        )?;
+        if let Some((kind, player, _)) = &was {
+            self.tx.execute(
+                "DELETE FROM place_outsides
+                  WHERE world_id = ?1 AND player_id = ?2 AND kind = ?3 AND x = ?4 AND y = ?5",
+                params![world_id, player, kind, to.0, to.1],
+            )?;
+            self.tx.execute(
+                "UPDATE place_outsides SET x = ?6, y = ?7
+                  WHERE world_id = ?1 AND player_id = ?2 AND kind = ?3 AND x = ?4 AND y = ?5",
+                params![world_id, player, kind, from.0, from.1, to.0, to.1],
+            )?;
+        }
+        q_write_changes(&self.tx, world_id, changes, now, "relocate")?;
+        if let Some((_, _, built_at)) = was {
+            for table in ["world_buildings", "world_squares", "world_more_places"] {
+                self.tx.execute(
+                    &format!("UPDATE {table} SET built_at = ?4 WHERE world_id = ?1 AND x = ?2 AND y = ?3"),
+                    params![world_id, to.0, to.1, built_at],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn write_changes_because(
         &self,
         world_id: &str,
