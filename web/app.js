@@ -8208,7 +8208,7 @@ async function worldView(id, { home = false } = {}) {
       rows = out.length ? out.map((row) => {
         const at = Array.isArray(row[8]) ? row[8] : [row[1], row[2]];
         const placeName = nameAt(at[0], at[1]) || 'a place';
-        const isMine = Boolean(world.myBots?.has(row[0]) && (!me?.name || row[7] === me.name));
+        const isMine = Boolean(me?.name && row[7] === me.name && world.myBots?.has(row[0]));
         return h('div', { class: `row${isMine ? ' mine' : ''}` },
           h('span', { class: 'row-main' },
             h('strong', {}, row[0], isMine ? h('span', { class: 'badge', style: 'margin-left:6px;font-size:10px;color:#f2b632' }, 'Yours') : null),

@@ -88,27 +88,32 @@ function makeMockContext() {
   assert.notEqual(mockCarNotMine.shadowColor, '#f2b632', 'drawCar must not set gold shadow when not mine');
 }
 
-// 3. Test owner matching in world.js: another owner's bot with the same name is never marked
+// 3. Test owner matching in world.js: another owner's bot with the same name is never marked,
+// and a cleared ownerName (e.g. sign-out or account switch) marks nothing.
 {
   assert.ok(
-    worldSource.includes('Boolean(this.myBots?.has(e.name) && (!this.ownerName || e.owner === this.ownerName))'),
-    'world.js must check owner name when highlighting entities'
+    worldSource.includes('Boolean(this.ownerName && e.owner === this.ownerName && this.myBots?.has(e.name))'),
+    'world.js must require explicit owner match when highlighting entities'
   );
   assert.ok(
-    worldSource.includes('if (this.myBots?.has(p.name) && (!this.ownerName || p.owner === this.ownerName)) there.mine = true;'),
-    'world.js must check owner name when marking building roof indicators'
+    worldSource.includes('if (this.ownerName && p.owner === this.ownerName && this.myBots?.has(p.name)) there.mine = true;'),
+    'world.js must require explicit owner match when marking building roof indicators'
   );
 
   const worldMock = {
     myBots: new Set(['Scout']),
     ownerName: 'Justin',
   };
-  const isMineBot = (e) => Boolean(worldMock.myBots?.has(e.name) && (!worldMock.ownerName || e.owner === worldMock.ownerName));
+  const isMineBot = (e, ownerName = worldMock.ownerName) => Boolean(ownerName && e.owner === ownerName && worldMock.myBots?.has(e.name));
 
   assert.equal(isMineBot({ name: 'Scout', owner: 'Justin' }), true, "viewer's Scout is marked");
   assert.equal(isMineBot({ name: 'Scout', owner: 'SomeoneElse' }), false, "stranger's Scout with identical name is never marked");
-  assert.equal(isMineBot({ name: 'Scout', owner: '' }), false, "ownerless Scout is never marked when viewer has ownerName");
+  assert.equal(isMineBot({ name: 'Scout', owner: '' }), false, "ownerless Scout is never marked");
   assert.equal(isMineBot({ name: 'Stranger', owner: 'Justin' }), false, "unowned bot name is never marked");
+
+  // When ownerName is cleared (signed out / account switch), nothing is marked:
+  assert.equal(isMineBot({ name: 'Scout', owner: 'Justin' }, null), false, "cleared ownerName marks nothing");
+  assert.equal(isMineBot({ name: 'Scout', owner: 'Justin' }, ''), false, "empty ownerName marks nothing");
 }
 
 // 4. Test Bots panel renderBots in app.js
@@ -252,6 +257,18 @@ function makeMockContext() {
   assert.ok(!strangerRow.class.includes('mine'), 'Stranger row must not have mine class');
   const strangerBadge = allNodes(strangerRow, (n) => n.children?.includes('Yours'));
   assert.equal(strangerBadge.length, 0, 'Stranger row must not have Yours badge');
+
+  // Test 4.4: When signed out (me = null), no row has Yours badge or mine class
+  appContext.me = null;
+  appContext.renderBots();
+  const signedOutBody = appContext.getBotsBody();
+  const signedOutRows = signedOutBody.children.slice(1);
+  assert.equal(signedOutRows.length, 3);
+  for (const r of signedOutRows) {
+    assert.ok(!r.class?.includes('mine'), 'signed out user must not see mine class');
+    const b = allNodes(r, (n) => n.children?.includes('Yours'));
+    assert.equal(b.length, 0, 'signed out user must not see Yours badge');
+  }
 }
 
 console.log('tests/my_bots_ui.cjs: all tests passed!');

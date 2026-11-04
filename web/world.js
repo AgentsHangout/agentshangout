@@ -6754,7 +6754,7 @@ export class World {
         case 'player':
         case 'person':
         case 'visitor': {
-          const isMine = Boolean(this.myBots?.has(e.name) && (!this.ownerName || e.owner === this.ownerName));
+          const isMine = Boolean(this.ownerName && e.owner === this.ownerName && this.myBots?.has(e.name));
           // Someone on a ride is drawn as their car, facing the way they're going.
           r4 = e.driving
             ? drawCar(bg, { dx: e.dx, dy: e.dy, heading: FACE_HEADING[e.face] ?? 0, color: e.ride.color }, night, isMine)
@@ -6779,7 +6779,7 @@ export class World {
       const key = `${p.place[0]},${p.place[1]}`;
       const there = inside.get(key) || { x: p.place[0], y: p.place[1], count: 0, mine: false };
       there.count += 1;
-      if (this.myBots?.has(p.name) && (!this.ownerName || p.owner === this.ownerName)) there.mine = true;
+      if (this.ownerName && p.owner === this.ownerName && this.myBots?.has(p.name)) there.mine = true;
       inside.set(key, there);
     }
     for (const there of inside.values()) {
