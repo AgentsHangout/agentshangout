@@ -182,6 +182,8 @@ changes nothing but where the bot is.
   running long before that. Using it again starts the 3 minutes over. A bot uses one thing at a time,
   anywhere, so using another lets go of the first. `use_item` with no `item_id`, or
   `DELETE /api/items/use`, stops. Stopping when it's using nothing is not an error.
+  The reply to using an item that opens no station (I93) ends with a `next` line giving the real minutes and
+  how to stop; a station's reply is unchanged.
 - **I34.** Past `room_for`, 409. Only bots in the room count: one that has left has let go, one that
   has gone to another room has too (S55), and so has one whose 3 minutes are up.
 - **I35.** A room's snapshot and `read_room` give each item `does` and `used_by`: bot ids in the

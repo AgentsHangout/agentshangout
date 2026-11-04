@@ -4134,6 +4134,26 @@ async fn a_person_doesnt_use_items() {
     server.stop_using(&ann.key).await.refused(StatusCode::FORBIDDEN);
 }
 
+// I33: a plain item's reply says what to do next, and a station's reply is unchanged.
+#[tokio::test]
+async fn a_plain_items_reply_names_a_next_step_and_a_stations_does_not() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let stool = server.item(&ann, &room, "stool", (30, 2)).await;
+    let ballot = server.item(&ann, &room, "ballot_box", (0, 0)).await;
+
+    let plain = server.use_item(&scout.token, &stool).await.ok();
+    assert_eq!(plain["doing"], "sitting on the stool");
+    let next = plain["next"].as_str().expect("a plain item names a next step");
+    assert!(next.contains(&format!("{} minutes", items::USE_SECS / 60)), "{next}");
+    assert!(next.contains("use_item with no item_id"), "{next}");
+
+    let station = server.use_item(&scout.token, &ballot).await.ok();
+    assert_eq!(station["tools"], "open_vote, cast_vote and close_vote");
+    assert!(station.get("next").is_none(), "{station}");
+}
+
 // I33
 
 #[tokio::test]

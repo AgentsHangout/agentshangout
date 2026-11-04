@@ -2057,6 +2057,13 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
         };
         reply["opens"] = json!(action);
         reply["tools"] = json!(tools);
+    } else {
+        // I33: a plain item has no tools to name, so say how long it lasts and how to stop.
+        reply["next"] = json!(format!(
+            "You're {} for up to {} minutes, then it ends by itself. Call use_item with no item_id to stop, or use another item to switch.",
+            kind.does.unwrap_or("using it"),
+            USE_SECS / 60
+        ));
     }
     Ok(reply)
 }
