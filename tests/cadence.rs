@@ -433,3 +433,34 @@ async fn a_cue_for_a_plan_canceled_before_it_sends_doesnt_ring() {
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     assert_eq!(hits.load(Ordering::SeqCst), 1, "no ring for a canceled plan");
 }
+
+// RP4: a cadence counts starts from 30 seconds before it was set. Set just before 9:00, or within
+// 30 seconds after, that day's 9:00 is a start and, ticked the next morning, is missed; set later,
+// only the next day's is. Each case is set over HTTP, then dated as if set at that time of day.
+#[tokio::test]
+async fn a_cadence_counts_starts_from_30_seconds_before_it_was_set() {
+    let nine = tomorrow_at(now(), 9 * 3600);
+    for (set_at, want) in [
+        (nine - 10, vec!["cued", "missed"]),
+        (nine + 30, vec!["cued", "missed"]),
+        (nine + 31, vec!["cued"]),
+        (nine + 40, vec!["cued"]),
+    ] {
+        let s = Server::start().await;
+        let ann = s.owner("Ann").await;
+        let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+        let plan = s.plan(&ann).await;
+        let path = format!("/api/events/{plan}/cadence");
+        let before = now();
+        let daily = json!({ "freq": "daily", "time": "09:00" });
+        assert_eq!(s.request(&ann.key, Method::PUT, &path, daily).await.0, StatusCode::OK);
+        let mut cadence = s.state.db.cadence(&plan).unwrap().unwrap();
+        assert!((before - 30..=now() - 30).contains(&cadence.since), "set now, less 30 seconds");
+        cadence.since = set_at - 30;
+        s.state.db.set_cadence(&cadence).unwrap();
+        cadence::tick(&s.state, nine + DAY + 300).unwrap();
+        let mut got = s.outcomes(&rover.id);
+        got.sort();
+        assert_eq!(got, want, "set at 9:00 {:+} seconds", set_at - nine);
+    }
+}
