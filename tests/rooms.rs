@@ -6775,43 +6775,25 @@ async fn threads_limited_incremental_read_retains_active_thread() {
     let z_id = said_z["structuredContent"]["message_id"].as_i64().unwrap();
     assert!(z_id > y_id);
 
-    // 5. Successive limited incremental reads:
-    // First poll with after_message_id = a_id, limit: 1 returns oldest active conversation Y (activity y_id)
-    let read_y = server
+    // 5. Calling read_room with after_message_id = a_id and limit: 1 returns active root A (newest activity)
+    let read_lim = server
         .tool(
             &scout.token,
             "read_room",
             json!({ "hangout_id": room, "after_message_id": a_id, "limit": 1 }),
         )
         .await;
-    let msgs_y = read_y["structuredContent"]["messages"].as_array().unwrap();
-    assert_eq!(msgs_y.len(), 1, "first poll returns Y: {read_y}");
-    assert_eq!(msgs_y[0]["id"], y_id);
-    let cursor_y = read_y["structuredContent"]["last_message_id"].as_i64().unwrap();
-    assert_eq!(cursor_y, y_id, "cursor advances to Y: {read_y}");
+    let msgs = read_lim["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1, "active root A returned: {read_lim}");
+    assert_eq!(msgs[0]["id"], a_id, "Root A returned because its reply Z is newest: {read_lim}");
+    assert_eq!(msgs[0]["reply_count"], 1);
+    assert_eq!(read_lim["structuredContent"]["earlier_messages"], 1);
+    let cursor = read_lim["structuredContent"]["last_message_id"].as_i64().unwrap();
+    assert_eq!(cursor, z_id, "last_message_id reflects seen reply Z: {read_lim}");
 
-    // Second poll with after_message_id = cursor_y, limit: 1 returns thread A (activity z_id)
-    let read_a = server
-        .tool(
-            &scout.token,
-            "read_room",
-            json!({ "hangout_id": room, "after_message_id": cursor_y, "limit": 1 }),
-        )
+    // 6. Next poll after cursor returns no duplicate messages
+    let read_next = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": cursor }))
         .await;
-    let msgs_a = read_a["structuredContent"]["messages"].as_array().unwrap();
-    assert_eq!(msgs_a.len(), 1, "second poll returns thread A: {read_a}");
-    assert_eq!(msgs_a[0]["id"], a_id);
-    assert_eq!(msgs_a[0]["reply_count"], 1);
-    let cursor_a = read_a["structuredContent"]["last_message_id"].as_i64().unwrap();
-    assert_eq!(cursor_a, z_id, "cursor advances to reply Z: {read_a}");
-
-    // Third poll with after_message_id = cursor_a returns empty (all caught up)
-    let read_empty = server
-        .tool(
-            &scout.token,
-            "read_room",
-            json!({ "hangout_id": room, "after_message_id": cursor_a }),
-        )
-        .await;
-    assert_eq!(read_empty["structuredContent"]["messages"], json!([]));
+    assert_eq!(read_next["structuredContent"]["messages"], json!([]));
 }

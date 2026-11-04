@@ -1715,47 +1715,42 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     }
 
-    let thread_activity = |root_id: i64| -> i64 {
-        snapshot
-            .messages
-            .iter()
-            .filter(|m| m.thread_root == Some(root_id) || m.reply_to == Some(root_id))
-            .map(|m| m.id)
-            .max()
-            .unwrap_or(root_id)
-            .max(root_id)
+    let conversation_activity = |msg: &crate::db::Message| -> i64 {
+        if msg.reply_to.is_some() {
+            msg.id
+        } else {
+            snapshot
+                .messages
+                .iter()
+                .filter(|m| m.thread_root == Some(msg.id) || m.reply_to == Some(msg.id))
+                .map(|m| m.id)
+                .max()
+                .unwrap_or(msg.id)
+                .max(msg.id)
+        }
     };
 
     let mut newer: Vec<&crate::db::Message> =
-        all_roots.iter().filter(|message| thread_activity(message.id) > after).collect();
-    newer.sort_by_key(|message| thread_activity(message.id));
+        all_roots.iter().filter(|message| conversation_activity(message) > after).collect();
+    newer.sort_by_key(|message| conversation_activity(message));
 
     let limit = optional_limit(args, 200)?;
     let brief = args["brief"].as_bool().unwrap_or(false);
-    let (roots, kept) = if after > 0 {
-        if let Some(lim) = limit {
-            let count = lim.min(newer.len());
-            let taken: Vec<&crate::db::Message> = newer.into_iter().take(count).collect();
-            (taken, 0)
-        } else {
-            (newer, 0)
-        }
-    } else {
-        let kept = limit.map_or(0, |lim| newer.len().saturating_sub(lim));
-        let taken: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
-        (taken, kept)
-    };
-    let last_message_id = roots.iter().map(|m| thread_activity(m.id)).max().unwrap_or(after);
-    let root_ids: Vec<i64> = roots.iter().map(|m| m.id).collect();
+    let kept = limit.map_or(0, |lim| newer.len().saturating_sub(lim));
+    let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
+    let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
+    let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
     let messages: Vec<Value> = roots
         .into_iter()
         .map(|message| {
             let mut line = message_json(message);
-            if let Some((count, last_at)) = summaries.get(&message.id) {
-                if *count > 0 {
-                    line["reply_count"] = json!(count);
-                    line["last_reply_at"] = json!(iso(*last_at));
+            if message.reply_to.is_none() {
+                if let Some((count, last_at)) = summaries.get(&message.id) {
+                    if *count > 0 {
+                        line["reply_count"] = json!(count);
+                        line["last_reply_at"] = json!(iso(*last_at));
+                    }
                 }
             }
             line

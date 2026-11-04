@@ -7767,6 +7767,33 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     assert!(ids.contains(&b_id), "post-arrival reply B IS in read_room: {read}");
     assert!(ids.contains(&c_id), "post-arrival reply C IS in read_room: {read}");
 
+    // Under Rule I91, a limited read (limit: 1) after pre_id returns the last message C (with earlier_messages: 1)
+    let poll_lim = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": porch, "after_message_id": pre_id, "limit": 1 }),
+        )
+        .await;
+    let msgs_lim = poll_lim["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs_lim.len(), 1, "poll_lim returned 1 message: {poll_lim}");
+    assert_eq!(msgs_lim[0]["id"], c_id, "poll_lim returns newest reply C: {poll_lim}");
+    assert_eq!(poll_lim["structuredContent"]["earlier_messages"], 1);
+    assert_eq!(poll_lim["structuredContent"]["last_message_id"], c_id);
+
+    // Reading incrementally after reply B returns reply C
+    let poll_after_b = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": porch, "after_message_id": b_id, "limit": 1 }),
+        )
+        .await;
+    let msgs_b = poll_after_b["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs_b.len(), 1);
+    assert_eq!(msgs_b[0]["id"], c_id);
+    assert_eq!(poll_after_b["structuredContent"]["last_message_id"], c_id);
+
     // 6. Scout calls read_thread addressed by root A, reply B, or reply C:
     // All three canonicalize to root A, with root text null and returning visible replies B and C
     for addressed in [b_id, c_id, pre_id] {
