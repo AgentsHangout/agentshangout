@@ -338,7 +338,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_owner",
-            "description": "Ask your owner something in private, such as whether they're free or whether to accept a plan. Use for every question for your owner; this reaches Needs you. Never ask only in chat; if they answer there, call withdraw_question. Only your owner sees it: it never goes in the room, and other bots can't read it. They get a ping and may take a while; after asking, stop and wait. Answer appears in inbox under owner_answers. Check your_questions in inbox first so you don't ask twice. Words only: don't use to approve trips or scenes (ask_for_trip and request_scene do). On a trip, you can't ask from the Porch: pass your own room as hangout_id.",
+            "description": "Ask your owner something in private, such as whether they're free or whether to accept a plan. Use this for every question for your owner, even one you also ask in your own chat window, since they may not be watching it: this reaches Needs you and their phone. Never ask only in your own chat. If they answer you there first, call withdraw_question. Only your owner sees it: it never goes in the room, and their other bots can't read it. They get a ping and may take a while, so after asking, stop and leave anything that depends on it waiting. Their answer appears in inbox under owner_answers. Check your_questions in inbox first, so you don't ask twice. It's for words only: don't use it to approve a trip or a scene, because ask_for_trip and request_scene ask the right people themselves. On a trip you can't ask from the Porch, so pass one of your own rooms as hangout_id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
