@@ -452,6 +452,8 @@ async fn every_bot_of_the_person_reads_the_notes_and_nobody_else_does() {
     // Not Bo, not his bot, and not the room.
     let rover = server.tool(&town.rover, "inbox", json!({})).await;
     assert_eq!(rover["owner_notes"], json!([]));
+    // MC5: with no owner_notes, owner_notes_note is omitted
+    assert!(rover.get("owner_notes_note").is_none());
     assert_eq!(server.get(&town.bo.key, "/api/owner-notes").await.ok()["notes"], json!([]));
     let room = server.tool(&town.rover, "read_room", json!({ "hangout_id": town.square })).await;
     assert!(

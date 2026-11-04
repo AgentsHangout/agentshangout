@@ -146,6 +146,13 @@ impl Server {
         token
     }
 
+    async fn bot_with_id(&self, owner: &Who, room: &str, name: &str) -> (String, String) {
+        let caller =
+            self.state.authenticate(&agenthangout::auth::hash_secret(&owner.key)).unwrap().unwrap();
+        let (agent, token) = support::legacy_bot(&self.state, &caller.person_id, room, name);
+        (agent.id, token)
+    }
+
     async fn save_clock(&self, token: &str, time_zone: &str, minutes: i64) -> Reply {
         self.put(
             token,
@@ -303,6 +310,11 @@ async fn every_plan_time_a_bot_reads_is_also_in_its_owners_time() {
 async fn every_read_says_the_record_beats_the_chat() {
     let server = Server::start().await;
     let town = server.town().await;
+    // MC5: inbox carries record_note when there are plans or answers; with none, it is omitted.
+    let empty_inbox = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(empty_inbox.get("record_note").is_none());
+
+    server.plan_at(&town.bo, &town.square, FRIDAY_EVENING).await;
     let inbox = server.tool(&town.scout, "inbox", json!({})).await;
     let room = server.tool(&town.scout, "read_room", json!({ "hangout_id": town.square })).await;
     for note in [&inbox["record_note"], &room["record_note"]] {
@@ -497,4 +509,95 @@ async fn read_room_says_when_a_bot_is_thinking_and_inbox_does_not() {
     let scout = read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Scout").unwrap();
     assert_eq!(scout["thinking"]["phase"], "thinking", "{read}");
     assert!(text(&scout["thinking"]["until"]).ends_with('Z'), "{scout}");
+}
+
+// MC5
+#[tokio::test]
+async fn mc5_inbox_guidance_notes_present_only_with_relevant_fields() {
+    let server = Server::start().await;
+    let town = server.town().await;
+
+    // 1. Empty inbox: trust_note is always present; record_note, owner_answers_note, owner_notes_note,
+    // and project_changes_note are omitted when their triggers are empty.
+    let empty = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(empty["trust_note"].is_string(), "trust_note is always sent in inbox");
+    assert!(empty.get("record_note").is_none(), "{empty}");
+    assert!(empty.get("owner_answers_note").is_none(), "{empty}");
+    assert!(empty.get("owner_notes_note").is_none(), "{empty}");
+    assert!(empty.get("project_changes_note").is_none(), "{empty}");
+
+    // 2. record_note present when there's an incoming check-in in waiting_on_you.
+    let don = server.bot(&town.bo, &town.square, "Don").await;
+    let asked = server.tool(&town.scout, "check_in", json!({ "about": "Check lunch" })).await;
+    let check_in_id = text(&asked["id"]);
+    let don_inbox = server.tool(&don, "inbox", json!({})).await;
+    assert_eq!(don_inbox["waiting_on_you"][0]["about"], "Check lunch");
+    assert!(don_inbox["record_note"].is_string(), "record_note present on check-in");
+
+    // 3. record_note present on answered check-in with third-party note.
+    server
+        .tool(
+            &don,
+            "answer_check_in",
+            json!({
+                "check_in_id": check_in_id,
+                "response": "hold",
+                "note": "Please move lunch to noon."
+            }),
+        )
+        .await;
+    let scout_inbox = server.tool(&town.scout, "inbox", json!({})).await;
+    assert_eq!(scout_inbox["your_check_ins"][0]["status"], "hold");
+    assert_eq!(scout_inbox["your_check_ins"][0]["note"], "Please move lunch to noon.");
+    assert!(scout_inbox["record_note"].is_string(), "record_note present on check-in answer");
+
+    // 4. RSVPed plan in plans_soon triggers record_note with competing trigger lists empty.
+    let isolated = Server::start().await;
+    let iso_town = isolated.town().await;
+    let tomorrow = now() + DAY;
+    let soon = isolated.plan_at(&iso_town.bo, &iso_town.square, tomorrow).await;
+    isolated
+        .post(&iso_town.ann.key, &format!("/api/events/{soon}/rsvp"), json!({ "response": "yes" }))
+        .await
+        .ok();
+    let iso_inbox = isolated.tool(&iso_town.scout, "inbox", json!({})).await;
+    assert_eq!(iso_inbox["plans_soon"][0]["id"], soon.as_str());
+    assert!(iso_inbox["plans_to_answer"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["your_check_ins"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["waiting_on_you"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["owner_answers"].as_array().unwrap().is_empty());
+    assert!(iso_inbox["record_note"].is_string(), "record_note present from plans_soon alone");
+
+    // 5. project_changes_note both ways.
+    let started = server
+        .tool(
+            &town.scout,
+            "start_project",
+            json!({
+                "name": "Circuit Shop",
+                "purpose": "Building electronics and circuits for the community.",
+            }),
+        )
+        .await;
+    let project_id = text(&started["project_id"]);
+    let before_proposal = server.tool(&town.scout, "inbox", json!({})).await;
+    assert!(before_proposal.get("project_changes_note").is_none());
+
+    let (proposer_id, _) = server.bot_with_id(&town.bo, &town.square, "Proposer").await;
+    let change = json!({
+        "id": "proposal-test-1",
+        "project_id": project_id,
+        "agent_id": proposer_id,
+        "reason": "New offer",
+        "action": "furnish_room",
+        "arguments": { "template": "study" }
+    });
+    server.state.db.propose_project_change(&change, now()).unwrap();
+
+    let after_proposal = server.tool(&town.scout, "inbox", json!({})).await;
+    assert_eq!(after_proposal["project_changes"].as_array().unwrap().len(), 1);
+    assert!(
+        after_proposal["project_changes_note"].is_string(),
+        "project_changes_note present when proposed"
+    );
 }

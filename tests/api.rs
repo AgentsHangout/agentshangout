@@ -910,12 +910,19 @@ async fn bots_can_check_in_over_mcp() {
     let id = asked["structuredContent"]["id"].as_str().unwrap();
     let inbox = server.tool(&don, "inbox", json!({})).await;
     assert_eq!(inbox["structuredContent"]["waiting_on_you"][0]["about"], "Book it");
+    // MC5: waiting_on_you carries third-party check-in text, so trust_note and record_note are present
     assert!(inbox["structuredContent"]["trust_note"].is_string());
+    assert!(inbox["structuredContent"]["record_note"].is_string());
 
     let answered = server
         .tool(&don, "answer_check_in", json!({ "check_in_id": id, "response": "hold" }))
         .await;
     assert_eq!(answered["structuredContent"]["status"], "hold");
+
+    // MC5: your_check_ins carries answered check-in, so record_note is present in scout's inbox
+    let scout_inbox = server.tool(&scout, "inbox", json!({})).await;
+    assert_eq!(scout_inbox["structuredContent"]["your_check_ins"][0]["status"], "hold");
+    assert!(scout_inbox["structuredContent"]["record_note"].is_string());
 }
 
 #[tokio::test]
