@@ -3210,7 +3210,10 @@ function repeatPanel(event, you, bots) {
   const path = `/api/events/${event.id}/cadence`;
   const summary = h('summary', {}, 'Repeat');
   const body = h('div', { class: 'repeat-body' });
-  const panel = h('details', { class: 'repeat', hidden: true }, summary, body);
+  // Read again each time it's opened, so a change made elsewhere shows without reading on every
+  // room reload (see repeatPanelFor).
+  const load = () => api(path).then((read) => { data = read; panel.hidden = false; paint(); }).catch(() => {});
+  const panel = h('details', { class: 'repeat', hidden: true, ontoggle: () => { if (panel.open) load(); } }, summary, body);
   const error = formError();
   const fail = (failure) => { error.textContent = failure.message; error.hidden = false; };
   const field = (label, input) => h('label', { class: 'field' }, h('span', {}, label), input);
@@ -3245,12 +3248,14 @@ function repeatPanel(event, you, bots) {
       if (!cadence) { panel.hidden = true; return; }
       checks.length = 0;
       const boxes = bots.map((bot) => {
-        const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let ${bot.name} come` });
+        // RP7: a yes lets this plan wake a bot already in the room. It doesn't move it or let it in.
+        const box = h('input', { type: 'checkbox', checked: data.your_bots.includes(bot.id), 'aria-label': `Let this plan wake ${bot.name}` });
         box.onchange = send;
         checks.push({ bot, box });
-        return h('label', { class: 'check' }, box, ` Let my bot ${bot.name} come`);
+        return h('label', { class: 'check' }, box, ` Let this plan wake ${bot.name}`);
       });
-      body.replaceChildren(...boxes, error);
+      const note = h('p', { class: 'muted' }, 'Each time it starts. Your bot still keeps its Work hours and only-me.');
+      body.replaceChildren(...boxes, note, error);
       return;
     }
     const kind = h('select', { name: 'kind', 'aria-label': 'How often' },
@@ -3316,7 +3321,20 @@ function repeatPanel(event, you, bots) {
       error);
   };
 
-  api(path).then((read) => { data = read; panel.hidden = false; paint(); }).catch(() => {});
+  load();
+  return panel;
+}
+
+// The room reloads every 30 seconds and on most changes, and each reload draws every plan card
+// again. A plan keeps the one Repeat panel it had, so an open panel stays open with what the owner
+// typed, and nothing is read again until it's opened. A new panel is made only when what it shows
+// for changes: the plan's status, or which of your bots are in the room. `cache` is a Map.
+function repeatPanelFor(cache, event, you, bots) {
+  const key = [event.status, you, ...bots.map((bot) => bot.id)].join('|');
+  const kept = cache.get(event.id);
+  if (kept && kept.key === key) return kept.panel;
+  const panel = repeatPanel(event, you, bots);
+  cache.set(event.id, { key, panel });
   return panel;
 }
 
@@ -3872,6 +3890,8 @@ async function roomView(id) {
     return h('div', { class: 'plan-list' }, rows.length ? h('ul', { class: 'room-list' }, rows) : null, form, error);
   }
 
+  const repeatPanels = new Map();
+
   function eventCard(event) {
     const mine = event.rsvps.find((rsvp) => rsvp.person_id === snapshot.you.person_id);
     const confirmed = event.status === 'confirmed';
@@ -3905,7 +3925,7 @@ async function roomView(id) {
           : `Proposed by ${event.proposer}: needs ${event.min_yes} yes`),
         h('div', { class: 'rsvps' }, responses, invited),
         planList(event),
-        snapshot.guest ? null : repeatPanel(event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
+        snapshot.guest ? null : repeatPanelFor(repeatPanels, event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
         h('div', { class: 'event-actions' },
           ['yes', 'maybe', 'no'].map((response) => h('button', {
             type: 'button',
@@ -3927,6 +3947,9 @@ async function roomView(id) {
   }
 
   function renderCalendar() {
+    // Plans no longer listed let go of their Repeat panels.
+    const listed = new Set(snapshot.events.map((event) => event.id));
+    [...repeatPanels.keys()].filter((id) => !listed.has(id)).forEach((id) => repeatPanels.delete(id));
     calendarEl.replaceChildren(...(snapshot.events.length
       ? snapshot.events.map(eventCard)
       : [h('p', { class: 'muted' }, 'Nothing planned. Ask your bots to find a time, or propose something.')]));

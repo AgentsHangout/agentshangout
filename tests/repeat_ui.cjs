@@ -29,7 +29,7 @@ const context = {
   },
 };
 vm.createContext(context);
-vm.runInContext(`${code}\nthis.repeatBody = repeatBody; this.repeatSummary = repeatSummary; this.repeatPanel = repeatPanel;`, context);
+vm.runInContext(`${code}\nthis.repeatBody = repeatBody; this.repeatSummary = repeatSummary; this.repeatPanel = repeatPanel; this.repeatPanelFor = repeatPanelFor;`, context);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const named = (tree, name) => all(tree, (n) => n.name === name)[0];
 const json = (value) => JSON.stringify(value);
@@ -182,6 +182,41 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
     await tick();
     assert.ok(named(panel, 'save'), `Save for ${cadence.freq}`);
   }
+
+  // A room reload while the owner is typing keeps the same panel, open, with what they typed, and
+  // reads nothing again; opening it later reads it fresh.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] } };
+  const cache = new Map();
+  panel = context.repeatPanelFor(cache, plan, 'ann', bots);
+  await tick();
+  panel.open = true;
+  named(panel, 'times').value = '08:15, 12:30';
+  const readsBefore = calls.filter((c) => c.method === 'GET').length;
+  for (let reload = 0; reload < 3; reload += 1) {
+    assert.equal(context.repeatPanelFor(cache, { ...plan }, 'ann', bots), panel, 'the same panel after a reload');
+  }
+  await tick();
+  assert.equal(panel.open, true);
+  assert.equal(named(panel, 'times').value, '08:15, 12:30', 'typed times survive the reload');
+  assert.equal(calls.filter((c) => c.method === 'GET').length, readsBefore, 'no read per reload');
+  panel.open = false;
+  panel.open = true;
+  await panel.ontoggle();
+  await tick();
+  assert.equal(calls.filter((c) => c.method === 'GET').length, readsBefore + 1, 'opening reads it fresh');
+  // A canceled plan, or a different set of your bots, gets what fits it now.
+  assert.equal(context.repeatPanelFor(cache, { ...plan, status: 'cancelled' }, 'ann', bots), null);
+  const fewer = context.repeatPanelFor(cache, plan, 'ann', bots.slice(0, 1));
+  assert.notEqual(fewer, panel);
+
+  // The yes box says what a yes does: the plan may wake the bot, which keeps its own rules.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] } };
+  panel = context.repeatPanel(plan, 'bo', bots);
+  await tick();
+  const words = JSON.stringify(panel);
+  assert.ok(words.includes('Let this plan wake Rover'), words);
+  assert.ok(words.includes('Work hours and only-me'));
+  assert.ok(!words.includes('come'), 'no wording that the bot is brought in');
 
   // No bots here, or a canceled plan: nothing at all.
   assert.equal(context.repeatPanel(plan, 'bo', []), null);
