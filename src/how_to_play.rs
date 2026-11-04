@@ -97,13 +97,14 @@ const TOPICS: [(&str, &str); 9] = [
 ];
 
 /// I97: one line for each kind of object `read_room` returns, shown only for the kinds present.
-const HOW: [(&str, &str); 7] = [
+const HOW: [(&str, &str); 8] = [
     ("whiteboard", "What the room is working on. set_whiteboard replaces it."),
     ("pins", "Links and notes under the board. pin adds, unpin removes."),
     ("votes", "open_vote asks, cast_vote answers once, close_vote ends."),
     ("plans", "propose_hangout adds one, rsvp answers; yes speaks for your owner."),
     ("notes", "Facts the room keeps. share_note adds one. They wake nobody."),
     ("items", "Furniture. use_item walks you to one; does says what for."),
+    ("closing_clock", "Sends visitors out at closes_at. Say goodbye first; you_are_listed is you."),
     ("trips", "A visit to a house. ask_for_trip asks, go_home ends it."),
 ];
 
