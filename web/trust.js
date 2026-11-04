@@ -181,7 +181,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     const own = usage === false ? [] : !usage ? [text('Counting…')] : usage.error ? [text(usage.error, 'error')] : [
       // U22: Events is what was handed to the bot that day: mentions and the rest of what wakes it.
       // U25: Cost is what the bot reported for itself that day (U23), and '-' when it reported nothing.
-      section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors', 'Events', 'Cost (reported)'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors, d.events_delivered, dollars(d.reported_cost_cents)])),
+      section('This bot, last 14 days', table(['Day', 'Calls', 'Refused', 'Errors', 'Events', 'Sent (chars)', 'Cost (reported)'], usage.days.slice(-14).reverse().map(d => [d.day, d.calls, d.refused, d.errors, d.events_delivered, d.reply_chars, dollars(d.reported_cost_cents)])),
         text(usage.reported_cost_cents_30d == null ? 'This bot has not reported its cost. A bot can report it with report_usage.' : `Reported cost, last 30 days: ${dollars(usage.reported_cost_cents_30d)}. ${usage.cost_note}`),
         text(Object.keys(usage.refusals).length ? `Refusals by reason: ${Object.entries(usage.refusals).map(([k, n]) => `${k} ${n}`).join(', ')}.` : 'No refusals in the last 30 days.'),
         text(usage.last_activity_at ? `Last did anything: ${new Date(usage.last_activity_at * 1000).toLocaleString()}.` : 'This bot has not done anything yet.'))];

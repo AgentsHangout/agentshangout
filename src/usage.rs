@@ -182,6 +182,8 @@ struct Inner {
     lines: HashMap<(i64, &'static str), i64>,
     /// U22: events handed to each bot, by bot and day.
     bot_events: HashMap<(String, i64), i64>,
+    /// U26: characters of tool results sent to each bot, by bot and day.
+    bot_chars: HashMap<(String, i64), i64>,
     day: i64,
     people: HashSet<u64>,
     bots_seen: HashSet<u64>,
@@ -207,6 +209,7 @@ pub struct Pending {
     lines: Vec<((i64, &'static str), i64)>,
     latency: Vec<(LatencyKey, [i64; BUCKETS])>,
     bot_events: Vec<((String, i64), i64)>,
+    bot_chars: Vec<((String, i64), i64)>,
 }
 
 /// U5: the hash that stands for a person for one day is made with a value kept only here.
@@ -400,6 +403,23 @@ impl Usage {
         }
     }
 
+    /// U26: `n` characters of tool results sent to a bot, for its own day. Capped as U22 is.
+    pub fn note_chars(&self, at: i64, agent_id: &str, n: i64) {
+        if n <= 0 {
+            return;
+        }
+        let key = (agent_id.to_string(), at.div_euclid(86_400));
+        let mut inner = self.lock();
+        if inner.bot_chars.len() < MAX_BUCKETS || inner.bot_chars.contains_key(&key) {
+            *inner.bot_chars.entry(key).or_default() += n;
+        }
+    }
+
+    /// How many bot-days of characters are waiting in memory.
+    pub fn held_bot_chars(&self) -> usize {
+        self.lock().bot_chars.len()
+    }
+
     /// How many bot-days of events are waiting in memory.
     pub fn held_bot_events(&self) -> usize {
         self.lock().bot_events.len()
@@ -445,6 +465,7 @@ impl Usage {
             hours: std::mem::take(&mut inner.hours).into_iter().collect(),
             bots: std::mem::take(&mut inner.bots).into_iter().collect(),
             bot_events: std::mem::take(&mut inner.bot_events).into_iter().collect(),
+            bot_chars: std::mem::take(&mut inner.bot_chars).into_iter().collect(),
             days,
         }
     }
@@ -460,6 +481,7 @@ impl Usage {
             && pending.lines.is_empty()
             && pending.latency.is_empty()
             && pending.bot_events.is_empty()
+            && pending.bot_chars.is_empty()
         {
             return;
         }
@@ -501,6 +523,11 @@ impl Usage {
                 .iter()
                 .map(|((agent, day), events)| (agent.as_str(), *day, *events))
                 .collect(),
+            bot_chars: pending
+                .bot_chars
+                .iter()
+                .map(|((agent, day), chars)| (agent.as_str(), *day, *chars))
+                .collect(),
         };
         if let Err(error) = state.db.write_usage(&rows) {
             tracing::error!(%error, "usage counts could not be written");
@@ -538,6 +565,8 @@ pub struct UsageRows<'a> {
     pub latency: Vec<(i64, &'a str, &'a str, [i64; BUCKETS])>,
     /// U22: `(agent, day, events)`
     pub bot_events: Vec<(&'a str, i64, i64)>,
+    /// U26: `(agent, day, chars)`
+    pub bot_chars: Vec<(&'a str, i64, i64)>,
 }
 
 /// U16: one hour's response-time buckets for a tool or route.
@@ -838,6 +867,7 @@ async fn agent_usage(
     let since = today - KEEP_DAYS + 1;
     let rows = state.db.usage_bot_days(&id, since)?;
     let events: BTreeMap<i64, i64> = state.db.usage_bot_events(&id, since)?.into_iter().collect();
+    let chars: BTreeMap<i64, i64> = state.db.usage_bot_chars(&id, since)?.into_iter().collect();
     let costs: BTreeMap<i64, ReportedCost> =
         state.db.usage_bot_cost(&id, since)?.into_iter().collect();
     let mut per_day: BTreeMap<i64, [i64; 3]> = BTreeMap::new();
@@ -859,7 +889,10 @@ async fn agent_usage(
             let events = events.get(&day).copied().unwrap_or_default();
             // U24: what the bot said it cost that day, or null when it said nothing.
             let cost = costs.get(&day);
+            // U26: what the bot was sent that day, in characters of tool results.
+            let sent = chars.get(&day).copied().unwrap_or_default();
             json!({"day": date(day), "calls": ok + refused + errors, "refused": refused, "errors": errors, "events_delivered": events,
+                "reply_chars": sent,
                 "reported_cost_cents": cost.map(|c| c.cost_cents),
                 "reported_input_tokens": cost.and_then(|c| c.input_tokens),
                 "reported_output_tokens": cost.and_then(|c| c.output_tokens)})

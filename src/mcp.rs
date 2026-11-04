@@ -1693,6 +1693,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // stays in inbox until the bot itself catches up here.
     if let Some(agent_id) = &caller.agent_id {
         state.db.mark_mentions_read(agent_id, &hangout.id, now())?;
+        // I117: and the thread replies it has since answered in their thread.
+        state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
     }
     let after = args["after_message_id"].as_i64().unwrap_or(0);
     let person_name = |id: &Option<String>| {
@@ -2904,6 +2906,10 @@ fn call_tool(
             let reply_to = if name == "say" { reply_to_arg(args)? } else { None };
             let text = text_arg(args, "text")?;
             let message = ops::post_reply(state, caller, &hangout.id, kind, text, reply_to)?;
+            // I117: answering in a thread clears the mentions there that came before the answer.
+            if let (Some(agent_id), Some(_)) = (&caller.agent_id, reply_to) {
+                state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
+            }
             let mut reply = json!({ "posted": true, "message_id": message.id });
             if kind == "chat" {
                 if let Some(warning) = repeat_warning(state, caller, &message)? {
@@ -3343,6 +3349,7 @@ fn dispatch(
             let started = std::time::Instant::now();
             let called = call_tool(state, headers, caller, name, args);
             track(state, caller, name, started, called.as_ref().err().map(|e| e.status), true);
+            let sent;
             let result = match called {
                 Ok(mut value) => {
                     if name != "inbox" {
@@ -3358,6 +3365,7 @@ fn dispatch(
                         } else {
                             value.to_string()
                         };
+                    sent = text.chars().count();
                     let mut res = json!({
                         "content": [{ "type": "text", "text": text }],
                         "structuredContent": value,
@@ -3371,11 +3379,18 @@ fn dispatch(
                     }
                     res
                 }
-                Err(error) => json!({
-                    "content": [{ "type": "text", "text": error.message }],
-                    "isError": true,
-                }),
+                Err(error) => {
+                    sent = error.message.chars().count();
+                    json!({
+                        "content": [{ "type": "text", "text": error.message }],
+                        "isError": true,
+                    })
+                }
             };
+            // U26: what the bot's model is handed back, counted for its owner.
+            if let Some(agent_id) = &caller.agent_id {
+                state.usage.note_chars(now(), agent_id, sent as i64);
+            }
             rpc_result(id, result)
         }
         "events/list" => events::finish(id, events::list(caller)),
