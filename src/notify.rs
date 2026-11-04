@@ -642,8 +642,14 @@ mod tests {
 
     #[test]
     fn a_test_says_what_came_back_in_words() {
-        let said =
-            |status| in_words(&Posted { status: Some(status), body: String::new(), error: None });
+        let said = |status| {
+            in_words(&Posted {
+                status: Some(status),
+                body: String::new(),
+                error: None,
+                attempted: true,
+            })
+        };
         assert!(said(200).contains("accepted"));
         assert!(said(204).contains("accepted"));
         assert!(said(400).contains("paused"));
