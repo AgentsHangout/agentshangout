@@ -422,14 +422,20 @@ fn rw12_requested_reviewers_are_who_still_hasnt_reviewed() {
     assert_eq!(got.people, ["mac-bot", "Ann_1"]);
     assert_eq!(got.teams, ["core.team"]);
     assert_eq!(asked(json!([]), json!([])), Some(research_work::Requested::default()));
-    // Either list missing, or a name GitHub wouldn't give, can't be read.
+    // A GitHub app is asked as its slug with [bot] after it.
+    let app = asked(json!([{"login":"copilot-reviewer[bot]"}]), json!([])).unwrap();
+    assert_eq!(app.people, ["copilot-reviewer[bot]"]);
+    // Either list missing, or an entry without its name, can't be read.
+    assert_eq!(asked(json!([{"id":3}]), json!([])), None);
+    assert_eq!(asked(json!([{"login":5}]), json!([])), None);
     assert_eq!(research_work::requested_of(&json!({"requested_reviewers":[]})), None);
     assert_eq!(research_work::requested_of(&json!({"requested_teams":[]})), None);
-    assert_eq!(asked(json!([{"login":"a b"}]), json!([])), None);
-    assert_eq!(asked(json!([{"login":""}]), json!([])), None);
-    assert_eq!(asked(json!([{"id":3}]), json!([])), None);
-    assert_eq!(asked(json!([{"login":"x".repeat(40)}]), json!([])), None);
-    assert_eq!(asked(json!([]), json!([{"slug":"<b>"}])), None);
+    // A name GitHub wouldn't give is skipped, and the rest still read.
+    let odd = json!([{"login":"a b"},{"login":""},{"login":"x".repeat(40)},{"login":"[bot]"},{"login":"ok"}]);
+    assert_eq!(
+        asked(odd, json!([{"slug":"<b>"}])).unwrap(),
+        research_work::Requested { people: vec!["ok".into()], teams: vec![] }
+    );
     // At most 20 of each are kept.
     let many: Vec<Value> = (0..30).map(|n| json!({"login":format!("u{n}")})).collect();
     assert_eq!(asked(Value::Array(many), json!([])).unwrap().people.len(), 20);
@@ -475,7 +481,7 @@ async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_gr
     assert_eq!(read["items"][1]["pr_state"]["requested"], json!(["mac", "ann"]));
 
     // A pull request without GitHub's requested lists can't be read, and keeps who was asked.
-    upstream.lock().unwrap()["requested"] = json!(["bad name"]);
+    upstream.lock().unwrap()["requested"] = json!([5]);
     state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
     let unreadable = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
     assert_eq!(

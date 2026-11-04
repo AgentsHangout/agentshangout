@@ -72,19 +72,19 @@ pub struct Requested {
 /// RW12: how many requested reviewers, and how many teams, are kept.
 const MAX_REQUESTED: usize = 20;
 /// RW12: who a pull request still asks for a review, from GitHub's own fields on it. Both lists are
-/// always there on a pull request, so one missing, or a name GitHub wouldn't allow, is unreadable.
+/// always there on a pull request, so one missing, or an entry without its name, is unreadable. A
+/// name GitHub wouldn't give is skipped, so one odd reviewer never stops the rest being read.
 pub fn requested_of(pr: &Value) -> Option<Requested> {
     let names = |list: &Value, key: &str, most: usize| -> Option<Vec<String>> {
         let mut out = Vec::new();
         for entry in list.as_array()? {
             let name = entry[key].as_str()?;
-            let fine = !name.is_empty()
-                && name.len() <= most
-                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
-            if !fine {
-                return None;
-            }
-            if out.len() < MAX_REQUESTED {
+            // A GitHub app reviews as its slug with [bot] after it.
+            let base = name.strip_suffix("[bot]").unwrap_or(name);
+            let fine = !base.is_empty()
+                && base.len() <= most
+                && base.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+            if fine && out.len() < MAX_REQUESTED {
                 out.push(name.to_string());
             }
         }
