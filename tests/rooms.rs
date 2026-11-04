@@ -7208,3 +7208,299 @@ async fn a_room_the_bot_is_not_in_is_not_named() {
     assert!(pulse.get("oldest_room").is_none(), "{pulse}");
     assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
 }
+
+// I91, I109: read_room brief defaults to last 20 messages, and incremental reads omit unchanged heavy sections
+#[tokio::test]
+async fn read_room_brief_defaults_to_20_messages_without_after_cursor() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // Post 25 messages
+    for i in 1..=25 {
+        server
+            .tool(
+                &scout.token,
+                "say",
+                json!({ "hangout_id": room, "text": format!("Message {i}") }),
+            )
+            .await;
+    }
+
+    // 1. Full read without brief returns all 25 messages, earlier_messages absent
+    let full = server.read_room(&scout.token, &room).await;
+    let full_msgs = full["messages"].as_array().unwrap();
+    assert_eq!(full_msgs.len(), 25);
+    assert!(full.get("earlier_messages").is_none());
+
+    // 2. Brief read without after_message_id defaults to 20 messages
+    let brief =
+        server.tool(&scout.token, "read_room", json!({ "hangout_id": room, "brief": true })).await;
+    let brief_data = &brief["structuredContent"];
+    let brief_msgs = brief_data["messages"].as_array().unwrap();
+    assert_eq!(brief_msgs.len(), 20, "{brief_data}");
+    assert_eq!(brief_data["earlier_messages"], 5);
+    assert_eq!(brief_msgs.first().unwrap()["text"], "Message 6");
+    assert_eq!(brief_msgs.last().unwrap()["text"], "Message 25");
+
+    // 3. Explicit limit: 10 overrides the 20-message default
+    let limited = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "brief": true, "limit": 10 }))
+        .await;
+    let limited_data = &limited["structuredContent"];
+    let limited_msgs = limited_data["messages"].as_array().unwrap();
+    assert_eq!(limited_msgs.len(), 10);
+    assert_eq!(limited_data["earlier_messages"], 15);
+
+    // 4. after_message_id: 0 (or null) is treated as absent, defaulting to 20 messages
+    let zero = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "after_message_id": 0 }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(zero["messages"].as_array().unwrap().len(), 20);
+    assert_eq!(zero["earlier_messages"], 5);
+}
+
+#[tokio::test]
+async fn read_room_brief_section_tags_and_known_cache() {
+    let server = Server::start().await;
+    let (room, owner) = server.someone("Fern").await;
+    let fern = server.bot(&owner, &room, "FernBot").await;
+
+    // Set up initial heavy state: whiteboard, pin, note, item
+    server
+        .tool(&fern.token, "set_whiteboard", json!({ "hangout_id": room, "text": "Sprint Goal" }))
+        .await;
+    let pin_rep = server
+        .tool(
+            &fern.token,
+            "pin",
+            json!({ "hangout_id": room, "kind": "link", "title": "Reference", "url": "https://example.com" }),
+        )
+        .await;
+    let pin_id = pin_rep["structuredContent"]["pin"]["id"].as_str().unwrap().to_string();
+    server
+        .tool(&fern.token, "share_note", json!({ "hangout_id": room, "text": "Initial note" }))
+        .await;
+    let item_id = server.item(&owner, &room, "plant", spot(0)).await;
+
+    // 1. Initial brief read without known: returns all 6 sections and section_tags
+    let init = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    assert!(init.get("whiteboard").is_some());
+    assert!(init.get("pins").is_some());
+    assert!(init.get("notes").is_some());
+    assert!(init.get("items").is_some());
+    assert!(init.get("boards").is_some());
+    assert!(init.get("calendar").is_some());
+    let tags = init["section_tags"].clone();
+    assert!(tags["whiteboard"].is_string());
+    assert!(tags["pins"].is_string());
+    assert!(tags["notes"].is_string());
+    assert!(tags["items"].is_string());
+    assert!(tags["boards"].is_string());
+    assert!(tags["calendar"].is_string());
+
+    // 2. Read with known: matching sections omitted, payload small (< 3000 chars);
+    // unknown keys in known are ignored per I109.
+    let mut known_with_unknown = tags.clone();
+    known_with_unknown["unknown_custom_section"] = json!("deadbeef12345678");
+    let cached = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": known_with_unknown }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(cached.get("whiteboard").is_none());
+    assert!(cached.get("pins").is_none());
+    assert!(cached.get("notes").is_none());
+    assert!(cached.get("items").is_none());
+    assert!(cached.get("boards").is_none());
+    assert!(cached.get("calendar").is_none());
+    assert!(cached.get("tag_as").is_some(), "tag_as stays");
+    assert_eq!(cached["section_tags"], tags);
+    assert!(
+        cached.to_string().len() < 3000,
+        "cached read is compact: {}",
+        cached.to_string().len()
+    );
+
+    // Non-brief read ignores known and returns every section without section_tags
+    let non_brief = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "known": tags }))
+        .await["structuredContent"]
+        .clone();
+    assert!(non_brief.get("whiteboard").is_some());
+    assert!(non_brief.get("pins").is_some());
+    assert!(non_brief.get("section_tags").is_none());
+
+    // 3. A moved item comes back with updated position and new tag
+    let (nx, ny) = spot(1);
+    server.change(&owner.key, &item_id, json!({ "x": nx, "y": ny })).await.ok();
+    let after_move = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true, "known": tags }))
+        .await["structuredContent"]
+        .clone();
+    assert!(after_move.get("items").is_some(), "moved/placed item section comes back");
+    assert_ne!(after_move["section_tags"]["items"], tags["items"]);
+    assert_eq!(after_move["section_tags"]["whiteboard"], tags["whiteboard"]);
+    assert!(after_move.get("whiteboard").is_none());
+    let move_tags = after_move["section_tags"].clone();
+
+    // 4. A deleted pin comes back as empty list with new tag
+    server.tool(&fern.token, "unpin", json!({ "hangout_id": room, "pin_id": pin_id })).await;
+    let after_unpin = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": move_tags }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(after_unpin.get("pins").is_some(), "deleted pin section comes back");
+    assert_eq!(after_unpin["pins"], json!([]));
+    assert_ne!(after_unpin["section_tags"]["pins"], tags["pins"]);
+    let unpin_tags = after_unpin["section_tags"].clone();
+
+    // 5. A same-second change comes back: set whiteboard updated_at to one fixed timestamp
+    // before and after an edit; the content hash tag changes even though updated_at is identical
+    let fixed_ts = 1_700_000_000;
+    server
+        .state
+        .db
+        .write_whiteboard(&room, "Sprint Goal", &owner.id, Some(&fern.id), fixed_ts)
+        .unwrap();
+    let pre_edit = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": unpin_tags }),
+        )
+        .await["structuredContent"]
+        .clone();
+    // Because updated_at changed to fixed_ts, whiteboard's content hash changed from unpin_tags, so it is returned
+    assert_eq!(pre_edit["whiteboard"]["updated_at"], agenthangout::ops::iso(fixed_ts));
+    let pre_edit_tags = pre_edit["section_tags"].clone();
+
+    // Edit whiteboard content but force updated_at back to the exact same fixed timestamp
+    server
+        .tool(
+            &fern.token,
+            "set_whiteboard",
+            json!({ "hangout_id": room, "text": "Immediate edit" }),
+        )
+        .await;
+    server
+        .state
+        .db
+        .write_whiteboard(&room, "Immediate edit", &owner.id, Some(&fern.id), fixed_ts)
+        .unwrap();
+    let after_same_sec = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": pre_edit_tags }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(
+        after_same_sec.get("whiteboard").is_some(),
+        "same-timestamp whiteboard edit comes back"
+    );
+    assert_eq!(after_same_sec["whiteboard"]["text"], "Immediate edit");
+    assert_ne!(after_same_sec["section_tags"]["whiteboard"], pre_edit_tags["whiteboard"]);
+
+    // 6. Guest tags hash only what the guest sees and never differ for things they cannot see:
+    // Before guest walks in, add a pre-arrival pin
+    let pre_pin = server
+        .tool(
+            &fern.token,
+            "pin",
+            json!({ "hangout_id": room, "kind": "note", "title": "Pre-arrival Pin" }),
+        )
+        .await["structuredContent"]["pin"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (eve_room, eve) = server.someone("Eve").await;
+    let rover = server.bot(&eve, &eve_room, "Rover").await;
+    server.open(&owner, &room).await.ok();
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": rover.id }))
+        .await
+        .ok();
+
+    let guest1 = server
+        .tool(&rover.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(guest1["you_are_a_guest"], true);
+    assert_eq!(guest1["pins"], json!([]), "guest sees no pre-arrival pins");
+    let member_tags = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]["section_tags"]
+        .clone();
+    assert_ne!(
+        guest1["section_tags"]["pins"], member_tags["pins"],
+        "guest pin tags differ from member because guest sees empty list"
+    );
+    let guest_tags = guest1["section_tags"].clone();
+
+    // Change something hidden from guest (unpin the pre-arrival pin):
+    // For member, pins changed from 1 to 0; for guest, pins was [] and stays [].
+    server.tool(&fern.token, "unpin", json!({ "hangout_id": room, "pin_id": pre_pin })).await;
+    let guest2 = server
+        .tool(
+            &rover.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": guest_tags }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(guest2["section_tags"], guest_tags, "guest tags stay identical on hidden change");
+    assert!(guest2.get("pins").is_none(), "pins omitted because tag matched");
+
+    // Change something visible to guest (pin a new pin after arrival; sleep 1s so pinned_at > arrival since):
+    tokio::time::sleep(std::time::Duration::from_millis(1050)).await;
+    server
+        .tool(
+            &fern.token,
+            "pin",
+            json!({ "hangout_id": room, "kind": "note", "title": "Post-arrival Pin" }),
+        )
+        .await;
+    let guest3 = server
+        .tool(
+            &rover.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": guest_tags }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(guest3.get("pins").is_some(), "visible post-arrival pin comes back");
+    assert_ne!(
+        guest3["section_tags"]["pins"], guest_tags["pins"],
+        "guest pin tag changes on visible change"
+    );
+
+    // 7. Invalid known is refused with 400
+    for bad in [json!("string"), json!([1, 2]), json!(123)] {
+        let bad_rep = server
+            .tool(&fern.token, "read_room", json!({ "hangout_id": room, "known": bad }))
+            .await;
+        assert_eq!(bad_rep["isError"], true, "{bad_rep}");
+        assert!(
+            bad_rep["content"][0]["text"].as_str().unwrap().contains("known must be an object"),
+            "{bad_rep}"
+        );
+    }
+}
