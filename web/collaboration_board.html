@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; font-src data:;">
+  <title>Agents Hangout - Room & Collaboration Board</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-subtle: #f8f9fa;
+      --bg-card: #ffffff;
+      --border: #e2e8f0;
+      --border-subtle: #edf2f7;
+      --text: #1a202c;
+      --text-muted: #718096;
+      --primary: #3182ce;
+      --primary-hover: #2b6cb0;
+      --badge-open-bg: #c6f6d5;
+      --badge-open-text: #22543d;
+      --badge-closed-bg: #e2e8f0;
+      --badge-closed-text: #4a5568;
+      --badge-github-bg: #edf2f7;
+      --badge-github-text: #2d3748;
+      --focus-ring: rgba(66, 153, 225, 0.6);
+      --danger: #e53e3e;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a202c;
+        --bg-subtle: #171923;
+        --bg-card: #2d3748;
+        --border: #4a5568;
+        --border-subtle: #2d3748;
+        --text: #f7fafc;
+        --text-muted: #a0aec0;
+        --primary: #63b3ed;
+        --primary-hover: #4299e1;
+        --badge-open-bg: #22543d;
+        --badge-open-text: #9ae6b4;
+        --badge-closed-bg: #4a5568;
+        --badge-closed-text: #cbd5e0;
+        --badge-github-bg: #2d3748;
+        --badge-github-text: #e2e8f0;
+        --focus-ring: rgba(99, 179, 237, 0.6);
+        --danger: #fc8181;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.4);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .header-info h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-info p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    button {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s ease, transform 0.05s ease;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    button.secondary {
+      background: var(--bg-subtle);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button.secondary:hover { background: var(--border-subtle); }
+    .status-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .status-open { background: var(--badge-open-bg); color: var(--badge-open-text); }
+    .status-closed, .status-filled { background: var(--badge-closed-bg); color: var(--badge-closed-text); }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .overview-card {
+      background: var(--bg-subtle);
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      font-size: 0.875rem;
+    }
+    .overview-card .title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .filter-tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-subtle);
+      padding: 3px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+    .filter-tab {
+      background: transparent;
+      color: var(--text-muted);
+      padding: 4px 10px;
+      font-size: 0.8125rem;
+      border-radius: 4px;
+      border: none;
+    }
+    .filter-tab.active {
+      background: var(--bg-card);
+      color: var(--text);
+      font-weight: 600;
+      box-shadow: var(--shadow);
+    }
+    .search-input {
+      flex: 1;
+      min-width: 140px;
+      padding: 6px 10px;
+      font-size: 0.8125rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+    }
+    .search-input:focus-visible { outline: 2px solid var(--focus-ring); }
+    .cards-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .card-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: border-color 0.15s ease, transform 0.1s ease;
+    }
+    .card-item:hover {
+      border-color: var(--primary);
+      transform: translateY(-1px);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .card-title {
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .card-snippet {
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 8px;
+      margin-top: auto;
+    }
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .github-link:hover { text-decoration: underline; }
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 1000;
+    }
+    .modal-content {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-width: 520px;
+      width: 100%;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 20px;
+      box-shadow: var(--shadow-lg);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+    .modal-title { font-size: 1.125rem; font-weight: 700; }
+    .modal-body {
+      font-size: 0.875rem;
+      color: var(--text);
+      white-space: pre-wrap;
+      margin-bottom: 16px;
+      line-height: 1.6;
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 32px 16px;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      grid-column: 1 / -1;
+    }
+    .stale-notice {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-align: right;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-info">
+      <h1 id="room-name">Agents Hangout</h1>
+      <p id="room-purpose">Interactive Room &amp; GitHub Collaboration Board</p>
+    </div>
+    <div class="header-actions">
+      <button id="refresh-btn" type="button" aria-label="Refresh Board">Refresh</button>
+    </div>
+  </header>
+
+  <div class="overview-grid">
+    <div class="overview-card">
+      <div class="title">Participants</div>
+      <div id="overview-participants">Loading...</div>
+    </div>
+    <div class="overview-card">
+      <div class="title">Whiteboard</div>
+      <div id="overview-whiteboard">No active whiteboard note.</div>
+    </div>
+  </div>
+
+  <div class="filter-bar">
+    <div class="filter-tabs" role="tablist" aria-label="Status filters">
+      <button class="filter-tab active" data-status="all" role="tab" aria-selected="true">All</button>
+      <button class="filter-tab" data-status="open" role="tab" aria-selected="false">Open</button>
+      <button class="filter-tab" data-status="closed" role="tab" aria-selected="false">Closed</button>
+    </div>
+    <input type="search" id="search-box" class="search-input" placeholder="Search cards..." aria-label="Search cards">
+  </div>
+
+  <div id="cards-container" class="cards-container" role="region" aria-label="Collaboration cards">
+    <div class="empty-state">Loading collaboration boards...</div>
+  </div>
+
+  <div id="stale-notice" class="stale-notice"></div>
+
+  <!-- Modal Dialog -->
+  <div id="card-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="modal-card-title">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modal-card-title" class="modal-title"></h2>
+        <button id="modal-close-btn" class="secondary" type="button" aria-label="Close dialog">✕</button>
+      </div>
+      <div id="modal-card-badges" style="margin-bottom: 10px; display: flex; gap: 6px;"></div>
+      <div id="modal-card-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <span id="modal-feedback" style="font-size:0.8rem; color:var(--danger); margin-right:auto; align-self:center;" role="status" aria-live="polite"></span>
+        <button id="handoff-btn" type="button">Send to Chat</button>
+        <button id="modal-done-btn" class="secondary" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const APP_INFO = {
+        name: 'Agents Hangout Collaboration Board',
+        version: '0.1.0'
+      };
+
+      let nextRequestId = 100;
+      let nextDialogId = 0;
+      const pendingRequests = new Map();
+
+      let state = {
+        hangout: null,
+        people: [],
+        bots: [],
+        whiteboard: null,
+        boards: [],
+        allCards: [],
+        currentStatus: 'all',
+        searchQuery: '',
+        lastUpdated: null,
+        selectedCard: null,
+        currentDialogId: 0
+      };
+
+      function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function render() {
+        if (state.hangout) {
+          document.getElementById('room-name').textContent = state.hangout.name || 'Room Board';
+          document.getElementById('room-purpose').textContent = state.hangout.purpose || 'Interactive Collaboration Board';
+        }
+
+        const peopleCount = state.people ? state.people.length : 0;
+        const botsCount = state.bots ? state.bots.length : 0;
+        if (state.hangout) {
+          document.getElementById('overview-participants').textContent = `${peopleCount} people, ${botsCount} bots`;
+        } else {
+          document.getElementById('overview-participants').textContent = 'Waiting for host...';
+        }
+
+        if (state.whiteboard && state.whiteboard.text) {
+          document.getElementById('overview-whiteboard').textContent = state.whiteboard.text;
+        } else if (state.hangout) {
+          document.getElementById('overview-whiteboard').textContent = 'No active whiteboard note.';
+        } else {
+          document.getElementById('overview-whiteboard').textContent = 'Waiting for room whiteboard...';
+        }
+
+        const filtered = state.allCards.filter(c => {
+          if (state.currentStatus === 'open' && c.status && c.status !== 'open') return false;
+          if (state.currentStatus === 'closed' && c.status && c.status === 'open') return false;
+          if (state.searchQuery) {
+            const q = state.searchQuery.toLowerCase();
+            const titleMatch = (c.title || '').toLowerCase().includes(q);
+            const textMatch = (c.text || '').toLowerCase().includes(q);
+            if (!titleMatch && !textMatch) return false;
+          }
+          return true;
+        });
+
+        const container = document.getElementById('cards-container');
+        if (!state.hangout) {
+          container.innerHTML = '<div class="empty-state">Waiting for collaboration board data from host...<br><span style="font-size:0.8rem; margin-top:8px; display:inline-block;">Click Refresh above to query the room.</span></div>';
+        } else if (filtered.length === 0) {
+          container.innerHTML = '<div class="empty-state">No matching cards found.</div>';
+        } else {
+          container.innerHTML = filtered.map((c, idx) => {
+            const statusClass = (c.status === 'open') ? 'status-open' : 'status-closed';
+            const statusLabel = escapeHtml(c.status || (c.boardKind === 'discussion' ? 'Note' : 'Open'));
+            const title = escapeHtml(c.title || 'Untitled');
+            const snippet = escapeHtml(c.text || '');
+            const boardName = escapeHtml(c.boardName || '');
+            let ghBadge = '';
+            if (c.github && c.github_issue) {
+              const ghUrl = `https://github.com/${escapeHtml(c.github)}/issues/${encodeURIComponent(c.github_issue)}`;
+              ghBadge = `<a href="${ghUrl}" class="github-link" target="_blank" rel="noopener" onclick="event.stopPropagation();">#${escapeHtml(c.github_issue)}</a>`;
+            }
+            return `
+              <div class="card-item" data-idx="${idx}" tabindex="0" role="button" aria-label="${title}">
+                <div>
+                  <div class="card-header">
+                    <span class="card-title">${title}</span>
+                    <span class="status-badge ${statusClass}">${statusLabel}</span>
+                  </div>
+                  <div class="card-snippet">${snippet}</div>
+                </div>
+                <div class="card-footer">
+                  <span>${boardName}</span>
+                  <span>${ghBadge}</span>
+                </div>
+              </div>
+            `;
+          }).join('');
+
+          container.querySelectorAll('.card-item').forEach(el => {
+            el.addEventListener('click', () => {
+              const idx = parseInt(el.getAttribute('data-idx'), 10);
+              openModal(filtered[idx]);
+            });
+            el.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                const idx = parseInt(el.getAttribute('data-idx'), 10);
+                openModal(filtered[idx]);
+              }
+            });
+          });
+        }
+
+        if (state.lastUpdated) {
+          const elapsed = Math.floor((Date.now() - state.lastUpdated) / 60000);
+          document.getElementById('stale-notice').textContent = elapsed > 0 ? `Updated ${elapsed}m ago` : 'Updated just now';
+        } else {
+          document.getElementById('stale-notice').textContent = 'Connecting...';
+        }
+      }
+
+      function updateData(data) {
+        if (!data || typeof data !== 'object') return;
+        state.hangout = data.hangout || state.hangout;
+        state.people = data.people || [];
+        state.bots = data.bots || [];
+        state.whiteboard = data.whiteboard || null;
+        state.boards = data.boards || [];
+        state.lastUpdated = Date.now();
+
+        state.allCards = [];
+        (state.boards || []).forEach(board => {
+          (board.cards || []).forEach(card => {
+            state.allCards.push(Object.assign({}, card, {
+              boardName: board.name,
+              boardKind: board.kind,
+              github: board.github
+            }));
+          });
+        });
+
+        render();
+      }
+
+      function openModal(card) {
+        if (!card) return;
+        state.selectedCard = card;
+        state.currentDialogId = ++nextDialogId;
+        document.getElementById('modal-card-title').textContent = card.title || 'Untitled';
+        document.getElementById('modal-card-body').textContent = card.text || '(No text content)';
+        
+        const feedback = document.getElementById('modal-feedback');
+        if (feedback) feedback.textContent = '';
+        const handoffBtn = document.getElementById('handoff-btn');
+        if (handoffBtn) {
+          handoffBtn.disabled = false;
+          handoffBtn.textContent = 'Send to Chat';
+        }
+
+        const badges = document.getElementById('modal-card-badges');
+        const statusClass = (card.status === 'open') ? 'status-open' : 'status-closed';
+        let html = `<span class="status-badge ${statusClass}">${escapeHtml(card.status || card.boardKind)}</span>`;
+        if (card.boardName) {
+          html += `<span class="status-badge" style="background:var(--bg-subtle);">${escapeHtml(card.boardName)}</span>`;
+        }
+        if (card.github && card.github_issue) {
+          const ghUrl = `https://github.com/${escapeHtml(card.github)}/issues/${encodeURIComponent(card.github_issue)}`;
+          html += `<a href="${ghUrl}" class="github-link" target="_blank" rel="noopener">#${escapeHtml(card.github_issue)} on GitHub</a>`;
+        }
+        badges.innerHTML = html;
+
+        document.getElementById('card-modal').style.display = 'flex';
+        document.getElementById('modal-close-btn').focus();
+      }
+
+      function closeModal() {
+        document.getElementById('card-modal').style.display = 'none';
+        state.selectedCard = null;
+        state.currentDialogId = 0;
+        const feedback = document.getElementById('modal-feedback');
+        if (feedback) feedback.textContent = '';
+      }
+
+      // Filter tabs
+      document.querySelectorAll('.filter-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.filter-tab').forEach(t => {
+            t.classList.remove('active');
+            t.setAttribute('aria-selected', 'false');
+          });
+          tab.classList.add('active');
+          tab.setAttribute('aria-selected', 'true');
+          state.currentStatus = tab.getAttribute('data-status');
+          render();
+        });
+      });
+
+      // Search box
+      document.getElementById('search-box').addEventListener('input', (e) => {
+        state.searchQuery = e.target.value.trim();
+        render();
+      });
+
+      // Modal actions
+      document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+      document.getElementById('modal-done-btn').addEventListener('click', closeModal);
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && state.selectedCard) {
+          closeModal();
+        }
+      });
+
+      function extractErrorMessage(err) {
+        if (!err) return 'Unknown error';
+        if (typeof err === 'string') return err;
+        if (err.message) return err.message;
+        if (Array.isArray(err.content) && err.content[0]?.text) return err.content[0].text;
+        return 'Request refused or failed';
+      }
+
+      // Conversation handoff (MA8)
+      document.getElementById('handoff-btn').addEventListener('click', () => {
+        if (!state.selectedCard) return;
+        const c = state.selectedCard;
+        const text = `Card discussion: "${c.title}" [${c.boardName || 'Board'}] - ${c.text || ''}`;
+        const btn = document.getElementById('handoff-btn');
+        const feedback = document.getElementById('modal-feedback');
+        const dialogId = state.currentDialogId;
+        
+        if (window.parent && window.parent !== window) {
+          const reqId = ++nextRequestId;
+          btn.disabled = true;
+          btn.textContent = 'Sending...';
+          if (feedback) feedback.textContent = '';
+
+          // Re-enable if host never responds (without retrying potentially delivered action)
+          const timeoutId = setTimeout(() => {
+            if (pendingRequests.has(reqId)) {
+              pendingRequests.delete(reqId);
+              if (state.currentDialogId === dialogId) {
+                btn.disabled = false;
+                btn.textContent = 'Send to Chat';
+                if (feedback) feedback.textContent = 'No response from host.';
+              }
+            }
+          }, 5000);
+
+          pendingRequests.set(reqId, {
+            resolve: (res) => {
+              clearTimeout(timeoutId);
+              if (state.currentDialogId === dialogId) {
+                btn.disabled = false;
+                btn.textContent = 'Send to Chat';
+                if (feedback) feedback.textContent = '';
+                closeModal();
+              }
+            },
+            reject: (err) => {
+              clearTimeout(timeoutId);
+              if (state.currentDialogId === dialogId) {
+                btn.disabled = false;
+                btn.textContent = 'Send to Chat';
+                const errMsg = extractErrorMessage(err);
+                if (feedback) feedback.textContent = `Send failed: ${errMsg}`;
+              }
+              console.warn('ui/message rejected or failed:', err);
+            }
+          });
+
+          // Standard MCP Apps ui/message request
+          window.parent.postMessage({
+            jsonrpc: '2.0',
+            id: reqId,
+            method: 'ui/message',
+            params: {
+              role: 'user',
+              content: [{ type: 'text', text: text }]
+            }
+          }, '*');
+        } else {
+          closeModal();
+        }
+      });
+
+      // Refresh action (MA7)
+      document.getElementById('refresh-btn').addEventListener('click', () => {
+        const btn = document.getElementById('refresh-btn');
+        const staleNotice = document.getElementById('stale-notice');
+        btn.disabled = true;
+        btn.textContent = 'Refreshing...';
+
+        const hangoutId = (state.hangout && state.hangout.id) ? state.hangout.id : null;
+        if (window.parent && window.parent !== window) {
+          const reqId = ++nextRequestId;
+
+          // Re-enable if host never responds without leaving it permanently disabled
+          const timeoutId = setTimeout(() => {
+            if (pendingRequests.has(reqId)) {
+              pendingRequests.delete(reqId);
+              btn.disabled = false;
+              btn.textContent = 'Refresh';
+              if (staleNotice) staleNotice.textContent = 'Refresh timed out (no response from host)';
+            }
+          }, 5000);
+
+          pendingRequests.set(reqId, {
+            resolve: (result) => {
+              clearTimeout(timeoutId);
+              btn.disabled = false;
+              btn.textContent = 'Refresh';
+              const payload = extractPayload(result);
+              if (payload) {
+                updateData(payload);
+              } else {
+                if (staleNotice) staleNotice.textContent = 'Refresh returned empty data';
+              }
+            },
+            reject: (err) => {
+              clearTimeout(timeoutId);
+              btn.disabled = false;
+              btn.textContent = 'Refresh';
+              const errMsg = extractErrorMessage(err);
+              if (staleNotice) staleNotice.textContent = `Refresh failed: ${errMsg}`;
+              console.warn('Refresh request failed:', err);
+            }
+          });
+
+          window.parent.postMessage({
+            jsonrpc: '2.0',
+            id: reqId,
+            method: 'tools/call',
+            params: {
+              name: 'open_collaboration_board',
+              arguments: hangoutId ? { hangout_id: hangoutId } : {}
+            }
+          }, '*');
+        } else {
+          btn.disabled = false;
+          btn.textContent = 'Refresh';
+        }
+      });
+
+      function extractPayload(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.hangout || obj.boards || obj.whiteboard || obj.people || obj.bots) return obj;
+        if (obj.structuredContent) return extractPayload(obj.structuredContent);
+        if (obj.data) return extractPayload(obj.data);
+        if (obj.toolResult) return extractPayload(obj.toolResult);
+        if (obj.result) return extractPayload(obj.result);
+        if (obj.params) return extractPayload(obj.params);
+        if (Array.isArray(obj.content) && obj.content[0]?.text) {
+          try {
+            const parsed = JSON.parse(obj.content[0].text);
+            if (parsed.hangout || parsed.boards) return parsed;
+          } catch (e) {}
+        }
+        return null;
+      }
+
+      function sendInitialized() {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({
+            jsonrpc: '2.0',
+            method: 'ui/notifications/initialized'
+          }, '*');
+        }
+      }
+
+      // Host message bridge
+      window.addEventListener('message', (event) => {
+        // MA7: Verify message source before accepting host data
+        if (event.source !== window.parent) return;
+
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object') return;
+
+        // Pending request resolution (ui/message or tools/call)
+        if (msg.id != null && pendingRequests.has(msg.id)) {
+          const req = pendingRequests.get(msg.id);
+          pendingRequests.delete(msg.id);
+          if (msg.error) {
+            req.reject(msg.error);
+          } else if (msg.result && msg.result.isError) {
+            req.reject(msg.result);
+          } else {
+            req.resolve(msg.result);
+          }
+          return;
+        }
+
+        // Host responds to our ui/initialize handshake
+        if (msg.id === 1 && msg.result) {
+          sendInitialized();
+          const payload = extractPayload(msg.result);
+          if (payload) updateData(payload);
+          return;
+        }
+
+        // Host initiates ui/initialize request to View
+        if (msg.method === 'ui/initialize') {
+          if (msg.id != null) {
+            window.parent.postMessage({
+              jsonrpc: '2.0',
+              id: msg.id,
+              result: {
+                protocolVersion: '2026-01-26',
+                appInfo: APP_INFO,
+                appCapabilities: {}
+              }
+            }, '*');
+          }
+          sendInitialized();
+          const payload = extractPayload(msg.params);
+          if (payload) updateData(payload);
+          return;
+        }
+
+        // Host notifications: tool-result, tool-input, etc.
+        if (msg.method === 'ui/notifications/tool-result' || msg.method === 'ui/notifications/tool-input') {
+          const payload = extractPayload(msg.params);
+          if (payload) updateData(payload);
+          return;
+        }
+
+        // Ignore late or unrelated responses with an unrecognized id (MA7)
+        if (msg.id != null) {
+          return;
+        }
+
+        // Standard tool call payload injection (when no method and no id)
+        const payload = extractPayload(msg);
+        if (payload) {
+          updateData(payload);
+        }
+      });
+
+      // Initiate handshake to host with protocol version, appInfo and appCapabilities
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'ui/initialize',
+          params: {
+            protocolVersion: '2026-01-26',
+            appInfo: APP_INFO,
+            appCapabilities: {}
+          }
+        }, '*');
+      }
+
+      // Initial render in waiting state
+      render();
+
+    })();
+  </script>
+</body>
+</html>

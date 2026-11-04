@@ -1970,6 +1970,25 @@ async fn the_shop_shows_each_paid_pack_before_it_is_bought() {
     assert!(card.contains("offer.pieces.map("), "the shop doesn't put the pieces in the picture");
 }
 
+// The credits card leads with the balance, shows how much of today's cap has paid, says how many
+// credits a pack still needs, and starts its history at the latest lines. A refund doesn't say who
+// caused it, since HC20 refunds the same way however a bounty ends.
+#[test]
+fn the_credits_card_leads_with_the_balance_and_keeps_history_short() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    let balance = card.find("h('p', { class: 'credit-balance' },").expect("no balance");
+    let facts = card.find("h('dl', { class: 'facts' },").unwrap();
+    assert!(balance < facts, "the balance isn't first");
+    assert!(card.contains("value: String(Math.min(now.earned_today, now.daily_cap))"));
+    assert!(card.contains("`Need ${offer.cost - now.balance} more`"));
+    assert!(card.contains("now.history.slice(0, SHORT_HISTORY)"));
+    assert!(card.contains("const SHORT_HISTORY = 10;"));
+    assert!(card.contains("question_refund: 'A question bounty came back'"));
+    assert!(!card.contains("you cancelled"), "a refund can come from a removed card");
+}
+
 // HC22: each kind of history line has its own words, so a funded question's credits aren't shown as
 // something that paid.
 #[test]
