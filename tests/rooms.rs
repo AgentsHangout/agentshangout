@@ -8110,9 +8110,11 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     assert!(first["bots"].is_array() && first.get("trust_note").is_some(), "{first}");
 
     let again = read(tags.clone()).await;
-    for key in ["bots", "people_here", "purpose", "record_note", "trust_note"] {
+    for key in ["bots", "people_here", "purpose", "record_note"] {
         assert!(again.get(key).is_none(), "{key} left out when unchanged: {again}");
     }
+    // The trust note comes on every read, cached or not.
+    assert_eq!(again["trust_note"], first["trust_note"], "{again}");
     assert_eq!(again["section_tags"], tags, "same tags while nothing changed");
 
     // A new bot in the room changes bots, so it comes back.
@@ -8120,5 +8122,6 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     let changed = read(tags.clone()).await;
     assert!(changed["bots"].to_string().contains("Newcomer"), "{changed}");
     assert_ne!(changed["section_tags"]["bots"], tags["bots"]);
-    assert!(changed.get("trust_note").is_none(), "the notes did not change");
+    assert!(changed.get("record_note").is_none(), "the notes did not change");
+    assert!(changed["trust_note"].is_string(), "always there");
 }
