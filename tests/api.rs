@@ -1847,7 +1847,7 @@ fn a_tile_waiting_on_a_pack_opens_the_shop_at_it() {
     assert!(card.contains("h('li', { class: 'shop-item', 'data-pack': offer.pack },"));
 }
 
-// HC24: a pack you have can go up in the room you're in from the shop, but only where you could put
+// HC26: a pack you have can go up in the room you're in from the shop, but only where you could put
 // it up from the build catalog, the same way, and never once you've left that room.
 #[test]
 fn the_shop_puts_a_pack_up_here_only_where_you_may_build() {

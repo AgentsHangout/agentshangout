@@ -126,8 +126,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   A room's build catalog shows a piece, paint, flooring or pack that's waiting on a pack still to
   buy as locked but pressable, and pressing it opens the shop at that pack. The coin opens the shop
   too (HC23).
-  In a room where you may build, a pack you have says **Put it up here** in the shop, which puts
-  it up on that floor the same way its catalog tile does. Anywhere else it points to the catalog.
+- **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
+  which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
+  points to the catalog.
 
 ### For a maintainer to look at
 

@@ -15,7 +15,7 @@ const leaving = () => sessionStorage.setItem(WAY_BACK, location.pathname);
 // S78: where a signed-out person's account from just a name is made.
 const NEW_PERSON = '/api/people';
 let leaveRoom = () => {};
-// HC24: the room you're in, as the shop sees it. It's set by a room and cleared on the way out, so
+// HC26: the room you're in, as the shop sees it. It's set by a room and cleared on the way out, so
 // the shop only offers to put a pack up where you could from the build catalog.
 let roomShop = null;
 
@@ -1381,7 +1381,7 @@ function creditsCard(credits) {
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
     const packPieces = (offer) => [...new Set(offer.pieces.map((piece) => piece.label.toLowerCase()))];
-    // HC24: a pack you have can go straight up in the room you're in, if you may build there.
+    // HC26: a pack you have can go straight up in the room you're in, if you may build there.
     const boughtPack = (offer) => {
       const putUp = roomShop?.putUpHere();
       const yours = h('span', { class: 'pill on' }, 'Yours');
@@ -2629,7 +2629,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     leave: () => menu.close(),
     // Whether the room is being built in or has something in hand: person cards stay out of the way.
     get active() { return building || Boolean(hand); },
-    // HC24: puts a pack up on this floor, the same as pressing its tile, for whoever may build here.
+    // HC26: puts a pack up on this floor, the same as pressing its tile, for whoever may build here.
     putUpHere: () => (mayBuild() ? async (pack) => {
       const done = await api(`/api/floors/${encodeURIComponent(id)}/packs/${encodeURIComponent(pack)}`, { method: 'POST' });
       catalogKey = null;
