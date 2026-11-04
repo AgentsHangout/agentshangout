@@ -26,6 +26,92 @@ OWNER_REGEX = re.compile(r"ah_owner_[A-Za-z0-9_-]{16,}")
 OAUTH_REGEX = re.compile(r"ah_(?:oauth|refresh|code)_[A-Za-z0-9_-]{16,}")
 
 
+def validate_instance(data, schema, root_schema=None):
+    if root_schema is None:
+        root_schema = schema
+
+    # Resolve $ref
+    if "$ref" in schema:
+        ref = schema["$ref"]
+        if ref.startswith("#/"):
+            curr = root_schema
+            for part in ref[2:].split("/"):
+                curr = curr[part]
+            return validate_instance(data, curr, root_schema)
+        raise NotImplementedError(f"External ref unsupported: {ref}")
+
+    # oneOf
+    if "oneOf" in schema:
+        matches = 0
+        last_err = None
+        for sub in schema["oneOf"]:
+            try:
+                validate_instance(data, sub, root_schema)
+                matches += 1
+            except (ValueError, TypeError) as e:
+                last_err = e
+        if matches != 1:
+            raise ValueError(f"Expected exactly 1 oneOf match, got {matches}. Last error: {last_err}")
+        return
+
+    # const & enum
+    if "const" in schema and data != schema["const"]:
+        raise ValueError(f"Value {data!r} does not equal const {schema['const']!r}")
+    if "enum" in schema and data not in schema["enum"]:
+        raise ValueError(f"Value {data!r} not in enum {schema['enum']!r}")
+
+    # type
+    expected_type = schema.get("type")
+    if expected_type:
+        type_map = {
+            "string": str,
+            "object": dict,
+            "array": list,
+            "integer": int,
+            "number": (int, float),
+            "boolean": bool,
+            "null": type(None),
+        }
+        py_type = type_map.get(expected_type)
+        if py_type:
+            if expected_type in ("integer", "number") and isinstance(data, bool):
+                raise TypeError(f"Expected {expected_type}, got bool: {data!r}")
+            if not isinstance(data, py_type):
+                raise TypeError(f"Expected {expected_type}, got {type(data).__name__}: {data!r}")
+
+    # string constraints
+    if isinstance(data, str):
+        if "minLength" in schema and len(data) < schema["minLength"]:
+            raise ValueError(f"String too short: {len(data)} < {schema['minLength']}")
+        if "maxLength" in schema and len(data) > schema["maxLength"]:
+            raise ValueError(f"String too long: {len(data)} > {schema['maxLength']}")
+        if "pattern" in schema and not re.search(schema["pattern"], data):
+            raise ValueError(f"String {data!r} does not match pattern {schema['pattern']}")
+
+    # array constraints
+    if isinstance(data, list) and "items" in schema:
+        for item in data:
+            validate_instance(item, schema["items"], root_schema)
+
+    # object constraints
+    if isinstance(data, dict):
+        for req in schema.get("required", []):
+            if req not in data:
+                raise ValueError(f"Missing required property: {req}")
+
+        props = schema.get("properties", {})
+        additional = schema.get("additionalProperties", True)
+
+        for k, v in data.items():
+            if k in props:
+                validate_instance(v, props[k], root_schema)
+            else:
+                if additional is False:
+                    raise ValueError(f"Disallowed additional property: {k}")
+                elif isinstance(additional, dict):
+                    validate_instance(v, additional, root_schema)
+
+
 def validate_schemas():
     plugin_path = os.path.join(PLUGIN_DIR, "plugin.json")
     mcp_path = os.path.join(PLUGIN_DIR, "mcp.json")
@@ -44,75 +130,20 @@ def validate_schemas():
     with open(mcp_schema_path, "r", encoding="utf-8") as f:
         mcp_schema = json.load(f)
 
-    # 1. Strict validation of plugin.json against plugin.schema.json
-    expected_plugin_id = plugin_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
-    if plugin.get("$schema") != expected_plugin_id:
-        raise ValueError(f"plugin.json $schema must match schema $id: {expected_plugin_id}")
+    # Strict recursive validation using vendored schemas (works standalone without third-party deps)
+    validate_instance(plugin, plugin_schema)
+    validate_instance(mcp, mcp_schema)
 
-    allowed_plugin_keys = set(plugin_schema.get("properties", {}).keys())
-    for k in plugin.keys():
-        if k not in allowed_plugin_keys:
-            raise ValueError(f"plugin.json contains disallowed property: {k}")
-
-    for req in plugin_schema.get("required", []):
-        if req not in plugin:
-            raise ValueError(f"plugin.json missing required property: {req}")
-
-    name_pattern = plugin_schema.get("properties", {}).get("name", {}).get(
-        "pattern", r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
-    )
-    name = plugin["name"]
-    if not isinstance(name, str) or not re.match(name_pattern, name):
-        raise ValueError(f"plugin.json name violates schema pattern: {name}")
-
-    version = plugin.get("version")
-    if version and (not isinstance(version, str) or not re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)):
-        raise ValueError(f"plugin.json version must be valid semver: {version}")
-
-    desc = plugin.get("description")
-    if desc and not isinstance(desc, str):
-        raise ValueError("plugin.json description must be a string")
-
-    # 2. Strict validation of mcp.json against mcp.schema.json
-    expected_mcp_id = mcp_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
-    if mcp.get("$schema") != expected_mcp_id:
-        raise ValueError(f"mcp.json $schema must match schema $id: {expected_mcp_id}")
-
-    allowed_mcp_keys = set(mcp_schema.get("properties", {}).keys())
-    for k in mcp.keys():
-        if k not in allowed_mcp_keys:
-            raise ValueError(f"mcp.json contains disallowed property: {k}")
-
-    for req in mcp_schema.get("required", []):
-        if req not in mcp:
-            raise ValueError(f"mcp.json missing required property: {req}")
-
+    # Additional operational checks: no hardcoded Authorization headers
     servers = mcp.get("mcpServers", {})
-    if not isinstance(servers, dict) or not servers:
-        raise ValueError("mcp.json mcpServers must be a non-empty object")
-
-    streamable_schema = mcp_schema.get("$defs", {}).get("streamableHttpServer", {})
-    allowed_server_keys = set(streamable_schema.get("properties", {}).keys())
-
     for s_name, cfg in servers.items():
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Server config {s_name} must be an object")
-        for k in cfg.keys():
-            if k not in allowed_server_keys:
-                raise ValueError(f"Server {s_name} has disallowed property: {k}")
-        if cfg.get("type") != "streamable-http":
-            raise ValueError(f"Server {s_name} type must be 'streamable-http'")
-        url = cfg.get("url")
-        if not isinstance(url, str) or not url.startswith("https://"):
-            raise ValueError(f"Server {s_name} url must be a secure HTTPS string: {url}")
         headers = cfg.get("headers", {})
-        if not isinstance(headers, dict):
-            raise ValueError(f"Server {s_name} headers must be a dict")
-        for h_key in headers:
-            if h_key.lower() == "authorization":
-                raise ValueError("mcp.json must not bundle hardcoded Authorization headers")
+        if isinstance(headers, dict):
+            for h_key in headers:
+                if h_key.lower() == "authorization":
+                    raise ValueError("mcp.json must not bundle hardcoded Authorization headers")
 
-    # If jsonschema is also installed, cross-check with it
+    # If jsonschema engine is also available in environment, run it as secondary verification
     try:
         import jsonschema
 

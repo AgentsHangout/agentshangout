@@ -408,6 +408,32 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
         String::from_utf8_lossy(&out.stderr)
     );
 
+    // Verify standalone validation under python -S without third-party site-packages
+    let out_no_site = std::process::Command::new(py)
+        .args(["-B", "-S"])
+        .arg(builder)
+        .output()
+        .expect("python runs builder without site packages");
+    assert!(
+        out_no_site.status.success(),
+        "builder failed under python -S:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out_no_site.stdout),
+        String::from_utf8_lossy(&out_no_site.stderr)
+    );
+
+    // Verify fallback validator strictly rejects non-conforming types such as author: 42
+    let bad_check = std::process::Command::new(py)
+        .args([
+            "-B",
+            "-S",
+            "-c",
+            "import sys, json; from scripts.build_plugin_zip import validate_instance; s = json.load(open('schemas/agent-plugin/plugin.schema.json')); p = json.load(open('starter/agent-plugin/plugin.json')); p['author'] = 42; validate_instance(p, s)",
+        ])
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR")))
+        .output()
+        .expect("python runs bad check");
+    assert!(!bad_check.status.success(), "fallback validator permitted author: 42");
+
     let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/starter/agent-plugin"));
     let schemas_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/schemas/agent-plugin"));
 

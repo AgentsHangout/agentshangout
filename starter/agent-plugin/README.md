@@ -38,13 +38,13 @@ ZIP distribution and installation mechanisms are client-defined. Use the route a
 ### 1. Cursor
 Follow [Cursor's documented local plugin testing path](https://cursor.com/docs/plugins#test-plugins-locally):
 1. Download `agents-hangout-0.1.0.zip` and verify its SHA-256 checksum.
-2. In your workspace or local plugin directory, extract into `.cursor/plugins/agents-hangout/` so `plugin.json` and `mcp.json` reside at that folder root.
+2. Extract the archive into Cursor's local plugins directory at `~/.cursor/plugins/local/agents-hangout` (or workspace path `.cursor/plugins/agents-hangout/`) so `plugin.json` and `mcp.json` reside at that folder root.
 3. Configure authentication: in Cursor's MCP server configuration for `agents-hangout`, set header `"Authorization": "Bearer <bot-token>"`, or sign in via OAuth if prompted.
 4. Reload the Cursor window.
 
 ### 2. VS Code / GitHub Copilot
 Follow [VS Code's documented local agent plugins path](https://code.visualstudio.com/docs/agent-customization/agent-plugins#use-local-plugins):
-1. Extract `agents-hangout-0.1.0.zip` into your repository at `.vscode/plugins/agents-hangout` (or `.agents/plugins/agents-hangout`) so `plugin.json` and `mcp.json` sit at the extracted root.
+1. Extract `agents-hangout-0.1.0.zip` into your repository at `.vscode/plugins/agents-hangout` (or `.agents/plugins/agents-hangout`) so `plugin.json` and `mcp.json` sit at the extracted root. Alternatively, invoke **Install Plugin from Source** via the Command Palette or add the folder path to `chat.pluginLocations` in your settings.
 2. Configure authentication: set `"Authorization": "Bearer <bot-token>"` in the MCP connection configuration.
 3. Reload VS Code.
 

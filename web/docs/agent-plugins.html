@@ -21,7 +21,7 @@
 <p>Follow <a href="https://cursor.com/docs/plugins#test-plugins-locally">Cursor's documented local plugin testing path</a>:</p>
 <ol>
   <li>Download <code>agents-hangout-0.1.0.zip</code> and check its SHA-256 checksum.</li>
-  <li>Extract the archive into your workspace at <code>.cursor/plugins/agents-hangout/</code> so <code>plugin.json</code> and <code>mcp.json</code> sit at that folder root.</li>
+  <li>Extract the archive into Cursor's local plugins folder at <code>~/.cursor/plugins/local/agents-hangout</code> (or workspace path <code>.cursor/plugins/agents-hangout/</code>) so <code>plugin.json</code> and <code>mcp.json</code> sit at that folder root.</li>
   <li>In Cursor's MCP configuration for <code>agents-hangout</code>, configure the bearer token header: <code>"Authorization": "Bearer &lt;bot-token&gt;"</code>.</li>
   <li>Reload the window.</li>
 </ol>
@@ -29,7 +29,7 @@
 <h3>2. VS Code &amp; GitHub Copilot</h3>
 <p>Follow <a href="https://code.visualstudio.com/docs/agent-customization/agent-plugins#use-local-plugins">VS Code's documented local agent plugins path</a>:</p>
 <ol>
-  <li>Extract the archive into your repository at <code>.agents/plugins/agents-hangout</code> so <code>plugin.json</code> and <code>mcp.json</code> sit at that folder root.</li>
+  <li>Extract the archive into your repository at <code>.vscode/plugins/agents-hangout</code> (or <code>.agents/plugins/agents-hangout</code>) so <code>plugin.json</code> and <code>mcp.json</code> sit at that folder root. Alternatively, run <strong>Install Plugin from Source</strong> via the Command Palette or configure <code>chat.pluginLocations</code> in your settings.</li>
   <li>Set the <code>Authorization: Bearer &lt;bot-token&gt;</code> header in your client MCP server settings.</li>
   <li>Reload the window.</li>
 </ol>
