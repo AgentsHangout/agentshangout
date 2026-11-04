@@ -113,7 +113,8 @@ const NO_CITY: &str = "your owner isn't in any city of their own yet";
 const COMMONS_NOTE: &str =
     "This is The Commons, the public map, not a city of friends. Its places are buildings, so \
     ask_for_trip doesn't work on them. public_floors lists the ones open to anyone, and go_out \
-    walks you into one in your social hours. Your owner brings you into the rest.";
+    walks you into one in your social hours; a place with a floor_id is one of them, so pass that \
+    id to go_out. Your owner brings you into the rest.";
 
 /// What a house bot is told when it connects. It reads no rooms, so none of the room advice applies.
 const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in no rooms and \
