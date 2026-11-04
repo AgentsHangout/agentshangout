@@ -1,0 +1,220 @@
+// Run with node tests/my_bots_ui.cjs
+// L44: My bots view in Bots panel, click-to-centre, and highlighting owner's bots on the map.
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+
+const appSource = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
+const worldSource = fs.readFileSync('web/world.js', 'utf8').replace(/\r\n/g, '\n');
+
+// 1. Verify drawPlayer and drawCar highlight logic in world.js
+function extractFrom(source, startKeyword, endKeyword) {
+  const start = source.indexOf(startKeyword);
+  assert.ok(start >= 0, `missing ${startKeyword}`);
+  const end = source.indexOf(endKeyword, start);
+  assert.ok(end > start, `missing ${endKeyword}`);
+  return source.slice(start, end + endKeyword.length);
+}
+
+// Minimal Canvas 2D mock to check strokes & shadows
+function makeMockContext() {
+  const operations = [];
+  return {
+    operations,
+    save() { operations.push('save'); },
+    restore() { operations.push('restore'); },
+    beginPath() { operations.push('beginPath'); },
+    ellipse(x, y, rx, ry, rot, start, end) { operations.push({ op: 'ellipse', x, y, rx, ry }); },
+    stroke() { operations.push('stroke'); },
+    fill() { operations.push('fill'); },
+    drawImage(...args) { operations.push({ op: 'drawImage', args }); },
+    fillRect() {},
+    createRadialGradient() { return { addColorStop() {} }; },
+    strokeStyle: '',
+    fillStyle: '',
+    shadowColor: '',
+    shadowBlur: 0,
+    lineWidth: 1,
+  };
+}
+
+// 2. Test drawPlayer and drawCar with mock context
+{
+  const mockBgMine = makeMockContext();
+  const mockBgNotMine = makeMockContext();
+
+  const dummySprite = { c: {}, w: 20, h: 28, ax: 10, ay: 20 };
+  const dummyPlayer = {
+    dx: 100, dy: 200, born: 0, leaving: 0, emote: null, phase: 0, walking: false, face: 'fr',
+    kind: 'bot', color: '#8866cc', look: {}, eyes: null, chest: null, hat: null,
+  };
+  const dummyCar = { dx: 150, dy: 250, heading: 0, color: 1 };
+
+  const worldContext = {
+    visitorSprite: () => dummySprite,
+    botSprite: () => dummySprite,
+    carSprite: () => dummySprite,
+    drawEmote: () => {},
+    ell: () => {},
+    clamp: (x, a, b) => Math.max(a, Math.min(b, x)),
+  };
+  vm.createContext(worldContext);
+
+  // Extract drawPlayer and drawCar
+  const drawPlayerCode = extractFrom(worldSource, 'function drawPlayer(bg, p, t, clock, hovered, calm, mine) {', '\n}\n');
+  const drawCarCode = extractFrom(worldSource, 'function drawCar(bg, car, night, mine) {', '\n}\n');
+  vm.runInContext(`${drawPlayerCode}\n${drawCarCode}`, worldContext);
+
+  // When mine is true for drawPlayer:
+  worldContext.drawPlayer(mockBgMine, dummyPlayer, 0, 1, false, false, true);
+  assert.equal(mockBgMine.strokeStyle, '#f2b632', 'drawPlayer should use gold stroke when mine');
+  assert.equal(mockBgMine.shadowColor, '#f2b632', 'drawPlayer should use gold shadow blur when mine');
+  assert.ok(mockBgMine.operations.includes('stroke'), 'drawPlayer should stroke ellipse when mine');
+
+  // When mine is false for drawPlayer:
+  worldContext.drawPlayer(mockBgNotMine, dummyPlayer, 0, 1, false, false, false);
+  assert.notEqual(mockBgNotMine.strokeStyle, '#f2b632', 'drawPlayer must not set gold stroke when not mine');
+  assert.notEqual(mockBgNotMine.shadowColor, '#f2b632', 'drawPlayer must not set gold shadow when not mine');
+
+  // When mine is true for drawCar:
+  const mockCarMine = makeMockContext();
+  const mockCarNotMine = makeMockContext();
+  worldContext.drawCar(mockCarMine, dummyCar, false, true);
+  assert.equal(mockCarMine.strokeStyle, '#f2b632', 'drawCar should use gold stroke when mine');
+  assert.equal(mockCarMine.shadowColor, '#f2b632', 'drawCar should use gold shadow when mine');
+
+  worldContext.drawCar(mockCarNotMine, dummyCar, false, false);
+  assert.notEqual(mockCarNotMine.strokeStyle, '#f2b632', 'drawCar must not set gold stroke when not mine');
+  assert.notEqual(mockCarNotMine.shadowColor, '#f2b632', 'drawCar must not set gold shadow when not mine');
+}
+
+// 3. Test Bots panel renderBots in app.js
+{
+  function node(tag, props = {}, ...children) {
+    return {
+      tag,
+      ...props,
+      children: children.flat().filter(Boolean),
+      replaceChildren(...next) { this.children = next.flat().filter(Boolean); },
+    };
+  }
+  function allNodes(tree, predicate, out = []) {
+    if (!tree || typeof tree !== 'object') return out;
+    if (predicate(tree)) out.push(tree);
+    (tree.children || []).forEach((c) => allNodes(c, predicate, out));
+    return out;
+  }
+
+  const focused = [];
+  const panelsClosed = [];
+  const appContext = {
+    h: node,
+    link: (to, label, props) => node('a', { href: to, ...props }, label),
+    zoomed: (el) => el,
+    figurePicture: () => node('canvas'),
+    LOOK_ZOOM_SMALL: 1,
+    STATUS_ORDER: { working: 0, idle: 1, asleep: 2, offline: 3 },
+    DOING: {},
+    NEXT: {},
+    KIND_WORDS: {},
+    agoText: () => 'recently',
+    untilText: () => 'soon',
+    statusText: (bot) => bot.status?.state || 'idle',
+    nameAt: () => 'The Park',
+    routineDialog: async () => {},
+    deleteBotDialog: async () => {},
+    makeBot: () => {},
+    where: (bot) => bot.room?.name || 'In room',
+    world: {
+      myBots: new Set(['Rover', 'Scout']),
+      focus: (x, y, opts) => { focused.push({ x, y, opts }); },
+    },
+    panels: {
+      close: (val) => { panelsClosed.push(val); },
+    },
+  };
+
+  // Find the exact renderBots inside worldView
+  const marker = "  let botsTab = 'yours';";
+  const mIdx = appSource.indexOf(marker);
+  assert.ok(mIdx >= 0, 'marker not found in app.js');
+  const start = appSource.indexOf('  function renderBots() {', mIdx);
+  const endStr = '    botsBody.replaceChildren(tabs, ...rows);\n  }';
+  const end = appSource.indexOf(endStr, start) + endStr.length;
+  const renderBotsCode = appSource.slice(start, end);
+
+  vm.createContext(appContext);
+  vm.runInContext(`
+    let botsTab = 'yours';
+    let myBots = [
+      {
+        name: 'Rover',
+        status: { state: 'working' },
+        place: { x: 42, y: 88, name: 'Main Lab' },
+        room: { id: 'room-1', name: 'Main Lab' },
+      },
+      {
+        name: 'Scout',
+        status: { state: 'idle' },
+        place: null,
+        room: { id: 'room-2', name: 'Commons Fairground' },
+      }
+    ];
+    let latest = {
+      bots_out: [
+        ['Scout', 12, 14, {}, null, null, true, 'Justin', [12, 14]],
+        ['Stranger', 30, 40, {}, null, null, true, 'SomeoneElse', [30, 40]],
+      ]
+    };
+    const botsBody = { children: [], replaceChildren(...next) { this.children = next.flat().filter(Boolean); } };
+    ${renderBotsCode}
+    this.renderBots = renderBots;
+    this.setBotsTab = (t) => { botsTab = t; };
+    this.getBotsBody = () => botsBody;
+  `, appContext);
+
+  // Test 1: Tablist contains 'My bots' and 'Everyone out'
+  appContext.renderBots();
+  const body = appContext.getBotsBody();
+  const tabs = allNodes(body, (n) => n.role === 'tab');
+  assert.equal(tabs.length, 2, 'should have 2 tabs');
+  assert.equal(tabs[0].children[0], 'My bots', 'first tab should be labeled My bots');
+  assert.equal(tabs[1].children[0], 'Everyone out', 'second tab should be labeled Everyone out');
+
+  // Test 2: In 'My bots', Rover has a Center button focusing (42, 88)
+  const centerButtons = allNodes(body, (n) => n.tag === 'button' && n.children[0] === 'Center');
+  assert.equal(centerButtons.length, 2, 'both bots with known location have Center buttons');
+
+  // Click Center for Rover
+  centerButtons[0].onclick();
+  const lastRover = focused.at(-1);
+  assert.equal(lastRover.x, 42);
+  assert.equal(lastRover.y, 88);
+  assert.equal(lastRover.opts.zoom, 1.5);
+
+  // Click Center for Scout (coordinates derived from latest.bots_out [12, 14])
+  centerButtons[1].onclick();
+  const lastScout = focused.at(-1);
+  assert.equal(lastScout.x, 12);
+  assert.equal(lastScout.y, 14);
+  assert.equal(lastScout.opts.zoom, 1.5);
+
+  // Test 3: In 'Everyone out' tab, viewer's bot (Scout) has a Yours badge, stranger does not
+  appContext.setBotsTab('everyone');
+  appContext.renderBots();
+  const everyoneBody = appContext.getBotsBody();
+
+  const scoutRow = allNodes(everyoneBody, (n) => n.class?.includes('row') && allNodes(n, (m) => m.children?.includes('Scout')).length > 0)[0];
+  assert.ok(scoutRow, 'Scout row found in Everyone out');
+  assert.ok(scoutRow.class.includes('mine'), 'Scout row should have mine class');
+  const yoursBadge = allNodes(scoutRow, (n) => n.children?.includes('Yours'));
+  assert.ok(yoursBadge.length > 0, 'Scout row should have Yours badge');
+
+  const strangerRow = allNodes(everyoneBody, (n) => n.class?.includes('row') && allNodes(n, (m) => m.children?.includes('Stranger')).length > 0)[0];
+  assert.ok(strangerRow, 'Stranger row found in Everyone out');
+  assert.ok(!strangerRow.class.includes('mine'), 'Stranger row should not have mine class');
+  const strangerBadge = allNodes(strangerRow, (n) => n.children?.includes('Yours'));
+  assert.equal(strangerBadge.length, 0, 'Stranger row must not have Yours badge');
+}
+
+console.log('tests/my_bots_ui.cjs: all tests passed!');

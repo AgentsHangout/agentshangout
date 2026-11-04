@@ -3492,7 +3492,7 @@ function drawEmote(bg, emote, X, Y, t, calm) {
   }
 }
 
-function drawPlayer(bg, p, t, clock, hovered, calm) {
+function drawPlayer(bg, p, t, clock, hovered, calm, mine) {
   const X = p.dx;
   const Y = p.dy;
   const age = clock - p.born;
@@ -3537,10 +3537,26 @@ function drawPlayer(bg, p, t, clock, hovered, calm) {
     ? visitorSprite(p.human, back, flip, step, arms, shut, sitting)
     : botSprite({ color: p.color, look: p.look, eyes: p.eyes, chest: p.chest, hat: p.hat, back, flip, step, arms, shut, sitting, tilt });
   const sway = emote === 'dance' && !calm ? Math.sin(beat * 2) * 1.4 : 0;
-  if (hovered) ell(bg, 'rgba(255,255,255,.4)', X, Y, human ? 11 : 13, human ? 4.6 : 5.4);
-  ell(bg, 'rgba(24,20,44,.3)', X + 3, Y + 0.6, (human ? 7.4 : 9) - bob * 0.5, human ? 2.8 : 3.4);
-  const h = s.h * k;
-  bg.drawImage(s.c, X - s.ax + sway, Y - (s.ay + bob) * k, s.w, h);
+  if (mine) {
+    bg.save();
+    bg.strokeStyle = '#f2b632';
+    bg.lineWidth = 1.8;
+    bg.beginPath();
+    bg.ellipse(X, Y + 0.6, human ? 11 : 13, human ? 4.2 : 5.0, 0, 0, Math.PI * 2);
+    bg.stroke();
+    bg.shadowColor = '#f2b632';
+    bg.shadowBlur = 5;
+    if (hovered) ell(bg, 'rgba(255,255,255,.4)', X, Y, human ? 11 : 13, human ? 4.6 : 5.4);
+    ell(bg, 'rgba(24,20,44,.3)', X + 3, Y + 0.6, (human ? 7.4 : 9) - bob * 0.5, human ? 2.8 : 3.4);
+    const h = s.h * k;
+    bg.drawImage(s.c, X - s.ax + sway, Y - (s.ay + bob) * k, s.w, h);
+    bg.restore();
+  } else {
+    if (hovered) ell(bg, 'rgba(255,255,255,.4)', X, Y, human ? 11 : 13, human ? 4.6 : 5.4);
+    ell(bg, 'rgba(24,20,44,.3)', X + 3, Y + 0.6, (human ? 7.4 : 9) - bob * 0.5, human ? 2.8 : 3.4);
+    const h = s.h * k;
+    bg.drawImage(s.c, X - s.ax + sway, Y - (s.ay + bob) * k, s.w, h);
+  }
   if (emote && !p.leaving && k > 0.9) drawEmote(bg, emote, X, Y - (human ? 36 : 42) - bob, t, calm);
   return [X - 14, Y - (human ? 46 : 52), X + 14, Y + 4];
 }
@@ -4058,11 +4074,24 @@ function carSprite(heading, colorIdx) {
 // Which way a car points for each way a figure can face: 0 along +x, 1 along +y, 2 along -x, 3 along -y.
 const FACE_HEADING = { fr: 0, fl: 1, bl: 2, br: 3 };
 
-function drawCar(bg, car, night) {
+function drawCar(bg, car, night, mine) {
   const X = car.dx;
   const Y = car.dy;
   const s = carSprite(car.heading, car.color);
-  bg.drawImage(s.c, X - s.ax, Y - s.ay, s.w, s.h);
+  if (mine) {
+    bg.save();
+    bg.strokeStyle = '#f2b632';
+    bg.lineWidth = 1.8;
+    bg.beginPath();
+    bg.ellipse(X, Y + 1, 16, 6, 0, 0, Math.PI * 2);
+    bg.stroke();
+    bg.shadowColor = '#f2b632';
+    bg.shadowBlur = 5;
+    bg.drawImage(s.c, X - s.ax, Y - s.ay, s.w, s.h);
+    bg.restore();
+  } else {
+    bg.drawImage(s.c, X - s.ax, Y - s.ay, s.w, s.h);
+  }
   void night;
   return [X - 20, Y - 28, X + 20, Y + 6];
 }
@@ -6723,12 +6752,14 @@ export class World {
       switch (e.type) {
         case 'player':
         case 'person':
-        case 'visitor':
+        case 'visitor': {
+          const isMine = Boolean(this.myBots?.has(e.name));
           // Someone on a ride is drawn as their car, facing the way they're going.
           r4 = e.driving
-            ? drawCar(bg, { dx: e.dx, dy: e.dy, heading: FACE_HEADING[e.face] ?? 0, color: e.ride.color }, night)
-            : drawPlayer(bg, e, t, this.time, this.hoverEnt === e, this.calm);
+            ? drawCar(bg, { dx: e.dx, dy: e.dy, heading: FACE_HEADING[e.face] ?? 0, color: e.ride.color }, night, isMine)
+            : drawPlayer(bg, e, t, this.time, this.hoverEnt === e, this.calm, isMine);
           break;
+        }
         case 'frog':
           r4 = drawFrog(bg, e, t, this.time, this.hoverEnt === e, this.calm);
           break;
