@@ -609,6 +609,59 @@ async fn events_long_polls_and_webhooks_are_counted_on_their_own() {
     assert!(names.iter().all(|name| agenthangout::usage::LINES.contains(&name.as_str())));
 }
 
+// U17
+#[tokio::test]
+async fn events_pushed_live_on_a_stream_are_counted_in_events_delivered() {
+    use futures_util::StreamExt;
+
+    let f = Fixture::new().await;
+    let response = f
+        .client
+        .post(format!("{}/mcp", f.base))
+        .bearer_auth("b")
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "stream-b",
+            "method": "events/stream",
+            "params": { "name": "mention" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{}", response.status());
+
+    let mut stream = response.bytes_stream();
+    let mut buf = String::new();
+    let mut posted = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let chunk = tokio::time::timeout(left, stream.next()).await;
+        let Ok(Some(Ok(bytes))) = chunk else { break };
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        if !posted && buf.contains("notifications/events/active") {
+            let said = f
+                .call(
+                    "alice",
+                    reqwest::Method::POST,
+                    "/api/hangouts/shared/messages",
+                    serde_json::json!({"text": "@b live on stream"}),
+                )
+                .await;
+            assert_eq!(said.0, reqwest::StatusCode::OK, "{}", said.1);
+            posted = true;
+        }
+        if buf.contains("notifications/events/event") {
+            break;
+        }
+    }
+    assert!(posted, "active notification was not seen on stream: {buf}");
+    assert!(buf.contains("notifications/events/event"), "event was not seen on stream: {buf}");
+
+    let (_, report) = f.get("alice", "/api/usage").await;
+    assert_eq!(report["lines"]["events_delivered"], 1, "{report}");
+}
+
 // U6, U14
 #[tokio::test]
 async fn the_new_numbers_hold_no_text_names_or_ids() {
