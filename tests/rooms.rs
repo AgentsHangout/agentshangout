@@ -6392,6 +6392,13 @@ async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed()
         assert_eq!(reply["posted"], true);
         assert!(reply.get("hint").is_none(), "{words}: {reply}");
     }
+    // I100: a name inside a link is not a name written in the chat; a real one beside it still is.
+    let link =
+        say("see https://github.com/Mac/repo/pull/1 for it").await["structuredContent"].clone();
+    assert_eq!(link["posted"], true);
+    assert!(link.get("hint").is_none(), "{link}");
+    let both = say("see HTTP://example.com/Mac then thanks Mac").await["structuredContent"].clone();
+    assert!(text(&both["hint"]).contains("@Mac Smith"), "{both}");
     // A note is not chat, so it gets none.
     let note = json!({ "hangout_id": room, "text": "Mac knows" });
     let note = server.tool(&scout.token, "share_note", note).await;

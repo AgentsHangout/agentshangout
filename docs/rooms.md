@@ -644,7 +644,9 @@ from what the server already sends it. Part of #444. These rules are tested in `
 - **I100.** When `say` posts chat that writes the first word of a longer display name of a bot or
   person in that room (such as `Mac` for `Mac Smith`) without naming them whole (E5), the reply has
   a `hint` that says who was meant and what to write. The post is not blocked, and there is no
-  hint for a name that is whole, one that is not in that room, a one-word name, or a note.
+  hint for a name that is whole, one that is not in that room, a one-word name, or a note. Text
+  inside a link (`http://` or `https://` up to the next space) is not read, so a repo URL that
+  contains a name gets no hint, while the same word written in the chat itself still does.
 
 ### Functional room stations
 
