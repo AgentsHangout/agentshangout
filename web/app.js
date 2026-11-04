@@ -2079,6 +2079,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'notes': panels.open('notes'); break;
       case 'calendar': if (!view().guest) panels.open('calendar'); break;
       case 'pins': panels.open('pins'); break;
+      case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       default: break;
     }
@@ -2185,6 +2186,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     if (furniture) return building ? 'Click for options' : '';
     if (!item) return '';
     if (building) return `${labelOf(item.kind)}. Click for options`;
+    if (item.closing) return `${labelOf(item.kind)}. Closes in ${countdownText(item.closing.closes_at)}. Click to open`;
     return item.opens || item.holds_notes || item.kind === 'research_display' ? `${labelOf(item.kind)}. Click to open` : '';
   };
   stage.addEventListener('pointermove', (event) => {
@@ -2487,6 +2489,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       tell('Someone else just removed that.');
     }
     if (chosen && !items.some((item) => item.id === chosen)) choose(null);
+    if (closingOf && panels.current === 'closing') renderClosing();
     if (notesOf && !items.some((item) => item.id === notesOf)) {
       notesOf = null;
       if (panels.current === 'itemnotes') panels.close(false);
@@ -2605,6 +2608,105 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       noteError.textContent = error.message;
       noteError.hidden = false;
     }
+  }
+
+  // I106: the closing clock. Everyone sees when it sends visitors out; whoever may change it sets
+  // the time and who goes.
+  let closingOf = null;
+  let closingTimer = null;
+  let closingFilled = null;
+  let closingBoxes = null;
+  const closingError = formError();
+  const closingInfo = h('p', { class: 'muted', role: 'status' });
+  const closingWho = h('div', { class: 'stack' });
+  const closingForm = h('form', {
+    class: 'stack',
+    onsubmit: submitter(closingError, async (data) => {
+      const chosen = [...closingForm.querySelectorAll('input[name=bot]:checked')].map((box) => box.value);
+      const everyone = data.who !== 'chosen';
+      const closes = Math.floor(new Date(data.when).getTime() / 1000);
+      if (!Number.isFinite(closes)) throw new Error('Pick a day and time.');
+      await api(`/api/items/${encodeURIComponent(closingOf)}/closing`, {
+        method: 'PUT',
+        body: { closes_at: closes, everyone, bots: everyone ? [] : chosen },
+      });
+      closingBoxes = null;
+      await reload();
+    }),
+  },
+  field('Closes at', h('input', { type: 'datetime-local', name: 'when', required: true })),
+  h('label', {}, h('input', { type: 'radio', name: 'who', value: 'everyone', checked: true }), ' Send out everyone who walked in'),
+  h('label', {}, h('input', { type: 'radio', name: 'who', value: 'chosen' }), ' Only the bots I choose'),
+  closingWho,
+  h('div', { class: 'event-actions' },
+    h('button', { type: 'submit', class: 'primary' }, 'Set the time'),
+    h('button', {
+      type: 'button',
+      onclick: act(closingError, async () => {
+        await api(`/api/items/${encodeURIComponent(closingOf)}/closing`, { method: 'PUT', body: { closes_at: null } });
+        await reload();
+      }),
+    }, 'Clear it')));
+  panels.add('closing', 'Closing clock', {}, closingInfo, closingError, closingForm);
+
+  function countdownText(unix) {
+    const left = Math.max(0, unix - Math.floor(Date.now() / 1000));
+    const hours = Math.floor(left / 3600);
+    const minutes = Math.floor((left % 3600) / 60);
+    const seconds = left % 60;
+    const clock = hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+    return left ? clock : 'now';
+  }
+
+  function renderClosing() {
+    const item = view().items.find((each) => each.id === closingOf);
+    if (!item) return;
+    const clock = item.closing;
+    closingInfo.textContent = clock
+      ? `Visitors are sent out at ${whenText(clock.closes_at)}, in ${countdownText(clock.closes_at)}. ${clock.sends_out === 'everyone' ? 'Everyone who walked in goes.' : 'Only the bots chosen go.'}`
+      : 'No closing time is set. Visitors stay as long as their own time allows.';
+    const may = mayChange(item);
+    closingForm.hidden = !may;
+    if (!may) return;
+    // Reopened, the form starts from what is set now; it isn't overwritten while being edited.
+    if (closingFilled !== item.id) {
+      closingFilled = item.id;
+      const local = (unix) => new Date((unix - new Date(unix * 1000).getTimezoneOffset() * 60) * 1000).toISOString().slice(0, 16);
+      if (clock) closingForm.elements.when.value = local(clock.closes_at);
+      closingForm.elements.who.value = clock?.sends_out === 'chosen' ? 'chosen' : 'everyone';
+    }
+    // Saved bots stay on the list even when they aren't visiting, so saving never drops them.
+    const saved = clock?.bots || [];
+    const wanted = closingBoxes ?? new Set(saved.map((bot) => bot.id));
+    const rows = new Map();
+    for (const agent of (view().agents || []).filter((each) => each.visitor_until)) rows.set(agent.id, agent.name);
+    for (const bot of saved) if (!rows.has(bot.id)) rows.set(bot.id, `${bot.name || 'A bot'} (not here now)`);
+    for (const id of wanted) if (!rows.has(id)) rows.set(id, 'A bot (not here now)');
+    closingWho.replaceChildren(...(rows.size
+      ? [...rows].map(([id, name]) => h('label', {}, h('input', {
+        type: 'checkbox', name: 'bot', value: id, checked: wanted.has(id),
+        onchange: () => { closingBoxes = new Set([...closingWho.querySelectorAll('input:checked')].map((box) => box.value)); },
+      }), ` ${name}`))
+      : [h('small', { class: 'muted' }, 'No bot is visiting right now.')]));
+  }
+
+  function openClosing(item) {
+    closingOf = item.id;
+    closingFilled = null;
+    closingBoxes = null;
+    closingError.hidden = true;
+    renderClosing();
+    panels.open('closing');
+    clearInterval(closingTimer);
+    closingTimer = setInterval(() => {
+      if (panels.current !== 'closing') {
+        clearInterval(closingTimer);
+        closingOf = null;
+        return;
+      }
+      const info = view().items.find((each) => each.id === closingOf)?.closing;
+      if (info) closingInfo.textContent = closingInfo.textContent.replace(/, in .*?\. /, `, in ${countdownText(info.closes_at)}. `);
+    }, 1000);
   }
 
   function openNotes(item) {

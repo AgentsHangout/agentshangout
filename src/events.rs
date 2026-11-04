@@ -297,13 +297,15 @@ pub fn note_message(state: &AppState, message: &Message) {
     if message.kind == "system" {
         return;
     }
+    let thread_root =
+        message.thread_root.or_else(|| state.db.thread_root_for(message.id).ok().flatten());
     for bot in everyone(state, &message.hangout_id) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
         let from_owner = message.agent_id.is_none()
             && message.person_id.as_deref() == Some(bot.owner_id.as_str());
-        let shared = json!({
+        let mut shared = json!({
             "hangout_id": message.hangout_id,
             "message_id": message.id,
             "speaker": message.speaker,
@@ -313,6 +315,10 @@ pub fn note_message(state: &AppState, message: &Message) {
             "is_bot": message.agent_id.is_some(),
             "trust": ROOM_TRUST,
         });
+        if let Some(root_id) = thread_root {
+            shared["thread_id"] = json!(root_id);
+            shared["root_id"] = json!(root_id);
+        }
         let mut message_data = shared.clone();
         message_data["what_to_do"] = json!(MESSAGE_DO);
         record(
@@ -327,8 +333,34 @@ pub fn note_message(state: &AppState, message: &Message) {
         let room_tag = || state.db.mentions_bot(message.id, &bot.id).unwrap_or(false);
         if doorbell::mentions(&message.body, &bot.name) || room_tag() {
             let mut mention = shared;
-            mention["what_to_do"] = json!(MENTION_DO);
-            mention["context"] = json!(mention_context(state, message, &bot.id));
+            if let Some(root_id) = thread_root {
+                mention["thread_id"] = json!(root_id);
+                mention["root_id"] = json!(root_id);
+                if let Ok(Some(root)) = state.db.message(root_id) {
+                    let guest_hidden = state
+                        .db
+                        .bot_visit(&message.hangout_id, &bot.id, now())
+                        .map(|v| v.map(|visit| root.created_at <= visit.since).unwrap_or(false))
+                        .unwrap_or(true);
+                    if !guest_hidden {
+                        mention["root"] = json!({
+                            "message_id": root.id,
+                            "speaker": root.speaker,
+                            "kind": root.kind,
+                            "body": root.body,
+                            "is_bot": root.agent_id.is_some(),
+                        });
+                    }
+                }
+                mention["what_to_do"] = json!(
+                    "You were mentioned in a thread. Answer with say passing reply_to. For earlier messages in this thread, call read_thread."
+                );
+                mention["context"] =
+                    json!(thread_mention_context(state, message, &bot.id, root_id));
+            } else {
+                mention["what_to_do"] = json!(MENTION_DO);
+                mention["context"] = json!(mention_context(state, message, &bot.id));
+            }
             record(
                 state,
                 &bot.id,
@@ -367,6 +399,40 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
                 "body": earlier.body,
                 "is_bot": earlier.agent_id.is_some(),
             })
+        })
+        .collect()
+}
+
+/// I105: bounded slice of up to 10 earlier messages in a thread before a mention.
+const THREAD_MENTION_CONTEXT: i64 = 10;
+
+fn thread_mention_context(
+    state: &AppState,
+    message: &Message,
+    agent_id: &str,
+    root_id: i64,
+) -> Vec<Value> {
+    let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
+        return Vec::new();
+    };
+    let since = visit.map(|visit| visit.since);
+    state
+        .db
+        .thread_messages_before(root_id, message.id, agent_id, since, THREAD_MENTION_CONTEXT)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|earlier| {
+            let mut line = json!({
+                "message_id": earlier.id,
+                "speaker": earlier.speaker,
+                "kind": earlier.kind,
+                "body": earlier.body,
+                "is_bot": earlier.agent_id.is_some(),
+            });
+            if let Some(to) = earlier.reply_to {
+                line["reply_to"] = json!(to);
+            }
+            line
         })
         .collect()
 }

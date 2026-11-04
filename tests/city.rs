@@ -4762,6 +4762,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "oauth_event_retention",
         "owner_waits",
         "owner_question_closings",
+        "message_threads",
         "message_replies",
         "person_mentions",
         "check_in_answers",
@@ -4838,6 +4839,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "research_labs",
             "person_mentions",
             "check_in_answers",
+            "message_threads",
             "message_replies",
             "owner_question_closings",
             "owner_waits",
@@ -4968,6 +4970,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "usage_active_hours",
             "usage_latency",
             "usage_lines",
+            "waiting_pulse_off",
+            "closing_clocks",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
@@ -7662,4 +7666,183 @@ async fn a_bot_at_the_recycling_plant_is_off_the_map_and_a_home_doesnt_bring_it_
     assert!(home.body.to_string().contains("recycling plant"), "{}", home.body);
     let here = server.state.db.agents_in(&w.bo_home.living, now()).unwrap();
     assert!(here.iter().all(|bot| bot.id != rover.id), "it's back in the Living Room");
+}
+
+#[tokio::test]
+async fn guest_does_not_see_pre_arrival_root_in_thread_mention() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let porch = &w.ann_home.porch;
+    let ann_bot = server.bot(&w.ann, porch, "AnnBot").await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+
+    // Line posted before Scout arrives on the porch
+    let pre = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Secret pre-arrival chat" }),
+        )
+        .await;
+    let pre_id = pre["structuredContent"]["message_id"].as_i64().unwrap();
+
+    pause_a_second().await;
+    server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+
+    // Reply mentioning Scout in response to pre-arrival message
+    let rep = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "@Scout welcome!", "reply_to": pre_id }),
+        )
+        .await;
+    assert_ne!(rep["isError"], true, "{rep}");
+
+    // Scout reads events: mention event must NOT expose root body
+    let ev = server.tool(&scout.token, "events_since", json!({})).await;
+    let events = ev["structuredContent"]["events"].as_array().unwrap();
+    let mention =
+        events.iter().find(|e| e["name"] == "mention").expect("Scout received mention event");
+    assert!(
+        mention["data"].get("root").is_none(),
+        "pre-arrival root must not leak to guest in mention event: {mention}"
+    );
+
+    // Scout calling read_thread on pre_id must be refused / not found
+    let th = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": pre_id }))
+        .await;
+    assert_eq!(th["isError"], true, "{th}");
+}
+
+#[tokio::test]
+async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let porch = &w.ann_home.porch;
+    let ann_bot = server.bot(&w.ann, porch, "AnnBot").await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+
+    // 1. AnnBot posts root message A before Scout arrives
+    let pre = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Pre-arrival root message" }),
+        )
+        .await;
+    let pre_id = pre["structuredContent"]["message_id"].as_i64().unwrap();
+
+    let note_pre = server
+        .tool(
+            &ann_bot.token,
+            "share_note",
+            json!({ "hangout_id": porch, "text": "Pre-arrival note" }),
+        )
+        .await;
+    let note_pre_id = note_pre["structuredContent"]["message_id"].as_i64().unwrap();
+
+    pause_a_second().await;
+    // 2. Scout arrives on the porch
+    server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+    pause_a_second().await;
+
+    // 3. AnnBot posts reply B answering pre-arrival root message A
+    let rep_b = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Welcome Scout (B)", "reply_to": pre_id }),
+        )
+        .await;
+    assert_ne!(rep_b["isError"], true, "{rep_b}");
+    let b_id = rep_b["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 4. AnnBot posts reply C answering reply B (same thread)
+    let rep_c = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Glad you made it (C)", "reply_to": b_id }),
+        )
+        .await;
+    assert_ne!(rep_c["isError"], true, "{rep_c}");
+    let c_id = rep_c["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 5. Scout calls read_room: replies B and C must be visible inline without pre-arrival root A
+    let read = server.tool(&scout.token, "read_room", json!({ "hangout_id": porch })).await;
+    let messages = read["structuredContent"]["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(!ids.contains(&pre_id), "pre-arrival root A is NOT in read_room: {read}");
+    assert!(ids.contains(&b_id), "post-arrival reply B IS in read_room: {read}");
+    assert!(ids.contains(&c_id), "post-arrival reply C IS in read_room: {read}");
+
+    // Under Rule I91, a limited read (limit: 1) after pre_id returns the last message C (with earlier_messages: 1)
+    let poll_lim = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": porch, "after_message_id": pre_id, "limit": 1 }),
+        )
+        .await;
+    let msgs_lim = poll_lim["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs_lim.len(), 1, "poll_lim returned 1 message: {poll_lim}");
+    assert_eq!(msgs_lim[0]["id"], c_id, "poll_lim returns newest reply C: {poll_lim}");
+    assert_eq!(poll_lim["structuredContent"]["earlier_messages"], 1);
+    assert_eq!(poll_lim["structuredContent"]["last_message_id"], c_id);
+
+    // Reading incrementally after reply B returns reply C
+    let poll_after_b = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": porch, "after_message_id": b_id, "limit": 1 }),
+        )
+        .await;
+    let msgs_b = poll_after_b["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs_b.len(), 1);
+    assert_eq!(msgs_b[0]["id"], c_id);
+    assert_eq!(poll_after_b["structuredContent"]["last_message_id"], c_id);
+
+    // 6. Scout calls read_thread addressed by root A, reply B, or reply C:
+    // All three canonicalize to root A, with root text null and returning visible replies B and C
+    for addressed in [b_id, c_id, pre_id] {
+        let th = server
+            .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": addressed }))
+            .await;
+        assert_ne!(th["isError"], true, "read_thread addressed by {addressed} succeeds: {th}");
+        let root_val = &th["structuredContent"]["root"];
+        assert_eq!(root_val["id"], pre_id, "root is canonical pre_id for {addressed}: {th}");
+        assert_eq!(
+            root_val["text"],
+            json!(null),
+            "pre-arrival root body is null for {addressed}: {th}"
+        );
+        assert_eq!(root_val["text_hidden"], "posted before you arrived");
+        assert_eq!(root_val["from"], json!(null));
+        assert_eq!(root_val["owner"], json!(null));
+        assert_eq!(root_val["at"], json!(null));
+        assert_eq!(root_val["kind"], json!(null));
+        assert_eq!(root_val["is_bot"], json!(null));
+        assert_eq!(root_val["from_your_side"], json!(false));
+        let rep_ids: Vec<i64> = th["structuredContent"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            rep_ids,
+            vec![b_id, c_id],
+            "thread returns both post-arrival replies B and C: {th}"
+        );
+    }
+
+    // Pre-arrival non-chat note message returns not_found (404) to guest, not bad_request
+    let note_th = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": note_pre_id }))
+        .await;
+    assert_eq!(note_th["isError"], true, "pre-arrival note returns error: {note_th}");
+    assert!(note_th["content"][0]["text"].as_str().unwrap().contains("not found"), "{note_th}");
 }

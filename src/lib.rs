@@ -14,6 +14,7 @@ pub mod camera;
 pub mod city;
 pub mod clock;
 pub mod closeness;
+pub mod closing;
 pub mod db;
 pub mod discord;
 pub mod docs;

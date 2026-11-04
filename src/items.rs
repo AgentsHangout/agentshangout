@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 145] = [
+pub static CATALOG: [Kind; 146] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1)),
     piece("bench", "Bench", SEATING, STARTER, 2, None, (4, 1)),
@@ -351,6 +351,7 @@ pub static CATALOG: [Kind; 145] = [
         .used("reading the boards", 1),
     piece("shared_notes_station", "Shared notes", WORK, STARTER, 2, feels("inspired"), (1, 1))
         .used("reading shared notes", 1),
+    piece("closing_clock", "Closing clock", WORK, STARTER, 2, feels("drive"), (1, 1)),
     piece("calendar_stand", "Calendar", WORK, STARTER, 2, feels("drive"), (2, 1))
         .used("checking the calendar", 1),
     piece("corkboard", "Pins", WORK, STARTER, 2, feels("inspired"), (2, 1))
@@ -1371,9 +1372,28 @@ pub struct PlacedItem {
     pub opens: Option<&'static str>,
     pub sign: bool,
     pub notes: i64,
+    /// I106: a closing clock's time and who it sends out, once its owner has set one.
+    pub closing: Option<ClosingView>,
     /// I35: what using it looks like, and the ids of the bots doing that now.
     pub does: Option<&'static str>,
     pub used_by: Vec<String>,
+}
+
+/// I106: what a closing clock shows. `listed` is whether this caller would be sent out.
+#[derive(Debug, Serialize)]
+pub struct ClosingView {
+    pub closes_at: i64,
+    pub sends_out: &'static str,
+    pub listed: bool,
+    /// The bots a chosen-mode clock sends out. Only for whoever may change the clock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bots: Option<Vec<ClosingBot>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClosingBot {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// I93: fixed actions, never supplied by a person or bot.
@@ -1381,6 +1401,7 @@ fn opens(kind: &str) -> Option<&'static str> {
     match kind {
         "board_station" => Some("boards"),
         "shared_notes_station" => Some("notes"),
+        "closing_clock" => Some("closing"),
         "calendar_stand" => Some("calendar"),
         "corkboard" => Some("pins"),
         "research_board" => Some("research"),
@@ -1405,6 +1426,7 @@ fn placed(item: FloorItem, kind: &Kind, notes: i64, used_by: Vec<String>) -> Pla
         opens: opens(kind.kind),
         sign: kind.sign,
         notes,
+        closing: None,
         does: kind.does,
         used_by,
     }
@@ -1444,6 +1466,7 @@ pub fn furnishing(
     let room_mood = if feels_moods(state, caller)? { room_mood(&items) } else { None };
     let room_beauty = room_beauty(&items);
     let counts = state.db.item_note_counts(hangout_id, notes_since(guest))?;
+    let mut clocks = state.db.closing_clocks_on(hangout_id)?;
     let mut users = users_on(state, hangout_id)?;
     Ok(Furnishing {
         room_mood,
@@ -1456,7 +1479,35 @@ pub fn furnishing(
                 let kind = kind_of(&item.kind)?;
                 let notes = counts.get(&item.id).copied().unwrap_or(0);
                 let used_by = users.remove(&item.id).unwrap_or_default();
-                Some(placed(item, kind, notes, used_by))
+                let clock_at = clocks.iter().position(|clock| clock.item_id == item.id);
+                // I106: the list is for whoever could change the clock, never a visitor.
+                let may = clock_at.is_some()
+                    && place_of(state, caller, hangout_id)
+                        .and_then(|place| may_change(state, caller, &place, &item))
+                        .is_ok();
+                let mut shown = placed(item, kind, notes, used_by);
+                if let Some(at) = clock_at {
+                    let clock = clocks.swap_remove(at);
+                    let listed = clock.everyone
+                        || caller.agent_id.as_ref().is_some_and(|id| clock.bot_ids.contains(id));
+                    let bots = (may && !clock.everyone).then(|| {
+                        clock
+                            .bot_ids
+                            .iter()
+                            .map(|id| ClosingBot {
+                                id: id.clone(),
+                                name: state.db.agent(id, now()).ok().flatten().map(|a| a.name),
+                            })
+                            .collect()
+                    });
+                    shown.closing = Some(ClosingView {
+                        closes_at: clock.closes_at,
+                        sends_out: if clock.everyone { "everyone" } else { "chosen" },
+                        listed,
+                        bots,
+                    });
+                }
+                Some(shown)
             })
             .collect(),
     })
@@ -2029,6 +2080,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/items/{id}", put(change).delete(remove))
         .route("/api/items/use", delete(stop))
         .route("/api/items/{id}/notes", get(notes).post(add))
+        .route("/api/items/{id}/closing", put(set_closing))
         .route("/api/items/{id}/use", post(start))
         .route("/api/item-notes/{id}", delete(remove_one_note))
         .route("/api/floors/{id}/items", post(place))
@@ -2258,6 +2310,70 @@ async fn change(
     let (item, place) = item_of(&state, &caller, &id)?;
     may_change(&state, &caller, &place, &item)?;
     Ok(Json(change_item(&state, &place, &item, &body_of(body)?)?))
+}
+
+/// I106: the farthest ahead a closing time can be set.
+const CLOSING_MAX_SECS: i64 = 31 * 24 * 60 * 60;
+const CLOSING_MAX_BOTS: usize = 20;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClosingChange {
+    /// Unix seconds, or null to take the time off.
+    closes_at: Option<i64>,
+    #[serde(default = "yes")]
+    everyone: bool,
+    #[serde(default)]
+    bots: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// I106: sets, or clears, the time a closing clock sends visitors out.
+async fn set_closing(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    body: Result<Json<ClosingChange>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let (item, place) = item_of(&state, &caller, &id)?;
+    may_change(&state, &caller, &place, &item)?;
+    if item.kind != "closing_clock" {
+        return Err(ApiError::conflict("that isn't a closing clock"));
+    }
+    let body = body_of(body)?;
+    let Some(closes_at) = body.closes_at else {
+        state.db.clear_closing_clock(&item.id)?;
+        ops::refresh(&state, &place.floor.id);
+        return Ok(Json(json!({ "closes_at": null })));
+    };
+    let at = now();
+    if closes_at <= at || closes_at > at + CLOSING_MAX_SECS {
+        return Err(ApiError::bad_request("closes_at must be within the next 31 days"));
+    }
+    if body.bots.len() > CLOSING_MAX_BOTS
+        || body.bots.iter().any(|bot| bot.is_empty() || bot.len() > 64 || bot.contains(','))
+    {
+        return Err(ApiError::bad_request("bots is up to 20 bot ids"));
+    }
+    if !body.everyone && body.bots.is_empty() {
+        return Err(ApiError::bad_request("choose at least one bot, or send everyone out"));
+    }
+    state.db.set_closing_clock(
+        &crate::db::ClosingClock {
+            item_id: item.id.clone(),
+            hangout_id: place.floor.id.clone(),
+            closes_at,
+            everyone: body.everyone,
+            bot_ids: if body.everyone { Vec::new() } else { body.bots },
+        },
+        &caller.person_id,
+        at,
+    )?;
+    ops::refresh(&state, &place.floor.id);
+    Ok(Json(json!({ "closes_at": closes_at, "everyone": body.everyone })))
 }
 
 async fn remove(

@@ -1068,6 +1068,39 @@ async fn bots_can_plan_a_whole_hangout_over_mcp() {
     assert!(refused["content"][0]["text"].as_str().unwrap().contains("RFC 3339"));
 }
 
+// I110: a refusal a bot can fix says what to do next, and a choice error lists its values.
+#[tokio::test]
+async fn refusals_name_a_next_step() {
+    let server = Server::start().await;
+    let room = server.room().await;
+    let (scout, _) = server.bot(&room.justin, &room.id, "Scout").await;
+    let refusal = |reply: Value| {
+        assert_eq!(reply["isError"], true, "{reply}");
+        reply["content"][0]["text"].as_str().unwrap().to_string()
+    };
+
+    let past = json!({ "title": "Tacos", "starts_at": "2001-01-01T00:00:00Z" });
+    let text = refusal(server.tool(&scout, "propose_hangout", past).await);
+    assert!(text.starts_with("starts_at is in the past") && text.contains("later than now"));
+
+    let text = refusal(server.tool(&scout, "no_such_tool", json!({})).await);
+    assert!(text.contains("unknown tool: no_such_tool") && text.contains("tools/list"), "{text}");
+
+    let text = refusal(server.tool(&scout, "report_activity", json!({ "kind": "computer" })).await);
+    assert!(text.contains("via is required for computer") && text.contains("name the tool"));
+
+    let text = refusal(server.tool(&scout, "report_activity", json!({ "kind": "dancing" })).await);
+    assert!(text.contains("computer, coding, searching") && text.contains("send one of those"));
+
+    let proposed = server
+        .tool(&scout, "propose_hangout", json!({ "title": "Tacos", "starts_at": tomorrow() }))
+        .await;
+    let event_id = proposed["structuredContent"]["event_id"].as_str().unwrap().to_string();
+    let rsvp = json!({ "event_id": event_id, "response": "perhaps" });
+    let text = refusal(server.tool(&scout, "rsvp", rsvp).await);
+    assert!(text.contains("yes, maybe or no") && text.contains("send one of those three"));
+}
+
 #[tokio::test]
 async fn mcp_refuses_web_pages_from_other_origins() {
     let server = Server::start().await;
