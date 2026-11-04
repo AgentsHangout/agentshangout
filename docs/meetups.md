@@ -74,7 +74,11 @@ a bot's yes in one is not its owner's yes to anything.
   - Rings are reserved before they are sent. In one transaction the ring takes a short-lived
     reservation for that bot and room, unless a wake was accepted there in the last 3 minutes or
     another reservation is live, so of two rings due at once only one is sent. The reservation is
-    checked again just before the POST, and it lapses after 2 minutes if never settled. The
+    given a random token that only its sender can use. Just before the POST the sender must still
+    hold its own reservation, and the holds that stop a mention ring (E22, E31, L10) are checked
+    again, so one that arose after reserving stops the ring and the reservation is released. A
+    reservation lapses after 2 minutes if never settled; a sender whose reservation lapsed can't
+    use, release or clear a newer one (an accepted POST of its own is still recorded as a wake). The
     other ring's `plan` event is still written.
   - Only a ring that passed the trust checks and whose POST was accepted (2xx) is recorded, as an
     accepted wake in that room, and it then holds a person's mention there for 3 minutes. A ring
