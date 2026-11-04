@@ -5825,7 +5825,7 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
-// I102: typing is a transient, human-only signal in the room, never a chat line.
+// I108: typing is a transient, human-only signal in the room, never a chat line.
 #[tokio::test]
 async fn human_typing_is_room_scoped_and_clears_on_chat() {
     let server = Server::start().await;

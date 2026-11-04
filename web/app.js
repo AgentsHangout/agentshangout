@@ -2875,7 +2875,7 @@ function wardrobe({ panels, mayDress, reload }) {
   };
 }
 
-// I102: only booleans leave the composer. Serialize start/stop requests in order.
+// I108: only booleans leave the composer. Serialize start/stop requests in order.
 function humanTypingComposer(input, send) {
   let active = false, lastSent = 0, idle = null, stopped = false, generation = 0;
   let pending = Promise.resolve();

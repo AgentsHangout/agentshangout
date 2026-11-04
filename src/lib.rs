@@ -296,7 +296,7 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), usage::observe))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), web::security_headers))
-        // Outside everything that can refuse a request, so it reads what they leave (W105).
+        // Outside everything that can refuse a request, so it reads what they leave (W107).
         .layer(middleware::from_fn(web::read_what_was_left))
         // Outermost, so it sees every request. It only watches (W38).
         .layer(middleware::from_fn_with_state(state.clone(), worlds::observe))

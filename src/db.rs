@@ -6876,7 +6876,7 @@ impl Db {
         Ok(())
     }
 
-    /// L60: count only held third spaces, using the same ownership rules as project creation.
+    /// L61: count only held third spaces, using the same ownership rules as project creation.
     pub fn third_space_count(&self, owner_id: &str) -> rusqlite::Result<i64> {
         self.conn().query_row(
             &format!(
@@ -13535,7 +13535,7 @@ impl Db {
         Ok(())
     }
 
-    /// L61: the player a bot plays The Commons with, if it has one.
+    /// L62: the player a bot plays The Commons with, if it has one.
     pub fn player_of_agent(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn()
             .query_row(
@@ -13546,7 +13546,7 @@ impl Db {
             .optional()
     }
 
-    /// L61: where a person's house stands in a world, if it does.
+    /// L62: where a person's house stands in a world, if it does.
     pub fn house_of_person(
         &self,
         world_id: &str,
