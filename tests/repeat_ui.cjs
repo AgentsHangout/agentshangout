@@ -98,6 +98,27 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
   await boxes[1].onchange();
   assert.equal(json(calls.at(-1).body), json({ bots: ['b1'] }));
 
+  // Save then Stop while Save is pending: Stop waits, so an old PUT can't undo it.
+  reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] } };
+  panel = context.repeatPanel(plan, 'ann', bots);
+  await tick();
+  let release;
+  reads['PUT /api/events/ev1/cadence'] = () => new Promise((resolve) => { release = () => resolve({ freq: 'weekly', days: week, times: ['09:00'] }); });
+  reads['DELETE /api/events/ev1/cadence'] = { ok: true };
+  const mark = calls.length;
+  const saving = named(panel, 'save').onclick();
+  assert.equal(named(panel, 'save').disabled, true);
+  assert.equal(named(panel, 'stop').disabled, true);
+  await named(panel, 'stop').onclick();
+  assert.equal(calls.slice(mark).filter((c) => c.method === 'DELETE').length, 0, 'no DELETE while the PUT is pending');
+  release();
+  await saving;
+  assert.ok(!named(panel, 'stop').disabled, 'buttons come back when it settles');
+  // A failure re-enables them too.
+  reads['PUT /api/events/ev1/cadence'] = () => { throw new Error('no'); };
+  await named(panel, 'save').onclick();
+  assert.ok(!named(panel, 'save').disabled);
+
   // Quick opt-outs: the last write matches the boxes, whatever order the answers come in.
   reads = { 'GET /api/events/ev1/cadence': { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: ['b1', 'b2'] } };
   panel = context.repeatPanel(plan, 'bo', bots);

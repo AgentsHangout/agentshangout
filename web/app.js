@@ -3263,26 +3263,45 @@ function repeatPanel(event, you, bots) {
     const to = h('input', { name: 'to', value: cadence?.window?.to || '17:00', 'aria-label': 'Last start' });
     const until = h('input', { name: 'until', placeholder: 'YYYY-MM-DD', value: cadence?.until || '', 'aria-label': 'Last day' });
     const resume = h('input', { type: 'checkbox', name: 'resume', 'aria-label': 'Resume' });
-    const save = async () => {
+    // One owner request at a time: Save and Stop are both off until it settles, so a late Save can't
+    // bring back a repeat that Stop just ended.
+    let busy = false;
+    const buttons = [];
+    const only = (action) => async () => {
+      if (busy) return;
+      busy = true;
+      buttons.forEach((button) => { button.disabled = true; });
+      try { await action(); } finally {
+        busy = false;
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    };
+    const save = only(async () => {
       try {
         const values = { paused: Boolean(cadence?.paused) && !resume.checked, kind: kind.value, times: times.value, month_day: monthDay.value, interval: interval.value, from: from.value, to: to.value, until: until.value.trim() };
         data.cadence = await api(path, { method: 'PUT', body: repeatBody(values) });
         error.hidden = true;
         paint();
       } catch (failure) { fail(failure); }
-    };
-    const stop = async () => {
+    });
+    const stop = only(async () => {
       try {
         await api(path, { method: 'DELETE' });
         data.cadence = null;
         error.hidden = true;
         paint();
       } catch (failure) { fail(failure); }
+    });
+    const button = (kind, name, onclick, text) => {
+      const made = h('button', { type: 'button', class: kind, name, onclick }, text);
+      buttons.push(made);
+      return made;
     };
+    const stopButton = () => button('link danger', 'stop', stop, 'Stop repeating');
     if (!repeatEditable(cadence)) {
       body.replaceChildren(
         h('p', { class: 'muted', name: 'locked' }, 'This repeat was set elsewhere, with days this form cannot show. Stop repeating, or set a new one.'),
-        h('button', { type: 'button', class: 'link danger', name: 'stop', onclick: stop }, 'Stop repeating'),
+        stopButton(),
         error);
       return;
     }
@@ -3291,8 +3310,8 @@ function repeatPanel(event, you, bots) {
       field('How often', kind), field('Times, in your own time', times), field('Day of the month (1 to 28)', monthDay),
       field('Every how many hours', interval), field('From', from), field('To', to), field('Until (optional)', until),
       h('div', { class: 'event-actions' },
-        h('button', { type: 'button', class: 'ghost', name: 'save', onclick: save }, 'Save'),
-        cadence ? h('button', { type: 'button', class: 'link danger', name: 'stop', onclick: stop }, 'Stop repeating') : null),
+        button('ghost', 'save', save, 'Save'),
+        cadence ? stopButton() : null),
       error);
   };
 
