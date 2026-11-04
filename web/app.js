@@ -8186,7 +8186,7 @@ async function worldView(id, { home = false } = {}) {
       rows = out.length ? out.map((row) => {
         const at = Array.isArray(row[8]) ? row[8] : [row[1], row[2]];
         const placeName = nameAt(at[0], at[1]) || 'a place';
-        const isMine = Boolean(world.myBots?.has(row[0]));
+        const isMine = Boolean(world.myBots?.has(row[0]) && (!me?.name || row[7] === me.name));
         return h('div', { class: `row${isMine ? ' mine' : ''}` },
           h('span', { class: 'row-main' },
             h('strong', {}, row[0], isMine ? h('span', { class: 'badge', style: 'margin-left:6px;font-size:10px;color:#f2b632' }, 'Yours') : null),
@@ -8216,6 +8216,7 @@ async function worldView(id, { home = false } = {}) {
     myBots = bots;
     // The count over a building turns gold for one of these.
     world.myBots = new Set(bots.map((bot) => bot.name));
+    world.ownerName = me.name;
     renderBots();
   }
 
@@ -8918,7 +8919,7 @@ async function worldView(id, { home = false } = {}) {
     if (hoveredPlace && me && me.kind === 'person') loadPlace(hoveredPlace);
   }
 
-  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name });
+  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name, ownerName: me?.name });
   frame.host.parentElement.classList.add('wd-hovercard');
   frame.host.parentElement.append(placeCard);
   world.canvas.addEventListener('pointermove', (event) => {

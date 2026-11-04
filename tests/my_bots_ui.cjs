@@ -1,5 +1,5 @@
 // Run with node tests/my_bots_ui.cjs
-// L44: My bots view in Bots panel, click-to-centre, and highlighting owner's bots on the map.
+// L58: My bots view in Bots panel, click-to-centre, and highlighting owner's bots on the map.
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
@@ -88,7 +88,30 @@ function makeMockContext() {
   assert.notEqual(mockCarNotMine.shadowColor, '#f2b632', 'drawCar must not set gold shadow when not mine');
 }
 
-// 3. Test Bots panel renderBots in app.js
+// 3. Test owner matching in world.js: another owner's bot with the same name is never marked
+{
+  assert.ok(
+    worldSource.includes('Boolean(this.myBots?.has(e.name) && (!this.ownerName || e.owner === this.ownerName))'),
+    'world.js must check owner name when highlighting entities'
+  );
+  assert.ok(
+    worldSource.includes('if (this.myBots?.has(p.name) && (!this.ownerName || p.owner === this.ownerName)) there.mine = true;'),
+    'world.js must check owner name when marking building roof indicators'
+  );
+
+  const worldMock = {
+    myBots: new Set(['Scout']),
+    ownerName: 'Justin',
+  };
+  const isMineBot = (e) => Boolean(worldMock.myBots?.has(e.name) && (!worldMock.ownerName || e.owner === worldMock.ownerName));
+
+  assert.equal(isMineBot({ name: 'Scout', owner: 'Justin' }), true, "viewer's Scout is marked");
+  assert.equal(isMineBot({ name: 'Scout', owner: 'SomeoneElse' }), false, "stranger's Scout with identical name is never marked");
+  assert.equal(isMineBot({ name: 'Scout', owner: '' }), false, "ownerless Scout is never marked when viewer has ownerName");
+  assert.equal(isMineBot({ name: 'Stranger', owner: 'Justin' }), false, "unowned bot name is never marked");
+}
+
+// 4. Test Bots panel renderBots in app.js
 {
   function node(tag, props = {}, ...children) {
     return {
@@ -98,6 +121,7 @@ function makeMockContext() {
       replaceChildren(...next) { this.children = next.flat().filter(Boolean); },
     };
   }
+
   function allNodes(tree, predicate, out = []) {
     if (!tree || typeof tree !== 'object') return out;
     if (predicate(tree)) out.push(tree);
@@ -108,6 +132,7 @@ function makeMockContext() {
   const focused = [];
   const panelsClosed = [];
   const appContext = {
+    me: { name: 'Justin', kind: 'person' },
     h: node,
     link: (to, label, props) => node('a', { href: to, ...props }, label),
     zoomed: (el) => el,
@@ -127,6 +152,7 @@ function makeMockContext() {
     where: (bot) => bot.room?.name || 'In room',
     world: {
       myBots: new Set(['Rover', 'Scout']),
+      ownerName: 'Justin',
       focus: (x, y, opts) => { focused.push({ x, y, opts }); },
     },
     panels: {
@@ -163,6 +189,7 @@ function makeMockContext() {
     let latest = {
       bots_out: [
         ['Scout', 12, 14, {}, null, null, true, 'Justin', [12, 14]],
+        ['Scout', 50, 60, {}, null, null, true, 'SomeoneElse', [50, 60]],
         ['Stranger', 30, 40, {}, null, null, true, 'SomeoneElse', [30, 40]],
       ]
     };
@@ -173,7 +200,7 @@ function makeMockContext() {
     this.getBotsBody = () => botsBody;
   `, appContext);
 
-  // Test 1: Tablist contains 'My bots' and 'Everyone out'
+  // Test 4.1: Tablist contains 'My bots' and 'Everyone out'
   appContext.renderBots();
   const body = appContext.getBotsBody();
   const tabs = allNodes(body, (n) => n.role === 'tab');
@@ -181,7 +208,7 @@ function makeMockContext() {
   assert.equal(tabs[0].children[0], 'My bots', 'first tab should be labeled My bots');
   assert.equal(tabs[1].children[0], 'Everyone out', 'second tab should be labeled Everyone out');
 
-  // Test 2: In 'My bots', Rover has a Center button focusing (42, 88)
+  // Test 4.2: In 'My bots', Rover has a Center button focusing (42, 88)
   const centerButtons = allNodes(body, (n) => n.tag === 'button' && n.children[0] === 'Center');
   assert.equal(centerButtons.length, 2, 'both bots with known location have Center buttons');
 
@@ -199,20 +226,30 @@ function makeMockContext() {
   assert.equal(lastScout.y, 14);
   assert.equal(lastScout.opts.zoom, 1.5);
 
-  // Test 3: In 'Everyone out' tab, viewer's bot (Scout) has a Yours badge, stranger does not
+  // Test 4.3: In 'Everyone out' tab, viewer's bot (Justin's Scout) has a Yours badge and mine class
+  // Stranger's bot with the same name ('SomeoneElse's Scout) does NOT have Yours badge or mine class!
   appContext.setBotsTab('everyone');
   appContext.renderBots();
   const everyoneBody = appContext.getBotsBody();
 
-  const scoutRow = allNodes(everyoneBody, (n) => n.class?.includes('row') && allNodes(n, (m) => m.children?.includes('Scout')).length > 0)[0];
-  assert.ok(scoutRow, 'Scout row found in Everyone out');
-  assert.ok(scoutRow.class.includes('mine'), 'Scout row should have mine class');
-  const yoursBadge = allNodes(scoutRow, (n) => n.children?.includes('Yours'));
-  assert.ok(yoursBadge.length > 0, 'Scout row should have Yours badge');
+  const allRows = everyoneBody.children.slice(1);
+  assert.equal(allRows.length, 3, 'should render 3 bot rows in Everyone out');
 
-  const strangerRow = allNodes(everyoneBody, (n) => n.class?.includes('row') && allNodes(n, (m) => m.children?.includes('Stranger')).length > 0)[0];
-  assert.ok(strangerRow, 'Stranger row found in Everyone out');
-  assert.ok(!strangerRow.class.includes('mine'), 'Stranger row should not have mine class');
+  // Justin's Scout:
+  const justinScoutRow = allRows[0];
+  assert.ok(justinScoutRow.class.includes('mine'), "Justin's Scout row should have mine class");
+  const justinBadge = allNodes(justinScoutRow, (n) => n.children?.includes('Yours'));
+  assert.equal(justinBadge.length, 1, "Justin's Scout must have Yours badge");
+
+  // SomeoneElse's Scout (same name!):
+  const strangerScoutRow = allRows[1];
+  assert.ok(!strangerScoutRow.class.includes('mine'), "SomeoneElse's Scout must not have mine class");
+  const strangerScoutBadge = allNodes(strangerScoutRow, (n) => n.children?.includes('Yours'));
+  assert.equal(strangerScoutBadge.length, 0, "SomeoneElse's Scout must never have Yours badge");
+
+  // Stranger:
+  const strangerRow = allRows[2];
+  assert.ok(!strangerRow.class.includes('mine'), 'Stranger row must not have mine class');
   const strangerBadge = allNodes(strangerRow, (n) => n.children?.includes('Yours'));
   assert.equal(strangerBadge.length, 0, 'Stranger row must not have Yours badge');
 }

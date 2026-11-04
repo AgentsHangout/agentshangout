@@ -1,4 +1,4 @@
-//! L44: My bots view in Bots panel, click-to-centre, and highlighting owner's bots on the map.
+//! L58: My bots view in Bots panel, click-to-centre, and highlighting owner's bots on the map.
 #[test]
 fn my_bots_ui() {
     let output =

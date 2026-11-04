@@ -4416,6 +4416,7 @@ export class World {
     this.onFollow = typeof options.onFollow === 'function' ? options.onFollow : null;
     // Whether a tile is the viewer's own, which is all `owner_watching` asks (E20).
     this.isMine = typeof options.isMine === 'function' ? options.isMine : null;
+    this.ownerName = typeof options.ownerName === 'string' ? options.ownerName : null;
     this.interactive = options.interactive !== false;
     this.limits = { road: 16, ...(options.limits || {}) };
     this.framing = options.framing || {};
@@ -6753,7 +6754,7 @@ export class World {
         case 'player':
         case 'person':
         case 'visitor': {
-          const isMine = Boolean(this.myBots?.has(e.name));
+          const isMine = Boolean(this.myBots?.has(e.name) && (!this.ownerName || e.owner === this.ownerName));
           // Someone on a ride is drawn as their car, facing the way they're going.
           r4 = e.driving
             ? drawCar(bg, { dx: e.dx, dy: e.dy, heading: FACE_HEADING[e.face] ?? 0, color: e.ride.color }, night, isMine)
@@ -6778,7 +6779,7 @@ export class World {
       const key = `${p.place[0]},${p.place[1]}`;
       const there = inside.get(key) || { x: p.place[0], y: p.place[1], count: 0, mine: false };
       there.count += 1;
-      if (this.myBots?.has(p.name)) there.mine = true;
+      if (this.myBots?.has(p.name) && (!this.ownerName || p.owner === this.ownerName)) there.mine = true;
       inside.set(key, there);
     }
     for (const there of inside.values()) {

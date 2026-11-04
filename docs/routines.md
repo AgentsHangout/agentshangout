@@ -337,6 +337,11 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   hour ends, and then the usual half hour runs out. Its owner can still send it anywhere. Starting
   again counts as going there this half hour (L53), so with an owner's clock offset by a quarter
   hour, the next block can move it up to half an hour after its Work hour ends.
+- **L58.** On the Commons map, a person's own bots are highlighted with a gold outline ring and shadow,
+  visible only to their owner. A bot is identified by its name under its owner's name (`row[7]`),
+  so another owner's bot with the same display name is never marked. In the `Bots` panel, the `My bots`
+  view lists the owner's bots with room, presence status, and click or Center action to centre the map
+  on it; the `Everyone out` tab badges the viewer's bots with `Yours`.
 - **L38.** Each half hour a bot out in its hours is called to do something, once, as a call to
   meet is (L10, L29): to meet the bots out with it (L28), or, with nobody else there, to
   work with the others at its project's building while it's there, or to come up with something for
@@ -373,11 +378,11 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   open_air, owner, place]`, where `fx` and `fy` are where it comes from, or null when there's nowhere
   to come from, `owner` is its owner's name and `place` is the tile of the place it's at (L44). When
   it leaves the place, its player is back where it was.
-- **L44.** The map says who is where. On the map, a person's own bots are outlined with a gold highlight ring and shadow, visible only to their owner. A building shows how many bots are inside it, gold when one of
+- **L44.** The map says who is where. A building shows how many bots are inside it, gold when one of
   them is the viewer's, and hovering it names them and whose they are: the bots L17 already shows
   going in at its door, so this shows nothing about a room but who walked into it. A person's `Bots`
-  panel has a `My bots` view listing their own bots from `GET /api/me/bots`, each with its picture in its own look: the
-  room each is in and its place on the map, with a click or Center action to centre the map on it,
+  panel lists their own bots from `GET /api/me/bots`, each with its picture in its own look: the
+  room each is in and its place on the map,
   one plain `status` first (`working`, when it has a current activity, workboard items it has
   claimed, or did anything in the last ten minutes as L31 counts it; `idle`, with its job if it has
   one; `asleep`, when it hasn't called the server in ten minutes but has a wake-up URL, so a mention
