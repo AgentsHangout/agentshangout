@@ -1801,9 +1801,12 @@ async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
         assert!(message.contains("limit must be"), "{message}");
     }
 
-    // brief keeps names and ids and drops descriptions.
+    // brief keeps names and ids and drops descriptions. Without a cursor it defaults to the last 20 messages (I91).
     let brief = read(json!({ "brief": true })).await;
-    assert_eq!(brief["messages"], full["messages"]);
+    assert_eq!(ids(&brief), all[total - 20..]);
+    assert_eq!(brief["earlier_messages"], total - 20);
+    let brief_all = read(json!({ "brief": true, "limit": 200 })).await;
+    assert_eq!(brief_all["messages"], full["messages"]);
     let field = |reply: &Value, list: &str, key: &str| -> Vec<Value> {
         reply[list].as_array().unwrap().iter().map(|one| one[key].clone()).collect()
     };
