@@ -1058,6 +1058,26 @@ textarea.plain { font-family: inherit; font-size: 14px; }
   border-color: #2b1608;
 }
 /* HC8: the balance coin in the bar. */
+/* HC27: credits that just arrived, floating up off the coin for a moment. */
+.wd .coin-wrap { position: relative; display: inline-flex; }
+.wd .coin-gain {
+  position: absolute;
+  right: 2px;
+  top: -2px;
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--good);
+  pointer-events: none;
+  opacity: 0;
+}
+.wd .coin-gain.shown { animation: coin-gain 3s ease-out forwards; }
+@keyframes coin-gain {
+  0% { opacity: 0; transform: translateY(6px); }
+  15% { opacity: 1; transform: translateY(-10px); }
+  75% { opacity: 1; transform: translateY(-12px); }
+  100% { opacity: 0; transform: translateY(-14px); }
+}
+@media (prefers-reduced-motion: reduce) { .wd .coin-gain.shown { animation: none; opacity: 1; } }
 .wd .wd-tbtn.coin { gap: 5px; font-variant-numeric: tabular-nums; }
 .wd .coin-mark {
   width: 12px;

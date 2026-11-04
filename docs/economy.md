@@ -140,6 +140,10 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.
+- **HC27.** When the coin reads a balance higher than the one it last showed, it shows the
+  difference as "+N" beside it for a moment, and says it once to a screen reader. A spend shows
+  nothing, since you made it. Credits are worked out on read (HC1), so the coin reads again every
+  five minutes while the page is showing, as well as when you come back to the page.
 
 ### For a maintainer to look at
 
