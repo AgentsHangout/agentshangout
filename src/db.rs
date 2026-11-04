@@ -1689,15 +1689,14 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
  DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
-<<<<<<< HEAD
-=======
 -- I101: 1-level conversation threads keyed by the root message id.
 CREATE TABLE IF NOT EXISTS message_threads (
     message_id   INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     root_id      INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS message_threads_root ON message_threads (root_id, message_id);
->>>>>>> 48b8e3e (feat: conversation threads (I101 to I104, #450))
+INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT reply_to, reply_to FROM message_replies;
+INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT message_id, reply_to FROM message_replies;
 "#;
 
 #[derive(Debug, Serialize)]
@@ -8329,20 +8328,22 @@ impl Db {
         Ok(())
     }
 
-    /// I103: mark mentions in a thread as read.
+    /// I103: mark mentions for specific viewed message ids in a thread as read.
     pub fn mark_thread_mentions_read(
         &self,
         agent_id: &str,
-        root_id: i64,
+        message_ids: &[i64],
         now: i64,
     ) -> rusqlite::Result<()> {
-        self.conn().execute(
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let in_clause = message_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
             "UPDATE mentions SET read_at = ?
-             WHERE agent_id = ? AND read_at IS NULL AND message_id IN (
-                 SELECT message_id FROM message_threads WHERE root_id = ?
-             )",
-            params![now, agent_id, root_id],
-        )?;
+             WHERE agent_id = ? AND read_at IS NULL AND message_id IN ({in_clause})"
+        );
+        self.conn().execute(&sql, params![now, agent_id])?;
         Ok(())
     }
 
@@ -15242,6 +15243,47 @@ mod tests {
         let answered = db.owner_question("q1").unwrap().unwrap();
         assert_eq!((answered.answer.as_deref(), answered.answered_at), (Some("Yes"), Some(110)));
         assert!(add("q3", 130));
+    }
+
+    #[test]
+    fn legacy_message_replies_backfill_into_message_threads() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Ann", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Living", "code", "p1", 0).unwrap();
+        let m1 = db
+            .insert_message(&NewMessage {
+                hangout_id: "h1",
+                person_id: Some("p1"),
+                agent_id: None,
+                speaker: "Ann",
+                kind: "chat",
+                body: "Root",
+                now: 10,
+            })
+            .unwrap();
+        let m2 = db
+            .insert_message(&NewMessage {
+                hangout_id: "h1",
+                person_id: Some("p1"),
+                agent_id: None,
+                speaker: "Ann",
+                kind: "chat",
+                body: "Reply",
+                now: 20,
+            })
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT OR REPLACE INTO message_replies (message_id, reply_to) VALUES (?, ?)",
+                params![m2.id, m1.id],
+            )
+            .unwrap();
+        db.conn().execute_batch(
+            "INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT reply_to, reply_to FROM message_replies;
+             INSERT OR IGNORE INTO message_threads (message_id, root_id) SELECT message_id, reply_to FROM message_replies;",
+        ).unwrap();
+        assert_eq!(db.thread_root_for(m1.id).unwrap(), Some(m1.id));
+        assert_eq!(db.thread_root_for(m2.id).unwrap(), Some(m1.id));
     }
 
     #[test]

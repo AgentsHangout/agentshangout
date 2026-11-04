@@ -6543,6 +6543,23 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
         "top-level mention Z unread before read_thread: {inbox_before}"
     );
 
+    // I103 pagination: calling read_thread with limit 1 returns only b_id; d_id on page 2 remains unread in inbox
+    let page1 = server
+        .tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id, "limit": 1 }))
+        .await;
+    assert_eq!(page1["structuredContent"]["messages"].as_array().unwrap().len(), 1);
+    let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        unread_mid.contains(&d_id),
+        "thread mention D on page 2 must stay unread after reading only page 1: {inbox_mid}"
+    );
+
     // I101 / I103: calling read_thread with a reply id resolves to the canonical root and clears thread A mentions
     let thread_via_b =
         server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": b_id })).await;
@@ -6574,4 +6591,50 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
         !unread_final.contains(&z_id),
         "top-level mention Z cleared by read_room: {inbox_final}"
     );
+}
+
+#[tokio::test]
+async fn threads_active_root_older_than_snapshot_window_retained_in_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root conversation start" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Post 105 chatter messages to push root A out of the 100 snapshot window (posted by person to avoid bot rate limits)
+    for i in 0..105 {
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/messages"),
+                json!({ "text": format!("chatter {i}") }),
+            )
+            .await
+            .ok();
+    }
+
+    // 3. Post reply B replying to root A
+    let said_b = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Replying to root A", "reply_to": a_id }),
+        )
+        .await;
+    assert_ne!(said_b["isError"], true, "{said_b}");
+
+    // 4. read_room must retain collapsed root A even though it was >100 messages ago
+    let read = server.read_room(&scout.token, &room).await;
+    let messages = read["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(
+        ids.contains(&a_id),
+        "Active thread root A must be retained in read_room when replies exist in window: {read}"
+    );
+    let a_entry = messages.iter().find(|m| m["id"] == a_id).unwrap();
+    assert_eq!(a_entry["reply_count"], 1);
 }

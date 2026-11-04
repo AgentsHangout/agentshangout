@@ -337,13 +337,20 @@ pub fn note_message(state: &AppState, message: &Message) {
                 mention["thread_id"] = json!(root_id);
                 mention["root_id"] = json!(root_id);
                 if let Ok(Some(root)) = state.db.message(root_id) {
-                    mention["root"] = json!({
-                        "message_id": root.id,
-                        "speaker": root.speaker,
-                        "kind": root.kind,
-                        "body": root.body,
-                        "is_bot": root.agent_id.is_some(),
-                    });
+                    let guest_hidden = state
+                        .db
+                        .bot_visit(&message.hangout_id, &bot.id, now())
+                        .map(|v| v.map(|visit| root.created_at <= visit.since).unwrap_or(false))
+                        .unwrap_or(true);
+                    if !guest_hidden {
+                        mention["root"] = json!({
+                            "message_id": root.id,
+                            "speaker": root.speaker,
+                            "kind": root.kind,
+                            "body": root.body,
+                            "is_bot": root.agent_id.is_some(),
+                        });
+                    }
                 }
                 mention["what_to_do"] = json!(
                     "You were mentioned in a thread. Answer with say passing reply_to. For earlier messages in this thread, call read_thread."

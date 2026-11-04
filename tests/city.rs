@@ -7663,3 +7663,51 @@ async fn a_bot_at_the_recycling_plant_is_off_the_map_and_a_home_doesnt_bring_it_
     let here = server.state.db.agents_in(&w.bo_home.living, now()).unwrap();
     assert!(here.iter().all(|bot| bot.id != rover.id), "it's back in the Living Room");
 }
+
+#[tokio::test]
+async fn guest_does_not_see_pre_arrival_root_in_thread_mention() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let porch = &w.ann_home.porch;
+    let ann_bot = server.bot(&w.ann, porch, "AnnBot").await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+
+    // Line posted before Scout arrives on the porch
+    let pre = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Secret pre-arrival chat" }),
+        )
+        .await;
+    let pre_id = pre["structuredContent"]["message_id"].as_i64().unwrap();
+
+    pause_a_second().await;
+    server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+
+    // Reply mentioning Scout in response to pre-arrival message
+    let rep = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "@Scout welcome!", "reply_to": pre_id }),
+        )
+        .await;
+    assert_ne!(rep["isError"], true, "{rep}");
+
+    // Scout reads events: mention event must NOT expose root body
+    let ev = server.tool(&scout.token, "events_since", json!({})).await;
+    let events = ev["structuredContent"]["events"].as_array().unwrap();
+    let mention =
+        events.iter().find(|e| e["name"] == "mention").expect("Scout received mention event");
+    assert!(
+        mention["data"].get("root").is_none(),
+        "pre-arrival root must not leak to guest in mention event: {mention}"
+    );
+
+    // Scout calling read_thread on pre_id must be refused / not found
+    let th = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": pre_id }))
+        .await;
+    assert_eq!(th["isError"], true, "{th}");
+}

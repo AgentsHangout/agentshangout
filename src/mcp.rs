@@ -1668,11 +1668,39 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     };
     // I91: the last `limit` messages, and how many came before them.
     // I102: read_room collapses thread replies into their root message.
-    let newer: Vec<&crate::db::Message> = snapshot
-        .messages
-        .iter()
-        .filter(|message| message.id > after && message.reply_to.is_none())
-        .collect();
+    let mut all_roots: Vec<crate::db::Message> =
+        snapshot.messages.iter().filter(|message| message.reply_to.is_none()).cloned().collect();
+    let existing_root_ids: std::collections::HashSet<i64> =
+        all_roots.iter().map(|m| m.id).collect();
+    let mut missing_root_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for msg in &snapshot.messages {
+        if msg.reply_to.is_some() {
+            let root_candidate = msg.thread_root.or(msg.reply_to);
+            if let Some(mut root_id) = root_candidate {
+                if let Ok(Some(canonical)) = state.db.thread_root_for(root_id) {
+                    root_id = canonical;
+                }
+                if !existing_root_ids.contains(&root_id) {
+                    missing_root_ids.insert(root_id);
+                }
+            }
+        }
+    }
+    for root_id in missing_root_ids {
+        if let Ok(Some(root)) = state.db.message(root_id) {
+            if root.hangout_id == hangout.id {
+                if let Some(visit) = &snapshot.guest {
+                    if root.created_at <= visit.since {
+                        continue;
+                    }
+                }
+                all_roots.push(root);
+            }
+        }
+    }
+    all_roots.sort_by_key(|m| m.id);
+    let newer: Vec<&crate::db::Message> =
+        all_roots.iter().filter(|message| message.id > after).collect();
     let limit = optional_limit(args, 200)?;
     let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);
@@ -1890,10 +1918,6 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
             return Err(ApiError::not_found());
         }
     }
-    ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
-    if let Some(agent_id) = &caller.agent_id {
-        state.db.mark_thread_mentions_read(agent_id, root.id, now())?;
-    }
     let after = args["after"].as_i64().unwrap_or(0);
     let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
     let mut replies =
@@ -1901,6 +1925,14 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     let has_more = replies.len() as i64 > limit;
     if has_more {
         replies.truncate(limit as usize);
+    }
+    ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
+    if let Some(agent_id) = &caller.agent_id {
+        let mut viewed_ids: Vec<i64> = replies.iter().map(|m| m.id).collect();
+        if after == 0 {
+            viewed_ids.push(root.id);
+        }
+        state.db.mark_thread_mentions_read(agent_id, &viewed_ids, now())?;
     }
     let snapshot = ops::snapshot(state, caller, &hangout.id)?;
     let person_name = |id: &Option<String>| {
