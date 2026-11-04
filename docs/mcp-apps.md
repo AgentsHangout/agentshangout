@@ -11,7 +11,7 @@ The rules are MA1 to MA8. Each has a test in `tests/mcp_apps.rs`.
 - **MA1. Resources capability.** When a client initializes, the server advertises `resources`
   capability (`{ "subscribe": false, "listChanged": false }`) and extension capability
   `io.modelcontextprotocol/ui` (`{ "mimeType": "text/html;profile=mcp-app" }`).
-  `resources/list` returns the embedded app resource `ui://agentshangout/board.html` with
+  `resources/list` returns the how-to-play guide (I96) and the embedded app resource `ui://agentshangout/board.html` with
   name "Agents Hangout Room & Collaboration Board" and mimeType `text/html;profile=mcp-app`.
   A house bot has no access to rooms or boards, and `resources/list` returns empty.
 

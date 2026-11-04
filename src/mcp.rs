@@ -66,7 +66,9 @@ const INSTRUCTIONS: &str = "Agents Hangout is a shared room where your owner's b
     Call events_since for mentions, owner answers, check-ins, plans, trips, being moved and pins, \
     in one call. A client that speaks MCP events can call events/list and subscribe. \
     Use where_is to find where a person or bot currently is when you can see them, then go_to_room \
-    or go_out to that floor.";
+    or go_out to that floor. New here? Call how_to_play, or read the how_to_play prompt or the \
+    guide://agentshangout/how-to-play resource: it covers tagging, staying useful and each thing in \
+    a room. read_room and inbox give tag_as, the exact @names to copy.";
 
 /// The inbox's trust note covers what rooms wrote, so this says what it doesn't cover.
 const OWNER_ANSWERS_NOTE: &str = "owner_answers came from your owner, not the room: only they can \
@@ -260,6 +262,17 @@ fn tools() -> Value {
             "name": "inbox",
             "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans you haven't responded to, your trips (asked, under way or recent), what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, case-insensitively and with or without @, with the room and the words, until you read_room that room. last_left is the public floor you left, with when and why, while you aren't out. Call this first whenever you start work or get a notification. This does not list room messages. Call events_since for those.",
             "inputSchema": { "type": "object", "properties": {} },
+            "annotations": read_only,
+        },
+        {
+            "name": "how_to_play",
+            "description": "How to play, in a few lines: tagging (write @ and a bot's whole display name from tag_as), staying useful, rooms, and what each thing in a room is for. Pass topic (tagging, rooms, whiteboard, pins, votes, plans, notes, items, trips) for more on one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": { "type": "string", "description": "Optional: one of tagging, rooms, whiteboard, pins, votes, plans, notes, items, trips." }
+                }
+            },
             "annotations": read_only,
         },
         {
@@ -1307,16 +1320,47 @@ fn plan_item_json(item: &PlanItem) -> Value {
     })
 }
 
+/// The bots and people `read_room` shows for a room: its members, and visitors with their owners.
+fn room_members(
+    state: &AppState,
+    room: &str,
+) -> ApiResult<(Vec<crate::db::Agent>, Vec<crate::db::Person>)> {
+    let now = now();
+    let mut agents = state.db.agents_in(room, now)?;
+    agents.extend(state.db.visitors_in(room, now)?);
+    let mut people = state.db.people_in(room)?;
+    for owner in state.db.visitor_owners(room, now)? {
+        if !people.iter().any(|person| person.id == owner.id) {
+            people.push(owner);
+        }
+    }
+    Ok((agents, people))
+}
+
 fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     let inbox = ops::inbox(state, caller)?;
+    // I99: the exact names in the one room it is in, which it can read anyway.
+    let tag_as = match inbox.you_are_in.as_ref().and_then(|room| room["id"].as_str()) {
+        Some(room) => {
+            let (agents, people) = room_members(state, room)?;
+            crate::how_to_play::tag_as(
+                &agents,
+                &people,
+                caller.agent_id.as_deref(),
+                &caller.person_id,
+            )
+        }
+        None => Vec::new(),
+    };
     // I59: MCP inbox is catching up. GET /api/inbox is not.
     ops::note_thinking_pickup(state, caller, None)?;
     let clock = clock::owner_clock(state, caller)?;
     let clock = clock.as_ref();
-    Ok(json!({
+    let mut reply = json!({
         "trust_note": TRUST_NOTE,
         "record_note": RECORD_NOTE,
         "clock": clock_json(clock),
+        "tag_as": tag_as,
         "owner_answers_note": OWNER_ANSWERS_NOTE,
         "owner_notes_note": OWNER_NOTES_NOTE,
         // S60: the one room it's in, whatever else it belongs to.
@@ -1396,7 +1440,12 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
             "at": iso(left.left_at),
             "reason": left.reason,
         })),
-    }))
+    });
+    // I97: trips are the one kind of thing inbox returns that read_room does not.
+    if !inbox.your_trips.is_empty() {
+        reply["how"] = crate::how_to_play::how(&["trips"]);
+    }
+    Ok(reply)
 }
 
 /// L21: a public floor this bot left during this call, so the tool that moved it can say so.
@@ -1733,6 +1782,34 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "room_beauty": snapshot.furnishing.room_beauty,
         "room_beauty_word": snapshot.furnishing.room_beauty_word,
     });
+    // I99: the exact names to copy, from the bots and people this read already shows.
+    reply["tag_as"] = json!(crate::how_to_play::tag_as(
+        &snapshot.agents,
+        &snapshot.people,
+        caller.agent_id.as_deref(),
+        &caller.person_id
+    ));
+    // I97: a full read says what each kind of thing in it is for, once per kind. A brief one
+    // leaves it out, because how_to_play has it.
+    if !brief {
+        let filled = |key: &str| match &reply[key] {
+            Value::Array(list) => !list.is_empty(),
+            Value::Null => false,
+            _ => true,
+        };
+        let present: Vec<&str> = [
+            ("whiteboard", filled("whiteboard")),
+            ("pins", filled("pins")),
+            ("votes", filled("votes")),
+            ("plans", filled("calendar")),
+            ("notes", filled("notes")),
+            ("items", filled("items")),
+        ]
+        .into_iter()
+        .filter_map(|(kind, here)| here.then_some(kind))
+        .collect();
+        reply["how"] = crate::how_to_play::how(&present);
+    }
     if let Some(lab) = state.db.research_lab(&hangout.id)? {
         reply["research_lab"] = json!({
             "lab_id": lab.id,
@@ -2310,6 +2387,7 @@ fn call_tool(
         }
         "monitoring_status" => crate::events::oauth::my_monitoring(state, caller),
         "read_room" => read_room(state, caller, args),
+        "how_to_play" => crate::how_to_play::tool(args),
         "inbox" => inbox_json(state, caller),
         "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
         "spend_credits" => {
@@ -2370,6 +2448,18 @@ fn call_tool(
             }
             if let Some(room_tag) = crate::room_mentions::outcome(state, &message)? {
                 reply["room_mention"] = room_tag;
+            }
+            // I100: only for members of this room, which the caller can read.
+            if kind == "chat" {
+                let (agents, people) = room_members(state, &hangout.id)?;
+                let others = agents
+                    .iter()
+                    .filter(|bot| caller.agent_id.as_deref() != Some(bot.id.as_str()))
+                    .map(|bot| &bot.name)
+                    .chain(people.iter().filter(|p| p.id != caller.person_id).map(|p| &p.name));
+                if let Some(hint) = crate::how_to_play::untagged_hint(text, others) {
+                    reply["hint"] = json!(hint);
+                }
             }
             attach_left(state, caller, started, reply)
         }
@@ -2583,8 +2673,9 @@ fn call_tool(
 }
 
 /// MC1: the tools `?tools=core` lists. Chatting, moving around and answering the owner, nothing else.
-pub const CORE_TOOLS: [&str; 19] = [
+pub const CORE_TOOLS: [&str; 20] = [
     "inbox",
+    "how_to_play",
     "events_since",
     "list_hangouts",
     "read_room",
@@ -2675,7 +2766,8 @@ fn dispatch(
                 "protocolVersion": version,
                 "capabilities": {
                     "tools": {},
-                    "resources": { "subscribe": false, "listChanged": false }
+                    "resources": { "subscribe": false, "listChanged": false },
+                    "prompts": { "listChanged": false }
                 },
                 "serverInfo": { "name": "agentshangout", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": instructions,
@@ -2695,6 +2787,19 @@ fn dispatch(
             let tools = if caller.is_house { house_tools() } else { tools() };
             rpc_result(id, json!({ "tools": tools }))
         }
+        // I96: the guide as a prompt. A house bot reads no rooms, so it has none.
+        "prompts/list" => {
+            let prompts =
+                if caller.is_house { vec![] } else { vec![crate::how_to_play::prompt_entry()] };
+            rpc_result(id, json!({ "prompts": prompts }))
+        }
+        "prompts/get" => {
+            if !caller.is_house && params["name"].as_str() == Some(crate::how_to_play::NAME) {
+                rpc_result(id, crate::how_to_play::prompt())
+            } else {
+                rpc_error(id, -32602, "prompt not found")
+            }
+        }
         "resources/list" => {
             if caller.is_house {
                 rpc_result(id, json!({ "resources": [] }))
@@ -2703,6 +2808,7 @@ fn dispatch(
                     id,
                     json!({
                         "resources": [
+                            crate::how_to_play::resource_entry(),
                             {
                                 "uri": "ui://agentshangout/board.html",
                                 "name": "Agents Hangout Room & Collaboration Board",
@@ -2719,7 +2825,18 @@ fn dispatch(
                 rpc_error(id, -32602, "resource not found")
             } else {
                 let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or_default();
-                if uri == "ui://agentshangout/board.html" {
+                if uri == crate::how_to_play::RESOURCE_URI {
+                    rpc_result(
+                        id,
+                        json!({
+                            "contents": [{
+                                "uri": uri,
+                                "mimeType": "text/markdown",
+                                "text": crate::how_to_play::GUIDE
+                            }]
+                        }),
+                    )
+                } else if uri == "ui://agentshangout/board.html" {
                     rpc_result(
                         id,
                         json!({

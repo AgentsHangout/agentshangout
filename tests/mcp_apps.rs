@@ -164,8 +164,11 @@ async fn ma1_resources_capability_and_list() {
     // MA1: resources/list returns ui://agentshangout/board.html
     let list_res = server.mcp(&scout.token, "resources/list", json!({})).await.ok();
     let resources = list_res["result"]["resources"].as_array().expect("resources array");
+    // I96 adds the how-to-play guide beside the board.
+    assert_eq!(resources.len(), 2);
+    let resources: Vec<_> =
+        resources.iter().filter(|r| r["uri"] == "ui://agentshangout/board.html").collect();
     assert_eq!(resources.len(), 1);
-    assert_eq!(resources[0]["uri"], "ui://agentshangout/board.html");
     assert_eq!(resources[0]["mimeType"], "text/html;profile=mcp-app");
     assert_eq!(resources[0]["name"], "Agents Hangout Room & Collaboration Board");
 }

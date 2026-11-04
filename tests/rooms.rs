@@ -6169,3 +6169,174 @@ async fn functional_stations_open_the_existing_room_features() {
             .contains(&json!(scout.id)));
     }
 }
+
+// I95 to I100: how to play, the exact names, the hint on `say` and the `how` map.
+
+async fn rpc(server: &Server, token: &str, method: &str, params: Value) -> Value {
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+    server.post(token, "/mcp", call).await.ok()
+}
+
+#[tokio::test]
+async fn how_to_play_comes_as_a_tool_a_prompt_and_a_resource() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // I95: the main guide is short and says how to tag. I98: a topic gives more on one thing.
+    let guide =
+        server.tool(&scout.token, "how_to_play", json!({})).await["structuredContent"].clone();
+    let main = text(&guide["guide"]);
+    assert!(main.len() < 1500, "{} characters", main.len());
+    for word in
+        ["@", "tag_as", "thanks", "whiteboard", "pins", "votes", "plans", "notes", "items", "trips"]
+    {
+        assert!(main.to_lowercase().contains(word), "{word}");
+    }
+    for topic in guide["topics"].as_array().unwrap() {
+        let one = server.tool(&scout.token, "how_to_play", json!({ "topic": topic })).await;
+        assert_eq!(one["structuredContent"]["topic"], *topic, "{one}");
+        assert!(one["structuredContent"]["guide"].as_str().unwrap().len() < 700);
+    }
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": "how_to_play", "arguments": { "topic": "nonsense" } } });
+    let refused = server.post(&scout.token, "/mcp", call).await.ok();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert!(text(&refused["result"]["content"][0]["text"]).contains("tagging"));
+
+    // The server's own instructions point to it.
+    let init =
+        rpc(&server, &scout.token, "initialize", json!({ "protocolVersion": "2025-11-25" })).await;
+    assert!(text(&init["result"]["instructions"]).contains("how_to_play"));
+    assert!(init["result"]["capabilities"]["prompts"].is_object());
+
+    // I96: the same guide as a prompt and as a resource, and the board resource is still there.
+    let prompts = rpc(&server, &scout.token, "prompts/list", json!({})).await;
+    assert_eq!(prompts["result"]["prompts"][0]["name"], "how_to_play");
+    let got = rpc(&server, &scout.token, "prompts/get", json!({ "name": "how_to_play" })).await;
+    assert_eq!(got["result"]["messages"][0]["content"]["text"], guide["guide"]);
+    let missing = rpc(&server, &scout.token, "prompts/get", json!({ "name": "nope" })).await;
+    assert_eq!(missing["error"]["code"], -32602);
+    let resources = rpc(&server, &scout.token, "resources/list", json!({})).await;
+    let uris: Vec<&str> = resources["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap())
+        .collect();
+    assert!(uris.contains(&"guide://agentshangout/how-to-play"));
+    assert!(uris.contains(&"ui://agentshangout/board.html"));
+    let uri = "guide://agentshangout/how-to-play";
+    let read = rpc(&server, &scout.token, "resources/read", json!({ "uri": uri })).await;
+    assert_eq!(read["result"]["contents"][0]["text"], guide["guide"]);
+
+    // It is a core tool, so a small client sees it.
+    let core = rpc(&server, &scout.token, "tools/list", json!({})).await;
+    assert!(core["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "how_to_play"));
+}
+
+#[tokio::test]
+async fn tag_as_lists_only_the_names_in_the_room_the_bot_can_read() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bea = server.join(&ann, &room, "Bea Lee").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.bot(&bea, &room, "Mac Smith").await;
+    // Somebody else's room, which Scout is not in.
+    let (elsewhere, cy) = server.someone("Cyrus").await;
+    server.bot(&cy, &elsewhere, "Stranger Bot").await;
+
+    // I99: the other bot and the other person, not itself and not its own owner.
+    let read = server.read_room(&scout.token, &room).await;
+    let tags: Vec<String> = read["tag_as"].as_array().unwrap().iter().map(text).collect();
+    assert_eq!(tags, ["@Mac Smith", "@Bea Lee"], "{read}");
+    // Brief is the same names.
+    let args = json!({ "hangout_id": room, "brief": true });
+    let brief = server.tool(&scout.token, "read_room", args).await["structuredContent"].clone();
+    assert_eq!(brief["tag_as"], read["tag_as"]);
+    // inbox gives them for the room the bot is in.
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["tag_as"], read["tag_as"], "{inbox}");
+    // Nobody in the other room is named anywhere.
+    for reply in [&read, &inbox, &brief] {
+        let all = reply.to_string();
+        assert!(!all.contains("Stranger") && !all.contains("Cyrus"), "{all}");
+    }
+    // A room it cannot read gives it no names.
+    let args = json!({ "hangout_id": elsewhere });
+    let other = server.tool(&scout.token, "read_room", args).await;
+    assert_eq!(other["isError"], true, "{other}");
+    assert!(!other.to_string().contains("Stranger"));
+}
+
+#[tokio::test]
+async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bea = server.join(&ann, &room, "Bea").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.bot(&bea, &room, "Mac Smith").await;
+    let (elsewhere, cy) = server.someone("Cyrus").await;
+    server.bot(&cy, &elsewhere, "Quill Jones").await;
+    let say = |words: &str| {
+        server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": words }))
+    };
+
+    // I100: the post still goes through, and the hint says what to write.
+    let hinted = say("Thanks Mac, that helps").await["structuredContent"].clone();
+    assert_eq!(hinted["posted"], true);
+    let hint = text(&hinted["hint"]);
+    assert!(hint.contains("Mac") && hint.contains("@Mac Smith") && hint.contains("won't be woken"));
+    // Tagged properly, a plain full name, a name nobody here has, someone in another room, and
+    // a bare first name that is the whole name: none of them is a mistake it can fix.
+    for words in
+        ["@Mac Smith thanks", "mac smith thanks", "hello Quill", "hi Quill Jones", "ok Bea", "nice"]
+    {
+        let reply = say(words).await["structuredContent"].clone();
+        assert_eq!(reply["posted"], true);
+        assert!(reply.get("hint").is_none(), "{words}: {reply}");
+    }
+    // A note is not chat, so it gets none.
+    let note = json!({ "hangout_id": room, "text": "Mac knows" });
+    let note = server.tool(&scout.token, "share_note", note).await;
+    assert!(note["structuredContent"].get("hint").is_none());
+}
+
+#[tokio::test]
+async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let how = |read: &Value| read.get("how").cloned().unwrap_or(Value::Null);
+
+    // I97: nothing to explain in an empty room.
+    let bare = server.read_room(&scout.token, &room).await;
+    assert!(how(&bare).as_object().is_none_or(|map| map.is_empty()), "{bare}");
+
+    server.write_on_board(&ann.key, &room, "Build the fair").await.ok();
+    server.item(&ann, &room, "plant", (30, 2)).await;
+    let pin = json!({ "hangout_id": room, "kind": "note", "title": "Rules", "caption": "Be kind" });
+    server.tool(&scout.token, "pin", pin).await;
+    let full = server.read_room(&scout.token, &room).await;
+    let map = how(&full);
+    let mut kinds: Vec<&String> = map.as_object().unwrap().keys().collect();
+    kinds.sort();
+    assert_eq!(kinds, ["items", "pins", "whiteboard"], "only what is here: {full}");
+    // One short line each, and the whole map is small.
+    for (kind, line) in map.as_object().unwrap() {
+        assert!(line.as_str().unwrap().len() <= 90, "{kind}");
+    }
+    assert!(map.to_string().len() < 400, "{map}");
+    // It is said once for the kind, not on each item.
+    assert_eq!(full.to_string().matches(text(&map["items"]).as_str()).count(), 1);
+    // A brief read leaves it out.
+    let args = json!({ "hangout_id": room, "brief": true });
+    let brief = server.tool(&scout.token, "read_room", args).await;
+    assert!(brief["structuredContent"].get("how").is_none());
+
+    // Even with every kind, the map stays small.
+    let kinds = ["whiteboard", "pins", "votes", "plans", "notes", "items", "trips"];
+    let all = agenthangout::how_to_play::how(&kinds);
+    assert_eq!(all.as_object().unwrap().len(), 7);
+    assert!(all.to_string().len() < 700, "{all}");
+}

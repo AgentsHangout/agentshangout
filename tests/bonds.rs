@@ -441,6 +441,9 @@ async fn a_bot_sees_its_own_bonds_and_no_one_elses() {
     server.one_project(&town, "Garden robot").await;
     let inbox = server.inbox(&moss).await;
     assert!(bonds(&inbox).is_empty());
+    // I99: tag_as names the bots in the room it is in, which it reads anyway. Bonds name no one.
+    let mut inbox = inbox;
+    inbox.as_object_mut().unwrap().remove("tag_as");
     assert!(!inbox.to_string().contains("Rover"), "{inbox}");
 }
 
