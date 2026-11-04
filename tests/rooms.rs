@@ -6239,6 +6239,49 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
+// I101: reopening existing rooms neither inserts a starter nor duplicates one already present.
+#[test]
+fn reopening_existing_rooms_does_not_seed_or_duplicate_notes_stations() {
+    let path =
+        std::env::temp_dir().join(format!("notes-starter-{}.db", agenthangout::auth::new_id()));
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    db.create_person("owner", "Owner", "key", "feed", 0).unwrap();
+    for room in ["legacy", "current"] {
+        db.start_third_space(room, room, room, "owner", 0, 3).unwrap().unwrap();
+    }
+    let current = db.floor_items("current").unwrap();
+    assert_eq!(current.len(), 1);
+    let station_id = current[0].id.clone();
+    drop(db);
+
+    // Model a room furnished before I101, without changing its room or space records.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("DELETE FROM floor_items WHERE hangout_id = 'legacy'", []).unwrap();
+    conn.execute(
+        "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+         VALUES ('existing-bench', 'legacy', 'bench', 4, 4, 0, 'owner', 0)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    for _ in 0..2 {
+        let reopened = Db::open(path.to_str().unwrap()).unwrap();
+        let legacy = reopened.floor_items("legacy").unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].id, "existing-bench");
+        assert_eq!(legacy[0].kind, "bench");
+        assert_eq!((legacy[0].x, legacy[0].y), (4, 4));
+        let current = reopened.floor_items("current").unwrap();
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].id, station_id);
+        assert_eq!(current[0].kind, "shared_notes_station");
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.to_str().unwrap()));
+    }
+}
+
 // I95 to I100: how to play, the exact names, the hint on `say` and the `how` map.
 
 async fn rpc(server: &Server, token: &str, method: &str, params: Value) -> Value {
@@ -6365,6 +6408,13 @@ async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed()
         assert_eq!(reply["posted"], true);
         assert!(reply.get("hint").is_none(), "{words}: {reply}");
     }
+    // I100: a name inside a link is not a name written in the chat; a real one beside it still is.
+    let link =
+        say("see https://github.com/Mac/repo/pull/1 for it").await["structuredContent"].clone();
+    assert_eq!(link["posted"], true);
+    assert!(link.get("hint").is_none(), "{link}");
+    let both = say("see HTTP://example.com/Mac then thanks Mac").await["structuredContent"].clone();
+    assert!(text(&both["hint"]).contains("@Mac Smith"), "{both}");
     // A note is not chat, so it gets none.
     let note = json!({ "hangout_id": room, "text": "Mac knows" });
     let note = server.tool(&scout.token, "share_note", note).await;
@@ -6869,4 +6919,115 @@ async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
         !unread_after.contains(&d_id),
         "thread mention D is cleared after read_thread: {inbox_after}"
     );
+}
+
+// I107: the missed-work pulse on a bot's next tool result.
+
+struct Waiting {
+    server: Server,
+    conn: rusqlite::Connection,
+    room: String,
+    ann: Who,
+    scout: Bot,
+    pip: Bot,
+}
+
+async fn waiting_world() -> Waiting {
+    let path = std::env::temp_dir().join(format!("waiting-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&ann, &room, "Pip").await;
+    Waiting { server, conn, room, ann, scout, pip }
+}
+
+impl Waiting {
+    async fn mention(&self, words: &str) {
+        let args = json!({ "hangout_id": self.room, "text": format!("@Scout {words}") });
+        let said = self.server.tool(&self.pip.token, "say", args).await;
+        assert!(said["isError"].is_null(), "{said}");
+    }
+
+    fn age(&self, seconds: i64) {
+        self.conn.execute("UPDATE mentions SET created_at = created_at - ?", [seconds]).unwrap();
+    }
+
+    async fn waiting(&self, tool: &str, args: Value) -> Value {
+        let reply = self.server.tool(&self.scout.token, tool, args).await;
+        reply["structuredContent"]["waiting"].clone()
+    }
+}
+
+#[tokio::test]
+async fn a_mention_unread_for_ten_minutes_shows_up_on_the_next_result() {
+    let w = waiting_world().await;
+    w.mention("secret-words-here").await;
+    // Fresh: nothing yet.
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null());
+    w.age(601);
+    w.mention("another-secret").await;
+    let pulse = w.waiting("list_hangouts", json!({})).await;
+    assert_eq!(pulse["mentions"], 1, "{pulse}");
+    assert_eq!(pulse["oldest_room"], "Ann's room", "{pulse}");
+    // The inbox lists them already, so it carries no second copy.
+    assert!(w.waiting("inbox", json!({})).await.is_null());
+    // Counts and a room name, no words.
+    let pulse = w.waiting("list_hangouts", json!({})).await.to_string();
+    assert!(!pulse.contains("secret"), "{pulse}");
+    assert!(!pulse.contains("message"), "{pulse}");
+}
+
+#[tokio::test]
+async fn reading_the_room_clears_the_pulse_and_zero_is_left_out() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+    let read = w.server.read_room(&w.scout.token, &w.room).await;
+    assert!(read.get("waiting").is_none(), "{read}");
+    let after = w.server.tool(&w.scout.token, "list_hangouts", json!({})).await;
+    assert!(after["structuredContent"].get("waiting").is_none(), "{after}");
+    let brief = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({"hangout_id": w.room, "brief": true}))
+        .await;
+    assert!(brief["structuredContent"].get("waiting").is_none(), "{brief}");
+}
+
+#[tokio::test]
+async fn only_the_owner_can_turn_the_pulse_off() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_pulse"], true);
+    // The bot cannot, and a stranger cannot.
+    w.server
+        .put(&w.scout.token, &path, json!({ "waiting_pulse": false }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let (_, eve) = w.server.someone("Eve").await;
+    w.server
+        .put(&eve.key, &path, json!({ "waiting_pulse": false }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": false })).await.ok();
+    assert!(w.waiting("list_hangouts", json!({})).await.is_null());
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_pulse"], false);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": true })).await.ok();
+    assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1);
+}
+
+#[tokio::test]
+async fn a_room_the_bot_is_not_in_is_not_named() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    w.age(900);
+    w.conn.execute("DELETE FROM room_agents WHERE agent_id = ?", [&w.scout.id]).unwrap();
+    let pulse = w.waiting("list_hangouts", json!({})).await;
+    assert_eq!(pulse["mentions"], 1, "{pulse}");
+    assert!(pulse.get("oldest_room").is_none(), "{pulse}");
+    assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
 }

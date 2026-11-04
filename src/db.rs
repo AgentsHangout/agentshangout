@@ -1689,6 +1689,7 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
  DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
+CREATE TABLE IF NOT EXISTS waiting_pulse_off (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE);
 -- I102: 1-level conversation threads keyed by the root message id.
 CREATE TABLE IF NOT EXISTS message_threads (
     message_id   INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
@@ -2167,6 +2168,9 @@ pub struct PublicFloor {
     pub here: i64,
     /// L18: this floor is behind the world's town square.
     pub town_square: bool,
+    /// Which space it is a floor of. For the map (W105); the list doesn't show it.
+    #[serde(skip)]
+    pub space_id: String,
 }
 
 pub struct NewVisit<'a> {
@@ -8312,6 +8316,45 @@ impl Db {
         )
     }
 
+    /// I107: an owner turned the waiting pulse off for this bot.
+    pub fn waiting_pulse_enabled(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        Ok(!exists(
+            &self.conn(),
+            "SELECT 1 FROM waiting_pulse_off WHERE agent_id = ?",
+            params![agent_id],
+        )?)
+    }
+
+    pub fn set_waiting_pulse(&self, agent_id: &str, on: bool) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        if on {
+            conn.execute("DELETE FROM waiting_pulse_off WHERE agent_id = ?", params![agent_id])?;
+        } else {
+            conn.execute(
+                "INSERT OR IGNORE INTO waiting_pulse_off (agent_id) VALUES (?)",
+                params![agent_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// I107: how many unread mentions were made at or before `before`, and the room of the
+    /// oldest. One indexed query, no message text, and no rows loaded.
+    pub fn stale_unread_mentions(
+        &self,
+        agent_id: &str,
+        before: i64,
+    ) -> rusqlite::Result<(i64, Option<String>)> {
+        self.conn().query_row(
+            "SELECT COUNT(*), (SELECT hangout_id FROM mentions WHERE agent_id = ?1
+                                AND read_at IS NULL AND created_at <= ?2
+                                ORDER BY created_at, id LIMIT 1)
+             FROM mentions WHERE agent_id = ?1 AND read_at IS NULL AND created_at <= ?2",
+            params![agent_id, before],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    }
+
     pub fn unread_mentions(&self, agent_id: &str) -> rusqlite::Result<Vec<Mention>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -8696,7 +8739,8 @@ impl Db {
                             JOIN world_squares q ON q.world_id = d.world_id AND q.x = d.x AND q.y = d.y
                             JOIN players pl ON pl.id = q.player_id AND pl.person_id = s.owner_id
                             WHERE d.space_id = s.id
-                              AND s.id IN (SELECT space_id FROM town_square_rooms)) AS town_square
+                              AND s.id IN (SELECT space_id FROM town_square_rooms)) AS town_square,
+                    s.id
              FROM floors f
              JOIN hangouts h ON h.id = f.hangout_id
              JOIN spaces s ON s.id = f.space_id
@@ -8716,6 +8760,7 @@ impl Db {
                 capacity: 0,
                 here: row.get(6)?,
                 town_square: row.get(7)?,
+                space_id: row.get(8)?,
             })
         })?;
         rows.collect()

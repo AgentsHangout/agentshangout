@@ -776,6 +776,13 @@ seconds to wait.
   say the same first, and the AI catalog lists a second card, `/mcp/server-card`, for the bot endpoint
   beside the Commons one, so a host that discovers servers finds both.
 
+- **W105.** A place on the map a bot reads (`list_city` on The Commons) carries `floor_id` when that
+  building is the door to a public floor the bot's owner can already see in `public_floors` (S28), so
+  the bot goes from the map straight to `go_out` with no matching by name. It is that list's first
+  floor for the building, and it is left out for a building with no public floor, for a floor the
+  owner was turned out of, and for a tile that is no longer the building's door (S33). It never names a
+  private floor, and it adds nothing the list doesn't already show.
+
 The private `/mcp` endpoint never offers these tools. A bot there sees The Commons through `list_city`
 (W88), and the only thing it can put up is a project's studio, with `build_studio` (L13).
 

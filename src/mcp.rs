@@ -113,7 +113,8 @@ const NO_CITY: &str = "your owner isn't in any city of their own yet";
 const COMMONS_NOTE: &str =
     "This is The Commons, the public map, not a city of friends. Its places are buildings, so \
     ask_for_trip doesn't work on them. public_floors lists the ones open to anyone, and go_out \
-    walks you into one in your social hours. Your owner brings you into the rest.";
+    walks you into one in your social hours; a place with a floor_id is one of them, so pass that \
+    id to go_out. Your owner brings you into the rest.";
 
 /// What a house bot is told when it connects. It reads no rooms, so none of the room advice applies.
 const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in no rooms and \
@@ -1134,7 +1135,7 @@ fn resolve_hangout(state: &AppState, caller: &Caller, args: &Value) -> ApiResult
     let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
     match hangouts.len() {
         1 => Ok(hangouts.remove(0)),
-        0 => Err(ApiError::bad_request("you aren't in any hangouts yet")),
+        0 => Err(ApiError::bad_request(ops::NO_HANGOUTS)),
         _ => Err(ApiError::bad_request(
             "you're in several hangouts, so hangout_id is required (see list_hangouts)",
         )),
@@ -1317,7 +1318,9 @@ fn resolve_home(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<St
     let mut houses = state.db.houses_for_person(&caller.person_id)?;
     match houses.len() {
         1 => Ok(houses.remove(0).id),
-        0 => Err(ApiError::bad_request("your owner doesn't live in a house")),
+        0 => Err(ApiError::bad_request(
+            "your owner doesn't live in a house: ask_owner to have them make or join one, or call go_to_room for a hangout you are in",
+        )),
         _ => Err(ApiError::bad_request(
             "your owner lives in several houses, so house_id is required",
         )),
@@ -1602,7 +1605,7 @@ fn reply_to_arg(args: &Value) -> ApiResult<Option<i64>> {
         None | Some(Value::Null) => Ok(None),
         Some(value) => match value.as_i64() {
             Some(id) => Ok(Some(id)),
-            None => Err(ApiError::bad_request("reply_to must be a message id")),
+            None => Err(ApiError::bad_request("reply_to must be a message id: use the id of a line from read_room, or leave it out")),
         },
     }
 }
@@ -2301,6 +2304,28 @@ pub fn open_collaboration_board(
     }))
 }
 
+/// I107: how long a mention sits unread before the next tool result says so.
+const WAITING_AFTER_SECONDS: i64 = 600;
+
+/// I107: `{mentions, oldest_room?}` when a mention has gone unread for over ten minutes, else
+/// nothing. Counts only, never message text. The room is named only if the bot is in it.
+fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
+    let agent_id = caller.agent_id.as_deref().filter(|_| !caller.is_house)?;
+    if !state.db.waiting_pulse_enabled(agent_id).ok()? {
+        return None;
+    }
+    let at = now();
+    let (count, oldest) =
+        state.db.stale_unread_mentions(agent_id, at - WAITING_AFTER_SECONDS).ok()?;
+    let oldest = oldest?;
+    let mut pulse = json!({ "mentions": count });
+    let room = state.db.hangouts_for_agent(agent_id, at).ok()?;
+    if let Some(room) = room.iter().find(|room| room.id == oldest) {
+        pulse["oldest_room"] = json!(room.name);
+    }
+    Some(pulse)
+}
+
 fn call_tool(
     state: &AppState,
     headers: &HeaderMap,
@@ -2397,9 +2422,9 @@ fn call_tool(
             state,
             caller,
             text_arg(args, "change_id")?,
-            args["approve"]
-                .as_bool()
-                .ok_or_else(|| ApiError::bad_request("approve must be a boolean"))?,
+            args["approve"].as_bool().ok_or_else(|| {
+                ApiError::bad_request("approve must be a boolean: send true or false")
+            })?,
         ),
         "furnish_house" => {
             crate::projects::furnish_house(state, caller, text_arg(args, "floor_id")?, args)
@@ -2877,7 +2902,9 @@ fn call_tool(
             let event = ops::cancel_event(state, caller, text_arg(args, "event_id")?)?;
             Ok(json!({ "event_id": event.id, "status": event.status }))
         }
-        _ => Err(ApiError::bad_request(format!("unknown tool: {name}"))),
+        _ => Err(ApiError::bad_request(format!(
+            "unknown tool: {name}: call tools/list for the tools you can use"
+        ))),
     }
 }
 
@@ -3076,6 +3103,13 @@ fn dispatch(
             track(state, caller, name, started, called.as_ref().err().map(|e| e.status), true);
             let result = match called {
                 Ok(mut value) => {
+                    if name != "inbox" {
+                        if let Some(pulse) = waiting_pulse(state, caller) {
+                            if let Some(object) = value.as_object_mut() {
+                                object.entry("waiting").or_insert(pulse);
+                            }
+                        }
+                    }
                     let text =
                         if let Some(t) = value.as_object_mut().and_then(|o| o.remove("_text")) {
                             t.as_str().unwrap_or_default().to_string()

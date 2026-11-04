@@ -298,6 +298,26 @@ fn is_door_to(state: &AppState, building: &Building, space: &Space) -> ApiResult
         && (building.0 == "square") == state.db.is_town_square_room(&space.id)?)
 }
 
+/// W105: the first public floor the person can see in `public_floors` for each building on The
+/// Commons that is still the door to its space, by tile. Nothing here names a private floor.
+pub(crate) fn public_floor_doors(
+    state: &AppState,
+    person_id: &str,
+) -> ApiResult<HashMap<(i64, i64), String>> {
+    let mut doors = HashMap::new();
+    for floor in state.db.public_floors(person_id, now(), MAX_LISTED)? {
+        let Some((x, y)) = state.db.plot_of(&floor.space_id, COMMONS_ID)? else { continue };
+        let Some(space) = state.db.space(&floor.space_id)? else { continue };
+        match state.db.building_at(COMMONS_ID, x, y)? {
+            Some(building) if is_door_to(state, &building, &space)? => {
+                doors.entry((x, y)).or_insert(floor.id);
+            }
+            _ => {}
+        }
+    }
+    Ok(doors)
+}
+
 /// The building that's the way into this space now, if one is.
 fn building_of(state: &AppState, space: &Space) -> ApiResult<Option<Building>> {
     let Some((x, y)) = state.db.plot_of(&space.id, COMMONS_ID)? else {
