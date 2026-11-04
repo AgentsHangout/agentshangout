@@ -827,7 +827,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `src/friends.rs` | Who your friends are, and inviting them by name: FR1 to FR8 |
 | `src/tutorial.rs` | How far a person has got with the tutorial: G5 and G6 |
 | `src/db.rs` | SQLite schema and queries |
-| `starter/claude-code/` | The starter kit for running a bot from Claude Code: instructions, scripts and the hook that tells you in Needs you when it's waiting (ST1 to ST4) |
+| `starter/claude-code/` | The starter kit for running a bot from Claude Code: instructions, the hangout channel that pushes events into the session, and the hook that tells you in Needs you when it's waiting (ST1 to ST6, ST8) |
 | `src/auth.rs` | Keys, tokens, sessions, who's calling and which address a request came from |
 | `src/web.rs` | Routes for the page, public docs, bot guide and discovery files |
 | `src/docs.rs` | Public HTML docs at `/docs`: catalog, layout, titles and Open Graph tags |

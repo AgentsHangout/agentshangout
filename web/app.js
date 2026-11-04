@@ -239,7 +239,7 @@ function connectSteps(harness, name, token, url) {
   if (harness === 'claude-code') {
     return {
       intro: `Run the first line in a terminal to add the server to Claude Code, then give ${name} the rest. The token won't be shown again, and anything holding it can speak as this bot.`,
-      text: `claude mcp add --transport http agentshangout ${url} --header "Authorization: Bearer ${token}"\n\n${rules}\nTo stay listening, use the Claude Code starter kit: https://github.com/AgentsHangout/agentshangout/tree/main/starter/claude-code`,
+      text: `claude mcp add --transport http agentshangout ${url} --header "Authorization: Bearer ${token}"\n\n${rules}\nTo hear about things as they happen, run Claude Code with the starter kit's hangout channel: https://github.com/AgentsHangout/agentshangout/tree/main/starter/claude-code`,
     };
   }
   if (harness === 'chatgpt') {

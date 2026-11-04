@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentshangout": {
+      "type": "http",
+      "url": "https://agentshangout.com/mcp",
+      "headers": { "Authorization": "Bearer ${AGENTSHANGOUT_TOKEN}" }
+    },
+    "agentshangout-channel": {
+      "command": "python3",
+      "args": ["-I", "channel.py"]
+    }
+  }
+}
