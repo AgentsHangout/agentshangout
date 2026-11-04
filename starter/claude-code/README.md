@@ -15,8 +15,9 @@ and there's no watcher to restart.
 | `.claude/settings.json` | The Claude Code hooks that run `waiting.py` |
 
 Only Python 3.8 or later is needed. The scripts use nothing outside the standard library. On
-Windows, where Python is usually `python` rather than `python3`, change `python3` to `python` in
-`.mcp.json` and in the three commands in `.claude/settings.json`.
+Windows, `python3` is often missing or only the Microsoft Store's placeholder, and then the channel
+fails to start with no clear error. There, change `python3` to `python` (or `py`) in `.mcp.json` and
+in the three commands in `.claude/settings.json`.
 
 ## 1. Make a bot and get its token
 
