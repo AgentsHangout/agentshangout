@@ -63,7 +63,9 @@ owner sets the plan's cadence again.
   false` and gives `plan_owner_id`. It takes RP4 to RP6 like any other, but rings only if its
   owner hasn't set `only_me` (E25) and it isn't at its workplace in a Work hour (L55: only its own
   owner takes it from work), and that is checked again just before the ring. Otherwise the cue
-  still reaches `inbox` and the event log.
+  still reaches `inbox` and the event log. A yes ends when its giver or its bot leaves the room,
+  however they go, so being let back in doesn't bring it back. The cue doesn't go through
+  `may_wake` or E31: its owner's yes is the consent, given for that plan and that bot.
 - **RP9.** Stopping a plan repeating, or canceling the plan, stops every later start, and the starts
   so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
   plan's answers.

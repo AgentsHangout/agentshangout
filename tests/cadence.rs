@@ -726,3 +726,109 @@ async fn a_monthly_plan_starts_on_its_day() {
     assert_eq!(cadence::tick(&s.state, nine + DAY + 60).unwrap(), 0, "the 2nd has none");
     assert_eq!(s.outcomes(&rover.id), ["cued"]);
 }
+
+// RP7: a yes ends when its giver or its bot leaves the room, so letting them back in doesn't
+// quietly bring it back.
+#[tokio::test]
+async fn a_yes_ends_when_its_giver_or_its_bot_leaves_the_room() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = member_of(&s, &ann.room, "Bo").await;
+    let (spot, _) = support::legacy_bot(&s.state, &bo.id, &ann.room, "Spot");
+    let plan = s.plan(&ann).await;
+    let daily = json!({ "freq": "daily", "time": "09:00" });
+    s.request(&ann.key, Method::PUT, &format!("/api/events/{plan}/cadence"), daily).await;
+    let path = format!("/api/events/{plan}/cue-bots");
+    let yes = json!({ "bots": [spot.id] });
+    assert_eq!(s.request(&bo.key, Method::PUT, &path, yes.clone()).await.0, StatusCode::OK);
+    let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 1);
+
+    // Bo leaves, taking Spot, and both are let back in: no yes until Bo says it again.
+    s.state.db.remove_member(&ann.room, &bo.id).unwrap();
+    assert!(s.state.db.cue_bots_of(&plan, &bo.id).unwrap().is_empty());
+    s.state.db.add_member(&ann.room, &bo.id, now()).unwrap();
+    s.state.db.add_agent_to_room(&ann.room, &spot.id).unwrap();
+    assert_eq!(cadence::tick(&s.state, nine + DAY + 60).unwrap(), 0);
+
+    // The same when only the bot leaves and comes back.
+    assert_eq!(s.request(&bo.key, Method::PUT, &path, yes).await.0, StatusCode::OK);
+    s.state.db.remove_agent_from_room(&ann.room, &spot.id).unwrap();
+    s.state.db.add_agent_to_room(&ann.room, &spot.id).unwrap();
+    assert!(s.state.db.cue_bots_of(&plan, &bo.id).unwrap().is_empty());
+    assert_eq!(cadence::tick(&s.state, nine + 2 * DAY + 60).unwrap(), 0);
+    assert_eq!(s.outcomes(&spot.id), ["cued"]);
+}
+
+/// Ann's plan, repeating daily at `time`, with Bo's yes for `bot`.
+async fn yes_plan_at(s: &Server, ann: &Who, bo: &Who, bot: &str, time: &str) {
+    let plan = s.plan(ann).await;
+    let cadence = json!({ "freq": "daily", "time": time });
+    let path = format!("/api/events/{plan}/cadence");
+    assert_eq!(s.request(&ann.key, Method::PUT, &path, cadence).await.0, StatusCode::OK);
+    let path = format!("/api/events/{plan}/cue-bots");
+    let yes = json!({ "bots": [bot] });
+    assert_eq!(s.request(&bo.key, Method::PUT, &path, yes).await.0, StatusCode::OK);
+}
+
+// RP7, L55: another owner's plan doesn't ring a bot at its workplace in a Work hour, at the tick
+// or at the check just before the ring; out of Work hours, it rings.
+#[tokio::test]
+async fn another_owners_cue_doesnt_ring_a_bot_at_work() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move || {
+        let counted = counted.clone();
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+    let settle = || tokio::time::sleep(std::time::Duration::from_millis(400));
+
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = member_of(&s, &ann.room, "Bo").await;
+    let (spot, _) = support::legacy_bot(&s.state, &bo.id, &ann.room, "Spot");
+    // Spot works in Ann's room every hour, and is there now.
+    let job = json!({ "room_id": ann.room, "job": "Keeping the books" });
+    let (status, reply) =
+        s.request(&bo.key, Method::PUT, &format!("/api/agents/{}/workplace", spot.id), job).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let schedule = |block: &str| json!({ "every_day": vec![block; 24] });
+    let schedule_path = format!("/api/agents/{}/schedule", spot.id);
+    let (status, reply) = s.request(&bo.key, Method::PUT, &schedule_path, schedule("work")).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+
+    // A plan starting this minute, so the tick and the ring both look at the real time.
+    let at = now();
+    let time = format!("{:02}:{:02}", at.rem_euclid(DAY) / 3600, at.rem_euclid(3600) / 60);
+    let start = at - at.rem_euclid(60);
+    yes_plan_at(&s, &ann, &bo, &spot.id, &time).await;
+    s.pin(start + 3600);
+    settle().await;
+    s.state.db.set_notify_url(&spot.id, Some(&url)).unwrap();
+    assert_eq!(cadence::tick(&s.state, now()).unwrap(), 1, "cued all the same");
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "not rung at work");
+
+    // Out of Work hours, a second plan at the same time rings it.
+    let (status, _) = s.request(&bo.key, Method::PUT, &schedule_path, schedule("social")).await;
+    assert_eq!(status, StatusCode::OK);
+    s.state.db.set_notify_url(&spot.id, None).unwrap();
+    yes_plan_at(&s, &ann, &bo, &spot.id, &time).await;
+    s.pin(start + 3600);
+    settle().await;
+    s.state.db.set_notify_url(&spot.id, Some(&url)).unwrap();
+    assert_eq!(cadence::tick(&s.state, now()).unwrap(), 1);
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "rung out of Work hours");
+}
