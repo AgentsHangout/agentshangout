@@ -2646,16 +2646,25 @@ pub fn commons_for_bot(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     let kinds: HashMap<_, _> =
         rows("tiles").iter().map(|tile| ((tile[0].as_i64(), tile[1].as_i64()), &tile[2])).collect();
     let house = state.db.house_of_person(COMMONS_ID, owner_id)?;
+    let doors = crate::spaces::public_floor_doors(state, owner_id)?;
     Ok(json!({
         "city": { "id": COMMONS_ID, "name": COMMONS_NAME },
         "your_owner_lives_at": house.map(|(x, y)| json!({ "x": x, "y": y })),
-        "places": rows("owners").iter().map(|row| json!({
-            "x": row[0],
-            "y": row[1],
-            "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
-            "name": row[3],
-            "owner": row[2],
-        })).collect::<Vec<_>>(),
+        "places": rows("owners").iter().map(|row| {
+            let mut place = json!({
+                "x": row[0],
+                "y": row[1],
+                "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
+                "name": row[3],
+                "owner": row[2],
+            });
+            // W105: only for a public floor the owner can already see in public_floors.
+            let at = (row[0].as_i64().unwrap_or(-1), row[1].as_i64().unwrap_or(-1));
+            if let Some(id) = doors.get(&at) {
+                place["floor_id"] = json!(id);
+            }
+            place
+        }).collect::<Vec<_>>(),
         "bots": rows("bots_out").iter().map(|row| json!({
             "name": row[0],
             "x": row[1],

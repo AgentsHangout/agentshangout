@@ -2148,6 +2148,9 @@ pub struct PublicFloor {
     pub here: i64,
     /// L18: this floor is behind the world's town square.
     pub town_square: bool,
+    /// Which space it is a floor of. For the map (W105); the list doesn't show it.
+    #[serde(skip)]
+    pub space_id: String,
 }
 
 pub struct NewVisit<'a> {
@@ -8635,7 +8638,8 @@ impl Db {
                             JOIN world_squares q ON q.world_id = d.world_id AND q.x = d.x AND q.y = d.y
                             JOIN players pl ON pl.id = q.player_id AND pl.person_id = s.owner_id
                             WHERE d.space_id = s.id
-                              AND s.id IN (SELECT space_id FROM town_square_rooms)) AS town_square
+                              AND s.id IN (SELECT space_id FROM town_square_rooms)) AS town_square,
+                    s.id
              FROM floors f
              JOIN hangouts h ON h.id = f.hangout_id
              JOIN spaces s ON s.id = f.space_id
@@ -8655,6 +8659,7 @@ impl Db {
                 capacity: 0,
                 here: row.get(6)?,
                 town_square: row.get(7)?,
+                space_id: row.get(8)?,
             })
         })?;
         rows.collect()
