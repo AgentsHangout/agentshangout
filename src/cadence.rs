@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{Path, State},
-    routing::put,
+    routing::{get, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -39,7 +39,7 @@ const LOOK_BACK_SECS: i64 = 7 * DAY_SECS;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/events/{id}/cadence", put(set).delete(end))
+        .route("/api/events/{id}/cadence", get(read).put(set).delete(end))
         .route("/api/events/{id}/cue-bots", put(set_cue_bots))
 }
 
@@ -283,6 +283,24 @@ async fn set(
         reply["clock_note"] = json!("You haven't saved a clock, so this time is in UTC. Open the site once to save yours, then set this again.");
     }
     Ok(Json(reply))
+}
+
+/// RP13: what the plan page shows. A member, as a person, reads whether the plan repeats and
+/// which of their own bots they said yes for.
+async fn read(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "read a plan's repeat")?;
+    let event = state.db.event(&id)?.ok_or_else(ApiError::not_found)?;
+    ops::no_guests(&state, &caller, &event.hangout_id, "read a plan's repeat")?;
+    let cadence = state.db.cadence(&id)?.map(|cadence| cadence_json(&cadence, now()));
+    Ok(Json(json!({
+        "event_id": id,
+        "cadence": cadence,
+        "your_bots": state.db.cue_bots_of(&id, &caller.person_id)?,
+    })))
 }
 
 /// RP9: it stops repeating, and every start so far stays on the record.
