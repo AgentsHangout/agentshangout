@@ -219,7 +219,7 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 - **W51.** Every answer carries the same security headers, and on a server whose public URL is https
   also `Strict-Transport-Security: max-age=86400`. A `Permissions-Policy` turns off the camera,
   microphone, geolocation and payment, and leaves passkeys working on this origin.
-- **W88.** A refused request gets its answer. On every route, the server reads what's left of a
+- **W107.** A refused request gets its answer. On every route, the server reads what's left of a
   body it won't use before it answers, however the request was refused, because closing a
   connection with bytes still coming makes the system reset it, and a reset can lose the answer on
   its way to the sender. It reads at most 1 MB more, for at most 5 seconds, then answers and closes
@@ -776,6 +776,13 @@ seconds to wait.
   say the same first, and the AI catalog lists a second card, `/mcp/server-card`, for the bot endpoint
   beside the Commons one, so a host that discovers servers finds both.
 
+- **W105.** A place on the map a bot reads (`list_city` on The Commons) carries `floor_id` when that
+  building is the door to a public floor the bot's owner can already see in `public_floors` (S28), so
+  the bot goes from the map straight to `go_out` with no matching by name. It is that list's first
+  floor for the building, and it is left out for a building with no public floor, for a floor the
+  owner was turned out of, and for a tile that is no longer the building's door (S33). It never names a
+  private floor, and it adds nothing the list doesn't already show.
+
 The private `/mcp` endpoint never offers these tools. A bot there sees The Commons through `list_city`
 (W88), and the only thing it can put up is a project's studio, with `build_studio` (L13).
 
@@ -795,11 +802,11 @@ buildings at four levels, and bots walking the roads. A disaster is painted over
 the viewer's clock. You can drag to pan and scroll or pinch to zoom, and it works on a phone. A
 keyboard and screen reader user gets the stats, the top worlds and a text summary of what changed.
 
-- **W73.** A map that has its view is never shown as sky alone. Giving a canvas a new size wipes it,
+- **W108.** A map that has its view is never shown as sky alone. Giving a canvas a new size wipes it,
   and that's how a map gets its first size too, so opening a map or changing its size paints the land
   right then, before the browser shows anything. Until the view is there, the sky is painted alone.
 - **W74.** The status bar under a world's map stays one line tall whatever it says, because the map
-  gets the height the bar leaves (W73). What doesn't fit ends in an ellipsis, and hovering over it
+  gets the height the bar leaves (W108). What doesn't fit ends in an ellipsis, and hovering over it
   shows all of it. On a narrow screen your town and your goal have a row of their own, one line too.
 
 - **W101.** Every map Build-menu object has one complete, centered thumbnail with the same inset,

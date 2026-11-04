@@ -232,7 +232,17 @@ pub(crate) fn out_until(
     if let Some(reason) = kept_in(state, agent_id)? {
         return Ok(Err(reason));
     }
-    Ok(hours_until(state, agent_id, owner_id, now)?.ok_or("it isn't your social hours"))
+    let Some(ends) = hours_until(state, agent_id, owner_id, now)? else {
+        return Ok(Err("it isn't your social hours"));
+    };
+    // L59: a saved plan's Anything hours don't send a bot home, only Home does.
+    Ok(Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => {
+            let offset = offset_of(state, owner_id)?;
+            schedule.run_until(offset, ends - 1, |block| block != Block::Home).max(ends)
+        }
+        None => ends,
+    }))
 }
 
 /// L3, L52: when the stretch of hours a bot may be out in ends, if it's in one now: its routine's
@@ -249,7 +259,19 @@ fn hours_until(
             let out = |block: Block| matches!(block, Block::Social | Block::Work);
             out(schedule.block_at(offset, now)).then(|| schedule.run_until(offset, now, out))
         }
-        None => social_until(&routine_of(state, agent_id)?, offset, now),
+        None => {
+            // L59: a window that ends where another begins, like midnight between two all-day
+            // days, is one stretch.
+            let routine = routine_of(state, agent_id)?;
+            let mut ends = social_until(&routine, offset, now);
+            for _ in 0..RUN_DAYS {
+                match ends.and_then(|at| social_until(&routine, offset, at)) {
+                    Some(more) if Some(more) != ends => ends = Some(more),
+                    _ => break,
+                }
+            }
+            ends
+        }
     })
 }
 
@@ -1073,7 +1095,7 @@ fn not_out_reason(
 /// L17: who The Commons shows at its places, by name, beside each building's door. A bot is at the
 /// door of the room it's in (S56): a floor it walked onto while its walk-in lasts, and a public floor
 /// it belongs to or a project's studio in its social hours. C14: what it's wearing goes with the name.
-/// L17, L18: a bot at a place: its name, the tile by the door, its look, where it comes from, and
+/// L17, L62: a bot at a place: its name, the tile by the door, its look, where it comes from, and
 /// the player of its own that isn't on the street while it's there.
 pub struct BotAtPlace {
     pub name: String,
@@ -1142,7 +1164,7 @@ pub fn bots_at_places_and_cut(
             tiles.get(&pos).is_some_and(|tile| tile.kind == crate::world::Kind::Road).then_some(pos)
         });
         let (x, y) = road.unwrap_or((x, y));
-        // L18: from where its own player stands, or else its owner's house.
+        // L62: from where its own player stands, or else its owner's house.
         let player = state.db.player_of_agent(&agent_id)?;
         let from = match player.and_then(|id| street.get(&id).copied()) {
             Some(pos) => Some(pos),

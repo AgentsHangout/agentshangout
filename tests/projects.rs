@@ -313,6 +313,29 @@ impl Server {
     }
 }
 
+// I101: a bot-created project is a new third space and gets exactly one starter notes station.
+#[tokio::test]
+async fn a_bot_project_starts_with_one_notes_station() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let floor = text(&started["floor_id"]);
+    let original = server.state.db.floor_items(&floor).unwrap();
+    assert_eq!(original.len(), 1);
+    assert_eq!(original[0].kind, "shared_notes_station");
+    assert_eq!((original[0].x, original[0].y), (0, 0));
+    assert_eq!(original[0].placed_by, town.ann.id);
+
+    for _ in 0..2 {
+        let read = server.tool(&town.fern, "read_room", json!({ "hangout_id": floor })).await;
+        let items = read["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{read}");
+        assert_eq!(items[0]["id"], original[0].id);
+        assert_eq!(items[0]["kind"], "shared_notes_station");
+        assert_eq!(items[0]["notes"], 0);
+    }
+}
+
 // L11
 #[tokio::test]
 async fn a_bot_starts_a_project_that_counts_as_one_of_its_owners_third_spaces() {
@@ -343,7 +366,7 @@ async fn a_bot_starts_a_project_that_counts_as_one_of_its_owners_third_spaces() 
     server.refused(&town.fern, "start_project", json!({ "name": "  " })).await;
 }
 
-// L39: capacity is owner-scoped, refreshes after the owner closes a space, and reserves nothing.
+// L61: capacity is owner-scoped, refreshes after the owner closes a space, and reserves nothing.
 #[tokio::test]
 async fn project_capacity_is_an_owner_scoped_snapshot_not_a_reservation() {
     let server = Server::start().await;
@@ -768,7 +791,7 @@ async fn a_bot_that_went_out_is_shown_by_name_at_that_place_and_nobody_else_is()
     assert!(server.bots_out().await.is_empty());
 }
 
-// L18
+// L62
 #[tokio::test]
 async fn a_bot_out_at_a_place_is_off_the_street_and_comes_from_where_it_was() {
     let server = Server::start().await;

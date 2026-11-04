@@ -1814,7 +1814,7 @@ pub fn my_world(state: &AppState, caller: &Caller) -> ApiResult<Value> {
 /// `[id, name, x, y, emote, kind, look]`, where `kind` is `person` or `agent` (W53), and `look` is
 /// null for a player with nobody's look to wear (C14).
 type PlayerOut = (i64, String, u16, u16, Option<&'static str>, &'static str, Option<Look>);
-/// L17, L18: `[name, x, y, look, fx, fy]` for a bot at a place.
+/// L17, L62: `[name, x, y, look, fx, fy]` for a bot at a place.
 /// L17: and last, an open-air place's tile, where the bot stays, or null for a building it's inside.
 type BotOutRow =
     (String, u16, u16, Look, Option<u16>, Option<u16>, Option<[u16; 2]>, String, [u16; 2]);
@@ -1854,7 +1854,7 @@ struct ViewOut<'a> {
     research_labs: Option<Vec<ResearchLabOut>>,
     /// L17: `[name, x, y, look]` of the bots out at The Commons' places, by their own names (C14).
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// L18: and `fx, fy`, where it comes from, or nulls.
+    /// L62: and `fx, fy`, where it comes from, or nulls.
     bots_out: Option<Vec<BotOutRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disaster: Option<DisasterOut>,
@@ -2026,7 +2026,7 @@ fn build_view(state: &AppState, world_id: &str, now: i64) -> ApiResult<Cached> {
                 })
             })
             .collect();
-        // L18: a bot at a place isn't on the street too, and comes from where it stood.
+        // L62: a bot at a place isn't on the street too, and comes from where it stood.
         let street = snapshot.players.iter().map(|player| (player.id, player.pos)).collect();
         let at_places = crate::routines::bots_at_places(state, &snapshot.tiles, &street, now)?;
         let inside: std::collections::HashSet<i64> =
@@ -2646,16 +2646,25 @@ pub fn commons_for_bot(state: &AppState, owner_id: &str) -> ApiResult<Value> {
     let kinds: HashMap<_, _> =
         rows("tiles").iter().map(|tile| ((tile[0].as_i64(), tile[1].as_i64()), &tile[2])).collect();
     let house = state.db.house_of_person(COMMONS_ID, owner_id)?;
+    let doors = crate::spaces::public_floor_doors(state, owner_id)?;
     Ok(json!({
         "city": { "id": COMMONS_ID, "name": COMMONS_NAME },
         "your_owner_lives_at": house.map(|(x, y)| json!({ "x": x, "y": y })),
-        "places": rows("owners").iter().map(|row| json!({
-            "x": row[0],
-            "y": row[1],
-            "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
-            "name": row[3],
-            "owner": row[2],
-        })).collect::<Vec<_>>(),
+        "places": rows("owners").iter().map(|row| {
+            let mut place = json!({
+                "x": row[0],
+                "y": row[1],
+                "kind": kinds.get(&(row[0].as_i64(), row[1].as_i64())),
+                "name": row[3],
+                "owner": row[2],
+            });
+            // W105: only for a public floor the owner can already see in public_floors.
+            let at = (row[0].as_i64().unwrap_or(-1), row[1].as_i64().unwrap_or(-1));
+            if let Some(id) = doors.get(&at) {
+                place["floor_id"] = json!(id);
+            }
+            place
+        }).collect::<Vec<_>>(),
         "bots": rows("bots_out").iter().map(|row| json!({
             "name": row[0],
             "x": row[1],

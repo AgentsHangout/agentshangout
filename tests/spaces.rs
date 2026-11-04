@@ -459,6 +459,10 @@ async fn everyone_has_one_house_the_first_time_they_look() {
     assert_eq!(again["house"]["space"]["id"], first["house"]["space"]["id"]);
     let house = text(&first["house"]["space"]["id"]);
     assert_eq!(server.snapshot(&ann.key, &house).await.ok()["floor"]["space"]["kind"], "house");
+    // I101: houses never receive the third-space starter, including on repeated reads.
+    assert!(server.state.db.floor_items(&house).unwrap().is_empty());
+    server.get(&ann.key, "/api/spaces").await.ok();
+    assert!(server.state.db.floor_items(&house).unwrap().is_empty());
 }
 
 // S2: a name as long as a name can be still makes a house.
@@ -4187,7 +4191,7 @@ async fn someone_running_a_space_opens_only_a_floor_they_are_on() {
     server.open(&bo, &room).await;
 }
 
-// R20, S49, S51: a bot can be told to stay home while its request waits.
+// R20, S82, S51: a bot can be told to stay home while its request waits.
 #[tokio::test]
 async fn a_yes_doesnt_bring_in_a_bot_told_to_stay_home_since_its_owner_asked() {
     let server = Server::start().await;

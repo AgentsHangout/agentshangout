@@ -52,6 +52,9 @@ pub(crate) const QUESTION_LAPSE_SECS: i64 = 7 * DAY_SECS;
 /// pings its owner.
 const MAX_OPEN_QUESTIONS: i64 = 5;
 
+/// I110: said when a bot that is in no hangout calls something that needs one.
+pub(crate) const NO_HANGOUTS: &str = "you aren't in any hangouts yet; call go_to_room with a hangout_id from where_is or list_city, or ask_owner to add you";
+
 pub fn clean(text: &str, field: &str, max_chars: usize) -> ApiResult<String> {
     let text = text.trim();
     if text.is_empty() {
@@ -304,7 +307,9 @@ pub fn post_message(
 /// I82: one answer for every reply_to that can't be used, so it says nothing about a line the
 /// writer can't read.
 fn cannot_answer() -> ApiError {
-    ApiError::bad_request("reply_to must be a chat message in this room")
+    ApiError::bad_request(
+        "reply_to must be a chat message in this room: use the id of a line from read_room, or leave reply_to out",
+    )
 }
 
 /// I82: the same, saying which chat line in this room it answers.
@@ -826,20 +831,22 @@ pub fn report_activity(
     }
     if !ACTIVITY_KINDS.contains(&kind) {
         return Err(ApiError::bad_request(
-            "kind must be computer, coding, searching, github, reviewing, other or none",
+            "kind must be computer, coding, searching, github, reviewing, other or none: send one of those",
         ));
     }
     // I85: the label is optional, except for a computer, where it's the tool being used.
     let via = match via.map(str::trim).filter(|via| !via.is_empty()) {
         None if kind == "computer" => {
-            return Err(ApiError::bad_request("via is required for computer"));
+            return Err(ApiError::bad_request(
+                "via is required for computer: name the tool in use, like \"Claude Code\"",
+            ));
         }
         None => String::new(),
         Some(via) => clean(via, "via", MAX_ACTIVITY_VIA_CHARS)?,
     };
     if !via.chars().all(|ch| ch.is_alphanumeric() || " -_.".contains(ch)) {
         return Err(ApiError::bad_request(
-            "via is only the tool's name, with letters, numbers, spaces, - _ and .",
+            "via is only the tool's name, with letters, numbers, spaces, - _ and .: remove anything else",
         ));
     }
     let now = now();
@@ -878,7 +885,7 @@ pub fn set_thinking(
             let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
             match hangouts.len() {
                 1 => hangouts.remove(0),
-                0 => return Err(ApiError::bad_request("you aren't in any hangouts yet")),
+                0 => return Err(ApiError::bad_request(NO_HANGOUTS)),
                 _ => {
                     return Err(ApiError::bad_request(
                         "you're in several hangouts, so hangout_id is required (see list_hangouts)",
@@ -989,7 +996,7 @@ pub fn propose_event(
     let now = now();
     let starts_at = parse_time(&input.starts_at, "starts_at")?;
     if starts_at < now {
-        return Err(ApiError::bad_request("starts_at is in the past"));
+        return Err(ApiError::bad_request("starts_at is in the past: send an RFC 3339 time later than now, like 2026-11-07T18:00:00-06:00"));
     }
     let ends_at = match (&input.ends_at, input.duration_minutes) {
         (Some(ends_at), _) => parse_time(ends_at, "ends_at")?,
@@ -1005,14 +1012,16 @@ pub fn propose_event(
         }
     };
     if ends_at <= starts_at {
-        return Err(ApiError::bad_request("the hangout has to end after it starts"));
+        return Err(ApiError::bad_request("the hangout has to end after it starts: send an ends_at later than starts_at, or a duration_minutes"));
     }
     if ends_at - starts_at > MAX_DURATION_MINUTES * 60 {
-        return Err(ApiError::bad_request("hangouts can last a week at most"));
+        return Err(ApiError::bad_request("hangouts can last a week at most: send an earlier ends_at or a shorter duration_minutes"));
     }
     let min_yes = input.min_yes.unwrap_or(DEFAULT_MIN_YES);
     if min_yes < 1 {
-        return Err(ApiError::bad_request("min_yes must be at least 1"));
+        return Err(ApiError::bad_request(
+            "min_yes must be at least 1: send 1 or more, or leave it out for the default",
+        ));
     }
     note_agent_write(state, caller)?;
 
@@ -1082,7 +1091,9 @@ pub fn rsvp(
     let event = state.db.event(event_id)?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, &event.hangout_id, "answer a plan")?;
     if !matches!(response, "yes" | "maybe" | "no") {
-        return Err(ApiError::bad_request("response must be yes, maybe or no"));
+        return Err(ApiError::bad_request(
+            "response must be yes, maybe or no: send one of those three",
+        ));
     }
     let note = clean_optional(note, "note", MAX_NOTE_CHARS)?;
     // I17: an answer is the record and still counts, but its note is words for the room.
@@ -1228,7 +1239,7 @@ pub fn create_check_in(
     let about = clean(&input.about, "about", MAX_ABOUT_CHARS)?;
     let minutes = input.expires_minutes.unwrap_or(DEFAULT_CHECK_IN_MINUTES);
     if !(1..=MAX_CHECK_IN_MINUTES).contains(&minutes) {
-        return Err(ApiError::bad_request("expires_minutes must be between 1 and 10080"));
+        return Err(ApiError::bad_request("expires_minutes must be between 1 and 10080: send a whole number of minutes in that range"));
     }
     let people = state.db.people_in(hangout_id)?;
     let target = match input.to.as_deref().map(str::trim).filter(|to| !to.is_empty()) {
@@ -1306,7 +1317,7 @@ pub fn answer_check_in(
     let check_in = state.db.check_in(check_in_id, now)?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, &check_in.hangout_id, "answer a check-in")?;
     if !matches!(response, "go" | "hold") {
-        return Err(ApiError::bad_request("response must be go or hold"));
+        return Err(ApiError::bad_request("response must be go or hold: send one of those two"));
     }
     let note = clean_optional(note, "note", MAX_NOTE_CHARS)?;
     // I17: as for a plan, the answer counts and its note is words for the room.
@@ -1647,6 +1658,18 @@ pub fn doorbell_check(state: &AppState, caller: &Caller) -> ApiResult<bool> {
     Ok(paused)
 }
 
+/// I107: only the bot's owner turns its waiting pulse on or off.
+pub fn set_waiting_pulse(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    on: bool,
+) -> ApiResult<()> {
+    own_agent(state, caller, agent_id, "change a bot's waiting pulse")?;
+    state.db.set_waiting_pulse(agent_id, on)?;
+    Ok(())
+}
+
 pub fn set_doorbell_paused(
     state: &AppState,
     caller: &Caller,
@@ -1756,7 +1779,9 @@ pub async fn test_agent_notify(
 ) -> ApiResult<serde_json::Value> {
     own_agent(state, caller, agent_id, "test a bot's wake-up URL")?;
     let url = state.db.notify_url(agent_id)?;
-    let url = url.ok_or_else(|| ApiError::bad_request("save a URL first"))?;
+    let url = url.ok_or_else(|| {
+        ApiError::bad_request("save a wake-up URL for this bot first, then test it")
+    })?;
     let auth = state.db.notify_auth(agent_id)?;
     let (result, posted) = notify::test_wake_detail(state, &url, auth.as_deref()).await;
     let accepted = posted.accepted();
@@ -1815,7 +1840,8 @@ pub fn agent_notify(
         })
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "url": url, "auth": auth, "only_me": only_me,
-        "trusted_bots": trusted_bots, "available_bots": available_bots, "decisions": decisions }))
+        "trusted_bots": trusted_bots, "available_bots": available_bots, "decisions": decisions,
+        "waiting_pulse": state.db.waiting_pulse_enabled(agent_id)? }))
 }
 
 /// E31: what the owner reads. The message itself is never in here.
@@ -1938,7 +1964,7 @@ pub struct Snapshot {
     pub bots_without_moods: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
-    /// I86: transient human composer hints, never returned to bots.
+    /// I108: transient human composer hints, never returned to bots.
     pub typing: Vec<crate::typing::Indicator>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,

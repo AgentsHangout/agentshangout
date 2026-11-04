@@ -1,6 +1,6 @@
 //! Tests for how a figure on the map gets from one place to the next. They run the map's own route
-//! code from web/world.js in Node, and are written from L18 in docs/routines.md and the city's map
-//! in docs/city.md. A comment such as `// L18` above a test names the rule it covers.
+//! code from web/world.js in Node, and are written from L62 in docs/routines.md and the city's map
+//! in docs/city.md. A comment such as `// L62` above a test names the rule it covers.
 
 use std::process::Command;
 
@@ -47,7 +47,7 @@ fn run(script: &str) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-// L18: a bot drives to a place across the whole map, however far it is, instead of vanishing.
+// L62: a bot drives to a place across the whole map, however far it is, instead of vanishing.
 #[test]
 fn a_bot_drives_all_the_way_across_the_map() {
     let out = run("
@@ -78,7 +78,7 @@ fn a_bot_drives_all_the_way_across_the_map() {
     );
 }
 
-// L18, and the city's map: with no way there at all, it still vanishes and appears at the other end.
+// L62, and the city's map: with no way there at all, it still vanishes and appears at the other end.
 #[test]
 fn a_bot_with_no_way_there_vanishes_and_appears() {
     let out = run("
@@ -98,7 +98,7 @@ fn a_bot_with_no_way_there_vanishes_and_appears() {
     assert_eq!(out, r#"{"sparkles":2,"steps":0,"at":[120.5,100.5]}"#);
 }
 
-// L18: a route that crosses grass, where each step costs 1.7, is found like one on the road. The
+// L62: a route that crosses grass, where each step costs 1.7, is found like one on the road. The
 // costs were kept in a Float32Array: 1.7 rounds there, so a step's stored cost could come out a hair
 // under its real one and the search skipped it as stale. Most routes across grass then failed, and
 // bots vanished and appeared at the other end instead of driving.

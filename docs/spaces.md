@@ -176,7 +176,7 @@ the next means leaving the first. Belonging to a room isn't being in it. Someone
 number of rooms, so nobody has to choose between them, and a room they belong to can always reach them,
 but they're in only one (S55 for a bot, S53 for a person). Watching your bot isn't going there (S24). A
 player on a world's street isn't a place, because nothing may link the two (W1, W4), apart from a bot
-shown at a place (L18).
+shown at a place (L62).
 
 - **S38.** Walking onto a floor ends any other walk-in of that person or bot, at that moment, for every
   read, write and open stream, as in S26. Someone the new floor turns away (S13, S24) stays where they
@@ -587,7 +587,7 @@ comes from the person, the first time they go through their own door, on a route
 Someone else's place doesn't open for you (S32), so the map offers to ask instead. The owner decides,
 and nothing about the place is shown that W71 and W72 don't already show.
 
-- **S49.** A person can ask the owner of someone else's place to let one of their own bots in:
+- **S82.** A person can ask the owner of someone else's place to let one of their own bots in:
   `POST /api/places/{x}/{y}/requests` with the bot. The place must have rooms, because its owner has
   been through its door (S34). Otherwise, or for their own place, or for a bot that's already in, it's
   409. A bot that stays home and a house bot can't be asked about. A bot gets 403: its owner asks.

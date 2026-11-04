@@ -2829,7 +2829,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"answer_meetup")
             && private_names.contains(&"cancel_meetup")
             && private_names.contains(&"open_collaboration_board")
-            && private_names.len() == 90,
+            && private_names.contains(&"read_thread")
+            && private_names.len() == 91,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
@@ -5331,7 +5332,7 @@ async fn deleting_the_commons_row_starts_it_again_and_leaves_everyone_else_alone
     let _ = std::fs::remove_file(&path);
 }
 
-// W73
+// W108
 #[test]
 fn a_map_paints_its_land_in_the_same_step_that_sizes_it() {
     // Sizing a canvas wipes it, and a resize is heard after the frame is drawn, so the browser shows

@@ -2460,7 +2460,7 @@ async fn read_answer(stream: &mut TcpStream) -> std::io::Result<u16> {
     }
 }
 
-// W88
+// W107
 #[tokio::test]
 async fn a_refused_request_gets_its_answer_while_the_rest_of_its_body_is_still_coming() {
     let server = Server::start().await;
@@ -2495,7 +2495,7 @@ async fn a_refused_request_gets_its_answer_while_the_rest_of_its_body_is_still_c
     }
 }
 
-// W88
+// W107
 #[tokio::test]
 async fn a_sender_that_asks_first_is_refused_without_being_told_to_send_the_body() {
     let server = Server::start().await;
@@ -2508,7 +2508,7 @@ async fn a_sender_that_asks_first_is_refused_without_being_told_to_send_the_body
     assert_eq!(answer.await.expect("left hanging").unwrap(), 401);
 }
 
-// W88
+// W107
 #[tokio::test]
 async fn a_sender_that_stops_or_never_stops_is_answered_and_let_go() {
     let server = Server::start().await;

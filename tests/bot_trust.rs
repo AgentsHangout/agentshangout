@@ -80,6 +80,7 @@ impl Fixture {
             body: "@a".into(),
             created_at: now(),
             reply_to: None,
+            thread_root: None,
         }
     }
     fn config(&self, mode: &str) {

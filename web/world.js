@@ -5192,7 +5192,7 @@ export class World {
   }
 
   // Cheapest route over walkable tiles, preferring roads. Returns tiles after the start. A stroll keeps
-  // the search small, and a move between places passes `whole` to search the whole map (L18).
+  // the search small, and a move between places passes `whole` to search the whole map (L62).
   findPath(sx, sy, tx, ty, maxLength = 90, whole = false) {
     const n = this.n;
     if (sx === tx && sy === ty) return [];
@@ -5205,7 +5205,7 @@ export class World {
     const h = y1 - y0 + 1;
     if (!whole && w * h > 9000) return null;
     // Float64, the same as the sums put in it: in a Float32Array a grass step's 1.7 rounds, and a
-    // stored cost a hair under the real one made the search skip that tile as stale (L18).
+    // stored cost a hair under the real one made the search skip that tile as stale (L62).
     const cost = new Float64Array(w * h).fill(Infinity);
     const from = new Int32Array(w * h).fill(-1);
     const start = (sy - y0) * w + (sx - x0);
@@ -5344,7 +5344,7 @@ export class World {
         const owner = typeof row[7] === 'string' ? row[7] : '';
         const place = Array.isArray(row[8]) ? [clamp(Number(row[8][0]) || 0, 0, n - 1), clamp(Number(row[8][1]) || 0, 0, n - 1)] : null;
         if (!p) {
-          // L18: a bot that just reached a place sets out from where it was, and goes there.
+          // L62: a bot that just reached a place sets out from where it was, and goes there.
           const travels = animate && row[4] != null && row[5] != null && Number.isFinite(Number(row[4])) && Number.isFinite(Number(row[5]));
           const fx = travels ? clamp(Math.round(Number(row[4])), 0, n - 1) : x;
           const fy = travels ? clamp(Math.round(Number(row[5])), 0, n - 1) : y;
@@ -5428,7 +5428,7 @@ export class World {
       p.path.length = 0;
       return;
     }
-    // L18: however far it is across the map.
+    // L62: however far it is across the map.
     const route = this.findPath(sx, sy, x, y, this.n * this.n, true);
     if (route) {
       // A car keeps to the road. Only the legs of the route from one road tile to the next are
@@ -5998,7 +5998,7 @@ export class World {
       this.focusOnceSized = null;
     }
     this.clampCam();
-    // W73: a canvas that is resized is cleared, and the browser shows that before the next frame comes.
+    // W108: a canvas that is resized is cleared, and the browser shows that before the next frame comes.
     // So it's all painted now, or the sky shows where the map was. The sky is opaque, so with no view
     // yet it still goes on, alone.
     if (wiped && this.ready) this.render();
