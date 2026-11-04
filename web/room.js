@@ -1023,6 +1023,17 @@ function paintSharedNotesStation(g, x, y) {
   r(g, '#d6453f', x - 3, y - 18, 1, 2);
 }
 
+// A wall clock on a post that sends visitors out at the time its owner set (I102).
+function paintClosingClock(g, x, y) {
+  r(g, SHADOW, x - 6, y - 2, 12, 2);
+  r(g, '#6b4628', x - 1, y - 12, 3, 10);
+  r(g, '#3b4158', x - 8, y - 28, 16, 16);
+  r(g, '#f4f1e8', x - 7, y - 27, 14, 14);
+  r(g, '#c8342c', x - 1, y - 26, 2, 1);
+  r(g, '#20283e', x, y - 25, 1, 6);
+  r(g, '#20283e', x, y - 20, 5, 1);
+}
+
 // A desktop flip calendar, with a marked day and a foot that reads clearly at room scale.
 function paintCalendarStand(g, x, y) {
   r(g, SHADOW, x - 12, y - 2, 24, 2);
@@ -4155,6 +4166,7 @@ const ITEMS = {
   whiteboard: { paint: paintWhiteboard, side: edgeOf(30, '#f4f1e8', '#20283e'), rise: 32 },
   board_station: { paint: paintBoardStation, side: edgeOf(25, '#c9a86a', '#4a3120'), rise: 31 },
   shared_notes_station: { paint: paintSharedNotesStation, side: edgeOf(16, '#fff8dc', '#6b4628'), rise: 19 },
+  closing_clock: { paint: paintClosingClock, side: edgeOf(16, '#f4f1e8', '#3b4158'), rise: 28 },
   calendar_stand: { paint: paintCalendarStand, side: edgeOf(17, '#f4f1e8', '#6b4628'), rise: 26 },
   corkboard: { paint: paintCorkboard, side: edgeOf(25, '#d89a6c', '#4a3120'), rise: 31 },
   research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },

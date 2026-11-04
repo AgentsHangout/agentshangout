@@ -6223,6 +6223,92 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
+// I102: a closing clock shows its time and a countdown, its owner sets it, and at the time it
+// sends out the walk-ins it names.
+#[tokio::test]
+async fn a_closing_clock_shows_its_time_and_sends_the_named_visitors_out() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.open(&ann, &room).await.ok();
+    let clock = server.item(&ann, &room, "closing_clock", (30, 10)).await;
+    let path = format!("/api/items/{clock}/closing");
+    let item_of = |read: &Value| {
+        read["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["kind"] == "closing_clock")
+            .unwrap()
+            .clone()
+    };
+
+    // Nothing is set at first.
+    let first = item_of(&server.read_room(&scout.token, &room).await);
+    assert_eq!(first["opens"], "closing");
+    assert!(first["closes_at"].is_null() && first["seconds_left"].is_null(), "{first}");
+
+    // Only whoever may change the item sets it; the time must be ahead.
+    let (home, eve) = server.someone("Eve").await;
+    server
+        .put(&eve.key, &path, json!({ "closes_at": now() + 600 }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    server
+        .put(&ann.key, &path, json!({ "closes_at": now() - 5 }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .put(&ann.key, &path, json!({ "closes_at": now() + 600, "everyone": false }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    let at = now() + 600;
+    server.put(&ann.key, &path, json!({ "closes_at": at })).await.ok();
+    let read = server.read_room(&scout.token, &room).await;
+    let shown = item_of(&read);
+    assert!(shown["closes_at"].as_str().unwrap().ends_with('Z'), "{shown}");
+    let left = shown["seconds_left"].as_i64().unwrap();
+    assert!((595..=600).contains(&left), "{shown}");
+    assert_eq!(shown["sends_out"], "everyone");
+    assert_eq!(shown["you_are_listed"], true);
+    assert!(read["how"]["closing_clock"].is_string(), "{read}");
+
+    // Changing it changes what is shown.
+    server.put(&ann.key, &path, json!({ "closes_at": at + 3600 })).await.ok();
+    let later = item_of(&server.read_room(&scout.token, &room).await);
+    assert!(later["seconds_left"].as_i64().unwrap() > 4000, "{later}");
+
+    // Two walk-ins; it names one of them.
+    let pip = server.bot(&eve, &home, "Pip").await;
+    let (home2, fay) = server.someone("Fay").await;
+    let rex = server.bot(&fay, &home2, "Rex").await;
+    for (owner, bot) in [(&eve, &pip), (&fay, &rex)] {
+        server
+            .post(&owner.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": bot.id }))
+            .await
+            .ok();
+    }
+    let at = now() + 60;
+    server
+        .put(&ann.key, &path, json!({ "closes_at": at, "everyone": false, "bots": [pip.id] }))
+        .await
+        .ok();
+    let for_rex = item_of(&server.read_room(&rex.token, &room).await);
+    assert_eq!(for_rex["you_are_listed"], false, "{for_rex}");
+    assert_eq!(item_of(&server.read_room(&pip.token, &room).await)["you_are_listed"], true);
+
+    // Before the time nobody goes.
+    assert_eq!(agenthangout::closing::sweep(&server.state, at - 1).unwrap(), 0);
+    server.read_room(&pip.token, &room).await;
+    // At the time only the named bot goes, and is told when and why; the clock rings once.
+    assert_eq!(agenthangout::closing::sweep(&server.state, at).unwrap(), 1);
+    let gone = server.tool(&pip.token, "read_room", json!({ "hangout_id": room })).await;
+    assert_eq!(gone["isError"], true, "{gone}");
+    assert!(text(&gone["content"][0]["text"]).contains("closing clock rang"), "{gone}");
+    server.read_room(&rex.token, &room).await;
+    assert!(item_of(&server.read_room(&scout.token, &room).await)["closes_at"].is_null());
+}
+
 // I95 to I100: how to play, the exact names, the hint on `say` and the `how` map.
 
 async fn rpc(server: &Server, token: &str, method: &str, params: Value) -> Value {
