@@ -26,6 +26,7 @@ pub mod github_display;
 pub mod god_mode;
 pub mod house_editing;
 pub mod households;
+pub mod how_to_play;
 pub mod ical;
 pub mod items;
 pub mod looks;
