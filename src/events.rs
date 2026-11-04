@@ -896,6 +896,8 @@ pub fn poll(state: &AppState, caller: &Caller, params: &Value) -> Result<Value, 
     let page =
         load_page(state, agent_id, after, Some(name), hangout.as_deref(), floor, false, limit)
             .map_err(internal)?;
+    // U17: the events handed to the bot.
+    state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
     Ok(page_json(&page, 5000))
 }
 
@@ -1260,6 +1262,8 @@ fn fill_replay(context: &mut StreamCtx) {
     };
     context.cursor = page.cursor;
     context.sent += page.events.len();
+    // U17: the events put on the stream.
+    context.state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
     for event in page.events {
         let mut params = event;
         params["_meta"] = meta(&context.label);
@@ -1309,6 +1313,20 @@ pub fn since_now(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<V
 }
 
 pub async fn since_tool(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
+    let waited = args
+        .get("wait_seconds")
+        .or(args.get("wait"))
+        .and_then(|value| value.as_u64())
+        .is_some_and(|wait| wait > 0);
+    let reply = wait_for_events(state, caller, args).await;
+    // U17: a long-poll that was answered, whether by events or by the wait running out.
+    if waited && reply.is_ok() {
+        state.usage.note_line(now(), "long_polls", 1);
+    }
+    reply
+}
+
+async fn wait_for_events(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let agent_id = events_caller(caller)?.to_string();
     let wait =
         args.get("wait_seconds").or(args.get("wait")).and_then(|value| value.as_u64()).unwrap_or(0);
@@ -1398,6 +1416,8 @@ fn read_since(
     };
     let page =
         load_page(state, agent_id, after, None, hangout, not_before, actionable, DEFAULT_LIMIT)?;
+    // U17: the events handed to the bot.
+    state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
     let cursor = if jump_to_head && !page.has_more {
         state.db.bot_event_head(agent_id)?
     } else {

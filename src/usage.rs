@@ -1,4 +1,4 @@
-//! Usage monitoring (docs/usage.md, U1 to U12): counts of what the server did, for the people who run
+//! Usage monitoring (docs/usage.md, U1 to U21): counts of what the server did, for the people who run
 //! it and for a bot's owner. Counts only. Nothing a person said, and nobody's history, goes in.
 
 use std::{
@@ -33,6 +33,37 @@ const MAX_BUCKETS: usize = 20_000;
 /// The most distinct people or bots held for one day.
 const MAX_ACTIVE: usize = 500_000;
 const UNKNOWN_TOOL: &str = "unknown_tool";
+/// U16: the upper edge of each response-time bucket, in milliseconds. A response over the last edge
+/// falls in one more bucket, so the list is fixed and the memory for it is too.
+pub const EDGES_MS: [u64; 13] = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000];
+/// How many buckets a histogram has: one for each edge and one for everything slower.
+pub const BUCKETS: usize = EDGES_MS.len() + 1;
+/// U17: the counts that are not a tool or a route.
+pub const LINES: [&str; 4] = ["events_delivered", "long_polls", "webhooks_sent", "webhooks_failed"];
+
+/// U16: which bucket a response time falls in.
+pub fn bucket_of(millis: u64) -> usize {
+    EDGES_MS.iter().position(|edge| millis <= *edge).unwrap_or(EDGES_MS.len())
+}
+
+/// U16: the response time that `share` (0 to 1) of the responses were at or under, as the upper edge of
+/// the bucket it falls in. It is never lower than the real figure, and never off by more than the
+/// bucket's width. The last bucket answers with the last edge. `None` when nothing was timed.
+pub fn percentile(hist: &[i64; BUCKETS], share: f64) -> Option<u64> {
+    let total: i64 = hist.iter().sum();
+    if total <= 0 {
+        return None;
+    }
+    let need = ((total as f64) * share).ceil().max(1.0) as i64;
+    let mut seen = 0;
+    for (index, n) in hist.iter().enumerate() {
+        seen += n;
+        if seen >= need {
+            return Some(EDGES_MS[index.min(EDGES_MS.len() - 1)]);
+        }
+    }
+    Some(EDGES_MS[EDGES_MS.len() - 1])
+}
 
 /// U13: what a count is split by, for telling one release from the next. The binary doesn't know its
 /// release number (the tag is made after it is built), so this is the commit it was built from when
@@ -127,6 +158,8 @@ struct Count {
     slow: i64,
 }
 
+/// Hour, surface and tool or route.
+type LatencyKey = (i64, &'static str, String);
 type BotKey = (String, i64, Outcome, &'static str);
 
 #[derive(Default)]
@@ -134,6 +167,10 @@ struct Inner {
     hours: HashMap<Key, Count>,
     /// A bot's own totals for a day (U7, U11): agent, day, outcome and reason.
     bots: HashMap<BotKey, i64>,
+    /// U16: response times by hour, tool or route and surface, as a fixed list of bucket counts.
+    latency: HashMap<LatencyKey, [i64; BUCKETS]>,
+    /// U17: the counts that are not a tool or a route, by hour.
+    lines: HashMap<(i64, &'static str), i64>,
     day: i64,
     people: HashSet<u64>,
     bots_seen: HashSet<u64>,
@@ -141,6 +178,12 @@ struct Inner {
     salt: RandomState,
     /// Days that ended before they were written: the day and the two numbers.
     finished: Vec<(i64, i64, i64)>,
+    /// U15: the same for the hour, with a value of its own that is replaced each hour.
+    hour: i64,
+    hour_people: HashSet<u64>,
+    hour_bots: HashSet<u64>,
+    hour_salt: RandomState,
+    finished_hours: Vec<(i64, i64, i64)>,
 }
 
 /// What is waiting to be written, taken out of memory in one go.
@@ -149,6 +192,9 @@ pub struct Pending {
     hours: Vec<(Key, Count)>,
     bots: Vec<(BotKey, i64)>,
     days: Vec<(i64, i64, i64)>,
+    active_hours: Vec<(i64, i64, i64)>,
+    lines: Vec<((i64, &'static str), i64)>,
+    latency: Vec<(LatencyKey, [i64; BUCKETS])>,
 }
 
 /// U5: the hash that stands for a person for one day is made with a value kept only here.
@@ -228,17 +274,36 @@ impl Usage {
     ) {
         let day = at.div_euclid(86_400);
         let mut inner = self.lock();
-        Self::roll_inner(&mut inner, day);
+        Self::roll_inner(&mut inner, at);
         match who {
-            Who::Person(id) if inner.people.len() < MAX_ACTIVE => {
-                let hashed = inner.salt.hash_one(id);
-                inner.people.insert(hashed);
+            Who::Person(id) => {
+                if inner.people.len() < MAX_ACTIVE {
+                    let hashed = inner.salt.hash_one(id);
+                    inner.people.insert(hashed);
+                }
+                if inner.hour_people.len() < MAX_ACTIVE {
+                    let hashed = inner.hour_salt.hash_one(id);
+                    inner.hour_people.insert(hashed);
+                }
             }
-            Who::Bot(id) if inner.bots_seen.len() < MAX_ACTIVE => {
-                let hashed = inner.salt.hash_one(id);
-                inner.bots_seen.insert(hashed);
+            Who::Bot(id) => {
+                if inner.bots_seen.len() < MAX_ACTIVE {
+                    let hashed = inner.salt.hash_one(id);
+                    inner.bots_seen.insert(hashed);
+                }
+                if inner.hour_bots.len() < MAX_ACTIVE {
+                    let hashed = inner.hour_salt.hash_one(id);
+                    inner.hour_bots.insert(hashed);
+                }
             }
-            _ => {}
+            Who::Nobody => {}
+        }
+        if let Some(millis) = millis {
+            // U16: the response time goes into a bucket of a fixed list, never kept as a sample.
+            let key = (at.div_euclid(3600), surface, name.to_string());
+            if inner.latency.len() < MAX_BUCKETS || inner.latency.contains_key(&key) {
+                inner.latency.entry(key).or_insert([0; BUCKETS])[bucket_of(millis)] += 1;
+            }
         }
         let key = Key {
             hour: at.div_euclid(3600),
@@ -265,8 +330,22 @@ impl Usage {
         }
     }
 
-    /// U5: a new day writes down the old day's two numbers, empties the sets and changes the salt.
-    fn roll_inner(inner: &mut Inner, day: i64) {
+    /// U5, U15: a new day writes down the old day's two numbers, and a new hour the old hour's. Each
+    /// empties its sets and changes its salt.
+    fn roll_inner(inner: &mut Inner, at: i64) {
+        let day = at.div_euclid(86_400);
+        let hour = at.div_euclid(3600);
+        if inner.hour != hour {
+            if inner.hour != 0 && (!inner.hour_people.is_empty() || !inner.hour_bots.is_empty()) {
+                let finished =
+                    (inner.hour, inner.hour_people.len() as i64, inner.hour_bots.len() as i64);
+                inner.finished_hours.push(finished);
+            }
+            inner.hour = hour;
+            inner.hour_people = HashSet::new();
+            inner.hour_bots = HashSet::new();
+            inner.hour_salt = RandomState::new();
+        }
         if inner.day == day {
             return;
         }
@@ -280,10 +359,32 @@ impl Usage {
         inner.salt = RandomState::new();
     }
 
-    /// U5: rolls the day over at a time with no request in it, so an idle server doesn't hold
-    /// yesterday's people past midnight.
+    /// U5, U15: rolls the day and the hour over at a time with no request in it, so an idle server
+    /// doesn't hold the people of a period that is over.
     pub fn roll(&self, at: i64) {
-        Self::roll_inner(&mut self.lock(), at.div_euclid(86_400));
+        Self::roll_inner(&mut self.lock(), at);
+    }
+
+    /// U17: `n` more of something that is not a tool or a route.
+    pub fn note_line(&self, at: i64, line: &'static str, n: i64) {
+        debug_assert!(LINES.contains(&line));
+        if n <= 0 {
+            return;
+        }
+        let mut inner = self.lock();
+        *inner.lines.entry((at.div_euclid(3600), line)).or_default() += n;
+    }
+
+    /// How many people and bots are held for the current hour in memory.
+    pub fn held_hour(&self) -> (usize, usize) {
+        let inner = self.lock();
+        (inner.hour_people.len(), inner.hour_bots.len())
+    }
+
+    /// How many histograms and line counts are waiting in memory.
+    pub fn held_counts(&self) -> (usize, usize) {
+        let inner = self.lock();
+        (inner.latency.len(), inner.lines.len())
     }
 
     /// How many people and bots are held for the day in memory.
@@ -299,7 +400,18 @@ impl Usage {
         if !inner.people.is_empty() || !inner.bots_seen.is_empty() {
             days.push((inner.day, inner.people.len() as i64, inner.bots_seen.len() as i64));
         }
+        let mut active_hours = std::mem::take(&mut inner.finished_hours);
+        if !inner.hour_people.is_empty() || !inner.hour_bots.is_empty() {
+            active_hours.push((
+                inner.hour,
+                inner.hour_people.len() as i64,
+                inner.hour_bots.len() as i64,
+            ));
+        }
         Pending {
+            active_hours,
+            lines: std::mem::take(&mut inner.lines).into_iter().collect(),
+            latency: std::mem::take(&mut inner.latency).into_iter().collect(),
             hours: std::mem::take(&mut inner.hours).into_iter().collect(),
             bots: std::mem::take(&mut inner.bots).into_iter().collect(),
             days,
@@ -310,7 +422,13 @@ impl Usage {
     pub fn flush(&self, state: &AppState) {
         self.roll(now());
         let pending = self.take();
-        if pending.hours.is_empty() && pending.bots.is_empty() && pending.days.is_empty() {
+        if pending.hours.is_empty()
+            && pending.bots.is_empty()
+            && pending.days.is_empty()
+            && pending.active_hours.is_empty()
+            && pending.lines.is_empty()
+            && pending.latency.is_empty()
+        {
             return;
         }
         let rows = UsageRows {
@@ -339,6 +457,13 @@ impl Usage {
                 })
                 .collect(),
             days: &pending.days,
+            active_hours: &pending.active_hours,
+            lines: pending.lines.iter().map(|((hour, line), n)| (*hour, *line, *n)).collect(),
+            latency: pending
+                .latency
+                .iter()
+                .map(|((hour, surface, name), hist)| (*hour, *surface, name.as_str(), *hist))
+                .collect(),
         };
         if let Err(error) = state.db.write_usage(&rows) {
             tracing::error!(%error, "usage counts could not be written");
@@ -360,6 +485,7 @@ pub struct HourRow<'a> {
 }
 
 /// What `Db::write_usage` takes: rows that borrow from the counts.
+#[derive(Default)]
 pub struct UsageRows<'a> {
     pub version: &'a str,
     pub hours: Vec<HourRow<'a>>,
@@ -367,6 +493,21 @@ pub struct UsageRows<'a> {
     pub bots: Vec<(&'a str, i64, &'a str, &'a str, i64)>,
     /// `(day, people, bots)`
     pub days: &'a [(i64, i64, i64)],
+    /// U15: `(hour, people, bots)`
+    pub active_hours: &'a [(i64, i64, i64)],
+    /// U17: `(hour, line, count)`
+    pub lines: Vec<(i64, &'a str, i64)>,
+    /// U16: `(hour, surface, name, buckets)`
+    pub latency: Vec<(i64, &'a str, &'a str, [i64; BUCKETS])>,
+}
+
+/// U16: one hour's response-time buckets for a tool or route.
+pub struct StoredLatency {
+    pub hour: i64,
+    pub surface: String,
+    pub name: String,
+    pub version: String,
+    pub hist: [i64; BUCKETS],
 }
 
 /// One row read back for the report, summed over its hours.
@@ -466,6 +607,8 @@ struct Totals {
     timed: i64,
     slow: i64,
     reasons: HashMap<String, i64>,
+    /// U16: the response-time buckets that go with these calls.
+    hist: [i64; BUCKETS],
 }
 
 impl Totals {
@@ -484,6 +627,12 @@ impl Totals {
         self.slow += row.slow;
     }
 
+    fn add_hist(&mut self, hist: &[i64; BUCKETS]) {
+        for (slot, n) in self.hist.iter_mut().zip(hist) {
+            *slot += n;
+        }
+    }
+
     fn json(&self) -> Value {
         // The reason with the most refusals, and the first alphabetically when they tie.
         let top = self
@@ -497,6 +646,8 @@ impl Totals {
             "errors": self.errors,
             "avg_ms": (self.timed > 0).then(|| self.millis / self.timed),
             "slow": self.slow,
+            "p50_ms": percentile(&self.hist, 0.5),
+            "p90_ms": percentile(&self.hist, 0.9),
             "top_refusal": top,
         })
     }
@@ -521,6 +672,11 @@ async fn server_usage(
     let since = today - days + 1;
     let rows = state.db.usage_hours(since)?;
     let active = state.db.usage_days(since)?;
+    let since_hour = since * 24;
+    let latency = state.db.usage_latency(since_hour)?;
+    let line_rows = state.db.usage_lines(since_hour)?;
+    let hour_calls = state.db.usage_hour_calls(since_hour)?;
+    let active_hours = state.db.usage_active_hours(since_hour)?;
     let mut tools: BTreeMap<(String, String), Totals> = BTreeMap::new();
     let mut by_day: BTreeMap<i64, Totals> = BTreeMap::new();
     let mut versions: BTreeMap<String, Totals> = BTreeMap::new();
@@ -529,6 +685,59 @@ async fn server_usage(
         by_day.entry(row.day).or_default().add(row);
         versions.entry(row.version.clone()).or_default().add(row);
     }
+    // U15, U16: the last 24 hours, one entry for each, with nothing in the hours with no calls.
+    let this_hour = now().div_euclid(3600);
+    let first_hour = this_hour - 23;
+    let mut by_hour: BTreeMap<i64, Totals> = BTreeMap::new();
+    for (hour, outcome, calls) in &hour_calls {
+        if *hour >= first_hour {
+            let totals = by_hour.entry(*hour).or_default();
+            totals.calls += calls;
+            match outcome.as_str() {
+                "refused" => totals.refused += calls,
+                "error" => totals.errors += calls,
+                _ => {}
+            }
+        }
+    }
+    for row in &latency {
+        tools.entry((row.surface.clone(), row.name.clone())).or_default().add_hist(&row.hist);
+        by_day.entry(row.hour.div_euclid(24)).or_default().add_hist(&row.hist);
+        versions.entry(row.version.clone()).or_default().add_hist(&row.hist);
+        if row.hour >= first_hour {
+            by_hour.entry(row.hour).or_default().add_hist(&row.hist);
+        }
+    }
+    let active_hours: HashMap<i64, (i64, i64)> =
+        active_hours.into_iter().map(|(h, p, b)| (h, (p, b))).collect();
+    // U17: events, long-polls and webhooks, by day and in all.
+    let mut line_days: BTreeMap<i64, [i64; LINES.len()]> = BTreeMap::new();
+    let mut line_all = [0i64; LINES.len()];
+    for (hour, line, count) in &line_rows {
+        if let Some(index) = LINES.iter().position(|known| known == line) {
+            line_days.entry(hour.div_euclid(24)).or_default()[index] += count;
+            line_all[index] += count;
+        }
+    }
+    let lines_json = |counts: &[i64; LINES.len()]| {
+        let mut object = serde_json::Map::new();
+        for (name, count) in LINES.iter().zip(counts) {
+            object.insert((*name).to_string(), json!(count));
+        }
+        Value::Object(object)
+    };
+    let hour_list: Vec<Value> = (first_hour..=this_hour)
+        .map(|hour| {
+            let totals = by_hour.remove(&hour).unwrap_or_default();
+            let (people, bots) = active_hours.get(&hour).copied().unwrap_or((0, 0));
+            let mut value = totals.json();
+            value["hour"] =
+                json!(format!("{}T{:02}:00Z", date(hour.div_euclid(24)), hour.rem_euclid(24)));
+            value["active_people"] = json!(people);
+            value["active_bots"] = json!(bots);
+            value
+        })
+        .collect();
     let active: HashMap<i64, (i64, i64)> =
         active.into_iter().map(|(d, p, b)| (d, (p, b))).collect();
     let mut tool_list: Vec<Value> = tools
@@ -549,6 +758,7 @@ async fn server_usage(
             value["day"] = json!(date(day));
             value["active_people"] = json!(people);
             value["active_bots"] = json!(bots);
+            value["lines"] = lines_json(&line_days.remove(&day).unwrap_or_default());
             value
         })
         .collect();
@@ -566,6 +776,8 @@ async fn server_usage(
         "by_tool": tool_list,
         "by_day": day_list,
         "by_version": version_list,
+        "by_hour": hour_list,
+        "lines": lines_json(&line_all),
     })))
 }
 
