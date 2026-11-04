@@ -28,15 +28,34 @@ fn relative(path: &Path) -> String {
         .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
-/// The line numbers (1-based) and text of a markdown file outside fenced code blocks.
+/// The fence a line opens or closes: its character (` or ~), its length, and whether anything but
+/// whitespace follows it. Up to three spaces of indent are allowed, as in CommonMark.
+fn fence(line: &str) -> Option<(char, usize, bool)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let mark = rest.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let length = rest.chars().take_while(|c| *c == mark).count();
+    (length >= 3).then(|| (mark, length, !rest[length..].trim().is_empty()))
+}
+
+/// The line numbers (1-based) and text of a markdown file outside fenced code blocks. A fence
+/// closes only on the same character, at least as long as the opener, with nothing else on the line.
 fn prose_lines(text: &str) -> Vec<(usize, &str)> {
-    let mut fenced = false;
+    let mut open: Option<(char, usize)> = None;
     let mut lines = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-        } else if !fenced {
-            lines.push((index + 1, line));
+        match (open, fence(line)) {
+            (None, Some((mark, length, _))) => open = Some((mark, length)),
+            (Some((mark, length)), Some((m, l, text_after)))
+                if m == mark && l >= length && !text_after =>
+            {
+                open = None
+            }
+            (None, None) => lines.push((index + 1, line)),
+            _ => {}
         }
     }
     lines
@@ -145,4 +164,43 @@ fn no_conflict_markers_are_committed() {
         }
     }
     assert!(found.is_empty(), "conflict markers committed:\n{}", found.join("\n"));
+}
+
+fn ids_outside_fences(text: &str) -> Vec<&str> {
+    prose_lines(text).into_iter().filter_map(|(_, line)| rule_id(line)).collect()
+}
+
+#[test]
+fn a_longer_fence_can_hold_a_shorter_one_and_the_text_after_it_is_still_read() {
+    let text = "- **X1.** a
+````
+```
+- **X2.** inside
+````
+- **X3.** after
+";
+    assert_eq!(ids_outside_fences(text), ["X1", "X3"]);
+}
+
+#[test]
+fn a_tilde_fence_hides_what_it_holds_and_the_text_after_it_is_still_read() {
+    let text = "- **X1.** a
+~~~
+- **X2.** inside
+```
+~~~
+- **X1.** after
+";
+    assert_eq!(ids_outside_fences(text), ["X1", "X1"]);
+}
+
+#[test]
+fn a_fence_with_text_after_its_marks_does_not_close_a_fence() {
+    let text = "```
+```rust
+- **X2.** inside
+```
+- **X3.** after
+";
+    assert_eq!(ids_outside_fences(text), ["X3"]);
 }
