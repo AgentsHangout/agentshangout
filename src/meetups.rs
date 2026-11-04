@@ -237,79 +237,105 @@ impl Db {
 
     /// MU11: reserves the right to ring this bot in this room, unless a person's wake or a meetup
     /// ring was accepted there since `since`, or another ring is being delivered (reserved less
-    /// than `RESERVATION_SECS` ago). Checked and written in one immediate transaction, so of
-    /// two rings due at once exactly one is true.
+    /// than `RESERVATION_SECS` ago). Checked and written in one immediate transaction, so of two
+    /// rings due at once exactly one gets a token. Only its holder can use or settle it.
     pub fn reserve_meetup_ring(
         &self,
         agent_id: &str,
         hangout_id: &str,
         since: i64,
         at: i64,
-    ) -> rusqlite::Result<bool> {
+    ) -> rusqlite::Result<Option<String>> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute(
-            "DELETE FROM meetup_ring_reservations WHERE reserved_at <= ?",
+            "DELETE FROM meetup_ring_claims WHERE reserved_at <= ?",
             [at - RESERVATION_SECS],
         )?;
         let held: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM wake_accepts
                  WHERE agent_id = ?1 AND hangout_id = ?2 AND accepted_at > ?3)
-                 OR EXISTS (SELECT 1 FROM meetup_ring_reservations
+                 OR EXISTS (SELECT 1 FROM meetup_ring_claims
                  WHERE agent_id = ?1 AND hangout_id = ?2)",
             params![agent_id, hangout_id, since],
             |row| row.get(0),
         )?;
         if held {
-            return Ok(false);
+            return Ok(None);
         }
+        let token = auth::new_id();
         tx.execute(
-            "INSERT INTO meetup_ring_reservations (agent_id, hangout_id, reserved_at)
-             VALUES (?, ?, ?)",
-            params![agent_id, hangout_id, at],
+            "INSERT INTO meetup_ring_claims (agent_id, hangout_id, token, reserved_at)
+             VALUES (?, ?, ?, ?)",
+            params![agent_id, hangout_id, token, at],
         )?;
         tx.commit()?;
-        Ok(true)
+        Ok(Some(token))
     }
 
-    /// MU11: whether this bot and room still hold a live reservation, for the final check.
+    /// MU11: whether this very reservation is still live, for the final check.
     pub fn meetup_ring_reserved(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        token: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM meetup_ring_claims
+             WHERE agent_id = ? AND hangout_id = ? AND token = ? AND reserved_at > ?)",
+            params![agent_id, hangout_id, token, at - RESERVATION_SECS],
+            |row| row.get(0),
+        )
+    }
+
+    /// MU11: whether any reservation is live for this bot and room.
+    pub fn meetup_ring_pending(
         &self,
         agent_id: &str,
         hangout_id: &str,
         at: i64,
     ) -> rusqlite::Result<bool> {
         self.conn().query_row(
-            "SELECT EXISTS (SELECT 1 FROM meetup_ring_reservations
+            "SELECT EXISTS (SELECT 1 FROM meetup_ring_claims
              WHERE agent_id = ? AND hangout_id = ? AND reserved_at > ?)",
             params![agent_id, hangout_id, at - RESERVATION_SECS],
             |row| row.get(0),
         )
     }
 
-    /// MU11: a failed or denied ring gives its reservation back and starts no cooldown.
-    pub fn release_meetup_ring(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+    /// MU11: a failed or denied ring gives its own reservation back and starts no cooldown. A
+    /// newer reservation made after this one lapsed is not touched.
+    pub fn release_meetup_ring(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        token: &str,
+    ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "DELETE FROM meetup_ring_reservations WHERE agent_id = ? AND hangout_id = ?",
-            params![agent_id, hangout_id],
+            "DELETE FROM meetup_ring_claims WHERE agent_id = ? AND hangout_id = ? AND token = ?",
+            params![agent_id, hangout_id, token],
         )?;
         Ok(())
     }
 
     /// MU11: records that a meetup ring was accepted by this bot's callback, in `wake_accepts`
     /// (the table a person's mention checks, E31) under a negative id no message has, so the two
-    /// hold each other. Called only after the trust checks passed and the POST was accepted.
+    /// hold each other. Called only after the trust checks passed and the POST was accepted. The
+    /// bot was rung, so that is recorded whatever became of the reservation, but only this
+    /// sender's own reservation is cleared.
     pub fn note_meetup_wake(
         &self,
         agent_id: &str,
         hangout_id: &str,
+        token: &str,
         at: i64,
     ) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute(
-            "DELETE FROM meetup_ring_reservations WHERE agent_id = ? AND hangout_id = ?",
-            params![agent_id, hangout_id],
+            "DELETE FROM meetup_ring_claims WHERE agent_id = ? AND hangout_id = ? AND token = ?",
+            params![agent_id, hangout_id, token],
         )?;
         tx.execute(
             "INSERT INTO wake_accepts (message_id, agent_id, hangout_id, accepted_at)
@@ -371,17 +397,23 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
         data,
         going,
     );
-    // MU11: a ring is held by what holds a mention ring. The event is there either way.
-    let ring = ring
+    // MU11: a ring is held by what holds a mention ring. The event is there either way. The
+    // checks can pass for two rings at once; the reservation lets one through, and its token is
+    // what the send and the settling must show.
+    let token = if ring
         && written
         && state.db.notify_url(agent_id).ok().flatten().is_some()
         && !ring_held(state, agent_id, &meetup.hangout_id, now())
-        // The checks above can pass for two rings at once; the reservation lets one through.
-        && state
+    {
+        state
             .db
             .reserve_meetup_ring(agent_id, &meetup.hangout_id, now() - RING_HOLD_SECS, now())
-            .unwrap_or(false);
-    if ring {
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    if let Some(token) = token {
         let notice = crate::notify::Notice {
             event: "plan",
             hangout_id: meetup.hangout_id.clone(),
@@ -389,21 +421,19 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
         };
         let (id, change) = (meetup.id.clone(), change.to_string());
         let (room, settled) = (meetup.hangout_id.clone(), meetup.hangout_id.clone());
+        let (own, settling) = (token.clone(), token);
         crate::notify::send_if(
             state,
             agent_id,
             &notice,
-            move |state, agent_id| {
-                may_ring(state, agent_id, &id, &change)
-                    && state.db.meetup_ring_reserved(agent_id, &room, now()).unwrap_or(false)
-            },
+            move |state, agent_id| ring_may_go(state, agent_id, &room, &id, &change, &own),
             // Only an accepted delivery starts the cooldown, as for a person's mention; any other
             // outcome gives the reservation back.
             move |state, agent_id, posted| {
                 let settled_ok = if posted.accepted() {
-                    state.db.note_meetup_wake(agent_id, &settled, now())
+                    state.db.note_meetup_wake(agent_id, &settled, &settling, now())
                 } else {
-                    state.db.release_meetup_ring(agent_id, &settled)
+                    state.db.release_meetup_ring(agent_id, &settled, &settling)
                 };
                 if let Err(error) = settled_ok {
                     tracing::warn!(%error, "a meetup ring could not be settled");
@@ -411,6 +441,21 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
             },
         );
     }
+}
+
+/// MU11: asked right before the POST. The reservation must still be this sender's own, nothing
+/// that holds a mention ring may have arisen since it was taken, and `may_ring` must still allow it.
+pub fn ring_may_go(
+    state: &AppState,
+    agent_id: &str,
+    room: &str,
+    meetup_id: &str,
+    change: &str,
+    token: &str,
+) -> bool {
+    state.db.meetup_ring_reserved(agent_id, room, token, now()).unwrap_or(false)
+        && !ring_held(state, agent_id, room, now())
+        && may_ring(state, agent_id, meetup_id, change)
 }
 
 /// MU11: whether something holds a meetup ring to this bot in this room right now: an unread

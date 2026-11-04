@@ -523,7 +523,7 @@ async fn a_meetup_ring_is_held_as_a_mention_ring_is() {
     let db = &server.state.db;
     let held = |bot: &str, room: &str, t: i64| meetups::ring_held(&server.state, bot, room, t);
     assert!(!held(&town.fern_id, &town.cafe, at));
-    db.note_meetup_wake(&town.fern_id, &town.cafe, at).unwrap();
+    db.note_meetup_wake(&town.fern_id, &town.cafe, "nobody", at).unwrap();
     assert!(db.person_wake_recent(&town.fern_id, &town.cafe, at - 180).unwrap());
     assert!(held(&town.fern_id, &town.cafe, at + 60), "an accepted meetup ring holds the next");
     assert!(!held(&town.pip_id, &town.cafe, at + 60), "another bot is free");
@@ -638,7 +638,7 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(!held(&town.fern_id), "a denied ring starts no cooldown");
     assert!(
-        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        !server.state.db.meetup_ring_pending(&town.fern_id, &town.cafe, now()).unwrap(),
         "a denied ring starts no cooldown (reservation)"
     );
 
@@ -652,7 +652,7 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(!held(&town.fern_id), "a failed ring starts no cooldown");
     assert!(
-        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        !server.state.db.meetup_ring_pending(&town.fern_id, &town.cafe, now()).unwrap(),
         "a failed ring starts no cooldown (reservation)"
     );
 
@@ -665,7 +665,7 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     let made = server.propose(&town, json!(["Fern"]), 30).await;
     // A refused connection can take a few seconds to fail on some systems.
     for _ in 0..100 {
-        let pending = server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now());
+        let pending = server.state.db.meetup_ring_pending(&town.fern_id, &town.cafe, now());
         if !pending.unwrap() {
             break;
         }
@@ -674,7 +674,7 @@ async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
     server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
     assert!(!held(&town.fern_id), "an unreachable URL starts no cooldown");
     assert!(
-        !server.state.db.meetup_ring_reserved(&town.fern_id, &town.cafe, now()).unwrap(),
+        !server.state.db.meetup_ring_pending(&town.fern_id, &town.cafe, now()).unwrap(),
         "an unreachable URL starts no cooldown (reservation)"
     );
 
@@ -806,23 +806,90 @@ async fn two_rings_due_at_once_reserve_once() {
             })
         })
         .collect();
-    let mut won = 0;
+    let mut tokens = Vec::new();
     for t in tries {
-        won += usize::from(t.await.unwrap());
+        tokens.extend(t.await.unwrap());
     }
-    assert_eq!(won, 1);
-    assert!(server.state.db.meetup_ring_reserved(&bot, &room, at).unwrap());
+    assert_eq!(tokens.len(), 1);
+    let db = &server.state.db;
+    assert!(db.meetup_ring_reserved(&bot, &room, &tokens[0], at).unwrap());
     // Released, it can be taken again; settled as accepted, it holds for three minutes instead.
-    server.state.db.release_meetup_ring(&bot, &room).unwrap();
-    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at - 180, at).unwrap());
-    server.state.db.note_meetup_wake(&bot, &room, at).unwrap();
-    assert!(!server.state.db.meetup_ring_reserved(&bot, &room, at).unwrap());
-    assert!(!server.state.db.reserve_meetup_ring(&bot, &room, at + 60 - 180, at + 60).unwrap());
+    db.release_meetup_ring(&bot, &room, &tokens[0]).unwrap();
+    let again = db.reserve_meetup_ring(&bot, &room, at - 180, at).unwrap().unwrap();
+    db.note_meetup_wake(&bot, &room, &again, at).unwrap();
+    assert!(!db.meetup_ring_pending(&bot, &room, at).unwrap());
+    assert!(db.reserve_meetup_ring(&bot, &room, at + 60 - 180, at + 60).unwrap().is_none());
     // A stale reservation (a callback that never settled) frees itself.
-    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 200).unwrap());
-    assert!(server.state.db.reserve_meetup_ring(&town.pip_id, &room, at - 180, at).unwrap());
-    assert!(!server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 201).unwrap());
-    assert!(server.state.db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 330).unwrap());
+    assert!(db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 200).unwrap().is_some());
+    assert!(db.reserve_meetup_ring(&town.pip_id, &room, at - 180, at).unwrap().is_some());
+    assert!(db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 201).unwrap().is_none());
+    assert!(db.reserve_meetup_ring(&bot, &room, at + 200 - 180, at + 330).unwrap().is_some());
+}
+
+// MU11: a sender whose reservation lapsed can neither use nor settle a newer one.
+#[tokio::test]
+async fn a_lapsed_sender_cannot_touch_the_next_reservation() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let (bot, room) = (town.fern_id.clone(), town.cafe.clone());
+    let db = &server.state.db;
+    let at = now();
+    let first = db.reserve_meetup_ring(&bot, &room, at - 180, at).unwrap().unwrap();
+    // It lapses, and a second sender reserves.
+    let later = at + 200;
+    let second = db.reserve_meetup_ring(&bot, &room, later - 180, later).unwrap().unwrap();
+    assert_ne!(first, second);
+    assert!(!db.meetup_ring_reserved(&bot, &room, &first, later).unwrap());
+    assert!(db.meetup_ring_reserved(&bot, &room, &second, later).unwrap());
+    // The first sender's release does nothing to the second's reservation.
+    db.release_meetup_ring(&bot, &room, &first).unwrap();
+    assert!(db.meetup_ring_reserved(&bot, &room, &second, later).unwrap());
+    // Its accept records that the bot was rung, but leaves the second's reservation alone.
+    db.note_meetup_wake(&bot, &room, &first, later).unwrap();
+    assert!(db.meetup_ring_reserved(&bot, &room, &second, later).unwrap());
+    // The second sender's own release still works.
+    db.release_meetup_ring(&bot, &room, &second).unwrap();
+    assert!(!db.meetup_ring_pending(&bot, &room, later).unwrap());
+}
+
+// MU11: a hold that arises after the reservation stops the ring right before the POST.
+#[tokio::test]
+async fn a_hold_that_arises_after_reserving_stops_the_ring() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let id = text(&server.propose(&town, json!(["Fern", town.pip_id]), 30).await["id"]);
+    let (bot, room) = (town.fern_id.clone(), town.cafe.clone());
+    let db = &server.state.db;
+    let go = |token: &str| {
+        meetups::ring_may_go(&server.state, &bot, &room, &id, "meetup_invited", token)
+    };
+
+    let token = db.reserve_meetup_ring(&bot, &room, now() - 180, now()).unwrap().unwrap();
+    assert!(go(&token));
+    assert!(!go("someone else's"), "a token that isn't the reservation's");
+    // A person's wake accepted in the room since reserving.
+    let line = server
+        .send(
+            &town.ann.key,
+            Method::POST,
+            &format!("/api/hangouts/{room}/messages"),
+            Some(json!({ "text": "hello" })),
+        )
+        .await
+        .ok();
+    db.note_person_wake(&bot, line["id"].as_i64().unwrap(), &room, now()).unwrap();
+    assert!(!go(&token));
+
+    // An unread ring in the room (E22), on the other invitee.
+    let pip = town.pip_id.clone();
+    let token = db.reserve_meetup_ring(&pip, &room, now() - 180, now()).unwrap().unwrap();
+    let go_pip = || meetups::ring_may_go(&server.state, &pip, &room, &id, "meetup_invited", &token);
+    assert!(go_pip());
+    let mid = line["id"].as_i64().unwrap();
+    db.add_mention(&pip, &room, mid, now()).unwrap();
+    db.note_wake_ring(&pip, mid, now(), false).unwrap();
+    assert!(!go_pip());
 }
 
 // MU11: a second meetup due while the first ring is in flight sends nothing; if the first fails,
