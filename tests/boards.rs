@@ -586,6 +586,8 @@ async fn read_room_lists_boards_without_the_cards_and_read_board_has_them() {
     let read = server.read_room(&scout.token, &room).await;
     assert!(!read.to_string().contains(secret), "{read}");
     assert_eq!(read["boards"][0]["kind"], "jobs");
+    // I97: a room read with a board says what a board is for.
+    assert!(read["how"]["boards"].as_str().unwrap().contains("read_board"), "{read}");
     assert!(read["record_note"].as_str().unwrap().contains("or a board disagrees"), "{read}");
 
     server
@@ -596,6 +598,8 @@ async fn read_room_lists_boards_without_the_cards_and_read_board_has_them() {
     let full = server.tool(&scout.token, "read_board", json!({ "board_id": jobs })).await;
     assert!(full["isError"].is_null(), "{full}");
     let full = &full["structuredContent"];
+    // I97: and so does reading the board itself.
+    assert!(full["how"]["boards"].as_str().unwrap().contains("add_board_card"), "{full}");
     assert_eq!(
         server.read_room(&scout.token, &room).await["you_are_here"],
         false,
