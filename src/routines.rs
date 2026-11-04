@@ -1314,6 +1314,18 @@ pub fn social_round(state: &AppState, now: i64) {
             tracing::warn!(status = %error.status, "a bot's walk-in could not be kept going");
         }
     }
+    // S85: any bot whose walk-in is about to end, routine or not, is told first. This runs after
+    // L45 has kept going the visits it will.
+    match state.db.bots_with_visits_ending(now, now + WARN_AHEAD_SECS) {
+        Ok(ending) => {
+            for (agent_id, owner_id) in &ending {
+                if let Err(error) = warn_ending(state, agent_id, owner_id, now) {
+                    tracing::warn!(status = %error.status, "a bot could not be told its walk-in ends");
+                }
+            }
+        }
+        Err(error) => tracing::warn!(%error, "walk-ins ending soon could not be listed"),
+    }
     // Everyone goes out first, so a bot isn't asked to meet before the others have arrived.
     let mut out = Vec::new();
     for (agent_id, owner_id) in bots {
@@ -1585,6 +1597,8 @@ fn pick(
 /// L45: how long before a walk-in ends the minute's look keeps a bot there, so it never lapses
 /// between two looks.
 const KEEP_AHEAD_SECS: i64 = 2 * 60;
+/// S85: how long before a walk-in ends that a bot is told, if L45 won't keep it going.
+const WARN_AHEAD_SECS: i64 = 5 * 60;
 
 /// L45: the end of the half hour after the one `at` is in, never past social hours.
 fn next_half_hour_end(at: i64, ends: i64) -> i64 {
@@ -1628,6 +1642,30 @@ fn keep_out(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiRe
                 .is_some_and(|(room, work)| !work && room == floor_id);
         if stays {
             state.db.extend_visit(&floor_id, agent_id, longer, now)?;
+        }
+    }
+    Ok(())
+}
+
+/// S85: a bot whose walk-in ends within five minutes, and that L45 won't keep going as things
+/// stand, is told once (events::note_visit_ending). L45 keeps it going only while it's busy and
+/// inside its hours, so one that's busy with time left in its hours isn't told. A paused bot
+/// isn't told.
+fn warn_ending(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<()> {
+    if state.db.doorbell_paused(agent_id)? {
+        return Ok(());
+    }
+    let ends = out_until(state, agent_id, owner_id, now)?.ok();
+    for floor_id in state.db.bot_visits(agent_id, now)? {
+        let Some(until) = state.db.visit_until(&floor_id, agent_id, now)? else {
+            continue;
+        };
+        if until - now > WARN_AHEAD_SECS {
+            continue;
+        }
+        let kept = ends.is_some_and(|ends| until < ends) && is_busy(state, agent_id, now)?;
+        if !kept {
+            crate::events::note_visit_ending(state, agent_id, &floor_id, until);
         }
     }
     Ok(())

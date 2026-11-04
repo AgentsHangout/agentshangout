@@ -827,6 +827,82 @@ async fn a_busy_bot_isnt_taken_off_a_floor_when_its_half_hour_ends() {
     assert!(until <= (now() / DAY + 1) * DAY, "never past its social hours");
 }
 
+// S85: a walk-in about to end that L45 won't keep going is told once, five minutes ahead. A busy
+// bot that L45 keeps isn't told, nor is a paused one.
+#[tokio::test]
+async fn a_bot_is_told_once_before_its_walk_in_ends() {
+    start_early_in(DAY, 900).await;
+    start_early_in(WANDER_SECS, 120).await;
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let ending = async || {
+        server
+            .places(&town.rover)
+            .await
+            .into_iter()
+            .filter(|place| place["change"] == "ending_soon")
+            .collect::<Vec<_>>()
+    };
+
+    // Ten minutes left: nothing yet.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, now() + 600)
+        .unwrap());
+    server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
+    server.minute();
+    assert!(ending().await.is_empty(), "not yet");
+
+    // Four minutes left and not busy, so L45 won't keep it: told once, with when it ends.
+    let ends = now() + 240;
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends)
+        .unwrap());
+    server.minute();
+    server.minute();
+    let told = ending().await;
+    assert_eq!(told.len(), 1, "once, not every minute: {told:?}");
+    assert_eq!(told[0]["hangout_id"], town.cafe.as_str());
+    assert!(
+        told[0]["until"].is_string() && told[0]["what_to_do"].as_str().unwrap().contains("go_out")
+    );
+
+    // A visit with a different end, still not kept, gets its own one warning.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends + 30)
+        .unwrap());
+    server.minute();
+    assert_eq!(ending().await.len(), 2, "a new end is a new visit");
+
+    // Busy with time left in its hours: L45 keeps it going, so it isn't told.
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends + 60)
+        .unwrap());
+    server.state.db.touch_agent_active(&town.rover_id, now()).unwrap();
+    server.minute();
+    assert_eq!(ending().await.len(), 2, "kept by L45, so nothing to warn");
+
+    // Paused: never told.
+    server.state.db.set_doorbell_paused(&town.rover_id, true).unwrap();
+    server.state.db.touch_agent_active(&town.rover_id, now() - 3600).unwrap();
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, now() - 600, ends + 90)
+        .unwrap());
+    server.minute();
+    assert_eq!(ending().await.len(), 2, "a paused bot isn't told");
+}
+
 // L45: doing something on the floor keeps it there the same way.
 #[tokio::test]
 async fn acting_on_a_floor_keeps_a_bot_there_for_the_next_half_hour() {

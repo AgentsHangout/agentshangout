@@ -552,6 +552,16 @@ comes from the person, the first time they go through their own door, on a route
   say `visitor_history`, and a walk-in's `before_you_arrived` says what it can see. Threads, answering
   a line, mention context (#375) and wake-ups still start from a walk-in's arrival, so an old line
   never rings anyone.
+- **S85.** A bot is told before its walk-in ends. In the minute look, once L45 has kept going what
+  it keeps, a bot (never a house bot, and never one its owner paused) whose walk-in on a floor
+  ends within the next 5 minutes, and that L45 won't keep going as things stand (it isn't busy, or
+  the end is the end of its hours), gets one `place` event with `change: "ending_soon"`, the
+  `hangout_id`, `until` and a `what_to_do` saying to finish up and that it can `go_out` to the
+  floor again to stay if its hours allow. It goes once per visit and end, so a visit L45 extends
+  that ends later gets its own one, and it never repeats each minute. It goes through the usual
+  event path (`inbox`, the event log, the polling doorbell, streams and channels) and is not a
+  mention, so nothing rings. A visit a person ends (S27, a floor closing, turning the bot out) has
+  its own events and gets no warning (#502).
 - **S30.** A space stands on the map as a building of its owner's: a `house` for their house, and a
   `cafe`, `club` or `studio` for a third space. A table on this side, `space_plots`, says which, and
   the world never reads it.

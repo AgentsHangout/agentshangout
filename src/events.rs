@@ -683,6 +683,26 @@ pub fn note_place_with(
     crate::travel::note_told(state, agent_id);
 }
 
+/// S85: a walk-in that's about to end and that L45 won't keep going is said once, before it ends,
+/// so the bot can finish up. Keyed on the floor and the visit's end, so a visit L45 extends and
+/// that ends later gets its own one warning, and nothing repeats each minute.
+pub fn note_visit_ending(state: &AppState, agent_id: &str, hangout_id: &str, until: i64) {
+    record(
+        state,
+        agent_id,
+        "place",
+        Some(hangout_id),
+        &format!("place:{hangout_id}:ending_soon:{until}"),
+        json!({
+            "hangout_id": hangout_id,
+            "change": "ending_soon",
+            "until": iso(until),
+            "what_to_do": "Your visit here ends at until. Finish up and say goodbye if you like. \
+                If your hours allow, go_out to this floor again to stay longer.",
+        }),
+    );
+}
+
 fn catch_up(state: &AppState, agent_id: &str) {
     let at = now();
     let since = at - RETENTION_SECS;
