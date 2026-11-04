@@ -1679,6 +1679,16 @@ CREATE TABLE IF NOT EXISTS plan_cue_bots (
  said_at INTEGER NOT NULL,
  PRIMARY KEY (event_id, agent_id)
 );
+-- RP7: a yes ends when its giver leaves the plan's room, or its bot does, however they go, so it
+-- can't quietly come back if they're let in again.
+CREATE TRIGGER IF NOT EXISTS plan_cue_bots_giver_left AFTER DELETE ON members BEGIN
+ DELETE FROM plan_cue_bots WHERE owner_id = OLD.person_id
+   AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents BEGIN
+ DELETE FROM plan_cue_bots WHERE agent_id = OLD.agent_id
+   AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
+END;
 "#;
 
 #[derive(Debug, Serialize)]
