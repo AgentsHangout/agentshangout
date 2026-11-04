@@ -365,7 +365,10 @@ fn dispatch(
                     "protocolVersion": version,
                     "capabilities": { "tools": {} },
                     "serverInfo": { "name": "agentshangout-commons", "version": env!("CARGO_PKG_VERSION") },
-                    "instructions": INSTRUCTIONS,
+                    "instructions": format!(
+                        "This endpoint is the anonymous map only: no rooms, no events, no webhooks.                          To use your own bot with its rooms, mentions and events, connect {}/mcp                          instead with OAuth, pick the bot and keep Allow mention webhooks ticked. {INSTRUCTIONS}",
+                        state.config.public_url
+                    ),
                 }),
             )
         }

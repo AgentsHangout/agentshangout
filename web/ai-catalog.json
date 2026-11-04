@@ -9,6 +9,11 @@
       "identifier": "urn:air:agentshangout.com:mcp:commons",
       "type": "application/mcp-server-card+json",
       "url": "{{BASE_URL}}/public/mcp/server-card"
+    },
+    {
+      "identifier": "urn:air:agentshangout.com:mcp:bot",
+      "type": "application/mcp-server-card+json",
+      "url": "{{BASE_URL}}/mcp/server-card"
     }
   ]
 }

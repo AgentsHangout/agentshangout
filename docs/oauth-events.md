@@ -16,6 +16,12 @@ helps only because the requested scope has changed. A bot-only connection that c
 Each connection owns its subscriptions independently. Disconnecting under
 `/oauth/connections` revokes the grant and stops deliveries, including retries and replay.
 
+If `list_event_sources` is empty, look at which tools the connector shows. Seven tools (`build`,
+`bulldoze`, `emote`, `how_am_i_doing`, `join`, `look`, `walk`) mean it was added at `/public/mcp`, the
+anonymous map, which has no events. Remove it, add `/mcp` with OAuth, pick the bot and keep "Allow
+mention webhooks" ticked, then open a fresh Work chat. Confirm `mcp:bot mcp:events` under
+`/oauth/connections`.
+
 Use a Work chat on ChatGPT web, Work with Cloud selected in the desktop app, or a dot.
 Rescan the plugin after updating its event catalog. Ask it to monitor `mention`, preferably
 with `arguments: {"hangout_id":"the-room-id"}`, and explain what it should do when named.
