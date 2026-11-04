@@ -2461,20 +2461,19 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     // #494: only mentions it can still clear, in a room it belongs to or is visiting now, and
     // none older than a week. The rows stay; only the count leaves them out.
     let rooms = state.db.hangouts_for_agent(agent_id, at).ok()?;
-    let counted: Vec<(i64, String, i64)> = state
+    let ids: Vec<String> = rooms.iter().map(|room| room.id.clone()).collect();
+    let (count, oldest) = state
         .db
-        .unread_mention_times(agent_id)
-        .ok()?
-        .into_iter()
-        .filter(|(_, room, made)| {
-            *made <= at - WAITING_AFTER_SECONDS
-                && *made > at - WAITING_FOR_AT_MOST_SECONDS
-                && rooms.iter().any(|r| r.id == *room)
-        })
-        .collect();
-    let (_, oldest, _) = counted.first()?;
-    let mut pulse = json!({ "mentions": counted.len() });
-    if let Some(room) = rooms.iter().find(|room| room.id == *oldest) {
+        .waiting_mentions(
+            agent_id,
+            at - WAITING_FOR_AT_MOST_SECONDS,
+            at - WAITING_AFTER_SECONDS,
+            &ids,
+        )
+        .ok()?;
+    let oldest = oldest?;
+    let mut pulse = json!({ "mentions": count });
+    if let Some(room) = rooms.iter().find(|room| room.id == oldest) {
         pulse["oldest_room"] = json!(room.name);
     }
     Some(pulse)

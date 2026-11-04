@@ -8,6 +8,8 @@ use crate::{error::ApiResult, notify::Notice, now, AppState};
 pub const QUIET_SECS: i64 = 30 * 60;
 /// I113: the least time between two pulses to one bot.
 pub const EVERY_SECS: i64 = 60 * 60;
+/// I113, #494: the most unread mentions the push looks at for one bot in one pass.
+const PUSH_LOOK_AT: i64 = 200;
 /// I113: a pulse counts as answered when the bot calls the server within this long after it.
 pub const ACK_SECS: i64 = 30 * 60;
 
@@ -51,11 +53,9 @@ fn trusted_unread(
     now: i64,
 ) -> ApiResult<Vec<(i64, String, i64)>> {
     let mut kept = Vec::new();
-    for (message_id, room, at) in state.db.unread_mention_times(agent_id)? {
-        // #494: a mention over a week old no longer counts, as for I107.
-        if at <= now - crate::mcp::WAITING_FOR_AT_MOST_SECONDS {
-            continue;
-        }
+    // #494: none over a week old, as for I107, and a bounded list, since this runs each tick.
+    let since = now - crate::mcp::WAITING_FOR_AT_MOST_SECONDS;
+    for (message_id, room, at) in state.db.unread_mentions_since(agent_id, since, PUSH_LOOK_AT)? {
         if crate::bot_trust::delivery_allowed(state, agent_id, &[message_id])? {
             kept.push((message_id, room, at));
         }
