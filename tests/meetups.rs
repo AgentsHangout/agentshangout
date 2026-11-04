@@ -512,23 +512,25 @@ async fn an_owner_who_restricts_waking_after_the_invite_stops_the_ring() {
     assert_eq!(server.changes(&town.fern).await, ["meetup_invited"]);
 }
 
-// MU11: a meetup ring and a person's accepted wake (E31) hold each other in a room for three minutes.
+// MU11: a meetup ring and a person's accepted wake (E31) hold each other in a room for three
+// minutes, and the bot-chain limit (L10) holds a meetup ring as it holds a mention.
 #[tokio::test]
-async fn a_meetup_ring_and_a_persons_wake_hold_each_other() {
+async fn a_meetup_ring_is_held_as_a_mention_ring_is() {
     let server = Server::start().await;
     let town = server.town().await;
+    server.rover_out(&town).await;
     let at = now();
     let db = &server.state.db;
-    let recent = |bot: &str, room: &str, t: i64| db.person_wake_recent(bot, room, t - 180).unwrap();
-    assert!(db.claim_meetup_ring(&town.fern_id, &town.cafe, at - 180, at).unwrap());
-    assert!(recent(&town.fern_id, &town.cafe, at + 60), "it holds a person's mention");
-    assert!(!db.claim_meetup_ring(&town.fern_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
-    // Another bot, another room, and three minutes on are free.
-    assert!(db.claim_meetup_ring(&town.pip_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
-    assert!(db.claim_meetup_ring(&town.fern_id, &town.bo_room, at + 60 - 180, at + 60).unwrap());
-    assert!(db.claim_meetup_ring(&town.fern_id, &town.cafe, at + 181 - 180, at + 181).unwrap());
+    let held = |bot: &str, room: &str, t: i64| meetups::ring_held(&server.state, bot, room, t);
+    assert!(!held(&town.fern_id, &town.cafe, at));
+    db.note_meetup_wake(&town.fern_id, &town.cafe, at).unwrap();
+    assert!(db.person_wake_recent(&town.fern_id, &town.cafe, at - 180).unwrap());
+    assert!(held(&town.fern_id, &town.cafe, at + 60), "an accepted meetup ring holds the next");
+    assert!(!held(&town.pip_id, &town.cafe, at + 60), "another bot is free");
+    assert!(!held(&town.fern_id, &town.bo_room, at + 60), "another room is free");
+    assert!(!held(&town.fern_id, &town.cafe, at + 181), "three minutes on is free");
 
-    // The other way: a person's wake accepted a minute ago holds the meetup ring.
+    // A person's accepted wake a minute ago holds a meetup ring.
     let line = server
         .send(
             &town.ann.key,
@@ -538,10 +540,124 @@ async fn a_meetup_ring_and_a_persons_wake_hold_each_other() {
         )
         .await
         .ok();
-    let message = line["id"].as_i64().unwrap();
-    db.note_person_wake(&town.rover_id, message, &town.cafe, at).unwrap();
-    assert!(!db.claim_meetup_ring(&town.rover_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
-    assert!(db.claim_meetup_ring(&town.rover_id, &town.cafe, at + 181 - 180, at + 181).unwrap());
+    db.note_person_wake(&town.pip_id, line["id"].as_i64().unwrap(), &town.cafe, at).unwrap();
+    assert!(held(&town.pip_id, &town.cafe, at + 60));
+
+    // Bot-started wakes in a row at the limit hold it, as they hold a bot's mention.
+    for number in 0..5 {
+        let said = server
+            .tool(
+                &town.rover,
+                "say",
+                json!({ "hangout_id": town.cafe, "text": format!("a line {number}") }),
+            )
+            .await;
+        let id = said["message_id"].as_i64().unwrap();
+        assert!(!held(&town.fern_id, &town.bo_room, at) && number < 5);
+        db.note_wake_ring(&town.fern_id, id, at, true).unwrap();
+        let expected = number == 4;
+        assert_eq!(held(&town.fern_id, &town.cafe, at + 1000), expected, "after {number}");
+    }
+}
+
+/// A wake-up URL that answers `status` to every POST, counting them.
+async fn status_hook(status: u16) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    let counted = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { return };
+            let counted = counted.clone();
+            tokio::spawn(async move {
+                let mut seen = Vec::new();
+                let mut buffer = [0u8; 4096];
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => seen.extend_from_slice(&buffer[..n]),
+                    }
+                }
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    (url, hits)
+}
+
+// MU11: only a ring that passed the trust checks and was accepted starts the cooldown.
+#[tokio::test]
+async fn only_an_accepted_meetup_ring_starts_the_cooldown() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let held = |bot: &str| meetups::ring_held(&server.state, bot, &town.cafe, now());
+    let watch = async |url: &str| {
+        server
+            .send(
+                &town.ann.key,
+                Method::PUT,
+                &format!("/api/agents/{}/notify", town.fern_id),
+                Some(json!({ "url": url })),
+            )
+            .await
+            .ok();
+    };
+    let settle = async |hits: &std::sync::atomic::AtomicUsize, want: usize| {
+        for _ in 0..60 {
+            if hits.load(std::sync::atomic::Ordering::SeqCst) >= want {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    };
+
+    // Denied by trust: nothing is posted and nothing is recorded.
+    let (url, hits) = status_hook(200).await;
+    watch(&url).await;
+    set_trust(&server, &town.ann, &town.fern_id, "owner", "participants").await;
+    let made = server.propose(&town, json!(["Fern"]), 30).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(!held(&town.fern_id), "a denied ring starts no cooldown");
+
+    // A non-2xx answer: posted, not accepted, not recorded.
+    set_trust(&server, &town.ann, &town.fern_id, "participants", "participants").await;
+    let (url, hits) = status_hook(500).await;
+    watch(&url).await;
+    let made = server.propose(&town, json!(["Fern"]), 30).await;
+    settle(&hits, 1).await;
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!held(&town.fern_id), "a failed ring starts no cooldown");
+
+    // Nothing listening: same.
+    let dead = {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        format!("http://{}/wake", listener.local_addr().unwrap())
+    };
+    watch(&dead).await;
+    let made = server.propose(&town, json!(["Fern"]), 30).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
+    assert!(!held(&town.fern_id), "an unreachable URL starts no cooldown");
+
+    // An accepted ring does, and a person's mention would then be held for three minutes.
+    let (url, hits) = status_hook(200).await;
+    watch(&url).await;
+    let made = server.propose(&town, json!(["Fern"]), 30).await;
+    settle(&hits, 1).await;
+    server.tool(&town.rover, "cancel_meetup", json!({ "meetup_id": made["id"] })).await;
+    assert!(held(&town.fern_id));
+    assert!(server.state.db.person_wake_recent(&town.fern_id, &town.cafe, now() - 180).unwrap());
 }
 
 // MU6: a nudge claimed, then the meetup cancelled or the bot saying no, is not written at all.

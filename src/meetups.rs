@@ -233,36 +233,23 @@ impl Db {
         Ok(due)
     }
 
-    /// MU11: claims a ring for this bot in this room unless a person's wake (E31) or an earlier
-    /// meetup ring was accepted there since `since`. It is recorded in `wake_accepts`, the table
-    /// a person's mention checks, under a negative id no message has, so the two hold each other.
-    /// Checked and written in one immediate transaction so two sweeps can't both ring it.
-    pub fn claim_meetup_ring(
+    /// MU11: records that a meetup ring was accepted by this bot's callback, in `wake_accepts`
+    /// (the table a person's mention checks, E31) under a negative id no message has, so the two
+    /// hold each other. Called only after the trust checks passed and the POST was accepted.
+    pub fn note_meetup_wake(
         &self,
         agent_id: &str,
         hangout_id: &str,
-        since: i64,
         at: i64,
-    ) -> rusqlite::Result<bool> {
-        let mut conn = self.conn();
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let recent: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM wake_accepts
-                 WHERE agent_id = ?1 AND hangout_id = ?2 AND accepted_at > ?3)",
-            params![agent_id, hangout_id, since],
-            |row| row.get(0),
-        )?;
-        if recent {
-            return Ok(false);
-        }
-        tx.execute(
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        conn.execute(
             "INSERT INTO wake_accepts (message_id, agent_id, hangout_id, accepted_at)
              SELECT COALESCE(MIN(message_id), 0) - 1, ?1, ?2, ?3 FROM wake_accepts
              WHERE message_id < 0",
             params![agent_id, hangout_id, at],
         )?;
-        tx.commit()?;
-        Ok(true)
+        Ok(())
     }
 
     /// Moves a meetup's start, for a test of MU12: the clock can't be moved over HTTP.
@@ -315,16 +302,11 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
         data,
         going,
     );
-    // MU11: a ring is held while an earlier ring in this room is unread (E22) or another meetup
-    // rang the bot in the last three minutes. The event is there either way.
+    // MU11: a ring is held by what holds a mention ring. The event is there either way.
     let ring = ring
         && written
         && state.db.notify_url(agent_id).ok().flatten().is_some()
-        && !ops::owner_ring_held(state, agent_id, &meetup.hangout_id, now()).unwrap_or(true)
-        && state
-            .db
-            .claim_meetup_ring(agent_id, &meetup.hangout_id, now() - RING_HOLD_SECS, now())
-            .unwrap_or(false);
+        && !ring_held(state, agent_id, &meetup.hangout_id, now());
     if ring {
         let notice = crate::notify::Notice {
             event: "plan",
@@ -332,10 +314,34 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
             text: "A meetup. Call inbox: meetups says where and when.".to_string(),
         };
         let (id, change) = (meetup.id.clone(), change.to_string());
-        crate::notify::send_if(state, agent_id, &notice, move |state, agent_id| {
-            may_ring(state, agent_id, &id, &change)
-        });
+        let room = meetup.hangout_id.clone();
+        crate::notify::send_if(
+            state,
+            agent_id,
+            &notice,
+            move |state, agent_id| may_ring(state, agent_id, &id, &change),
+            // Only an accepted delivery starts the cooldown, as for a person's mention.
+            move |state, agent_id, posted| {
+                if posted.accepted() {
+                    if let Err(error) = state.db.note_meetup_wake(agent_id, &room, now()) {
+                        tracing::warn!(%error, "a meetup ring could not be recorded");
+                    }
+                }
+            },
+        );
     }
+}
+
+/// MU11: whether something holds a meetup ring to this bot in this room right now: an unread
+/// ring there (E22), a person's wake or an earlier meetup ring accepted there in the last 3 minutes
+/// (E31), or the chain of bot-started wakes already at its limit (L10). The event is still written.
+pub fn ring_held(state: &AppState, agent_id: &str, room: &str, at: i64) -> bool {
+    ops::owner_ring_held(state, agent_id, room, at).unwrap_or(true)
+        || state.db.person_wake_recent(agent_id, room, at - RING_HOLD_SECS).unwrap_or(true)
+        || state
+            .db
+            .bot_mention_chain(agent_id, room)
+            .map_or(true, |chain| chain >= i64::from(crate::doorbell::MAX_BOT_RUNS_IN_A_ROW))
 }
 
 /// MU6, MU11: whether a meetup's ring may still go, asked again just before it is sent. A bot

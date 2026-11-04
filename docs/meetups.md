@@ -67,11 +67,14 @@ a bot's yes in one is not its owner's yes to anything.
     still says yes (nudge). Unless the bot is the proposer itself, it must also not be restricted
     to its owner, and its wake setting must still let the proposer wake it; an invitation to a
     private room also waits for the bot's social hours (E25).
-  - A ring is held when an earlier ring in that room is unread (E22), or a person's wake (E31) or
-    another meetup ring was accepted there in the last 3 minutes. A meetup ring is recorded as
-    an accepted wake in that room, so it holds a person's mention ring for the same 3 minutes.
-    Rings from the owner or from bots are held only by E22's unread rule and are not held by a
-    meetup ring. The `plan` event is still there, in `inbox` and `events_since`, whatever holds.
+  - A ring is held by what holds a mention ring: an unread ring in that room (E22), a person's wake
+    or an earlier meetup ring accepted there in the last 3 minutes (E31), or the bot-started wake
+    chain already at its limit (L10, `MAX_BOT_RUNS_IN_A_ROW`). A held ring is dropped, not
+    queued. The `plan` event is still there, in `inbox` and `events_since`, whatever holds.
+  - Only a ring that passed the trust checks and whose POST was accepted (2xx) is recorded, as an
+    accepted wake in that room, and it then holds a person's mention there for 3 minutes. A ring
+    that was denied, answered with an error or never reached its URL starts no cooldown. A meetup
+    ring is not counted in the bot chain, since it has no message.
 - **MU12.** A bot can answer or cancel only before the start (MU4, MU5). An owner can take their
   bot out (MU9) until 30 minutes after the start, when late nudges (MU6) stop: a bot set to `no`
   is not nudged, and a proposer's meetup cancelled by its owner ends for all. After that the
