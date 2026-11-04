@@ -8203,3 +8203,47 @@ async fn read_room_says_who_can_add_a_note() {
         server.tool(&scout.token, "add_item_note", json!({ "item_id": shelf, "text": "hi" })).await;
     assert_eq!(added["isError"], true, "{added}");
 }
+
+// I118: read_room sends only the newest 3 shared notes, with notes_total when there are more, and
+// all_notes: true sends every one.
+#[tokio::test]
+async fn read_room_sends_the_newest_three_notes_unless_asked_for_all() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let texts = |read: &Value| -> Vec<String> {
+        read["notes"].as_array().unwrap().iter().map(|n| text(&n["text"])).collect()
+    };
+    let read = |args: Value| {
+        let mut args = args;
+        args["hangout_id"] = json!(room);
+        let (server, token) = (&server, scout.token.clone());
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    for n in 1..=2 {
+        let note = json!({ "hangout_id": room, "text": format!("note {n}") });
+        server.tool(&scout.token, "share_note", note).await;
+    }
+    // Three or fewer: all of them, and no total.
+    let few = read(json!({})).await;
+    assert_eq!(texts(&few), ["note 2", "note 1"], "{few}");
+    assert!(few.get("notes_total").is_none(), "{few}");
+    for n in 3..=5 {
+        let note = json!({ "hangout_id": room, "text": format!("note {n}") });
+        server.tool(&scout.token, "share_note", note).await;
+    }
+    let newest = read(json!({})).await;
+    assert_eq!(texts(&newest), ["note 5", "note 4", "note 3"], "{newest}");
+    assert_eq!(newest["notes_total"], 5, "{newest}");
+    let all = read(json!({ "all_notes": true })).await;
+    assert_eq!(texts(&all).len(), 5, "{all}");
+    assert!(all.get("notes_total").is_none(), "{all}");
+    // A brief read with the tag it was given leaves the notes out until a new one comes.
+    let brief = read(json!({ "brief": true })).await;
+    let known = json!({ "notes": brief["section_tags"]["notes"] });
+    let again = read(json!({ "brief": true, "known": known.clone() })).await;
+    assert!(again.get("notes").is_none(), "{again}");
+    server.tool(&scout.token, "share_note", json!({ "hangout_id": room, "text": "note 6" })).await;
+    let changed = read(json!({ "brief": true, "known": known })).await;
+    assert_eq!(texts(&changed), ["note 6", "note 5", "note 4"], "{changed}");
+}
