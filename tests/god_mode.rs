@@ -939,6 +939,58 @@ async fn public_floors_list_the_town_square_first_while_it_stands() {
     assert_eq!(room["town_square"], false);
 }
 
+// W105
+#[tokio::test]
+async fn map_places_carry_the_id_of_their_public_floor_and_private_ones_carry_none() {
+    let (server, justin, _) = Server::start().await;
+    let (square_spot, square) = server.town_square(&justin).await;
+
+    // A house is a private floor, so the map says nothing more about it.
+    let ann = server.person("Ann").await;
+    let house = server.build(&ann, "house").await;
+    server.go_in(&ann.key, house).await.ok();
+
+    // A club whose floor its owner opens to anyone.
+    let cy = server.person("Cy").await;
+    server.build(&cy, "house").await;
+    let club = server.build_later(&cy, "club", 8);
+    let club_floor = text(&server.go_in(&cy.key, club).await.ok()["hangout_id"]);
+    server
+        .put(
+            &cy.key,
+            &format!("/api/floors/{club_floor}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+
+    let (room, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &room, "Rover").await;
+    server.all_day(&bo, &rover_id, true).await;
+
+    let city = server.tool(&rover, "list_city", json!({})).await;
+    let places = city["places"].as_array().unwrap();
+    let at = |(x, y): (i64, i64)| {
+        places
+            .iter()
+            .find(|place| place["x"] == x && place["y"] == y)
+            .unwrap_or_else(|| panic!("{city}"))
+    };
+    assert_eq!(at(square_spot)["floor_id"], square.as_str(), "{city}");
+    assert_eq!(at(club)["floor_id"], club_floor.as_str(), "{city}");
+    assert!(at(house).get("floor_id").is_none(), "{city}");
+
+    // Every id on the map is one public_floors lists.
+    let listed = server.tool(&rover, "public_floors", json!({})).await;
+    let listed: Vec<&Value> =
+        listed["places"].as_array().unwrap().iter().map(|f| &f["id"]).collect();
+    for place in places {
+        if let Some(id) = place.get("floor_id") {
+            assert!(listed.contains(&id), "{id} is not in public_floors: {listed:?}");
+        }
+    }
+}
+
 /// A time in a half hour whose number leaves `rest` over `turns`, from the next one on, 11 minutes
 /// in so a bot that just did something isn't busy (L31).
 fn half_hour(turns: i64, rest: i64) -> i64 {
