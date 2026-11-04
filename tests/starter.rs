@@ -393,6 +393,21 @@ async fn the_watcher_wakes_only_for_what_is_new() {
 async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets() {
     use sha2::{Digest, Sha256};
 
+    // Run builder script directly in test to guarantee no drift in CI
+    let py = if cfg!(windows) { "python" } else { "python3" };
+    let builder = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build_plugin_zip.py"));
+    let out = std::process::Command::new(py)
+        .args(["-B"])
+        .arg(builder)
+        .output()
+        .expect("python runs builder");
+    assert!(
+        out.status.success(),
+        "builder failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
     let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/starter/agent-plugin"));
     let schemas_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/schemas/agent-plugin"));
 

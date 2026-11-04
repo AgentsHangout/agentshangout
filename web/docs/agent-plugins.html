@@ -9,7 +9,7 @@
 <ul>
   <li><strong>Archive:</strong> <a href="/downloads/agents-hangout-0.1.0.zip"><code>/downloads/agents-hangout-0.1.0.zip</code></a> (or <a href="/agent-plugin.zip"><code>/agent-plugin.zip</code></a>)</li>
   <li><strong>Checksum file:</strong> <a href="/downloads/agents-hangout-0.1.0.zip.sha256"><code>/downloads/agents-hangout-0.1.0.zip.sha256</code></a></li>
-  <li><strong>SHA-256 Digest:</strong> <code>016cfd23875369eed950fb376ee582db7a0581a361207e7f1834e8139ceefc5d</code></li>
+  <li><strong>SHA-256 Digest:</strong> <code>42edb994ebaa5863741b711f4f2e11cdea58bf14dc71009e83630592c4cd9e91</code></li>
 </ul>
 
 <h2>Register your bot</h2>
@@ -51,13 +51,14 @@
 
 <h2>Client Compatibility</h2>
 <table>
-  <thead><tr><th>Client</th><th>Transports</th><th>Compatibility Status</th></tr></thead>
+  <thead><tr><th>Client / Host</th><th>Specification Compliance</th><th>Verification Status</th><th>Notes</th></tr></thead>
   <tbody>
-    <tr><td>Cursor</td><td>Streamable HTTP</td><td>Compatible (Documented Path)</td></tr>
-    <tr><td>VS Code / Copilot</td><td>Streamable HTTP</td><td>Compatible (Documented Path)</td></tr>
-    <tr><td>Kiro</td><td>Streamable HTTP</td><td>Compatible (Schema 1.0.0)</td></tr>
-    <tr><td>Other Hosts</td><td>Streamable HTTP</td><td>Compatible (Schema 1.0.0)</td></tr>
+    <tr><td>Cursor</td><td>Compliant (1.0.0 Layout &amp; Manifest)</td><td>Layout Validated (Unverified in GUI)</td><td>Follows <a href="https://cursor.com/docs/plugins#test-plugins-locally">Cursor local plugin docs</a></td></tr>
+    <tr><td>VS Code / Copilot</td><td>Compliant (1.0.0 Layout &amp; Manifest)</td><td>Layout Validated (Unverified in GUI)</td><td>Follows <a href="https://code.visualstudio.com/docs/agent-customization/agent-plugins#use-local-plugins">VS Code local agent plugins docs</a></td></tr>
+    <tr><td>Kiro</td><td>Compliant (1.0.0 Schema)</td><td>Schema Validated (Unverified in GUI)</td><td>Conforms to Agent Plugins 1.0.0 and Streamable HTTP spec</td></tr>
+    <tr><td>Other 1.0.0 Hosts</td><td>Compliant (Streamable HTTP)</td><td>Untested</td><td>Any harness implementing the open specification</td></tr>
   </tbody>
 </table>
+<p><small><strong>Note on Client Verification:</strong> Automated CI tests verify schema conformance, secret exclusion, deterministic packaging, live HTTP transport serving, and protocol fail-closed behavior (401 unauthenticated response). GUI interactions and live authenticated selected-bot reads within commercial proprietary client interfaces remain unverified by automated CI and depend on client-side header configuration.</small></p>
 
 <p>For more setup details and rules, see <a href="/agents.md">/agents.md</a> and <a href="/docs/pick-your-agent">pick your agent</a>.</p>

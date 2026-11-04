@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build and validate the portable Agent Plugins 1.0.0 ZIP package for Agents Hangout.
 
-Performs schema validation against pinned official schemas, secret scanning,
+Performs strict schema validation against pinned official schemas, secret scanning,
 deterministic ZIP archive packaging with pinned UNIX platform metadata, and
 SHA-256 checksum generation.
 """
@@ -32,6 +32,9 @@ def validate_schemas():
     plugin_schema_path = os.path.join(SCHEMAS_DIR, "plugin.schema.json")
     mcp_schema_path = os.path.join(SCHEMAS_DIR, "mcp.schema.json")
 
+    if not os.path.exists(plugin_schema_path) or not os.path.exists(mcp_schema_path):
+        raise FileNotFoundError("Vendored schema files missing from schemas/agent-plugin")
+
     with open(plugin_path, "r", encoding="utf-8") as f:
         plugin = json.load(f)
     with open(mcp_path, "r", encoding="utf-8") as f:
@@ -41,48 +44,86 @@ def validate_schemas():
     with open(mcp_schema_path, "r", encoding="utf-8") as f:
         mcp_schema = json.load(f)
 
-    # Validate with jsonschema engine when available
+    # 1. Strict validation of plugin.json against plugin.schema.json
+    expected_plugin_id = plugin_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
+    if plugin.get("$schema") != expected_plugin_id:
+        raise ValueError(f"plugin.json $schema must match schema $id: {expected_plugin_id}")
+
+    allowed_plugin_keys = set(plugin_schema.get("properties", {}).keys())
+    for k in plugin.keys():
+        if k not in allowed_plugin_keys:
+            raise ValueError(f"plugin.json contains disallowed property: {k}")
+
+    for req in plugin_schema.get("required", []):
+        if req not in plugin:
+            raise ValueError(f"plugin.json missing required property: {req}")
+
+    name_pattern = plugin_schema.get("properties", {}).get("name", {}).get(
+        "pattern", r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$"
+    )
+    name = plugin["name"]
+    if not isinstance(name, str) or not re.match(name_pattern, name):
+        raise ValueError(f"plugin.json name violates schema pattern: {name}")
+
+    version = plugin.get("version")
+    if version and (not isinstance(version, str) or not re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)):
+        raise ValueError(f"plugin.json version must be valid semver: {version}")
+
+    desc = plugin.get("description")
+    if desc and not isinstance(desc, str):
+        raise ValueError("plugin.json description must be a string")
+
+    # 2. Strict validation of mcp.json against mcp.schema.json
+    expected_mcp_id = mcp_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json")
+    if mcp.get("$schema") != expected_mcp_id:
+        raise ValueError(f"mcp.json $schema must match schema $id: {expected_mcp_id}")
+
+    allowed_mcp_keys = set(mcp_schema.get("properties", {}).keys())
+    for k in mcp.keys():
+        if k not in allowed_mcp_keys:
+            raise ValueError(f"mcp.json contains disallowed property: {k}")
+
+    for req in mcp_schema.get("required", []):
+        if req not in mcp:
+            raise ValueError(f"mcp.json missing required property: {req}")
+
+    servers = mcp.get("mcpServers", {})
+    if not isinstance(servers, dict) or not servers:
+        raise ValueError("mcp.json mcpServers must be a non-empty object")
+
+    streamable_schema = mcp_schema.get("$defs", {}).get("streamableHttpServer", {})
+    allowed_server_keys = set(streamable_schema.get("properties", {}).keys())
+
+    for s_name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Server config {s_name} must be an object")
+        for k in cfg.keys():
+            if k not in allowed_server_keys:
+                raise ValueError(f"Server {s_name} has disallowed property: {k}")
+        if cfg.get("type") != "streamable-http":
+            raise ValueError(f"Server {s_name} type must be 'streamable-http'")
+        url = cfg.get("url")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise ValueError(f"Server {s_name} url must be a secure HTTPS string: {url}")
+        headers = cfg.get("headers", {})
+        if not isinstance(headers, dict):
+            raise ValueError(f"Server {s_name} headers must be a dict")
+        for h_key in headers:
+            if h_key.lower() == "authorization":
+                raise ValueError("mcp.json must not bundle hardcoded Authorization headers")
+
+    # If jsonschema is also installed, cross-check with it
     try:
         import jsonschema
 
         jsonschema.validate(instance=plugin, schema=plugin_schema)
         jsonschema.validate(instance=mcp, schema=mcp_schema)
-        print("[OK] Verified plugin.json and mcp.json against vendored schemas using jsonschema engine")
+        print("[OK] Confirmed schema validation via jsonschema engine")
     except ImportError:
         pass
 
-    # Built-in strict assertions against vendored schema definitions
-    if plugin.get("$schema") != plugin_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"):
-        raise ValueError(f"Invalid plugin.json $schema: {plugin.get('$schema')}")
-    name_pattern = plugin_schema.get("properties", {}).get("name", {}).get("pattern", r"^[a-z0-9]+(-[a-z0-9]+)*$")
-    name = plugin.get("name")
-    if not name or not re.match(name_pattern, name):
-        raise ValueError(f"Invalid plugin name: {name}")
-    version_pattern = plugin_schema.get("properties", {}).get("version", {}).get("pattern", r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
-    version = plugin.get("version")
-    if not version or not re.match(version_pattern, version):
-        raise ValueError(f"Invalid semver version: {version}")
-    if not plugin.get("description"):
-        raise ValueError("Missing plugin description")
-    print("[OK] plugin.json strictly matches Agent Plugins 1.0.0 manifest schema")
-
-    # mcp.json checks
-    if mcp.get("$schema") != mcp_schema.get("$id", "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"):
-        raise ValueError(f"Invalid mcp.json $schema: {mcp.get('$schema')}")
-    servers = mcp.get("mcpServers", {})
-    if not servers:
-        raise ValueError("mcp.json must define at least one server under mcpServers")
-    for s_name, cfg in servers.items():
-        if cfg.get("type") != "streamable-http":
-            raise ValueError(f"Server {s_name} must use 'streamable-http' transport")
-        url = cfg.get("url")
-        if not url or not url.startswith("https://"):
-            raise ValueError(f"Server {s_name} URL must be secure HTTPS: {url}")
-        headers = cfg.get("headers", {})
-        for h_key in headers:
-            if h_key.lower() == "authorization":
-                raise ValueError("mcp.json must not bundle hardcoded Authorization headers")
-    print("[OK] mcp.json strictly matches Agent Plugins 1.0.0 MCP configuration schema")
+    print("[OK] plugin.json strictly validated against vendored plugin.schema.json")
+    print("[OK] mcp.json strictly validated against vendored mcp.schema.json")
 
 
 def scan_for_secrets():
