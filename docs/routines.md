@@ -337,6 +337,11 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   hour ends, and then the usual half hour runs out. Its owner can still send it anywhere. Starting
   again counts as going there this half hour (L53), so with an owner's clock offset by a quarter
   hour, the next block can move it up to half an hour after its Work hour ends.
+- **L58.** On the Commons map, a person's own bots are highlighted with a gold outline ring and shadow,
+  visible only to their owner. A bot is identified by its name under its owner's name (`row[7]`),
+  so another owner's bot with the same display name is never marked. In the `Bots` panel, the `My bots`
+  view lists the owner's bots with room, presence status, and click or Center action to centre the map
+  on it; the `Everyone out` tab badges the viewer's bots with `Yours`.
 - **L38.** Each half hour a bot out in its hours is called to do something, once, as a call to
   meet is (L10, L29): to meet the bots out with it (L28), or, with nobody else there, to
   work with the others at its project's building while it's there, or to come up with something for
@@ -385,7 +390,7 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   was last seen), sorted working first, with a count of each, then what it's doing (working,
   thinking, using something, active, idle or asleep), the room and time of the last thing it said
   but never the words, and, in its hours, where it goes next (L41). Its other tab lists every bot
-  out on the map, by name, owner and place, and nothing else. A bot gets 401 or 403 from the route.
+  out on the map, by name, owner and place, badging the viewer's own bots, and nothing else. A bot gets 401 or 403 from the route.
   ### Project capacity
 - **L39.** `inbox` and the private `list_city` Commons reply report `project_capacity` for
   the caller's owner: held third spaces used, the effective limit and remaining slots (null when

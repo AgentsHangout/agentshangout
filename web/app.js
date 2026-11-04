@@ -8174,27 +8174,32 @@ async function worldView(id, { home = false } = {}) {
   };
   function renderBots() {
     const tabs = h('div', { class: 'row-actions', role: 'tablist' },
-      ...[['yours', 'Yours'], ['everyone', 'Everyone out']].map(([tab, label]) =>
+      ...[['yours', 'My bots'], ['everyone', 'Everyone out']].map(([tab, label]) =>
         h('button', { type: 'button', class: botsTab === tab ? 'primary' : '', role: 'tab', 'aria-selected': String(botsTab === tab), onclick: () => { botsTab = tab; renderBots(); } }, label)));
     let rows;
     if (botsTab === 'yours') {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
-      rows = sorted.length ? sorted.map((bot) => h('div', { class: 'row' },
-        // L44: its picture, in its own look, as the map and the wardrobe draw it.
-        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
-        h('span', { class: 'row-main' },
-          h('strong', {}, bot.name),
-          h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
-          h('small', {}, where(bot)),
-          h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
-          h('small', { class: 'muted' }, bot.next
-            ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
-            : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
-        bot.place ? h('button', { type: 'button', class: 'link', 'aria-label': `Show ${bot.name} on the map`, onclick: () => world.focus(bot.place.x, bot.place.y, { zoom: 1.5 }) }, 'Show') : null,
-        bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
-        h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
-        h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')))
-        : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
+      rows = sorted.length ? sorted.map((bot) => {
+        const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
+        const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
+        const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
+        return h('div', { class: 'row' },
+          // L44: its picture, in its own look, as the map and the wardrobe draw it.
+          h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
+          h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
+            h('strong', {}, bot.name),
+            h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
+            h('small', {}, where(bot)),
+            h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
+            h('small', { class: 'muted' }, bot.next
+              ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
+              : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
+          focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
+          bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+          h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
+          h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete'));
+      })
+      : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
       if (myBots.length) rows.unshift(h('p', { class: 'muted', role: 'status' }, `${count('working')} working, ${count('idle')} idle, ${count('asleep')} asleep, ${count('offline')} offline`));
       rows.unshift(h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: makeBot }, 'Your crew')));
@@ -8203,9 +8208,10 @@ async function worldView(id, { home = false } = {}) {
       rows = out.length ? out.map((row) => {
         const at = Array.isArray(row[8]) ? row[8] : [row[1], row[2]];
         const placeName = nameAt(at[0], at[1]) || 'a place';
-        return h('div', { class: 'row' },
+        const isMine = Boolean(world.myBots?.has(row[0]) && (!me?.name || row[7] === me.name));
+        return h('div', { class: `row${isMine ? ' mine' : ''}` },
           h('span', { class: 'row-main' },
-            h('strong', {}, row[0]),
+            h('strong', {}, row[0], isMine ? h('span', { class: 'badge', style: 'margin-left:6px;font-size:10px;color:#f2b632' }, 'Yours') : null),
             h('small', { class: 'muted' }, `${row[7] ? `${row[7]}\u2019s bot \u00b7 ` : ''}at ${placeName}`)),
           h('button', { type: 'button', class: 'link', 'aria-label': `Show ${row[0]} on the map`, onclick: () => world.focus(at[0], at[1], { zoom: 1.5 }) }, 'Show'));
       }) : [h('p', { class: 'muted' }, 'No bots are out on the map right now.')];
@@ -8232,6 +8238,7 @@ async function worldView(id, { home = false } = {}) {
     myBots = bots;
     // The count over a building turns gold for one of these.
     world.myBots = new Set(bots.map((bot) => bot.name));
+    world.ownerName = me.name;
     renderBots();
   }
 
@@ -8934,7 +8941,7 @@ async function worldView(id, { home = false } = {}) {
     if (hoveredPlace && me && me.kind === 'person') loadPlace(hoveredPlace);
   }
 
-  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name });
+  const world = new World(frame.host, { interactive: true, onTile: build, onHover: hovered, onPick: picked, clickable: (t) => BUILDING_KINDS.has(t.kind), onFollow: followEnded, isMine: (x, y) => ownerAt(x, y) === me?.name, ownerName: me?.name });
   frame.host.parentElement.classList.add('wd-hovercard');
   frame.host.parentElement.append(placeCard);
   world.canvas.addEventListener('pointermove', (event) => {
