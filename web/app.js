@@ -5387,7 +5387,7 @@ async function spaceView(id) {
       bots.value = comeIn;
       bots.disabled = false;
     }).catch(() => {});
-    // S83: whether people who walk in see earlier chat. Only a public floor has walk-ins to show it to.
+    // S84: whether people who walk in see earlier chat. Only a public floor has walk-ins to show it to.
     const historyError = formError();
     const history = h('input', {
       type: 'checkbox',

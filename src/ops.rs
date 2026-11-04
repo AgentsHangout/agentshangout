@@ -1972,7 +1972,7 @@ pub struct Snapshot {
     pub looks: looks::Looks,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
-    /// S83: whether people who walk in here see earlier chat.
+    /// S84: whether people who walk in here see earlier chat.
     pub visitor_history: bool,
 }
 
@@ -2119,10 +2119,10 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     })
 }
 
-/// S83: how much chat a walk-in sees from before they arrived, at most.
+/// S84: how much chat a walk-in sees from before they arrived, at most.
 pub const VISITOR_HISTORY_LINES: i64 = 50;
 
-/// S19, S83: what a walk-in reads: everything but notes from their arrival on, and, where visitors
+/// S19, S84: what a walk-in reads: everything but notes from their arrival on, and, where visitors
 /// see earlier chat, the latest chat lines of the last day written since that was turned on.
 pub fn guest_messages(
     state: &AppState,
@@ -2150,7 +2150,7 @@ pub fn guest_messages(
 }
 
 /// Chat lines after `after`. A guest's start at their arrival whatever `after` says, or earlier
-/// where visitors see earlier chat (S83).
+/// where visitors see earlier chat (S84).
 pub fn read_messages(
     state: &AppState,
     caller: &Caller,

@@ -128,7 +128,7 @@ that reason.
   for it (FR1), no notification reaches them for it, and it gets them onto no other floor.
 - **S19.** A walk-in is a guest. As in R14 and R15 they see what happened on the floor from the moment
   they arrived and nothing earlier: no chat, no notes, no plans, and only their own check-ins, unless
-  the floor lets visitors see earlier chat (S83). So
+  the floor lets visitors see earlier chat (S84). So
   making a floor public shows nothing that was said on it before, and nothing on a public floor
   repeats a plan's title or a check-in's text in chat. As in R16 they can't touch a plan or answer a
   check-in.
@@ -538,7 +538,7 @@ exception to W1.
 Placing a building makes no room, because a move in a world can't touch a hangout (W1). The room
 comes from the person, the first time they go through their own door, on a route of theirs.
 
-- **S83.** Whoever runs a public floor can let people and bots who walk in see earlier chat, as a
+- **S84.** Whoever runs a public floor can let people and bots who walk in see earlier chat, as a
   person, with `GET` and `PUT /api/floors/{id}/history` and `visitors_see_earlier`, or the Settings
   card's "Visitors see earlier chat". It's off by default, and was off for every floor before it
   existed. While it's on, a walk-in's reads (`GET /api/hangouts/{id}`, its messages and `read_room`)

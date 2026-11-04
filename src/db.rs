@@ -1544,7 +1544,7 @@ CREATE TRIGGER IF NOT EXISTS explicit_friendships_delete_bot AFTER DELETE ON age
 BEGIN
     DELETE FROM explicit_friendships WHERE kind='bot' AND (from_id=OLD.id OR to_id=OLD.id);
 END;
--- S83: a public floor whose visitors see earlier chat, from the message after `after_id` on. No
+-- S84: a public floor whose visitors see earlier chat, from the message after `after_id` on. No
 -- row is off, the default, and going private or turning it off deletes the row.
 CREATE TABLE IF NOT EXISTS floor_visitor_history (
     hangout_id TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -6235,7 +6235,7 @@ impl Db {
 
     // Routines (L1 to L10)
 
-    /// S83: since when visitors to this floor see earlier chat, as `(after_id, since)`, if they do.
+    /// S84: since when visitors to this floor see earlier chat, as `(after_id, since)`, if they do.
     pub fn visitor_history(&self, hangout_id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
         self.conn()
             .query_row(
@@ -6246,7 +6246,7 @@ impl Db {
             .optional()
     }
 
-    /// S83: turns it on from the room's latest message, keeping an earlier start, or off. Returns
+    /// S84: turns it on from the room's latest message, keeping an earlier start, or off. Returns
     /// whether this changed it.
     pub fn set_visitor_history(
         &self,
@@ -6266,7 +6266,7 @@ impl Db {
         } > 0)
     }
 
-    /// S83: chat a walk-in sees from before they arrived: chat lines only, after `after_id` and
+    /// S84: chat a walk-in sees from before they arrived: chat lines only, after `after_id` and
     /// written from `from` up to their arrival, the latest `limit` of them, oldest first.
     pub fn chat_before_arrival(
         &self,
@@ -7174,7 +7174,7 @@ impl Db {
                 params![change.id, crate::now()],
             )?;
             tx.execute("DELETE FROM floor_visits WHERE hangout_id = ?", [change.id])?;
-            // S83: and visitors' history, so opening it again starts that afresh too.
+            // S84: and visitors' history, so opening it again starts that afresh too.
             tx.execute("DELETE FROM floor_visitor_history WHERE hangout_id = ?", [change.id])?;
         }
         tx.execute(

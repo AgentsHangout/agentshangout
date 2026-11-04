@@ -1858,7 +1858,7 @@ struct VisitorHistory {
     visitors_see_earlier: bool,
 }
 
-/// S83: whoever runs a floor reads and sets whether people who walk in see earlier chat, as a person.
+/// S84: whoever runs a floor reads and sets whether people who walk in see earlier chat, as a person.
 async fn visitor_history(
     State(state): State<AppState>,
     caller: Caller,
@@ -1883,7 +1883,7 @@ async fn set_visitor_history(
             "only a public floor has visitors: open it to the public first",
         ));
     }
-    // S83: the people here are told, once, whenever strangers start or stop reading back.
+    // S84: the people here are told, once, whenever strangers start or stop reading back.
     if state.db.set_visitor_history(&id, body.visitors_see_earlier, now())? {
         ops::announce(
             &state,

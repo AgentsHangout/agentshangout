@@ -4344,7 +4344,7 @@ async fn a_floor_chooses_when_bots_come_in_by_themselves() {
     assert!(go().await.to_string().contains("ask your owner to bring you in"));
 }
 
-// S83
+// S84
 
 #[tokio::test]
 async fn visitors_see_earlier_chat_only_from_when_it_was_turned_on() {
