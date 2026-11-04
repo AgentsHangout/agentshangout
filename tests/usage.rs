@@ -826,3 +826,121 @@ async fn two_bots_with_the_same_name_keep_their_own_events() {
     assert_eq!(f.get("alice", "/api/agents/c/usage").await.0, StatusCode::NOT_FOUND);
     assert_eq!(f.get("bob", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
 }
+
+// U23, U24: a bot reports its own cost for the day; a later report replaces it, and only its owner
+// reads it back, marked as reported by the bot.
+#[tokio::test]
+async fn a_bot_reports_its_own_cost_and_only_its_owner_reads_it() {
+    let f = Fixture::new().await;
+    let today = |usage: &Value| usage["days"].as_array().unwrap().last().unwrap().clone();
+    // Nothing reported yet: nulls, and no total.
+    let (status, usage) = f.get("alice", "/api/agents/a/usage").await;
+    assert_eq!(status, StatusCode::OK, "{usage}");
+    assert!(today(&usage)["reported_cost_cents"].is_null(), "{usage}");
+    assert!(usage["reported_cost_cents_30d"].is_null(), "{usage}");
+    assert!(usage["cost_note"].as_str().unwrap().contains("reported by the bot itself"));
+
+    let said = f.tool("a", "report_usage", json!({"cost_cents": 250, "input_tokens": 1000})).await;
+    assert!(said["isError"].is_null(), "{said}");
+    // The running total for the day replaces the earlier one, so a repeat never adds up twice.
+    let args = json!({"cost_cents": 1234, "input_tokens": 90_000, "output_tokens": 4_000});
+    f.tool("a", "report_usage", args.clone()).await;
+    f.tool("a", "report_usage", args).await;
+    let (_, usage) = f.get("alice", "/api/agents/a/usage").await;
+    let day = today(&usage);
+    assert_eq!(
+        (
+            &day["reported_cost_cents"],
+            &day["reported_input_tokens"],
+            &day["reported_output_tokens"]
+        ),
+        (&json!(1234), &json!(90_000), &json!(4_000)),
+        "{usage}"
+    );
+    assert_eq!(usage["reported_cost_cents_30d"], 1234, "{usage}");
+    let rows = f.state.db.usage_bot_cost("a", 0).unwrap();
+    assert_eq!(rows.len(), 1, "one row per bot and day");
+
+    // Yesterday can be finished off, and it adds to the 30-day total.
+    let yesterday = days_ago(1);
+    f.tool("a", "report_usage", json!({"cost_cents": 100, "day": yesterday})).await;
+    let (_, usage) = f.get("alice", "/api/agents/a/usage").await;
+    assert_eq!(usage["reported_cost_cents_30d"], 1334, "{usage}");
+    let days = usage["days"].as_array().unwrap();
+    assert_eq!(days[days.len() - 2]["reported_cost_cents"], 100, "{usage}");
+    assert!(days[days.len() - 2]["reported_output_tokens"].is_null(), "{usage}");
+
+    // Nobody else reads it: another owner, the bot itself, another bot.
+    assert_eq!(f.get("bob", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("a", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("b", "/api/agents/a/usage").await.0, StatusCode::NOT_FOUND);
+    // Bob's bot reported nothing, and Alice's report isn't his.
+    let (_, bobs) = f.get("bob", "/api/agents/b/usage").await;
+    assert!(bobs["reported_cost_cents_30d"].is_null(), "{bobs}");
+    // It goes with the bot.
+    f.state.db.delete_agent("a").unwrap();
+    assert!(f.state.db.usage_bot_cost("a", 0).unwrap().is_empty());
+}
+
+fn days_ago(n: i64) -> String {
+    let day = now().div_euclid(DAY) - n;
+    // Civil date from days since 1970 (Howard Hinnant's algorithm).
+    let z = day + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+// U23: only whole numbers within the caps, only today or yesterday, and only a bot.
+#[tokio::test]
+async fn a_cost_report_out_of_bounds_is_refused_and_stores_nothing() {
+    let f = Fixture::new().await;
+    for args in [
+        json!({}),
+        json!({"cost_cents": -1}),
+        json!({"cost_cents": 100_001}),
+        json!({"cost_cents": 1.5}),
+        json!({"cost_cents": "12"}),
+        json!({"cost_cents": 1, "input_tokens": 10_000_000_001_i64}),
+        json!({"cost_cents": 1, "output_tokens": -5}),
+        json!({"cost_cents": 1, "day": days_ago(2)}),
+        json!({"cost_cents": 1, "day": days_ago(-1)}),
+        json!({"cost_cents": 1, "day": "yesterday"}),
+    ] {
+        let said = f.tool("a", "report_usage", args.clone()).await;
+        assert_eq!(said["isError"], true, "{args} was taken: {said}");
+    }
+    assert!(f.state.db.usage_bot_cost("a", 0).unwrap().is_empty());
+    // The caps themselves are fine.
+    let most =
+        json!({"cost_cents": 100_000, "input_tokens": 10_000_000_000_i64, "output_tokens": 0});
+    assert!(f.tool("a", "report_usage", most).await["isError"].is_null());
+    // A person's key can't report for a bot.
+    let body = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"report_usage","arguments":{"cost_cents": 5}}});
+    let (status, reply) = f.call("bob", Method::POST, "/mcp", body).await;
+    assert!(status != StatusCode::OK || reply["result"]["isError"] == true, "{reply}");
+    assert!(f.state.db.usage_bot_cost("b", 0).unwrap().is_empty());
+}
+
+// U23, U8: reported costs older than 30 days are deleted with the rest.
+#[tokio::test]
+async fn reported_costs_older_than_thirty_days_are_deleted() {
+    let f = Fixture::new().await;
+    let at = now();
+    let cost = agenthangout::usage::ReportedCost { cost_cents: 7, ..Default::default() };
+    for back in [31, 29] {
+        f.state.db.set_usage_bot_cost("a", (at - back * DAY).div_euclid(DAY), &cost, at).unwrap();
+    }
+    f.state.db.sweep_usage(at).unwrap();
+    assert_eq!(
+        f.state.db.usage_bot_cost("a", 0).unwrap(),
+        vec![((at - 29 * DAY).div_euclid(DAY), cost)]
+    );
+}

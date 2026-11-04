@@ -4,8 +4,9 @@ Nothing here is a tracker. The server counts what it did, so the people who run 
 tools fail and whether a release made things worse, and so a bot's owner can see why their bot
 "randomly stopped". It stays inside the binary and the SQLite file. No cookies, no third party.
 
-U1 to U13 are phase 1 of issue 399 and U14 to U21 are phase 2. U22 is phase 1 of issue 487. Each
-rule here has a test in `tests/usage.rs`, and U21 and U22 have one in `tests/trust_ui.cjs`.
+U1 to U13 are phase 1 of issue 399 and U14 to U21 are phase 2. U22 is phase 1 of issue 487 and U23
+to U25 are phase 2. Each rule here has a test in `tests/usage.rs`, and U21, U22 and U25 have one in
+`tests/trust_ui.cjs`.
 
 ## What is counted
 
@@ -55,4 +56,7 @@ same 30 days (U8), and read by the same people (U9).
 
 | Rule | |
 | --- | --- |
-| U22 | Each bot's `events_delivered` is also counted for that bot, by day: the events handed to it, as U17 counts them for the server (a read of its events, a poll or a stream), whatever woke it to ask. It is one whole number per bot and day, with no event, room or text, kept in memory until it is written (U4) and capped as U18's counts are. U11 returns it as `events_delivered` on each day, and the Usage tab's table for the bot has an Events column. Only the bot's owner reads it (U7, U11), it is deleted after 30 days (U8), and it goes when the bot is deleted. What a bot's model costs is not here: the server never sees it. |
+| U22 | Each bot's `events_delivered` is also counted for that bot, by day: the events handed to it, as U17 counts them for the server (a read of its events, a poll or a stream), whatever woke it to ask. It is one whole number per bot and day, with no event, room or text, kept in memory until it is written (U4) and capped as U18's counts are. U11 returns it as `events_delivered` on each day, and the Usage tab's table for the bot has an Events column. Only the bot's owner reads it (U7, U11), it is deleted after 30 days (U8), and it goes when the bot is deleted. What a bot's model costs is not counted here: the server never sees it (U23). |
+| U23 | A bot may report its own model cost with the MCP tool `report_usage`: `cost_cents`, a whole number of US cents from 0 to 100,000 ($1,000), and optionally `input_tokens` and `output_tokens`, whole numbers from 0 to 10^10. It is the bot's running total for one UTC day: today unless `day` names yesterday (`YYYY-MM-DD`). Any other day, a fraction, a negative or a larger number is refused. A later report for the same day replaces the earlier one, so there is one row per bot and day, and sending it again never adds up twice. Only a bot reports, and only for itself; a person's key is refused. It holds numbers only, no text. |
+| U24 | U11 gives each day `reported_cost_cents`, `reported_input_tokens` and `reported_output_tokens`, each null when the bot reported nothing, plus `reported_cost_cents_30d`, the sum over the kept days, null when there were none, and `cost_note`, which says the bot reported these itself and the server can't check them. Only the bot's owner reads it (U11), it is deleted after 30 days (U8), and it goes when the bot is deleted. Nothing is estimated on the server's side. |
+| U25 | The Usage tab's table for the bot has a Cost (reported) column in dollars, `-` on a day with no report, and under it the 30-day total with the note from U24, or a line saying the bot hasn't reported its cost. |

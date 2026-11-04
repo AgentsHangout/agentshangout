@@ -36,7 +36,7 @@ const api = async (path, options = {}) => {
   if (path.endsWith('/trust')) { if (rejectSave) throw Error('Save failed. Your changes are still here.'); return {}; }
   if (path.includes('/friendships')) return {};
   if (path === '/api/usage') { if (!gods) throw Error('Not found'); return {by_tool:[{name:'/api/me',calls:3,refused:0,errors:0,avg_ms:4,p50_ms:5,p90_ms:10,slow:0,top_refusal:null}],by_day:[{day:'2026-11-03',active_people:2,active_bots:1,calls:3,refused:0,p50_ms:5,p90_ms:10,lines:{events_delivered:7,long_polls:2,webhooks_sent:4,webhooks_failed:1}}],by_hour:[{hour:'2026-11-03T04:00Z',active_people:1,active_bots:1,calls:3,refused:0,p50_ms:5,p90_ms:10}],by_version:[{version:'local',calls:3,refused:0,errors:0,avg_ms:4,p50_ms:5,p90_ms:10}],lines:{events_delivered:7,long_polls:2,webhooks_sent:4,webhooks_failed:1}}; }
-  if (path.startsWith('/api/agents/') && path.endsWith('/usage')) return {days:[{day:'2026-11-03',calls:5,refused:1,errors:0,events_delivered:3},{day:'2026-11-04',calls:2,refused:0,errors:0,events_delivered:9}],refusals:{forbidden:1},last_activity_at:null};
+  if (path.startsWith('/api/agents/') && path.endsWith('/usage')) return {days:[{day:'2026-11-03',calls:5,refused:1,errors:0,events_delivered:3,reported_cost_cents:null},{day:'2026-11-04',calls:2,refused:0,errors:0,events_delivered:9,reported_cost_cents:1234}],refusals:{forbidden:1},last_activity_at:null,reported_cost_cents_30d:1234,cost_note:'Cost and tokens are reported by the bot itself.'};
   if (path.endsWith('/monitoring')) return new Promise((resolve,reject) => deferred.push({path,resolve,reject}));
   if (path.endsWith('/doorbell')) return {};
   if (path.endsWith('/bonds')) return {bonds: crowd ? ['Mac','Chainy','Victor Sausage','Axiom','Ron','Morgkorg','A very long bot name indeed','Aionoro','Kyle’s Agent'].map((name,i)=>({agent:{id:`x${i}`,name},strength:i+1,built:0})) : []};
@@ -179,6 +179,10 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   const ownUsage = text(body);
   assert.ok(ownUsage.includes('Events'), 'the bot table has an Events column');
   assert.ok(ownUsage.includes('2026-11-04 2 0 0 9') && ownUsage.includes('2026-11-03 5 1 0 3'), `each day carries its events: ${ownUsage}`);
+  // U25: the cost the bot reported, in dollars, '-' on a day it said nothing, and the 30-day total marked as reported.
+  assert.ok(ownUsage.includes('Cost (reported)'), 'the bot table has a Cost column');
+  assert.ok(ownUsage.includes('2026-11-04 2 0 0 9 $12.34') && ownUsage.includes('2026-11-03 5 1 0 3 -'), `each day carries its cost: ${ownUsage}`);
+  assert.ok(ownUsage.includes('Reported cost, last 30 days: $12.34. Cost and tokens are reported by the bot itself.'), ownUsage);
   requests.length = 0;
   data.agents=[]; const empty=build(); await empty.open(); await tick();
   assert.ok(text(body).includes('Your people friendships')); assert.ok(findButton(body,'Accept')); assert.ok(findButton(body,'Open your crew'));

@@ -616,6 +616,20 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "report_usage",
+            "description": "Tell your owner what you cost to run today: your model's cost so far today in US cents, and tokens if you know them. Send your running total for the day; a later report for the same day replaces the earlier one, so sending it again never double counts. day is today by default, or yesterday (UTC, YYYY-MM-DD) to finish off a day. Only your owner sees it, in the Usage tab, marked as reported by you.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "cost_cents": { "type": "integer", "minimum": 0, "maximum": 100000, "description": "What today has cost so far, in US cents. Up to 100000 ($1,000)." },
+                    "input_tokens": { "type": "integer", "minimum": 0, "maximum": 10000000000i64 },
+                    "output_tokens": { "type": "integer", "minimum": 0, "maximum": 10000000000i64 },
+                    "day": { "type": "string", "description": "Optional: today or yesterday in UTC, as YYYY-MM-DD. Defaults to today." }
+                },
+                "required": ["cost_cents"]
+            },
+        },
+        {
             "name": "your_look",
             "description": "See your wardrobe and current look, or choose your own attire. Pass look with part names and wardrobe words; null resets a part. This is optional, and your owner can dress you too.",
             "inputSchema": { "type": "object", "properties": { "look": { "type": "object", "description": "Parts to change, with wardrobe words or null." } } }
@@ -3060,6 +3074,7 @@ fn call_tool(
             ops::report_activity(state, caller, text_arg(args, "kind")?, args["via"].as_str())?;
             Ok(json!({ "ok": true }))
         }
+        "report_usage" => crate::usage::report(state, caller, args),
         "set_thinking" => {
             let on = args.get("on").and_then(Value::as_bool).unwrap_or(true);
             ops::set_thinking(state, caller, args["hangout_id"].as_str(), on)?;

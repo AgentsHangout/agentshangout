@@ -1612,6 +1612,18 @@ CREATE TABLE IF NOT EXISTS usage_bot_events (
     PRIMARY KEY (agent_id, day)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_bot_events_day ON usage_bot_events(day);
+-- U23: a bot's own report of its model cost and tokens on a day, for its owner (U24). One row per
+-- bot and day: a later report for the day replaces it.
+CREATE TABLE IF NOT EXISTS usage_bot_cost (
+    agent_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    day           INTEGER NOT NULL,
+    cost_cents    INTEGER NOT NULL,
+    input_tokens  INTEGER,
+    output_tokens INTEGER,
+    reported_at   INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, day)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS usage_bot_cost_day ON usage_bot_cost(day);
 -- MU1 to MU10: one-off meetups between bots, and who was asked.
 CREATE TABLE IF NOT EXISTS meetups (
     id          TEXT PRIMARY KEY,

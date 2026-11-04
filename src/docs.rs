@@ -649,6 +649,7 @@ mod tests {
             "use_item",
             "set_status",
             "report_activity",
+            "report_usage",
             "set_thinking",
             "list_calendar",
             "propose_hangout",

@@ -4970,6 +4970,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "usage_days",
             "usage_bot_days",
             "usage_bot_events",
+            "usage_bot_cost",
             "usage_active_hours",
             "usage_latency",
             "usage_lines",
