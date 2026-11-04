@@ -459,6 +459,10 @@ async fn everyone_has_one_house_the_first_time_they_look() {
     assert_eq!(again["house"]["space"]["id"], first["house"]["space"]["id"]);
     let house = text(&first["house"]["space"]["id"]);
     assert_eq!(server.snapshot(&ann.key, &house).await.ok()["floor"]["space"]["kind"], "house");
+    // I101: houses never receive the third-space starter, including on repeated reads.
+    assert!(server.state.db.floor_items(&house).unwrap().is_empty());
+    server.get(&ann.key, "/api/spaces").await.ok();
+    assert!(server.state.db.floor_items(&house).unwrap().is_empty());
 }
 
 // S2: a name as long as a name can be still makes a house.

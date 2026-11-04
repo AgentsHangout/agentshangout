@@ -6223,6 +6223,48 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
+// I101: reopening existing rooms neither inserts a starter nor duplicates one already present.
+#[test]
+fn reopening_existing_rooms_does_not_seed_or_duplicate_notes_stations() {
+    let path = std::env::temp_dir().join(format!("notes-starter-{}.db", agenthangout::auth::new_id()));
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    db.create_person("owner", "Owner", "key", "feed", 0).unwrap();
+    for room in ["legacy", "current"] {
+        db.start_third_space(room, room, room, "owner", 0, 3).unwrap().unwrap();
+    }
+    let current = db.floor_items("current").unwrap();
+    assert_eq!(current.len(), 1);
+    let station_id = current[0].id.clone();
+    drop(db);
+
+    // Model a room furnished before I101, without changing its room or space records.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("DELETE FROM floor_items WHERE hangout_id = 'legacy'", []).unwrap();
+    conn.execute(
+        "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+         VALUES ('existing-bench', 'legacy', 'bench', 4, 4, 0, 'owner', 0)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    for _ in 0..2 {
+        let reopened = Db::open(path.to_str().unwrap()).unwrap();
+        let legacy = reopened.floor_items("legacy").unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].id, "existing-bench");
+        assert_eq!(legacy[0].kind, "bench");
+        assert_eq!((legacy[0].x, legacy[0].y), (4, 4));
+        let current = reopened.floor_items("current").unwrap();
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].id, station_id);
+        assert_eq!(current[0].kind, "shared_notes_station");
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.to_str().unwrap()));
+    }
+}
+
 // I95 to I100: how to play, the exact names, the hint on `say` and the `how` map.
 
 async fn rpc(server: &Server, token: &str, method: &str, params: Value) -> Value {
