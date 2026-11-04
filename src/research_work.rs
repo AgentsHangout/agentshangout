@@ -75,12 +75,11 @@ const MAX_REQUESTED: usize = 20;
 /// always there on a pull request, so one missing, or an entry without its name, is unreadable. A
 /// name GitHub wouldn't give is skipped, so one odd reviewer never stops the rest being read.
 pub fn requested_of(pr: &Value) -> Option<Requested> {
-    let names = |list: &Value, key: &str, most: usize| -> Option<Vec<String>> {
+    let names = |list: &Value, key: &str, most: usize, base: fn(&str) -> &str| {
         let mut out = Vec::new();
         for entry in list.as_array()? {
             let name = entry[key].as_str()?;
-            // A GitHub app reviews as its slug with [bot] after it.
-            let base = name.strip_suffix("[bot]").unwrap_or(name);
+            let base = base(name);
             let fine = !base.is_empty()
                 && base.len() <= most
                 && base.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
@@ -91,8 +90,14 @@ pub fn requested_of(pr: &Value) -> Option<Requested> {
         Some(out)
     };
     Some(Requested {
-        people: names(&pr["requested_reviewers"], "login", 39)?,
-        teams: names(&pr["requested_teams"], "slug", 100)?,
+        // A GitHub app reviews as its slug with [bot] after it.
+        people: names(&pr["requested_reviewers"], "login", 39, |name| {
+            name.strip_suffix("[bot]").unwrap_or(name)
+        })?,
+        // An enterprise team is its slug with ent: before it.
+        teams: names(&pr["requested_teams"], "slug", 100, |slug| {
+            slug.strip_prefix("ent:").unwrap_or(slug)
+        })?,
     })
 }
 /// RW9: how many check runs or reviews one request asks for. A full page counts as unreadable.
