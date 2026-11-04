@@ -552,16 +552,41 @@ async fn mc5_inbox_guidance_notes_present_only_with_relevant_fields() {
     assert!(don_inbox["trust_note"].is_string(), "trust_note present on check-in");
     assert!(don_inbox["record_note"].is_string(), "record_note present on check-in");
 
-    // 4. record_note present with check-ins only in your_check_ins (after answer).
+    // 4. trust_note and record_note present on answered check-in with third-party note.
     server
-        .tool(&don, "answer_check_in", json!({ "check_in_id": check_in_id, "response": "hold" }))
+        .tool(
+            &don,
+            "answer_check_in",
+            json!({
+                "check_in_id": check_in_id,
+                "response": "hold",
+                "note": "Please move lunch to noon."
+            }),
+        )
         .await;
     let scout_inbox = server.tool(&town.scout, "inbox", json!({})).await;
     assert_eq!(scout_inbox["your_check_ins"][0]["status"], "hold");
-    assert!(scout_inbox.get("trust_note").is_none(), "no untrusted text in your_check_ins");
+    assert_eq!(scout_inbox["your_check_ins"][0]["note"], "Please move lunch to noon.");
+    assert!(
+        scout_inbox["trust_note"].is_string(),
+        "trust_note present on answered check-in with note"
+    );
     assert!(scout_inbox["record_note"].is_string(), "record_note present on check-in answer");
 
-    // 5. project_changes_note both ways.
+    // 5. RSVPed plan in plans_soon: trust_note and record_note present.
+    let tomorrow = now() + DAY;
+    let soon = server.plan_at(&town.bo, &town.square, tomorrow).await;
+    server
+        .post(&town.ann.key, &format!("/api/events/{soon}/rsvp"), json!({ "response": "yes" }))
+        .await
+        .ok();
+    let (_, planner_token) = server.bot_with_id(&town.ann, &town.square, "PlannerBot").await;
+    let planner_inbox = server.tool(&planner_token, "inbox", json!({})).await;
+    assert_eq!(planner_inbox["plans_soon"][0]["id"], soon.as_str());
+    assert!(planner_inbox["trust_note"].is_string(), "trust_note present on plans_soon");
+    assert!(planner_inbox["record_note"].is_string(), "record_note present on plans_soon");
+
+    // 6. project_changes_note both ways.
     let started = server
         .tool(
             &town.scout,

@@ -1387,6 +1387,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         })
         .collect::<Vec<_>>();
     let owner_answers = inbox.owner_answers.iter().map(owner_question_json).collect::<Vec<_>>();
+    let apprentice = crate::bonds::proposal_for_inbox(state, caller)?;
 
     let mut reply = json!({
         "clock": clock_json(clock),
@@ -1399,7 +1400,7 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "project_changes": inbox.project_changes,
         // K6: the bots it has been in projects with. K13, K22: its proposal and its seed.
         "your_bonds": crate::bonds::your_bonds(state, caller)?,
-        "apprentice": crate::bonds::proposal_for_inbox(state, caller)?,
+        "apprentice": apprentice,
         "seed": crate::bonds::seed_for_inbox(state, caller)?,
         // L28: the other bots out with it, and what it can do with them.
         "meet": inbox.meet,
@@ -1465,18 +1466,24 @@ fn inbox_json(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     });
 
     // MC5: send guidance notes only when their corresponding triggers are present.
-    let has_untrusted_text = !inbox.mentions.is_empty()
+    let has_third_party_content = !inbox.mentions.is_empty()
         || !inbox.waiting_on_you.is_empty()
+        || !inbox.your_check_ins.is_empty()
+        || !inbox.plans_soon.is_empty()
         || !inbox.plans_to_answer.is_empty()
+        || !inbox.plan_starts.is_empty()
         || !inbox.meetups.is_empty()
         || inbox.meet.is_some()
         || inbox.nudge.is_some()
-        || !inbox.your_trips.is_empty();
-    if has_untrusted_text {
+        || !inbox.your_trips.is_empty()
+        || !inbox.project_changes.is_empty()
+        || !apprentice.is_null();
+    if has_third_party_content {
         reply["trust_note"] = json!(TRUST_NOTE);
     }
     let has_record_data = !inbox.plans_soon.is_empty()
         || !inbox.plans_to_answer.is_empty()
+        || !inbox.plan_starts.is_empty()
         || !inbox.owner_answers.is_empty()
         || !inbox.your_check_ins.is_empty()
         || !inbox.waiting_on_you.is_empty();
