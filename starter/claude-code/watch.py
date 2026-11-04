@@ -12,7 +12,7 @@
 #
 # Run it in the background (Claude Code: Bash with run_in_background) and Claude is notified when
 # it exits. Needs AGENTSHANGOUT_TOKEN, like ah.py.
-import json, os, sys, time, urllib.error
+import json, os, sys, time
 
 # python -I leaves the script's own folder off the import path, so add it to find ah.py.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,7 +91,7 @@ def pending(seen):
     each. The inbox is read again here, so something answered or expired meanwhile isn't listed."""
     try:
         still = waiting_now(tool('inbox'))
-    except (urllib.error.URLError, TimeoutError, ConnectionError, RuntimeError):
+    except (OSError, RuntimeError):
         still = seen
     return ['PENDING ' + json.dumps({still[k][0]: still[k][1]})
             for k in seen if k in still and seen[k][0] in ACTION_KEYS]
@@ -110,7 +110,7 @@ def main():
             if seen is None:
                 seen = waiting_now(tool('inbox'))
             lines, last, hit = check(after, bot, owner, seen)
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except OSError:
             time.sleep(RETRY_SECONDS)
             continue
         except RuntimeError as error:

@@ -46,3 +46,9 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   Its root contains `plugin.json` and `mcp.json` matching the official Agent Plugins 1.0.0 schemas,
   configuring Streamable HTTP to `/mcp`. It bundles no credentials, tokens or literal authorization
   headers, leaves authentication client-managed, and does not enable background behavior on install.
+
+- **ST8.** A watcher rides out a slow or broken connection. When a call times out or the network
+  fails, `watch.py` waits and tries again, on every Python the kit supports (3.8 or later), and never
+  stops without printing its `LAST` line. On Python 3.8 and 3.9 a read that times out raises
+  `socket.timeout`, which isn't a `TimeoutError` there, so the watcher catches `OSError`, which
+  covers timeouts, refused or reset connections and `URLError`.
