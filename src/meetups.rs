@@ -1,5 +1,5 @@
 //! Meetups: a bot suggests a place and a time to a few bots they can see, they answer, and at the
-//! time each that said yes is nudged with a `plan` event (docs/meetups.md, MU1 to MU10). Nothing
+//! time each that said yes is nudged with a `plan` event (docs/meetups.md, MU1 to MU12). Nothing
 //! here moves a bot: it goes with `go_out` or `go_to_room`, so the usual rules apply.
 
 use rusqlite::{params, OptionalExtension};
@@ -21,6 +21,8 @@ pub const MAX_AHEAD_SECS: i64 = 48 * 60 * 60;
 /// MU6: how long before the start a bot that said yes is nudged, and how long after it still is.
 const NUDGE_LEAD_SECS: i64 = 5 * 60;
 const LATE_SECS: i64 = 30 * 60;
+/// MU11: a bot rung by a meetup isn't rung by another for this long.
+const RING_HOLD_SECS: i64 = 3 * 60;
 const KEEP_SECS: i64 = 7 * 24 * 60 * 60;
 pub const MAX_OPEN_PROPOSED: i64 = 3;
 pub const MAX_WAITING: i64 = 10;
@@ -231,6 +233,35 @@ impl Db {
         Ok(due)
     }
 
+    /// MU11: claims a ring for this bot unless a meetup rang it since `since`, checked and written
+    /// in one immediate transaction so two sweeps can't both ring it.
+    pub fn claim_meetup_ring(&self, agent_id: &str, since: i64, at: i64) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let last: Option<i64> = tx
+            .query_row("SELECT rung_at FROM meetup_rings WHERE agent_id = ?", [agent_id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if last.is_some_and(|rung| rung > since) {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO meetup_rings (agent_id, rung_at) VALUES (?1, ?2)
+             ON CONFLICT (agent_id) DO UPDATE SET rung_at = ?2",
+            params![agent_id, at],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Moves a meetup's start, for a test of MU12: the clock can't be moved over HTTP.
+    pub fn set_meetup_start(&self, id: &str, starts_at: i64) -> rusqlite::Result<()> {
+        self.conn()
+            .execute("UPDATE meetups SET starts_at = ? WHERE id = ?", params![starts_at, id])?;
+        Ok(())
+    }
+
     /// How many meetups are stored, for a test of MU10.
     pub fn meetup_count(&self) -> rusqlite::Result<i64> {
         self.conn().query_row("SELECT COUNT(*) FROM meetups", [], |row| row.get(0))
@@ -263,13 +294,24 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
     // A stable key per bot and change, so telling twice records once.
     let by = data["agent_id"].as_str().unwrap_or("").to_string();
     let answer = data["answer"].as_str().unwrap_or("").to_string();
-    events::note_meetup(
+    // MU6: a nudge is written only while the meetup is open and the bot still says yes, checked in
+    // the same step as the write, so a cancellation or a no that came after the claim wins.
+    let going = (change == "meetup_now").then_some((meetup.id.as_str(), agent_id));
+    let written = events::note_meetup(
         state,
         agent_id,
         &meetup.hangout_id,
         &format!("meetup:{}:{change}:{agent_id}:{by}:{answer}", meetup.id),
         data,
+        going,
     );
+    // MU11: a ring is held while an earlier ring in this room is unread (E22) or another meetup
+    // rang the bot in the last three minutes. The event is there either way.
+    let ring = ring
+        && written
+        && state.db.notify_url(agent_id).ok().flatten().is_some()
+        && !ops::owner_ring_held(state, agent_id, &meetup.hangout_id, now()).unwrap_or(true)
+        && state.db.claim_meetup_ring(agent_id, now() - RING_HOLD_SECS, now()).unwrap_or(false);
     if ring {
         let notice = crate::notify::Notice {
             event: "plan",
@@ -283,10 +325,12 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
     }
 }
 
-/// MU6: whether a meetup's ring may still go, asked again just before it is sent. A bot whose
-/// doorbell is paused isn't rung; the meetup must still be open with the bot still in it; an
-/// invitation rings only when the bot's owner lets other owners' bots wake it (or it is the
-/// owner's own bot that asked); and a nudge only when the bot still says yes.
+/// MU6, MU11: whether a meetup's ring may still go, asked again just before it is sent. A bot
+/// whose doorbell is paused isn't rung; the meetup must still be open with the bot still in it; an
+/// invitation rings only while the bot still hasn't answered, and a nudge only while it says yes.
+/// A bot of the proposer's own owner follows its owner's rules. Any other proposer is a bot waking
+/// it, so the bot's wake setting (BT) must still let that bot wake it, it must not be restricted
+/// to its owner, and an invitation to a private room also waits for its social hours (E25).
 pub fn may_ring(state: &AppState, agent_id: &str, meetup_id: &str, change: &str) -> bool {
     if state.db.doorbell_paused(agent_id).unwrap_or(true) {
         return false;
@@ -300,17 +344,39 @@ pub fn may_ring(state: &AppState, agent_id: &str, meetup_id: &str, change: &str)
     if meetup.status != "open" {
         return false;
     }
-    match change {
+    let answered = match change {
         "meetup_now" => me.answer == "yes",
-        "meetup_invited" => {
-            let own = meetup.bots.iter().any(|member| {
-                member.agent_id == meetup.proposer_id && member.owner_id == me.owner_id
-            });
-            me.answer == "pending"
-                && (own || !state.db.wakes_only_for_owner(agent_id).unwrap_or(true))
-        }
+        "meetup_invited" => me.answer == "pending",
         _ => false,
+    };
+    if !answered {
+        return false;
     }
+    let Some(proposer) = meetup.bots.iter().find(|member| member.agent_id == meetup.proposer_id)
+    else {
+        return false;
+    };
+    if proposer.owner_id == me.owner_id {
+        return true;
+    }
+    let now = now();
+    let (Ok(Some(bot)), Ok(Some(sender))) =
+        (state.db.agent(agent_id, now), state.db.agent(&meetup.proposer_id, now))
+    else {
+        return false;
+    };
+    if state.db.wakes_only_for_owner(agent_id).unwrap_or(true)
+        || !crate::bot_trust::may_wake_from(state, &bot, &sender).unwrap_or(false)
+    {
+        return false;
+    }
+    let public =
+        state.db.floor(&meetup.hangout_id).ok().flatten().is_some_and(|f| f.access == "public");
+    if change == "meetup_invited" && !public {
+        return crate::routines::routine_view(state, agent_id, &bot.owner_id)
+            .is_ok_and(|routine| routine.social_now);
+    }
+    true
 }
 
 fn bot_of(caller: &Caller) -> ApiResult<&str> {
@@ -428,6 +494,11 @@ pub fn propose(
     owners.sort();
     owners.dedup();
     place_allowed(state, hangout_id, &owners)?;
+    // MU11: an invitee's owner decides who may invite it, as for a room (BT); its owner's own bots
+    // are the owner's to arrange.
+    for bot in invited.iter().filter(|bot| bot.owner_id != agent.owner_id) {
+        crate::bot_trust::check_invite(state, caller, bot, hangout_id, false)?;
+    }
     if state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public") {
         if let Some(reason) = routines::kept_in(state, agent_id)? {
             return Err(ApiError::forbidden(format!("you can't go there yourself: {reason}")));
@@ -555,7 +626,14 @@ pub fn owner_cancel(
     id: &str,
 ) -> ApiResult<Value> {
     owned_bot(state, caller, agent_id)?;
-    let meetup = open_meetup(state, id, now())?;
+    // MU12: the owner can take their bot out until the last late nudge could be sent.
+    let meetup = state.db.meetup_row(id)?.ok_or_else(ApiError::not_found)?;
+    if meetup.status != "open" {
+        return Err(ApiError::conflict("that meetup was cancelled"));
+    }
+    if meetup.starts + LATE_SECS <= now() {
+        return Err(ApiError::conflict("that meetup is over"));
+    }
     if !meetup.bots.iter().any(|member| member.agent_id == agent_id) {
         return Err(ApiError::not_found());
     }

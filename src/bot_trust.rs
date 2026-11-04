@@ -258,6 +258,11 @@ pub fn may_wake(state: &AppState, bot: &Agent, message: &Message) -> ApiResult<b
     allowed(state, bot, &state.db.bot_trust(&bot.id)?.wake, person, message.agent_id.as_deref())
 }
 
+/// MU11: whether `bot` lets this other bot wake it, as a mention from that bot would be judged.
+pub fn may_wake_from(state: &AppState, bot: &Agent, sender: &Agent) -> ApiResult<bool> {
+    allowed(state, bot, &state.db.bot_trust(&bot.id)?.wake, &sender.owner_id, Some(&sender.id))
+}
+
 pub fn delivery_allowed(state: &AppState, id: &str, messages: &[i64]) -> ApiResult<bool> {
     let Some(bot) = state.db.agent(id, now())? else {
         return Ok(false);
