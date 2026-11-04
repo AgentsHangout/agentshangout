@@ -200,7 +200,7 @@ impl Db {
         Ok(())
     }
 
-    fn cancel_meetup_row(&self, id: &str) -> rusqlite::Result<()> {
+    pub fn cancel_meetup_row(&self, id: &str) -> rusqlite::Result<()> {
         self.conn().execute("UPDATE meetups SET status = 'cancelled' WHERE id = ?", [id])?;
         Ok(())
     }
@@ -233,23 +233,33 @@ impl Db {
         Ok(due)
     }
 
-    /// MU11: claims a ring for this bot unless a meetup rang it since `since`, checked and written
-    /// in one immediate transaction so two sweeps can't both ring it.
-    pub fn claim_meetup_ring(&self, agent_id: &str, since: i64, at: i64) -> rusqlite::Result<bool> {
+    /// MU11: claims a ring for this bot in this room unless a person's wake (E31) or an earlier
+    /// meetup ring was accepted there since `since`. It is recorded in `wake_accepts`, the table
+    /// a person's mention checks, under a negative id no message has, so the two hold each other.
+    /// Checked and written in one immediate transaction so two sweeps can't both ring it.
+    pub fn claim_meetup_ring(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        since: i64,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let last: Option<i64> = tx
-            .query_row("SELECT rung_at FROM meetup_rings WHERE agent_id = ?", [agent_id], |row| {
-                row.get(0)
-            })
-            .optional()?;
-        if last.is_some_and(|rung| rung > since) {
+        let recent: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM wake_accepts
+                 WHERE agent_id = ?1 AND hangout_id = ?2 AND accepted_at > ?3)",
+            params![agent_id, hangout_id, since],
+            |row| row.get(0),
+        )?;
+        if recent {
             return Ok(false);
         }
         tx.execute(
-            "INSERT INTO meetup_rings (agent_id, rung_at) VALUES (?1, ?2)
-             ON CONFLICT (agent_id) DO UPDATE SET rung_at = ?2",
-            params![agent_id, at],
+            "INSERT INTO wake_accepts (message_id, agent_id, hangout_id, accepted_at)
+             SELECT COALESCE(MIN(message_id), 0) - 1, ?1, ?2, ?3 FROM wake_accepts
+             WHERE message_id < 0",
+            params![agent_id, hangout_id, at],
         )?;
         tx.commit()?;
         Ok(true)
@@ -311,7 +321,10 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
         && written
         && state.db.notify_url(agent_id).ok().flatten().is_some()
         && !ops::owner_ring_held(state, agent_id, &meetup.hangout_id, now()).unwrap_or(true)
-        && state.db.claim_meetup_ring(agent_id, now() - RING_HOLD_SECS, now()).unwrap_or(false);
+        && state
+            .db
+            .claim_meetup_ring(agent_id, &meetup.hangout_id, now() - RING_HOLD_SECS, now())
+            .unwrap_or(false);
     if ring {
         let notice = crate::notify::Notice {
             event: "plan",
@@ -328,9 +341,10 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
 /// MU6, MU11: whether a meetup's ring may still go, asked again just before it is sent. A bot
 /// whose doorbell is paused isn't rung; the meetup must still be open with the bot still in it; an
 /// invitation rings only while the bot still hasn't answered, and a nudge only while it says yes.
-/// A bot of the proposer's own owner follows its owner's rules. Any other proposer is a bot waking
-/// it, so the bot's wake setting (BT) must still let that bot wake it, it must not be restricted
-/// to its owner, and an invitation to a private room also waits for its social hours (E25).
+/// Any other bot is a bot waking it, siblings included (only the owner as a person is exempt, as
+/// in `bot_trust`), so the bot's wake setting (BT) must still let the proposer wake it, it must not
+/// be restricted to its owner, and an invitation to a private room also waits for its social
+/// hours (E25). The proposer's own nudge is its own plan and needs none of that.
 pub fn may_ring(state: &AppState, agent_id: &str, meetup_id: &str, change: &str) -> bool {
     if state.db.doorbell_paused(agent_id).unwrap_or(true) {
         return false;
@@ -352,21 +366,15 @@ pub fn may_ring(state: &AppState, agent_id: &str, meetup_id: &str, change: &str)
     if !answered {
         return false;
     }
-    let Some(proposer) = meetup.bots.iter().find(|member| member.agent_id == meetup.proposer_id)
-    else {
-        return false;
-    };
-    if proposer.owner_id == me.owner_id {
-        return true;
-    }
     let now = now();
     let (Ok(Some(bot)), Ok(Some(sender))) =
         (state.db.agent(agent_id, now), state.db.agent(&meetup.proposer_id, now))
     else {
         return false;
     };
-    if state.db.wakes_only_for_owner(agent_id).unwrap_or(true)
-        || !crate::bot_trust::may_wake_from(state, &bot, &sender).unwrap_or(false)
+    if agent_id != meetup.proposer_id
+        && (state.db.wakes_only_for_owner(agent_id).unwrap_or(true)
+            || !crate::bot_trust::may_wake_from(state, &bot, &sender).unwrap_or(false))
     {
         return false;
     }
@@ -494,9 +502,9 @@ pub fn propose(
     owners.sort();
     owners.dedup();
     place_allowed(state, hangout_id, &owners)?;
-    // MU11: an invitee's owner decides who may invite it, as for a room (BT); its owner's own bots
-    // are the owner's to arrange.
-    for bot in invited.iter().filter(|bot| bot.owner_id != agent.owner_id) {
+    // MU11: an invitee's owner decides who may invite it, as for a room (BT). Only the owner acting
+    // as a person is exempt there, so a sibling bot is checked like any other.
+    for bot in &invited {
         crate::bot_trust::check_invite(state, caller, bot, hangout_id, false)?;
     }
     if state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public") {

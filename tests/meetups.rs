@@ -49,10 +49,14 @@ struct Town {
 
 impl Server {
     async fn start() -> Self {
+        Self::start_on(":memory:").await
+    }
+
+    async fn start_on(path: &str) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
         let state = AppState::new(
-            Db::open(":memory:").unwrap(),
+            Db::open(path).unwrap(),
             Config {
                 public_url: base.clone(),
                 create_code: Some(CODE.to_string()),
@@ -468,8 +472,11 @@ async fn an_invitee_whose_owner_restricted_invites_cannot_be_invited_by_other_ow
         .await;
     assert!(said.contains("not allowed you to invite"), "{said}");
     assert!(server.inbox_meetups(&town.fern).await.is_empty());
-    // Bo's own Pip, with the same setting, is still Rover's to invite.
+    // Only the owner as a person is exempt, as in rooms: Bo's own Pip, with the same setting,
+    // is refused to Rover too, and open again once Bo allows it.
     set_trust(&server, &town.bo, &town.pip_id, "owner", "owner").await;
+    server.refused(&town.rover, "propose_meetup", asking(&town.cafe, json!(["Pip"]), 30)).await;
+    set_trust(&server, &town.bo, &town.pip_id, "owner", "participants").await;
     server.propose(&town, json!([town.pip_id]), 30).await;
     // Opening it up again lets Rover invite Fern.
     set_trust(&server, &town.ann, &town.fern_id, "participants", "participants").await;
@@ -493,25 +500,48 @@ async fn an_owner_who_restricts_waking_after_the_invite_stops_the_ring() {
     assert!(ring(&town.fern_id, "meetup_now"));
     server.state.db.set_wakes_only_for_owner(&town.fern_id, true).unwrap();
     assert!(!ring(&town.fern_id, "meetup_now"));
-    // Same owner: Rover's invitation to Pip follows Bo's rules, not the wake setting for others.
-    set_trust(&server, &town.bo, &town.pip_id, "owner", "owner").await;
-    server.state.db.set_wakes_only_for_owner(&town.pip_id, true).unwrap();
+    // A sibling bot is no exception: Pip's owner restricting waking stops Rover's invitation ring.
     assert!(ring(&town.pip_id, "meetup_invited"));
+    set_trust(&server, &town.bo, &town.pip_id, "owner", "participants").await;
+    assert!(!ring(&town.pip_id, "meetup_invited"));
+    // The proposer's own nudge is its own plan, whatever its wake setting says.
+    server.state.db.set_wakes_only_for_owner(&town.rover_id, true).unwrap();
+    set_trust(&server, &town.bo, &town.rover_id, "owner", "owner").await;
+    assert!(ring(&town.rover_id, "meetup_now"));
     // The event is there for every one of these.
     assert_eq!(server.changes(&town.fern).await, ["meetup_invited"]);
 }
 
-// MU11: one meetup ring per bot in three minutes.
+// MU11: a meetup ring and a person's accepted wake (E31) hold each other in a room for three minutes.
 #[tokio::test]
-async fn a_meetup_ring_is_held_for_three_minutes() {
+async fn a_meetup_ring_and_a_persons_wake_hold_each_other() {
     let server = Server::start().await;
     let town = server.town().await;
     let at = now();
     let db = &server.state.db;
-    assert!(db.claim_meetup_ring(&town.fern_id, at - 180, at).unwrap());
-    assert!(!db.claim_meetup_ring(&town.fern_id, at + 60 - 180, at + 60).unwrap());
-    assert!(db.claim_meetup_ring(&town.pip_id, at + 60 - 180, at + 60).unwrap());
-    assert!(db.claim_meetup_ring(&town.fern_id, at + 181 - 180, at + 181).unwrap());
+    let recent = |bot: &str, room: &str, t: i64| db.person_wake_recent(bot, room, t - 180).unwrap();
+    assert!(db.claim_meetup_ring(&town.fern_id, &town.cafe, at - 180, at).unwrap());
+    assert!(recent(&town.fern_id, &town.cafe, at + 60), "it holds a person's mention");
+    assert!(!db.claim_meetup_ring(&town.fern_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
+    // Another bot, another room, and three minutes on are free.
+    assert!(db.claim_meetup_ring(&town.pip_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
+    assert!(db.claim_meetup_ring(&town.fern_id, &town.bo_room, at + 60 - 180, at + 60).unwrap());
+    assert!(db.claim_meetup_ring(&town.fern_id, &town.cafe, at + 181 - 180, at + 181).unwrap());
+
+    // The other way: a person's wake accepted a minute ago holds the meetup ring.
+    let line = server
+        .send(
+            &town.ann.key,
+            Method::POST,
+            &format!("/api/hangouts/{}/messages", town.cafe),
+            Some(json!({ "text": "hello" })),
+        )
+        .await
+        .ok();
+    let message = line["id"].as_i64().unwrap();
+    db.note_person_wake(&town.rover_id, message, &town.cafe, at).unwrap();
+    assert!(!db.claim_meetup_ring(&town.rover_id, &town.cafe, at + 60 - 180, at + 60).unwrap());
+    assert!(db.claim_meetup_ring(&town.rover_id, &town.cafe, at + 181 - 180, at + 181).unwrap());
 }
 
 // MU6: a nudge claimed, then the meetup cancelled or the bot saying no, is not written at all.
@@ -582,4 +612,37 @@ async fn an_owner_can_cancel_until_the_late_nudges_end() {
     let path = format!("/api/agents/{}/meetups/{id2}", town.rover_id);
     let late = server.send(&town.bo.key, Method::DELETE, &path, None).await;
     assert_eq!(late.status, StatusCode::CONFLICT);
+}
+
+// MU6: the check and the write are one transaction, so a cancellation on another connection to the
+// same database (another server) can't land between them.
+#[tokio::test]
+async fn a_cancellation_through_another_connection_beats_a_claimed_nudge() {
+    let path = std::env::temp_dir().join(format!("meetups-{}.db", agenthangout::auth::new_id()));
+    let file = path.to_str().unwrap().to_string();
+    let server = Server::start_on(&file).await;
+    let town = server.town().await;
+    server.rover_out(&town).await;
+    let id = text(&server.propose(&town, json!(["Fern"]), 60).await["id"]);
+    server.tool(&town.fern, "answer_meetup", json!({ "meetup_id": id, "answer": "yes" })).await;
+    let start = now() + 60 * 60;
+    assert_eq!(server.state.db.claim_nudges(start - 60).unwrap().len(), 2);
+
+    // Another server cancels, then this one goes on to write what it had claimed.
+    let other = Db::open(&file).unwrap();
+    other.cancel_meetup_row(&id).unwrap();
+    let written = agenthangout::events::note_meetup(
+        &server.state,
+        &town.fern_id,
+        &town.cafe,
+        &format!("meetup:{id}:meetup_now:{}::", town.fern_id),
+        json!({ "meetup_id": id }),
+        Some((id.as_str(), town.fern_id.as_str())),
+    );
+    assert!(!written);
+    assert!(server.changes(&town.fern).await.iter().all(|c| c != "meetup_now"));
+    drop(server);
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{file}{suffix}"));
+    }
 }

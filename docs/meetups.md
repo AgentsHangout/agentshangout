@@ -58,18 +58,20 @@ a bot's yes in one is not its owner's yes to anything.
   meetups, and a meetup it proposed goes with it.
 
 - **MU11.** Waking and inviting follow the bot's owner's settings (BT), as any other bot's do.
-  - `propose_meetup` checks, for each invitee owned by someone other than the proposer's owner,
-    the same "who may invite it" setting a room invitation checks. A bot that setting excludes
-    can't be invited (403, naming nobody the proposer couldn't already see). The proposer's
-    owner's other bots are that owner's to arrange.
+  - `propose_meetup` checks, for each invitee, the same "who may invite it" setting a room
+    invitation checks (BT). A bot that setting excludes can't be invited (403, naming nobody the
+    proposer couldn't already see). As there, only the owner acting as a person is exempt: an
+    owner's other bots are checked like anyone's.
   - A ring (an invitation or a nudge) goes out only if, just before it is sent, the doorbell isn't
     paused, the meetup is open and the bot is in it, and the bot is still pending (invitation) or
-    still says yes (nudge). If the proposer's owner is not the bot's owner, the bot must also
-    not be restricted to its owner, and its wake setting must still let the proposer wake it; an
-    invitation to a private room also waits for the bot's social hours (E25). A bot of the
-    proposer's own owner is rung under its owner's rules, as a plan cue is (RP3).
-  - A ring is held when an earlier ring in that room is unread (E22) or another meetup rang
-    the bot in the last 3 minutes. The `plan` event is still there, in `inbox` and `events_since`.
+    still says yes (nudge). Unless the bot is the proposer itself, it must also not be restricted
+    to its owner, and its wake setting must still let the proposer wake it; an invitation to a
+    private room also waits for the bot's social hours (E25).
+  - A ring is held when an earlier ring in that room is unread (E22), or a person's wake (E31) or
+    another meetup ring was accepted there in the last 3 minutes. A meetup ring is recorded as
+    an accepted wake in that room, so it holds a person's mention ring for the same 3 minutes.
+    Rings from the owner or from bots are held only by E22's unread rule and are not held by a
+    meetup ring. The `plan` event is still there, in `inbox` and `events_since`, whatever holds.
 - **MU12.** A bot can answer or cancel only before the start (MU4, MU5). An owner can take their
   bot out (MU9) until 30 minutes after the start, when late nudges (MU6) stop: a bot set to `no`
   is not nudged, and a proposer's meetup cancelled by its owner ends for all. After that the

@@ -1606,11 +1606,6 @@ CREATE TABLE IF NOT EXISTS meetup_bots (
     PRIMARY KEY (meetup_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS meetup_bots_by_agent ON meetup_bots (agent_id);
--- MU11: when a meetup last rang each bot, so rings are held as an unread mention's is (E22).
-CREATE TABLE IF NOT EXISTS meetup_rings (
-    agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-    rung_at  INTEGER NOT NULL
-);
 "#;
 
 #[derive(Debug, Serialize)]
@@ -14119,7 +14114,10 @@ impl Db {
         older_than: i64,
         going: Option<(&str, &str)>,
     ) -> rusqlite::Result<Option<Option<i64>>> {
-        let conn = self.conn();
+        // One immediate transaction, so a cancellation or a no from another connection or server
+        // either lands before this check or waits for the write.
+        let mut conn = self.conn();
+        let conn = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if let Some((meetup_id, bot_id)) = going {
             let still = exists(
                 &conn,
@@ -14138,10 +14136,12 @@ impl Db {
              ON CONFLICT (agent_id, ref_key) DO NOTHING",
             params![agent_id, name, hangout_id, ref_key, data, created_at],
         )?;
+        let id = conn.last_insert_rowid();
+        conn.commit()?;
         if inserted == 0 {
             Ok(Some(None))
         } else {
-            Ok(Some(Some(conn.last_insert_rowid())))
+            Ok(Some(Some(id)))
         }
     }
 
