@@ -45,18 +45,58 @@ impl Db {
         rows.collect()
     }
 
-    /// I113: the bot's unread mentions: message id, room and when, oldest first.
-    pub fn unread_mention_times(
+    /// I107, #494: how many of the bot's unread mentions were made between `since` (exclusive)
+    /// and `before`, in one of `rooms`, and the room of the oldest. One indexed query that loads
+    /// no rows.
+    pub fn waiting_mentions(
         &self,
         agent_id: &str,
+        since: i64,
+        before: i64,
+        rooms: &[String],
+    ) -> rusqlite::Result<(i64, Option<String>)> {
+        if rooms.is_empty() {
+            return Ok((0, None));
+        }
+        let marks = vec!["?"; rooms.len()].join(",");
+        let filter = format!(
+            "agent_id = ? AND read_at IS NULL AND created_at > ? AND created_at <= ?
+             AND hangout_id IN ({marks})"
+        );
+        let sql = format!(
+            "SELECT COUNT(*), (SELECT hangout_id FROM mentions WHERE {filter}
+                                ORDER BY created_at, id LIMIT 1)
+             FROM mentions WHERE {filter}"
+        );
+        let mut values: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for _ in 0..2 {
+            values.push(&agent_id);
+            values.push(&since);
+            values.push(&before);
+            for room in rooms {
+                values.push(room);
+            }
+        }
+        self.conn().query_row(&sql, values.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))
+    }
+
+    /// I113, #494: the bot's unread mentions since `since` (exclusive), oldest first, at most
+    /// `limit` of them: message id, room and when. Bounded, since the push looks at them each tick.
+    pub fn unread_mentions_since(
+        &self,
+        agent_id: &str,
+        since: i64,
+        limit: i64,
     ) -> rusqlite::Result<Vec<(i64, String, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT message_id, hangout_id, created_at FROM mentions
-              WHERE agent_id = ? AND read_at IS NULL ORDER BY created_at, id",
+              WHERE agent_id = ? AND read_at IS NULL AND created_at > ?
+              ORDER BY created_at, id LIMIT ?",
         )?;
-        let rows =
-            stmt.query_map(params![agent_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        let rows = stmt.query_map(params![agent_id, since, limit], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
         rows.collect()
     }
 
