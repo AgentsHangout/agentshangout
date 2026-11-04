@@ -1059,6 +1059,42 @@ lines",
     assert!(cleared["workplace"].is_null(), "{cleared}");
 }
 
+// L57: a bot quiet at its workplace in a Work hour isn't sent home after S61's half hour.
+#[tokio::test]
+async fn a_bot_quiet_at_work_stays_at_work() {
+    let (server, _, _) = Server::start().await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, _) = server.bot(&bo, &home, "Rover").await;
+    let (pip_id, _) = server.bot(&bo, &home, "Pip").await;
+    let office = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Office", "create_code": CODE }))
+        .await
+        .ok();
+    let office = text(&office["hangout"]["id"]);
+    for bot in [&rover_id, &pip_id] {
+        server.all_day(&bo, bot, true).await;
+        server.state.db.add_agent_to_room(&office, bot).unwrap();
+    }
+    let job = json!({ "room_id": office, "job": "Building Agents Hangout" });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/workplace"), job).await.ok();
+    // Both went to the office 20 minutes ago and have done nothing since; only Rover works there.
+    let start = now();
+    for bot in [&rover_id, &pip_id] {
+        server.state.db.set_bot_place(bot, &office, start - 20 * 60).unwrap();
+    }
+    agenthangout::travel::sweep(&server.state, start);
+    let at = |bot: &str, when: i64| server.state.db.bot_place(bot, when).unwrap();
+    // Fifteen minutes on, past S61's half hour, Rover is still at work and Pip has gone home.
+    assert_eq!(at(&rover_id, start + 15 * 60).as_deref(), Some(office.as_str()));
+    assert_ne!(at(&pip_id, start + 15 * 60).as_deref(), Some(office.as_str()));
+
+    // Once its hours aren't Work hours, nothing starts its half hour again, and it runs out.
+    let social = json!({ "every_day": vec!["social"; 24] });
+    server.put(&bo.key, &format!("/api/agents/{rover_id}/schedule"), social).await.ok();
+    agenthangout::travel::sweep(&server.state, start + 20 * 60);
+    assert_ne!(at(&rover_id, start + 31 * 60).as_deref(), Some(office.as_str()));
+}
+
 // L41, L9
 #[tokio::test]
 async fn a_bot_explores_its_owners_places_too_and_meets_when_there_is_nowhere_else() {

@@ -444,6 +444,27 @@ pub(crate) fn at_work(
         && work_hour(state, agent_id, owner_id, now)?)
 }
 
+/// L57: a bot at its workplace in a Work hour isn't sent home for being quiet there (S61). Each
+/// minute's look starts its half hour there again, well before it runs out.
+pub(crate) fn keep_at_work(state: &AppState, agent_id: &str, now: i64) -> ApiResult<()> {
+    let Some(since) = state.db.bot_place_since(agent_id)? else {
+        return Ok(());
+    };
+    if now - since < crate::db::BOT_STAY_SECS / 2 {
+        return Ok(());
+    }
+    let Some(agent) = state.db.agent(agent_id, now)? else {
+        return Ok(());
+    };
+    if !at_work(state, agent_id, &agent.owner_id, now)? {
+        return Ok(());
+    }
+    if let Some((room, _)) = workplace_of(state, agent_id)? {
+        state.db.note_bot_here(agent_id, &room, now)?;
+    }
+    Ok(())
+}
+
 fn clock_text(minute: i64) -> String {
     format!("{:02}:{:02}", minute / 60, minute % 60)
 }

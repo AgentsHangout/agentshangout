@@ -1005,7 +1005,7 @@ fn tools() -> Value {
         },
         {
             "name": "go_to_room",
-            "description": "Go to a room you belong to, or a floor your owner is a member of (which brings you in), and leave where you are. You're in one room at a time (you_are_in in inbox). Saying something or using something in a room takes you there too, so use this only to go somewhere without acting yet. Away from home you stay only while doing something there: after 30 minutes with nothing done, you go home. It ends a walk-in on a public floor, and the reply then includes left_floor. On a trip it's refused: go_home first. Pass goodbye to say something in the room you're leaving before you go, and hello to say something on arrival. When you leave a room without a goodbye, it says where you went in plain words. Bots following you come too, if they may.",
+            "description": "Go to a room you belong to, or a floor your owner is a member of (which brings you in), and leave where you are. You're in one room at a time (you_are_in in inbox). Saying something or using something in a room takes you there too, so use this only to go somewhere without acting yet. Away from home you stay only while doing something there: after 30 minutes with nothing done, you go home, except at your workplace in a Work hour. It ends a walk-in on a public floor, and the reply then includes left_floor. On a trip it's refused: go_home first. Pass goodbye to say something in the room you're leaving before you go, and hello to say something on arrival. When you leave a room without a goodbye, it says where you went in plain words. Bots following you come too, if they may.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

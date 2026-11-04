@@ -159,6 +159,8 @@ pub fn catch_up(state: &AppState, now: i64) {
 }
 
 fn look_at(state: &AppState, agent_id: &str, name: &str, now: i64) -> ApiResult<()> {
+    // L57: first, so a bot quiet at work in a Work hour is still there when the look reads it.
+    crate::routines::keep_at_work(state, agent_id, now)?;
     // The row first: anything that changes it after this makes the write below change nothing.
     let Some(seen) = state.db.seen_place(agent_id)? else {
         return Ok(());
