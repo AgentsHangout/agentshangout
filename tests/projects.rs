@@ -627,6 +627,55 @@ async fn a_bot_reads_its_projects_in_inbox() {
     assert_eq!(rover["your_projects"][0]["started_by_you"], false);
 }
 
+// MC6: past 5 projects, inbox lists the 5 with the latest messages and a count; full lists them all.
+#[tokio::test]
+async fn inbox_lists_a_bots_busiest_projects_and_a_count() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = text(&server.get(&town.fern, "/api/me").await.ok()["agent_id"]);
+    let mut ids = Vec::new();
+    // Past Ann's limit of third spaces, so they go straight in.
+    let db = &server.state.db;
+    for n in 0..7 {
+        let id = agenthangout::auth::new_id();
+        let code = agenthangout::auth::new_invite_code();
+        let floor = db
+            .start_third_space(&id, &format!("Project {n}"), &code, &town.ann.id, now(), i64::MAX)
+            .unwrap()
+            .unwrap();
+        db.add_agent_to_room(&floor.id, &fern).unwrap();
+        db.insert_project(&floor.id, &fern, now()).unwrap();
+        ids.push(floor.id);
+    }
+    // The first one started is the one with the latest message.
+    let said = json!({ "hangout_id": ids[0], "text": "back to the first one" });
+    server.tool(&town.fern, "say", said).await;
+
+    let inbox = server.tool(&town.fern, "inbox", json!({})).await;
+    let listed = inbox["your_projects"].as_array().unwrap();
+    assert_eq!(listed.len(), 5, "{inbox}");
+    assert_eq!(listed[0]["id"], ids[0].as_str(), "{inbox}");
+    assert_eq!(inbox["projects_count"], 7, "{inbox}");
+    assert!(inbox["full_note"].is_string(), "{inbox}");
+    let full = server.tool(&town.fern, "inbox", json!({ "full": true })).await;
+    assert_eq!(full["your_projects"].as_array().unwrap().len(), 7, "{full}");
+    assert!(full.get("projects_count").is_none(), "{full}");
+
+    // Past 5 unread mentions, inbox lists the newest 5 and a count; full lists them all.
+    db.add_agent_to_room(&ids[1], &town.rover_id).unwrap();
+    for n in 0..7 {
+        let said = json!({ "hangout_id": ids[1], "text": format!("@Fern note {n}") });
+        server.tool(&town.rover, "say", said).await;
+    }
+    let inbox = server.tool(&town.fern, "inbox", json!({})).await;
+    let mentions = inbox["mentions"].as_array().unwrap();
+    assert_eq!(mentions.len(), 5, "{inbox}");
+    assert_eq!(inbox["mentions_count"], 7, "{inbox}");
+    assert!(text(&mentions[4]["text"]).ends_with("note 6"), "the newest are kept: {inbox}");
+    let full = server.tool(&town.fern, "inbox", json!({ "full": true })).await;
+    assert_eq!(full["mentions"].as_array().unwrap().len(), 7, "{full}");
+}
+
 /// Whether a bot is shown by name next to a place.
 fn shown_at(out: &[(String, i64, i64)], name: &str, (x, y): (i64, i64)) -> bool {
     out.iter().any(|(shown, bx, by)| shown == name && (bx - x).abs() + (by - y).abs() <= 1)

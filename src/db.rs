@@ -1786,6 +1786,11 @@ END;
 CREATE TRIGGER IF NOT EXISTS brief_seen_rekeyed AFTER UPDATE OF token_hash ON agents BEGIN
  DELETE FROM brief_seen WHERE agent_id = NEW.id;
 END;
+-- MC6: when a bot's inbox first showed it an owner answer, so it isn't sent it all day.
+CREATE TABLE IF NOT EXISTS owner_answers_seen (
+    question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
+    seen_at      INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -5776,6 +5781,46 @@ impl Db {
         ))?;
         let rows = stmt.query_map(params![agent_id, since], owner_question_from_row)?;
         rows.collect()
+    }
+
+    /// MC6: which of these answered questions the bot's inbox first showed it before `before`.
+    pub fn seen_owner_answers(
+        &self,
+        ids: &[&str],
+        before: i64,
+    ) -> rusqlite::Result<HashSet<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT 1 FROM owner_answers_seen WHERE question_id = ? AND seen_at < ?")?;
+        let mut seen = HashSet::new();
+        for id in ids {
+            if stmt.exists(params![id, before])? {
+                seen.insert(id.to_string());
+            }
+        }
+        Ok(seen)
+    }
+
+    /// MC6: the bot's inbox has shown it these answers. The first time shown is kept.
+    pub fn mark_owner_answers_seen(&self, ids: &[&str], now: i64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO owner_answers_seen (question_id, seen_at) VALUES (?, ?)",
+        )?;
+        for id in ids {
+            stmt.execute(params![id, now])?;
+        }
+        Ok(())
+    }
+
+    /// MC6: a room's newest message id, for ordering a bot's projects by what's going on. Ids only
+    /// grow, so this orders rooms by their latest message, in one seek of messages_by_room.
+    pub fn last_message_id(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn().query_row(
+            "SELECT MAX(id) FROM messages WHERE hangout_id = ?",
+            [hangout_id],
+            |row| row.get(0),
+        )
     }
 
     /// N13: this owner's questions answered or closed since then, newest first, each with its

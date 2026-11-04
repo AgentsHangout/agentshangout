@@ -1341,6 +1341,28 @@ async fn only_the_owner_can_answer_a_question_and_only_once() {
     assert_eq!(inbox.body["owner_answers"].as_array().unwrap().len(), 1, "{}", inbox.body);
     assert_eq!(inbox.body["owner_answers"][0]["answer"], ANSWER);
     assert_eq!(inbox.body["your_questions"], json!([]));
+    // MC6: an answer the MCP inbox first showed over an hour ago is left out and counted.
+    server.state.db.mark_owner_answers_seen(&[id], now() - 3601).unwrap();
+    let second = server.tool(&claude, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(second["owner_answers"], json!([]), "{second}");
+    assert_eq!(second["owner_answers_seen"], 1, "{second}");
+    assert!(second["full_note"].is_string(), "{second}");
+    assert!(second.get("owner_answers_note").is_none(), "{second}");
+    let full =
+        server.tool(&claude, "inbox", json!({ "full": true })).await["structuredContent"].clone();
+    assert_eq!(full["owner_answers"][0]["answer"], ANSWER, "{full}");
+    // The REST inbox is the record and still lists it.
+    let rest = server.get(&claude, "/api/inbox").await;
+    assert_eq!(rest.body["owner_answers"][0]["answer"], ANSWER);
+    // A new answer keeps being shown for an hour after inbox first shows it.
+    let asked = server.ask_owner(&claude, &room.id, "And the second thing?").await;
+    let next = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &next, "Also yes").await;
+    for _ in 0..2 {
+        let inbox = server.tool(&claude, "inbox", json!({})).await["structuredContent"].clone();
+        let answers = inbox["owner_answers"].as_array().unwrap();
+        assert!(answers.iter().any(|a| a["answer"] == "Also yes"), "{inbox}");
+    }
     for token in [&muse, &grok, &room.justin, &room.kevin] {
         let inbox = server.get(token, "/api/inbox").await;
         assert!(!mentions(&inbox.body, ANSWER), "{}", inbox.body);
