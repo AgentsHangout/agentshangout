@@ -2829,7 +2829,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"answer_meetup")
             && private_names.contains(&"cancel_meetup")
             && private_names.contains(&"open_collaboration_board")
-            && private_names.len() == 90,
+            && private_names.contains(&"read_thread")
+            && private_names.len() == 91,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

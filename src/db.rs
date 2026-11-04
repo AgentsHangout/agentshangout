@@ -1700,6 +1700,25 @@ CREATE TABLE IF NOT EXISTS closing_clocks (
     set_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS closing_clocks_due ON closing_clocks (closes_at);
+-- I102: 1-level conversation threads keyed by the root message id.
+CREATE TABLE IF NOT EXISTS message_threads (
+    message_id   INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    root_id      INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS message_threads_root ON message_threads (root_id, message_id);
+INSERT OR IGNORE INTO message_threads (message_id, root_id)
+WITH RECURSIVE roots(child_id, ancestor_id) AS (
+    SELECT message_id, reply_to FROM message_replies
+    UNION ALL
+    SELECT r.child_id, m.reply_to
+    FROM roots r
+    JOIN message_replies m ON m.message_id = r.ancestor_id
+)
+SELECT child_id, ancestor_id
+FROM roots
+WHERE ancestor_id NOT IN (SELECT message_id FROM message_replies);
+INSERT OR IGNORE INTO message_threads (message_id, root_id)
+SELECT root_id, root_id FROM message_threads;
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -2263,6 +2282,9 @@ pub struct Message {
     /// I82: the chat line in the same room this one answers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<i64>,
+    /// I102: the root chat line of this message's thread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_root: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3014,6 +3036,7 @@ fn message_from_row(row: &Row) -> rusqlite::Result<Message> {
         body: row.get(6)?,
         created_at: row.get(7)?,
         reply_to: row.get(8)?,
+        thread_root: row.get(9)?,
     })
 }
 
@@ -3095,7 +3118,8 @@ const OWNER_NOTE_COLS: &str = "n.id, n.owner_id, n.kind, n.body, n.about_person,
      n.from_question, n.created_at, n.updated_at";
 const OWNER_NOTES: &str = "FROM owner_notes n LEFT JOIN people p ON p.id = n.about_person";
 const MESSAGE_COLS: &str = "id, hangout_id, person_id, agent_id, speaker, kind, body, created_at, \
-     (SELECT reply_to FROM message_replies WHERE message_id = messages.id)";
+     (SELECT reply_to FROM message_replies WHERE message_id = messages.id), \
+     (SELECT root_id FROM message_threads WHERE message_id = messages.id AND root_id != messages.id)";
 const EVENT_COLS: &str =
     "e.id, e.hangout_id, e.title, e.location, e.notes, e.starts_at, e.ends_at, \
      e.status, e.min_yes, e.sequence, e.proposed_by, e.proposer, e.updated_at, e.created_at";
@@ -3363,6 +3387,7 @@ fn insert_message_row(conn: &Connection, message: &NewMessage) -> rusqlite::Resu
         body: message.body.to_string(),
         created_at: message.now,
         reply_to: None,
+        thread_root: None,
     })
 }
 
@@ -5326,8 +5351,25 @@ impl Db {
             "INSERT INTO message_replies (message_id, reply_to) VALUES (?, ?)",
             params![stored.id, reply_to],
         )?;
+        let root_id: i64 = tx
+            .query_row(
+                "SELECT root_id FROM message_threads WHERE message_id = ?",
+                params![reply_to],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(reply_to);
+        tx.execute(
+            "INSERT OR IGNORE INTO message_threads (message_id, root_id) VALUES (?, ?)",
+            params![root_id, root_id],
+        )?;
+        tx.execute(
+            "INSERT INTO message_threads (message_id, root_id) VALUES (?, ?)",
+            params![stored.id, root_id],
+        )?;
         tx.commit()?;
         stored.reply_to = Some(reply_to);
+        stored.thread_root = Some(root_id);
         Ok(Some(stored))
     }
 
@@ -8365,9 +8407,28 @@ impl Db {
         now: i64,
     ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND hangout_id = ? AND read_at IS NULL",
+            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND hangout_id = ? AND read_at IS NULL AND message_id NOT IN (SELECT message_id FROM message_replies)",
             params![now, agent_id, hangout_id],
         )?;
+        Ok(())
+    }
+
+    /// I104: mark mentions for specific viewed message ids in a thread as read.
+    pub fn mark_thread_mentions_read(
+        &self,
+        agent_id: &str,
+        message_ids: &[i64],
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let in_clause = message_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "UPDATE mentions SET read_at = ?
+             WHERE agent_id = ? AND read_at IS NULL AND message_id IN ({in_clause})"
+        );
+        self.conn().execute(&sql, params![now, agent_id])?;
         Ok(())
     }
 
@@ -9922,6 +9983,107 @@ impl Db {
         ))?;
         let rows = stmt.query_map(params![hangout_id, since, limit], message_from_row)?;
         rows.collect()
+    }
+
+    /// I102: fetches a single message by id.
+    pub fn message(&self, id: i64) -> rusqlite::Result<Option<Message>> {
+        let conn = self.conn();
+        conn.query_row(
+            &format!("SELECT {MESSAGE_COLS} FROM messages WHERE id = ?"),
+            params![id],
+            message_from_row,
+        )
+        .optional()
+    }
+
+    /// I102: the canonical thread root for a message, if it is in a thread.
+    pub fn thread_root_for(&self, message_id: i64) -> rusqlite::Result<Option<i64>> {
+        let conn = self.conn();
+        conn.query_row(
+            "SELECT root_id FROM message_threads WHERE message_id = ?",
+            params![message_id],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    /// I103: reply count and latest reply timestamp for root messages.
+    pub fn thread_summaries(
+        &self,
+        root_ids: &[i64],
+    ) -> rusqlite::Result<std::collections::HashMap<i64, (i64, i64)>> {
+        if root_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let conn = self.conn();
+        let in_clause = root_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT t.root_id, COUNT(*), MAX(m.created_at)
+             FROM message_threads t
+             JOIN messages m ON m.id = t.message_id
+             WHERE t.root_id IN ({in_clause}) AND t.message_id != t.root_id
+             GROUP BY t.root_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (root_id, (count, last_at)) = row?;
+            map.insert(root_id, (count, last_at));
+        }
+        Ok(map)
+    }
+
+    /// I104: replies in a thread after `after`, oldest first.
+    pub fn thread_replies(
+        &self,
+        root_id: i64,
+        after: i64,
+        since: Option<i64>,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages
+             JOIN message_threads t ON t.message_id = messages.id
+             WHERE t.root_id = ? AND t.message_id != t.root_id AND messages.id > ?
+               AND messages.created_at > ?
+             ORDER BY messages.id ASC LIMIT ?"
+        ))?;
+        let rows = stmt.query_map(
+            params![root_id, after, since.unwrap_or(i64::MIN), limit],
+            message_from_row,
+        )?;
+        rows.collect()
+    }
+
+    /// I105: messages in a thread before `before_id`, oldest first (bounded slice for mentions).
+    pub fn thread_messages_before(
+        &self,
+        root_id: i64,
+        before_id: i64,
+        agent_id: &str,
+        since: Option<i64>,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages
+             JOIN message_threads t ON t.message_id = messages.id
+             WHERE t.root_id = ? AND messages.id < ? AND messages.created_at > ?
+               AND messages.kind != 'note'
+               AND (messages.agent_id IS NULL OR messages.agent_id != ?)
+             ORDER BY messages.id DESC LIMIT ?"
+        ))?;
+        let rows = stmt.query_map(
+            params![root_id, before_id, since.unwrap_or(i64::MIN), agent_id, limit],
+            message_from_row,
+        )?;
+        let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
     }
 
     // Friends and invites
@@ -15242,6 +15404,37 @@ mod tests {
         let answered = db.owner_question("q1").unwrap().unwrap();
         assert_eq!((answered.answer.as_deref(), answered.answered_at), (Some("Yes"), Some(110)));
         assert!(add("q3", 130));
+    }
+
+    #[test]
+    fn legacy_message_replies_backfill_chains_via_schema() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Ann", "key", "feed", 0).unwrap();
+        db.create_hangout("h1", "Living", "code", "p1", 0).unwrap();
+        // Insert messages & replies mimicking pre-upgrade database state
+        db.conn()
+            .execute_batch(
+                "INSERT INTO messages (id, hangout_id, speaker, kind, body, created_at) VALUES
+                 (1, 'h1', 'A', 'chat', 'root', 10),
+                 (2, 'h1', 'A', 'chat', 'r1', 20),
+                 (3, 'h1', 'A', 'chat', 'r2', 30),
+                 (4, 'h1', 'A', 'chat', 'r3', 40);
+                 INSERT INTO message_replies (message_id, reply_to) VALUES (2, 1), (3, 2), (4, 3);
+                 DELETE FROM message_threads;",
+            )
+            .unwrap();
+        // Run SCHEMA itself to execute the backfill
+        db.conn().execute_batch(SCHEMA).unwrap();
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare("SELECT message_id, root_id FROM message_threads ORDER BY message_id")
+            .unwrap();
+        let rows: Vec<(i64, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows, vec![(1, 1), (2, 1), (3, 1), (4, 1)]);
     }
 
     #[test]

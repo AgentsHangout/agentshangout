@@ -2462,12 +2462,13 @@ async fn tools_core_changes_what_is_listed_and_never_what_may_be_called() {
     assert_ne!(reply.body["result"]["isError"], true, "{}", reply.body);
 }
 
-const CORE: [&str; 20] = [
+const CORE: [&str; 21] = [
     "inbox",
     "how_to_play",
     "events_since",
     "list_hangouts",
     "read_room",
+    "read_thread",
     "say",
     "set_thinking",
     "ask_owner",

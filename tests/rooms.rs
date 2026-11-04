@@ -2388,11 +2388,27 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
     let answer_id = said["structuredContent"]["message_id"].as_i64().unwrap();
 
     let read = server.read_room(&rover.token, &room).await;
-    let line = |id: i64| {
-        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == id).cloned().unwrap()
-    };
-    assert_eq!(line(answer_id)["reply_to"], asked_id, "{read}");
-    assert!(line(asked_id).get("reply_to").is_none(), "{read}");
+    // I103: read_room collapses thread replies into the root.
+    let root_line =
+        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == asked_id).cloned().unwrap();
+    assert_eq!(root_line["reply_count"], 1, "{read}");
+    assert!(root_line["last_reply_at"].is_string(), "{read}");
+    assert!(
+        read["messages"].as_array().unwrap().iter().all(|m| m["id"] != answer_id),
+        "reply collapsed: {read}"
+    );
+
+    // I104: read_thread returns the root and its replies.
+    let thread = server
+        .tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": asked_id }))
+        .await;
+    assert_ne!(thread["isError"], true, "{thread}");
+    let thread_body = &thread["structuredContent"];
+    assert_eq!(thread_body["root"]["id"], asked_id);
+    let replies = thread_body["messages"].as_array().unwrap();
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0]["id"], answer_id);
+    assert_eq!(replies[0]["reply_to"], asked_id);
     let snapshot = server.snapshot(&ann.key, &room).await;
     let shown = snapshot["messages"].as_array().unwrap().iter().find(|m| m["id"] == answer_id);
     assert_eq!(shown.unwrap()["reply_to"], asked_id, "{snapshot}");
@@ -6619,6 +6635,467 @@ async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() 
     let all = agenthangout::how_to_play::how(&kinds);
     assert_eq!(all.as_object().unwrap().len(), 7);
     assert!(all.to_string().len() < 700, "{all}");
+}
+
+// I102, I103, I104, I105: threads, 1-level deriving from reply_to, collapsed read_room, read_thread and mention wakes
+#[tokio::test]
+async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+
+    // 1. Post root message A (top-level chat)
+    let said_a = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Starting a topic on caching" }),
+        )
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Post reply B to A
+    let said_b = server
+        .tool(
+            &rover.token,
+            "say",
+            json!({ "hangout_id": room, "text": "We could use Redis", "reply_to": a_id }),
+        )
+        .await;
+    let b_id = said_b["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Post reply C to B (reply to reply) - I102: automatically joins root A's thread
+    let said_c = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Or SQLite in-memory", "reply_to": b_id }),
+        )
+        .await;
+    let c_id = said_c["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 4. Post reply D to A mentioning Rover - I105: wakes Rover with thread context
+    let said_d = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "@Rover what do you prefer?", "reply_to": a_id }),
+        )
+        .await;
+    let d_id = said_d["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 5. Post separate top-level message Z (not in thread)
+    let said_z = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "@Rover lunch time?" }))
+        .await;
+    let z_id = said_z["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // I103: read_room collapses thread replies B, C, D into root A (Scout reads room)
+    let read = server.read_room(&scout.token, &room).await;
+    let messages = read["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(ids.contains(&a_id), "root A is in read_room: {read}");
+    assert!(ids.contains(&z_id), "top-level Z is in read_room: {read}");
+    assert!(!ids.contains(&b_id), "reply B is collapsed: {read}");
+    assert!(!ids.contains(&c_id), "reply C is collapsed: {read}");
+    assert!(!ids.contains(&d_id), "reply D is collapsed: {read}");
+
+    let a_entry = messages.iter().find(|m| m["id"] == a_id).unwrap();
+    assert_eq!(a_entry["reply_count"], 3);
+    assert!(a_entry["last_reply_at"].is_string());
+
+    let z_entry = messages.iter().find(|m| m["id"] == z_id).unwrap();
+    assert!(z_entry.get("reply_count").is_none());
+
+    // I104: read_thread returns root and chronological replies
+    let thread = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": room, "root": a_id, "limit": 2 }))
+        .await;
+    assert_ne!(thread["isError"], true, "{thread}");
+    let content = &thread["structuredContent"];
+    assert_eq!(content["root"]["id"], a_id);
+    let paged = content["messages"].as_array().unwrap();
+    assert_eq!(paged.len(), 2);
+    assert_eq!(paged[0]["id"], b_id);
+    assert_eq!(paged[0]["reply_to"], a_id);
+    assert_eq!(paged[1]["id"], c_id);
+    assert_eq!(paged[1]["reply_to"], b_id);
+    assert_eq!(content["has_more"], true);
+
+    // Page 2: after c_id
+    let thread2 = server
+        .tool(
+            &scout.token,
+            "read_thread",
+            json!({ "hangout_id": room, "root": a_id, "after": c_id, "limit": 2 }),
+        )
+        .await;
+    let content2 = &thread2["structuredContent"];
+    let paged2 = content2["messages"].as_array().unwrap();
+    assert_eq!(paged2.len(), 1);
+    assert_eq!(paged2[0]["id"], d_id);
+    assert_eq!(content2["has_more"], false);
+
+    // I105: mention event in thread carries thread_id, root_id, root, and bounded context
+    let res = server.tool(&rover.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap();
+    let d_mention = events
+        .iter()
+        .find(|e| e["name"] == "mention" && e["data"]["message_id"] == d_id)
+        .expect("Rover received mention event for D");
+    assert_eq!(d_mention["data"]["thread_id"], a_id);
+    assert_eq!(d_mention["data"]["root_id"], a_id);
+    assert_eq!(d_mention["data"]["root"]["message_id"], a_id);
+    let ctx = d_mention["data"]["context"].as_array().unwrap();
+    let ctx_ids: Vec<i64> = ctx.iter().map(|m| m["message_id"].as_i64().unwrap()).collect();
+    assert!(ctx_ids.contains(&c_id));
+    assert!(!ctx_ids.contains(&b_id), "Rover's own line is excluded under E4");
+    assert!(d_mention["data"]["what_to_do"].as_str().unwrap().contains("read_thread"));
+
+    // I104: inbox has both mentions before reading thread
+    let inbox_before = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_ids: Vec<i64> = inbox_before["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        unread_ids.contains(&d_id),
+        "thread mention D unread before read_thread: {inbox_before}"
+    );
+    assert!(
+        unread_ids.contains(&z_id),
+        "top-level mention Z unread before read_thread: {inbox_before}"
+    );
+
+    // I104 pagination: calling read_thread with limit 1 returns only b_id; d_id on page 2 remains unread in inbox
+    let page1 = server
+        .tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id, "limit": 1 }))
+        .await;
+    assert_eq!(page1["structuredContent"]["messages"].as_array().unwrap().len(), 1);
+    let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        unread_mid.contains(&d_id),
+        "thread mention D on page 2 must stay unread after reading only page 1: {inbox_mid}"
+    );
+
+    // I102 / I104: calling read_thread with a reply id resolves to the canonical root and clears thread A mentions
+    let thread_via_b =
+        server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": b_id })).await;
+    assert_eq!(thread_via_b["structuredContent"]["root"]["id"], a_id);
+
+    let inbox_after = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_after: Vec<i64> = inbox_after["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !unread_after.contains(&d_id),
+        "thread mention D marked read by read_thread: {inbox_after}"
+    );
+    assert!(unread_after.contains(&z_id), "top-level mention Z still unread: {inbox_after}");
+
+    // Reading room clears remaining room mentions (Z)
+    server.read_room(&rover.token, &room).await;
+    let inbox_final = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_final: Vec<i64> = inbox_final["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !unread_final.contains(&z_id),
+        "top-level mention Z cleared by read_room: {inbox_final}"
+    );
+}
+
+#[tokio::test]
+async fn threads_active_root_older_than_snapshot_window_retained_in_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root conversation start" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Post 105 chatter messages to push root A out of the 100 snapshot window (posted by person to avoid bot rate limits)
+    for i in 0..105 {
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/messages"),
+                json!({ "text": format!("chatter {i}") }),
+            )
+            .await
+            .ok();
+    }
+
+    // 3. Post reply B replying to root A
+    let said_b = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Replying to root A", "reply_to": a_id }),
+        )
+        .await;
+    assert_ne!(said_b["isError"], true, "{said_b}");
+
+    // 4. read_room must retain collapsed root A even though it was >100 messages ago
+    let read = server.read_room(&scout.token, &room).await;
+    let messages = read["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(
+        ids.contains(&a_id),
+        "Active thread root A must be retained in read_room when replies exist in window: {read}"
+    );
+    let a_entry = messages.iter().find(|m| m["id"] == a_id).unwrap();
+    assert_eq!(a_entry["reply_count"], 1);
+}
+
+#[tokio::test]
+async fn threads_incremental_cursor_surfaces_older_root_on_new_reply() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root message" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Post separate top-level message B
+    let said_b = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Separate chat" }))
+        .await;
+    let b_id = said_b["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Catch up with read_room up to b_id
+    let read_initial = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": b_id }))
+        .await;
+    assert_eq!(read_initial["structuredContent"]["messages"], json!([]));
+    assert_eq!(read_initial["structuredContent"]["last_message_id"], b_id);
+
+    // 4. Post reply C replying to older root message A
+    let said_c = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Reply to older root", "reply_to": a_id }),
+        )
+        .await;
+    let c_id = said_c["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 5. read_room with after_message_id = b_id must return root A with updated reply metadata
+    let read_after_reply = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": b_id }))
+        .await;
+    let msgs = read_after_reply["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1, "older root A returned because of new reply C: {read_after_reply}");
+    assert_eq!(msgs[0]["id"], a_id);
+    assert_eq!(msgs[0]["reply_count"], 1);
+    let cursor = read_after_reply["structuredContent"]["last_message_id"].as_i64().unwrap();
+    assert_eq!(cursor, c_id);
+
+    // 6. Next poll with after_message_id = cursor returns nothing (no duplicate looping)
+    let read_next = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": cursor }))
+        .await;
+    assert_eq!(read_next["structuredContent"]["messages"], json!([]));
+}
+
+#[tokio::test]
+async fn threads_orphan_after_root_deleted() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let rover = server.bot(&bo, &room, "Rover").await;
+
+    // 1. Scout (Ann's bot) posts root message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root to be deleted" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Rover (Bo's bot) replies to root A
+    let said_b = server
+        .tool(
+            &rover.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Rover's reply to root A", "reply_to": a_id }),
+        )
+        .await;
+    assert_ne!(said_b["isError"], true);
+    let b_id = said_b["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Ann deletes her account, removing all words written by Ann and her bots (A38)
+    server.state.db.delete_person(&ann.id, "Ann").unwrap();
+
+    // 4. Rover calls read_thread on deleted root A -> 404 / error
+    let th_a =
+        server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id })).await;
+    assert_eq!(th_a["isError"], true, "deleted root A is not found: {th_a}");
+
+    // 5. Rover calls read_thread with reply B -> B is now standalone root with 0 replies
+    let th_b =
+        server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": b_id })).await;
+    assert_ne!(th_b["isError"], true, "B is valid: {th_b}");
+    assert_eq!(th_b["structuredContent"]["root"]["id"], b_id);
+    assert_eq!(th_b["structuredContent"]["messages"], json!([]));
+
+    // 6. read_room does not panic or include the deleted root
+    let read = server.read_room(&rover.token, &room).await;
+    let messages = read["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(!ids.contains(&a_id), "deleted root A is omitted from read_room: {read}");
+    assert!(ids.contains(&b_id), "standalone B remains in read_room: {read}");
+}
+
+#[tokio::test]
+async fn threads_limited_incremental_read_retains_active_thread() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A (id 1)
+    let said_a =
+        server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root A" })).await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Scout catches up to a_id (cursor)
+    let read_1 = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": a_id }))
+        .await;
+    assert_eq!(read_1["structuredContent"]["messages"], json!([]));
+    assert_eq!(read_1["structuredContent"]["last_message_id"], a_id);
+
+    // 3. Post new top-level message Y (id 2)
+    let said_y = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Top-level Y" }))
+        .await;
+    let y_id = said_y["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 4. Post reply Z answering A (id 3 / newer than Y)
+    let said_z = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Reply Z to A", "reply_to": a_id }),
+        )
+        .await;
+    let z_id = said_z["structuredContent"]["message_id"].as_i64().unwrap();
+    assert!(z_id > y_id);
+
+    // 5. Calling read_room with after_message_id = a_id and limit: 1 returns active root A (newest activity)
+    let read_lim = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": room, "after_message_id": a_id, "limit": 1 }),
+        )
+        .await;
+    let msgs = read_lim["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1, "active root A returned: {read_lim}");
+    assert_eq!(msgs[0]["id"], a_id, "Root A returned because its reply Z is newest: {read_lim}");
+    assert_eq!(msgs[0]["reply_count"], 1);
+    assert_eq!(read_lim["structuredContent"]["earlier_messages"], 1);
+    let cursor = read_lim["structuredContent"]["last_message_id"].as_i64().unwrap();
+    assert_eq!(cursor, z_id, "last_message_id reflects seen reply Z: {read_lim}");
+
+    // 6. Next poll after cursor returns no duplicate messages
+    let read_next = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": cursor }))
+        .await;
+    assert_eq!(read_next["structuredContent"]["messages"], json!([]));
+}
+
+#[tokio::test]
+async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let rover = server.bot(&bo, &room, "Rover").await;
+
+    // 1. Scout posts root chat message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root conversation start" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Scout posts reply D mentioning Rover: @Rover
+    let said_d = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "@Rover reply inside thread", "reply_to": a_id }),
+        )
+        .await;
+    let d_id = said_d["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Rover's inbox has mention for D
+    let inbox_before = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_before: Vec<i64> = inbox_before["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(unread_before.contains(&d_id));
+
+    // 4. Rover calls read_room before calling read_thread:
+    // Rover sees root A with reply_count: 1, but collapsed reply D is NOT returned.
+    let read = server.read_room(&rover.token, &room).await;
+    let msgs = read["messages"].as_array().unwrap();
+    assert!(msgs.iter().any(|m| m["id"] == a_id));
+    assert!(!msgs.iter().any(|m| m["id"] == d_id), "reply D is collapsed");
+
+    // D's mention must STILL BE IN INBOX (not cleared by read_room)
+    let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        unread_mid.contains(&d_id),
+        "collapsed reply mention D must stay in inbox after read_room: {inbox_mid}"
+    );
+
+    // 5. Rover calls read_thread for root A: D is viewed and its mention is marked read
+    let thread =
+        server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id })).await;
+    assert_ne!(thread["isError"], true);
+
+    // D's mention is now cleared from inbox
+    let inbox_after = server.tool(&rover.token, "inbox", json!({})).await;
+    let unread_after: Vec<i64> = inbox_after["structuredContent"]["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_id"].as_i64().unwrap())
+        .collect();
+    assert!(
+        !unread_after.contains(&d_id),
+        "thread mention D is cleared after read_thread: {inbox_after}"
+    );
 }
 
 // I107: the missed-work pulse on a bot's next tool result.
