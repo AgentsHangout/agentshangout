@@ -564,3 +564,165 @@ async fn a_cadence_counts_starts_from_30_seconds_before_it_was_set() {
         assert_eq!(got, want, "set at 9:00 {:+} seconds", set_at - nine);
     }
 }
+
+/// A person with no room of their own in Ann's, made a member of `room`.
+async fn member_of(s: &Server, room: &str, name: &str) -> Who {
+    let who = s.owner(name).await;
+    s.state.db.add_member(room, &who.id, now()).unwrap();
+    who
+}
+
+fn cues(events: &Value) -> Vec<Value> {
+    events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["name"] == "plan" && event["data"]["reason"] == "cue")
+        .cloned()
+        .collect()
+}
+
+// RP7: another member's bot is cued only with its owner's yes, only while it belongs to the room,
+// and a no stops it.
+#[tokio::test]
+async fn another_members_bot_is_cued_only_with_their_yes() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = member_of(&s, &ann.room, "Bo").await;
+    let cy = s.owner("Cy").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let (spot, spot_token) = support::legacy_bot(&s.state, &bo.id, &ann.room, "Spot");
+    // Bo's other bot lives in Bo's own room, not Ann's.
+    let (rex, _) = support::legacy_bot(&s.state, &bo.id, &bo.room, "Rex");
+    let plan = s.plan(&ann).await;
+    let daily = json!({ "freq": "daily", "time": "09:00" });
+    let (status, _) =
+        s.request(&ann.key, Method::PUT, &format!("/api/events/{plan}/cadence"), daily).await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("/api/events/{plan}/cue-bots");
+    let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
+
+    // Before any yes, only Ann's own bot is cued.
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 1);
+    assert_eq!(s.outcomes(&rover.id), ["cued"]);
+    assert!(s.outcomes(&spot.id).is_empty());
+
+    // Only Bo, as a person, says yes for Bo's bots, and only for ones already in the room.
+    let yes = |bots: Vec<&str>| json!({ "bots": bots });
+    let refused = [
+        (&spot_token, yes(vec![&spot.id]), StatusCode::FORBIDDEN),
+        (&ann.key, yes(vec![&rover.id]), StatusCode::BAD_REQUEST),
+        (&bo.key, yes(vec![&rover.id]), StatusCode::FORBIDDEN),
+        (&bo.key, yes(vec![&rex.id]), StatusCode::BAD_REQUEST),
+    ];
+    for (key, body, want) in refused {
+        let (status, reply) = s.request(key, Method::PUT, &path, body.clone()).await;
+        assert_eq!(status, want, "{body} {reply}");
+    }
+    let (status, reply) = s.request(&cy.key, Method::PUT, &path, yes(vec![])).await;
+    assert_ne!(status, StatusCode::OK, "{reply}");
+    let (status, reply) = s.request(&bo.key, Method::PUT, &path, yes(vec![&spot.id])).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["bots"], json!([spot.id]));
+
+    // The next day Spot is cued too, and its cue says it isn't from its owner.
+    assert_eq!(cadence::tick(&s.state, nine + DAY + 60).unwrap(), 2);
+    assert_eq!(s.outcomes(&spot.id), ["cued"]);
+    let (_, events) = s.request(&spot_token, Method::GET, "/api/events", json!(null)).await;
+    let cue = cues(&events).pop().unwrap_or_else(|| panic!("no cue in {events}"));
+    assert_eq!(cue["data"]["from_your_owner"], false);
+    assert_eq!(cue["data"]["plan_owner_id"], ann.id.as_str());
+
+    // A no stops it; past starts stay on the record.
+    assert_eq!(s.request(&bo.key, Method::PUT, &path, yes(vec![])).await.0, StatusCode::OK);
+    assert_eq!(cadence::tick(&s.state, nine + 2 * DAY + 60).unwrap(), 1);
+    assert_eq!(s.outcomes(&spot.id), ["cued"]);
+
+    // A yes for a bot that then leaves the room cues nothing.
+    assert_eq!(s.request(&bo.key, Method::PUT, &path, yes(vec![&spot.id])).await.0, StatusCode::OK);
+    s.state.db.remove_agent_from_room(&ann.room, &spot.id).unwrap();
+    assert_eq!(cadence::tick(&s.state, nine + 3 * DAY + 60).unwrap(), 1);
+    assert_eq!(s.outcomes(&spot.id), ["cued"]);
+}
+
+// RP7: another owner's plan rings their bot, but not past its owner's only_me (E25).
+#[tokio::test]
+async fn another_owners_cue_rings_unless_only_me() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = hits.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move || {
+        let counted = counted.clone();
+        async move {
+            counted.fetch_add(1, Ordering::SeqCst);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+    let settle = || tokio::time::sleep(std::time::Duration::from_millis(400));
+
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = member_of(&s, &ann.room, "Bo").await;
+    let (spot, spot_token) = support::legacy_bot(&s.state, &bo.id, &ann.room, "Spot");
+    let plan = s.plan(&ann).await;
+    let daily = json!({ "freq": "daily", "time": "09:00" });
+    s.request(&ann.key, Method::PUT, &format!("/api/events/{plan}/cadence"), daily).await;
+    let (status, _) = s
+        .request(
+            &bo.key,
+            Method::PUT,
+            &format!("/api/events/{plan}/cue-bots"),
+            json!({ "bots": [spot.id] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
+    // Set after the plan is made, so making it rings nothing here.
+    s.state.db.set_notify_url(&spot.id, Some(&url)).unwrap();
+    settle().await;
+
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 1);
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "rung with Bo's yes");
+
+    // With only_me, it's still cued and in its events, but not rung.
+    s.state.db.set_wakes_only_for_owner(&spot.id, true).unwrap();
+    assert_eq!(cadence::tick(&s.state, nine + DAY + 60).unwrap(), 1);
+    settle().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "only_me stops another owner's ring");
+    let (_, events) = s.request(&spot_token, Method::GET, "/api/events", json!(null)).await;
+    assert_eq!(cues(&events).len(), 2, "{events}");
+}
+
+// RP10: a monthly plan starts on its day through the loop, and not the day after.
+#[tokio::test]
+async fn a_monthly_plan_starts_on_its_day() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let (rover, _) = support::legacy_bot(&s.state, &ann.id, &ann.room, "Rover");
+    let plan = s.plan(&ann).await;
+    let monthly = json!({ "freq": "monthly", "month_day": 1, "time": "09:00" });
+    let (status, set) =
+        s.request(&ann.key, Method::PUT, &format!("/api/events/{plan}/cadence"), monthly).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    let first = time::OffsetDateTime::parse(
+        set["next_start"].as_str().unwrap(),
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    assert_eq!((first.day(), first.hour()), (1, 9), "{set}");
+    let nine = first.unix_timestamp();
+    s.pin(nine);
+    assert_eq!(cadence::tick(&s.state, nine - 60).unwrap(), 0, "not yet");
+    assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 1);
+    assert_eq!(cadence::tick(&s.state, nine + DAY + 60).unwrap(), 0, "the 2nd has none");
+    assert_eq!(s.outcomes(&rover.id), ["cued"]);
+}

@@ -412,12 +412,17 @@ pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &st
     let may = move |state: &AppState| {
         !state.db.doorbell_paused(&id).unwrap_or(true)
             && state.db.belongs_to_room(&room, &id).unwrap_or(false)
-            && state
-                .db
-                .agent(&id, crate::now())
-                .ok()
-                .flatten()
-                .is_some_and(|bot| bot.owner_id == owner)
+            // RP3, RP7: still the plan owner's bot, or another member's with its yes standing.
+            && state.db.agent(&id, crate::now()).ok().flatten().is_some_and(|bot| {
+                match crate::cadence::cue_kind(state, &event, &room, &owner, &bot) {
+                    Ok(Some(true)) => true,
+                    Ok(Some(false)) => {
+                        crate::cadence::others_cue_may_ring(state, &bot, crate::now())
+                            .unwrap_or(false)
+                    }
+                    _ => false,
+                }
+            })
             && state
                 .db
                 .cadence(&event)

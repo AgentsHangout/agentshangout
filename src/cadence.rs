@@ -1,7 +1,8 @@
 //! RP1 to RP11: plans that repeat (docs/repeating-plans.md, from the design in
 //! docs/repeating-plans-design.md). A plan's owner gives it weekdays and times of day, a day of the
 //! month, or an hourly window. Each start cues the owner's own bots in the plan's room once, through
-//! the doorbell, and every start is on the record with what it did for each bot.
+//! the doorbell, and any other member's bots there they said yes for (RP7). Every start is on the
+//! record with what it did for each bot.
 
 use axum::{
     extract::{Path, State},
@@ -37,7 +38,9 @@ const MIN_GAP_MIN: i64 = 60;
 const LOOK_BACK_SECS: i64 = 7 * DAY_SECS;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/events/{id}/cadence", put(set).delete(end))
+    Router::new()
+        .route("/api/events/{id}/cadence", put(set).delete(end))
+        .route("/api/events/{id}/cue-bots", put(set_cue_bots))
 }
 
 #[derive(Deserialize)]
@@ -66,6 +69,12 @@ struct CadenceInput {
     until: Option<String>,
     #[serde(default)]
     paused: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CueBotsInput {
+    bots: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -293,6 +302,73 @@ async fn end(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// RP7: another member says yes for their own bots in the plan's room to be cued by it. The list
+/// replaces what they said before, and an empty one is a no. It lets no bot into the room.
+async fn set_cue_bots(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(input): Json<CueBotsInput>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "say yes for a bot")?;
+    let event = state.db.event(&id)?.ok_or_else(ApiError::not_found)?;
+    ops::no_guests(&state, &caller, &event.hangout_id, "say yes for a bot")?;
+    if event.status == "cancelled" {
+        return Err(ApiError::conflict("this plan was canceled"));
+    }
+    if event.proposed_by == caller.person_id {
+        return Err(ApiError::bad_request("your own bots in the room are cued already"));
+    }
+    let now = now();
+    let mut bots = input.bots;
+    bots.sort();
+    bots.dedup();
+    for bot in &bots {
+        let agent = state.db.agent(bot, now)?.ok_or_else(ApiError::not_found)?;
+        if agent.owner_id != caller.person_id {
+            return Err(ApiError::forbidden("you can only say yes for your own bots"));
+        }
+        if !state.db.belongs_to_room(&event.hangout_id, bot)? {
+            return Err(ApiError::bad_request(
+                "that bot isn't in this plan's room, and a yes doesn't bring it in",
+            ));
+        }
+    }
+    state.db.set_cue_bots(&id, &caller.person_id, &bots, now)?;
+    Ok(Json(json!({ "event_id": id, "bots": state.db.cue_bots_of(&id, &caller.person_id)? })))
+}
+
+/// RP3, RP7: whether a bot is cued by a plan: Some(true) for its owner's own plan, Some(false) for
+/// another member's that its owner said yes for, None if it isn't. Either way it must belong to the
+/// room; a yes stands only while its owner is still a member there.
+pub(crate) fn cue_kind(
+    state: &AppState,
+    event_id: &str,
+    hangout_id: &str,
+    plan_owner: &str,
+    bot: &crate::db::Agent,
+) -> ApiResult<Option<bool>> {
+    if !state.db.belongs_to_room(hangout_id, &bot.id)? {
+        return Ok(None);
+    }
+    if bot.owner_id == plan_owner {
+        return Ok(Some(true));
+    }
+    Ok((state.db.cue_yes(event_id, &bot.id)? && state.db.is_member(hangout_id, &bot.owner_id)?)
+        .then_some(false))
+}
+
+/// RP7: another owner's plan rings their bot only if its owner hasn't set only_me (E25) and it
+/// isn't at its workplace in a Work hour (L55, its owner's call alone).
+pub(crate) fn others_cue_may_ring(
+    state: &AppState,
+    bot: &crate::db::Agent,
+    now: i64,
+) -> ApiResult<bool> {
+    Ok(!state.db.wakes_only_for_owner(&bot.id)?
+        && !crate::routines::at_work(state, &bot.id, &bot.owner_id, now)?)
+}
+
 /// The starts on a local day, as UTC instants, earliest first.
 fn starts_on(cadence: &Cadence, local_day: i64) -> Vec<i64> {
     let on = match cadence.shape {
@@ -389,26 +465,26 @@ fn tick_one(state: &AppState, cadence: &Cadence, now: i64) -> ApiResult<usize> {
         if state.db.start_handled(&cadence.event_id, starts_at)? {
             continue;
         }
-        // Phase 1: the plan owner's own bots that belong to its room.
-        let bots: Vec<String> = state
-            .db
-            .agents_in(&event.hangout_id, now)?
-            .into_iter()
-            .filter(|bot| bot.owner_id == cadence.owner_id)
-            .filter(|bot| state.db.belongs_to_room(&event.hangout_id, &bot.id).unwrap_or(false))
-            .map(|bot| bot.id)
-            .collect();
+        // RP3, RP7: the plan owner's own bots in its room, and others' bots there with a yes.
+        let mut bots = Vec::new();
+        for bot in state.db.agents_in(&event.hangout_id, now)? {
+            if let Some(own) =
+                cue_kind(state, &cadence.event_id, &event.hangout_id, &cadence.owner_id, &bot)?
+            {
+                bots.push((bot, own));
+            }
+        }
         let late = now - starts_at > LATE_SECS;
         let mut outcomes = Vec::new();
-        for bot in &bots {
+        for (bot, _) in &bots {
             let outcome = if late {
                 "missed"
-            } else if state.db.doorbell_paused(bot)? {
+            } else if state.db.doorbell_paused(&bot.id)? {
                 "paused"
             } else {
                 "cued"
             };
-            outcomes.push((bot.clone(), outcome));
+            outcomes.push((bot.id.clone(), outcome));
         }
         // RP6: the cap is counted again inside the start's own transaction.
         let Some(outcomes) =
@@ -418,10 +494,14 @@ fn tick_one(state: &AppState, cadence: &Cadence, now: i64) -> ApiResult<usize> {
         };
         for (bot, outcome) in &outcomes {
             if *outcome == "cued" {
+                let Some((agent, own)) = bots.iter().find(|(agent, _)| agent.id == *bot) else {
+                    continue;
+                };
                 // RP3: the ring follows the owner-mention safeguards: none without a wake-up
                 // URL (the event still reaches inbox and the doorbell), and none while an earlier
                 // ring in that room is unread (E22). A paused bot was already `paused` above.
                 let ring = state.db.notify_url(bot)?.is_some()
+                    && (*own || others_cue_may_ring(state, agent, now)?)
                     && !ops::owner_ring_held(state, bot, &event.hangout_id, now)?
                     && state.db.claim_cue_ring(
                         &cadence.event_id,
@@ -430,7 +510,7 @@ fn tick_one(state: &AppState, cadence: &Cadence, now: i64) -> ApiResult<usize> {
                         now - CUE_RING_SECS,
                         now,
                     )?;
-                crate::events::note_plan_cue(state, &event, bot, starts_at, ring);
+                crate::events::note_plan_cue(state, &event, bot, starts_at, ring, *own);
                 cued += 1;
             }
         }

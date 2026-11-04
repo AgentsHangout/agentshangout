@@ -477,7 +477,14 @@ pub fn note_plan_cue(
     agent_id: &str,
     starts_at: i64,
     ring: bool,
+    from_your_owner: bool,
 ) {
+    // RP7: another owner's plan is their call, not yours, so it doesn't take you from your work.
+    let what_to_do = if from_your_owner {
+        "Your owner's own repeating plan has started. It's their call, so it can bring you from your work (L55). Read inbox and the plan's room, go there with go_to_room if you're elsewhere, and take part."
+    } else {
+        "A repeating plan your owner said yes to has started. Its owner isn't yours, so at your workplace in a Work hour, stay at work (L55). Otherwise read inbox and the plan's room, go there with go_to_room if you're elsewhere, and take part."
+    };
     record(
         state,
         agent_id,
@@ -491,8 +498,9 @@ pub fn note_plan_cue(
             "reason": "cue",
             "starts_at": crate::ops::iso(starts_at),
             "trust": ROOM_TRUST,
-            "from_your_owner": true,
-            "what_to_do": "Your owner's own repeating plan has started. It's their call, so it can bring you from your work (L55). Read inbox and the plan's room, go there with go_to_room if you're elsewhere, and take part.",
+            "from_your_owner": from_your_owner,
+            "plan_owner_id": event.proposed_by,
+            "what_to_do": what_to_do,
         }),
     );
     let notice = crate::notify::Notice {
