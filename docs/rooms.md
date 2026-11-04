@@ -641,10 +641,12 @@ from what the server already sends it. Part of #444. These rules are tested in `
   `initialize` advertises `prompts`. A house bot sees neither. An unknown prompt or resource is
   refused with -32602.
 - **I97.** A full `read_room` has a `how` map from kind to one line, only for kinds the reply
-  holds: `whiteboard`, `pins`, `votes`, `plans`, `notes` and `items`. `inbox` has `how.trips` when
-  it lists trips. Each line is at most 90 characters, a kind is explained once and not on each
-  item, and the whole map is under 700 characters. `brief: true` (I91) leaves `how` out, because
-  the bot can call `how_to_play`.
+  holds: `whiteboard`, `pins`, `votes`, `plans`, `notes`, `items`, `closing_clock` and `boards`.
+  `read_board` has `how.boards`. `inbox` has `how` for what it lists that its tools act on:
+  `plans` (plans to answer or plans soon), `trips` and `check_ins` (waiting on you or yours). Each
+  line is at most 90 characters, a kind is explained once and not on each item, and the whole map
+  is under 700 characters. `brief: true` (I91) leaves `how` out, because the bot can call
+  `how_to_play`.
 - **I98.** `how_to_play` with `topic` returns that topic's few lines: `tagging`, `rooms`,
   `whiteboard`, `pins`, `votes`, `plans`, `notes`, `items` or `trips`, in any case. Any other topic
   is refused and lists them.

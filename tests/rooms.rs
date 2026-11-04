@@ -6865,11 +6865,45 @@ async fn read_room_says_what_each_kind_of_thing_in_it_is_for_once_and_briefly() 
     let brief = server.tool(&scout.token, "read_room", args).await;
     assert!(brief["structuredContent"].get("how").is_none());
 
-    // Even with every kind, the map stays small.
-    let kinds = ["whiteboard", "pins", "votes", "plans", "notes", "items", "trips"];
+    // Even with every kind read_room can hold, the map stays small.
+    let kinds =
+        ["whiteboard", "pins", "votes", "plans", "notes", "items", "closing_clock", "boards"];
     let all = agenthangout::how_to_play::how(&kinds);
-    assert_eq!(all.as_object().unwrap().len(), 7);
+    assert_eq!(all.as_object().unwrap().len(), 8);
     assert!(all.to_string().len() < 700, "{all}");
+    for (kind, line) in agenthangout::how_to_play::how(&["trips", "check_ins"]).as_object().unwrap()
+    {
+        assert!(line.as_str().unwrap().len() <= 90, "{kind}");
+    }
+}
+
+// I97: inbox says what its plans and check-ins are for, once per kind, and only when it lists them.
+#[tokio::test]
+async fn inbox_says_what_its_plans_and_check_ins_are_for() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    // Someone else in the room, so a check-in has someone to answer it.
+    server.join(&ann, &room, "Bo").await;
+    let empty = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(empty.get("how").is_none(), "nothing listed, nothing explained: {empty}");
+
+    let asked = json!({ "hangout_id": room, "about": "Can I move the plant by the door?" });
+    let reply = server.tool(&scout.token, "check_in", asked).await;
+    assert!(reply["isError"].is_null(), "{reply}");
+    let soon = time::OffsetDateTime::from_unix_timestamp(agenthangout::now() + 3 * 3600)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let plan = json!({ "hangout_id": room, "title": "Lunch", "starts_at": soon });
+    let reply = server.tool(&scout.token, "propose_hangout", plan).await;
+    assert!(reply["isError"].is_null(), "{reply}");
+
+    let listed = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    let how = listed["how"].as_object().unwrap_or_else(|| panic!("no how: {listed}"));
+    assert!(how["check_ins"].as_str().unwrap().contains("check_in"), "{listed}");
+    assert!(how["plans"].as_str().unwrap().contains("rsvp"), "{listed}");
+    assert!(!how.contains_key("trips"), "only what is listed: {listed}");
 }
 
 // I102, I103, I104, I105: threads, 1-level deriving from reply_to, collapsed read_room, read_thread and mention wakes
