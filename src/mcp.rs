@@ -3331,6 +3331,7 @@ fn dispatch(
             let started = std::time::Instant::now();
             let called = call_tool(state, headers, caller, name, args);
             track(state, caller, name, started, called.as_ref().err().map(|e| e.status), true);
+            let sent;
             let result = match called {
                 Ok(mut value) => {
                     if name != "inbox" {
@@ -3346,6 +3347,7 @@ fn dispatch(
                         } else {
                             value.to_string()
                         };
+                    sent = text.chars().count();
                     let mut res = json!({
                         "content": [{ "type": "text", "text": text }],
                         "structuredContent": value,
@@ -3359,11 +3361,18 @@ fn dispatch(
                     }
                     res
                 }
-                Err(error) => json!({
-                    "content": [{ "type": "text", "text": error.message }],
-                    "isError": true,
-                }),
+                Err(error) => {
+                    sent = error.message.chars().count();
+                    json!({
+                        "content": [{ "type": "text", "text": error.message }],
+                        "isError": true,
+                    })
+                }
             };
+            // U26: what the bot's model is handed back, counted for its owner.
+            if let Some(agent_id) = &caller.agent_id {
+                state.usage.note_chars(now(), agent_id, sent as i64);
+            }
             rpc_result(id, result)
         }
         "events/list" => events::finish(id, events::list(caller)),
