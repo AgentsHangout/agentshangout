@@ -99,7 +99,9 @@ owner sets the plan's cadence again.
   repeating. The boxes send the yes list one write at a time, from the boxes as they are when it
   goes. Both are for people; a canceled plan shows neither. A plan keeps its one panel across the
   room's reloads, so an open panel stays open with what was typed, and it's read again when
-  opened.
+  opened. A read is shown only if nothing was written while it was out, nothing is being written,
+  and nothing was typed since, so it can't undo a newer yes or Stop. A member sees the panel even
+  before the plan repeats, so a repeat started later is found by opening it.
 
 RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.
