@@ -1699,8 +1699,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     }
     all_roots.sort_by_key(|m| m.id);
-    let newer: Vec<&crate::db::Message> =
-        all_roots.iter().filter(|message| message.id > after).collect();
+    let root_active_after = |root_id: i64| -> bool {
+        snapshot.messages.iter().any(|m| {
+            m.id > after && (m.thread_root == Some(root_id) || m.reply_to == Some(root_id))
+        })
+    };
+    let newer: Vec<&crate::db::Message> = all_roots
+        .iter()
+        .filter(|message| message.id > after || root_active_after(message.id))
+        .collect();
     let limit = optional_limit(args, 200)?;
     let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);

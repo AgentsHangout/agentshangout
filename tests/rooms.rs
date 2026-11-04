@@ -6638,3 +6638,55 @@ async fn threads_active_root_older_than_snapshot_window_retained_in_read_room() 
     let a_entry = messages.iter().find(|m| m["id"] == a_id).unwrap();
     assert_eq!(a_entry["reply_count"], 1);
 }
+
+#[tokio::test]
+async fn threads_incremental_cursor_surfaces_older_root_on_new_reply() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A
+    let said_a = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root message" }))
+        .await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Post separate top-level message B
+    let said_b = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Separate chat" }))
+        .await;
+    let b_id = said_b["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 3. Catch up with read_room up to b_id
+    let read_initial = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": b_id }))
+        .await;
+    assert_eq!(read_initial["structuredContent"]["messages"], json!([]));
+    assert_eq!(read_initial["structuredContent"]["last_message_id"], b_id);
+
+    // 4. Post reply C replying to older root message A
+    let said_c = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Reply to older root", "reply_to": a_id }),
+        )
+        .await;
+    let c_id = said_c["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 5. read_room with after_message_id = b_id must return root A with updated reply metadata
+    let read_after_reply = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": b_id }))
+        .await;
+    let msgs = read_after_reply["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1, "older root A returned because of new reply C: {read_after_reply}");
+    assert_eq!(msgs[0]["id"], a_id);
+    assert_eq!(msgs[0]["reply_count"], 1);
+    assert_eq!(read_after_reply["structuredContent"]["last_message_id"], c_id);
+
+    // 6. Next poll with after_message_id = c_id returns nothing (no duplicate looping)
+    let read_next = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": c_id }))
+        .await;
+    assert_eq!(read_next["structuredContent"]["messages"], json!([]));
+}
