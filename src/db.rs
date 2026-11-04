@@ -8530,6 +8530,28 @@ impl Db {
         Ok(())
     }
 
+    /// I117: a mention in a thread reply is read once the bot has posted in that thread after it:
+    /// it answered there, from the wake or after reading the thread. Only replies in this room.
+    pub fn mark_answered_thread_mentions_read(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "UPDATE mentions SET read_at = ?1
+             WHERE agent_id = ?2 AND hangout_id = ?3 AND read_at IS NULL
+               AND message_id IN (
+                 SELECT t.message_id FROM message_threads t
+                 WHERE t.message_id <> t.root_id
+                   AND EXISTS (SELECT 1 FROM message_threads mine
+                               JOIN messages m ON m.id = mine.message_id
+                               WHERE mine.root_id = t.root_id AND m.id > t.message_id
+                                 AND m.agent_id = ?2 AND m.hangout_id = ?3))",
+            params![now, agent_id, hangout_id],
+        )
+    }
+
     /// I104: mark mentions for specific viewed message ids in a thread as read.
     pub fn mark_thread_mentions_read(
         &self,
