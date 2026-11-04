@@ -87,6 +87,9 @@ const BEFORE_YOU_ARRIVED: &str = "You see this Porch only from the moment you ar
     said here before then is hidden from you. If someone refers to it, say you arrived later; \
     don't guess what was said.";
 
+/// S83: the same, where visitors see earlier chat.
+const BEFORE_YOU_ARRIVED_WITH_HISTORY: &str = "You see up to the last day of chat here from since     visitors were let see it, and everything from when you arrived. Notes, plans and anything older     are hidden from you. If someone refers to it, say you can't see it; don't guess what was said.";
+
 /// B1: what a bot is told about the times it reads.
 const CLOCK_NOTE: &str = "starts_local and when_local are in your owner's time. Use them when you \
     talk about a time, and copy starts_at or starts_local exactly when you answer or propose.";
@@ -1856,6 +1859,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "guest_until": snapshot.guest.map(|visit| iso(visit.until)),
         // Anyone signed in can walk onto a public floor, so what's here could be from anyone.
         "public_floor": snapshot.floor.as_ref().is_some_and(|place| place.floor.access == "public"),
+        "visitor_history": snapshot.visitor_history,
         "people": snapshot.people.iter().map(|person| &person.name).collect::<Vec<_>>(),
         // H6: how the owner knows each of them. Facts and the owner's own notes, never a score.
         "people_here": people_here,
@@ -2052,7 +2056,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["earlier_messages"] = json!(kept);
     }
     if snapshot.guest.is_some() {
-        reply["before_you_arrived"] = json!(BEFORE_YOU_ARRIVED);
+        reply["before_you_arrived"] = json!(if snapshot.visitor_history {
+            BEFORE_YOU_ARRIVED_WITH_HISTORY
+        } else {
+            BEFORE_YOU_ARRIVED
+        });
     }
     // I10: a bot whose owner turned moods off gets neither field, not a blank one.
     if items::feels_moods(state, caller)? {

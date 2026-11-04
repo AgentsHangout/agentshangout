@@ -1972,6 +1972,8 @@ pub struct Snapshot {
     pub looks: looks::Looks,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
+    /// S83: whether people who walk in here see earlier chat.
+    pub visitor_history: bool,
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
@@ -2016,7 +2018,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let (events, messages, notes, check_ins, counted_since) = match &guest {
         Some(visit) => (
             Vec::new(),
-            state.db.messages_since(hangout_id, visit.since, 0, 100)?,
+            guest_messages(state, hangout_id, visit, 0, 100, now)?,
             state.db.notes_since(hangout_id, visit.since, 50)?,
             state
                 .db
@@ -2113,10 +2115,42 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         typing: crate::typing::visible(state, caller, hangout_id)?,
         looks,
         discord_linking: shown_links && state.discord.is_some(),
+        visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
     })
 }
 
-/// Chat lines after `after`. A guest's start at their arrival whatever `after` says.
+/// S83: how much chat a walk-in sees from before they arrived, at most.
+pub const VISITOR_HISTORY_LINES: i64 = 50;
+
+/// S19, S83: what a walk-in reads: everything but notes from their arrival on, and, where visitors
+/// see earlier chat, the latest chat lines of the last day written since that was turned on.
+pub fn guest_messages(
+    state: &AppState,
+    hangout_id: &str,
+    visit: &Visit,
+    after: i64,
+    limit: i64,
+    now: i64,
+) -> ApiResult<Vec<Message>> {
+    let mut messages = state.db.messages_since(hangout_id, visit.since, after, limit)?;
+    if let Some((after_id, _)) = state.db.visitor_history(hangout_id)? {
+        let mut earlier = state.db.chat_before_arrival(
+            hangout_id,
+            after_id,
+            now - DAY_SECS,
+            visit.since,
+            after,
+            VISITOR_HISTORY_LINES,
+        )?;
+        earlier.append(&mut messages);
+        let extra = earlier.len().saturating_sub(limit.max(0) as usize);
+        messages = earlier.split_off(extra);
+    }
+    Ok(messages)
+}
+
+/// Chat lines after `after`. A guest's start at their arrival whatever `after` says, or earlier
+/// where visitors see earlier chat (S83).
 pub fn read_messages(
     state: &AppState,
     caller: &Caller,
@@ -2126,7 +2160,7 @@ pub fn read_messages(
 ) -> ApiResult<Vec<Message>> {
     require_room(state, caller, hangout_id)?;
     Ok(match state.guest_visit(caller, hangout_id)? {
-        Some(visit) => state.db.messages_since(hangout_id, visit.since, after, limit)?,
+        Some(visit) => guest_messages(state, hangout_id, &visit, after, limit, now())?,
         None => state.db.messages(hangout_id, after, limit)?,
     })
 }
