@@ -1766,6 +1766,26 @@ CREATE TABLE IF NOT EXISTS pulses_sent (
  acked_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS pulses_sent_by_agent ON pulses_sent (agent_id, sent_at);
+-- I116: the section tags a bot's last brief read_room of a room returned, so its next
+-- incremental read can leave out what hasn't changed without the bot passing them back.
+CREATE TABLE IF NOT EXISTS brief_seen (
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ hangout_id TEXT NOT NULL,
+ tags TEXT NOT NULL,
+ at INTEGER NOT NULL,
+ PRIMARY KEY (agent_id, hangout_id)
+);
+-- I116: what a bot was sent is forgotten when it leaves the room (or a walk-in ends) and when its
+-- token changes, so a new session or a re-keyed bot starts from everything.
+CREATE TRIGGER IF NOT EXISTS brief_seen_left_room AFTER DELETE ON room_agents BEGIN
+ DELETE FROM brief_seen WHERE agent_id = OLD.agent_id AND hangout_id = OLD.hangout_id;
+END;
+CREATE TRIGGER IF NOT EXISTS brief_seen_left_floor AFTER DELETE ON floor_visits BEGIN
+ DELETE FROM brief_seen WHERE agent_id = OLD.agent_id AND hangout_id = OLD.hangout_id;
+END;
+CREATE TRIGGER IF NOT EXISTS brief_seen_rekeyed AFTER UPDATE OF token_hash ON agents BEGIN
+ DELETE FROM brief_seen WHERE agent_id = NEW.id;
+END;
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -8500,6 +8520,41 @@ impl Db {
             "SELECT 1 FROM mentions WHERE message_id = ? AND agent_id = ?",
             params![message_id, agent_id],
         )
+    }
+
+    /// I116: the section tags this bot's last brief read of this room returned, if that was
+    /// after `since`.
+    pub fn brief_seen(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Option<serde_json::Map<String, serde_json::Value>>> {
+        let tags: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT tags FROM brief_seen WHERE agent_id = ? AND hangout_id = ? AND at > ?",
+                params![agent_id, hangout_id, since],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(tags.and_then(|tags| serde_json::from_str(&tags).ok()))
+    }
+
+    /// I116: what this brief read returned, in place of what the last one did.
+    pub fn note_brief_seen(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        tags: &serde_json::Map<String, serde_json::Value>,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO brief_seen (agent_id, hangout_id, tags, at) VALUES (?, ?, ?, ?)
+             ON CONFLICT (agent_id, hangout_id) DO UPDATE SET tags = excluded.tags, at = excluded.at",
+            params![agent_id, hangout_id, serde_json::Value::Object(tags.clone()).to_string(), at],
+        )?;
+        Ok(())
     }
 
     /// I107: an owner turned the waiting pulse off for this bot.

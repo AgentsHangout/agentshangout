@@ -8204,6 +8204,109 @@ async fn read_room_says_who_can_add_a_note() {
     assert_eq!(added["isError"], true, "{added}");
 }
 
+// I116: the server remembers the section tags it sent a bot, so an incremental brief read
+// (after_message_id) leaves out what hasn't changed without the bot passing known; the reply says
+// which were left out. A read without after_message_id, or with full: true, gets everything.
+#[tokio::test]
+async fn the_server_remembers_what_a_brief_read_sent() {
+    let w = waiting_world().await;
+    let read = |extra: Value| {
+        let mut args = json!({ "hangout_id": w.room, "brief": true });
+        if let (Some(args), Value::Object(extra)) = (args.as_object_mut(), extra) {
+            args.extend(extra);
+        }
+        let server = &w.server;
+        let token = w.scout.token.clone();
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    // A line first, so there is a message id to read on from.
+    w.mention("hello").await;
+    let first = read(json!({})).await;
+    assert!(first.get("bots").is_some() && first.get("unchanged").is_none(), "{first}");
+    let last = first["last_message_id"].clone();
+    assert!(last.as_i64().unwrap() > 0, "{first}");
+
+    // Incremental, passing no known: what hasn't changed is left out and listed.
+    let again = read(json!({ "after_message_id": last })).await;
+    assert!(again.get("bots").is_none() && again.get("people_here").is_none(), "{again}");
+    let unchanged = again["unchanged"].as_array().unwrap();
+    assert!(unchanged.contains(&json!("bots")) && unchanged.contains(&json!("guide")), "{again}");
+    assert!(again["trust_note"].is_string(), "always sent");
+
+    // A fresh session reads without after_message_id and gets everything.
+    let fresh = read(json!({})).await;
+    assert!(fresh.get("bots").is_some() && fresh.get("unchanged").is_none(), "{fresh}");
+
+    // full: true gets everything even on an incremental read.
+    let full = read(json!({ "after_message_id": last, "full": true })).await;
+    assert!(full.get("bots").is_some() && full.get("unchanged").is_none(), "{full}");
+
+    // A change brings that section back; the rest stays out.
+    support::legacy_bot(&w.server.state, &w.ann.id, &w.room, "Newcomer");
+    read(json!({ "after_message_id": last })).await;
+    let changed = read(json!({ "after_message_id": last })).await;
+    assert!(changed.get("bots").is_none(), "seen on the read before: {changed}");
+}
+
+// I116: leaving the room, or a new token, forgets what was sent, so the next read starts whole.
+#[tokio::test]
+async fn leaving_or_a_new_token_forgets_what_was_sent() {
+    let w = waiting_world().await;
+    let state = &w.server.state;
+    let args = json!({ "hangout_id": w.room, "brief": true });
+    w.server.tool(&w.scout.token, "read_room", args).await;
+    let seen = |state: &agenthangout::AppState| {
+        state.db.brief_seen(&w.scout.id, &w.room, 0).unwrap().is_some()
+    };
+    assert!(seen(state), "remembered after a brief read");
+
+    state.db.remove_agent_from_room(&w.room, &w.scout.id).unwrap();
+    assert!(!seen(state), "forgotten on leaving the room");
+    state.db.add_agent_to_room(&w.room, &w.scout.id).unwrap();
+
+    let args = json!({ "hangout_id": w.room, "brief": true });
+    w.server.tool(&w.scout.token, "read_room", args).await;
+    assert!(seen(state));
+    w.conn.execute("UPDATE agents SET token_hash = 'rotated' WHERE id = ?", [&w.scout.id]).unwrap();
+    assert!(!seen(state), "forgotten on a new token");
+}
+
+// I116: a byte budget for an incremental brief read of a busy room where nothing changed.
+#[tokio::test]
+async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
+    let w = waiting_world().await;
+    let server = &w.server;
+    for name in ["Rover", "Pip2", "Juniper", "Bramble"] {
+        support::legacy_bot(&server.state, &w.ann.id, &w.room, name);
+    }
+    for i in 0..6 {
+        let note = json!({ "hangout_id": w.room, "text": format!("Shared note number {i} with some words about the plan") });
+        server.tool(&w.scout.token, "share_note", note).await;
+        let pin = json!({ "hangout_id": w.room, "kind": "note", "title": format!("Pin {i}"), "caption": "A pinned thing" });
+        server.tool(&w.scout.token, "pin", pin).await;
+    }
+    w.mention("hello").await;
+    let first = server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let after = first["last_message_id"].clone();
+    let again = server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "brief": true, "after_message_id": after }),
+        )
+        .await["structuredContent"]
+        .clone();
+    let (big, small) = (first.to_string().len(), again.to_string().len());
+    assert!(
+        small < 2_000,
+        "an incremental read with nothing new is {small} bytes (first was {big})"
+    );
+    assert!(small * 2 < big, "it saves most of a read: {small} vs {big}");
+}
+
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
 // without read_thread. One it hasn't answered still waits, and only its own posts count.
 #[tokio::test]
