@@ -82,6 +82,15 @@ impl Server {
         assert_eq!(status, StatusCode::OK, "{plan}");
         plan["id"].as_str().unwrap().to_string()
     }
+    /// Each running cadence counts starts only from an hour before `nine`, as if it was set then,
+    /// so how a test runs doesn't hang on the time of day: before 9:00 UTC, setting one at the real
+    /// time would also make today's 9:00 a start.
+    fn pin(&self, nine: i64) {
+        for mut cadence in self.state.db.running_cadences().unwrap() {
+            cadence.since = nine - 3600;
+            self.state.db.set_cadence(&cadence).unwrap();
+        }
+    }
     fn outcomes(&self, bot: &str) -> Vec<String> {
         self.state
             .db
@@ -144,6 +153,7 @@ async fn each_start_cues_once_and_a_late_start_is_missed() {
 
     // Ann has saved no clock, so 9:00 is 9:00 UTC. Tomorrow at 9:05 it's due.
     let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
     assert_eq!(cadence::tick(&s.state, nine - 60).unwrap(), 0, "not yet");
     assert_eq!(cadence::tick(&s.state, nine + 300).unwrap(), 1);
     // A second tick, or a second server, cues nobody again.
@@ -182,6 +192,7 @@ async fn paused_bots_weekdays_until_and_ending_are_kept_to() {
         [((nine.div_euclid(DAY) + 3) % 7) as usize];
     let weekly = json!({ "freq": "weekly", "days": [weekday], "time": "09:00" });
     assert_eq!(s.request(&ann.key, Method::PUT, &path, weekly).await.0, StatusCode::OK);
+    s.pin(nine);
 
     // Paused by its owner, the bot's start is recorded as paused, not missed.
     s.state.db.set_doorbell_paused(&rover.id, true).unwrap();
@@ -220,6 +231,7 @@ async fn the_daily_cap_and_a_paused_plan() {
             break;
         }
     }
+    s.pin(nine);
     cadence::tick(&s.state, nine + 60).unwrap();
     assert_eq!(s.outcomes(&rover.id).len(), 20, "20 plans each, so 20 starts");
     assert!(s.outcomes(&rover.id).iter().all(|o| o == "cued"));
@@ -246,6 +258,7 @@ async fn the_daily_cap_and_a_paused_plan() {
             .0,
         StatusCode::OK
     );
+    s.pin(nine);
     cadence::tick(&s.state, nine + 31 * 60).unwrap();
     assert_eq!(s.outcomes(&rover.id)[0], "over_cap", "{:?}", s.outcomes(&rover.id));
 
@@ -296,6 +309,7 @@ async fn a_cue_really_rings_once_and_never_a_paused_bot() {
         assert_eq!(status, StatusCode::OK);
     }
     let nine = tomorrow_at(now(), 9 * 3600);
+    s.pin(nine);
     assert_eq!(cadence::tick(&s.state, nine + 60).unwrap(), 2, "both cued");
     settle().await;
     assert_eq!(hits.load(Ordering::SeqCst), 1, "rung once for the two");
@@ -356,6 +370,7 @@ async fn two_ticks_at_once_take_a_start_once_and_ring_once() {
         assert_eq!(status, StatusCode::OK);
     }
     let at = tomorrow_at(now(), 9 * 3600) + 60;
+    s.pin(at - 60);
     let ticks: Vec<_> = (0..4)
         .map(|_| {
             let state = s.state.clone();
