@@ -970,8 +970,8 @@ pub fn poll(state: &AppState, caller: &Caller, params: &Value) -> Result<Value, 
     let page =
         load_page(state, agent_id, after, Some(name), hangout.as_deref(), floor, false, limit)
             .map_err(internal)?;
-    // U17: the events handed to the bot.
-    state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
+    // U17, U22: the events handed to the bot.
+    state.usage.note_events(now(), agent_id, page.events.len() as i64);
     Ok(page_json(&page, 5000))
 }
 
@@ -1336,8 +1336,8 @@ fn fill_replay(context: &mut StreamCtx) {
     };
     context.cursor = page.cursor;
     context.sent += page.events.len();
-    // U17: the events put on the stream.
-    context.state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
+    // U17, U22: the events put on the stream.
+    context.state.usage.note_events(now(), &context.agent_id, page.events.len() as i64);
     for event in page.events {
         let mut params = event;
         params["_meta"] = meta(&context.label);
@@ -1490,8 +1490,8 @@ fn read_since(
     };
     let page =
         load_page(state, agent_id, after, None, hangout, not_before, actionable, DEFAULT_LIMIT)?;
-    // U17: the events handed to the bot.
-    state.usage.note_line(now(), "events_delivered", page.events.len() as i64);
+    // U17, U22: the events handed to the bot.
+    state.usage.note_events(now(), agent_id, page.events.len() as i64);
     let cursor = if jump_to_head && !page.has_more {
         state.db.bot_event_head(agent_id)?
     } else {
