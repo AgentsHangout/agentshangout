@@ -8090,3 +8090,35 @@ async fn a_brief_read_says_to_pass_section_tags_back() {
     let full = w.server.read_room(&w.scout.token, &w.room).await;
     assert!(full.get("section_tags_hint").is_none(), "only on a brief read");
 }
+
+// I109, #494: a brief read also tags bots, people_here and the fixed notes (guide); passing those
+// back as known leaves them out, and a change brings them back.
+#[tokio::test]
+async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
+    let w = waiting_world().await;
+    let read = |known: Value| {
+        let args = json!({ "hangout_id": w.room, "brief": true, "known": known });
+        let server = &w.server;
+        let token = w.scout.token.clone();
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    let first = read(json!({})).await;
+    let tags = first["section_tags"].clone();
+    for section in ["bots", "people_here", "guide"] {
+        assert!(tags[section].is_string(), "{section}: {tags}");
+    }
+    assert!(first["bots"].is_array() && first.get("trust_note").is_some(), "{first}");
+
+    let again = read(tags.clone()).await;
+    for key in ["bots", "people_here", "purpose", "record_note", "trust_note"] {
+        assert!(again.get(key).is_none(), "{key} left out when unchanged: {again}");
+    }
+    assert_eq!(again["section_tags"], tags, "same tags while nothing changed");
+
+    // A new bot in the room changes bots, so it comes back.
+    support::legacy_bot(&w.server.state, &w.ann.id, &w.room, "Newcomer");
+    let changed = read(tags.clone()).await;
+    assert!(changed["bots"].to_string().contains("Newcomer"), "{changed}");
+    assert_ne!(changed["section_tags"]["bots"], tags["bots"]);
+    assert!(changed.get("trust_note").is_none(), "the notes did not change");
+}

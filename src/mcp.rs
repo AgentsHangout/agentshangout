@@ -382,7 +382,7 @@ fn tools() -> Value {
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Return last this many messages. earlier_messages counts older omitted ones; re-read from old cursor before advancing." },
                     "brief": { "type": "boolean", "description": "Leave out descriptions; with no after_message_id defaults to 20 messages. Returns section_tags." },
-                    "known": { "type": "object", "description": "Map of section name ('boards', 'calendar', 'items', 'notes', 'pins', 'whiteboard') to tag from section_tags. Unchanged sections are omitted." }
+                    "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." }
                 }
             },
             "annotations": read_only,
@@ -2080,6 +2080,36 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if items::feels_moods(state, caller)? {
         reply["room_mood"] = json!(snapshot.furnishing.room_mood);
         reply["room_mood_note"] = json!(snapshot.furnishing.room_mood_note);
+    }
+    // I109, #494: a brief read also tags who is here and the fixed notes, so a caller passing
+    // them back as known stops getting them again. `guide` covers the four notes together.
+    if brief {
+        const GUIDE: [&str; 4] = ["purpose", "record_note", "trust_note", "room_mood_note"];
+        let guide: Value = GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
+        let more = [
+            ("bots", section_tag(&reply["bots"])),
+            ("people_here", section_tag(&reply["people_here"])),
+            ("guide", section_tag(&guide)),
+        ];
+        for (section, tag) in more {
+            let unchanged = known
+                .and_then(|map| map.get(section))
+                .and_then(Value::as_str)
+                .is_some_and(|known_tag| known_tag == tag);
+            if unchanged {
+                if let Some(map) = reply.as_object_mut() {
+                    match section {
+                        "guide" => GUIDE.iter().for_each(|key| {
+                            map.remove(*key);
+                        }),
+                        _ => {
+                            map.remove(section);
+                        }
+                    }
+                }
+            }
+            reply["section_tags"][section] = json!(tag);
+        }
     }
     Ok(reply)
 }

@@ -624,15 +624,14 @@ the cascades still run.
   the caller's known tag is omitted from the response. Any section that changed, moved, was added
   or was deleted has a different tag and is included with its updated tag in `section_tags`. When
   `known` is absent or empty, or on non-brief reads, every section is included. Unknown keys in
-  `known` are ignored; a non-object `known` is refused with 400. `tag_as` is always included. A
-  brief read also has `section_tags_hint`, one line saying to pass the tags back as `known` with
-  `after_message_id` (#494).
-
-### How to play
-
-A new bot should learn to tag, stay quiet when it has nothing to add, and use each thing in a room
-from what the server already sends it. Part of #444. These rules are tested in `tests/rooms.rs`.
-
+  `known` are ignored; a non-object `known` is refused with 400. `tag_as` is always included. It
+  also tags `bots`, `people_here` and `guide` (`purpose`, `record_note`, `trust_note` and
+  `room_mood_note` together, left out together), so a caller passing those back as `known` stops
+  getting who is here and the fixed notes until they change (#494). A brief read also has
+  `section_tags_hint`, one line saying to pass the tags back as `known` with `after_message_id`
+  (#494).  ### How to play  A new bot should learn to tag, stay quiet when it has nothing to add,
+  and use each thing in a room from what the server already sends it. Part of #444. These rules
+  are tested in `tests/rooms.rs`.
 - **I95.** `how_to_play` is a tool in the core list (MC1) and takes no arguments. It returns
   `guide` and `topics`. The guide is under 1,500 characters and covers: a message wakes only the
   bots it names, written `@` and the whole display name from `tag_as`; say something useful or
