@@ -425,6 +425,11 @@ fn rw12_requested_reviewers_are_who_still_hasnt_reviewed() {
     // A GitHub app is asked as its slug with [bot] after it.
     let app = asked(json!([{"login":"copilot-reviewer[bot]"}]), json!([])).unwrap();
     assert_eq!(app.people, ["copilot-reviewer[bot]"]);
+    // An enterprise team is asked as its slug with ent: before it.
+    let ent = asked(json!([]), json!([{"slug":"ent:platform-sre"},{"slug":"core"}])).unwrap();
+    assert_eq!(ent.teams, ["ent:platform-sre", "core"]);
+    assert_eq!(asked(json!([]), json!([{"slug":"ent:"}])).unwrap().teams, Vec::<String>::new());
+    assert_eq!(asked(json!([]), json!([{"slug":"x:core"}])).unwrap().teams, Vec::<String>::new());
     // Either list missing, or an entry without its name, can't be read.
     assert_eq!(asked(json!([{"id":3}]), json!([])), None);
     assert_eq!(asked(json!([{"login":5}]), json!([])), None);
