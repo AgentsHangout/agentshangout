@@ -6335,6 +6335,33 @@ async fn a_guests_ballot_box_counts_the_open_votes_in_its_own_list() {
     assert_eq!(stand["votes"], seen, "{read}");
 }
 
+// I111: the page's snapshot lists votes for a member and none for a guest.
+#[tokio::test]
+async fn the_snapshot_lists_votes_for_a_member_and_none_for_a_guest() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server
+        .tool(
+            &scout.token,
+            "open_vote",
+            json!({ "hangout_id": room, "question": "Pizza?", "options": ["yes", "no"], "minutes": 30 }),
+        )
+        .await;
+    let member = server.snapshot(&ann.key, &room).await;
+    assert_eq!(member["votes"].as_array().unwrap().len(), 1, "{member}");
+
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    let guest = server.snapshot(&pip.token, &room).await;
+    assert_eq!(guest["votes"], json!([]), "{guest}");
+}
+
 // I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it
 // sends out the walk-ins it names.
 #[tokio::test]

@@ -1940,7 +1940,7 @@ pub struct Snapshot {
     pub pin_policy: String,
     pub can_pin: bool,
     pub can_clear_pins: bool,
-    /// Open votes and ones closed in the last day (V6, I111): the same list `read_room` gives.
+    /// Open votes and ones closed in the last day (V6, I111). Empty for a guest, who sees no past votes.
     pub votes: Vec<serde_json::Value>,
     pub events: Vec<Event>,
     /// Friends who answered a plan through its link, who aren't in `people` (F19).
@@ -2092,7 +2092,11 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         pin_policy,
         can_pin,
         can_clear_pins,
-        votes: crate::votes::for_room(state, hangout_id)?,
+        votes: if guest.is_some() {
+            Vec::new()
+        } else {
+            crate::votes::for_room(state, hangout_id)?
+        },
         events,
         invitees,
         plan_items,
