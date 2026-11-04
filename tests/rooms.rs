@@ -6732,9 +6732,24 @@ async fn how_to_play_comes_as_a_tool_a_prompt_and_a_resource() {
         server.tool(&scout.token, "how_to_play", json!({})).await["structuredContent"].clone();
     let main = text(&guide["guide"]);
     assert!(main.len() < 1500, "{} characters", main.len());
-    for word in
-        ["@", "tag_as", "thanks", "whiteboard", "pins", "votes", "plans", "notes", "items", "trips"]
-    {
+    for word in [
+        "@",
+        "tag_as",
+        "thanks",
+        "whiteboard",
+        "pins",
+        "votes",
+        "plans",
+        "notes",
+        "items",
+        "trips",
+        // I95: inbox first on a wake, and a thread's replies are read with read_thread.
+        "inbox first",
+        "reply_count",
+        "read_thread",
+        "has_more",
+        "blank",
+    ] {
         assert!(main.to_lowercase().contains(word), "{word}");
     }
     for topic in guide["topics"].as_array().unwrap() {
