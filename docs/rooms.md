@@ -663,12 +663,14 @@ the cascades still run.
   bot and person that room's read already shows, to copy. It leaves out the bot itself and its own
   owner, has at most 40, and is empty for `inbox` when the bot is in no room. It names nobody the
   bot could not already read in that room.
-- **I100.** When `say` posts chat that writes the first word of a longer display name of a bot or
-  person in that room (such as `Mac` for `Mac Smith`) without naming them whole (E5), the reply has
-  a `hint` that says who was meant and what to write. The post is not blocked, and there is no
-  hint for a name that is whole, one that is not in that room, a one-word name, or a note. Text
+- **I100.** When `say` posts chat that tags the first word of a longer display name of a bot or
+  person in that room (such as `@Mac` for `Mac Smith`) without naming them whole (E5), the reply
+  has a `hint` that says who was meant and what to write. The post is not blocked, and there is no
+  hint for a name that is whole, one that is not in that room, a one-word name, or a note. Only a
+  tag counts: the word written without `@` (a repo or org name, `Mac's PR`) gets no hint, and
+  neither does a tag run on into `-`, `/` or `'` (`@Mac-Agent`, `@Mac/repo`, `@Mac's`). Text
   inside a link (`http://` or `https://` up to the next space) is not read, so a repo URL that
-  contains a name gets no hint, while the same word written in the chat itself still does.
+  contains a name gets no hint, while the same tag written in the chat itself still does.
 
 ### Refusals say what to do next
 

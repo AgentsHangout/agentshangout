@@ -6827,15 +6827,27 @@ async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed()
     };
 
     // I100: the post still goes through, and the hint says what to write.
-    let hinted = say("Thanks Mac, that helps").await["structuredContent"].clone();
+    let hinted = say("Thanks @Mac, that helps").await["structuredContent"].clone();
     assert_eq!(hinted["posted"], true);
     let hint = text(&hinted["hint"]);
     assert!(hint.contains("Mac") && hint.contains("@Mac Smith") && hint.contains("won't be woken"));
     // Tagged properly, a plain full name, a name nobody here has, someone in another room, and
-    // a bare first name that is the whole name: none of them is a mistake it can fix.
-    for words in
-        ["@Mac Smith thanks", "mac smith thanks", "hello Quill", "hi Quill Jones", "ok Bea", "nice"]
-    {
+    // a bare first name that is the whole name: none of them is a mistake it can fix. Nor is a
+    // first name written without `@`, or a tag run on into a repo name, a path or a possessive.
+    for words in [
+        "@Mac Smith thanks",
+        "mac smith thanks",
+        "hello @Quill",
+        "hi Quill Jones",
+        "ok @Bea",
+        "nice",
+        "Thanks Mac, that helps",
+        "Mac's PR #456",
+        "see @Mac-Agent #7",
+        "the @Mac/repo code",
+        "@Mac's turn",
+        "mail mac@example.com",
+    ] {
         let reply = say(words).await["structuredContent"].clone();
         assert_eq!(reply["posted"], true);
         assert!(reply.get("hint").is_none(), "{words}: {reply}");
@@ -6845,7 +6857,8 @@ async fn say_hints_when_a_first_name_is_written_where_the_whole_name_is_needed()
         say("see https://github.com/Mac/repo/pull/1 for it").await["structuredContent"].clone();
     assert_eq!(link["posted"], true);
     assert!(link.get("hint").is_none(), "{link}");
-    let both = say("see HTTP://example.com/Mac then thanks Mac").await["structuredContent"].clone();
+    let both =
+        say("see HTTP://example.com/@Mac then thanks @Mac").await["structuredContent"].clone();
     assert!(text(&both["hint"]).contains("@Mac Smith"), "{both}");
     // A note is not chat, so it gets none.
     let note = json!({ "hangout_id": room, "text": "Mac knows" });
