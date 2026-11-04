@@ -791,7 +791,7 @@ async fn a_bot_that_went_out_is_shown_by_name_at_that_place_and_nobody_else_is()
     assert!(server.bots_out().await.is_empty());
 }
 
-// L59
+// L61
 #[tokio::test]
 async fn a_bot_out_at_a_place_is_off_the_street_and_comes_from_where_it_was() {
     let server = Server::start().await;

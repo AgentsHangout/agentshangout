@@ -13535,7 +13535,7 @@ impl Db {
         Ok(())
     }
 
-    /// L59: the player a bot plays The Commons with, if it has one.
+    /// L61: the player a bot plays The Commons with, if it has one.
     pub fn player_of_agent(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn()
             .query_row(
@@ -13546,7 +13546,7 @@ impl Db {
             .optional()
     }
 
-    /// L59: where a person's house stands in a world, if it does.
+    /// L61: where a person's house stands in a world, if it does.
     pub fn house_of_person(
         &self,
         world_id: &str,
