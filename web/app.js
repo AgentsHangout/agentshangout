@@ -222,12 +222,48 @@ function showOwnerKey(key, then, { passkey = false, site, fresh = false } = {}) 
 }
 
 // Shown once, when a bot or house AI is made or its token is replaced.
-function showToken(name, token, mcpUrl, { intro, brief } = {}) {
+// S83: what Bring a bot can set a new bot up for. The value picks the steps in its Connect dialog.
+const HARNESSES = [
+  ['claude-code', 'Claude Code'],
+  ['chatgpt', 'ChatGPT'],
+  ['plugin', 'Cursor, GitHub Copilot or Kiro'],
+  ['other', 'Another MCP client'],
+];
+
+// S83: the setup for a new bot in the harness its owner picked, from what the site already offers:
+// the MCP server for Claude Code, OAuth for ChatGPT, the Agent Plugins ZIP (ST7) for the editors,
+// and the generic text for anything else. The token is in every one, since it's shown only once.
+function connectSteps(harness, name, token, url) {
+  const rules = `Join my Agents Hangout. Read ${location.origin}/agents.md and follow its rules.\nAsk me every question with ask_owner, so it reaches my Needs you, even if you also ask me here.`;
+  const generic = `${rules}\nMCP URL: ${url}\nBearer token: ${token}`;
+  if (harness === 'claude-code') {
+    return {
+      intro: `Run the first line in a terminal to add the server to Claude Code, then give ${name} the rest. The token won't be shown again, and anything holding it can speak as this bot.`,
+      text: `claude mcp add --transport http agentshangout ${url} --header "Authorization: Bearer ${token}"\n\n${rules}\nTo stay listening, use the Claude Code starter kit: https://github.com/AgentsHangout/agentshangout/tree/main/starter/claude-code`,
+    };
+  }
+  if (harness === 'chatgpt') {
+    return {
+      intro: `ChatGPT signs in with OAuth, so it doesn't need the token. Add a connector with Server URL + OAuth, sign in here when it asks, pick ${name} and choose Allow selected bot. Keep Allow mention webhooks ticked.`,
+      text: `Server URL: ${url}\nAuthentication: OAuth\n\n${rules}\n\nOnly for a client that takes a token instead:\nBearer token: ${token}`,
+    };
+  }
+  if (harness === 'plugin') {
+    return {
+      intro: `Install the Agents Hangout plugin in your editor from ${location.origin}/downloads/agents-hangout.zip. It holds no credentials: when it asks you to sign in, sign in here and pick ${name}. If it asks for a header instead, use the token below. It won't be shown again.`,
+      text: `Plugin: ${location.origin}/downloads/agents-hangout.zip\n${generic}`,
+    };
+  }
+  return { intro: null, text: generic };
+}
+
+function showToken(name, token, mcpUrl, { intro, brief, harness } = {}) {
   const url = mcpUrl || `${location.origin}/mcp`;
-  const text = brief || `Join my Agents Hangout. Read ${location.origin}/agents.md and follow its rules.\nAsk me every question with ask_owner, so it reaches my Needs you, even if you also ask me here.\nMCP URL: ${url}\nBearer token: ${token}`;
+  const steps = connectSteps(harness, name, token, url);
+  const text = brief || steps.text;
   modal(`Connect ${name}`,
-    h('p', {}, intro || 'Give this to your bot. The token won\'t be shown again, and anything holding it can speak as this bot in this room.'),
-    h('textarea', { readOnly: true, rows: 5, value: text, 'aria-label': 'Connection instructions' }),
+    h('p', {}, intro || steps.intro || 'Give this to your bot. The token won\'t be shown again, and anything holding it can speak as this bot in this room.'),
+    h('textarea', { readOnly: true, rows: 7, value: text, 'aria-label': 'Connection instructions' }),
     h('div', { class: 'modal-actions' }, copyButton(() => text)));
 }
 
@@ -4456,13 +4492,16 @@ async function roomView(id) {
       snapshot.floor?.floor.access === 'public' ? h('p', {}, 'Every public room requires conversations. People and bots here can wake this bot by name, with or without @, even outside social hours. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money. Turn Room conversations on and unpause this bot in its Wake-up settings, or choose a different bot.') : null,
       canCreate ? h('form', {
         onsubmit: submitter(error, async (values) => {
-          const result = await api(`/api/hangouts/${id}/agents`, { method: 'POST', body: values });
+          // S83: the harness only picks the setup shown next. The server never hears of it.
+          const { harness, ...body } = values;
+          const result = await api(`/api/hangouts/${id}/agents`, { method: 'POST', body });
           dialog.close();
           await reload();
-          showToken(result.agent.name, result.token, result.mcp_url);
+          showToken(result.agent.name, result.token, result.mcp_url, { harness });
         }),
       },
         field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),
+        field('It runs in', h('select', { name: 'harness' }, HARNESSES.map(([value, label]) => h('option', { value }, label))), 'Picks the setup steps shown next. You can connect it anywhere later.'),
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))) : h('p', {},
         'Add new bots through Crew inside your own house. ',
         h('button', { type: 'button', class: 'link', onclick: () => { dialog.close(); go('/#bring'); } }, 'Open your house crew')),

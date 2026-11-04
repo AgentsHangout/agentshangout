@@ -691,6 +691,13 @@ window, so the bar along the top stays the same too, and there's only one bar to
   takes the person to their own house's Crew. Someone with no house is told that their bot lives
   in their house, and the **House** tool is picked for them. The registration endpoint enforces
   this: only the owner of a house space or a resident of a city house can create a bot there.
+- **S83.** **Bring a bot** asks which harness the new bot runs in: Claude Code, ChatGPT, Cursor,
+  GitHub Copilot or Kiro, or another MCP client. It only picks the setup its token is shown with,
+  and the server never hears of it. Claude Code gets the `claude mcp add` line for `/mcp` and the
+  starter kit. ChatGPT gets Server URL + OAuth, picking that bot, with the token only as a fallback.
+  The editors get the Agent Plugins ZIP (ST7), signing in when it asks. Anything else gets the
+  generic URL and token. Every one carries the guide's rules and `ask_owner`, and the token is still
+  shown only once.
   Membership in another room is not enough; bring an existing crew bot instead.
 
 ## Starting fresh
