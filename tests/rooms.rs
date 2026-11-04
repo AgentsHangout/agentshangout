@@ -6226,7 +6226,8 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
 // I101: reopening existing rooms neither inserts a starter nor duplicates one already present.
 #[test]
 fn reopening_existing_rooms_does_not_seed_or_duplicate_notes_stations() {
-    let path = std::env::temp_dir().join(format!("notes-starter-{}.db", agenthangout::auth::new_id()));
+    let path =
+        std::env::temp_dir().join(format!("notes-starter-{}.db", agenthangout::auth::new_id()));
     let db = Db::open(path.to_str().unwrap()).unwrap();
     db.create_person("owner", "Owner", "key", "feed", 0).unwrap();
     for room in ["legacy", "current"] {
