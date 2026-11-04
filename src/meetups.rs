@@ -23,6 +23,8 @@ const NUDGE_LEAD_SECS: i64 = 5 * 60;
 const LATE_SECS: i64 = 30 * 60;
 /// MU11: a bot rung by a meetup isn't rung by another for this long.
 const RING_HOLD_SECS: i64 = 3 * 60;
+/// MU11: how long a ring being delivered holds the next one, if it is never settled.
+const RESERVATION_SECS: i64 = 2 * 60;
 const KEEP_SECS: i64 = 7 * 24 * 60 * 60;
 pub const MAX_OPEN_PROPOSED: i64 = 3;
 pub const MAX_WAITING: i64 = 10;
@@ -233,6 +235,67 @@ impl Db {
         Ok(due)
     }
 
+    /// MU11: reserves the right to ring this bot in this room, unless a person's wake or a meetup
+    /// ring was accepted there since `since`, or another ring is being delivered (reserved less
+    /// than `RESERVATION_SECS` ago). Checked and written in one immediate transaction, so of
+    /// two rings due at once exactly one is true.
+    pub fn reserve_meetup_ring(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        since: i64,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM meetup_ring_reservations WHERE reserved_at <= ?",
+            [at - RESERVATION_SECS],
+        )?;
+        let held: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM wake_accepts
+                 WHERE agent_id = ?1 AND hangout_id = ?2 AND accepted_at > ?3)
+                 OR EXISTS (SELECT 1 FROM meetup_ring_reservations
+                 WHERE agent_id = ?1 AND hangout_id = ?2)",
+            params![agent_id, hangout_id, since],
+            |row| row.get(0),
+        )?;
+        if held {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO meetup_ring_reservations (agent_id, hangout_id, reserved_at)
+             VALUES (?, ?, ?)",
+            params![agent_id, hangout_id, at],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// MU11: whether this bot and room still hold a live reservation, for the final check.
+    pub fn meetup_ring_reserved(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM meetup_ring_reservations
+             WHERE agent_id = ? AND hangout_id = ? AND reserved_at > ?)",
+            params![agent_id, hangout_id, at - RESERVATION_SECS],
+            |row| row.get(0),
+        )
+    }
+
+    /// MU11: a failed or denied ring gives its reservation back and starts no cooldown.
+    pub fn release_meetup_ring(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM meetup_ring_reservations WHERE agent_id = ? AND hangout_id = ?",
+            params![agent_id, hangout_id],
+        )?;
+        Ok(())
+    }
+
     /// MU11: records that a meetup ring was accepted by this bot's callback, in `wake_accepts`
     /// (the table a person's mention checks, E31) under a negative id no message has, so the two
     /// hold each other. Called only after the trust checks passed and the POST was accepted.
@@ -242,13 +305,19 @@ impl Db {
         hangout_id: &str,
         at: i64,
     ) -> rusqlite::Result<()> {
-        let conn = self.conn();
-        conn.execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM meetup_ring_reservations WHERE agent_id = ? AND hangout_id = ?",
+            params![agent_id, hangout_id],
+        )?;
+        tx.execute(
             "INSERT INTO wake_accepts (message_id, agent_id, hangout_id, accepted_at)
              SELECT COALESCE(MIN(message_id), 0) - 1, ?1, ?2, ?3 FROM wake_accepts
              WHERE message_id < 0",
             params![agent_id, hangout_id, at],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -306,7 +375,12 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
     let ring = ring
         && written
         && state.db.notify_url(agent_id).ok().flatten().is_some()
-        && !ring_held(state, agent_id, &meetup.hangout_id, now());
+        && !ring_held(state, agent_id, &meetup.hangout_id, now())
+        // The checks above can pass for two rings at once; the reservation lets one through.
+        && state
+            .db
+            .reserve_meetup_ring(agent_id, &meetup.hangout_id, now() - RING_HOLD_SECS, now())
+            .unwrap_or(false);
     if ring {
         let notice = crate::notify::Notice {
             event: "plan",
@@ -314,18 +388,25 @@ fn tell(state: &AppState, agent_id: &str, meetup: &Meetup, change: &str, extra: 
             text: "A meetup. Call inbox: meetups says where and when.".to_string(),
         };
         let (id, change) = (meetup.id.clone(), change.to_string());
-        let room = meetup.hangout_id.clone();
+        let (room, settled) = (meetup.hangout_id.clone(), meetup.hangout_id.clone());
         crate::notify::send_if(
             state,
             agent_id,
             &notice,
-            move |state, agent_id| may_ring(state, agent_id, &id, &change),
-            // Only an accepted delivery starts the cooldown, as for a person's mention.
+            move |state, agent_id| {
+                may_ring(state, agent_id, &id, &change)
+                    && state.db.meetup_ring_reserved(agent_id, &room, now()).unwrap_or(false)
+            },
+            // Only an accepted delivery starts the cooldown, as for a person's mention; any other
+            // outcome gives the reservation back.
             move |state, agent_id, posted| {
-                if posted.accepted() {
-                    if let Err(error) = state.db.note_meetup_wake(agent_id, &room, now()) {
-                        tracing::warn!(%error, "a meetup ring could not be recorded");
-                    }
+                let settled_ok = if posted.accepted() {
+                    state.db.note_meetup_wake(agent_id, &settled, now())
+                } else {
+                    state.db.release_meetup_ring(agent_id, &settled)
+                };
+                if let Err(error) = settled_ok {
+                    tracing::warn!(%error, "a meetup ring could not be settled");
                 }
             },
         );

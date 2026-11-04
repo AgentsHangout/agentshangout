@@ -1606,6 +1606,14 @@ CREATE TABLE IF NOT EXISTS meetup_bots (
     PRIMARY KEY (meetup_id, agent_id)
 );
 CREATE INDEX IF NOT EXISTS meetup_bots_by_agent ON meetup_bots (agent_id);
+-- MU11: a meetup ring being delivered holds the next one for that bot and room until it is
+-- accepted (then it is a wake_accepts row), fails (then it is released) or goes stale.
+CREATE TABLE IF NOT EXISTS meetup_ring_reservations (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL,
+    reserved_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
 "#;
 
 #[derive(Debug, Serialize)]

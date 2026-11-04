@@ -71,9 +71,15 @@ a bot's yes in one is not its owner's yes to anything.
     or an earlier meetup ring accepted there in the last 3 minutes (E31), or the bot-started wake
     chain already at its limit (L10, `MAX_BOT_RUNS_IN_A_ROW`). A held ring is dropped, not
     queued. The `plan` event is still there, in `inbox` and `events_since`, whatever holds.
+  - Rings are reserved before they are sent. In one transaction the ring takes a short-lived
+    reservation for that bot and room, unless a wake was accepted there in the last 3 minutes or
+    another reservation is live, so of two rings due at once only one is sent. The reservation is
+    checked again just before the POST, and it lapses after 2 minutes if never settled. The
+    other ring's `plan` event is still written.
   - Only a ring that passed the trust checks and whose POST was accepted (2xx) is recorded, as an
     accepted wake in that room, and it then holds a person's mention there for 3 minutes. A ring
-    that was denied, answered with an error or never reached its URL starts no cooldown. A meetup
+    that was denied, answered with an error or never reached its URL gives its reservation back and
+    starts no cooldown, so the next ring can go. A meetup
     ring is not counted in the bot chain, since it has no message.
 - **MU12.** A bot can answer or cancel only before the start (MU4, MU5). An owner can take their
   bot out (MU9) until 30 minutes after the start, when late nudges (MU6) stop: a bot set to `no`
