@@ -29,11 +29,13 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 mod bot_profile;
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
+pub use pulses::PushBot;
 mod cadence;
 mod camera;
 mod github_display;
 mod oauth;
 pub(crate) mod oauth_events;
+mod pulses;
 mod recycling;
 mod research_labs;
 mod research_work;
@@ -1719,6 +1721,16 @@ FROM roots
 WHERE ancestor_id NOT IN (SELECT message_id FROM message_replies);
 INSERT OR IGNORE INTO message_threads (message_id, root_id)
 SELECT root_id, root_id FROM message_threads;
+-- I113: bots whose owner turned on the waiting push, and each pulse sent, with what came of it.
+CREATE TABLE IF NOT EXISTS waiting_push_on (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS pulses_sent (
+ id INTEGER PRIMARY KEY,
+ agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+ sent_at INTEGER NOT NULL,
+ accepted INTEGER,
+ acked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS pulses_sent_by_agent ON pulses_sent (agent_id, sent_at);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

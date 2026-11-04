@@ -687,6 +687,7 @@ struct AgentNotifyBody {
     only_me: Option<bool>,
     trusted_bots: Option<Vec<String>>,
     waiting_pulse: Option<bool>,
+    waiting_push: Option<bool>,
 }
 
 fn notify_update(field: &NotifyField) -> ops::NotifyAuth<'_> {
@@ -722,6 +723,9 @@ async fn set_agent_notify(
     )?;
     if let Some(on) = body.waiting_pulse {
         ops::set_waiting_pulse(&state, &caller, &id, on)?;
+    }
+    if let Some(on) = body.waiting_push {
+        ops::set_waiting_push(&state, &caller, &id, on)?;
     }
     Ok(Json(json!({ "ok": true })))
 }

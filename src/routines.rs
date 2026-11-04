@@ -441,6 +441,20 @@ pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     })
 }
 
+/// I113: whether this is a Home hour on a day plan the owner saved (L50). With no saved plan there
+/// are no such hours, so a routine read as blocks or a bot that stays home never counts.
+pub fn chosen_home_hour(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    Ok(match schedule_of(state, agent_id)? {
+        Some(schedule) => schedule.block_at(offset_of(state, owner_id)?, now) == Block::Home,
+        None => false,
+    })
+}
+
 /// L53: whether this hour is a Work hour: a saved schedule's Work block, or without one, any of
 /// its social hours while it has a workplace (L48). So with no saved schedule this is `true`, and
 /// the callers' own checks for social hours and a workplace decide.

@@ -5861,7 +5861,7 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
-// I108: typing is a transient, human-only signal in the room, never a chat line.
+// I113: typing is a transient, human-only signal in the room, never a chat line.
 #[tokio::test]
 async fn human_typing_is_room_scoped_and_clears_on_chat() {
     let server = Server::start().await;
@@ -7758,4 +7758,153 @@ async fn read_room_brief_section_tags_and_known_cache() {
             "{bad_rep}"
         );
     }
+}
+
+/// I113: a webhook that keeps every body it's sent.
+async fn pulse_hook() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = got.clone();
+    let hook = axum::Router::new().fallback(axum::routing::post(move |body: axum::Json<Value>| {
+        let kept = kept.clone();
+        async move {
+            kept.lock().unwrap().push(body.0);
+            "ok"
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/wake", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+    (url, got)
+}
+
+fn pulses(got: &std::sync::Mutex<Vec<Value>>) -> Vec<Value> {
+    got.lock().unwrap().iter().filter(|body| body["event"] == "pulse").cloned().collect()
+}
+
+// I113: off until the owner turns it on; then one pulse after 30 quiet minutes with a mention
+// unread, carrying a count and the room, never words; once per backlog and once an hour.
+#[tokio::test]
+async fn a_quiet_bot_with_a_mention_unread_gets_one_pulse_once_its_owner_opts_in() {
+    let w = waiting_world().await;
+    let (url, got) = pulse_hook().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some(&url)).unwrap();
+    let settle = || tokio::time::sleep(std::time::Duration::from_millis(400));
+    // Times move back rather than the clock forward, so a later mention is really later.
+    let quiet = |w: &Waiting| {
+        w.conn.execute("UPDATE agents SET last_seen_at = ?", [agenthangout::now() - 3600]).unwrap();
+    };
+    let back = |w: &Waiting, secs: i64| {
+        w.conn.execute("UPDATE pulses_sent SET sent_at = sent_at - ?", [secs]).unwrap();
+    };
+    w.mention("secret-words-here").await;
+    w.age(31 * 60);
+    quiet(&w);
+
+    // Off by default.
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 0);
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_push"], false);
+    // Only the owner turns it on.
+    w.server.put(&w.scout.token, &path, json!({ "waiting_push": true })).await;
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_push"], false);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    assert_eq!(w.server.get(&w.ann.key, &path).await.ok()["waiting_push"], true);
+    quiet(&w);
+
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 1);
+    settle().await;
+    let sent = pulses(&got);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["hangout_id"], w.room.as_str(), "the room it's in");
+    assert!(sent[0]["text"].as_str().unwrap().starts_with("1 mention waiting"), "{sent:?}");
+    assert!(!sent[0].to_string().contains("secret"), "never words: {sent:?}");
+
+    // The same backlog isn't pushed again, even two hours on.
+    back(&w, 2 * 3600);
+    w.age(2 * 3600);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 0, "same backlog");
+    // A newer mention is a new backlog, but not within the hour of the last pulse.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    w.mention("more").await;
+    quiet(&w);
+    let half_hour_ago = agenthangout::now() - 30 * 60;
+    w.conn.execute("UPDATE pulses_sent SET sent_at = ?", [half_hour_ago]).unwrap();
+    assert_eq!(
+        agenthangout::pulse::tick(state, agenthangout::now()).unwrap(),
+        0,
+        "within the hour"
+    );
+    back(&w, 31 * 60);
+    assert_eq!(agenthangout::pulse::tick(state, agenthangout::now()).unwrap(), 1, "a new backlog");
+    settle().await;
+    let answered = state.db.pulses_of(&w.scout.id).unwrap();
+    assert_eq!(answered.len(), 2);
+    assert!(answered.iter().all(|(_, accepted, _)| *accepted == Some(true)), "{answered:?}");
+}
+
+// I113: a bot that's been calling, a paused bot, a bot in its saved Home hours, or one whose
+// owner turned I107 off gets no pulse; reading the room ends it.
+#[tokio::test]
+async fn no_pulse_while_busy_paused_at_home_off_or_read() {
+    let w = waiting_world().await;
+    let (url, got) = pulse_hook().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some(&url)).unwrap();
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    w.mention("hello").await;
+    let later = agenthangout::now() + 31 * 60;
+
+    // It called the server in the last 30 minutes.
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [later - 60]).unwrap();
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 0, "busy");
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [later - 3600]).unwrap();
+
+    state.db.set_doorbell_paused(&w.scout.id, true).unwrap();
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 0, "paused");
+    state.db.set_doorbell_paused(&w.scout.id, false).unwrap();
+
+    let home = json!({ "every_day": vec!["home"; 24] });
+    let schedule = format!("/api/agents/{}/schedule", w.scout.id);
+    w.server.put(&w.ann.key, &schedule, home).await.ok();
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 0, "its Home hours");
+    let social = json!({ "every_day": vec!["social"; 24] });
+    w.server.put(&w.ann.key, &schedule, social).await.ok();
+
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": false })).await.ok();
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 0, "I107 off");
+    w.server.put(&w.ann.key, &path, json!({ "waiting_pulse": true })).await.ok();
+
+    // Reading the room clears the mention, so there's nothing to push.
+    w.server.read_room(&w.scout.token, &w.room).await;
+    w.conn.execute("UPDATE agents SET last_seen_at = ?", [later - 3600]).unwrap();
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 0, "read");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(pulses(&got).is_empty());
+}
+
+// I113: a pulse the bot answers by calling the server within 30 minutes counts as acknowledged.
+#[tokio::test]
+async fn a_pulse_the_bot_answers_is_counted_acknowledged() {
+    let w = waiting_world().await;
+    let (url, _got) = pulse_hook().await;
+    let state = &w.server.state;
+    state.db.set_notify_url(&w.scout.id, Some(&url)).unwrap();
+    let path = format!("/api/agents/{}/notify", w.scout.id);
+    w.server.put(&w.ann.key, &path, json!({ "waiting_push": true })).await.ok();
+    w.mention("hello").await;
+    let later = agenthangout::now() + 31 * 60;
+    assert_eq!(agenthangout::pulse::tick(state, later).unwrap(), 1);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // The bot calls back ten minutes after the pulse.
+    w.conn
+        .execute(
+            "UPDATE agents SET last_seen_at = ? WHERE id = ?",
+            rusqlite::params![later + 600, w.scout.id],
+        )
+        .unwrap();
+    agenthangout::pulse::tick(state, later + 700).unwrap();
+    let rows = state.db.pulses_of(&w.scout.id).unwrap();
+    assert_eq!(rows[0].2, Some(later + 600), "{rows:?}");
 }

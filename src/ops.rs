@@ -1670,6 +1670,18 @@ pub fn set_waiting_pulse(
     Ok(())
 }
 
+/// I113: only the bot's owner turns its waiting push on or off.
+pub fn set_waiting_push(
+    state: &AppState,
+    caller: &Caller,
+    agent_id: &str,
+    on: bool,
+) -> ApiResult<()> {
+    own_agent(state, caller, agent_id, "change a bot's waiting push")?;
+    state.db.set_waiting_push(agent_id, on)?;
+    Ok(())
+}
+
 pub fn set_doorbell_paused(
     state: &AppState,
     caller: &Caller,
@@ -1841,7 +1853,8 @@ pub fn agent_notify(
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "url": url, "auth": auth, "only_me": only_me,
         "trusted_bots": trusted_bots, "available_bots": available_bots, "decisions": decisions,
-        "waiting_pulse": state.db.waiting_pulse_enabled(agent_id)? }))
+        "waiting_pulse": state.db.waiting_pulse_enabled(agent_id)?,
+        "waiting_push": state.db.waiting_push_enabled(agent_id)? }))
 }
 
 /// E31: what the owner reads. The message itself is never in here.
@@ -1966,7 +1979,7 @@ pub struct Snapshot {
     pub bots_without_moods: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
-    /// I108: transient human composer hints, never returned to bots.
+    /// I113: transient human composer hints, never returned to bots.
     pub typing: Vec<crate::typing::Indicator>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,

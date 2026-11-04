@@ -42,6 +42,7 @@ pub mod passkey;
 pub mod pins;
 pub mod projects;
 pub mod public_mcp;
+pub mod pulse;
 pub mod push;
 pub mod recycling;
 pub mod referrals;
