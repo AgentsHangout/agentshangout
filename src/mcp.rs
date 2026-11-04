@@ -1668,55 +1668,73 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     };
     // I91: the last `limit` messages, and how many came before them.
     // I103: read_room collapses thread replies into their root message.
-    let mut all_roots: Vec<crate::db::Message> =
-        snapshot.messages.iter().filter(|message| message.reply_to.is_none()).cloned().collect();
-    let existing_root_ids: std::collections::HashSet<i64> =
-        all_roots.iter().map(|m| m.id).collect();
+    let guest_since = snapshot.guest.as_ref().map(|v| v.since);
+    let mut all_roots: Vec<crate::db::Message> = Vec::new();
     let mut missing_root_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
     for msg in &snapshot.messages {
-        if msg.reply_to.is_some() {
-            let root_candidate = msg.thread_root.or(msg.reply_to);
-            if let Some(mut root_id) = root_candidate {
-                if let Ok(Some(canonical)) = state.db.thread_root_for(root_id) {
-                    root_id = canonical;
-                }
-                if !existing_root_ids.contains(&root_id) {
-                    missing_root_ids.insert(root_id);
-                    if missing_root_ids.len() >= 50 {
-                        break;
-                    }
-                }
+        if let Some(r_cand) = msg.reply_to {
+            let mut root_id = msg.thread_root.unwrap_or(r_cand);
+            if let Ok(Some(canonical)) = state.db.thread_root_for(root_id) {
+                root_id = canonical;
             }
+            let root_visible = if let Some(since) = guest_since {
+                if let Ok(Some(root)) = state.db.message(root_id) {
+                    root.hangout_id == hangout.id && root.created_at > since
+                } else {
+                    false
+                }
+            } else {
+                true
+            };
+            if root_visible {
+                if !snapshot.messages.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
+                    missing_root_ids.insert(root_id);
+                }
+            } else {
+                // Root is not visible to this guest; keep reply inline as an ordinary line.
+                all_roots.push(msg.clone());
+            }
+        } else {
+            all_roots.push(msg.clone());
         }
     }
-    for root_id in missing_root_ids {
+
+    for root_id in missing_root_ids.into_iter().take(50) {
         if let Ok(Some(root)) = state.db.message(root_id) {
             if root.hangout_id == hangout.id {
-                if let Some(visit) = &snapshot.guest {
-                    if root.created_at <= visit.since {
+                if let Some(since) = guest_since {
+                    if root.created_at <= since {
                         continue;
                     }
                 }
-                all_roots.push(root);
+                if !all_roots.iter().any(|m| m.id == root.id) {
+                    all_roots.push(root);
+                }
             }
         }
     }
-    all_roots.sort_by_key(|m| m.id);
-    let root_active_after = |root_id: i64| -> bool {
-        snapshot.messages.iter().any(|m| {
-            m.id > after && (m.thread_root == Some(root_id) || m.reply_to == Some(root_id))
-        })
+
+    let thread_activity = |root_id: i64| -> i64 {
+        snapshot
+            .messages
+            .iter()
+            .filter(|m| m.thread_root == Some(root_id) || m.reply_to == Some(root_id))
+            .map(|m| m.id)
+            .max()
+            .unwrap_or(root_id)
+            .max(root_id)
     };
-    let newer: Vec<&crate::db::Message> = all_roots
-        .iter()
-        .filter(|message| message.id > after || root_active_after(message.id))
-        .collect();
+
+    let mut newer: Vec<&crate::db::Message> =
+        all_roots.iter().filter(|message| thread_activity(message.id) > after).collect();
+    newer.sort_by_key(|message| thread_activity(message.id));
+
     let limit = optional_limit(args, 200)?;
     let kept = limit.map_or(0, |limit| newer.len().saturating_sub(limit));
     let brief = args["brief"].as_bool().unwrap_or(false);
     let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
-    let last_message_id =
-        roots.iter().map(|m| m.id).chain(snapshot.messages.iter().map(|m| m.id)).max().unwrap_or(0);
+    let last_message_id = roots.iter().map(|m| thread_activity(m.id)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
     let messages: Vec<Value> = roots
@@ -1919,21 +1937,33 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     if root.kind != "chat" {
         return Err(ApiError::bad_request("not a chat thread"));
     }
+    let guest = state.guest_visit(caller, &hangout.id)?;
+    let mut root_visible = true;
     if let Some(canonical) = state.db.thread_root_for(root.id)? {
         if canonical != root.id {
-            root = state.db.message(canonical)?.ok_or_else(ApiError::not_found)?;
+            if let Ok(Some(can_msg)) = state.db.message(canonical) {
+                let can_visible = match &guest {
+                    Some(visit) => can_msg.created_at > visit.since,
+                    None => true,
+                };
+                if can_visible {
+                    root = can_msg;
+                }
+            }
         }
     }
-    let guest = state.guest_visit(caller, &hangout.id)?;
     if let Some(visit) = &guest {
         if root.created_at <= visit.since {
-            return Err(ApiError::not_found());
+            root_visible = false;
         }
     }
     let after = args["after"].as_i64().unwrap_or(0);
     let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
     let mut replies =
         state.db.thread_replies(root.id, after, guest.as_ref().map(|v| v.since), limit + 1)?;
+    if !root_visible && replies.is_empty() {
+        return Err(ApiError::not_found());
+    }
     let has_more = replies.len() as i64 > limit;
     if has_more {
         replies.truncate(limit as usize);
@@ -1941,7 +1971,7 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
     if let Some(agent_id) = &caller.agent_id {
         let mut viewed_ids: Vec<i64> = replies.iter().map(|m| m.id).collect();
-        if after == 0 {
+        if after == 0 && root_visible {
             viewed_ids.push(root.id);
         }
         state.db.mark_thread_mentions_read(agent_id, &viewed_ids, now())?;
@@ -1978,9 +2008,14 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         }
         line
     };
+    let mut root_val = message_json(&root);
+    if !root_visible {
+        root_val["text"] = json!(null);
+        root_val["text_hidden"] = json!("posted before you arrived");
+    }
     Ok(json!({
         "hangout_id": hangout.id,
-        "root": message_json(&root),
+        "root": root_val,
         "messages": replies.iter().map(message_json).collect::<Vec<_>>(),
         "has_more": has_more,
     }))

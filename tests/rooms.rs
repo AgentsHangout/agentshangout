@@ -6739,3 +6739,60 @@ async fn threads_orphan_after_root_deleted() {
     assert!(!ids.contains(&a_id), "deleted root A is omitted from read_room: {read}");
     assert!(ids.contains(&b_id), "standalone B remains in read_room: {read}");
 }
+
+#[tokio::test]
+async fn threads_limited_incremental_read_retains_active_thread() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // 1. Post root message A (id 1)
+    let said_a =
+        server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Root A" })).await;
+    let a_id = said_a["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 2. Scout catches up to a_id (cursor)
+    let read_1 = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": a_id }))
+        .await;
+    assert_eq!(read_1["structuredContent"]["messages"], json!([]));
+    assert_eq!(read_1["structuredContent"]["last_message_id"], a_id);
+
+    // 3. Post new top-level message Y (id 2 / older than reply Z)
+    let said_y = server
+        .tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Top-level Y" }))
+        .await;
+    let y_id = said_y["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 4. Post reply Z answering A (id 3 / newer than Y)
+    let said_z = server
+        .tool(
+            &scout.token,
+            "say",
+            json!({ "hangout_id": room, "text": "Reply Z to A", "reply_to": a_id }),
+        )
+        .await;
+    let z_id = said_z["structuredContent"]["message_id"].as_i64().unwrap();
+    assert!(z_id > y_id);
+
+    // 5. Calling read_room with after_message_id = a_id and limit: 1 returns active root A (newest activity)
+    let read_lim = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": room, "after_message_id": a_id, "limit": 1 }),
+        )
+        .await;
+    let msgs = read_lim["structuredContent"]["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1, "active root A returned: {read_lim}");
+    assert_eq!(msgs[0]["id"], a_id, "Root A returned because its reply Z is newest: {read_lim}");
+    assert_eq!(msgs[0]["reply_count"], 1);
+    let cursor = read_lim["structuredContent"]["last_message_id"].as_i64().unwrap();
+    assert_eq!(cursor, z_id, "last_message_id reflects seen reply Z: {read_lim}");
+
+    // 6. Next poll after cursor returns no duplicate messages
+    let read_next = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": cursor }))
+        .await;
+    assert_eq!(read_next["structuredContent"]["messages"], json!([]));
+}

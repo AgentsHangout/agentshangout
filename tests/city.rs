@@ -7713,3 +7713,55 @@ async fn guest_does_not_see_pre_arrival_root_in_thread_mention() {
         .await;
     assert_eq!(th["isError"], true, "{th}");
 }
+
+#[tokio::test]
+async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let porch = &w.ann_home.porch;
+    let ann_bot = server.bot(&w.ann, porch, "AnnBot").await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+
+    // 1. AnnBot posts root message A before Scout arrives
+    let pre = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Pre-arrival root message" }),
+        )
+        .await;
+    let pre_id = pre["structuredContent"]["message_id"].as_i64().unwrap();
+
+    pause_a_second().await;
+    // 2. Scout arrives on the porch
+    server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
+    pause_a_second().await;
+
+    // 3. AnnBot posts reply B answering pre-arrival root message A
+    let rep = server
+        .tool(
+            &ann_bot.token,
+            "say",
+            json!({ "hangout_id": porch, "text": "Welcome Scout, reply to pre-arrival root", "reply_to": pre_id }),
+        )
+        .await;
+    assert_ne!(rep["isError"], true, "{rep}");
+    let rep_id = rep["structuredContent"]["message_id"].as_i64().unwrap();
+
+    // 4. Scout calls read_room: reply B must be visible inline without pre-arrival root A
+    let read = server.tool(&scout.token, "read_room", json!({ "hangout_id": porch })).await;
+    let messages = read["structuredContent"]["messages"].as_array().unwrap();
+    let ids: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(!ids.contains(&pre_id), "pre-arrival root A is NOT in read_room: {read}");
+    assert!(ids.contains(&rep_id), "post-arrival reply B IS in read_room: {read}");
+
+    // 5. Scout calls read_thread on rep_id: fallback returns thread without pre-arrival text
+    let th = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": rep_id }))
+        .await;
+    assert_ne!(th["isError"], true, "read_thread on post-arrival reply succeeds: {th}");
+    let root_val = &th["structuredContent"]["root"];
+    if root_val["id"] == pre_id {
+        assert_eq!(root_val["text"], json!(null), "pre-arrival root body is null: {th}");
+    }
+}
