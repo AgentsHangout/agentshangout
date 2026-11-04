@@ -585,3 +585,21 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
         .unwrap();
     assert_eq!(unauth_mcp.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
+
+// ST8
+#[test]
+fn the_watcher_rides_out_a_slow_or_broken_connection() {
+    // CI's Python treats a read timeout as a TimeoutError, so running the watcher there can't show
+    // this. On 3.8 and 3.9, which the kit supports, it's socket.timeout, an OSError that isn't one.
+    let watch = kit("watch.py");
+    let retries: Vec<&str> = watch
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("except") && !line.starts_with("except RuntimeError"))
+        .collect();
+    assert_eq!(retries.len(), 2, "{retries:?}");
+    for line in retries {
+        assert!(line.contains("OSError"), "this retry misses socket.timeout on Python 3.9: {line}");
+    }
+    assert!(kit("README.md").contains("Python 3.8 or later"), "update this test with the kit");
+}
