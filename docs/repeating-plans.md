@@ -101,7 +101,10 @@ owner sets the plan's cadence again.
   room's reloads, so an open panel stays open with what was typed, and it's read again when
   opened. A read is shown only if nothing was written while it was out, nothing is being written,
   and nothing was typed since, so it can't undo a newer yes or Stop. A member sees the panel even
-  before the plan repeats, so a repeat started later is found by opening it.
+  before the plan repeats, so a repeat started later is found by opening it. Nothing can be
+  changed until a read has come back, so a read that is slow or fails never offers Save over
+  defaults; only the newest read is shown; and a panel with a Save, Stop or yes still out is kept
+  until it settles.
 
 RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.

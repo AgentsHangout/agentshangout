@@ -281,6 +281,60 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
     assert.equal(all(member, (n) => n.type === 'checkbox').length, 2, 'opening shows the yes boxes');
   }
 
+  // Nothing can be changed before a read has come back, and a failed read offers nothing to save.
+  {
+    let fail;
+    reads = { 'GET /api/events/ev1/cadence': () => new Promise((_, reject) => { fail = () => reject(new Error('offline')); }) };
+    const own = context.repeatPanel(plan, 'ann', bots);
+    assert.equal(named(own, 'save'), undefined, 'no Save while the first read is out');
+    assert.ok(named(own, 'loading'));
+    fail();
+    await tick(); await tick();
+    assert.equal(named(own, 'save'), undefined, 'no Save after a failed read');
+    assert.ok(named(own, 'unread'));
+    reads['GET /api/events/ev1/cadence'] = { cadence: { freq: 'weekly', days: ['mon', 'wed'], times: ['14:00'], paused: true }, your_bots: [] };
+    own.open = true;
+    await own.ontoggle();
+    await tick();
+    assert.equal(named(own, 'save'), undefined, 'the real Mon/Wed repeat is locked, not replaced by defaults');
+    assert.ok(named(own, 'locked'));
+  }
+
+  // Only the newest read is painted: an older one coming back last is dropped.
+  {
+    const answers = [];
+    reads = { 'GET /api/events/ev1/cadence': () => new Promise((resolve) => answers.push(resolve)) };
+    const own = context.repeatPanel(plan, 'ann', bots);
+    own.open = true;
+    const second = own.ontoggle();
+    answers[1]({ cadence: { freq: 'weekly', days: week, times: ['10:00'] }, your_bots: [] });
+    await second;
+    answers[0]({ cadence: null, your_bots: [] });
+    await tick(); await tick();
+    assert.equal(own.children[0].children[0], 'Repeat: Weekdays at 10:00', 'the older read did not win');
+  }
+
+  // A reload that would swap the panel while a Save is out keeps it, and its lock, until it settles.
+  {
+    const weekly = { cadence: { freq: 'weekly', days: week, times: ['09:00'] }, your_bots: [] };
+    reads = { 'GET /api/events/ev1/cadence': weekly, 'DELETE /api/events/ev1/cadence': { ok: true } };
+    const cacheSwap = new Map();
+    const own = context.repeatPanelFor(cacheSwap, plan, 'ann', bots);
+    await tick();
+    let release;
+    reads['PUT /api/events/ev1/cadence'] = () => new Promise((resolve) => { release = () => resolve(weekly.cadence); });
+    const saving = named(own, 'save').onclick();
+    assert.equal(context.repeatPanelFor(cacheSwap, { ...plan, status: 'confirmed' }, 'ann', bots), own, 'confirmed keeps the panel');
+    const during = context.repeatPanelFor(cacheSwap, plan, 'ann', bots.slice(0, 1));
+    assert.equal(during, own, 'a bot-list change waits for the Save');
+    const mark = calls.length;
+    await named(during, 'stop').onclick();
+    assert.equal(calls.slice(mark).filter((c) => c.method === 'DELETE').length, 0, 'still locked');
+    release();
+    await saving;
+    assert.notEqual(context.repeatPanelFor(cacheSwap, plan, 'ann', bots.slice(0, 1)), own, 'swapped once settled');
+  }
+
   // No bots here, or a canceled plan: nothing at all.
   assert.equal(context.repeatPanel(plan, 'bo', []), null);
   assert.equal(context.repeatPanel({ ...plan, status: 'cancelled' }, 'ann', bots), null);

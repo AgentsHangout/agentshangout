@@ -3220,6 +3220,10 @@ function repeatPanel(event, you, bots) {
   let writing = 0;
   let writes = 0;
   let typed = false;
+  // Nothing can be changed until a read has come back: a pending or failed first read must never
+  // offer Save over defaults that would replace the real repeat. Only the newest read is painted.
+  let loaded = false;
+  let readsSent = 0;
   const write = async (action) => {
     writing += 1;
     writes += 1;
@@ -3227,15 +3231,22 @@ function repeatPanel(event, you, bots) {
   };
   const load = () => {
     const before = writes;
+    const sent = ++readsSent;
     return api(path).then((read) => {
-      if (writing || writes !== before || typed) return;
+      if (sent !== readsSent || writing || writes !== before || typed) return;
       data = read;
+      loaded = true;
       paint();
-    }).catch(() => {});
+    }).catch(() => {
+      if (sent !== readsSent || loaded) return;
+      body.replaceChildren(h('p', { class: 'muted', name: 'unread' }, 'Couldn\'t read this plan\'s repeat. Close and open this to try again.'));
+    });
   };
   // Every member who can answer sees it, repeating or not, and opening it reads it again: so a repeat
   // its owner starts later can be found without reading on every room reload (see repeatPanelFor).
   const panel = h('details', { class: 'repeat', ontoggle: () => { if (panel.open) load(); } }, summary, body);
+  // repeatPanelFor keeps this panel, and its lock, while anything it sent is still out.
+  panel.pending = () => writing > 0;
   // One yes-list write at a time, each built from the boxes as they are when it goes, so a quick
   // second click can't be sent behind a first that was built from older boxes.
   const checks = [];
@@ -3273,6 +3284,10 @@ function repeatPanel(event, you, bots) {
   };
 
   const paint = () => {
+    if (!loaded) {
+      body.replaceChildren(h('p', { class: 'muted', name: 'loading' }, 'Reading this plan\'s repeat…'));
+      return;
+    }
     const { cadence } = data;
     typed = false;
     summary.replaceChildren(`Repeat: ${repeatSummary(cadence)}`);
@@ -3354,11 +3369,13 @@ function repeatPanel(event, you, bots) {
 // The room reloads every 30 seconds and on most changes, and each reload draws every plan card
 // again. A plan keeps the one Repeat panel it had, so an open panel stays open with what the owner
 // typed, and nothing is read again until it's opened. A new panel is made only when what it shows
-// for changes: the plan's status, or which of your bots are in the room. `cache` is a Map.
+// for changes: whether the plan is canceled, or which of your bots are in the room. While the kept
+// panel still has a Save, Stop or yes out, it stays until that settles, so its lock isn't lost to a
+// fresh panel. `cache` is a Map.
 function repeatPanelFor(cache, event, you, bots) {
-  const key = [event.status, you, ...bots.map((bot) => bot.id)].join('|');
+  const key = [event.status === 'cancelled', you, ...bots.map((bot) => bot.id)].join('|');
   const kept = cache.get(event.id);
-  if (kept && kept.key === key) return kept.panel;
+  if (kept && (kept.key === key || kept.panel?.pending?.())) return kept.panel;
   const panel = repeatPanel(event, you, bots);
   cache.set(event.id, { key, panel });
   return panel;
