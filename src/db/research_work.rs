@@ -310,19 +310,22 @@ impl Db {
         self.conn()
             .query_row(
                 "SELECT s.ci, s.review, s.checked_at, s.attempted_at, s.stale,
-                        COALESCE(q.people_json, '[]'), COALESCE(q.teams_json, '[]')
+                        q.people_json, q.teams_json
                  FROM research_work_pr_state s
                  LEFT JOIN research_work_pr_requests q ON q.repo = s.repo AND q.number = s.number
                  WHERE s.repo = ? AND s.number = ?",
                 params![repo, number as i64],
                 |r| {
-                    let people: String = r.get(5)?;
-                    let teams: String = r.get(6)?;
+                    // RW12: no row means not read since GitHub's lists were kept, not nobody asked.
+                    let list = |json: Option<String>| -> Option<Vec<String>> {
+                        json.map(|json| serde_json::from_str(&json).unwrap_or_default())
+                    };
+                    let (people, teams): (Option<String>, Option<String>) = (r.get(5)?, r.get(6)?);
                     Ok(crate::research_work::PrState {
                         ci: r.get(0)?,
                         review: r.get(1)?,
-                        requested: serde_json::from_str(&people).unwrap_or_default(),
-                        requested_teams: serde_json::from_str(&teams).unwrap_or_default(),
+                        requested: list(people),
+                        requested_teams: list(teams),
                         checked_at: r.get(2)?,
                         attempted_at: r.get(3)?,
                         stale: r.get(4)?,

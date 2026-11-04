@@ -53,9 +53,10 @@ pub const MAX_WATCHES: i64 = 50;
 pub struct PrState {
     pub ci: String,
     pub review: String,
-    /// RW12: who's still asked to review, as GitHub last said: logins, and team slugs.
-    pub requested: Vec<String>,
-    pub requested_teams: Vec<String>,
+    /// RW12: who's still asked to review, as GitHub last said: logins, and team slugs. None
+    /// until a read has seen GitHub's lists, which isn't the same as nobody asked.
+    pub requested: Option<Vec<String>>,
+    pub requested_teams: Option<Vec<String>>,
     pub checked_at: i64,
     #[serde(skip)]
     pub attempted_at: i64,
@@ -639,8 +640,8 @@ pub async fn pr_status(
     let pr_state = state.db.research_work_pr_state(&repo, number)?.unwrap_or(PrState {
         ci: "unknown".into(),
         review: "unknown".into(),
-        requested: vec![],
-        requested_teams: vec![],
+        requested: None,
+        requested_teams: None,
         checked_at: 0,
         attempted_at: at,
         stale: true,

@@ -455,7 +455,8 @@ async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_gr
 
     assert_eq!(
         (down["requested"].clone(), down["requested_teams"].clone()),
-        (json!([]), json!([]))
+        (json!(null), json!(null)),
+        "RW12: who's asked isn't known yet, which is null, not nobody"
     );
 
     // RW12: five minutes on, one review is in and two are still asked for: pending, not a result.
