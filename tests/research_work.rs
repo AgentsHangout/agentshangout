@@ -80,7 +80,18 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
         if v.lock().unwrap()["pr_fail"] == true {
             return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
         }
-        (StatusCode::OK, Json(json!({"number":12,"head":{"sha":"a".repeat(40)}})))
+        // RW12: who it still asks for a review, from requested and requested_teams when set.
+        let asked = |key: &str, field: &str| {
+            let names = v.lock().unwrap()[key].clone();
+            let names = names.as_array().cloned().unwrap_or_default();
+            Value::Array(names.into_iter().map(|name| json!({ field: name })).collect())
+        };
+        let (people, teams) = (asked("requested", "login"), asked("requested_teams", "slug"));
+        (
+            StatusCode::OK,
+            Json(json!({"number":12,"head":{"sha":"a".repeat(40)},
+                "requested_reviewers":people,"requested_teams":teams})),
+        )
     }
     async fn checks(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
         let runs = v.lock().unwrap()["checks"].clone();
@@ -401,6 +412,34 @@ fn rw9_ci_and_review_are_read_conservatively() {
     // A full page of reviews might hide a later change request.
     assert_eq!(of(Value::Array(vec![review(1, "APPROVED"); 100])), None);
 }
+#[test]
+fn rw12_requested_reviewers_are_who_still_hasnt_reviewed() {
+    let asked = |people: Value, teams: Value| {
+        research_work::requested_of(&json!({"requested_reviewers":people,"requested_teams":teams}))
+    };
+    let got = asked(json!([{"login":"mac-bot"},{"login":"Ann_1"}]), json!([{"slug":"core.team"}]))
+        .unwrap();
+    assert_eq!(got.people, ["mac-bot", "Ann_1"]);
+    assert_eq!(got.teams, ["core.team"]);
+    assert_eq!(asked(json!([]), json!([])), Some(research_work::Requested::default()));
+    // A GitHub app is asked as its slug with [bot] after it.
+    let app = asked(json!([{"login":"copilot-reviewer[bot]"}]), json!([])).unwrap();
+    assert_eq!(app.people, ["copilot-reviewer[bot]"]);
+    // Either list missing, or an entry without its name, can't be read.
+    assert_eq!(asked(json!([{"id":3}]), json!([])), None);
+    assert_eq!(asked(json!([{"login":5}]), json!([])), None);
+    assert_eq!(research_work::requested_of(&json!({"requested_reviewers":[]})), None);
+    assert_eq!(research_work::requested_of(&json!({"requested_teams":[]})), None);
+    // A name GitHub wouldn't give is skipped, and the rest still read.
+    let odd = json!([{"login":"a b"},{"login":""},{"login":"x".repeat(40)},{"login":"[bot]"},{"login":"ok"}]);
+    assert_eq!(
+        asked(odd, json!([{"slug":"<b>"}])).unwrap(),
+        research_work::Requested { people: vec!["ok".into()], teams: vec![] }
+    );
+    // At most 20 of each are kept.
+    let many: Vec<Value> = (0..30).map(|n| json!({"login":format!("u{n}")})).collect();
+    assert_eq!(asked(Value::Array(many), json!([])).unwrap().people.len(), 20);
+}
 #[tokio::test]
 async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_green() {
     let (state, owner, _bot, upstream) = setup().await;
@@ -420,15 +459,49 @@ async fn rw9_pr_state_is_read_on_request_every_five_minutes_and_never_falsely_gr
         (json!("unknown"), json!("unknown"), json!(true))
     );
 
-    // Five minutes on, it reads passing and approved.
+    assert_eq!(
+        (down["requested"].clone(), down["requested_teams"].clone()),
+        (json!(null), json!(null)),
+        "RW12: who's asked isn't known yet, which is null, not nobody"
+    );
+
+    // RW12: five minutes on, one review is in and two are still asked for: pending, not a result.
     upstream.lock().unwrap()["pr_fail"] = json!(false);
     upstream.lock().unwrap()["checks"] = json!([{"status":"completed","conclusion":"success"}]);
+    upstream.lock().unwrap()["reviews"] = json!([{"user":{"id":5},"state":"COMMENTED"}]);
+    upstream.lock().unwrap()["requested"] = json!(["mac", "ann"]);
+    upstream.lock().unwrap()["requested_teams"] = json!(["core"]);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    let asked = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(
+        (asked["review"].clone(), asked["requested"].clone(), asked["requested_teams"].clone()),
+        (json!("none"), json!(["mac", "ann"]), json!(["core"]))
+    );
+    let read = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert_eq!(read["items"][1]["pr_state"]["requested"], json!(["mac", "ann"]));
+
+    // A pull request without GitHub's requested lists can't be read, and keeps who was asked.
+    upstream.lock().unwrap()["requested"] = json!([5]);
+    state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
+    let unreadable = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(
+        (unreadable["stale"].clone(), unreadable["requested"].clone()),
+        (json!(true), json!(["mac", "ann"]))
+    );
+
+    // Then it reads passing and approved, and whoever reviewed is no longer asked.
     upstream.lock().unwrap()["reviews"] = json!([{"user":{"id":5},"state":"APPROVED"}]);
+    upstream.lock().unwrap()["requested"] = json!(["ann"]);
+    upstream.lock().unwrap()["requested_teams"] = json!([]);
     state.db.age_research_work_pr_checks("org/repo", 301).unwrap();
     let up = research_work::pr_status(&state, &owner, "lab", 12).await.unwrap();
     assert_eq!(
         (up["ci"].clone(), up["review"].clone(), up["stale"].clone()),
         (json!("passing"), json!("approved"), json!(false))
+    );
+    assert_eq!(
+        (up["requested"].clone(), up["requested_teams"].clone()),
+        (json!(["ann"]), json!([]))
     );
 
     // Within five minutes it doesn't ask GitHub again, even though CI has started failing.

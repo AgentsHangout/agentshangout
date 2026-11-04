@@ -7816,6 +7816,9 @@ function researchItemDetails(item, labId) {
       : pr.ci === 'unknown' ? `CI and review couldn’t be read${pr.stale ? ' · stale' : ''}`
         : `CI ${pr.ci} · review ${String(pr.review).replaceAll('_', ' ')}${pr.stale ? ' · stale, couldn’t be checked' : ''}`;
     rows.push(h('p', { class: pr && pr.ci === 'failing' ? 'research-stale' : 'muted' }, said));
+    // RW12: who's still asked to review is pending, apart from any review already in.
+    const asked = pr ? [...(pr.requested || []), ...(pr.requested_teams || []).map((team) => `team ${team}`)] : [];
+    if (asked.length) rows.push(h('p', { class: 'muted' }, `Review requested from: ${asked.join(', ')}`));
   }
   const claims = item.claims || [];
   if (claims.length) {
