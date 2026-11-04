@@ -1690,6 +1690,16 @@ CREATE TRIGGER IF NOT EXISTS plan_cue_bots_bot_left AFTER DELETE ON room_agents 
    AND event_id IN (SELECT id FROM events WHERE hangout_id = OLD.hangout_id);
 END;
 CREATE TABLE IF NOT EXISTS waiting_pulse_off (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS closing_clocks (
+    item_id     TEXT PRIMARY KEY REFERENCES floor_items(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    closes_at   INTEGER NOT NULL,
+    everyone    INTEGER NOT NULL DEFAULT 1,
+    bot_ids     TEXT NOT NULL DEFAULT '',
+    set_by      TEXT NOT NULL REFERENCES people(id),
+    set_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS closing_clocks_due ON closing_clocks (closes_at);
 -- I102: 1-level conversation threads keyed by the root message id.
 CREATE TABLE IF NOT EXISTS message_threads (
     message_id   INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
@@ -1710,6 +1720,27 @@ WHERE ancestor_id NOT IN (SELECT message_id FROM message_replies);
 INSERT OR IGNORE INTO message_threads (message_id, root_id)
 SELECT root_id, root_id FROM message_threads;
 "#;
+
+/// I106: a closing clock's saved time and who it sends out.
+#[derive(Debug, Clone)]
+pub struct ClosingClock {
+    pub item_id: String,
+    pub hangout_id: String,
+    pub closes_at: i64,
+    pub everyone: bool,
+    pub bot_ids: Vec<String>,
+}
+
+fn closing_clock_from_row(row: &Row) -> rusqlite::Result<ClosingClock> {
+    let bots: String = row.get(4)?;
+    Ok(ClosingClock {
+        item_id: row.get(0)?,
+        hangout_id: row.get(1)?,
+        closes_at: row.get(2)?,
+        everyone: row.get::<_, i64>(3)? != 0,
+        bot_ids: bots.split(',').filter(|id| !id.is_empty()).map(str::to_string).collect(),
+    })
+}
 
 #[derive(Debug, Serialize)]
 pub struct RoadRemoval {
@@ -13352,6 +13383,80 @@ impl Db {
         )?;
         let rows =
             stmt.query_map(params![hangout_id, since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// I106: sets a closing clock's time and who it sends out.
+    pub fn set_closing_clock(
+        &self,
+        clock: &ClosingClock,
+        set_by: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO closing_clocks (item_id, hangout_id, closes_at, everyone, bot_ids, set_by, set_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (item_id) DO UPDATE SET closes_at = excluded.closes_at,
+                everyone = excluded.everyone, bot_ids = excluded.bot_ids,
+                set_by = excluded.set_by, set_at = excluded.set_at",
+            params![
+                clock.item_id,
+                clock.hangout_id,
+                clock.closes_at,
+                clock.everyone,
+                clock.bot_ids.join(","),
+                set_by,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// I106: takes the time off a closing clock.
+    pub fn clear_closing_clock(&self, item_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM closing_clocks WHERE item_id = ?", [item_id])?;
+        Ok(())
+    }
+
+    /// I106: the closing clocks with a time set on one floor.
+    pub fn closing_clocks_on(&self, hangout_id: &str) -> rusqlite::Result<Vec<ClosingClock>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT item_id, hangout_id, closes_at, everyone, bot_ids FROM closing_clocks
+             WHERE hangout_id = ?",
+        )?;
+        let rows = stmt.query_map([hangout_id], closing_clock_from_row)?;
+        rows.collect()
+    }
+
+    /// I106: the closing clocks whose time has come.
+    pub fn due_closing_clocks(&self, now: i64) -> rusqlite::Result<Vec<ClosingClock>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT item_id, hangout_id, closes_at, everyone, bot_ids FROM closing_clocks
+             WHERE closes_at <= ?",
+        )?;
+        let rows = stmt.query_map([now], closing_clock_from_row)?;
+        rows.collect()
+    }
+
+    /// I106: everyone walked onto a floor and still there, as `(who, bot's id if a bot)`.
+    pub fn floor_walkers(
+        &self,
+        hangout_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT v.who, v.agent_id FROM floor_visits v
+             WHERE v.hangout_id = ?1 AND v.until > ?2
+               AND NOT EXISTS (SELECT 1 FROM members m
+                               WHERE m.hangout_id = v.hangout_id AND m.person_id = v.person_id)
+               AND NOT EXISTS (SELECT 1 FROM room_agents r
+                               WHERE r.hangout_id = v.hangout_id AND r.agent_id = v.agent_id)",
+        )?;
+        let rows =
+            stmt.query_map(params![hangout_id, now], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect()
     }
 

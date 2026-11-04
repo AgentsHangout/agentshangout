@@ -1885,6 +1885,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "placed_by": item.placed_by_name,
             "holds_notes": item.holds_notes,
             "opens": item.opens,
+            // I106: when a closing clock sends visitors out, so there is time to say goodbye.
+            "closes_at": item.closing.as_ref().map(|clock| iso(clock.closes_at)),
+            "seconds_left": item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)),
+            "sends_out": item.closing.as_ref().map(|clock| clock.sends_out),
+            "you_are_listed": item.closing.as_ref().map(|clock| clock.listed),
+            "sends_out_bots": item.closing.as_ref().and_then(|clock| clock.bots.as_ref()),
             // I101: the shared-notes station counts the room's notes this caller can read.
             "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
             "does": item.does,
@@ -1908,6 +1914,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             Value::Null => false,
             _ => true,
         };
+        let has_closing_clock = snapshot.furnishing.items.iter().any(|item| item.closing.is_some());
         let present: Vec<&str> = [
             ("whiteboard", filled("whiteboard")),
             ("pins", filled("pins")),
@@ -1915,6 +1922,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             ("plans", filled("calendar")),
             ("notes", filled("notes")),
             ("items", filled("items")),
+            ("closing_clock", has_closing_clock),
         ]
         .into_iter()
         .filter_map(|(kind, here)| here.then_some(kind))

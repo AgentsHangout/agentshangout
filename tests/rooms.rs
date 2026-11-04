@@ -6239,6 +6239,183 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
 }
 
+// I106: a closing clock shows its time and a countdown, its owner sets it, and at the time it
+// sends out the walk-ins it names.
+#[tokio::test]
+async fn a_closing_clock_shows_its_time_and_sends_the_named_visitors_out() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.open(&ann, &room).await.ok();
+    let clock = server.item(&ann, &room, "closing_clock", (30, 10)).await;
+    let path = format!("/api/items/{clock}/closing");
+    let item_of = |read: &Value| {
+        read["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["kind"] == "closing_clock")
+            .unwrap()
+            .clone()
+    };
+
+    // Nothing is set at first.
+    let first = item_of(&server.read_room(&scout.token, &room).await);
+    assert_eq!(first["opens"], "closing");
+    assert!(first["closes_at"].is_null() && first["seconds_left"].is_null(), "{first}");
+
+    // Only whoever may change the item sets it; the time must be ahead.
+    let (home, eve) = server.someone("Eve").await;
+    server
+        .put(&eve.key, &path, json!({ "closes_at": now() + 600 }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    server
+        .put(&ann.key, &path, json!({ "closes_at": now() - 5 }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .put(&ann.key, &path, json!({ "closes_at": now() + 600, "everyone": false }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    let at = now() + 600;
+    server.put(&ann.key, &path, json!({ "closes_at": at })).await.ok();
+    let read = server.read_room(&scout.token, &room).await;
+    let shown = item_of(&read);
+    assert!(shown["closes_at"].as_str().unwrap().ends_with('Z'), "{shown}");
+    let left = shown["seconds_left"].as_i64().unwrap();
+    assert!((595..=600).contains(&left), "{shown}");
+    assert_eq!(shown["sends_out"], "everyone");
+    assert_eq!(shown["you_are_listed"], true);
+    assert!(read["how"]["closing_clock"].is_string(), "{read}");
+
+    // Changing it changes what is shown.
+    server.put(&ann.key, &path, json!({ "closes_at": at + 3600 })).await.ok();
+    let later = item_of(&server.read_room(&scout.token, &room).await);
+    assert!(later["seconds_left"].as_i64().unwrap() > 4000, "{later}");
+
+    // Two walk-ins; it names one of them.
+    let pip = server.bot(&eve, &home, "Pip").await;
+    let (home2, fay) = server.someone("Fay").await;
+    let rex = server.bot(&fay, &home2, "Rex").await;
+    for (owner, bot) in [(&eve, &pip), (&fay, &rex)] {
+        server
+            .post(&owner.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": bot.id }))
+            .await
+            .ok();
+    }
+    let at = now() + 60;
+    server
+        .put(&ann.key, &path, json!({ "closes_at": at, "everyone": false, "bots": [pip.id] }))
+        .await
+        .ok();
+    let for_rex = item_of(&server.read_room(&rex.token, &room).await);
+    assert_eq!(for_rex["you_are_listed"], false, "{for_rex}");
+    assert_eq!(item_of(&server.read_room(&pip.token, &room).await)["you_are_listed"], true);
+
+    // Before the time nobody goes.
+    assert_eq!(agenthangout::closing::sweep(&server.state, at - 1).unwrap(), 0);
+    server.read_room(&pip.token, &room).await;
+    // At the time only the named bot goes, and is told when and why; the clock rings once.
+    assert_eq!(agenthangout::closing::sweep(&server.state, at).unwrap(), 1);
+    let gone = server.tool(&pip.token, "read_room", json!({ "hangout_id": room })).await;
+    assert_eq!(gone["isError"], true, "{gone}");
+    assert!(text(&gone["content"][0]["text"]).contains("closing clock rang"), "{gone}");
+    server.read_room(&rex.token, &room).await;
+    assert!(item_of(&server.read_room(&scout.token, &room).await)["closes_at"].is_null());
+}
+
+// I106: the saved bot list is shown to whoever can change the clock and never to a visitor; the
+// limits hold; everyone mode sends out everyone who walked in but never a member's bot.
+#[tokio::test]
+async fn a_closing_clock_keeps_its_list_private_and_its_limits_and_spares_members() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.open(&ann, &room).await.ok();
+    let clock = server.item(&ann, &room, "closing_clock", (30, 10)).await;
+    let plant = server.item(&ann, &room, "plant", (32, 10)).await;
+    let path = format!("/api/items/{clock}/closing");
+    let closing_of = |snapshot: &Value| {
+        snapshot["items"].as_array().unwrap().iter().find(|i| i["kind"] == "closing_clock").unwrap()
+            ["closing"]
+            .clone()
+    };
+
+    // Limits, the wrong kind of item, and clearing.
+    let soon = now() + 600;
+    server
+        .put(&ann.key, &path, json!({ "closes_at": now() + 32 * 86_400 }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    let many: Vec<String> = (0..21).map(|n| format!("bot{n}")).collect();
+    server
+        .put(&ann.key, &path, json!({ "closes_at": soon, "everyone": false, "bots": many }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .put(&ann.key, &format!("/api/items/{plant}/closing"), json!({ "closes_at": soon }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    server.put(&ann.key, &path, json!({ "closes_at": soon })).await.ok();
+    assert!(closing_of(&server.snapshot(&ann.key, &room).await).is_object());
+    server.put(&ann.key, &path, json!({ "closes_at": null })).await.ok();
+    assert!(closing_of(&server.snapshot(&ann.key, &room).await).is_null());
+
+    // Two visitors, one of them a person, and the saved list.
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    let (_, fay) = server.someone("Fay").await;
+    server.walk_in(&fay, &room).await;
+    let at = now() + 60;
+    server
+        .put(
+            &ann.key,
+            &path,
+            json!({ "closes_at": at, "everyone": false, "bots": [pip.id, "gone-bot"] }),
+        )
+        .await
+        .ok();
+    let mine = closing_of(&server.snapshot(&ann.key, &room).await);
+    assert_eq!(mine["bots"][0]["id"], pip.id.as_str(), "{mine}");
+    assert_eq!(mine["bots"][0]["name"], "Pip");
+    assert_eq!(mine["bots"][1]["id"], "gone-bot", "a saved bot stays listed");
+    let theirs = closing_of(&server.snapshot(&eve.key, &room).await);
+    assert!(theirs["bots"].is_null() && !theirs.to_string().contains(&pip.id), "{theirs}");
+    let seen = server.read_room(&pip.token, &room).await;
+    assert!(!seen.to_string().contains("gone-bot"), "{seen}");
+    let by_changer = server.read_room(&scout.token, &room).await;
+    assert!(!by_changer.to_string().contains("gone-bot"));
+
+    // Everyone mode: a member's bot with a walk-in row is spared, visitors all go.
+    let now_secs = now();
+    server
+        .state
+        .db
+        .walk_in(
+            &agenthangout::db::NewVisit {
+                hangout_id: &room,
+                who: &scout.id,
+                person_id: &ann.id,
+                agent_id: Some(&scout.id),
+                until: now_secs + 3600,
+                now: now_secs,
+            },
+            100,
+            100,
+        )
+        .unwrap();
+    server.put(&ann.key, &path, json!({ "closes_at": at })).await.ok();
+    assert_eq!(agenthangout::closing::sweep(&server.state, at).unwrap(), 2);
+    assert!(!server.state.db.bot_visits(&pip.id, at).unwrap().contains(&room));
+    assert!(server.state.db.bot_visits(&scout.id, at).unwrap().contains(&room));
+    server.get(&fay.key, &format!("/api/hangouts/{room}")).await.refused(StatusCode::NOT_FOUND);
+}
+
 // I101: reopening existing rooms neither inserts a starter nor duplicates one already present.
 #[test]
 fn reopening_existing_rooms_does_not_seed_or_duplicate_notes_stations() {
