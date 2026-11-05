@@ -572,6 +572,21 @@ async fn someone_let_onto_a_private_floor_is_told_they_can_go_in_and_the_door_op
     assert!(menu.contains("if (details.can_go_in) own.push({ label: 'Go in'"), "{menu}");
 }
 
+// W109: the owner's details carry the space's id, for Room permissions in their menu, and nobody
+// else's do.
+#[tokio::test]
+async fn only_a_places_owner_gets_its_space_id() {
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    let house = server.place_at(&ann, "house", now() - 8 * DAY);
+    assert_eq!(server.place(&ann.key, house).await.ok()["space_id"], Value::Null, "no rooms yet");
+    server.post(&ann.key, "/api/spaces/door", json!({ "x": house.0, "y": house.1 })).await.ok();
+    let mine = server.place(&ann.key, house).await.ok();
+    assert!(mine["space_id"].as_str().is_some_and(|id| !id.is_empty()), "{mine}");
+    assert_eq!(server.place(&bo.key, house).await.ok()["space_id"], Value::Null);
+}
+
 // W72: a place's menu is what you can do with it. Nothing can be built on one, so the build tools
 // aren't offered there.
 #[test]

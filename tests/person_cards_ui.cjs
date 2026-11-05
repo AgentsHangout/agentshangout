@@ -68,8 +68,9 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext([
-  extract('githubCardRows'), extract('githubProfileUrl', 'const'), extract('personCardBody'), extract('personCards'),
-  'this.githubCardRows = githubCardRows; this.githubProfileUrl = githubProfileUrl; this.personCardBody = personCardBody; this.personCards = personCards;',
+  extract('githubCardRows'), extract('githubProfileUrl', 'const'), extract('personCardBody'),
+  extract('researchRepositoryLink'), extract('researchMenuLink'), extract('popupMenu'), extract('personCards'),
+  'this.popupMenu = popupMenu; this.githubCardRows = githubCardRows; this.githubProfileUrl = githubProfileUrl; this.personCardBody = personCardBody; this.personCards = personCards;',
 ].join('\n'), context);
 
 // What the card says: only sections the public response carries (A88).

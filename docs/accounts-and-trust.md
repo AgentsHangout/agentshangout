@@ -463,8 +463,9 @@ merged-pull-request count. No tokens, no private repos, no emails.
 - **A90.** Pressing a person, with the left button or the right, or a tap, opens the same card
   with what can be done: "Mention in chat" (not on your own card) and, if they show their GitHub
   login, "View on GitHub". The hover card ends with "Click for options" (W102), and the
-  name tag says the same, so hovering says what a press does. The right button replaces the
-  browser's menu only over a person. While building, or with something in hand, people are left
+  name tag says the same, so hovering says what a press does. The card is the game's one menu
+  (W109), and a pressed one ends with My bots. The right button replaces the browser's menu over a
+  person, and over bare floor only to open the room's menu (W109). While building, or with something in hand, people are left
   alone and the build clicks work as before.
 - **A91.** The card for a person is fetched once for five minutes, and once for a minute after a
   failure, however often the pointer passes over them; the server's own refresh limits (A72) apply
