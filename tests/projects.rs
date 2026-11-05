@@ -1860,10 +1860,13 @@ async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
         reply[list].as_array().unwrap().iter().map(|one| one[key].clone()).collect()
     };
     assert_eq!(field(&brief, "bots", "name"), field(&full, "bots", "name"));
-    assert_eq!(field(&brief, "items", "id"), field(&full, "items", "id"));
+    // I122: only the items a bot can use, in the same order, with the decoration counted.
+    let (listed, every) = (field(&brief, "items", "id"), field(&full, "items", "id"));
+    assert!(listed.iter().all(|id| every.contains(id)), "{brief}");
+    assert_eq!(listed.len() + brief["decor"].as_u64().unwrap() as usize, every.len());
     assert!(!full["items"].as_array().unwrap().is_empty());
     for item in brief["items"].as_array().unwrap() {
-        assert!(item["kind"].is_string() && item.get("does").is_none());
+        assert!(item["kind"].is_string() && item.get("facing").is_none());
         assert!(item.get("notes").is_none() && item.get("placed_by").is_none());
     }
     for bot in brief["bots"].as_array().unwrap() {

@@ -1910,6 +1910,8 @@ WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) 
  INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
  WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
 END;
+-- I122: when a bot last said something in a room, for a brief read_room, in one seek per bot.
+CREATE INDEX IF NOT EXISTS messages_by_room_bot ON messages (hangout_id, agent_id, kind, id);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -8811,6 +8813,30 @@ impl Db {
             )
             .optional()?;
         Ok(tags.and_then(|tags| serde_json::from_str(&tags).ok()))
+    }
+
+    /// I122: when each of these bots last said something (a chat line) in this room, at or after
+    /// `since`. Bots that haven't are left out.
+    pub fn last_posted_at(
+        &self,
+        hangout_id: &str,
+        agent_ids: &[&str],
+        since: i64,
+    ) -> rusqlite::Result<HashMap<String, i64>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare_cached(
+            "SELECT created_at FROM messages INDEXED BY messages_by_room_bot
+             WHERE hangout_id = ? AND agent_id = ? AND kind = 'chat' ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut found = HashMap::new();
+        for agent_id in agent_ids {
+            let at: Option<i64> =
+                statement.query_row(params![hangout_id, agent_id], |row| row.get(0)).optional()?;
+            if let Some(at) = at.filter(|at| *at >= since) {
+                found.insert((*agent_id).to_string(), at);
+            }
+        }
+        Ok(found)
     }
 
     /// I116: what this brief read returned, in place of what the last one did.
