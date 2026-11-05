@@ -48,6 +48,8 @@ pub const MAX_LIMIT: usize = 10;
 const LIST_DEPTH: usize = 100;
 /// MM9: the fuzzy list keeps a memory that shares at least this share of a word's trigrams.
 const FUZZY_SHARE: f64 = 0.5;
+/// MM9: subjects the who-and-where list takes as named, before looking one step away.
+const MAX_NAMED: usize = 20;
 /// MM9: trigrams a query is matched on, taken from each of its words in turn.
 const MAX_GRAMS: usize = 64;
 /// MM12: notes in one sleep.
@@ -481,17 +483,70 @@ fn bot_name(conn: &Connection, bot: &str) -> rusqlite::Result<String> {
         .unwrap_or_default())
 }
 
-/// The names of these subjects, looked up once each.
+/// MM4: SQL for whether the subject key `{s}` is one the bot can see now: a room it can read, or
+/// someone in such a room (its owner, `{owner}`, always), and `self`. It needs the rooms as a
+/// CTE `r(id)`.
+fn seen_now_sql(s: &str, owner: &str) -> String {
+    format!(
+        "CASE
+           WHEN {s} LIKE 'room:%' THEN substr({s}, 6) IN r
+           WHEN {s} LIKE 'person:%' THEN substr({s}, 8) = {owner}
+             OR EXISTS (SELECT 1 FROM members m WHERE m.person_id = substr({s}, 8)
+                                                AND m.hangout_id IN r)
+             OR EXISTS (SELECT 1 FROM floor_visits v WHERE v.person_id = substr({s}, 8)
+                          AND v.agent_id IS NULL AND v.hangout_id IN r)
+             OR EXISTS (SELECT 1 FROM messages x WHERE x.hangout_id IN r
+                          AND x.person_id = substr({s}, 8) AND x.agent_id IS NULL)
+           WHEN {s} LIKE 'agent:%' THEN
+             EXISTS (SELECT 1 FROM room_agents ra WHERE ra.agent_id = substr({s}, 7)
+                                                  AND ra.hangout_id IN r)
+             OR EXISTS (SELECT 1 FROM bot_rooms_seen bs WHERE bs.agent_id = substr({s}, 7)
+                          AND bs.hangout_id IN r)
+             OR EXISTS (SELECT 1 FROM floor_visits v WHERE v.agent_id = substr({s}, 7)
+                          AND v.hangout_id IN r)
+             OR EXISTS (SELECT 1 FROM messages x WHERE x.hangout_id IN r
+                          AND x.agent_id = substr({s}, 7))
+           ELSE 1
+         END"
+    )
+}
+
+/// MM4: whether the bot can see this subject now, as `seen_now_sql` says.
+fn seen_now(
+    conn: &Connection,
+    owner: &str,
+    rooms: &Rooms,
+    subject: &str,
+) -> rusqlite::Result<bool> {
+    let sql = format!(
+        "WITH r(id) AS (SELECT value FROM json_each(?1)) SELECT {}",
+        seen_now_sql("?3", "?2")
+    );
+    conn.query_row(&sql, params![rooms.json, owner, subject], |row| row.get(0))
+}
+
+/// Who the bot is reading names for: its owner and the rooms it can read now. A subject it can't
+/// see now has no name, so a room renamed after it left, or someone's new name, isn't shown.
+type Seer<'a> = (&'a str, &'a Rooms);
+
+/// The names of these subjects, looked up once each. With a bot's `Seer`, only those it can see
+/// now (MM4); without one, as the owner sees them (MM15).
 fn names_of<'a>(
     conn: &Connection,
     bot: &str,
+    seer: Option<Seer>,
     subjects: impl Iterator<Item = &'a str>,
 ) -> rusqlite::Result<HashMap<String, Option<String>>> {
     let me = bot_name(conn, bot)?;
     let mut names = HashMap::new();
     for subject in subjects {
         if !names.contains_key(subject) {
-            names.insert(subject.to_string(), subject_name(conn, &me, subject)?);
+            let seen = match seer {
+                Some((owner, rooms)) => seen_now(conn, owner, rooms, subject)?,
+                None => true,
+            };
+            let name = if seen { subject_name(conn, &me, subject)? } else { None };
+            names.insert(subject.to_string(), name);
         }
     }
     Ok(names)
@@ -611,10 +666,13 @@ fn write_note(
     }
 }
 
-/// MM2: past 200 notes, the one left unchanged longest goes, never one just written.
+/// MM2: past 200 notes, one goes: never one just written, nor the note on itself or its owner;
+/// first one on a subject it can't see now (MM4), then the one left unchanged longest.
 fn evict_note(
     conn: &Connection,
     bot: &str,
+    owner: &str,
+    rooms: &Rooms,
     keep: &HashSet<String>,
 ) -> rusqlite::Result<Option<String>> {
     let count: i64 = conn.query_row(
@@ -625,10 +683,17 @@ fn evict_note(
     if count as usize <= MAX_NOTES {
         return Ok(None);
     }
-    let mut stmt = conn.prepare(
-        "SELECT n, id FROM bot_memories WHERE bot_id = ? AND kind = 'note' ORDER BY updated_at, n",
-    )?;
-    let mut rows = stmt.query([bot])?;
+    // Never the note on itself or its owner. Of the rest, first one on a subject it can't see
+    // now, then the one left unchanged longest.
+    let sql = format!(
+        "WITH r(id) AS (SELECT value FROM json_each(?3))
+         SELECT n, id FROM bot_memories
+         WHERE bot_id = ?1 AND kind = 'note' AND subject <> 'self' AND subject <> 'person:' || ?2
+         ORDER BY {} , updated_at, n",
+        seen_now_sql("subject", "?2")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params![bot, owner, rooms.json])?;
     while let Some(row) = rows.next()? {
         let (n, id): (i64, String) = (row.get(0)?, row.get(1)?);
         if !keep.contains(&id) {
@@ -698,12 +763,16 @@ pub fn remember(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Va
         ));
     }
     let tx = conn.transaction()?;
+    // Again, now that nothing else can save for this bot until this is done: the check above let
+    // the connection go, so calls at once could all have passed it.
+    check_use(&tx, &bot, &SAVES, now, 1)?;
     record_use(&tx, &bot, &SAVES, now, 1)?;
     let mut reply = if note {
         let written = write_note(&tx, &bot, &subject, &input, now)?;
         let mut reply = json!({ "id": written.id, "kind": "note", "subject": subject.key(), "changed": written.changed });
         if written.new {
-            if let Some(dropped) = evict_note(&tx, &bot, &HashSet::from([written.id.clone()]))? {
+            let keep = HashSet::from([written.id.clone()]);
+            if let Some(dropped) = evict_note(&tx, &bot, &owner, &rooms, &keep)? {
                 reply["dropped"] = json!(dropped);
             }
         }
@@ -999,9 +1068,10 @@ fn who_where_list(
     bot: &str,
     query: &str,
     memories: &[Memory],
-    rooms: &Rooms,
+    seer: Seer,
     now: i64,
 ) -> rusqlite::Result<(Vec<i64>, HashMap<i64, &'static str>)> {
+    let (owner, rooms) = seer;
     let query = query.to_lowercase();
     let query_words: HashSet<String> = words_of(&query).into_iter().collect();
     let subjects: BTreeSet<&str> = memories.iter().map(|memory| memory.subject.as_str()).collect();
@@ -1011,9 +1081,14 @@ fn who_where_list(
         if *subject == "self" {
             continue;
         }
+        // A name only counts while the bot can see the subject (MM4), so a room renamed after it
+        // left can't be found by its new name. At most 20 are named, which bounds the next step.
         if let Some(name) = subject_name(conn, &me, subject)? {
-            if is_named(&query, &query_words, &name) {
+            if is_named(&query, &query_words, &name) && seen_now(conn, owner, rooms, subject)? {
                 named.insert(subject.to_string());
+                if named.len() == MAX_NAMED {
+                    break;
+                }
             }
         }
     }
@@ -1075,7 +1150,7 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
         ("words", words_list(&mut conn, &words, &by_n, now)?),
         ("spelling", fuzzy_list(&words, &by_n, now)),
     ];
-    let (who_where, named) = who_where_list(&conn, &bot, query, &memories, &rooms, now)?;
+    let (who_where, named) = who_where_list(&conn, &bot, query, &memories, (&owner, &rooms), now)?;
     // MM9 list 4: standing ranks what the other three found. A memory in none is never returned.
     let found: BTreeSet<i64> = lists
         .iter()
@@ -1109,10 +1184,18 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
     ranked.truncate(limit);
 
     let chosen: Vec<&Memory> = ranked.iter().filter_map(|(_, n)| by_n.get(n).copied()).collect();
-    let names = names_of(&conn, &bot, chosen.iter().map(|memory| memory.subject.as_str()))?;
+    let names = names_of(
+        &conn,
+        &bot,
+        Some((&owner, &rooms)),
+        chosen.iter().map(|memory| memory.subject.as_str()),
+    )?;
+    // One transaction for all of them, not one write each.
+    let tx = conn.transaction()?;
     for memory in &chosen {
-        conn.execute("UPDATE bot_memories SET recalls = recalls + 1 WHERE n = ?", [memory.n])?;
+        tx.execute("UPDATE bot_memories SET recalls = recalls + 1 WHERE n = ?", [memory.n])?;
     }
+    tx.commit()?;
     let results: Vec<Value> = chosen
         .iter()
         .map(|memory| {
@@ -1290,7 +1373,13 @@ struct RoomLine {
 }
 
 /// MM11: the bot's day since it last slept, from the rooms it can read now.
-fn the_day(state: &AppState, bot: &str, now: i64, readable: &Rooms) -> ApiResult<Value> {
+fn the_day(
+    state: &AppState,
+    bot: &str,
+    owner: &str,
+    now: i64,
+    readable: &Rooms,
+) -> ApiResult<Value> {
     let place = state.db.bot_place(bot, now)?;
     let conn = state.db.conn();
     let since = day_start(&conn, bot, now)?;
@@ -1447,6 +1536,7 @@ fn the_day(state: &AppState, bot: &str, now: i64, readable: &Rooms) -> ApiResult
     let names = names_of(
         &conn,
         bot,
+        Some((owner, readable)),
         notes.iter().chain(moments.iter()).map(|memory| memory.subject.as_str()),
     )?;
     Ok(json!({
@@ -1485,7 +1575,7 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     let rooms = readable_rooms(state, &bot, now)?;
     let notes = match &args["notes"] {
-        Value::Null => return the_day(state, &bot, now, &rooms),
+        Value::Null => return the_day(state, &bot, &owner, now, &rooms),
         Value::Array(notes) => notes,
         _ => {
             return Err(ApiError::bad_request(
@@ -1534,7 +1624,7 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             changed += 1;
         }
         if note.new {
-            dropped.extend(evict_note(&tx, &bot, &written)?);
+            dropped.extend(evict_note(&tx, &bot, &owner, &rooms, &written)?);
         }
     }
     // MM12: what sleep changed counts against its own 60 a day. Past that nothing is written.
@@ -1606,6 +1696,7 @@ pub fn owner_memories(state: &AppState, caller: &Caller, id: &str) -> ApiResult<
     let names = names_of(
         &conn,
         id,
+        None,
         notes.iter().chain(moments.iter()).map(|memory| memory.subject.as_str()),
     )?;
     let name_of = |memory: &Memory| names.get(&memory.subject).cloned().flatten();

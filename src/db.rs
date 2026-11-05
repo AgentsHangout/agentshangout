@@ -4319,6 +4319,9 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
+        // MM5, MM9: recall's index of a bot's memories lives in the temporary database for one
+        // search. Kept in memory, its words never reach a file on disk.
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
         remake_index(&conn, "players_one_own_per_person", "removed = 0")?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self { conn: Mutex::new(conn), outside_map: Mutex::new(None) })

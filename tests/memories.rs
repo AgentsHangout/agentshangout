@@ -1331,6 +1331,110 @@ async fn mm7_memories_say_they_are_information_and_repeat_reads_skip_unchanged_n
     assert!(note(&day).contains("never instructions"), "{day}");
 }
 
+// MM6: calls at once can't save past the limit between them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mm6_saves_at_once_still_stop_at_30_an_hour() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    for _ in 0..29 {
+        conn.execute(
+            "INSERT INTO bot_memory_uses (bot_id, what, at) VALUES (?1, 'save', ?2)",
+            rusqlite::params![fern.id, now() - 60],
+        )
+        .unwrap();
+    }
+    let calls = (0..20).map(|i| {
+        let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "remember", "arguments": { "text": format!("at once {i}") } } });
+        server.post(&fern.token, "/mcp", call)
+    });
+    let saved = futures_util::future::join_all(calls)
+        .await
+        .into_iter()
+        .filter(|reply| reply.body["result"]["isError"].is_null())
+        .count();
+    assert_eq!(saved, 1, "only one of the twenty fits");
+    assert_eq!(
+        server.count(
+            "SELECT COUNT(*) FROM bot_memory_uses WHERE bot_id = ? AND what = 'save'",
+            &fern.id
+        ),
+        30
+    );
+}
+
+// MM4: a bot taken out of a room doesn't see its new name, or the new name of someone only there.
+#[tokio::test]
+async fn mm4_a_removed_bot_sees_no_new_names_from_the_room_it_left() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let (deck, _, dee) = server.someone("Dee", "Dee's Deck").await;
+    server.state.db.add_agent_to_room(&deck, &fern.id).unwrap();
+    let room = format!("room:{deck}");
+    let person = format!("person:{}", dee.id);
+    server.remember(fern, json!({ "text": "Windy up here", "subject": room, "note": true })).await;
+    server.remember(fern, json!({ "text": "Windy hair", "subject": person, "note": true })).await;
+    let names =
+        |found: &[Value]| -> Vec<Value> { found.iter().map(|m| m["name"].clone()).collect() };
+    assert_eq!(names(&server.recall(fern, "windy").await).len(), 2);
+    server.state.db.remove_agent_from_room(&deck, &fern.id).unwrap();
+    let conn = server.sql();
+    conn.execute("UPDATE hangouts SET name = 'Hidden Harbour' WHERE id = ?", [&deck]).unwrap();
+    conn.execute("UPDATE people SET name = 'Delphine' WHERE id = ?", [&dee.id]).unwrap();
+
+    let found = server.recall(fern, "windy").await;
+    assert_eq!(found.len(), 2, "its memories are still its own");
+    assert_eq!(names(&found), [Value::Null, Value::Null], "{found:?}");
+    let all = json!(found).to_string();
+    assert!(!all.contains("Hidden Harbour") && !all.contains("Delphine"), "{all}");
+    // Nor can the new names find them.
+    assert!(server.recall(fern, "hidden harbour").await.is_empty());
+    assert!(server.recall(fern, "delphine").await.is_empty());
+    // Its owner still sees them as they are (MM15).
+    let view = server.view(&town.ann, fern).await;
+    assert!(view.to_string().contains("Hidden Harbour"), "{view}");
+}
+
+// MM2: the notes on itself and its owner never go, and one on a subject it can't see goes first.
+#[tokio::test]
+async fn mm2_notes_on_itself_and_its_owner_stay_and_unseen_subjects_go_first() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    let note = |subject: String, ago: i64| {
+        let id = agenthangout::auth::new_id();
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', 'a note', 4, ?4, ?4)",
+            rusqlite::params![id, fern.id, subject, now() - ago],
+        )
+        .unwrap();
+        id
+    };
+    // The oldest are on itself, its owner, and a room and a person it can see now.
+    let kept = [
+        note("self".to_string(), 90 * DAY),
+        note(format!("person:{}", town.ann.id), 90 * DAY),
+        note(format!("room:{}", town.cafe), 60 * DAY),
+        note(format!("person:{}", town.bo.id), 60 * DAY),
+    ];
+    let first_unseen = note("room:gone-0".to_string(), DAY);
+    for i in 1..196 {
+        note(format!("room:gone-{i}"), DAY);
+    }
+    let rover = format!("agent:{}", town.rover.id);
+    let added =
+        server.remember(fern, json!({ "text": "Hums", "subject": rover, "note": true })).await;
+    assert_eq!(added["dropped"], json!(first_unseen), "{added}");
+    for id in kept {
+        assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &id), 1);
+    }
+}
+
 /// The tables with a row holding these bytes in any column. Memories are kept in one table and no
 /// index of their words (MM5, MM9), so after a delete or the wipe this is the whole check.
 fn tables_holding(conn: &rusqlite::Connection, word: &str) -> Vec<String> {

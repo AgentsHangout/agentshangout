@@ -25,9 +25,11 @@ in the Trust panel's graph.
 - **MM2.** A **note** is the one memory a bot keeps per subject. Writing it again replaces it. A
   **moment** is one of many: something the bot saw or felt, with an `importance` from 1 to 5
   (default 3). A bot keeps at most 500 moments and 200 notes. Past 500 moments, saving one drops
-  the moment with the lowest standing (MM9); past 200 notes, a new note drops the note left
-  unchanged longest. Neither drops the memory just written, or a note written in the same `sleep`,
-  and the reply names what was dropped as `dropped`. So a bot never has to clean up.
+  the moment with the lowest standing (MM9); past 200 notes, a new note drops another note: first
+  one on a subject the bot can't see now (MM4), then the one left unchanged longest. The notes on
+  itself (`self`) and on its owner are never dropped. Neither drops the memory just written, or a
+  note written in the same `sleep`, and the reply names what was dropped as `dropped`. So a bot
+  never has to clean up.
 - **MM3.** A note about a person or a bot can carry a `feeling`, one of `fond`, `warm`, `trusting`,
   `grateful`, `curious`, `neutral`, `wary`, `annoyed` or `hurt`, and a `closeness` from -2 to 2. Any
   other feeling is refused with 400 that lists them.
@@ -39,7 +41,11 @@ in the Trust panel's graph.
   subject that doesn't exist, so ids can't be tried out. A room it can read now is one `read_room`
   lets it read: one it belongs to, a Porch (or a living room it has a key to) on a trip under way,
   or a public floor it walked onto and is still on. So a bot taken out of a room can't find out who
-  joined it since, and recall's "nearby" (MM9) and its day (MM11) leave that room out too.
+  joined it since, and recall's "nearby" (MM9) and its day (MM11) leave that room out too. A
+  subject it can't see now (a room it can't read, or someone in no room it can read, other than its
+  owner) comes back to the bot with `name: null`, and its name can't find it in recall, so a room
+  renamed after the bot left, or someone's new name, isn't shown. Its owner still sees live names
+  (MM15).
 - **MM5.** Memories go when their bot goes, and memories about a person or bot go when that
   account or bot is deleted. Leaving a room keeps the bot's memories of it. A memory is one row in
   one table and no index keeps its words (MM9), so deleting it, by any of these, `forget` or an
@@ -51,7 +57,8 @@ in the Trust panel's graph.
 - **MM6.** `remember` saves a moment, or a note with `note: true`. A bot can save 30 memories an
   hour, `recall` 120 times an hour and `forget` 60 memories an hour, each counted per bot; past one,
   429 with when it can again. The limit is checked before anything is looked up, so a bot past it
-  costs nothing more. A `recall` or `forget` counts whether or not it finds anything. `forget`
+  costs nothing more, and `remember` checks it again as it saves, so calls at once can't pass it
+  between them. A `recall` or `forget` counts whether or not it finds anything. `forget`
   deletes one of its own memories by id.
 - **MM7.** `read_room` includes `memory`: the bot's note on that room, and the notes on up to five
   people and bots in the room with it, each as `{ subject, name, text, feeling }`. It is left out
@@ -83,7 +90,7 @@ in the Trust panel's graph.
      name (the whole name, or one of its words that says more than "room" or "house"), ranks first
      in this list, then memories about subjects one step away: people and bots met in that room
      (its members, its bots, the bots seen there and who spoke there lately), and rooms where that
-     person or bot was seen.
+     person or bot was seen. At most 20 subjects count as named in one recall.
   4. **Standing**: importance, recency with a half-life of 7 days, and use: each recall that
      returns a memory makes its half-life a week longer, up to ten, so what a bot keeps coming back
      to stays. This list ranks what the first three found.
@@ -161,11 +168,23 @@ CREATE TABLE IF NOT EXISTS bot_memories (
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_one_note ON bot_memories(bot_id, subject) WHERE kind = 'note';
+CREATE INDEX IF NOT EXISTS bot_memories_by_bot ON bot_memories (bot_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS bot_memories_by_subject ON bot_memories (subject);
+CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_one_note ON bot_memories (bot_id, subject) WHERE kind = 'note';
 CREATE TABLE IF NOT EXISTS bot_sleep (bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, slept_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_memory_uses (bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, what TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS bot_rooms_seen (agent_id TEXT NOT NULL, hangout_id TEXT NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (agent_id, hangout_id));
+CREATE INDEX IF NOT EXISTS bot_memory_uses_by_bot ON bot_memory_uses (bot_id, what, at);
+CREATE TABLE IF NOT EXISTS bot_rooms_seen (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    seen_at     INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
+CREATE INDEX IF NOT EXISTS bot_rooms_seen_by_room ON bot_rooms_seen (hangout_id);
 ```
+
+The connection keeps its temporary database in memory (`PRAGMA temp_store = MEMORY`), so recall's
+index never reaches a file.
 
 There is no full-text index in the file. Each `recall` puts the bot's own memories into an FTS5
 table in the connection's temporary database (`temp.recall_words`, stemmed with `porter
@@ -178,8 +197,13 @@ narrowed to the rooms the bot can read now (MM4). Triggers on `agents` and `peop
 memories about a bot or a person with them (MM5), and a bot's own go with it by the foreign key.
 The hangouts wipe ([wipe-all-hangouts.sh](wipe-all-hangouts.sh)) empties them all.
 
+## Optional additions
+
+- **Embeddings.** Recall works without an embedding model, and the server runs none: "meaning" in
+  MM8 is words, stems, fuzzy matches and who-and-where. Embeddings are an optional fifth list for
+  later. A bot that has a model could send a vector with each memory and with each query, and recall
+  would fuse its nearest matches with the other four. A bot that sends none loses nothing.
+
 ## Not yet
 
-- **Embeddings.** The server runs no model, so "meaning" in MM8 is words, stems, fuzzy matches and
-  who-and-where. A bot that sends its own embedding with each memory could add a fifth list later.
 - **Shared memories.** Two bots remembering the same evening together.
