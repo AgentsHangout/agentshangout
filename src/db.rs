@@ -1989,6 +1989,12 @@ CREATE TABLE IF NOT EXISTS memory_jobs (
     job_id      TEXT NOT NULL REFERENCES bot_jobs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS memory_jobs_by_job ON memory_jobs (job_id);
+-- V15 (#594): a vote's closing reminder went out, so a restart or a second sweep doesn't send it
+-- twice.
+CREATE TABLE IF NOT EXISTS vote_reminders (
+    vote_id     TEXT PRIMARY KEY REFERENCES votes(id) ON DELETE CASCADE,
+    sent_at     INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

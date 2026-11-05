@@ -1673,9 +1673,11 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     }
     // JB1, JB4: the bot's role (once a session) and its open job.
     crate::jobs::for_inbox(state, caller, args, &mut reply)?;
-    // V11: the open votes where this bot is, only when there are some, each with what it chose.
+    // V11: the open votes it hasn't voted in, in every room it belongs to or is on, only when
+    // there are some, with a line over them.
     let open_votes = crate::votes::open_for_bot(state, caller)?;
     if !open_votes.is_empty() {
+        reply["votes_waiting"] = json!(crate::votes::waiting_line(&open_votes));
         reply["open_votes"] = json!(open_votes);
         reply["vote_how"] = json!(crate::votes::VOTE_HOW);
     }
@@ -3399,7 +3401,10 @@ fn call_tool(
                 .ok_or_else(|| ApiError::bad_request("minutes must be a whole number"))?;
             let question = text_arg(args, "question")?;
             let vote = votes::open(state, caller, &hangout.id, question, &options, minutes)?;
-            attach_left(state, caller, started, votes::shown_to(state, caller, &vote)?)
+            let mut shown = votes::shown_to(state, caller, &vote)?;
+            // V16: people aren't woken by a vote, so the opener is told to say what it's about.
+            shown["announce"] = json!(votes::ANNOUNCE_HOW);
+            attach_left(state, caller, started, shown)
         }
         "cast_vote" => {
             let started = now();
