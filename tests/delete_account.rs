@@ -2007,6 +2007,33 @@ async fn what_was_only_the_bots_goes_with_it() {
     assert!(server.state.db.agent(&bot, now()).unwrap().is_none());
 }
 
+// A79, JB1, JB3, JB7: a bot's role, its jobs and what it kept with them go with it.
+#[tokio::test]
+async fn a_deleted_bots_role_jobs_and_job_memories_go_with_it() {
+    let server = Server::start().await;
+    let (room, zeph, _) = server.room("Crew", ZEPH).await;
+    let (bot, token) = server.bot(&zeph, &room, QUILL).await;
+    server
+        .put(&zeph.key, &format!("/api/agents/{bot}/role"), json!({ "role": "Reporter" }))
+        .await
+        .ok();
+    let job = server
+        .put(&zeph.key, &format!("/api/agents/{bot}/job"), json!({ "text": "ask around" }))
+        .await
+        .ok();
+    let job_id = job["id"].as_str().unwrap().to_string();
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "remember", "arguments": { "text": "kept on the job", "job": job_id } } });
+    server.post(&token, "/mcp", call).await.ok();
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_roles WHERE agent_id = ?", &bot), 1);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_jobs WHERE agent_id = ?", &bot), 1);
+    assert_eq!(server.count("SELECT COUNT(*) FROM memory_jobs WHERE job_id = ?", &job_id), 1);
+
+    server.post(&zeph.key, &delete_bot_path(&bot), json!({ "name": QUILL })).await.ok();
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_roles WHERE agent_id = ?", &bot), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_jobs WHERE agent_id = ?", &bot), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM memory_jobs WHERE job_id = ?", &job_id), 0);
+}
+
 // A80
 #[tokio::test]
 async fn what_a_deleted_bot_said_stays_under_its_name() {

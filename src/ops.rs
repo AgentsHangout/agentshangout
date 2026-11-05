@@ -335,20 +335,15 @@ pub fn post_reply(
             return Err(cannot_answer());
         }
     }
-    // JB3: an owner's `/job` line gives one of their bots here a job about this room. It's given
-    // first, so a refusal posts nothing, and the line itself is posted as said.
-    if kind == "chat" {
-        if let Some((agent_id, request)) = crate::jobs::job_line(state, caller, hangout_id, &body)?
-        {
-            crate::jobs::give(
-                state,
-                &caller.person_id,
-                &agent_id,
-                &request,
-                Some(hangout_id),
-                crate::jobs::DEFAULT_JOB_HOURS,
-            )?;
-        }
+    // JB3: an owner's `/job` line gives one of their bots here a job about this room. It's checked
+    // first, so a refusal posts nothing, and given once the line is posted as said.
+    let job = if kind == "chat" {
+        crate::jobs::job_line(state, caller, hangout_id, &body)?
+    } else {
+        None
+    };
+    if let Some((_, request)) = &job {
+        crate::jobs::check_give(state, &caller.person_id, request, crate::jobs::DEFAULT_JOB_HOURS)?;
     }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
@@ -367,6 +362,16 @@ pub fn post_reply(
         None => state.db.insert_message(&new)?,
         Some(to) => state.db.insert_reply(&new, to, seen_after)?.ok_or_else(cannot_answer)?,
     };
+    if let Some((agent_id, request)) = &job {
+        crate::jobs::give(
+            state,
+            &caller.person_id,
+            agent_id,
+            request,
+            Some(hangout_id),
+            crate::jobs::DEFAULT_JOB_HOURS,
+        )?;
+    }
     if caller.agent_id.is_none() && message.kind == "chat" {
         if let Err(error) = crate::typing::clear(state, caller, hangout_id) {
             tracing::warn!(status = %error.status, "typing hint could not be cleared after chat");
