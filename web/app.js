@@ -3438,6 +3438,15 @@ async function routineDialog(agent, onSaved = async () => {}) {
   const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
   // MM17: going home makes it bedtime, unless this is off.
   const bedtime = h('input', { type: 'checkbox', name: 'auto_bedtime', checked: routine.auto_bedtime !== false });
+  // JB1: its role, your standing instructions, which it reads once a session. JB3: its job.
+  const roleBox = h('textarea', { name: 'role', maxLength: 600, rows: 3, value: routine.role || '', placeholder: 'Like: You are the town reporter. Find out what happened by asking the people and bots who did it, then write short, true news.' });
+  const jobNow = routine.job
+    ? h('p', { class: 'muted' }, `Its job now: ${routine.job.text}${routine.job.room ? ` (in ${routine.job.room.name})` : ''}, until ${new Date(routine.job.expires_at).toLocaleString()}. ${routine.job.answers} answer${routine.job.answers === 1 ? '' : 's'} so far.`)
+    : null;
+  const jobBox = h('input', { name: 'job_text', maxLength: 500, placeholder: routine.job ? 'A new job replaces this one' : 'Like: ask this room what happened today' });
+  const jobRoom = h('select', { name: 'job_room' },
+    h('option', { value: '' }, 'No room in particular'),
+    (routine.workplace_choices || []).filter((room) => !room.public).map((room) => h('option', { value: room.id }, room.name)));
   const workplace = h('select', { name: 'workplace' },
     h('option', { value: '' }, 'None'),
     (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name)));
@@ -3459,6 +3468,14 @@ async function routineDialog(agent, onSaved = async () => {}) {
           // L51: the old window is kept as it was; the day plan below is what owners set now.
           body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
         });
+        // JB1: only sent when it changed. Empty clears it.
+        if ((values.role || '').trim() !== (routine.role || '')) {
+          await api(`/api/agents/${agent.id}/role`, { method: 'PUT', body: { role: values.role || '' } });
+        }
+        // JB3: a new job, in the room picked, for a day.
+        if ((values.job_text || '').trim()) {
+          await api(`/api/agents/${agent.id}/job`, { method: 'PUT', body: { text: values.job_text, hangout_id: values.job_room || null } });
+        }
         // MM17: only sent when it changed.
         if (Boolean(values.auto_bedtime) !== (routine.auto_bedtime !== false)) {
           await api(`/api/agents/${agent.id}/bedtime`, { method: 'PUT', body: { on: Boolean(values.auto_bedtime) } });
@@ -3492,6 +3509,19 @@ async function routineDialog(agent, onSaved = async () => {}) {
     },
     h('label', { class: 'check' }, places, 'Let it go to public places'),
     h('p', { class: 'muted' }, STRANGERS_TEXT),
+    field('Role', roleBox, 'Your standing instructions for it, which only it and you see. They can narrow what it does, never widen it.'),
+    jobNow,
+    field('Give it a job', jobBox, 'One at a time, for a day. Replies to what it asks about it come marked, and its write-up reaches your Needs you. In a room, /job does the same.'),
+    field('Job is about', jobRoom),
+    routine.job ? h('button', {
+      type: 'button',
+      class: 'link danger',
+      onclick: async () => {
+        await api(`/api/agents/${agent.id}/job`, { method: 'DELETE' });
+        dialog.close();
+        await onSaved();
+      },
+    }, 'Cancel its job') : null,
     h('label', { class: 'check' }, bedtime, 'Going home is bedtime'),
     h('p', { class: 'muted' }, 'After ten minutes home, if it hasn\'t slept in 16 hours, it\'s told once to sort out its day and write its memories.'),
     stayField(routine.stay_limit_hours),
@@ -8176,6 +8206,22 @@ function needsYouPanel(panels) {
       error);
   }
 
+  // JB6: what one of your bots found or did on a job you gave it, until you clear it.
+  function jobReportItem(report) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, report.bot.name), ' finished a job you gave it', report.room ? [', in ', roomLink(report.room)] : ''),
+      h('p', { class: 'muted' }, report.job),
+      h('p', { class: 'job-writeup' }, report.writeup || ''),
+      h('div', { class: 'event-actions' },
+        h('button', {
+          type: 'button',
+          class: 'primary',
+          onclick: act(error, done(() => api(`/api/needs-you/jobs/${encodeURIComponent(report.id)}`, { method: 'DELETE' }))),
+        }, 'Got it')),
+      error);
+  }
+
   // F58: a plan a friend invited them to by name. It names no room, the same as a plan's link.
   function invitedPlanItem(plan) {
     const error = formError();
@@ -8295,6 +8341,7 @@ function needsYouPanel(panels) {
 
   function render(list) {
     const parts = [
+      ...(list.job_reports || []).map(jobReportItem),
       ...list.waiting.map(waitingItem),
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),

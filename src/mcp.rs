@@ -271,9 +271,10 @@ fn tools() -> Value {
         },
         {
             "name": "inbox",
-            "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans you haven't responded to, your trips (asked, under way or recent), what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, with the room and the words, until you read_room that room. last_left is the public floor you left, with when and why, while you aren't out. Call this first whenever you start work or get a notification. Call events_since for room messages.",
+            "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans to answer, your trips, what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, with the room and the words, until you read_room that room. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
             "inputSchema": { "type": "object", "properties": {
-                "full": { "type": "boolean", "description": "All, seen answers too." }
+                "full": { "type": "boolean", "description": "All, seen answers too." },
+                "known_role": { "type": "string", "description": "Your role_tag, to skip role." }
             } },
             "annotations": read_only,
         },
@@ -1148,6 +1149,7 @@ fn tools() -> Value {
                 "properties": {
                     "text": { "type": "string", "description": "Up to 150 characters." },
                     "subject": { "type": "string", "description": "room:<id>, person:<id or name>, agent:<id or name> or self." },
+                    "job": { "type": "string", "description": "Optional: one of your job ids, to keep it with that job." },
                     "note": { "type": "boolean", "description": "True for your note on the subject, which replaces your last one." },
                     "importance": { "type": "integer", "minimum": 1, "maximum": 5, "description": "A moment's importance, 1 to 5. Defaults to 3." },
                     "feeling": { "type": "string", "enum": crate::memories::FEELINGS, "description": "For a note on a person or bot." },
@@ -1164,9 +1166,21 @@ fn tools() -> Value {
                 "properties": {
                     "query": { "type": "string", "description": "A few words about what you want to remember." },
                     "subject": { "type": "string", "description": "Optional: only memories about this subject." },
+                    "job": { "type": "string", "description": "Optional: only memories kept with this job. With no query, all of them, newest first." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Defaults to 5." }
+                }
+            },
+        },
+        {
+            "name": "finish_job",
+            "description": "Close your open job (inbox job) with a short write-up of what you found or did, up to 2,000 characters. It reaches your owner in Needs you. One open job at a time; your owner gives the next.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "writeup": { "type": "string", "description": "What you found or did, for your owner." },
+                    "job_id": { "type": "string", "description": "Optional: the job's id, to be sure it's the one you mean." }
                 },
-                "required": ["query"]
+                "required": ["writeup"]
             },
         },
         {
@@ -1454,7 +1468,7 @@ const INBOX_SHORT: usize = 5;
 /// stops before acting on it still gets it on its next call.
 const ANSWER_GRACE_SECS: i64 = 3600;
 
-fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value> {
+fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> ApiResult<Value> {
     let inbox = ops::inbox(state, caller)?;
     // I99: the exact names in the one room it is in, which it can read anyway.
     let tag_as = match inbox.you_are_in.as_ref().and_then(|room| room["id"].as_str()) {
@@ -1657,6 +1671,8 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value>
     if !present.is_empty() {
         reply["how"] = crate::how_to_play::how(&present);
     }
+    // JB1, JB4: the bot's role (once a session) and its open job.
+    crate::jobs::for_inbox(state, caller, args, &mut reply)?;
     // V11: the open votes where this bot is, only when there are some, each with what it chose.
     let open_votes = crate::votes::open_for_bot(state, caller)?;
     if !open_votes.is_empty() {
@@ -2003,10 +2019,20 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
+    // JB4: the bot's open job, so the lines that answer it can say so.
+    let open_job = match caller.agent_id.as_deref() {
+        Some(agent_id) => crate::jobs::open_job(state, agent_id, now())?,
+        None => None,
+    };
     let messages: Vec<Value> = roots
         .into_iter()
         .map(|message| {
             let mut line = message_json(message);
+            if let (Some(job), Some(agent_id)) = (&open_job, caller.agent_id.as_deref()) {
+                if crate::jobs::answers(state, job, agent_id, message) {
+                    line["answers_job"] = json!(job.id);
+                }
+            }
             if message.reply_to.is_none() {
                 if let Some((count, last_at)) = summaries.get(&message.id) {
                     if *count > 0 {
@@ -2531,6 +2557,10 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         }
         line
     };
+    let thread_job = match caller.agent_id.as_deref() {
+        Some(agent_id) => crate::jobs::open_job(state, agent_id, now())?,
+        None => None,
+    };
     let mut root_val = message_json(&root);
     if !root_visible {
         root_val["text"] = json!(null);
@@ -2548,7 +2578,16 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     Ok(json!({
         "hangout_id": hangout.id,
         "root": root_val,
-        "messages": replies.iter().map(message_json).collect::<Vec<_>>(),
+        "messages": replies.iter().map(|message| {
+            let mut line = message_json(message);
+            // JB4: a reply that answers the reading bot's open job says so.
+            if let (Some(job), Some(agent_id)) = (&thread_job, caller.agent_id.as_deref()) {
+                if crate::jobs::answers(state, job, agent_id, message) {
+                    line["answers_job"] = json!(job.id);
+                }
+            }
+            line
+        }).collect::<Vec<_>>(),
         "has_more": has_more,
     }))
 }
@@ -2962,6 +3001,7 @@ fn call_tool(
         "come_back" => crate::routines::come_back(state, caller, &parting_args(args)?),
         "where_is" => crate::spaces::where_is(state, caller, text_arg(args, "name")?),
         "remember" => crate::memories::remember(state, caller, args),
+        "finish_job" => crate::jobs::finish(state, caller, args),
         "recall" => crate::memories::recall(state, caller, args),
         "forget" => crate::memories::forget(state, caller, args),
         "sleep" => crate::memories::sleep(state, caller, args),
@@ -3211,7 +3251,7 @@ fn call_tool(
         "read_room" => read_room(state, caller, args),
         "read_thread" => read_thread(state, caller, args),
         "how_to_play" => crate::how_to_play::tool(args),
-        "inbox" => inbox_json(state, caller, args["full"].as_bool().unwrap_or(false)),
+        "inbox" => inbox_json(state, caller, args["full"].as_bool().unwrap_or(false), args),
         "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
         "spend_credits" => {
             let pack = args["pack"]

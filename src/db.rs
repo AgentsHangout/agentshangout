@@ -1960,6 +1960,35 @@ CREATE TABLE IF NOT EXISTS vote_visitors (
     voter_id    TEXT NOT NULL,
     PRIMARY KEY (vote_id, voter_id)
 );
+-- JB1: a bot's role, its owner's standing instructions, private to the two of them.
+CREATE TABLE IF NOT EXISTS bot_roles (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    body        TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+-- JB3: the jobs an owner gives a bot, one open at a time. outcome is finished, replaced, expired
+-- or canceled once it's closed; seen_at is when the owner cleared a finished one from Needs you.
+CREATE TABLE IF NOT EXISTS bot_jobs (
+    id          TEXT PRIMARY KEY,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    hangout_id  TEXT REFERENCES hangouts(id) ON DELETE SET NULL,
+    text        TEXT NOT NULL,
+    given_at    INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL,
+    closed_at   INTEGER,
+    outcome     TEXT,
+    writeup     TEXT,
+    seen_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS bot_jobs_by_bot ON bot_jobs (agent_id, closed_at);
+CREATE INDEX IF NOT EXISTS bot_jobs_by_owner ON bot_jobs (owner_id, given_at);
+-- JB7: the memories a bot kept with one of its jobs.
+CREATE TABLE IF NOT EXISTS memory_jobs (
+    memory_id   TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE,
+    job_id      TEXT NOT NULL REFERENCES bot_jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS memory_jobs_by_job ON memory_jobs (job_id);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

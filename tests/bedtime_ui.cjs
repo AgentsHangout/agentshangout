@@ -76,5 +76,17 @@ assert.ok(context.statusText({ status: { state: 'idle' } }).startsWith('Idle'));
   assert.equal(all(off).find((n) => n.props.name === 'auto_bedtime').props.checked, false);
   await off.props.onsubmit({ auto_bedtime: 'on' });
   assert.equal(JSON.stringify(context.calls.find((c) => c.path.endsWith('/bedtime')).body), '{"on":true}');
+  // JB1, JB3: the Role box sends only a change, and a job is given only when one is typed.
+  context.calls = []; context.dialogs = [];
+  context.routine = { ...context.routine, auto_bedtime: true, role: 'Town reporter', job: { text: 'ask around', room: { name: 'Cafe' }, expires_at: new Date(Date.now() + 3600e3).toISOString(), answers: 1 }, workplace_choices: [{ id: 'r1', name: 'Cafe' }] };
+  await context.routineDialog({ id: 'b1', name: 'Fern' });
+  const jobs = context.dialogs[0].content.find((c) => c instanceof Node && c.tag === 'form');
+  assert.ok(text(jobs).includes('Its job now: ask around (in Cafe)') && text(jobs).includes('1 answer so far'), text(jobs));
+  await jobs.props.onsubmit({ auto_bedtime: 'on', role: 'Town reporter', job_text: '', job_room: '' });
+  assert.equal(context.calls.filter((c) => c.path.endsWith('/role') || c.path.endsWith('/job')).length, 0, 'nothing changed, nothing sent');
+  context.calls = [];
+  await jobs.props.onsubmit({ auto_bedtime: 'on', role: 'Town reporter, briefly', job_text: 'count the chairs', job_room: 'r1' });
+  assert.equal(JSON.stringify(context.calls.find((c) => c.path.endsWith('/role')).body), '{"role":"Town reporter, briefly"}');
+  assert.equal(JSON.stringify(context.calls.find((c) => c.path.endsWith('/job')).body), '{"text":"count the chairs","hangout_id":"r1"}');
   console.log('Bedtime: Dreaming and Asleep in My bots, and the Schedule switch (run, not just read).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
