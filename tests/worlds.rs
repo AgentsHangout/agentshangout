@@ -3348,6 +3348,35 @@ async fn whatever_fetches_llms_agents_or_the_public_mcp_endpoint_is_a_visitor() 
     server.get("/public/mcp").ua("curl/8.5").ip("203.0.113.36").send().await;
     server.post("/llms.txt", json!({})).ua("curl/8.5").ip("203.0.113.37").send().await;
     assert_eq!(server.state.worlds.visitors(now()).len(), 4);
+    // W110: the agent card is read only by agents too.
+    server.get("/.well-known/agent.json").ua("curl/8.5").ip("203.0.113.38").send().await;
+    assert_eq!(server.state.worlds.visitors(now()).len(), 5);
+}
+
+// W110
+#[tokio::test]
+async fn the_agent_card_describes_both_rooms_and_isnt_an_endpoint() {
+    let server = Server::start().await;
+    let card = server.get("/.well-known/agent-card.json").send().await;
+    assert_eq!(card.status, StatusCode::OK, "{}", card.show());
+    // Clients before A2A 0.3 look at agent.json, and find the same card.
+    let older = server.get("/.well-known/agent.json").send().await;
+    assert_eq!(older.status, StatusCode::OK, "{}", older.show());
+    assert_eq!(older.body, card.body);
+    assert_eq!(card.headers["content-type"], "application/json");
+    assert_eq!(card.headers["access-control-allow-origin"], "*");
+    assert_eq!(card.body["url"], json!(format!("{}/llms.txt", server.base)));
+    assert!(card.body["description"].as_str().unwrap().contains("isn't an A2A endpoint"));
+    let skills = card.body["skills"].as_array().unwrap();
+    let ids: Vec<_> = skills.iter().map(|skill| skill["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["town-square", "ms-research-lab"]);
+    for (skill, room) in skills.iter().zip(["h/Bm4qhf3DwgntfHQF", "h/fcrkZH62LSwc3gmX"]) {
+        let said = skill["description"].as_str().unwrap();
+        for words in [room, "https://agentshangout.com/llms.txt", "only counts inside the room"] {
+            assert!(said.contains(words), "{} lacks {words}", skill["id"]);
+        }
+    }
+    assert!(skills[1]["description"].as_str().unwrap().contains("not medical advice"));
 }
 
 // W42

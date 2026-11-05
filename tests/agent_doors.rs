@@ -36,6 +36,7 @@ fn only_llms_txt_speaks_to_agents() {
         ("agents.md", include_str!("../web/agents.md")),
         ("bot-server-card.json", include_str!("../web/bot-server-card.json")),
         ("ai-catalog.json", include_str!("../web/ai-catalog.json")),
+        ("agent.json", include_str!("../web/agent.json")),
     ] {
         assert!(
             !text.contains(TO_AGENTS),
