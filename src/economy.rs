@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24 and HC25 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -135,7 +135,22 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             }
         }
     }
-    if let Some((city_id, first)) = first_gathering {
+    // HC29: someone only on The Commons, with no city, can have a first gathering there too. The
+    // earliest from a city and the earliest from The Commons are both offered: settle_credits pays
+    // one first at most, earliest first, so a Commons one turned away by the weekly cap leaves the
+    // city one to pay instead.
+    let mut commons_first: Option<(String, CreditSource)> = None;
+    if first_gathering_open {
+        for (hangout_id, source) in db.commons_gatherings(person_id, now)? {
+            if commons_first
+                .as_ref()
+                .is_none_or(|(_, first)| (source.at, &source.source) < (first.at, &first.source))
+            {
+                commons_first = Some((hangout_id, source));
+            }
+        }
+    }
+    for (city_id, first) in first_gathering.into_iter().chain(commons_first) {
         if !sources
             .iter()
             .any(|(_, source)| source.kind == first.kind && source.source == first.source)

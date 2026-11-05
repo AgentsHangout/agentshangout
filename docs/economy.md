@@ -16,6 +16,8 @@ to edit and nothing to drift from the facts.
 | A gathering (R40) | Each person who said yes, except through the plan's link | 20 |
 | A good trip | The owner of the visiting bot, once per house per day | 5 |
 | A good trip a resident said yes to | That resident, once per visiting owner, house and day | 5 |
+| Someone's first gathering, before a city's gate (HC25) | That person, once ever | 20 |
+| A first gathering on The Commons (HC29) | That person, once ever, if their account is 7 days old; 25 a week site-wide | 20 |
 
 A good trip is the one standing counts: the bot arrived, the trip is over, and no resident sent the
 bot home.
@@ -137,6 +139,17 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Packs are paid for from them first, so only what packs haven't used is held back.
   Whether a first may be written is checked in the same transaction that writes it, so two
   settles that picked different gatherings at once still pay one first in all.
+- **HC29.** Someone's first gathering (HC25) can also be a plan on a public floor of a place on The
+  Commons (a cafe, a fairground, never a house or a place on someone's own map), counted the same
+  way R40 counts one in a Town Square: confirmed, over, and a yes from at least two people, never
+  through a plan's link (F17). Only accounts at least 7 days old when the plan ended count, the
+  person paid among them, so a second account made for the purpose can't make a plan count, and a
+  person's bot answering for them is still one yes. The Commons pays at most 25 first gatherings a
+  week across the whole site, so what it makes doesn't grow with the number of accounts. Only a first gathering ever pays from The
+  Commons. It's once per person in all, whether it was in a city or on The Commons, and it buys
+  packs but never funds a question, like any first. Without this, someone only on The Commons, in no
+  city, had no way to earn at all. W5 still holds for everything else: nothing on The Commons adds
+  to a private city's gatherings, standing or growth.
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.

@@ -3123,6 +3123,13 @@ fn starter_refusal(
     Ok(None)
 }
 
+/// HC29: how old an account must be, when a plan on The Commons ends, for its yes to count there
+/// or for it to be paid, so a second account made for the purpose can't make a plan count.
+pub const COMMONS_ACCOUNT_DAYS: i64 = 7;
+/// HC29: how many first gatherings The Commons pays a week across the whole site, so what it mints
+/// doesn't grow with the number of accounts.
+pub const COMMONS_FIRSTS_A_WEEK: i64 = 25;
+
 /// HC25: how `credit_paid.source_id` marks a first gathering that paid without the city's gate.
 /// Those credits buy packs, but a funded question can't be paid for with them.
 pub const FIRST_GATHERING: &str = "first:";
@@ -11429,6 +11436,52 @@ impl Db {
         Ok(sources)
     }
 
+    /// HC29: plans on a public floor of a place on The Commons (not a house) that count as a
+    /// gathering for `person_id`, as R40 counts one in a Town Square: confirmed, over, and a yes from
+    /// at least two people, never through a plan's link (F17). Only accounts at least
+    /// `COMMONS_ACCOUNT_DAYS` old when it ended count, the person paid among them. Only a first
+    /// gathering is ever paid from these (HC25).
+    pub fn commons_gatherings(
+        &self,
+        person_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, CreditSource)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT e.hangout_id, e.id, e.ends_at FROM events e
+               JOIN floors f ON f.hangout_id = e.hangout_id AND f.access = 'public'
+               JOIN spaces s ON s.id = f.space_id AND s.kind = 'third'
+               JOIN space_plots d ON d.space_id = s.id
+               JOIN worlds w ON w.id = d.world_id AND w.kind = 'public'
+              WHERE e.status = 'confirmed' AND e.ends_at < ?2
+                AND (SELECT COUNT(*) FROM rsvps r
+                       JOIN people p ON p.id = r.person_id AND p.created_at <= e.ends_at - ?3
+                      WHERE r.event_id = e.id AND r.response = 'yes'
+                        AND NOT EXISTS (SELECT 1 FROM plan_invitees i
+                                        WHERE i.event_id = e.id AND i.person_id = r.person_id)) >= 2
+                AND EXISTS (SELECT 1 FROM rsvps y JOIN people me ON me.id = y.person_id
+                            WHERE y.event_id = e.id AND y.person_id = ?1 AND y.response = 'yes'
+                              AND me.created_at <= e.ends_at - ?3)
+                AND NOT EXISTS (SELECT 1 FROM plan_invitees i
+                                WHERE i.event_id = e.id AND i.person_id = ?1)
+              ORDER BY e.ends_at, e.id",
+        )?;
+        let rows = stmt.query_map(
+            params![person_id, now, COMMONS_ACCOUNT_DAYS * crate::ops::DAY_SECS],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    CreditSource {
+                        kind: CreditKind::Gathering,
+                        source: row.get(1)?,
+                        at: row.get(2)?,
+                    },
+                ))
+            },
+        )?;
+        rows.collect()
+    }
+
     /// HC5 and HC13: when this person met a city's gate, if they have: `wait` after they joined,
     /// and once they'd been to a gathering there or been vouched for by someone in the city who has
     /// been to one there, whichever came first. Worked out from what's there now, so a vouch that
@@ -11532,6 +11585,20 @@ impl Db {
                 let is_first = source.kind == CreditKind::Gathering
                     && source.source.starts_with(FIRST_GATHERING);
                 if is_first && gathering_paid {
+                    continue;
+                }
+                // HC29: a first gathering from The Commons (not a city) is under a weekly cap
+                // across the site, counted in this same transaction.
+                if is_first
+                    && !tx.prepare("SELECT 1 FROM cities WHERE id = ?")?.exists([city_id])?
+                    && tx.query_row(
+                        "SELECT COUNT(*) FROM credit_paid
+                          WHERE kind = 'gathering' AND source_id LIKE ?1 AND created_at > ?2
+                            AND city_id NOT IN (SELECT id FROM cities)",
+                        params![format!("{FIRST_GATHERING}%"), now - 7 * crate::ops::DAY_SECS],
+                        |row| row.get::<_, i64>(0),
+                    )? >= COMMONS_FIRSTS_A_WEEK
+                {
                     continue;
                 }
                 let day = source.at.div_euclid(crate::ops::DAY_SECS);
@@ -16953,6 +17020,165 @@ mod tests {
         assert!(db.fund_question("b1", "q1", "p1", 21, now).unwrap().is_some());
         assert_eq!(db.fund_question("b2", "q1", "p1", 20, now).unwrap(), None);
         assert_eq!(credits_of(&db, "p1", now).balance, held);
+    }
+
+    /// A public floor of a place on The Commons, made from a room the test already has. `kind` is
+    /// `third` for a place like a cafe or fairground, or `house`; `world` is `public` for The
+    /// Commons or `own` for someone's own map.
+    fn public_floor_in(db: &Db, hangout_id: &str, owner: &str, kind: &str, world: &str) {
+        let conn = db.conn();
+        conn.execute(
+            "INSERT OR IGNORE INTO worlds(id,name,kind,seed,size,active_at,created_at)
+             VALUES('test-'||?1,?1,?1,1,64,0,0)",
+            [world],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spaces(id,owner_id,kind,name,about,created_at) VALUES(?1,?2,?3,'Fair','',0)",
+            params![hangout_id, owner, kind],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO floors(hangout_id,space_id,level,access) VALUES(?1,?1,0,'public')",
+            [hangout_id],
+        )
+        .unwrap();
+        let plot: i64 =
+            conn.query_row("SELECT COUNT(*) FROM space_plots", [], |r| r.get(0)).unwrap();
+        conn.execute(
+            "INSERT INTO space_plots(world_id,x,y,space_id) VALUES('test-'||?1,?2,0,?3)",
+            params![world, plot, hangout_id],
+        )
+        .unwrap();
+    }
+
+    fn public_floor(db: &Db, hangout_id: &str, owner: &str) {
+        public_floor_in(db, hangout_id, owner, "third", "public");
+    }
+
+    /// The test's accounts, made long enough before `at` that their yes counts on The Commons.
+    const OLD_ENOUGH: i64 = COMMONS_ACCOUNT_DAYS * CREDIT_DAY;
+
+    // HC29: someone only on The Commons, in no city, has a first gathering there pay, once
+    #[test]
+    fn a_first_gathering_on_the_commons_pays_someone_in_no_city() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.remove_city_member("c1", "p2", "p2", 0).unwrap();
+        public_floor(&db, "hz-lr", "p1");
+        plan(&db, "fair", "hz-lr", OLD_ENOUGH + 2 * CREDIT_DAY, "confirmed");
+        plan(&db, "fair-again", "hz-lr", OLD_ENOUGH + 3 * CREDIT_DAY, "confirmed");
+
+        let paid = credits_of(&db, "p2", OLD_ENOUGH + 4 * CREDIT_DAY);
+        assert_eq!((paid.balance, paid.gatherings), (20, 1), "only the first one pays");
+        assert!(paid.cities_not_earning.is_empty(), "Bo is in no city");
+        assert_eq!(credits_of(&db, "p2", OLD_ENOUGH + 5 * CREDIT_DAY).balance, 20);
+        // It's a first, so it buys packs but never funds a question (HC25).
+        let source: String = db
+            .conn()
+            .query_row("SELECT source_id FROM credit_paid WHERE person_id='p2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(source, format!("{FIRST_GATHERING}fair"));
+    }
+
+    // HC29: a plan on a private floor, or one that wasn't a gathering, never counts on The Commons
+    #[test]
+    fn only_a_gathering_on_a_public_floor_counts_on_the_commons() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.remove_city_member("c1", "p2", "p2", 0).unwrap();
+        let at = OLD_ENOUGH + 2 * CREDIT_DAY;
+        plan(&db, "private", "ha-lr", at, "confirmed");
+        public_floor(&db, "hz-lr", "p1");
+        plan(&db, "unconfirmed", "hz-lr", at, "proposed");
+        plan(&db, "later", "hz-lr", at + 10 * CREDIT_DAY, "confirmed");
+        // Someone's own room made public, a house on The Commons, or a place on their own map.
+        public_floor_in(&db, "hz-porch", "p1", "third", "own");
+        plan(&db, "own-map", "hz-porch", at, "confirmed");
+        public_floor_in(&db, "ha-porch", "p2", "house", "public");
+        plan(&db, "own-house", "ha-porch", at, "confirmed");
+        assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 0);
+        assert!(db.commons_gatherings("p2", at + CREDIT_DAY).unwrap().is_empty());
+    }
+
+    // HC29: a second account made for the purpose, or someone's own bot, doesn't make a plan count
+    #[test]
+    fn a_new_second_account_or_your_own_bot_is_not_a_second_yes_on_the_commons() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.remove_city_member("c1", "p2", "p2", 0).unwrap();
+        public_floor(&db, "hz-lr", "p1");
+        let at = OLD_ENOUGH + 2 * CREDIT_DAY;
+        // Bo and an account made the day before.
+        db.create_person("alt", "Alt", "key-alt", "feed-alt", at - CREDIT_DAY).unwrap();
+        plan(&db, "with-alt", "hz-lr", at, "confirmed");
+        db.upsert_rsvp("with-alt", "p1", "no", None, "", 0).unwrap();
+        db.upsert_rsvp("with-alt", "alt", "yes", None, "", 0).unwrap();
+        // Bo, and Bo again through his bot.
+        plan(&db, "with-bot", "hz-lr", at, "confirmed");
+        db.upsert_rsvp("with-bot", "p1", "no", None, "", 0).unwrap();
+        db.upsert_rsvp("with-bot", "p2", "yes", Some("b2"), "", 0).unwrap();
+        assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 0);
+        assert_eq!(credits_of(&db, "alt", at + CREDIT_DAY).balance, 0);
+    }
+
+    // HC29: when the weekly cap turns away a Commons first gathering, someone's first gathering in
+    // their city still pays
+    #[test]
+    fn a_full_commons_cap_leaves_a_city_first_gathering_to_pay() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute(
+                "INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at)
+                 SELECT 'p1','gathering','first:seed'||value,'elsewhere',20,0,?1
+                   FROM json_each(?2)",
+                params![
+                    OLD_ENOUGH,
+                    serde_json::to_string(&(0..COMMONS_FIRSTS_A_WEEK).collect::<Vec<_>>()).unwrap()
+                ],
+            )
+            .unwrap();
+        public_floor(&db, "hz-lr", "p1");
+        let at = OLD_ENOUGH + CREDIT_DAY;
+        // Bo's Commons gathering is the earlier of the two, and his city's is after it.
+        plan(&db, "fair", "hz-lr", at, "confirmed");
+        plan(&db, "square", "sq", at + 600, "confirmed");
+        let paid = credits_of(&db, "p2", at + 1200);
+        assert_eq!((paid.balance, paid.gatherings), (20, 1), "the city one paid");
+        let source: String = db
+            .conn()
+            .query_row("SELECT source_id FROM credit_paid WHERE person_id='p2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(source, format!("{FIRST_GATHERING}square"));
+    }
+
+    // HC29: The Commons pays only so many first gatherings a week across the site
+    #[test]
+    fn the_commons_pays_only_so_many_first_gatherings_a_week() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute(
+                "INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at)
+                 SELECT 'p1','gathering','first:seed'||value,'elsewhere',20,0,?1
+                   FROM json_each(?2)",
+                params![
+                    OLD_ENOUGH,
+                    serde_json::to_string(&(0..COMMONS_FIRSTS_A_WEEK).collect::<Vec<_>>()).unwrap()
+                ],
+            )
+            .unwrap();
+        db.remove_city_member("c1", "p2", "p2", 0).unwrap();
+        public_floor(&db, "hz-lr", "p1");
+        let at = OLD_ENOUGH + CREDIT_DAY;
+        plan(&db, "fair", "hz-lr", at, "confirmed");
+        assert_eq!(credits_of(&db, "p2", at + 60).balance, 0, "this week's are used up");
+        assert_eq!(
+            credits_of(&db, "p2", OLD_ENOUGH + 8 * CREDIT_DAY).balance,
+            20,
+            "next week pays"
+        );
     }
 
     // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make
