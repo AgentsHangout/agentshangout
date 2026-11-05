@@ -1683,6 +1683,14 @@ CREATE TABLE IF NOT EXISTS plan_cadence_shapes (
  window_to INTEGER,
  since INTEGER NOT NULL
 );
+-- RP8: the IANA time zone a repeating plan's starts follow, copied from its owner's clock (B2) when
+-- the cadence is set. Like a shape, a row counts only while its `since` matches the cadence's, so
+-- an edit made by a binary from before RP8 goes back to the saved offset.
+CREATE TABLE IF NOT EXISTS plan_cadence_zones (
+ event_id TEXT PRIMARY KEY REFERENCES plan_cadences(event_id) ON DELETE CASCADE,
+ time_zone TEXT NOT NULL,
+ since INTEGER NOT NULL
+);
 -- U14 to U21: usage phase 2. Counts only, as in phase 1: people and bots active in an hour (the
 -- number), response times as a fixed list of bucket counts, and events, long-polls and webhooks.
 CREATE TABLE IF NOT EXISTS usage_active_hours (
@@ -1790,6 +1798,12 @@ END;
 CREATE TABLE IF NOT EXISTS owner_answers_seen (
     question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
     seen_at      INTEGER NOT NULL
+);
+-- L64: how long a bot may stay on one public floor. No row, or NULL hours, is forever.
+CREATE TABLE IF NOT EXISTS bot_stay_limits (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    hours       INTEGER,
+    set_at      INTEGER NOT NULL
 );
 -- BT10: a bot tagged in a room it isn't in, by someone its wake setting lets reach it (#460). Who
 -- tagged it and the room's name or "a private room", and whether it was rung. message_id is kept
@@ -1967,6 +1981,9 @@ pub struct Agent {
     pub doorbell: Option<DoorbellStatus>,
     /// When this bot's trip here runs out. Set only for a guest, by `visitors_in`.
     pub visitor_until: Option<i64>,
+    /// L67: why its visit ends then. Set only where a person is shown a room's guests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visitor_until_why: Option<&'static str>,
     /// It belongs to this room but it's somewhere else (S55). Set only in a room's snapshot.
     pub away: bool,
     /// Set only where a person is shown a room's own bots (A21, A22).
@@ -3104,6 +3121,7 @@ fn agent_from_row(row: &Row, now: i64) -> rusqlite::Result<Agent> {
         activity,
         doorbell,
         visitor_until: None,
+        visitor_until_why: None,
         away: false,
         discord: None,
         apprenticed_by: None,
@@ -6522,6 +6540,80 @@ impl Db {
             None => conn.execute("DELETE FROM bot_workplaces WHERE agent_id = ?", [agent_id])?,
         };
         Ok(())
+    }
+
+    /// L64: how many hours a bot may stay on one public floor, or `None` for forever.
+    pub fn bot_stay_limit(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT hours FROM bot_stay_limits WHERE agent_id = ?", [agent_id], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .optional()?
+            .flatten())
+    }
+
+    /// L64: sets a bot's stay limit, or with `None` makes it forever.
+    pub fn set_bot_stay_limit(
+        &self,
+        agent_id: &str,
+        hours: Option<i64>,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_stay_limits (agent_id, hours, set_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (agent_id) DO UPDATE SET hours = excluded.hours, set_at = excluded.set_at",
+            params![agent_id, hours, now],
+        )?;
+        Ok(())
+    }
+
+    /// L65: when the newest line on a floor at or after `since` that this bot takes part in was
+    /// said: its own, one naming it, or a reply to one of its lines. Reads the room newest first on
+    /// its index and stops at the first line older than `since`, so a quiet room costs a few rows
+    /// and nobody else's chatter is counted.
+    pub fn last_line_with(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT m.created_at,
+                    COALESCE(m.agent_id = ?2, 0)
+                    OR EXISTS (SELECT 1 FROM mentions x WHERE x.message_id = m.id AND x.agent_id = ?2)
+                    OR EXISTS (SELECT 1 FROM message_replies r JOIN messages p ON p.id = r.reply_to
+                               WHERE r.message_id = m.id AND p.agent_id = ?2)
+             FROM messages m WHERE m.hangout_id = ?1 AND m.kind != 'system' ORDER BY m.id DESC",
+        )?;
+        let mut rows = stmt.query(params![hangout_id, agent_id])?;
+        while let Some(row) = rows.next()? {
+            let at: i64 = row.get(0)?;
+            if at < since {
+                break;
+            }
+            if row.get::<_, bool>(1)? {
+                return Ok(Some(at));
+            }
+        }
+        Ok(None)
+    }
+    /// L64: the walk-in this bot had that has run out and is still on its floor's row (S62): the
+    /// floor, when it started and when it ended.
+    pub fn last_ended_walk_in(
+        &self,
+        agent_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, since, until FROM floor_visits
+                 WHERE agent_id = ?1 AND until <= ?2 ORDER BY until DESC LIMIT 1",
+                params![agent_id, now],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
     }
 
     pub fn bot_routine(&self, agent_id: &str) -> rusqlite::Result<Option<RoutineRow>> {

@@ -2261,6 +2261,10 @@ async fn the_map_of_outsides_is_open_to_anyone_and_is_only_listed_words_and_numb
 #[tokio::test]
 async fn a_database_an_older_release_has_changed_shows_only_what_is_still_true() {
     let path = std::env::temp_dir().join(format!("outside-old-{}.db", std::process::id()));
+    // Process ids come round again, so a file an earlier run left must not be read as this one's.
+    for leftover in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{leftover}", path.display()));
+    }
     let path_text = path.to_string_lossy().to_string();
     let server = Server::start_on(&path_text).await;
     let ann = server.person("Ann").await;
@@ -2326,6 +2330,10 @@ async fn a_database_an_older_release_has_changed_shows_only_what_is_still_true()
 #[tokio::test]
 async fn the_cap_on_waiting_outsides_never_takes_one_that_shows_nor_another_kinds() {
     let path = std::env::temp_dir().join(format!("outside-cap-{}.db", std::process::id()));
+    // Process ids come round again, so a file an earlier run left must not be read as this one's.
+    for leftover in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{leftover}", path.display()));
+    }
     let path_text = path.to_string_lossy().to_string();
     let server = Server::start_on(&path_text).await;
     let ann = server.person("Ann").await;

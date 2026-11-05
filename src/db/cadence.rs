@@ -11,6 +11,9 @@ pub struct Cadence {
     pub shape: Shape,
     /// The owner's saved offset from UTC when it was set (B2).
     pub offset_min: i64,
+    /// RP8: the owner's IANA time zone when it was set, which starts follow across daylight saving
+    /// time. None when they had no clock or a zone the server doesn't know, so `offset_min` holds.
+    pub time_zone: Option<String>,
     /// The last local day, counted from 1 January 1970, that can have a start. Inclusive.
     pub until_day: Option<i64>,
     pub paused: bool,
@@ -94,6 +97,7 @@ fn cadence_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cadence> {
         days,
         shape,
         offset_min: row.get(4)?,
+        time_zone: row.get(16)?,
         until_day: row.get(5)?,
         paused: row.get(6)?,
         since,
@@ -105,9 +109,10 @@ pub type BotStart = (String, String, String, i64, String);
 
 const CADENCE_COLS: &str = "c.event_id, c.owner_id, c.days, c.time_min, c.offset_min, c.until_day,
      c.paused, c.since, s.freq, s.days, s.times, s.month_day, s.every_hours, s.window_from,
-     s.window_to, s.since";
+     s.window_to, s.since, z.time_zone";
 const CADENCE_FROM: &str =
-    "plan_cadences c LEFT JOIN plan_cadence_shapes s ON s.event_id = c.event_id";
+    "plan_cadences c LEFT JOIN plan_cadence_shapes s ON s.event_id = c.event_id
+     LEFT JOIN plan_cadence_zones z ON z.event_id = c.event_id AND z.since = c.since";
 
 impl Db {
     /// RP1: the plan's cadence, if it repeats.
@@ -196,6 +201,18 @@ impl Db {
                 cadence.since
             ],
         )?;
+        match &cadence.time_zone {
+            Some(zone) => tx.execute(
+                "INSERT INTO plan_cadence_zones (event_id, time_zone, since) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (event_id) DO UPDATE SET time_zone = excluded.time_zone,
+                     since = excluded.since",
+                params![cadence.event_id, zone, cadence.since],
+            )?,
+            None => tx.execute(
+                "DELETE FROM plan_cadence_zones WHERE event_id = ?",
+                [&cadence.event_id],
+            )?,
+        };
         tx.commit()
     }
 
@@ -369,6 +386,7 @@ mod tests {
             days: 0,
             shape: Shape::Monthly { month_day: 1, times: vec![600, 900] },
             offset_min: 0,
+            time_zone: None,
             until_day: None,
             paused: false,
             since,
@@ -398,5 +416,22 @@ mod tests {
         let read = db.cadence("e").unwrap().unwrap();
         assert_eq!(read.days, 127);
         assert_eq!(read.shape, Shape::Days { weekly: false, times: vec![540] });
+    }
+
+    // RP8: the zone is kept beside the cadence, setting it again without one clears it, and an
+    // older binary's edit (which moves `since` but not the zone) goes back to the saved offset.
+    #[test]
+    fn a_zone_counts_only_while_the_cadence_it_was_set_with_does() {
+        let db = Db::open(":memory:").unwrap();
+        db.conn().pragma_update(None, "foreign_keys", false).unwrap();
+        let zoned = Cadence { time_zone: Some("America/Chicago".into()), ..monthly(100) };
+        db.set_cadence(&zoned).unwrap();
+        assert_eq!(db.cadence("e").unwrap(), Some(zoned.clone()));
+        db.set_cadence(&monthly(150)).unwrap();
+        assert_eq!(db.cadence("e").unwrap().unwrap().time_zone, None);
+
+        db.set_cadence(&Cadence { since: 160, ..zoned }).unwrap();
+        db.conn().execute("UPDATE plan_cadences SET since = 200", []).unwrap();
+        assert_eq!(db.cadence("e").unwrap().unwrap().time_zone, None);
     }
 }
