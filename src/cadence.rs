@@ -692,6 +692,26 @@ mod tests {
         assert_eq!(starts_on(&unknown, day("2026-03-09")), [utc("2026-03-09T15:00:00Z")]);
     }
 
+    // RP8: an hourly window is wall-clock time too: 9:00 to 17:00 every 4 hours in Chicago is
+    // 9, 13 and 17 local on both sides of the 8 March 2026 change.
+    #[test]
+    fn an_hourly_window_keeps_its_local_hours_across_daylight_saving() {
+        let hourly = Cadence {
+            shape: Shape::Hourly { every_hours: 4, from: 9 * 60, to: 17 * 60 },
+            ..chicago_daily(Vec::new())
+        };
+        let day = |date| day_of(date).unwrap();
+        let at = |times: [&str; 3]| times.map(utc).to_vec();
+        assert_eq!(
+            starts_on(&hourly, day("2026-03-07")),
+            at(["2026-03-07T15:00:00Z", "2026-03-07T19:00:00Z", "2026-03-07T23:00:00Z"])
+        );
+        assert_eq!(
+            starts_on(&hourly, day("2026-03-09")),
+            at(["2026-03-09T14:00:00Z", "2026-03-09T18:00:00Z", "2026-03-09T22:00:00Z"])
+        );
+    }
+
     // RP8: 2:30 am doesn't exist on 8 March 2026 in Chicago, so it starts at 3:00 am CDT.
     #[test]
     fn a_time_in_the_spring_forward_gap_starts_when_the_gap_ends() {
