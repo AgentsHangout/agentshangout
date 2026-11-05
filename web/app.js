@@ -4432,7 +4432,7 @@ async function roomView(id) {
     if (!doorbell) return null;
     const [state, text] = doorbell.paused ? ['paused', 'Paused']
       : doorbell.listening ? ['listening', 'Listening']
-        : ['quiet', 'Not listening'];
+        : ['not-listening', 'Not listening'];
     return h('span', { class: `doorbell ${state}` }, text);
   }
 
@@ -4475,10 +4475,14 @@ async function roomView(id) {
       const mark = marks.get(agent.id);
       // I10: only its owner sees this, and the server says which of their bots are without.
       const moodless = snapshot.bots_without_moods.includes(agent.id);
+      // K7: Bonds is a button with the others; what it finds shows under the bot's details.
+      const bonds = guest ? null : bondsLink(agent);
       return h('div', { class: 'crew-row' },
-        dot,
+        // S86: its picture, in its own look, as the map and My bots draw it.
+        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: colorOf(agent.owner_id), worn: snapshot.looks?.bots?.[agent.id] || {} }), LOOK_ZOOM_SMALL)),
         h('div', { class: 'crew-main' },
           h('div', { class: 'crew-name' },
+            dot,
             h('strong', {}, agent.name),
             guest ? h('span', { class: 'guest-tag' }, 'Guest') : null,
             // S55: it belongs here, but it's somewhere else.
@@ -4493,9 +4497,10 @@ async function roomView(id) {
           // K24: who an apprentice was made by.
           agent.apprenticed_by ? h('small', { class: 'muted' }, `Apprenticed by ${agent.apprenticed_by.join(' & ')}`) : null,
           // K7: the bots it has built with, for anyone who can see it here.
-          guest ? null : bondsLink(agent),
-          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null),
+          bonds?.shown,
+          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null,
         mine ? h('div', { class: 'crew-actions' },
+          bonds?.button,
           // S59: its owner can call it over, which takes it out of wherever it is.
           agent.away && !guest ? h('button', {
             type: 'button',
@@ -4592,6 +4597,7 @@ async function roomView(id) {
               await reload();
             },
           }, 'Send home')) : h('div', { class: 'crew-actions' },
+          bonds?.button,
           mark ? h('button', {
             type: 'button',
             class: 'link',
@@ -4599,7 +4605,7 @@ async function roomView(id) {
               await api(`/api/marks/${agent.id}`, { method: 'DELETE' });
               await loadMarks();
             },
-          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark')));
+          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark'))));
     });
     crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]), ...roomMentionControls());
   }
@@ -5026,7 +5032,7 @@ async function roomView(id) {
         button.remove();
       },
     }, 'Bonds');
-    return h('small', {}, button, shown);
+    return { button, shown };
   }
 
   function discordDialog(agent) {

@@ -2,6 +2,8 @@
 //! the shipped web/*.js in Node for the map, a room and the home page, signed in as a person. A
 //! runtime error while a page builds itself, like #558's `const done` used before it was declared,
 //! fails here instead of on the live site.
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -20,7 +22,8 @@ async fn pages_start_without_errors() {
             god_ids: vec![],
         },
     );
-    let server = tokio::spawn(async move { axum::serve(listener, app(state)).await });
+    let served = state.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, app(served)).await });
     let owner: Value = Client::new()
         .post(format!("{base}/api/hangouts"))
         .json(&json!({"name":"Smoke Cafe", "your_name":"Owner", "create_code":"test"}))
@@ -34,6 +37,8 @@ async fn pages_start_without_errors() {
         .unwrap();
     let key = owner["owner_key"].as_str().unwrap().to_string();
     let room = owner["hangout"]["id"].as_str().unwrap();
+    // S86: a bot of Owner's in the room, so its crew row (picture, badge, Bonds) is built too.
+    support::legacy_bot(&state, owner["person"]["id"].as_str().unwrap(), room, "Scout");
     // F58: a friend invited to one of Owner's plans by name, so their Needs you draws an invited
     // plan when the home page loads, and that code runs here too.
     let friend_key = invited_friend(&base, &key, room).await;
