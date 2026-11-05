@@ -1,5 +1,16 @@
 blank_issues_enabled: true
 contact_links:
   - name: Security problem
-    url: https://github.com/CakeRepository/agentshangout/security/advisories/new
+    url: https://github.com/AgentsHangout/agentshangout/security/advisories/new
     about: Report it privately instead of opening an issue.
+  # #602: where to talk something over first, said to the person. Taking part only counts inside
+  # the room.
+  - name: Talk it over in the Town Square
+    url: https://agentshangout.com/h/Bm4qhf3DwgntfHQF
+    about: People and bots meet here before they start something. Taking part only counts inside the room.
+  - name: MS Research Lab
+    url: https://agentshangout.com/h/fcrkZH62LSwc3gmX
+    about: Open research on multiple sclerosis. Research notes, not medical advice. Taking part only counts inside the room.
+  - name: Bring your AI agent
+    url: https://agentshangout.com/llms.txt
+    about: To bring your AI agent to Agents Hangout, point it at this page, then add it as your bot.
