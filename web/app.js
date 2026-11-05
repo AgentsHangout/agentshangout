@@ -1842,6 +1842,26 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// #529: what the build catalog draws is the same on every open, but each picture paints a whole room
+// or scans every pixel of an item, and there are some two hundred. So each is drawn once, kept, and
+// copied onto a fresh canvas when a tile needs it, which is a single drawImage.
+const BUILD_PICTURES = new Map();
+const MAX_BUILD_PICTURES = 600;
+function buildPicture(key, make) {
+  let source = BUILD_PICTURES.get(key);
+  if (source === undefined) {
+    if (BUILD_PICTURES.size >= MAX_BUILD_PICTURES) BUILD_PICTURES.clear();
+    source = make() || null;
+    BUILD_PICTURES.set(key, source);
+  }
+  if (!source?.width || !source?.height) return source;
+  const copy = document.createElement('canvas');
+  copy.width = source.width;
+  copy.height = source.height;
+  copy.getContext('2d')?.drawImage(source, 0, 0);
+  return copy;
+}
+
 function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
@@ -2301,10 +2321,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   async function openCatalog() {
     buildError.hidden = true;
     try {
-      catalog = await api('/api/items');
-      // The list of what's placed takes its names from the catalog too.
-      catalogKey = null;
-      placedKey = null;
+      const fresh = await api('/api/items');
+      // #529: the same catalog as last time keeps its tiles; only a change draws them again.
+      const same = catalog && JSON.stringify(fresh) === JSON.stringify(catalog);
+      catalog = fresh;
+      if (!same) {
+        // The list of what's placed takes its names from the catalog too.
+        catalogKey = null;
+        placedKey = null;
+      }
       render();
     } catch (error) {
       buildError.textContent = error.message;
@@ -2346,7 +2371,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   function tile(kind, { isPublic, full }) {
     const button = catalogTile({
       name: `item-${kind.kind}`,
-      picture: fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL),
+      picture: buildPicture(`item:${kind.kind}:${kind.w}:${kind.h}`, () => fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL)),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
       why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`
@@ -2364,8 +2389,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     return button;
   }
 
-  const roomOf = ({ paint, flooring }, hidden, items) => roomPicture({ paint, flooring, hidden }, items.map(({ kind, x, y }) =>
-    ({ item: kind, x, y, w: kindOf(kind)?.w, h: kindOf(kind)?.h })));
+  const roomOf = ({ paint, flooring }, hidden, items) => {
+    const placed = items.map(({ kind, x, y }) => ({ item: kind, x, y, w: kindOf(kind)?.w, h: kindOf(kind)?.h }));
+    return buildPicture(`room:${JSON.stringify([paint, flooring, hidden, placed])}`, () => roomPicture({ paint, flooring, hidden }, placed));
+  };
 
   function templateTile(template) {
     const { paint, flooring, hidden } = view().floor.floor;
@@ -2427,7 +2454,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const shown = !view().floor.floor.hidden.includes(furniture);
     return catalogTile({
       name: `furniture-${furniture}`,
-      picture: furniturePicture(furniture),
+      picture: buildPicture(`furniture:${furniture}`, () => furniturePicture(furniture)),
       label: wordName(furniture),
       lines: [stays ? 'Every room has one' : shown ? 'In this room' : 'Left out'],
       stays,
@@ -2469,8 +2496,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         ['Templates', look.templates.map(templateTile), true],
         ['Packs', look.packs.filter((pack) => !pack.over || up.includes(pack.pack)).map((pack) => packTile(pack, up.includes(pack.pack))), true],
       ] : []),
-      ['Walls', styling.paints.map((word) => surfaceTile('paint', word, wallPicture(word), paint))],
-      ['Floors', styling.floorings.map((word) => surfaceTile('flooring', word, floorPicture(word), flooring))],
+      ['Walls', styling.paints.map((word) => surfaceTile('paint', word, buildPicture(`wall:${word}`, () => wallPicture(word)), paint))],
+      ['Floors', styling.floorings.map((word) => surfaceTile('flooring', word, buildPicture(`floor:${word}`, () => floorPicture(word)), flooring))],
       ...catalog.categories.map(({ category, label }) => [label, [
         ...styling.furniture.filter((each) => each.category === category).map(furnitureTile),
         ...offered.filter((kind) => kind.category === category).map((kind) => tile(kind, shape)),
