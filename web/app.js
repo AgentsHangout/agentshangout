@@ -5406,7 +5406,7 @@ async function roomView(id) {
     floorsMore,
     aboutMore,
     h('div', { class: 'game-more' }, ...[
-      moreButton('tutorial', 'Get started', 'sec'),
+      moreButton('tutorial', 'Get started', 'sec tutorial-more'),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
@@ -9053,7 +9053,7 @@ async function worldView(id, { home = false } = {}) {
   const moreRow = (name, label, className = '') =>
     h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
-    guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
+    guide ? h('button', { type: 'button', class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial') }, 'Get started') : null,
     moreRow('rooms', placesLabel, 'sec'),
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),

@@ -207,9 +207,9 @@ fn the_tutorial_is_a_panel_on_the_map_and_in_a_room_with_a_button_at_every_width
     assert!(app.contains("toggleClass: 'mid'") && app.contains("toggleClass: 'sec'"));
     // Where the bar has no room, the same panel is in More.
     assert!(app.contains(
-        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,"
+        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial') }, 'Get started') : null,"
     ));
-    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec'),"));
+    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec tutorial-more'),"));
     let style = page("style.css");
     assert!(style.contains(".wd-game .wd-title-actions .mid:not(.wait) { display: none; }"));
     // The button takes its width from the name of the place, so the map keeps its narrower bar for
@@ -788,9 +788,11 @@ fn it_stays_open_until_someone_closes_it_and_stays_closed_after() {
 #[test]
 fn the_browser_keeps_one_word_and_nothing_breaks_without_it() {
     let tutorial = page("tutorial.js");
-    assert_eq!(tutorial.matches("localStorage").count(), 2);
+    // G14, G19: the word, and whether every step was done last time, each read and written in a try.
+    assert_eq!(tutorial.matches("localStorage").count(), 5);
     let keep = part(&tutorial, "function remembered() {", "\n// The panel,");
-    assert_eq!(keep.matches("try {").count(), 2, "a browser that refuses storage throws");
+    assert_eq!(keep.matches("try {").count(), 4, "a browser that refuses storage throws");
+    assert!(tutorial.contains("const DONE = 'tutorial-done';"));
     assert!(keep.contains("catch {"));
     assert!(tutorial.contains("const WORD = 'tutorial';"));
     let writes: Vec<&str> =
@@ -803,7 +805,7 @@ fn the_browser_keeps_one_word_and_nothing_breaks_without_it() {
         );
     }
     assert!(!tutorial.contains("sessionStorage"));
-    assert!(include_str!("../web/privacy.html").contains("one word in your browser"));
+    assert!(include_str!("../web/privacy.html").contains("two words in your browser"));
 }
 
 // G15
@@ -912,4 +914,29 @@ fn making_a_bot_says_it_starts_free_and_asks_about_public_places_and_its_stay() 
     // The schedule says the same about strangers.
     let schedule = part(&app, "async function routineDialog(", "\n}\n");
     assert!(schedule.contains("h('p', { class: 'muted' }, STRANGERS_TEXT),"));
+}
+
+// G19
+#[test]
+fn get_started_leaves_the_bar_once_every_step_is_done() {
+    let tutorial = page("tutorial.js");
+    assert!(tutorial.contains("const allDone = () => Boolean(signedIn && progress && !next());"));
+    // Until the server answers it goes by what this browser saw last, so a finished page never flashes.
+    assert!(tutorial.contains("const done = progress ? allDone() : signedIn && rememberedDone();"));
+    assert!(tutorial.contains("document.documentElement.classList.toggle('tutorial-done', done);"));
+    assert!(tutorial.contains("if (progress) rememberDone(done);"));
+    assert!(tutorial.contains("tutorial-toggle"));
+    // Its row in More shows at every width once it's done, on the map and in a room.
+    let app = page("app.js");
+    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec tutorial-more')"));
+    assert!(app.contains(
+        "class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial')"
+    ));
+    let css = page("style.css");
+    assert!(css.contains(
+        ".tutorial-done .wd-title-actions .tutorial-toggle { display: none !important; }"
+    ));
+    assert!(css.contains(
+        ".tutorial-done .game-more .wd-btn.tutorial-more { display: inline-flex !important; }"
+    ));
 }
