@@ -1887,6 +1887,13 @@ function buildPicture(key, make) {
   return copy;
 }
 
+// I119, #523: whether to offer the owner of a third space that has no shared notes station one, until
+// they add it or say not now. Nothing is ever placed without them pressing Add.
+function notesStationOffer(floor, items, dismissed) {
+  return Boolean(floor?.runs_it && floor.space?.kind === 'third' && !dismissed
+    && !items.some((item) => item.kind === 'shared_notes_station'));
+}
+
 function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
@@ -2491,6 +2498,36 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     });
   }
 
+  // I119: Not now is remembered in this browser only, as a convenience; the offer holds no state.
+  const NOTES_OFFER_KEY = `notes-station-offer-dismissed:${id}`;
+  function notesOfferDismissed() {
+    try { return localStorage.getItem(NOTES_OFFER_KEY) === '1'; } catch { return false; }
+  }
+  function notesOfferEl() {
+    const add = async () => {
+      buildError.hidden = true;
+      try {
+        const { x, y } = firstSpot(1, 1);
+        await api(`/api/floors/${encodeURIComponent(id)}/items`, { method: 'POST', body: { kind: 'shared_notes_station', x, y, facing: 0 } });
+        tell('Added a shared notes station. Move it like anything else.');
+        await reload();
+      } catch (error) {
+        buildError.textContent = error.message;
+        buildError.hidden = false;
+      }
+    };
+    const notNow = () => {
+      try { localStorage.setItem(NOTES_OFFER_KEY, '1'); } catch { /* only for now, then */ }
+      catalogKey = null;
+      renderCatalog();
+    };
+    return h('div', { class: 'notes-station-offer', role: 'group', 'aria-label': 'Shared notes station' },
+      h('p', {}, 'This room has no shared notes station, so its notes are only a list. Add one where people can see it?'),
+      h('div', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: add }, 'Add a shared notes station'),
+        h('button', { type: 'button', onclick: notNow }, 'Not now')));
+  }
+
   const catalogGroup = ([title, members, whole]) => h('section', { class: 'build-group', 'aria-label': title },
     h('h3', {}, title),
     h('div', { class: `build-tiles${whole ? ' build-templates' : ''}` }, members));
@@ -2509,14 +2546,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const shape = { isPublic: floor.floor.access === 'public', full: items.length >= catalog.max_items };
     const up = look.packs.filter((pack) => items.some((item) => pack.items.some((part) => part.kind === item.kind)))
       .map((pack) => pack.pack);
-    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up, collectionId]);
+    const offering = notesStationOffer(floor, items, notesOfferDismissed());
+    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up, collectionId, offering]);
     if (key === catalogKey) return;
     catalogKey = key;
     const focused = catalogEl.contains(document.activeElement) ? document.activeElement.name : null;
     const offered = catalog.items.filter((kind) => (kind.sign ? floor.runs_it : !guest) && collectionOffers(collection, 'items', kind.kind));
     const styling = floor.runs_it && !collection ? look : { furniture: [], paints: [], floorings: [] };
     tiles = new Map();
-    catalogEl.replaceChildren(...[buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean), ...[
+    catalogEl.replaceChildren(...[offering ? notesOfferEl() : null, buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean), ...[
       ...(floor.runs_it && !guest && !collection ? [
         ['Templates', look.templates.map(templateTile), true],
         ['Packs', look.packs.filter((pack) => !pack.over || up.includes(pack.pack)).map((pack) => packTile(pack, up.includes(pack.pack))), true],

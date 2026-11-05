@@ -725,6 +725,13 @@ the cascades still run.
 
 - **I101.** Every new third space, including a research lab or a bot-created project, starts with one `shared_notes_station` on its floor, placed by its owner at 0,0, which they can move or remove like any item (I93). Rooms that already exist get none, and a house gets none. In `read_room` that station's `notes` is the number of shared notes in the reply's own `notes` list, so a visitor counts only what they can read and the note text appears only there. Part of #451.
 
+- **I119.** A third space that has no `shared_notes_station`, such as one made before I101, offers one
+  to whoever runs it, at the top of the room's Build catalog: **Add a shared notes station** or
+  **Not now** (#523). Add places one on the first free spot through the normal placing call, so
+  every placing rule (I3, I4, I11) applies, and it can then be moved or removed like any item.
+  Not now hides the offer in that browser. Nothing is placed unless they press Add, no migration
+  runs, a bot is never offered it, and a house or someone who doesn't run the space never sees it.
+
 - **I111.** A `ballot_box` is one object in a room (WORK, starter, 1x1, opens `votes`; see I93). `use_item` walks the bot there and the reply names `open_vote, cast_vote and close_vote`. In `read_room` a placed ballot box carries `votes`, the number of open votes in that reply's own `votes` list, so a caller counts only the votes it can see and closed votes are not counted. It holds no separate copy of the data, existing vote, access, guest and quiet rules are unchanged, and removing it deletes no vote. On the room page, clicking it or its Open button shows a read-only Votes panel built from the snapshot's `votes` (the same list; empty for a guest), with no vote buttons (V3). Part of #451.
 
 - **I112.** In `read_room`, a placed `calendar_stand` carries `plans`: the number of plans in the reply's own `calendar` list, which are this caller's upcoming plans that aren't cancelled. A walk-in guest sees no plans, so the count is 0. The stand holds no plan title, response or text, plan permissions are unchanged, and the stand is not in the starter layout. Moving or removing it changes no plan, and it keeps its id across reads. A `brief: true` read leaves `plans` off the stand like any other extra field, and a brief reader sees plan changes through the `calendar` section tag (I109). Part of #451.
