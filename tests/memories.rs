@@ -79,11 +79,7 @@ fn texts(list: &Value, field: &str) -> Vec<String> {
 
 impl Server {
     async fn start() -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("memories-{}-{}.db", std::process::id(), agenthangout::auth::new_id()))
-            .to_str()
-            .unwrap()
-            .to_string();
+        let path = support::db_path("memories").to_str().unwrap().to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
@@ -270,8 +266,7 @@ async fn storage_keeps_no_index_of_memories_and_an_old_database_gets_the_tables(
     assert_eq!(tables_holding(&conn, "piano"), ["bot_memories"]);
 
     // A database from before memories gets every table when the server opens it.
-    let path =
-        std::env::temp_dir().join(format!("memories-old-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("memories-old");
     let path = path.to_str().unwrap().to_string();
     drop(Db::open(&path).unwrap());
     let old = rusqlite::Connection::open(&path).unwrap();

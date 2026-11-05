@@ -89,10 +89,7 @@ struct Home {
 
 impl Server {
     async fn start() -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("agenthangout-test-{}.db", auth::new_id()))
-            .to_string_lossy()
-            .into_owned();
+        let path = support::db_path("agenthangout-test").to_string_lossy().into_owned();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");

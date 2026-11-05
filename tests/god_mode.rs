@@ -396,7 +396,7 @@ async fn only_the_people_named_have_the_switch_and_nobody_else_hears_of_it() {
 // W75
 #[tokio::test]
 async fn the_switch_stays_as_it_was_left_until_someone_is_off_the_list() {
-    let path = std::env::temp_dir().join(format!("agenthangout-test-{}.db", auth::new_id()));
+    let path = support::db_path("agenthangout-test");
     let path = path.to_string_lossy().into_owned();
     let db = Db::open(&path).unwrap();
     let justin = make_god(&db, JUSTIN, "Justin");

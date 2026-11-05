@@ -412,8 +412,7 @@ impl Rng {
 }
 
 fn temp_db(label: &str) -> String {
-    let path =
-        std::env::temp_dir().join(format!("round2-{label}-{}-{}.db", std::process::id(), now()));
+    let path = support::db_path(&format!("round2-{label}"));
     path.to_str().unwrap().to_string()
 }
 

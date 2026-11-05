@@ -142,10 +142,7 @@ struct TempDb {
 
 impl TempDb {
     fn create() -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("commons-bots-{}-{}.db", std::process::id(), auth::new_id()))
-            .to_string_lossy()
-            .into_owned();
+        let path = support::db_path("commons-bots").to_string_lossy().into_owned();
         Self { path }
     }
 }

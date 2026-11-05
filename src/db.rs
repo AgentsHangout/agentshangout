@@ -16214,6 +16214,31 @@ impl Db {
     }
 }
 
+/// #597 (unit tests): where a test keeps a database file: in one folder for the tests' files, never loose in the
+/// temp folder. The first call in a run deletes files there over an hour old, so a run that was
+/// killed before it could clean up, or a test that never does, can't fill the disk.
+#[cfg(test)]
+pub(crate) fn test_db_path(label: &str) -> std::path::PathBuf {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    let dir = std::env::temp_dir().join("agenthangout-tests");
+    let _ = std::fs::create_dir_all(&dir);
+    SWEPT.call_once(|| {
+        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_secs(60 * 60));
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    });
+    dir.join(format!("{label}-{}-{}.db", std::process::id(), crate::auth::new_id()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -17285,7 +17310,7 @@ mod tests {
         assert_eq!((firsts(&db), db.credit_totals("p1", 3).unwrap().paid), (1, 20));
 
         // At the same moment, on two connections to one file.
-        let path = std::env::temp_dir().join(format!("hc25-race-{}.db", std::process::id()));
+        let path = crate::db::test_db_path("hc25-race");
         let path_str = path.to_str().unwrap().to_string();
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{path_str}{suffix}"));

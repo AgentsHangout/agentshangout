@@ -4560,11 +4560,7 @@ async fn a_member_of_a_city_keeps_every_power_over_an_ordinary_hangout_of_their_
 #[tokio::test]
 async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it() {
     use rusqlite::Connection;
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-upgrade-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-upgrade");
     let path_text = path.to_str().unwrap().to_string();
     let _ = std::fs::remove_file(&path);
     let old_tables: [(&str, &[&str]); 12] = [

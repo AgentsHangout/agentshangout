@@ -787,7 +787,7 @@ async fn standing_is_only_the_counts_the_doc_names_and_is_worked_out_on_every_re
 // T1
 #[tokio::test]
 async fn no_table_in_the_database_holds_a_score_or_a_copy_of_standing() {
-    let path = std::env::temp_dir().join(format!("trust-schema-{}.db", std::process::id()));
+    let path = support::db_path("trust-schema");
     let _ = std::fs::remove_file(&path);
     drop(Db::open(path.to_str().unwrap()).unwrap());
     let conn =

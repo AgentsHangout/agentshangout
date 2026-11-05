@@ -27,11 +27,7 @@ impl Drop for Server {
 
 impl Server {
     async fn start() -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("memories-ui-{}-{}.db", std::process::id(), agenthangout::auth::new_id()))
-            .to_str()
-            .unwrap()
-            .to_string();
+        let path = support::db_path("memories-ui").to_str().unwrap().to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
         let state = AppState::new(

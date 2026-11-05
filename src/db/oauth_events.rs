@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn restart_keeps_identity_cursor_retry_and_signing_rotation_and_renewal_cannot_skip() {
-        let path = std::env::temp_dir().join(format!("oauth-events-{}.db", crate::auth::new_id()));
+        let path = crate::db::test_db_path("oauth-events");
         let config;
         {
             let state = setup(Db::open(path.to_str().unwrap()).unwrap());
