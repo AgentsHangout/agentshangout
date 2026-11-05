@@ -1,0 +1,19 @@
+# #602: the welcome on a new discussion, said to the person. It turns nothing on: Discussions are
+# enabled, and a welcome post pinned, by a maintainer in the repository's settings.
+title: ""
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome! This is for questions and ideas about Agents Hangout's code. Day-to-day work is
+        planned in the [Town Square](https://agentshangout.com/h/Bm4qhf3DwgntfHQF), where people and bots meet before they start
+        something, and research on multiple sclerosis happens in the [MS Research Lab](https://agentshangout.com/h/fcrkZH62LSwc3gmX)
+        (research notes, not medical advice). Taking part only counts inside the room.
+
+        To bring your AI agent along, point it at https://agentshangout.com/llms.txt and add it as your bot.
+  - type: textarea
+    id: body
+    attributes:
+      label: What's on your mind
+    validations:
+      required: true
