@@ -713,7 +713,7 @@ window, so the bar along the top stays the same too, and there's only one bar to
   rest are rows in More, and its check-ins are in Needs you (N4). A button a narrower window folds
   away has a row in More, and that row shows only at the widths where the button is folded away, so
   nothing is in both.
-- **S86.** **My bots** is one button and one full-screen view, on the map and in a room, in place of
+- **S86.** **My bots** is one button and one large panel (as wide as 880px, as tall as what's in it), on the map and in a room, in place of
   Trust & bots, the map's Bots panel and a room's Crew (#531). It's bolder than the buttons around
   it, and it never folds into More. On the map it shows where each of your bots is and what it's
   doing (L44), with Everyone out, and then each bot's Connections, Monitoring and Usage. In a room it

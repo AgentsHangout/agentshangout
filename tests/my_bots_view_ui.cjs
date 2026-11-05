@@ -1,4 +1,4 @@
-// node tests/my_bots_view_ui.cjs: S86, one My bots button and full-screen view for Trust, Bots and Crew.
+// node tests/my_bots_view_ui.cjs: S86, one My bots button and large panel for Trust, Bots and Crew.
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const app = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 const css = fs.readFileSync('web/trust.css', 'utf8').replace(/\r\n/g, '\n');
@@ -31,7 +31,8 @@ assert.ok(app.includes('const roomTrustHost = yourBotsSection(me, snapshot);'));
 assert.ok(app.includes("{ id: 'around', label: 'Around', icon: '👀'"));
 assert.ok(app.includes("{ id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') }"));
 // Full screen, on both.
-assert.ok(css.includes('.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px); max-width: none; justify-self: stretch; align-self: stretch; height: calc(100% - 24px); max-height: none; }'), 'full screen, not a floating card');
+assert.ok(css.includes('.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: min(880px, calc(100% - 24px)); max-width: none; }'), 'a large panel, as tall as its contents');
+assert.ok(!css.includes('height: calc(100% - 24px); max-height: none;'), 'not stretched to the full height');
 
 // Trust inside a host: draws into it, has no panel or button of its own, and opens the host panel.
 const h = (tag, props = {}, ...children) => ({ tag, props, children, classList: { add() {} }, append() {}, replaceChildren() {} });
@@ -52,4 +53,4 @@ const alone = context.trustPanel({ h, api: context.api, panels, me: { kind: 'per
 assert.deepEqual([added, toggled], [['trust'], ['trust']]);
 alone.open();
 assert.deepEqual(opened, ['bots', 'trust']);
-console.log('My bots view: one button and view on the map and in a room, Trust hosted inside it, full screen.');
+console.log('My bots view: one button and view on the map and in a room, Trust hosted inside it, as a large panel.');
