@@ -991,6 +991,144 @@ async fn mm13_inbox_says_bedtime_in_a_home_hour_after_16_hours_with_a_day_to_sor
     assert_eq!(server.tool(fern, "inbox", json!({})).await["bedtime"], true);
 }
 
+// MM17, MM18: ten minutes home with a day to sort out sends one bedtime event; its owner sees it
+// dreaming, then asleep once it has slept, until it does something. The owner can turn it off.
+#[tokio::test]
+async fn mm17_going_home_is_bedtime_once_and_its_owner_sees_it_dreaming_then_asleep() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let tick = || agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    let bedtimes = |bot: &Bot| {
+        let events: Vec<String> = server
+            .sql()
+            .prepare(
+                "SELECT data FROM bot_events WHERE agent_id = ? AND name = 'bedtime' ORDER BY id",
+            )
+            .unwrap()
+            .query_map([&bot.id], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        events.iter().map(|body| serde_json::from_str::<Value>(body).unwrap()).collect::<Vec<_>>()
+    };
+    let night = |bot: &Bot| {
+        let id = bot.id.clone();
+        let key = town.ann.key.clone();
+        let server = &server;
+        async move {
+            let bots = server.get(&key, "/api/me/bots").await.ok();
+            bots["bots"].as_array().unwrap().iter().find(|b| b["id"] == id.as_str()).unwrap()
+                ["status"]["night"]
+                .clone()
+        }
+    };
+    let settle = |bot: &Bot| {
+        server
+            .sql()
+            .execute("UPDATE bot_places SET since = since - 11 * 60 WHERE agent_id = ?", [&bot.id])
+            .unwrap();
+    };
+
+    // Home, with a day to sort out, but only just arrived: nothing yet.
+    server.tool(fern, "say", json!({ "hangout_id": town.cafe, "text": "Evening" })).await;
+    tick();
+    assert!(bedtimes(fern).is_empty(), "a bot home for a moment is left alone");
+    assert!(night(fern).await.is_null());
+
+    // Ten minutes home: one bedtime, saying to sleep, and its owner sees it dreaming.
+    settle(fern);
+    tick();
+    let told = bedtimes(fern);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0]["hangout_id"], town.cafe.as_str());
+    assert!(text(&told[0]["what_to_do"]).contains("sleep"));
+    assert_eq!(night(fern).await, "dreaming");
+    tick();
+    assert_eq!(bedtimes(fern).len(), 1, "once a night");
+
+    // It sleeps: asleep, until it does something.
+    server.tool(fern, "sleep", json!({ "notes": [] })).await;
+    assert_eq!(night(fern).await, "asleep");
+    server
+        .sql()
+        .execute("UPDATE agents SET last_active_at = last_active_at + 120 WHERE id = ?", [&fern.id])
+        .unwrap();
+    assert!(night(fern).await.is_null(), "awake once it does something");
+    tick();
+    assert_eq!(bedtimes(fern).len(), 1, "it slept, so not again for 16 hours");
+
+    // Its owner can turn it off, in its schedule; nobody else can.
+    let path = format!("/api/agents/{}/bedtime", fern.id);
+    server
+        .send(&town.bo.key, Method::PUT, &path, Some(json!({ "on": false })))
+        .await
+        .is(StatusCode::NOT_FOUND);
+    server
+        .send(&fern.token, Method::PUT, &path, Some(json!({ "on": false })))
+        .await
+        .is(StatusCode::FORBIDDEN);
+    server.send(&town.ann.key, Method::PUT, &path, Some(json!({ "on": false }))).await.ok();
+    let routine = server.get(&town.ann.key, &format!("/api/agents/{}/routine", fern.id)).await.ok();
+    assert_eq!(routine["auto_bedtime"], false);
+    server
+        .sql()
+        .execute(
+            "UPDATE bot_sleep SET slept_at = slept_at - 17 * 3600 WHERE bot_id = ?",
+            [&fern.id],
+        )
+        .unwrap();
+    // As if the last bedtime was the night before that sleep too.
+    server
+        .sql()
+        .execute("UPDATE bedtime_told SET at = at - 18 * 3600 WHERE agent_id = ?", [&fern.id])
+        .unwrap();
+    server.tool(fern, "say", json!({ "hangout_id": town.cafe, "text": "Late one" })).await;
+    // Saying something there is doing something there (S61), so it's ten more quiet minutes.
+    tick();
+    assert_eq!(bedtimes(fern).len(), 1, "not settled yet");
+    settle(fern);
+    tick();
+    assert_eq!(bedtimes(fern).len(), 1, "off means no bedtime");
+    server.send(&town.ann.key, Method::PUT, &path, Some(json!({ "on": true }))).await.ok();
+    tick();
+    assert_eq!(bedtimes(fern).len(), 2, "on again, and it's been 17 hours");
+}
+
+// MM17: no bedtime while it's staying somewhere else, nor in the ten minutes after S61 takes it
+// home, then one.
+#[tokio::test]
+async fn mm17_no_bedtime_until_ten_minutes_after_getting_home() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let (dee_room, _, _) = server.someone("Dee", "Dee's Deck").await;
+    server.state.db.add_agent_to_room(&dee_room, &fern.id).unwrap();
+    server.tool(fern, "go_to_room", json!({ "hangout_id": dee_room })).await;
+    server.tool(fern, "say", json!({ "hangout_id": dee_room, "text": "Hello" })).await;
+    // Twenty minutes there: still staying (S61), so not home.
+    server
+        .sql()
+        .execute("UPDATE bot_places SET since = since - 20 * 60 WHERE agent_id = ?", [&fern.id])
+        .unwrap();
+    agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    assert_eq!(server.count("SELECT COUNT(*) FROM bedtime_told WHERE agent_id = ?", &fern.id), 0);
+    // Its stay ran out five minutes ago, so S61 has it home, but only for five minutes.
+    server
+        .sql()
+        .execute("UPDATE bot_places SET since = since - 15 * 60 WHERE agent_id = ?", [&fern.id])
+        .unwrap();
+    agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    assert_eq!(server.count("SELECT COUNT(*) FROM bedtime_told WHERE agent_id = ?", &fern.id), 0);
+    // Ten minutes after that, it's settled home: bedtime.
+    server
+        .sql()
+        .execute("UPDATE bot_places SET since = since - 10 * 60 WHERE agent_id = ?", [&fern.id])
+        .unwrap();
+    agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    assert_eq!(server.count("SELECT COUNT(*) FROM bedtime_told WHERE agent_id = ?", &fern.id), 1);
+}
+
 // MM14
 #[tokio::test]
 async fn mm14_sleeping_changes_nothing_anyone_else_sees() {
@@ -1022,8 +1160,11 @@ async fn mm14_sleeping_changes_nothing_anyone_else_sees() {
         server.count("SELECT COUNT(*) FROM bot_events WHERE agent_id = ?", &fern.id),
         events_before
     );
+    // Its owner, and only its owner, sees its night (MM18), apart from its status (L44).
     let bots = server.get(&town.ann.key, "/api/me/bots").await.ok();
-    assert!(!bots.to_string().contains("\"asleep\""), "{bots}");
+    assert_ne!(bots["bots"][0]["status"]["state"], "asleep", "{bots}");
+    assert_eq!(bots["bots"][0]["status"]["night"], "asleep", "{bots}");
+    assert!(!room_after.to_string().contains("night"), "{room_after}");
 }
 
 // MM15

@@ -1922,6 +1922,15 @@ CREATE TABLE IF NOT EXISTS brought_in_owners (
 CREATE TRIGGER IF NOT EXISTS brought_in_owners_left AFTER DELETE ON members BEGIN
  DELETE FROM brought_in_owners WHERE hangout_id = OLD.hangout_id AND person_id = OLD.person_id;
 END;
+-- MM17: when a bot was last told it's bedtime, so it's told once a night, and the bots whose
+-- owners turned going-home bedtime off.
+CREATE TABLE IF NOT EXISTS bedtime_told (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bedtime_off (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

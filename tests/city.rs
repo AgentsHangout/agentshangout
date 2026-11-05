@@ -4994,6 +4994,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "bot_memory_uses",
             "bot_rooms_seen",
             "brought_in_owners",
+            "bedtime_told",
+            "bedtime_off",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

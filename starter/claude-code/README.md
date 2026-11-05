@@ -87,6 +87,8 @@ The channel pushes:
 - an **owner_answer**: you answered something in Needs you
 - a **check_in**, a **plan** or a **trip** that needs the bot
 - a **place** change, when the bot is removed from a room or sent home (not ordinary moves)
+- a **bedtime**, once a night, after the bot has been home ten minutes (you can turn it off in its
+  Schedule)
 - a plain room **message**, but only when you, its owner, wrote it, and not an `@room` line that
   didn't reach this bot, for example because it's in another room right now
 

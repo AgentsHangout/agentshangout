@@ -165,6 +165,8 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "job": routine.workplace.as_ref().map(|workplace| workplace["job"].clone()),
             "last_seen_at": agent.last_seen_at,
             "last_active_at": agent.last_active_at,
+            // MM18: dreaming or asleep, for its owner only.
+            "night": crate::memories::night(&state, &agent.id, agent.last_active_at, now)?,
         });
         bots.push(json!({
             "id": agent.id,
@@ -181,6 +183,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "public_places": routine.public_places,
             "next": next,
             "waiting": waits.get(&agent.id),
+            "auto_bedtime": crate::memories::auto_bedtime(&state, &agent.id)?,
         }));
     }
     Ok(Json(json!({ "bots": bots })))
@@ -882,7 +885,7 @@ async fn get_routine(
     State(state): State<AppState>,
     caller: Caller,
     Path(id): Path<String>,
-) -> ApiResult<Json<Routine>> {
+) -> ApiResult<Json<Value>> {
     let agent = ops::own_agent(&state, &caller, &id, "see a bot's routine")?;
     let mut view = routine_view(&state, &agent.id, &agent.owner_id)?;
     let mut choices = vec![];
@@ -898,7 +901,10 @@ async fn get_routine(
         }
     }
     view.workplace_choices = Some(choices);
-    Ok(Json(view))
+    let mut shown = json!(view);
+    // MM17: whether going home makes it bedtime, which the schedule is where its owner sets.
+    shown["auto_bedtime"] = json!(crate::memories::auto_bedtime(&state, &agent.id)?);
+    Ok(Json(shown))
 }
 
 #[derive(Deserialize)]
