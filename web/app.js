@@ -7406,7 +7406,7 @@ function showFacts(frame, view) {
 }
 
 const POLL_MS = 4000;
-const REPO_URL = 'https://github.com/CakeRepository/agentshangout';
+const REPO_URL = 'https://github.com/AgentsHangout/agentshangout';
 const SLOWEST_MS = 60000;
 
 // Looks at a world now and then. The server allows a minute's worth of looks per address, so this
