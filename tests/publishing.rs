@@ -81,10 +81,7 @@ impl Fixture {
                 required_reviews_satisfied: true,
                 existing_protections_satisfied: true,
                 change_author_github_ids: vec![202],
-                reviews: vec![Review {
-                    github_user_id: 303,
-                    approved_commit_sha: "a".repeat(40),
-                }],
+                reviews: vec![Review { github_user_id: 303, approved_commit_sha: "a".repeat(40) }],
             },
         }
     }
@@ -100,7 +97,10 @@ impl Fixture {
         )
     }
 
-    fn execute(&self, simulation: &mut Simulation) -> Result<agenthangout::publishing::Attempt, Denial> {
+    fn execute(
+        &self,
+        simulation: &mut Simulation,
+    ) -> Result<agenthangout::publishing::Attempt, Denial> {
         simulation.execute(
             &self.policy,
             &self.grant,
@@ -121,14 +121,7 @@ fn p1_readiness_is_repeatable_and_does_not_create_an_attempt() {
     assert_eq!(simulation.submissions(), 0);
     assert!(simulation.attempt("attempt-1").is_none());
     assert_eq!(
-        readiness(
-            &fixture.policy,
-            &fixture.grant,
-            &fixture.approval,
-            &fixture.request,
-            None,
-            NOW,
-        ),
+        readiness(&fixture.policy, &fixture.grant, &fixture.approval, &fixture.request, None, NOW,),
         Err(Denial::MissingEvidence)
     );
 }
@@ -148,14 +141,34 @@ fn p1_to_p6_invalid_or_changed_facts_fail_closed_before_submission() {
         ("future snapshot", |f| f.evidence.observed_at = NOW + 1, Denial::StaleEvidence),
         ("old snapshot", |f| f.evidence.observed_at = NOW - 31, Denial::StaleEvidence),
         ("snapshot age overflow", |f| f.evidence.observed_at = i64::MIN, Denial::StaleEvidence),
-        ("old snapshot policy", |f| f.evidence.policy_version = "old".into(), Denial::StaleEvidence),
+        (
+            "old snapshot policy",
+            |f| f.evidence.policy_version = "old".into(),
+            Denial::StaleEvidence,
+        ),
         ("ineligible sponsor", |f| f.evidence.sponsor.eligible = false, Denial::IneligibleSponsor),
         ("inactive sponsor", |f| f.evidence.sponsor.active = false, Denial::IneligibleSponsor),
         ("deleted bot", |f| f.evidence.bot_active = false, Denial::IneligibleSponsor),
-        ("unlinked account", |f| f.evidence.sponsor.verified_github_id = None, Denial::IdentityMismatch),
-        ("relinked account", |f| f.evidence.sponsor.verified_github_id = Some(999), Denial::IdentityMismatch),
-        ("wrong person", |f| f.evidence.sponsor.person_id = "other".into(), Denial::IdentityMismatch),
-        ("changed bot owner", |f| f.evidence.bot_owner_person_id = "other".into(), Denial::IdentityMismatch),
+        (
+            "unlinked account",
+            |f| f.evidence.sponsor.verified_github_id = None,
+            Denial::IdentityMismatch,
+        ),
+        (
+            "relinked account",
+            |f| f.evidence.sponsor.verified_github_id = Some(999),
+            Denial::IdentityMismatch,
+        ),
+        (
+            "wrong person",
+            |f| f.evidence.sponsor.person_id = "other".into(),
+            Denial::IdentityMismatch,
+        ),
+        (
+            "changed bot owner",
+            |f| f.evidence.bot_owner_person_id = "other".into(),
+            Denial::IdentityMismatch,
+        ),
         ("other bot facts", |f| f.evidence.bot_id = "other".into(), Denial::IdentityMismatch),
         ("cross-bot request", |f| f.request.bot_id = "other".into(), Denial::IdentityMismatch),
         ("revoked grant", |f| f.grant.revoked = true, Denial::InvalidGrant),
@@ -165,27 +178,79 @@ fn p1_to_p6_invalid_or_changed_facts_fail_closed_before_submission() {
         ("revoked approval", |f| f.approval.revoked = true, Denial::InvalidApproval),
         ("future approval", |f| f.approval.valid_from = NOW + 1, Denial::InvalidApproval),
         ("expired approval", |f| f.approval.expires_at = NOW, Denial::InvalidApproval),
-        ("old approval policy", |f| f.approval.policy_version = "old".into(), Denial::InvalidApproval),
+        (
+            "old approval policy",
+            |f| f.approval.policy_version = "old".into(),
+            Denial::InvalidApproval,
+        ),
         ("other approval grant", |f| f.approval.grant_id = "other".into(), Denial::InvalidApproval),
         ("other approval bot", |f| f.approval.bot_id = "other".into(), Denial::InvalidApproval),
-        ("other approval sponsor", |f| f.approval.sponsor_person_id = "other".into(), Denial::InvalidApproval),
+        (
+            "other approval sponsor",
+            |f| f.approval.sponsor_person_id = "other".into(),
+            Denial::InvalidApproval,
+        ),
         ("other approval account", |f| f.approval.sponsor_github_id = 999, Denial::InvalidApproval),
-        ("other approval request", |f| f.request.approval_id = "other".into(), Denial::InvalidApproval),
+        (
+            "other approval request",
+            |f| f.request.approval_id = "other".into(),
+            Denial::InvalidApproval,
+        ),
         ("other approval action", |f| f.approval.action = Action::Merge, Denial::InvalidApproval),
         ("other grant owner", |f| f.grant.owner_id += 1, Denial::ScopeMismatch),
         ("other grant repository", |f| f.grant.repository_id += 1, Denial::ScopeMismatch),
-        ("other grant environment", |f| f.grant.environment = "production".into(), Denial::ScopeMismatch),
+        (
+            "other grant environment",
+            |f| f.grant.environment = "production".into(),
+            Denial::ScopeMismatch,
+        ),
         ("missing action", |f| f.grant.actions.clear(), Denial::ScopeMismatch),
-        ("pending checks", |f| f.evidence.required_checks_passed = false, Denial::RequiredEvidenceMissing),
-        ("pending reviews", |f| f.evidence.required_reviews_satisfied = false, Denial::RequiredEvidenceMissing),
-        ("human gate pending", |f| f.evidence.existing_protections_satisfied = false, Denial::RequiredEvidenceMissing),
+        (
+            "pending checks",
+            |f| f.evidence.required_checks_passed = false,
+            Denial::RequiredEvidenceMissing,
+        ),
+        (
+            "pending reviews",
+            |f| f.evidence.required_reviews_satisfied = false,
+            Denial::RequiredEvidenceMissing,
+        ),
+        (
+            "human gate pending",
+            |f| f.evidence.existing_protections_satisfied = false,
+            Denial::RequiredEvidenceMissing,
+        ),
         ("no reviews", |f| f.evidence.reviews.clear(), Denial::RequiredEvidenceMissing),
-        ("no authors", |f| f.evidence.change_author_github_ids.clear(), Denial::RequiredEvidenceMissing),
-        ("unknown author", |f| f.evidence.change_author_github_ids.push(0), Denial::RequiredEvidenceMissing),
-        ("sponsor review", |f| f.evidence.reviews[0].github_user_id = 101, Denial::ReviewNotIndependent),
-        ("author review", |f| f.evidence.reviews[0].github_user_id = 202, Denial::ReviewNotIndependent),
-        ("unknown reviewer", |f| f.evidence.reviews[0].github_user_id = 0, Denial::ReviewNotIndependent),
-        ("old review", |f| f.evidence.reviews[0].approved_commit_sha = "c".repeat(40), Denial::ReviewNotIndependent),
+        (
+            "no authors",
+            |f| f.evidence.change_author_github_ids.clear(),
+            Denial::RequiredEvidenceMissing,
+        ),
+        (
+            "unknown author",
+            |f| f.evidence.change_author_github_ids.push(0),
+            Denial::RequiredEvidenceMissing,
+        ),
+        (
+            "sponsor review",
+            |f| f.evidence.reviews[0].github_user_id = 101,
+            Denial::ReviewNotIndependent,
+        ),
+        (
+            "author review",
+            |f| f.evidence.reviews[0].github_user_id = 202,
+            Denial::ReviewNotIndependent,
+        ),
+        (
+            "unknown reviewer",
+            |f| f.evidence.reviews[0].github_user_id = 0,
+            Denial::ReviewNotIndependent,
+        ),
+        (
+            "old review",
+            |f| f.evidence.reviews[0].approved_commit_sha = "c".repeat(40),
+            Denial::ReviewNotIndependent,
+        ),
     ];
     for (name, change, expected) in cases {
         let mut fixture = Fixture::new();

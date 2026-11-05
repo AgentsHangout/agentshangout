@@ -166,9 +166,7 @@ pub fn readiness(
     }
     let evidence = evidence.ok_or(Denial::MissingEvidence)?;
     let age = now.checked_sub(evidence.observed_at).ok_or(Denial::StaleEvidence)?;
-    if age < 0
-        || age > policy.max_evidence_age_seconds
-        || evidence.policy_version != policy.version
+    if age < 0 || age > policy.max_evidence_age_seconds || evidence.policy_version != policy.version
     {
         return Err(Denial::StaleEvidence);
     }
@@ -307,7 +305,9 @@ impl Simulation {
     ) -> Result<Attempt, Denial> {
         readiness(policy, grant, approval, request, evidence, now)?;
         if let Some(attempt) = self.attempts.get_mut(&request.idempotency_key) {
-            if attempt.request != *request || attempt.grant != *grant || attempt.approval != *approval
+            if attempt.request != *request
+                || attempt.grant != *grant
+                || attempt.approval != *approval
             {
                 return Err(Denial::IdempotencyConflict);
             }
