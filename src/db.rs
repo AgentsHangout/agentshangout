@@ -16936,6 +16936,37 @@ mod tests {
         assert_eq!(credits_of(&db, "alt", at + CREDIT_DAY).balance, 0);
     }
 
+    // HC29: when the weekly cap turns away a Commons first gathering, someone's first gathering in
+    // their city still pays
+    #[test]
+    fn a_full_commons_cap_leaves_a_city_first_gathering_to_pay() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.conn()
+            .execute(
+                "INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at)
+                 SELECT 'p1','gathering','first:seed'||value,'elsewhere',20,0,?1
+                   FROM json_each(?2)",
+                params![
+                    OLD_ENOUGH,
+                    serde_json::to_string(&(0..COMMONS_FIRSTS_A_WEEK).collect::<Vec<_>>()).unwrap()
+                ],
+            )
+            .unwrap();
+        public_floor(&db, "hz-lr", "p1");
+        let at = OLD_ENOUGH + CREDIT_DAY;
+        // Bo's Commons gathering is the earlier of the two, and his city's is after it.
+        plan(&db, "fair", "hz-lr", at, "confirmed");
+        plan(&db, "square", "sq", at + 600, "confirmed");
+        let paid = credits_of(&db, "p2", at + 1200);
+        assert_eq!((paid.balance, paid.gatherings), (20, 1), "the city one paid");
+        let source: String = db
+            .conn()
+            .query_row("SELECT source_id FROM credit_paid WHERE person_id='p2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(source, format!("{FIRST_GATHERING}square"));
+    }
+
     // HC29: The Commons pays only so many first gatherings a week across the site
     #[test]
     fn the_commons_pays_only_so_many_first_gatherings_a_week() {

@@ -135,18 +135,22 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             }
         }
     }
-    // HC29: someone only on The Commons, with no city, can have a first gathering there too.
+    // HC29: someone only on The Commons, with no city, can have a first gathering there too. The
+    // earliest from a city and the earliest from The Commons are both offered: settle_credits pays
+    // one first at most, earliest first, so a Commons one turned away by the weekly cap leaves the
+    // city one to pay instead.
+    let mut commons_first: Option<(String, CreditSource)> = None;
     if first_gathering_open {
         for (hangout_id, source) in db.commons_gatherings(person_id, now)? {
-            if first_gathering
+            if commons_first
                 .as_ref()
                 .is_none_or(|(_, first)| (source.at, &source.source) < (first.at, &first.source))
             {
-                first_gathering = Some((hangout_id, source));
+                commons_first = Some((hangout_id, source));
             }
         }
     }
-    if let Some((city_id, first)) = first_gathering {
+    for (city_id, first) in first_gathering.into_iter().chain(commons_first) {
         if !sources
             .iter()
             .any(|(_, source)| source.kind == first.kind && source.source == first.source)
