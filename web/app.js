@@ -5466,8 +5466,17 @@ async function roomView(id) {
   const roomBotsList = roomTrustHost ? h('div', { class: 'my-bots-list' }) : null;
   const loadRoomBots = async () => {
     if (!roomBotsList) return;
-    const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
-    roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), ...yourBotsSummary(bots, loadRoomBots));
+    let bots;
+    try {
+      ({ bots = [] } = await api('/api/me/bots'));
+    } catch (error) {
+      // Not the same as having none: say it couldn't be read, and keep the heading.
+      roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), h('p', { class: 'error' }, `Couldn't load your bots: ${error.message}`));
+      return;
+    }
+    // After a change here (a Delete), each bot's tabs below are read again too.
+    const changed = async () => { await loadRoomBots(); roomTrust?.load(); };
+    roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), ...yourBotsSummary(bots, changed));
   };
   panels.add('crew', 'My bots', { onOpen: () => { loadRoomBots(); roomTrust?.load(); } },
     h('h3', { class: 'my-bots-here' }, 'In this room'),
@@ -8924,7 +8933,7 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return yourBotRow(bot, { focusOn, reload: () => loadBots(true) });
+        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
