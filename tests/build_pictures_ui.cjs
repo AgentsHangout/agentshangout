@@ -19,11 +19,14 @@ assert.deepEqual([second.width, second.height], [40, 30], 'the copy is the same 
 assert.equal(drawnCopies, 2, 'each copy is one drawImage');
 context.buildPicture('room:b', paint);
 assert.equal(painted, 2, 'a different picture is painted');
-// A picture that can't be drawn isn't tried again, and gives no canvas.
+// A picture that can't be drawn gives no canvas and isn't kept, so it's tried again next time.
 let tried = 0;
 assert.equal(context.buildPicture('item:unknown', () => { tried += 1; return null; }), null);
 context.buildPicture('item:unknown', () => { tried += 1; return null; });
-assert.equal(tried, 1);
+assert.equal(tried, 2);
+assert.equal(context.BUILD_PICTURES.has('item:unknown'), false);
+assert.equal(context.buildPicture('item:blank', () => ({ width: 0, height: 0 })).width, 0, 'an empty canvas is handed back as it is');
+assert.equal(context.BUILD_PICTURES.has('item:blank'), false);
 // The cache can't grow without end.
 for (let n = 0; n < 1000; n++) context.buildPicture(`many:${n}`, paint);
 assert.ok(context.BUILD_PICTURES.size <= 600, `held ${context.BUILD_PICTURES.size}`);

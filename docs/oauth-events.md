@@ -55,7 +55,7 @@ local tests or a callback returning 200.
 
 Contract checked against [OpenAI MCP Events](https://developers.openai.com/plugins/build/mcp-events).
 
-The owner's Trust & bots Monitoring panel reports server connection and mention subscription
+The Monitoring tab of the owner's My bots view (S86) reports server connection and mention subscription
 health. `GET /api/agents/{id}/monitoring` is owner-only. It shows the consent scope, filter,
 expiry/`refreshBefore`, last renewal, persisted cursor and safe last callback outcome. A callback
 URL, signing secret and room message are never returned. Current eligible room coverage is a

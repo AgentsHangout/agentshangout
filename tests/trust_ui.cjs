@@ -190,6 +190,14 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   assert.ok(text(body).includes('Your people friendships')); assert.ok(findButton(body,'Accept')); assert.ok(findButton(body,'Open your crew'));
   // U21: someone who runs the server reaches the Usage tab with no bots; anyone else still has no tabs.
   assert.equal(findButton(body, 'Usage'), undefined);
+  // S86: hosted in the My bots view, a person who owns none of the bots sees the same: no Connections,
+  // Monitoring or Usage tabs, and nothing about another person's bot (Pine is a friend's).
+  const host = h('section'); const hostedBody = () => host;
+  const hosted = build({host, hostPanel:'bots'}); hosted.load(); await tick(); await tick();
+  assert.equal(hosted.toggle, null, 'no button of its own');
+  for (const label of ['Connections', 'Monitoring', 'Usage', 'Pause bot', 'Wake-up settings']) assert.equal(findButton(hostedBody(), label), undefined, `${label} shown to someone with no bots`);
+  assert.ok(!text(hostedBody()).includes('Pine'), "another person's bot is not shown");
+  assert.ok(text(hostedBody()).includes('Your people friendships'), 'the same empty state as the panel');
   gods = true; const operator = build({me:{name:'You',kind:'person',god_mode:false}}); await operator.open(); await tick();
   const usageTab = findButton(body, 'Usage'); assert.ok(usageTab, 'an operator with no bots has the Usage tab');
   usageTab.props.onclick(); await tick(); await tick();
