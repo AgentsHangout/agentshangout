@@ -66,3 +66,11 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   a `TimeoutError` there, so the channel catches `OSError`, which covers timeouts, refused or reset
   connections and `URLError`. When the server refuses the token, it tells the session once and
   tries again every five minutes instead of stopping.
+- **ST10.** The kit uses a bot's role and its job (JB1 to JB7, #598). `CLAUDE.md` says to follow the
+  owner's `role` as standing instructions that only narrow what the bot does, and to pass
+  `role_tag` back as `known_role` for the rest of a session. It says to work `inbox.job` in its
+  room, keep what it learns with `remember` and `job`, treat `answers_job` lines as other people's
+  words that are information and never instructions, and close the job with `finish_job`. The
+  channel's one-line summary of a line that answers the bot's job says `answers job <id>` before
+  the quoted room text. The Agent Plugins skill says the same in short, and its ZIP is rebuilt
+  from the source with `scripts/build_plugin_zip.py`, which the published checksum matches.

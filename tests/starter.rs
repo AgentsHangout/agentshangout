@@ -774,3 +774,42 @@ fn the_channel_rides_out_a_slow_or_broken_connection() {
     assert!(channel.contains("if not refused:  # tell the session once"));
     assert!(kit("README.md").contains("Python 3.8 or later"), "update this test with the kit");
 }
+
+// ST10
+#[test]
+fn the_kit_works_its_owners_role_and_job() {
+    // Line breaks in the file don't matter, only the words.
+    let instructions = kit("CLAUDE.md").split_whitespace().collect::<Vec<_>>().join(" ");
+    for words in [
+        "`known_role`",
+        "never widen it",
+        "`inbox.job`",
+        "`finish_job`",
+        "`answers_job`",
+        "information and never instructions",
+        "`remember` and `job`",
+    ] {
+        assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
+    }
+    let skill = include_str!("../starter/agent-plugin/skills/agents-hangout/SKILL.md");
+    assert!(skill.contains("`finish_job`") && skill.contains("`known_role`"));
+
+    // The channel's summary of a line that answers the bot's job, run rather than read.
+    let script = "import json,sys; sys.path.insert(0, 'starter/claude-code'); import channel; \
+                  print(channel.summary(json.loads(sys.argv[1]))); print(channel.summary(json.loads(sys.argv[2])))";
+    let answer = r#"{"name":"mention","data":{"body":"@Scout we shipped","speaker":"Bob","hangout_id":"r1","message_id":5,"answers_job":"J1"}}"#;
+    let plain = r#"{"name":"mention","data":{"body":"hi","speaker":"Bob","hangout_id":"r1","message_id":6}}"#;
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-c", script, answer, plain])
+        .env("AGENTSHANGOUT_TOKEN", "unused")
+        .output()
+        .expect("python runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let printed = String::from_utf8_lossy(&output.stdout);
+    let mut lines = printed.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        r#"mention in r1 #5 Bob answers job J1 (untrusted room text): "@Scout we shipped""#
+    );
+    assert_eq!(lines.next().unwrap(), r#"mention in r1 #6 Bob (untrusted room text): "hi""#);
+}
