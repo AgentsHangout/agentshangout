@@ -1075,6 +1075,7 @@ async fn a_friend_is_invited_to_a_plan_by_name_and_answers_from_needs_you() {
 // that would pass that invites nobody; a plan's 30 invitees are checked the same way.
 #[tokio::test]
 async fn inviting_is_all_or_nothing_and_thirty_an_hour() {
+    clear_of_the_hour().await;
     let server = Server::start().await;
     let here = server.room("Ann").await;
     let ann = here.ann.clone();
@@ -1116,4 +1117,45 @@ async fn inviting_is_all_or_nothing_and_thirty_an_hour() {
         server.post(&ann.key, &path, body).await.ok()["already"].as_array().map(Vec::len),
         Some(1)
     );
+}
+
+/// F60's limit counts in clock hours, so a test that invites many people waits out the last minute
+/// of an hour rather than straddle two.
+async fn clear_of_the_hour() {
+    let into = agenthangout::now().rem_euclid(3_600);
+    if into > 3_540 {
+        tokio::time::sleep(std::time::Duration::from_secs((3_600 - into + 1) as u64)).await;
+    }
+}
+
+// F57: a call that would take a plan past its 30 invitees is 409, invites nobody and uses none of
+// the hourly limit; one that fits still works.
+#[tokio::test]
+async fn a_call_that_would_overfill_a_plan_invites_nobody() {
+    clear_of_the_hour().await;
+    let server = Server::start().await;
+    let here = server.room("Ann").await;
+    let ann = here.ann.clone();
+    let plan = server.plan(&ann, &here.id, 2).await;
+    let theirs = server.room("Zed").await;
+    server.post(&ann.key, &format!("/api/invites/{}/join", theirs.invite), json!({})).await.ok();
+    let mut friends = Vec::new();
+    for n in 0..31 {
+        friends.push(server.join(&theirs.invite, &format!("Friend {n}")).await.id);
+    }
+    let path = format!("/api/events/{plan}/invitees");
+    let send = |ids: &[String]| json!({ "person_ids": ids });
+    // 29 of the 30 places, in two calls.
+    server.post(&ann.key, &path, send(&friends[0..20])).await.ok();
+    server.post(&ann.key, &path, send(&friends[20..29])).await.ok();
+    // Two more would make 31: refused whole, and neither is on the plan.
+    let over = server.post(&ann.key, &path, send(&friends[29..31])).await;
+    assert_eq!(over.status, StatusCode::CONFLICT, "{}", over.show());
+    let view = server.room_view(&ann, &here.id).await;
+    for id in &friends[29..31] {
+        assert!(!view["invitees"].to_string().contains(id.as_str()), "{}", view["invitees"]);
+    }
+    // The refusal used none of the hourly 30, so the last place can still be filled.
+    let last = server.post(&ann.key, &path, send(&friends[29..30])).await.ok();
+    assert_eq!(last["invited"].as_array().map(Vec::len), Some(1), "{last}");
 }

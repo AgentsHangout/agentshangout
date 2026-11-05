@@ -177,11 +177,12 @@ A link has to be sent by hand, outside the site. A friend can also be invited by
 
 - **F57.** A person in a plan's room (not a bot, not a guest) invites friends to it with
   `POST /api/events/{id}/invitees` and `person_ids`, 1 to 20 of them, while the plan is coming up
-  and not canceled. Each must be someone they have a real tie to (#574, FR3): a room they share
-  that isn't a Town Square, a plan they both said yes or maybe to, someone who answered a plan in
-  one of their rooms through its link, or an accepted friendship. Sharing only a city or its Town
-  Square isn't a tie. Anyone else, or an id that doesn't exist, is the same 400, and nobody is
-  invited. A friend already in the room is listed back as `in_room` and
+  and not canceled. Each must be their friend as FR1 counts it, a real tie (#574): a room they
+  share that isn't a Town Square, a plan they both said yes or maybe to outside a Town Square,
+  someone who answered a plan in one of their rooms through its link, or an accepted friendship.
+  A room they're in only because another bot brought theirs into its project (L12), and a plan
+  on a public floor, don't count (#583), nor does sharing only a city or its Town Square. Anyone
+  else, or an id that doesn't exist, is the same 400, and nobody is invited. A friend already in the room is listed back as `in_room` and
   nothing changes, since a proposal already told them. A friend already invited is `already`.
   Everyone else becomes an invitee of that plan, exactly as through its link (F14, F16 to F20,
   and F18's 30), and is listed back as `invited`. A call is all or nothing: if the new invitees

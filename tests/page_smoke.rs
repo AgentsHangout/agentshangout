@@ -34,8 +34,16 @@ async fn pages_start_without_errors() {
         .unwrap();
     let key = owner["owner_key"].as_str().unwrap().to_string();
     let room = owner["hangout"]["id"].as_str().unwrap();
-    for path in ["/".to_string(), "/world/commons".to_string(), format!("/h/{room}")] {
-        let (base, key) = (base.clone(), key.clone());
+    // F58: a friend invited to one of Owner's plans by name, so their Needs you draws an invited
+    // plan when the home page loads, and that code runs here too.
+    let friend_key = invited_friend(&base, &key, room).await;
+    for (key, path) in [
+        (key.clone(), "/".to_string()),
+        (key.clone(), "/world/commons".to_string()),
+        (key.clone(), format!("/h/{room}")),
+        (friend_key, "/".to_string()),
+    ] {
+        let base = base.clone();
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new("node")
                 .args(["tests/page_smoke.mjs", &base, &key, &path])
@@ -52,4 +60,53 @@ async fn pages_start_without_errors() {
         );
     }
     server.abort();
+}
+
+/// Owner proposes a plan and invites a friend to it by name; the friend's key is returned. They're
+/// friends through the friend's own room, which Owner joins (FR1).
+async fn invited_friend(base: &str, owner_key: &str, room: &str) -> String {
+    let client = Client::new();
+    let send = |key: &str, path: &str, body: Value| {
+        client.post(format!("{base}{path}")).bearer_auth(key).json(&body).send()
+    };
+    let json = |reply: reqwest::Response| async move {
+        reply.error_for_status().unwrap().json::<Value>().await.unwrap()
+    };
+    let plan = json(
+        send(
+            owner_key,
+            &format!("/api/hangouts/{room}/events"),
+            json!({"title":"Smoke tacos","starts_at":"2031-06-06T18:00:00Z"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    let theirs = json(
+        send(
+            "",
+            "/api/hangouts",
+            json!({"name":"Friend place","your_name":"Friend","create_code":"test"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    let code = theirs["invite_url"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    json(send(owner_key, &format!("/api/invites/{code}/join"), json!({})).await.unwrap()).await;
+    let friend = theirs["person"]["id"].as_str().unwrap();
+    let plan_id = plan["id"].as_str().unwrap();
+    let sent = json(
+        send(owner_key, &format!("/api/events/{plan_id}/invitees"), json!({"person_ids":[friend]}))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(sent["invited"].as_array().map(Vec::len), Some(1), "{sent}");
+    let friend_key = theirs["owner_key"].as_str().unwrap().to_string();
+    let needs =
+        client.get(format!("{base}/api/needs-you")).bearer_auth(&friend_key).send().await.unwrap();
+    let needs = json(needs).await;
+    assert_eq!(needs["invited_plans"].as_array().map(Vec::len), Some(1), "{needs}");
+    friend_key
 }

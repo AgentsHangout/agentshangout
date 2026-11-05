@@ -1930,7 +1930,6 @@ CREATE TABLE IF NOT EXISTS bedtime_told (
 );
 CREATE TABLE IF NOT EXISTS bedtime_off (
     agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
-
 );
 -- F57 to F61: who invited a friend to a plan by name, and when. The invitee itself is a row in
 -- plan_invitees, as through a link. This says it came from someone, so Needs you can say who.
