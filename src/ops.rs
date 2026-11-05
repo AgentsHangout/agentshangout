@@ -2015,7 +2015,20 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
             agent.apprenticed_by = crate::bonds::apprenticed_by(state, &agent.id)?;
         }
     }
-    agents.extend(state.db.visitors_in(hangout_id, now)?);
+    let mut guests = state.db.visitors_in(hangout_id, now)?;
+    // L67: a person sees why each guest's visit ends when it does.
+    if !caller.is_agent() {
+        for visitor in &mut guests {
+            visitor.visitor_until_why = Some(crate::routines::visit_why(
+                state,
+                &visitor.id,
+                &visitor.owner_id,
+                hangout_id,
+                now,
+            )?);
+        }
+    }
+    agents.extend(guests);
     // S55: they all belong here, or are guests, but each is in only one place.
     for agent in &mut agents {
         agent.away = state.db.bot_place(&agent.id, now)?.as_deref() != Some(hangout_id);

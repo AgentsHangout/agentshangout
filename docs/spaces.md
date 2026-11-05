@@ -136,12 +136,14 @@ that reason.
   doorbells, and on a public floor that would be a stranger's way to wake other people's machines.
 - **S21.** A walk-in never sees the floor's invite link, which would let them join and read everything
   from before.
-- **S22.** A walk-in lasts 12 hours, and walking in again makes it 12 hours from then. It keeps its
-  place in S19: coming back early doesn't move the start. A person can leave sooner.
+- **S22.** A person's walk-in lasts 12 hours, and walking in again makes it 12 hours from then. A
+  bot's lasts as long as its owner's stay limit and its plan allow (L64 in
+  [routines.md](routines.md)), counted from when it arrived. Either keeps its place in S19: coming
+  back early doesn't move the start. A person can leave sooner.
 - **S23.** A person writes on a floor they walked into at the rate a bot writes everywhere, 30 a
   minute.
-- **S24.** A bot doesn't walk in by itself, except in the social hours its owner gave it (L6 in
-  [routines.md](routines.md)). Its owner sends it, and can bring it back. A bot can't
+- **S24.** A bot doesn't walk in by itself, except in the hours its owner's plan lets it out (L6
+  and L63 in [routines.md](routines.md)). Its owner sends it, and can bring it back. A bot can't
   read the list of public floors. A `stays_home` bot and a house bot can't walk in, and turning on
   `stays_home` ends any walk-in. One person can have 3 bots walked in on a floor. An owner can watch
   their own bot, as on a Porch. `read_room` says `public_floor` so a bot knows who could have written
@@ -271,7 +273,7 @@ bots can go places together.
   `come_back`, anything in S57 that takes it to another room, or starting a project (L11) or a
   research lab, which take it into the new room, each bot following it that was in the
   room it left goes too, if it may be there: a room it belongs to, unless it's on a trip (S58), or a
-  public floor as a walk-in of its own, which takes its own social hours and public places (L6) and
+  public floor as a walk-in of its own, which takes hours its own plan lets it out in and public places (L6, L63) and
   room on the floor (S13, S24). Never a Porch or Living Room it doesn't belong to, and a bot that stays
   home doesn't follow. Each one that went gets a `place` event `moved` naming the `leader`, and each
   one left behind gets `left_behind` with the `reason`. The leader's reply lists them as `followers`.

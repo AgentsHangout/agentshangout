@@ -17,7 +17,7 @@ use crate::{
     looks::{worn, Look},
     now,
     ops::{self, DAY_SECS},
-    spaces::{capacity, MAX_BOTS_WALKED_IN, WALK_IN_SECS},
+    spaces::{capacity, MAX_BOTS_WALKED_IN},
     travel::Parting,
     AppState,
 };
@@ -30,6 +30,12 @@ pub const WANDER_SECS: i64 = 30 * 60;
 const MAX_PLACES: i64 = 50;
 /// L47: how long a bot's job may be.
 const JOB_CHARS: usize = 200;
+/// L64: the stay limits an owner can pick, in hours, besides forever.
+pub const STAY_LIMIT_HOURS: [i64; 3] = [1, 4, 12];
+/// L64: forever still needs an end on a walk-in's row: as far ahead as a plan is followed (L52).
+pub const NO_LIMIT_SECS: i64 = RUN_DAYS * DAY_SECS;
+/// L65: how long nothing has to happen on a floor before a bot moves on from it.
+pub const QUIET_SECS: i64 = 30 * 60;
 
 /// What a bot has before its owner gives it a routine: no social hours and public places off.
 const NO_ROUTINE: RoutineRow = RoutineRow {
@@ -45,6 +51,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/agents/{id}/routine", get(get_routine).put(put_routine))
         .route("/api/agents/{id}/workplace", put(put_workplace).delete(delete_workplace))
         .route("/api/agents/{id}/schedule", put(put_schedule).delete(delete_schedule))
+        .route("/api/agents/{id}/stay_limit", put(put_stay_limit))
         .route("/api/me/bots", get(my_bots))
 }
 
@@ -222,7 +229,9 @@ pub fn kept_in(state: &AppState, agent_id: &str) -> ApiResult<Option<&'static st
     Ok(None)
 }
 
-/// L2, L3, L4: when this bot may go out until, or why it can't go out now.
+/// L2, L4, L6, L59, L63: when this bot's time out ends, or why it can't go out now. Any hour but
+/// a Home hour lets it out, so its time out runs to the next Home hour, or as far as a plan is
+/// followed when there's none.
 pub(crate) fn out_until(
     state: &AppState,
     agent_id: &str,
@@ -232,17 +241,125 @@ pub(crate) fn out_until(
     if let Some(reason) = kept_in(state, agent_id)? {
         return Ok(Err(reason));
     }
-    let Some(ends) = hours_until(state, agent_id, owner_id, now)? else {
-        return Ok(Err("it isn't your social hours"));
+    let offset = offset_of(state, owner_id)?;
+    let plan = plan_of(state, agent_id)?;
+    if plan.block_at(offset, now) == Block::Home {
+        return Ok(Err("it's a Home hour in your plan"));
+    }
+    Ok(Ok(plan.run_until(offset, now, |block| block != Block::Home)))
+}
+
+/// L63: whether this bot counts as out in its hours: a Social or Work hour it may go out in, or a
+/// free hour it's spending out on a walk-in.
+fn in_hours(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<bool> {
+    if out_until(state, agent_id, owner_id, now)?.is_err() {
+        return Ok(false);
+    }
+    Ok(hours_until(state, agent_id, owner_id, now)?.is_some()
+        || !state.db.bot_visits(agent_id, now)?.is_empty())
+}
+
+/// L64: how many hours this bot may stay on one public floor, or `None` for forever.
+pub fn stay_limit_of(state: &AppState, agent_id: &str) -> ApiResult<Option<i64>> {
+    Ok(state.db.bot_stay_limit(agent_id)?)
+}
+
+/// L64: when a walk-in onto `floor_id` made now should end: at `ends` if that's given and sooner,
+/// and never later than the bot's stay limit after it arrived there. Walking in again while it's
+/// still there keeps its arrival (S19), so the limit counts from then.
+pub(crate) fn walk_in_until(
+    state: &AppState,
+    agent_id: &str,
+    floor_id: &str,
+    ends: Option<i64>,
+    now: i64,
+) -> ApiResult<i64> {
+    let arrived = match state.db.visit_times(floor_id, agent_id)? {
+        Some((since, until)) if until > now => since,
+        _ => now,
     };
-    // L59: a saved plan's Anything hours don't send a bot home, only Home does.
-    Ok(Ok(match schedule_of(state, agent_id)? {
-        Some(schedule) => {
-            let offset = offset_of(state, owner_id)?;
-            schedule.run_until(offset, ends - 1, |block| block != Block::Home).max(ends)
+    let cap = stay_cap(state, agent_id, arrived)?;
+    Ok(ends.map_or(cap, |ends| ends.min(cap)))
+}
+
+/// L64: the latest a walk-in that started at `since` may last.
+fn stay_cap(state: &AppState, agent_id: &str, since: i64) -> ApiResult<i64> {
+    Ok(match stay_limit_of(state, agent_id)? {
+        Some(hours) => since + hours * 3600,
+        None => since + NO_LIMIT_SECS,
+    })
+}
+
+/// L64: the floor whose walk-in just ran out at the bot's stay limit, so wandering and roaming
+/// don't take it straight back.
+fn left_at_limit(state: &AppState, agent_id: &str, now: i64) -> ApiResult<Option<String>> {
+    let Some(hours) = stay_limit_of(state, agent_id)? else {
+        return Ok(None);
+    };
+    let Some((floor, since, until)) = state.db.last_ended_walk_in(agent_id, now)? else {
+        return Ok(None);
+    };
+    Ok((now - until < WANDER_SECS && until - since >= hours * 3600 - 60).then_some(floor))
+}
+
+/// L65: when this bot moves on from the floor it's walked onto, if it would: in a Social or free
+/// hour, at the first half hour after 30 minutes in which nobody said anything there and it did
+/// nothing, counted from when it arrived.
+pub(crate) fn moves_on_at(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    floor_id: &str,
+    now: i64,
+) -> ApiResult<Option<i64>> {
+    if !matches!(block_now(state, agent_id, owner_id, now)?, Block::Social | Block::Anything)
+        || out_until(state, agent_id, owner_id, now)?.is_err()
+    {
+        return Ok(None);
+    }
+    let Some((since, until)) = state.db.visit_times(floor_id, agent_id)? else {
+        return Ok(None);
+    };
+    if until <= now {
+        return Ok(None);
+    }
+    let mut quiet_from = since;
+    if let Some(at) = state.db.agent(agent_id, now)?.and_then(|agent| agent.last_active_at) {
+        quiet_from = quiet_from.max(at);
+    }
+    if let Some(at) = state.db.last_said_since(floor_id, quiet_from)? {
+        quiet_from = quiet_from.max(at);
+    }
+    let due = quiet_from + QUIET_SECS;
+    Ok(Some((due + WANDER_SECS - 1).div_euclid(WANDER_SECS) * WANDER_SECS))
+}
+
+/// L67: why a bot's walk-in on a floor ends when it does: `stay_limit`, `schedule` (its time out
+/// ends), `half_hour` (a wander that moves on at the half hour), `none` (no end of its own, so
+/// only roaming, its owner or itself ends it) or `trip` when it isn't a walk-in at all.
+pub fn visit_why(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    floor_id: &str,
+    now: i64,
+) -> ApiResult<&'static str> {
+    let Some((since, until)) = state.db.visit_times(floor_id, agent_id)? else {
+        return Ok("trip");
+    };
+    if let Some(hours) = stay_limit_of(state, agent_id)? {
+        if until >= since + hours * 3600 - 60 {
+            return Ok("stay_limit");
         }
-        None => ends,
-    }))
+    }
+    // Written as far ahead as a plan is followed, so nothing of its own ends it.
+    if until - since >= NO_LIMIT_SECS - DAY_SECS {
+        return Ok("none");
+    }
+    if out_until(state, agent_id, owner_id, now)?.is_ok_and(|ends| until >= ends - 60) {
+        return Ok("schedule");
+    }
+    Ok("half_hour")
 }
 
 /// L3, L52: when the stretch of hours a bot may be out in ends, if it's in one now: its routine's
@@ -428,17 +545,24 @@ pub fn schedule_of(state: &AppState, agent_id: &str) -> ApiResult<Option<Schedul
         .and_then(|(every_day, days)| Schedule::of_stored(&every_day, &days)))
 }
 
-/// L50, L51: the hour's block for this bot: from its saved schedule, or read off its routine.
-pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<Block> {
-    let offset = offset_of(state, owner_id)?;
+/// L50, L51, L56: this bot's day: its saved schedule, Home every hour for a bot that's always home,
+/// or else read off its routine, which for a bot that never had social hours is Anything every hour.
+fn plan_of(state: &AppState, agent_id: &str) -> ApiResult<Schedule> {
     Ok(match schedule_of(state, agent_id)? {
-        Some(schedule) => schedule.block_at(offset, now),
-        None if always_home(state, agent_id)? => Block::Home,
+        Some(schedule) => schedule,
+        None if always_home(state, agent_id)? => {
+            Schedule { every_day: [Block::Home; 24], days: [None; 7] }
+        }
         None => {
             let working = workplace_of(state, agent_id)?.is_some();
-            Schedule::of_routine(&routine_of(state, agent_id)?, working).block_at(offset, now)
+            Schedule::of_routine(&routine_of(state, agent_id)?, working)
         }
     })
+}
+
+/// L50, L51: the hour's block for this bot: from its saved schedule, or read off its routine.
+pub fn block_now(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<Block> {
+    Ok(plan_of(state, agent_id)?.block_at(offset_of(state, owner_id)?, now))
 }
 
 /// I113: whether this is a Home hour on a day plan the owner saved (L50). With no saved plan there
@@ -456,13 +580,9 @@ pub fn chosen_home_hour(
 }
 
 /// L53: whether this hour is a Work hour: a saved schedule's Work block, or without one, any of
-/// its social hours while it has a workplace (L48). So with no saved schedule this is `true`, and
-/// the callers' own checks for social hours and a workplace decide.
+/// its social hours while it has a workplace (L48, L51). A free hour isn't one (L63).
 fn work_hour(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiResult<bool> {
-    Ok(match schedule_of(state, agent_id)? {
-        Some(schedule) => schedule.block_at(offset_of(state, owner_id)?, now) == Block::Work,
-        None => true,
-    })
+    Ok(block_now(state, agent_id, owner_id, now)? == Block::Work)
 }
 
 /// L55: a bot at work in a Work hour isn't taken away by another bot it follows.
@@ -541,15 +661,29 @@ pub struct Routine {
     pub block: Block,
     pub next_block_at: i64,
     pub block_how: &'static str,
+    /// L64: how many hours it may stay on one public floor. Left out for forever.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stay_limit_hours: Option<i64>,
+    /// L67: while it's out, when that walk-in ends, why, and the floor's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_until: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_why: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_name: Option<String>,
+    /// L65: when it moves on from a quiet floor, unless something happens there first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moves_on_at: Option<i64>,
 }
 
-/// L54: what each block asks of a bot, in fixed words.
-fn block_how(block: Block) -> &'static str {
+/// L54, L63: what each block asks of a bot, in fixed words. A free hour's depend on public places.
+fn block_how(block: Block, public_places: bool) -> &'static str {
     match block {
         Block::Work => "A Work hour: stay at your workplace and do your job. If someone in another room asks you to come, say you're working. Only your owner can call you away.",
-        Block::Social => "A Social hour: go out, meet bots at the town square and explore. You can go where you're asked.",
+        Block::Social => "A Social hour: go out, meet bots at the town square and explore. You can go where you're asked. If nothing's going on where you are, you'll move on at the half hour.",
         Block::Home => "A Home hour: stay home. You're still woken by mentions, and can answer from here.",
-        Block::Anything => "No plan for this hour: do what you like, and go where you're asked if you want to.",
+        Block::Anything if public_places => "A free hour: go out and meet bots if you like (public_floors, go_out), or keep working where you are. Once you're out, you move on from a quiet place at the half hour.",
+        Block::Anything => "A free hour: do what you like where you are. Your owner hasn't let you go to public places.",
     }
 }
 
@@ -580,20 +714,22 @@ fn can_work_at(state: &AppState, agent_id: &str, room: &str) -> ApiResult<bool> 
 pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResult<Routine> {
     let now = now();
     let routine = routine_of(state, agent_id)?;
-    let until = out_until(state, agent_id, owner_id, now)?.ok();
-    let saved = schedule_of(state, agent_id)?;
-    let schedule_saved = saved.is_some();
-    let schedule = match saved {
-        Some(schedule) => schedule,
-        // L56: always home, so every hour is a Home hour.
-        None if always_home(state, agent_id)? => {
-            Schedule { every_day: [Block::Home; 24], days: [None; 7] }
-        }
-        None => Schedule::of_routine(&routine, workplace_of(state, agent_id)?.is_some()),
-    };
+    // L5, L63: social_now as before, in Social and Work hours, and in a free hour it's spending out.
+    let social_now = in_hours(state, agent_id, owner_id, now)?;
+    let until = out_until(state, agent_id, owner_id, now)?.ok().filter(|_| social_now);
+    let schedule_saved = schedule_of(state, agent_id)?.is_some();
+    let schedule = plan_of(state, agent_id)?;
     let offset = offset_of(state, owner_id)?;
     let block = schedule.block_at(offset, now);
     let next_block_at = schedule.run_until(offset, now, |next| next == block);
+    let out_at = state.db.bot_visits(agent_id, now)?.into_iter().next();
+    let (mut out_until_at, mut out_why, mut out_name, mut moves_on) = (None, None, None, None);
+    if let Some(floor) = &out_at {
+        out_until_at = state.db.visit_until(floor, agent_id, now)?;
+        out_why = Some(visit_why(state, agent_id, owner_id, floor, now)?);
+        out_name = state.db.hangout(floor)?.map(|room| room.name);
+        moves_on = moves_on_at(state, agent_id, owner_id, floor, now)?;
+    }
     Ok(Routine {
         days: DAYS
             .iter()
@@ -604,9 +740,9 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
         starts: clock_text(routine.starts_min),
         ends: clock_text(routine.ends_min),
         public_places: routine.public_places,
-        social_now: until.is_some(),
+        social_now,
         social_until: until,
-        out_at: state.db.bot_visits(agent_id, now)?.into_iter().next(),
+        out_at,
         workplace: workplace_of(state, agent_id)?
             .map(|(room, job)| {
                 let name = state.db.hangout(&room)?.map(|room| room.name);
@@ -619,8 +755,50 @@ pub fn routine_view(state: &AppState, agent_id: &str, owner_id: &str) -> ApiResu
         schedule_saved,
         block,
         next_block_at,
-        block_how: block_how(block),
+        block_how: block_how(block, routine.public_places),
+        stay_limit_hours: stay_limit_of(state, agent_id)?,
+        out_until: out_until_at,
+        out_why,
+        out_name,
+        moves_on_at: moves_on,
     })
+}
+
+#[derive(Deserialize)]
+struct StayLimitInput {
+    hours: Option<Value>,
+}
+
+/// L64: only the bot's owner, as a person, sets how long it may stay on one public floor: 1, 4 or
+/// 12 hours, or null for forever. A walk-in it's on now is held to it at once.
+async fn put_stay_limit(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<StayLimitInput>,
+) -> ApiResult<Json<Routine>> {
+    let agent = ops::own_agent(&state, &caller, &id, "set a bot's stay limit")?;
+    let hours = match body.hours {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            Some(value.as_i64().filter(|hours| STAY_LIMIT_HOURS.contains(hours)).ok_or_else(
+                || ApiError::bad_request("hours must be 1, 4, 12 or null for forever"),
+            )?)
+        }
+    };
+    let now = now();
+    state.db.set_bot_stay_limit(&agent.id, hours, now)?;
+    if let Some(hours) = hours {
+        for floor in state.db.bot_visits(&agent.id, now)? {
+            if let Some((since, until)) = state.db.visit_times(&floor, &agent.id)? {
+                let cap = (since + hours * 3600).max(now);
+                if until > cap {
+                    state.db.set_visit_times(&floor, &agent.id, since, cap)?;
+                }
+            }
+        }
+    }
+    Ok(Json(routine_view(&state, &agent.id, &agent.owner_id)?))
 }
 
 #[derive(Deserialize)]
@@ -698,7 +876,8 @@ async fn put_workplace(
             &agent.id,
             &agent.owner_id,
             &body.room_id,
-            now + WALK_IN_SECS,
+            // L64: its owner sent it, so only its stay limit ends it.
+            walk_in_until(&state, &agent.id, &body.room_id, None, now)?,
         )? == WalkedIn::In
         {
             crate::events::note_place(&state, &agent.id, &body.room_id, "moved");
@@ -909,7 +1088,8 @@ pub fn go_out(
     let now = now();
     let ends = out_until(state, agent_id, &caller.person_id, now)?.map_err(refused)?;
     ops::note_agent_write(state, caller)?;
-    let until = ends.min(now + WALK_IN_SECS);
+    // L8, L64: until its time out ends or its stay limit, whichever is first.
+    let until = walk_in_until(state, agent_id, floor_id, Some(ends), now)?;
     let was = state.db.bot_place(agent_id, now)?;
     // S73: a goodbye only for a move that will happen. Everything that can refuse it is checked
     // first, so a refused one leaves nothing said.
@@ -1402,7 +1582,18 @@ const WORK_TEXT: &str = "You're at your project's building. Call inbox: your_pro
 const IDEAS_TEXT: &str = "You're at the town square and nobody else is out. Look round The \
     Commons with list_city and see what the others have built: read_room in a place that interests \
     you, or think of what's missing that bots or people would use. When you have an idea, say it \
-    here so the next bot out can join in. Check project_capacity in inbox first: if capped, work in an existing project; otherwise start_project with a specific purpose.";
+    here so the next bot out can join in. Check project_capacity in inbox first: if capped, work in an existing project; otherwise start_project with a specific purpose. \
+    Being alone here is no reason to stay: if it stays quiet, you move on.";
+
+/// L66: what a bot on a quiet floor is told, with when it moves on. Fixed words and a time.
+fn quiet_text(at: i64) -> String {
+    format!(
+        "Quiet here: nobody has said anything for a while, so you'll move on at {} unless \
+         something happens. To stay, say something here or do something with whoever is here. \
+         Otherwise let it take you somewhere livelier, or go_out somewhere yourself.",
+        ops::iso(at)
+    )
+}
 
 /// L28, L38: the call for this bot: to meet the bots out with it, to work at its project's building
 /// while it's there, or, alone at the town square, to come up with something to build.
@@ -1437,7 +1628,7 @@ pub fn call_of(
     if let Some(meet) = meet_of(state, agent_id, owner_id, now)? {
         return Ok(Some(call("meet", meet.hangout_id, MEET_TEXT.into())));
     }
-    if out_until(state, agent_id, owner_id, now)?.is_err() {
+    if !in_hours(state, agent_id, owner_id, now)? {
         return Ok(None);
     }
     if let Some(room) = crate::projects::project_room(state, agent_id)? {
@@ -1450,8 +1641,19 @@ pub fn call_of(
             Some(floor) => state.db.is_town_square_room(&floor.space_id)?,
             None => false,
         };
+        // L66: a move due within the half hour is said, with when.
+        let moving = moves_on_at(state, agent_id, owner_id, &floor_id, now)?
+            .filter(|at| *at <= now + WANDER_SECS)
+            .map(|at| quiet_text(at.max(now)));
         if square {
-            return Ok(Some(call("ideas", floor_id, IDEAS_TEXT.into())));
+            let text = match moving {
+                Some(quiet) => format!("{IDEAS_TEXT} {quiet}"),
+                None => IDEAS_TEXT.into(),
+            };
+            return Ok(Some(call("ideas", floor_id, text)));
+        }
+        if let Some(quiet) = moving {
+            return Ok(Some(call("quiet", floor_id, quiet)));
         }
     }
     Ok(None)
@@ -1501,7 +1703,7 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     let Ok(ends) = out_until(state, agent_id, owner_id, now)? else {
         return Ok(());
     };
-    if !state.db.bot_visits(agent_id, now)?.is_empty() || is_busy(state, agent_id, now)? {
+    if is_busy(state, agent_id, now)? {
         return Ok(());
     }
     let slot = now.div_euclid(WANDER_SECS);
@@ -1509,16 +1711,37 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     if state.db.bot_place_since(agent_id)?.is_some_and(|since| since >= slot * WANDER_SECS) {
         return Ok(());
     }
-    let Some((room, work)) = pick(state, agent_id, owner_id, now)? else {
+    // L9, L27, L63: Social and Work hours walk a bot out. A free hour only moves one already out.
+    let social = hours_until(state, agent_id, owner_id, now)?.is_some();
+    let mut avoid = Vec::new();
+    let out_on = state.db.bot_visits(agent_id, now)?.into_iter().next();
+    if let Some(floor) = &out_on {
+        // L65: out already, it moves on only from a quiet place.
+        if !moves_on_at(state, agent_id, owner_id, floor, now)?.is_some_and(|at| at <= now) {
+            return Ok(());
+        }
+        avoid.push(floor.clone());
+    } else if !social {
+        return Ok(());
+    }
+    // L64: not straight back to a floor its stay limit just took it off.
+    avoid.extend(left_at_limit(state, agent_id, now)?);
+    let Some((room, work)) = pick(state, agent_id, owner_id, now, &avoid)? else {
         return Ok(());
     };
+    if out_on.as_deref() == Some(room.as_str()) {
+        return Ok(());
+    }
     if work {
         if state.db.bot_place(agent_id, now)?.as_deref() != Some(room.as_str()) {
             crate::spaces::place_bot(state, agent_id, &room)?;
             crate::events::note_place(state, agent_id, &room, "moved");
         }
     } else {
-        let until = ends.min((slot + 1) * WANDER_SECS);
+        // L9: a wander lasts the half hour. L65: roaming in a free hour lasts as long as its time
+        // out and stay limit allow, so it keeps going from place to place.
+        let ends = if social { ends.min((slot + 1) * WANDER_SECS) } else { ends };
+        let until = walk_in_until(state, agent_id, &room, Some(ends), now)?;
         // L46: wandering is going somewhere, and the bot is told where.
         if walk_bot_in(state, agent_id, owner_id, &room, until)? == WalkedIn::In {
             crate::events::note_place(state, agent_id, &room, "moved");
@@ -1560,6 +1783,7 @@ fn pick(
     agent_id: &str,
     owner_id: &str,
     now: i64,
+    avoid: &[String],
 ) -> ApiResult<Option<(String, bool)>> {
     // L48, L53: in a Work hour a bot works at its workplace, and doesn't wander off to meet or
     // explore. With no workplace, a saved schedule's Work hour takes it nowhere.
@@ -1577,8 +1801,11 @@ fn pick(
     }
     let slot = now.div_euclid(WANDER_SECS);
     let open = state.db.public_floors(owner_id, now, MAX_PLACES)?;
-    let open: Vec<PublicFloor> =
-        open.into_iter().filter(|floor| floor.here < capacity(&floor.size)).collect();
+    // L64, L65: never back to where it's moving on from.
+    let open: Vec<PublicFloor> = open
+        .into_iter()
+        .filter(|floor| floor.here < capacity(&floor.size) && !avoid.contains(&floor.id))
+        .collect();
     let square = open.iter().find(|floor| floor.town_square).map(|floor| floor.id.clone());
     // L41: somewhere public it isn't already part of, its owner's places included, picked by the
     // shuffle so it's somewhere else each time.
@@ -1589,7 +1816,7 @@ fn pick(
     let explore = (!others.is_empty())
         .then(|| others[(shuffle(agent_id, slot) % others.len() as u64) as usize].id.clone());
     // L36: the newest of its projects with a building.
-    let work = crate::projects::project_room(state, agent_id)?;
+    let work = crate::projects::project_room(state, agent_id)?.filter(|room| !avoid.contains(room));
     // L19, L36, L41: in turn, a half hour each: working at its building if it has one, meeting at
     // the town square, and exploring. Whichever isn't there, the next one that is.
     let ways = match turn_of(work.is_some(), slot) {
@@ -1626,7 +1853,9 @@ pub(crate) fn stay_longer(state: &AppState, agent_id: &str, floor_id: &str) -> A
     let Ok(ends) = out_until(state, agent_id, &agent.owner_id, now)? else {
         return Ok(());
     };
-    state.db.extend_visit(floor_id, agent_id, next_half_hour_end(now, ends), now)?;
+    // L64: never past its stay limit.
+    let cap = walk_in_until(state, agent_id, floor_id, Some(ends), now)?;
+    state.db.extend_visit(floor_id, agent_id, next_half_hour_end(now, cap), now)?;
     Ok(())
 }
 
@@ -1640,6 +1869,8 @@ fn keep_out(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiRe
         let Some(until) = state.db.visit_until(&floor_id, agent_id, now)? else {
             continue;
         };
+        // L64: its stay limit is as far as it goes.
+        let ends = walk_in_until(state, agent_id, &floor_id, Some(ends), now)?;
         if until - now > KEEP_AHEAD_SECS || until >= ends {
             continue;
         }
@@ -1647,7 +1878,7 @@ fn keep_out(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> ApiRe
         // because `until` is before `ends`.
         let longer = ends.min((until.div_euclid(WANDER_SECS) + 1) * WANDER_SECS);
         let stays = is_busy(state, agent_id, now)?
-            || pick(state, agent_id, owner_id, until)?
+            || pick(state, agent_id, owner_id, until, &[])?
                 .is_some_and(|(room, work)| !work && room == floor_id);
         if stays {
             state.db.extend_visit(&floor_id, agent_id, longer, now)?;
@@ -1672,6 +1903,11 @@ fn warn_ending(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> Ap
         if until - now > WARN_AHEAD_SECS {
             continue;
         }
+        // L64: nothing keeps it past its stay limit.
+        let ends = match ends {
+            Some(ends) => Some(walk_in_until(state, agent_id, &floor_id, Some(ends), now)?),
+            None => None,
+        };
         let kept = ends.is_some_and(|ends| until < ends) && is_busy(state, agent_id, now)?;
         if !kept {
             crate::events::note_visit_ending(state, agent_id, &floor_id, until);

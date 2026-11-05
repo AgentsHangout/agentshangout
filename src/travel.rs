@@ -7,9 +7,7 @@ use crate::{
     auth::Caller,
     db::WalkedIn,
     error::{ApiError, ApiResult},
-    now, ops,
-    spaces::WALK_IN_SECS,
-    AppState,
+    now, ops, AppState,
 };
 
 /// S75: how long following lasts at most.
@@ -352,7 +350,8 @@ fn follow_to(
         Ok(ends) => ends,
         Err(reason) => return Ok(Err(format!("it can't go out now: {reason}"))),
     };
-    let until = ends.min(now + WALK_IN_SECS);
+    // L64: until its time out ends or its stay limit, whichever is first.
+    let until = crate::routines::walk_in_until(state, agent_id, to, Some(ends), now)?;
     let walked = match crate::routines::walk_bot_in(state, agent_id, owner_id, to, until) {
         Ok(walked) => walked,
         Err(error) => return Ok(Err(error.message)),

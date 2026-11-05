@@ -75,4 +75,57 @@ painter = context.painter(weekdayRead);
 assert.equal(painter.value()[10], 'social', "the strip starts from a weekday's hours");
 assert.ok(!says(painter.element, 'stays as it is'), 'no saved weekday plan to keep');
 assert.equal(JSON.stringify(painter.days()), '{}', 'read-off weekdays are not saved');
-console.log('Day plan painter: read-off strip, brush and drag, presets, keyboard and clearing verified.');
+
+// L51, L63: a bot that never had social hours is free all day, and says so, not "old social hours".
+const fresh = { schedule_saved: false, schedule: { every_day: Array(24).fill('anything'), days: {} }, workplace: null, public_places: false };
+painter = context.painter(fresh);
+assert.ok(says(painter.element, 'Not saved yet: free all day.'));
+assert.ok(!says(painter.element, 'old social hours'));
+assert.ok(!says(painter.element, 'With public places off'), 'free hours need no warning');
+// The free preset is called what it does.
+all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Social all day')[0].onclick();
+assert.ok(says(painter.element, 'With public places off, Work and Social hours leave it where it is.'), 'painting updates the hints');
+// L67: ticking public places in the dialog takes the warning away at once.
+painter.setContext({ public_places: true });
+assert.ok(!says(painter.element, 'With public places off'));
+all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Always working')[0].onclick();
+assert.ok(says(painter.element, 'With no workplace, a Work hour leaves it where it is.'));
+painter.setContext({ workplace: 'room-1' });
+assert.ok(!says(painter.element, 'With no workplace'), 'picking a workplace takes it away');
+all(painter.element, (n) => n.tag === 'button' && n.children[0] === 'Free all day')[0].onclick();
+assert.ok(painter.value().every((block) => block === 'anything'));
+console.log('Day plan painter: read-off strip, brush and drag, presets, keyboard, clearing and live hints verified.');
+
+// L67 (#527): one helper says how long a bot is out and why, for Crew and the schedule alike.
+const outStart = source.indexOf('function outText(');
+assert.ok(outStart >= 0, 'missing outText');
+const outSource = source.slice(outStart, source.indexOf('\n}\n', outStart) + 3);
+const clock = { dayFormat: new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+  timeFormat: new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }) };
+clock.fromUnix = (unix) => new Date(unix * 1000);
+clock.whenText = (unix) => `${clock.dayFormat.format(clock.fromUnix(unix))}, ${clock.timeFormat.format(clock.fromUnix(unix))}`;
+vm.createContext(clock);
+vm.runInContext(`${outSource}\nthis.outText = outText;`, clock);
+const soon = Math.floor(Date.now() / 1000) + 60;
+const at = clock.timeFormat.format(clock.fromUnix(soon));
+const sameDay = clock.dayFormat.format(new Date()) === clock.dayFormat.format(clock.fromUnix(soon));
+const shown = sameDay ? at : clock.whenText(soon);
+assert.equal(clock.outText(soon, 'stay_limit'), `until ${shown} (stay limit)`);
+assert.equal(clock.outText(soon, 'schedule'), `until ${shown} (schedule)`);
+assert.equal(clock.outText(soon, 'half_hour'), `until ${shown} (wandering)`);
+assert.equal(clock.outText(soon + 9 * 86400, 'none'), "until it's quiet (no limit)");
+assert.equal(clock.outText(null, 'schedule'), '');
+// Crew and the schedule dialog both use it.
+assert.ok(source.includes('out ${outText(agent.visitor_until, agent.visitor_until_why)}'));
+assert.ok(source.includes('${outText(routine.out_until, routine.out_why)}'));
+assert.ok(source.includes("const STATE_TEXT = { active: 'At the table', idle: 'Online', offline: 'Napping' };"));
+assert.ok(!source.includes("'Wandering"), 'wandering only means going from place to place');
+console.log('outText: one reason, in Crew and the schedule.');
+
+// G18: Bring a bot asks about public places and how long it can stay, off and Forever to start.
+const bring = source.slice(source.indexOf('async function bringBot('), source.indexOf('function proposeHangout('));
+assert.ok(bring.includes("h('input', { type: 'checkbox', name: 'public_places' }), 'Let it go to public places'"));
+assert.ok(bring.includes('STRANGERS_TEXT') && bring.includes('stayField(null)'));
+assert.ok(bring.includes('`/api/agents/${result.agent.id}/stay_limit`') && bring.includes('`/api/agents/${result.agent.id}/routine`'));
+assert.ok(source.includes("[['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']]"));
+console.log('Bring a bot: public places off and Forever to start.');
