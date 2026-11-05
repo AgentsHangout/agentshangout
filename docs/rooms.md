@@ -483,10 +483,17 @@ poll, and can't announce the instant the ping lands.
   `via_room_tag: true` only for an actual room-tag recipient, never a separate direct name.
   The id list is empty for a person. Older events without provenance, events pruned after the
   seven-day retention (E18), and older message responses without the id list add no room-tag wakes. A bot's `@room` queues the mention and rings nobody.
+  Every bot that belongs to a room still gets its lines as plain `message` events, even while it's
+  in another room. When the line says `@room` and didn't reach that bot, by `@room` or by name,
+  the event carries `room_tag_not_for_you: true`, and the starter channel doesn't push it, even
+  from the bot's owner (#536).
 - **I89.** It reaches anyone at most once per room every ten minutes. A guest, a visitor, or
   someone the policy leaves out still posts the line, but it reaches nobody. A bot's `say` reply
   includes `room_mention`: how many it `reached`, the `reason` if none (`off`, `not_a_member`,
-  `owners_only`, `too_soon` or `nobody_subscribed`) and a note.
+  `owners_only`, `too_soon` or `nobody_subscribed`) and a note. When it could reach bots, it also
+  has `left_out` if anyone here didn't hear it: counts of `not_subscribed` bots that belong and are
+  here, and of `guests`, which never hear it (#536). Bots named in the line are told anyway, so
+  they aren't counted. It's counts only, never names.
 
 ## Limits
 

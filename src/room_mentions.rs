@@ -167,7 +167,37 @@ pub fn outcome(state: &AppState, message: &Message) -> ApiResult<Option<Value>> 
         }
         _ => "No bot here is subscribed to @room, so it reached nobody.",
     };
-    Ok(Some(json!({ "reached": delivered, "reason": reason, "note": note })))
+    let mut outcome = json!({ "reached": delivered, "reason": reason, "note": note });
+    // #536: who is here that it didn't reach, as counts, so a sender can tell why a bot they can
+    // see didn't hear it: a bot whose owner didn't subscribe it, and a guest, which never hears it
+    // (I88). A bot named in the line was told anyway, so it isn't counted.
+    if matches!(reason.as_deref(), None | Some("nobody_subscribed")) {
+        let room = &message.hangout_id;
+        let at = now();
+        let speaker = message.agent_id.as_deref();
+        let mut unsubscribed = 0;
+        for bot in state.db.agents_in(room, at)? {
+            if speaker == Some(bot.id.as_str())
+                || state.db.bot_place(&bot.id, at)?.as_deref() != Some(room.as_str())
+                || state.db.mentions_bot(message.id, &bot.id)?
+            {
+                continue;
+            }
+            if !state.db.room_mention_subscribed(room, &bot.id)? {
+                unsubscribed += 1;
+            }
+        }
+        let guests = state
+            .db
+            .visitors_in(room, at)?
+            .iter()
+            .filter(|bot| speaker != Some(bot.id.as_str()))
+            .count();
+        if unsubscribed + guests > 0 {
+            outcome["left_out"] = json!({ "not_subscribed": unsubscribed, "guests": guests });
+        }
+    }
+    Ok(Some(outcome))
 }
 
 /// I120: whether `@room` from this caller would reach anyone here, apart from the ten-minute wait:

@@ -6195,6 +6195,126 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
         .is_client_error());
 }
 
+// I88, #536: @room reaches every subscribed bot that belongs here and is here, and nobody else: not
+// a subscribed member that's in another room, not a guest, not an unsubscribed bot. The sender is
+// told how many it left out and why.
+#[tokio::test]
+async fn room_mentions_reach_every_subscribed_bot_here_and_nobody_elsewhere() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let here: Vec<Bot> = bots_named(&server, &ann, &room, ["Fido", "Rex", "Kip"]).await;
+    let kit = server.bot(&ann, &room, "Kit").await;
+    // Mo belongs here too, but is in Ann's other room right now (S59).
+    let den = server
+        .post(&ann.key, "/api/hangouts", json!({ "name": "Ann's den", "create_code": CODE }))
+        .await
+        .ok();
+    let den = text(&den["hangout"]["id"]);
+    let mo = server.bot(&ann, &den, "Mo").await;
+    server.state.db.add_agent_to_room(&room, &mo.id).unwrap();
+    // Pip is a guest: Eve walked it onto Ann's public floor.
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    server
+        .put(
+            &ann.key,
+            &format!("/api/hangouts/{room}/room-mentions"),
+            json!({ "policy": "members" }),
+        )
+        .await
+        .ok();
+    for bot in here.iter().chain([&mo]) {
+        let path = format!("/api/hangouts/{room}/room-mentions/bots/{}", bot.id);
+        server.put(&ann.key, &path, json!({ "subscribed": true })).await.ok();
+    }
+    let sent = server
+        .tool(&rover.token, "say", json!({ "hangout_id": room, "text": "@room standup now" }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(sent["room_mention"]["reached"], 3, "{sent}");
+    assert_eq!(sent["room_mention"]["left_out"], json!({ "not_subscribed": 1, "guests": 1 }));
+
+    let heard = |token: String| {
+        let server = &server;
+        async move {
+            let inbox = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
+            inbox["mentions"].as_array().unwrap().iter().any(|m| m["text"] == "@room standup now")
+        }
+    };
+    for bot in &here {
+        assert!(heard(bot.token.clone()).await, "every subscribed bot here hears it");
+    }
+    assert!(!heard(mo.token.clone()).await, "a member in another room doesn't");
+    assert!(!heard(kit.token.clone()).await, "an unsubscribed bot doesn't");
+    assert!(!heard(pip.token.clone()).await, "a guest doesn't");
+    assert!(!heard(rover.token.clone()).await, "nor the one that said it");
+
+    // Mo still gets the line as a plain message event, since it belongs here, but marked as an
+    // @room that wasn't for it, so a wake (the starter channel) leaves it out even from its owner.
+    server.state.db.age_room_mentions(&room, 11 * 60).unwrap();
+    let cursor = |token: String| {
+        let server = &server;
+        async move {
+            let page = server.tool(&token, "events_since", json!({ "wait_seconds": 0 })).await;
+            page["structuredContent"]["cursor"].clone()
+        }
+    };
+    let (mo_from, fido_from) =
+        (cursor(mo.token.clone()).await, cursor(here[0].token.clone()).await);
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &messages, json!({ "text": "@room lunch at noon" })).await.ok();
+    let line_for = |token: String, since: Value| {
+        let server = &server;
+        async move {
+            let args = json!({ "wait_seconds": 0, "since": since });
+            let page = server.tool(&token, "events_since", args).await["structuredContent"].clone();
+            page["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["name"] == "message" && e["data"]["body"] == "@room lunch at noon")
+                .cloned()
+                .unwrap_or_else(|| panic!("{page}"))
+        }
+    };
+    let elsewhere = line_for(mo.token.clone(), mo_from).await;
+    assert_eq!(elsewhere["data"]["room_tag_not_for_you"], true, "{elsewhere}");
+    assert_eq!(elsewhere["data"]["from_your_owner"], true);
+    let reached = line_for(here[0].token.clone(), fido_from).await;
+    assert!(reached["data"].get("room_tag_not_for_you").is_none(), "{reached}");
+
+    // What the starter channel does with each, run rather than read.
+    let script = "import json,sys; sys.path.insert(0, 'starter/claude-code'); import channel; \
+                  print(json.dumps([channel.wanted(json.loads(e)) for e in sys.argv[1:]]))";
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-c", script, &elsewhere.to_string(), &reached.to_string()])
+        .env("AGENTSHANGOUT_TOKEN", "unused")
+        .output()
+        .expect("python runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "[false, true]");
+}
+
+async fn bots_named<const N: usize>(
+    server: &Server,
+    owner: &Who,
+    room: &str,
+    names: [&str; N],
+) -> Vec<Bot> {
+    let mut bots = Vec::new();
+    for name in names {
+        bots.push(server.bot(owner, room, name).await);
+    }
+    bots
+}
+
 // I93: station actions are fixed catalog metadata, including in bot snapshots.
 #[tokio::test]
 async fn functional_stations_open_the_existing_room_features() {
