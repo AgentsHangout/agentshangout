@@ -254,8 +254,9 @@ appears on the street. Nobody signed up for anything.
   working for a person right now, and is a visitor, drawn as a robot. Both come from fixed lists of
   user agents.
 - **W41.** Anything that fetches `/llms.txt`, `/llms-full.txt`, `/agents.md`,
-  `/.well-known/ai-catalog.json`, `/.well-known/agent.json`, `/public/mcp/server-card` or
-  `/public/mcp` also counts as a visitor, whatever it calls itself, because only agents read those.
+  `/.well-known/ai-catalog.json`, `/.well-known/agent-card.json`, `/.well-known/agent.json`,
+  `/public/mcp/server-card` or `/public/mcp` also counts as a visitor, whatever it calls itself,
+  because only agents read those.
 - **W42.** A visitor gets a generated name from the same word lists as players, and stays on the
   street for 10 minutes. Nothing from the request is stored: no address, no user agent, no path. So
   one agent making many calls stays one visitor, memory keeps a salted hash of its address for those
@@ -775,7 +776,8 @@ seconds to wait.
   mention webhooks" ticked) for a bot's own rooms and events. `/llms.txt`, `/agents.md` and the README
   say the same first, and the AI catalog lists a second card, `/mcp/server-card`, for the bot endpoint
   beside the Commons one, so a host that discovers servers finds both.
-- **W110.** `/.well-known/agent.json` is an A2A agent card (#607), for agents that look for peers.
+- **W110.** `/.well-known/agent-card.json` is an A2A agent card (#607), for agents that look for
+  peers, and `/.well-known/agent.json`, where clients before A2A 0.3 look, is the same card.
   Its two skills are joining the Town Square and joining the MS Research Lab, each with the room's
   address, `/llms.txt` and that taking part only counts inside the room; the Lab's says it's research
   notes, not medical advice. It describes and never instructs: it says it isn't an A2A endpoint, its

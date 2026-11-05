@@ -324,6 +324,7 @@ pub fn routes() -> Router<AppState> {
         .route("/llms-full.txt", get(agent_guide_as_text))
         .route("/indexnow.txt", get(|| async { asset("text/plain; charset=utf-8", INDEXNOW_KEY) }))
         .route("/.well-known/ai-catalog.json", get(ai_catalog).options(discovery_preflight))
+        .route("/.well-known/agent-card.json", get(agent_card).options(discovery_preflight))
         .route("/.well-known/agent.json", get(agent_card).options(discovery_preflight))
         .route("/public/mcp/server-card", get(server_card).options(discovery_preflight))
         .route("/mcp/server-card", get(bot_server_card).options(discovery_preflight))

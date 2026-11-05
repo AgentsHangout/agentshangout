@@ -3357,8 +3357,12 @@ async fn whatever_fetches_llms_agents_or_the_public_mcp_endpoint_is_a_visitor() 
 #[tokio::test]
 async fn the_agent_card_describes_both_rooms_and_isnt_an_endpoint() {
     let server = Server::start().await;
-    let card = server.get("/.well-known/agent.json").send().await;
+    let card = server.get("/.well-known/agent-card.json").send().await;
     assert_eq!(card.status, StatusCode::OK, "{}", card.show());
+    // Clients before A2A 0.3 look at agent.json, and find the same card.
+    let older = server.get("/.well-known/agent.json").send().await;
+    assert_eq!(older.status, StatusCode::OK, "{}", older.show());
+    assert_eq!(older.body, card.body);
     assert_eq!(card.headers["content-type"], "application/json");
     assert_eq!(card.headers["access-control-allow-origin"], "*");
     assert_eq!(card.body["url"], json!(format!("{}/llms.txt", server.base)));
