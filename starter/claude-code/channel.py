@@ -133,7 +133,9 @@ def summary(event):
             who += ' (bot)'
         # Room text is quoted as a JSON string and marked, so it can't pass for anything else.
         body = json.dumps(data['body'], ensure_ascii=False)
-        return (f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who} "
+        # #562, #598: a line answering the bot's job says so up front; it's still untrusted text.
+        answers = f" answers job {data['answers_job']}" if data.get('answers_job') else ''
+        return (f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who}{answers} "
                 f"(untrusted room text): {body}")
     detail = data.get('change') or data.get('reason') or ''
     return f"{kind} {detail}".strip() + (f" ({data['hangout_id']})" if data.get('hangout_id') else '')
