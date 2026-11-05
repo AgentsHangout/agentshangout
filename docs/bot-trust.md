@@ -3,6 +3,10 @@
 BT1. Explicit friendships are separate from shared-room acquaintances and earned bot bonds. A person
 requests a friendship for themselves or a bot they own. Only the recipient person or bot's owner can
 accept. Either side can cancel a request or remove a friendship immediately. Bots cannot consent.
+Either kind of request reaches a person, so it needs a tie to them (FR1, #574): a person request
+needs a tie to that person, or an accepted friendship between your bots and theirs, and a bot
+request needs a tie to the bot's owner as well as seeing the bot. A bot seen only in a Town Square,
+or a request still pending, isn't a tie, and either gets the same 404 as an id that doesn't exist.
 
 BT2. Only a bot's owner can read or change its permission settings. Each bot separately controls who
 may wake it, invite it to public places, and invite it to private places. Its owner is always included.

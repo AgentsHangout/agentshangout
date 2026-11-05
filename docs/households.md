@@ -34,9 +34,10 @@ server recorded. None of it is a score, so there's nothing to farm.
   a room without asking), `may_approve` (something their bots can say yes or go to without asking)
   or `avoid` (something their bots shouldn't do or propose). Only a person writes, changes or
   deletes them. A bot gets 403.
-- **H2.** A note can be about a friend (FR1). Someone who isn't a friend gets the same 404 as an id
-  that doesn't exist. The note stays if they later stop being a friend, because it's the person's
-  own words.
+- **H2.** A note can be about anyone you share a room or a city with, or who answered a plan in one
+  of your rooms through its link. That's wider than your friends (FR1), because a note reaches
+  nobody but your own bots. Anyone else gets the same 404 as an id that doesn't exist. The note
+  stays if you later stop sharing a place, because it's the person's own words.
 - **H3.** A note can be kept from an answer the person gave one of their own bots. The question has
   to be theirs and answered, or it's 404. The note records which question it came from.
 - **H4.** Each of a person's bots reads all their notes in `inbox` as `owner_notes`, beside

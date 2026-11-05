@@ -12,8 +12,9 @@ Those friendships and their permission effects are defined in [bot-trust.md](bot
 
 - **FR1.** Your friends are the people you have a real tie with (#574): everyone in a room with you,
   apart from a city's Town Square; everyone who said yes or maybe to a plan you said yes or maybe
-  to; everyone who answered a plan in one of your rooms through its link; and your accepted
-  friendships (BT1). Sharing only a city or its Town Square doesn't count, so a stranger in a big
+  to, unless it was held in a Town Square, where a gathering (R40) is open to the whole city;
+  everyone who answered a plan in one of your rooms through its link, but not someone only named
+  on it who hasn't answered; and your accepted friendships (BT1). Sharing only a city or its Town Square doesn't count, so a stranger in a big
   city can't send you an invite (FR3) or a friendship request (BT1), both of which reach you. The
   friend count a room shows (I19), a research lab's eligibility, and who a private note for your
   own bots can be about (H2) still count everyone you share a room or a city with, since none of
