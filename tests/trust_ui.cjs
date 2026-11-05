@@ -48,7 +48,8 @@ const panels = { add: (_name,_title,opts) => { options = opts; body = h('div'); 
 const pictures = [];
 const canvas = () => ({width:0,height:0,getContext:()=>({imageSmoothingEnabled:true,drawImage(){}}),toDataURL:()=>'data:image/png;base64,HEAD'});
 const figure = worn => { pictures.push(worn); return {width:26,height:36,getContext:()=>({getImageData:()=>({data:Uint8ClampedArray.from({length:26*36*4},(_,i)=>i%4===3&&i>=4*26*5?255:0)})})}; };
-const context = {h,api,panels,document:{activeElement:null,body:h('body'),createElement:canvas},console};
+const listeners = {};
+const context = {h,api,panels,document:{activeElement:null,body:h('body'),createElement:canvas},console,addEventListener:(type,fn)=>{listeners[type]=fn;},removeEventListener:(type,fn)=>{if(listeners[type]===fn)delete listeners[type];}};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('web/trust.js','utf8').replace('export function trustPanel','function trustPanel'),context);
 const scheduled = [];
@@ -178,30 +179,71 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
     const world = all(body).find(n=>n.props.class==='trust-world');
     const [ox,oy] = world.props.transform.match(/translate\(([-\d.e]+) ([-\d.e]+)\)/).slice(1).map(Number), k = scaleOf();
     return all(body).filter(n=>n.tag==='g'&&n.props.class?.includes('trust-node')).map(g=>{
-      const [x,y] = g.props.transform.match(/-?[\d.]+/g).map(Number); return {name:g.props['aria-label'], x:ox+x*k, y:oy+y*k};
+      const [x,y] = g.props.transform.match(/-?[\d.]+/g).map(Number);
+      // The frame with its ring, and the name under it: the whole of what is drawn for this node.
+      const half = (g.props.class.includes(' you')?22:g.props.class.includes(' person')?17:g.props.class.includes(' mine')?19:16)+5;
+      const label = all(g).find(n=>n.props.class==='label'); const w = [...text(label).replace(/\s+/g,' ').trim()].length*6.4+6;
+      const lx = x+Number(label.props.x), ly = y+Number(label.props.y);
+      const x0 = Math.min(x-half,lx-w/2), x1 = Math.max(x+half,lx+w/2), y0 = Math.min(y-half,ly-10), y1 = Math.max(y+half,ly+3);
+      return {name:g.props['aria-label'], x:ox+x*k, y:oy+y*k, x0:ox+x0*k, x1:ox+x1*k, y0:oy+y0*k, y1:oy+y1*k};
     });
   };
+  const wholeInView = where => { for (const p of inside()) assert.ok(p.x0>=0&&p.x1<=480&&p.y0>=0&&p.y1<=300,`${p.name} (ring and name) is inside ${where}: ${p.x0},${p.y0} to ${p.x1},${p.y1}`); };
   for (const [label,aria] of [['+','Zoom in'],['−','Zoom out'],['Fit','Fit the whole graph']]) assert.equal(findButton(body,label)?.props['aria-label'],aria,`${label} button is labelled`);
   assert.ok(placed.length>=10);
   assert.ok(scaleOf()>=0.5&&scaleOf()<=1.5,`fitted scale ${scaleOf()}`);
-  for (const p of inside()) assert.ok(p.x>0&&p.x<480&&p.y>0&&p.y<300,`${p.name} is inside the fitted view: ${p.x},${p.y}`);
+  wholeInView('the fitted view');
   const fitScale = scaleOf();
   findButton(body,'+').props.onclick(); assert.ok(scaleOf()>fitScale,'zoom in enlarges');
   findButton(body,'−').props.onclick(); assert.ok(Math.abs(scaleOf()-fitScale)<1e-3,'zoom out returns to the same scale');
   for (let i=0;i<30;i++) findButton(body,'+').props.onclick(); assert.equal(scaleOf(),4,'zoom stops at its top');
   for (let i=0;i<60;i++) findButton(body,'−').props.onclick(); assert.equal(scaleOf(),0.5,'zoom stops at its bottom');
   findButton(body,'Fit').props.onclick(); assert.equal(scaleOf(),fitScale,'Fit goes back to the fitted view');
-  for (const p of inside()) assert.ok(p.x>0&&p.x<480&&p.y>0&&p.y<300,`${p.name} is inside after Fit`);
+  wholeInView('the view after Fit');
   // The keys do the same with the graph focused, and the wheel zooms around the pointer.
   const picture = all(body).find(n=>n.tag==='svg'&&n.props.class==='trust-graph');
   picture.props.onkeydown({key:'+',preventDefault(){}}); assert.ok(scaleOf()>fitScale);
   picture.props.onkeydown({key:'-',preventDefault(){}}); assert.ok(Math.abs(scaleOf()-fitScale)<1e-3);
   picture.props.onkeydown({key:'+',preventDefault(){}}); picture.props.onkeydown({key:'0',preventDefault(){}}); assert.equal(scaleOf(),fitScale);
   picture.getBoundingClientRect = () => ({left:0,top:0,width:480,height:300});
-  picture.props.onwheel({clientX:100,clientY:80,deltaY:-120,deltaMode:0,preventDefault(){}}); assert.ok(scaleOf()>fitScale,'the wheel zooms in');
-  // A view zoomed by hand stays put when the graph is drawn again; a new set of nodes is fitted again.
-  const hand = scaleOf(); data.looks.bots.one = {head:'wide'}; await busy.refreshLooks(); await tick();
+  // A plain wheel is left alone so the page scrolls; with Ctrl (a trackpad pinch) it zooms.
+  let stopped = false;
+  picture.props.onwheel({clientX:100,clientY:80,deltaY:-120,deltaMode:0,preventDefault(){stopped=true;}});
+  assert.equal(stopped,false,'a plain wheel is not taken'); assert.equal(scaleOf(),fitScale,'a plain wheel does not zoom');
+  picture.props.onwheel({clientX:100,clientY:80,deltaY:-120,deltaMode:0,ctrlKey:true,preventDefault(){stopped=true;}});
+  assert.ok(stopped&&scaleOf()>fitScale,'Ctrl and the wheel zoom in');
+  // Dragging the background pans, and the middle of the graph can't be dragged out of the picture.
+  findButton(body,'Fit').props.onclick();
+  const seen = () => inside().some(p=>p.x>=0&&p.x<=480&&p.y>=0&&p.y<=300);
+  for (const [dx,dy] of [[5000,5000],[-5000,-5000],[5000,-5000],[-5000,5000]]) {
+    picture.props.onpointerdown({pointerId:1,button:0,clientX:240,clientY:150,target:{}});
+    listeners.pointermove({pointerId:1,clientX:240+dx,clientY:150+dy});
+    assert.ok(seen(),`something of the graph is still in view after a drag of ${dx},${dy}`);
+    listeners.pointerup({pointerId:1});
+  }
+  assert.equal(listeners.pointermove,undefined,'a finished pan leaves nothing listening');
+  findButton(body,'Fit').props.onclick();
+  // A drag in progress ends when the graph is drawn again.
+  picture.props.onpointerdown({pointerId:2,button:0,clientX:240,clientY:150,target:{}});
+  assert.ok(listeners.pointermove,'a pan listens');
+  const first = all(body).find(n=>n.tag==='g'&&n.props.class?.includes('trust-node'));
+  first.props.onpointerdown({button:0,clientX:240,clientY:150}); assert.ok(listeners.pointerup);
+  data.looks.bots.one = {head:'wide'}; await busy.refreshLooks(); await tick();
+  assert.equal(listeners.pointermove,undefined,'drawing again ends a drag or pan that was going on');
+  assert.equal(listeners.pointerup,undefined);
+  // A view zoomed by hand stays put when the same people are drawn again; a different set is fitted again.
+  const redrawn = () => all(body).find(n=>n.tag==='svg'&&n.props.class==='trust-graph');
+  for (let i=0;i<3;i++) findButton(body,'+').props.onclick();
+  const hand = scaleOf(); assert.ok(hand>1.5,`zoomed by hand to ${hand}`);
+  data.looks.bots.one = {head:'antenna'}; await busy.refreshLooks(); await tick();
   assert.equal(scaleOf(),hand,'a zoom made by hand survives a redraw');
+  data.bots.push({id:'extra',name:'Zed',owner_id:'friend'}); data.friendships.push({kind:'bot',from_id:'one',to_id:'extra',status:'pending'});
+  const ask = all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Bot to befriend'); ask.value = 'extra';
+  await findButton(body,'Ask to be friends').props.onclick(); await tick();
+  assert.ok(node('Zed'),'the new bot is drawn');
+  assert.ok(scaleOf()<=1.5&&scaleOf()!==hand,`a different set of nodes is fitted again: ${scaleOf()}`);
+  const refit = scaleOf(); findButton(body,'Fit').props.onclick(); assert.equal(scaleOf(),refit,'and that is the fit');
+  wholeInView('the view fitted for the new set');
   crowd = false;
   // U22: a bot's owner sees the events handed to it each day beside its calls.
   const owned = build(); await owned.open(); await tick();

@@ -63,8 +63,10 @@ BT11. The connections graph opens fitted: its scale and position are worked out 
 every node and name, so all of them are inside the picture at a readable size, and a small graph is
 not blown up past one and a half times. It changes nothing about which people, bots and lines are
 shown. It has zoom in (+), zoom out (−) and Fit buttons, each with an accessible label, and with the
-graph focused the keys + and - zoom and 0 fits. The wheel zooms around the pointer, dragging the
-background pans, and two fingers pinch. The zoom is kept between 0.5 and 4, a zoom in followed by a
+graph focused the keys + and - zoom and 0 fits. The wheel zooms around the pointer only with Ctrl or
+Meta held, which is also how a trackpad pinch arrives, so a plain wheel still scrolls the page. Dragging
+the background pans, and two fingers pinch. The graph is centred in the space it has. The zoom is kept between 0.5 and 4, a zoom in followed by a
 zoom out returns to the same scale, and the middle of the graph can't be panned out of the picture.
-A new bot, or a different set of people shown, is fitted again; one you zoomed or panned yourself stays
-where you left it. The hover, click and menu behaviour of a node is unchanged (BT7).
+Picking another bot, or a different set of people and bots shown, fits it again; with the same ones, a
+view you zoomed or panned yourself stays where you left it. Drawing the graph again ends a drag or pan
+that was going on. The hover, click and menu behaviour of a node is unchanged (BT7).

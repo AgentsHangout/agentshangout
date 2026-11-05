@@ -54,6 +54,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   // BT11: where the graph is looking: scale `k` and offset (`x`, `y`) in the graph's own 480 by 300.
   // `auto` is a fitted view, which is fitted again when the people shown change; null before the first draw.
   let view = null;
+  // BT11: ends what a press on the graph has going (a drag, a pan, a pinch) when the graph is drawn again.
+  let cancels = [];
   const body = host || panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
   body.classList.add('trust-body');
   const toggle = host ? null : panels.toggle('trust', 'Trust & bots', { short: 'Trust' });
@@ -398,6 +400,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     return placed;
   }
   function connections() {
+    for (const cancel of cancels) cancel();
+    cancels = [];
     const { nodes, edges } = graph();
     layout(nodes, edges);
     if (!nodes.some(n => n.id === focusId())) focus = selected ? 'bot' : 'you';
@@ -464,7 +468,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       const k = clampZoom(Math.min((W - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (H - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX));
       return { k, x: W / 2 - (x0 + x1) / 2 * k, y: H / 2 - (y0 + y1) / 2 * k, auto: true, key };
     };
-    if (!view || (view.auto && view.key !== key)) view = fitted();
+    if (!view || view.key !== key) view = fitted();
     const apply = () => {
       world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
       world.setAttribute('data-scale', String(view.k));
@@ -509,7 +513,10 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     };
     const press = e => {
       if (!picture.getBoundingClientRect) return;
-      if (!pointers.size) { addEventListener('pointermove', move); addEventListener('pointerup', release); addEventListener('pointercancel', release); }
+      if (!pointers.size) {
+        addEventListener('pointermove', move); addEventListener('pointerup', release); addEventListener('pointercancel', release);
+        cancels.push(() => { pointers.clear(); pan = pinch = null; removeEventListener('pointermove', move); removeEventListener('pointerup', release); removeEventListener('pointercancel', release); });
+      }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = W / (r.width || W);
@@ -520,7 +527,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${W} ${H}`, role: 'group', tabindex: 0,
       'aria-label': selected ? `${bot().name}’s connections` : 'Your connections', 'aria-keyshortcuts': '+ - 0',
       onpointerdown: press,
-      onwheel: e => { e.preventDefault(); const p = rootPoint(e); zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.04 : 0.0025)), p.x, p.y); },
+      // Only with Ctrl or Meta (which is how a trackpad pinch arrives): a plain wheel scrolls the page.
+      onwheel: e => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); const p = rootPoint(e); zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.04 : 0.0025)), p.x, p.y); },
       onkeydown: e => {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === '+' || e.key === '=') zoomAt(ZOOM_STEP); else if (e.key === '-' || e.key === '_') zoomAt(1 / ZOOM_STEP); else if (e.key === '0') fit(); else return;
@@ -546,15 +554,17 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         groups.get(n.id).setAttribute('transform', `translate(${n.x} ${n.y})`);
         for (const l of lines) if (l.a === n || l.b === n) l.line.setAttribute('d', curve(l.a, l.b, l.bend));
       };
-      const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); if (!moved) pick(n); };
+      const stop = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+      const up = () => { stop(); if (!moved) pick(n); };
       addEventListener('pointermove', move); addEventListener('pointerup', up);
+      cancels.push(stop);
     }
     const legend = h('p', { class: 'trust-legend fine' },
       h('span', { class: 'swatch owns' }), 'Yours', h('span', { class: 'swatch friend' }), 'Friends',
       h('span', { class: 'swatch pending' }), 'Asked, not answered', h('span', { class: 'swatch bond' }), 'Bond (earned)',
       ...(edges.some(e => e.kind === 'feeling') ? [h('span', { class: 'swatch feeling' }), 'Feelings, warm to cool, dashed when distant'] : []));
     const about = text(`${selected ? `${bot().name}’s` : 'Your'} connections. Round is a person, square is a bot, and each wears its own look. The ringed one is open below.`, 'muted fine');
-    const hint = text('Pick anyone in the graph to see and change them. Drag them to move them, or the background to pan. Scroll or pinch to zoom, or press + and − with the graph picked; 0 fits it.', 'muted fine');
+    const hint = text('Pick anyone in the graph to see and change them. Drag them to move them, or the background to pan. Hold Ctrl and scroll, or pinch, to zoom, or press + and − with the graph picked; 0 fits it.', 'muted fine');
     // BT11: the buttons sit over the graph's corner, outside what is zoomed.
     const zoom = h('div', { class: 'trust-zoom', role: 'group', 'aria-label': 'Zoom the connections' },
       button('+', () => zoomAt(ZOOM_STEP), { 'aria-label': 'Zoom in', title: 'Zoom in' }),
