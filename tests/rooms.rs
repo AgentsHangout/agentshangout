@@ -9322,6 +9322,23 @@ async fn a_second_mention_in_a_thread_carries_only_what_is_new() {
     };
     assert_eq!(context_of(first), [before], "the root isn't repeated in context");
     assert_eq!(context_of(second), [after, later], "nothing the first mention already carried");
+
+    // A mention the bot was never sent (at the recycling plant, RC2, or expired) doesn't count:
+    // the next one goes back to the last event it did get.
+    w.conn
+        .execute("DELETE FROM bot_events WHERE ref_key = ?", [format!("mention:{second}")])
+        .unwrap();
+    let extra = say("one more reply", Some(root)).await;
+    let third = say("@Scout still there?", Some(root)).await;
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap();
+    let third_event = events
+        .iter()
+        .find(|e| e["name"] == "mention" && e["data"]["message_id"] == third)
+        .expect("a mention event for the third");
+    let lines = third_event["data"]["context"].as_array().unwrap();
+    let ids: Vec<i64> = lines.iter().map(|line| line["message_id"].as_i64().unwrap()).collect();
+    assert_eq!(ids, [after, later, second, extra], "back to what the first mention carried");
 }
 
 // #609: finding a bot's last mention in a thread uses indexes, so it doesn't scan every mention.

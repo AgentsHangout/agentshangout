@@ -8182,13 +8182,16 @@ fn staying_or_home(
     .optional()
 }
 
-/// #609: the last message in thread ?1 before ?2 that mentioned bot ?4. Driven by the thread's
-/// (root_id, message_id) index, newest first, probing mentions' (message_id, agent_id) key, so it
-/// doesn't grow with how often the bot is mentioned elsewhere. Public so a test can check its plan.
+/// #609: the last message in thread ?1 before ?2 whose mention event bot ?4 was actually sent. It's
+/// the bot's own event row, not the mentions table, since a mention is counted for a bot that isn't
+/// sent the event (one at the recycling plant, RC2). A pruned event only means more context is sent.
+/// Driven by the thread's (root_id, message_id) index, newest first, probing bot_events' unique
+/// (agent_id, ref_key), so it doesn't grow with the bot's other events. Public so a test can check
+/// its plan.
 pub const LAST_THREAD_MENTION: &str = "SELECT lt.message_id FROM message_threads lt
-                   CROSS JOIN mentions lm
+                   CROSS JOIN bot_events le
                    WHERE lt.root_id = ?1 AND lt.message_id < ?2
-                     AND lm.message_id = lt.message_id AND lm.agent_id = ?4
+                     AND le.agent_id = ?4 AND le.ref_key = 'mention:' || lt.message_id
                    ORDER BY lt.message_id DESC LIMIT 1";
 
 /// I117: the update behind `mark_answered_thread_mentions_read`. Driven by this bot's few unread
