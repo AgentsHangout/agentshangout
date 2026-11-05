@@ -832,7 +832,8 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   ending in W102's line about what a click does; a press is the frame with its items. A row that leads
   to more shows `›`, and choosing it, or pressing the right arrow, shows that list in the same frame
   with "Back to …" first. The left arrow or Escape goes back a level, and Escape at the top closes
-  it. The map's place card, the city page's house card, its menus, the person card in a room and the
+  it and puts focus back where it was. What comes in after it opens, such as a person's card rows,
+  is drawn in without moving focus. The map's place card, the city page's house card, its menus, the person card in a room and the
   build menus all use it.
   - **My bots** ends every menu a signed-in person opens on the map, and every pressed person card
     in a room they aren't a guest in. It lists their bots, one row each with what My bots says
@@ -844,7 +845,9 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
     row. For it, `GET /api/places/{x}/{y}` (W72) gives the owner, and only the owner, `space_id`.
   - **A room's menu.** A right click or a press and hold on a room's bare floor, with nothing under
     it and nothing being built, opens the room's own menu, headed by the space and the floor, with
-    Room permissions and My bots. With neither to offer, the browser keeps its own menu.
+    Room permissions and My bots. With neither to offer, the browser keeps its own menu. The menu
+    key opens it at the room's top left corner. A press and hold is the browser's own, so it works
+    where the browser sends one (desktop and Android, not iOS Safari).
 
 ## What this can't do
 

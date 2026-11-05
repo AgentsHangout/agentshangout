@@ -3777,8 +3777,10 @@ async function roomView(id) {
     if (!items.length) return;
     event.preventDefault();
     personCard.close();
+    // The menu key has no pointer, so its menu opens at the room's top left corner.
+    const box = !event.clientX && !event.clientY ? stage.getBoundingClientRect?.() : null;
     roomMenu.open({ title: place?.space.name || snapshot.hangout?.name || 'This room', sub: place ? place.floor.name : 'This room', items },
-      event.clientX, event.clientY, event.pointerType === 'touch' ? 'press' : 'click');
+      box ? box.left + 16 : event.clientX, box ? box.top + 16 : event.clientY, event.pointerType === 'touch' ? 'press' : 'click');
   });
 
   // The running notes along the bottom, around the status bar's own message and clock.
@@ -8212,8 +8214,11 @@ function popupMenu(root, { refocus }) {
     return button;
   }
 
+  let shownButtons = [];
   // The frame for the menu on top of the stack. A submenu keeps the head and leads with Back.
-  function draw() {
+  // `focusAt` is the row to focus: the first when it opens, the same one when it's drawn again, or
+  // none when focus was somewhere else.
+  function draw(focusAt = 0) {
     const spec = stack.at(-1);
     const buttons = [];
     const rows = [];
@@ -8257,8 +8262,9 @@ function popupMenu(root, { refocus }) {
     el?.remove();
     root.append(next);
     el = next;
+    shownButtons = buttons;
     place();
-    if (!peeking) buttons[0]?.focus({ preventScroll: true });
+    if (!peeking && focusAt >= 0) buttons[Math.min(focusAt, buttons.length - 1)]?.focus({ preventScroll: true });
   }
 
   // Next to the pointer, and kept on the screen. A finger covers what is under it, so a menu from a
@@ -8308,11 +8314,12 @@ function popupMenu(root, { refocus }) {
     draw();
   }
 
-  // The same menu again with what came back since it opened, where it is, unless a submenu is open.
+  // The same menu again with what came back since it opened, where it is and with focus where it
+  // was. With a submenu open, the top is updated for when they go back to it.
   function update(spec) {
-    if (!el || stack.length !== 1) return;
+    if (!el) return;
     stack[0] = peeking ? { ...spec, items: [] } : spec;
-    draw();
+    if (stack.length === 1) draw(shownButtons.indexOf(document.activeElement));
   }
 
   return {
@@ -8321,6 +8328,7 @@ function popupMenu(root, { refocus }) {
     update,
     close,
     move: (x, y) => { if (at) { at = { ...at, x, y }; place(); } },
+    contains: (node) => Boolean(el && el.contains(node)),
     get isOpen() { return Boolean(el) && !peeking; },
     get isPeek() { return Boolean(el) && peeking; },
   };
@@ -8367,7 +8375,9 @@ function personCardBody(data) {
 // ends with, such as My bots.
 function personCards({ room, stage, root, view, locked, mention, extras = () => [] }) {
   const cache = new Map();
-  const menu = popupMenu(root, { refocus: () => {} });
+  // W109: after Escape or a choice, focus goes back to the person's row, or the room.
+  let opener = null;
+  const menu = popupMenu(root, { refocus: () => opener?.focus?.({ preventScroll: true }) });
   let pinned = false;
   let shownFor = null;
   let timer = 0;
@@ -8391,8 +8401,11 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     shownFor = null;
     document.removeEventListener('keydown', onEscape, true);
   };
+  // A hover has no focus to take Escape, so the page does. In an open card the menu does: Escape
+  // goes back out of a submenu, and at the top it closes and returns focus.
   function onEscape(event) {
-    if (event.key === 'Escape') close();
+    if (event.key !== 'Escape' || (menu.isOpen && menu.contains(event.target))) return;
+    close();
   }
   async function show(personId, x, y, pin) {
     const who = view().people.find((p) => p.id === personId);
@@ -8461,6 +8474,7 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     if (!personId) return;
     event.preventDefault();
     event.stopPropagation();
+    opener = event.target.closest?.('[data-person]') || stage;
     show(personId, event.clientX, event.clientY, true);
   };
   // Left and right press open the same card (A90).
@@ -8470,6 +8484,7 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     const chip = event.target.closest?.('[data-person]');
     if (!chip || locked() || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
+    opener = chip;
     const box = chip.getBoundingClientRect();
     show(chip.dataset.person, box.left, box.bottom, true);
   });
@@ -9070,15 +9085,21 @@ async function worldView(id, { home = false } = {}) {
     go(`/h/${encodeURIComponent(room)}#crew`);
   }
   let botsAt = 0;
-  async function loadBots(force = false) {
-    if (!me || me.kind !== 'person' || (!force && Date.now() - botsAt < 30000)) return;
+  // W109: the load in flight or the last one, so a menu can wait for the first instead of showing
+  // no bots, and a person with none isn't asked again on every menu.
+  let botsLoad = null;
+  function loadBots(force = false) {
+    if (!me || me.kind !== 'person' || (!force && Date.now() - botsAt < 30000)) return botsLoad || Promise.resolve();
     botsAt = Date.now();
-    const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
-    myBots = bots;
-    // The count over a building turns gold for one of these.
-    world.myBots = new Set(bots.map((bot) => bot.name));
-    world.ownerName = me.name;
-    renderBots();
+    botsLoad = (async () => {
+      const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
+      myBots = bots;
+      // The count over a building turns gold for one of these.
+      world.myBots = new Set(bots.map((bot) => bot.name));
+      world.ownerName = me.name;
+      renderBots();
+    })();
+    return botsLoad;
   }
 
   const aboutBody = panels.add('about', 'About', {
@@ -9586,7 +9607,7 @@ async function worldView(id, { home = false } = {}) {
     }
     // W109: every menu a person opens ends with My bots.
     if (spec && me?.kind === 'person') {
-      if (!myBots.length) loadBots();
+      await loadBots();
       spec = { ...spec, items: [...spec.items, null, myBotsMenu(myBots.map((bot) => ({ name: bot.name, state: bot.status?.state })), () => panels.open('bots'))] };
     }
     if (spec) {

@@ -38,12 +38,15 @@ const textOf = (node) => (node == null ? '' : typeof node === 'string' ? node : 
 const items = (node) => (node.children || []).flatMap((c) => (c && (c.tag === 'button' || c.tag === 'a') ? [c] : c && c.children ? items(c) : []));
 const labels = (node) => items(node).map((b) => textOf(b).replace(/\s*[›‹]\s*/g, '').trim());
 const went = [];
+let cardData = new Promise(() => {});
 const said = [];
 const documentListeners = {};
 const context = {
   h: element,
   go: (path) => went.push(path),
   setTimeout: (fn) => { fn(); return 1; },
+  Date,
+  api: () => cardData,
   clearTimeout() {},
   innerWidth: 1000,
   innerHeight: 800,
@@ -58,7 +61,8 @@ vm.createContext(context);
 vm.runInContext([
   extract('researchRepositoryLink'), extract('researchMenuLink'), extract('BOT_STATE_WORD', 'const'),
   extract('myBotsMenu'), extract('roomPermissionsMenu'), extract('popupMenu'),
-  'this.popupMenu = popupMenu; this.myBotsMenu = myBotsMenu; this.roomPermissionsMenu = roomPermissionsMenu;',
+  extract('githubCardRows'), extract('githubProfileUrl', 'const'), extract('personCardBody'), extract('personCards'),
+  'this.popupMenu = popupMenu; this.myBotsMenu = myBotsMenu; this.roomPermissionsMenu = roomPermissionsMenu; this.personCards = personCards;',
 ].join('\n'), context);
 
 const root = element('main');
@@ -152,7 +156,60 @@ menu.open({ title: 'Me', sub: 'Person', items: [], note: 'Nothing else to do her
 assert.match(textOf(shown()), /Nothing else to do here/);
 menu.close();
 
-// Where the three meet in the page: the map's hover card, its menus, a person and the room.
+// Through a person's card (#557 review): Escape in a submenu goes back, data coming in keeps focus,
+// and closing returns focus to the person's row.
+(async () => {
+  const stageListeners = {};
+  const stage = element('div');
+  stage.classList = { toggle() {} };
+  stage.addEventListener = (kind, fn) => { (stageListeners[kind] ||= []).push(fn); };
+  const cardRoot = element('main');
+  let release;
+  cardData = new Promise((resolve) => { release = resolve; });
+  const cards = context.personCards({
+    room: { personAt: () => null },
+    stage,
+    root: cardRoot,
+    locked: () => false,
+    mention() {},
+    view: () => ({ you: { person_id: 'p-me' }, people: [{ id: 'p-ann', name: 'Ann' }] }),
+    extras: () => [context.myBotsMenu([{ name: 'Rover', where: 'In this room' }], () => {})],
+  });
+  const chip = element('span');
+  chip.dataset = { person: 'p-ann' };
+  const open = () => stageListeners.click[0]({
+    clientX: 5,
+    clientY: 5,
+    target: { closest: (sel) => (sel === 'button, a' ? null : chip) },
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  const card = () => cardRoot.children.filter((c) => !c.removed).at(-1);
+  const key = (name) => {
+    const event = { key: name, target: focused, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    for (const fn of documentListeners.keydown || []) fn(event);
+    if (card()) card().props.onkeydown(event);
+  };
+
+  open();
+  same(labels(card()), ['Mention in chat', 'My bots']);
+  focused = items(card())[1];
+  release({ linked: true, login: 'ann-codes', stars: { total: 2 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  same(labels(card()), ['Mention in chat', 'View on GitHub', 'My bots'], 'the link comes in');
+  assert.equal(textOf(focused).trim(), 'View on GitHub', 'focus stays on the second row, not the first');
+  focused = items(card())[2];
+  key('ArrowRight');
+  same(labels(card()), ['Back to Ann', 'Rover In this room', 'Open My bots']);
+  key('Escape');
+  assert.ok(card(), 'Escape in a submenu keeps the card');
+  same(labels(card()), ['Mention in chat', 'View on GitHub', 'My bots'], 'and goes back a level');
+  key('Escape');
+  assert.equal(card(), undefined, 'Escape at the top closes it');
+  assert.equal(focused, chip, 'and focus goes back to the person');
+  cards.close();
+
+  // Where the three meet in the page: the map's hover card, its menus, a person and the room.
 assert.ok(source.includes("class: 'game-menu city-card', role: 'tooltip'"), 'the map hover card is the menu frame');
 assert.ok(fs.readFileSync('web/city.js', 'utf8').includes("el('div', 'game-menu city-card')"), 'so is the city page’s');
 assert.ok(/spec = \{ \.\.\.spec, items: \[\.\.\.spec\.items, null, myBotsMenu\(/.test(source), 'every map menu ends with My bots');
@@ -161,3 +218,4 @@ assert.ok(source.includes('extras: roomBotsMenu,'), 'a pressed person card ends 
 assert.ok(source.includes("place?.runs_it ? [roomPermissionsMenu("), 'the room menu has Room permissions only for whoever runs it');
 assert.ok(!/function personCards[\s\S]*?h\('div', \{ class: 'game-menu person-card'/.test(source), 'a person card has no frame of its own');
 console.log('Game menu: one frame for hover and press; submenus in place with Back; My bots and Room permissions reachable.');
+})().catch((error) => { console.error(error); process.exitCode = 1; });
