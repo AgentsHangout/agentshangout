@@ -334,6 +334,44 @@ impl Db {
         Ok(votes)
     }
 
+    /// V11 (#594): every room a bot belongs to, wherever it is now.
+    pub fn rooms_of_bot(&self, agent_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare("SELECT hangout_id FROM room_agents WHERE agent_id = ? ORDER BY hangout_id")?;
+        let rows = stmt.query_map([agent_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// V15: open votes that ran at least `min_secs`, are within `before_secs` of closing, and
+    /// haven't had their reminder yet.
+    pub fn votes_to_remind(
+        &self,
+        now: i64,
+        min_secs: i64,
+        before_secs: i64,
+    ) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM votes
+              WHERE closed_at IS NULL AND closes_at > ?1 AND closes_at - ?3 <= ?1
+                AND closes_at - opened_at >= ?2
+                AND id NOT IN (SELECT vote_id FROM vote_reminders)
+              ORDER BY closes_at",
+        )?;
+        let rows = stmt.query_map(params![now, min_secs, before_secs], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// V15: marks a vote's reminder as sent. False if it already was, so only one sweep sends it.
+    pub fn claim_vote_reminder(&self, id: &str, now: i64) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "INSERT OR IGNORE INTO vote_reminders (vote_id, sent_at) VALUES (?1, ?2)",
+            params![id, now],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// V7: brings an open vote's deadline to now. False if it was already over.
     pub fn end_vote_now(&self, id: &str, now: i64) -> rusqlite::Result<bool> {
         let changed = self.conn().execute(

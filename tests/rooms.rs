@@ -6697,6 +6697,150 @@ async fn walk_ins_on_a_public_floor_vote_as_visitors() {
     assert!(member["votes"][0].get("voters_hidden").is_none());
 }
 
+/// The `vote` events in a bot's log, as (change, data).
+async fn vote_events(server: &Server, token: &str) -> Vec<(String, Value)> {
+    let page = server.tool(token, "events_since", json!({ "since": "0" })).await;
+    page["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["name"] == "vote")
+        .map(|event| (text(&event["data"]["change"]), event["data"].clone()))
+        .collect()
+}
+
+// V11, V14, V16, #594: a bot hears of a vote in a room it belongs to while it's in another one,
+// and its inbox lists it with minutes left, whether it voted, the tally and a line over the list.
+#[tokio::test]
+async fn a_bot_elsewhere_is_told_a_vote_is_waiting_with_minutes_left() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (den, dee) = server.someone("Dee").await;
+    let code = server.invite_code(&dee, &den).await;
+    server.post(&ann.key, &format!("/api/invites/{code}/join"), json!({})).await.ok();
+    server.put(&ann.key, &format!("/api/hangouts/{den}/agents/{}", scout.id), json!({})).await.ok();
+    let went = server.tool(&scout.token, "go_to_room", json!({ "hangout_id": den })).await;
+    assert_ne!(went["isError"], true, "{went}");
+
+    let opened = server
+        .tool(
+            &rover.token,
+            "open_vote",
+            json!({ "hangout_id": room, "question": "Lunch?", "options": ["Tacos", "Pizza"], "minutes": 30 }),
+        )
+        .await["structuredContent"]
+        .clone();
+    let vote = text(&opened["id"]);
+    assert_eq!(opened["minutes_left"], 30, "{opened}");
+    let announce = text(&opened["announce"]);
+    assert!(announce.contains("People aren't") && announce.contains("tag"), "{announce}");
+
+    // The event reaches it in the Den, with minutes left.
+    let heard = vote_events(&server, &scout.token).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0].0, "opened");
+    assert_eq!(heard[0].1["minutes_left"], 30, "{:?}", heard[0]);
+    assert_eq!(heard[0].1["vote"]["minutes_left"], 30);
+
+    // Its inbox lists it, though it isn't in that room now.
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    let listed = &inbox["open_votes"][0];
+    assert_eq!(listed["vote_id"], vote.as_str(), "{inbox}");
+    assert_eq!(listed["minutes_left"], 30, "{listed}");
+    assert_eq!(listed["you_voted"], false, "{listed}");
+    assert_eq!(
+        listed["counts"],
+        json!([{ "option": "Tacos", "votes": 0 }, { "option": "Pizza", "votes": 0 }]),
+        "{listed}"
+    );
+    let line = text(&inbox["votes_waiting"]);
+    assert!(line.starts_with("1 vote waiting for you: "), "{line}");
+    assert!(line.ends_with(", 30 minutes left"), "{line}");
+
+    // The tally moves with ballots, and with 30 seconds left it still says 1 minute.
+    server.tool(&rover.token, "cast_vote", json!({ "vote_id": vote, "option": "Pizza" })).await;
+    server.state.db.age_vote(&vote, 30 * 60 - 30).unwrap();
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["open_votes"][0]["counts"][1]["votes"], 1, "{inbox}");
+    assert_eq!(inbox["open_votes"][0]["minutes_left"], 1, "{inbox}");
+    assert!(text(&inbox["votes_waiting"]).ends_with(", 1 minute left"), "{inbox}");
+
+    // Once it votes, it's off the list.
+    server.tool(&scout.token, "cast_vote", json!({ "vote_id": vote, "option": "Tacos" })).await;
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox.get("open_votes").is_none(), "{inbox}");
+    assert!(inbox.get("votes_waiting").is_none(), "{inbox}");
+}
+
+// V14, V15, #594: a bot that walked onto a public floor hears of a vote there without voters'
+// names, and a long vote reminds those who haven't voted once, 10 minutes before it closes.
+#[tokio::test]
+async fn walk_ins_hear_of_a_vote_and_a_long_one_reminds_once_before_it_closes() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server.walk_in(&eve, &room).await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    let open = |token: &str, question: &str, minutes: i64| {
+        let token = token.to_string();
+        let args = json!({ "hangout_id": room, "question": question, "options": ["Jazz", "Folk"], "minutes": minutes });
+        let server = &server;
+        async move { text(&server.tool(&token, "open_vote", args).await["structuredContent"]["id"]) }
+    };
+    let long = open(&scout.token, "Music?", 30).await;
+    server.tool(&rover.token, "cast_vote", json!({ "vote_id": long, "option": "Jazz" })).await;
+
+    // The walk-in hears of it in the counts-only form: no names of who chose what.
+    let heard = vote_events(&server, &pip.token).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(heard[0].0, "opened");
+    assert_eq!(heard[0].1["vote"]["voters_hidden"], true, "{:?}", heard[0]);
+    assert!(!heard[0].1.to_string().contains("Ann"), "{:?}", heard[0]);
+
+    // Nothing yet with 20 minutes to go.
+    server.state.db.age_vote(&long, 10 * 60).unwrap();
+    agenthangout::votes::settle_due(&server.state).unwrap();
+    assert!(vote_events(&server, &pip.token).await.iter().all(|(change, _)| change != "closing"));
+
+    // With 9 minutes left, those who haven't voted are reminded, once, even if the sweep runs again.
+    server.state.db.age_vote(&long, 11 * 60).unwrap();
+    agenthangout::votes::settle_due(&server.state).unwrap();
+    agenthangout::votes::settle_due(&server.state).unwrap();
+    let closing = |events: Vec<(String, Value)>| {
+        events.into_iter().filter(|(change, _)| change == "closing").collect::<Vec<_>>()
+    };
+    let pip_closing = closing(vote_events(&server, &pip.token).await);
+    assert_eq!(pip_closing.len(), 1, "{pip_closing:?}");
+    assert_eq!(pip_closing[0].1["minutes_left"], 9, "{:?}", pip_closing[0]);
+    assert_eq!(pip_closing[0].1["vote"]["voters_hidden"], true);
+    assert_eq!(
+        closing(vote_events(&server, &scout.token).await).len(),
+        1,
+        "the opener hasn't voted"
+    );
+    assert!(closing(vote_events(&server, &rover.token).await).is_empty(), "Rover already voted");
+
+    // A short vote gets no reminder.
+    let short = open(&rover.token, "Now?", 15).await;
+    server.state.db.age_vote(&short, 10 * 60).unwrap();
+    agenthangout::votes::settle_due(&server.state).unwrap();
+    let reminded: Vec<_> = closing(vote_events(&server, &pip.token).await)
+        .into_iter()
+        .filter(|(_, data)| data["vote"]["id"] == short.as_str())
+        .collect();
+    assert!(reminded.is_empty(), "{reminded:?}");
+}
+
 // JB1 to JB7, #562: the Fairground case. An owner's /job line gives their bot a job; the bot asks
 // the room; the answers come marked; what it learns is kept with the job; its write-up reaches the
 // owner's Needs you; and after a restart inbox still has its role and job.
