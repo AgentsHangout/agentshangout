@@ -1682,7 +1682,9 @@ const RESPONSE_MARK = { yes: '✓', maybe: '?', no: '✕' };
 // cursor, because a mention only counts when it has the whole name, and names can have spaces. The
 // names are other people's text, so they only ever go in as text. This is for the private pages; the
 // public world has no text to type, and never uses it.
-//   names()  the choices now, as [{ name, kind }] with kind "person" or "bot"
+//   names()  the choices now, as [{ name, kind }] with kind "person" or "bot". #548: a choice may also
+//            have `group` (a heading it's listed under, in the order the groups first appear),
+//            `detail` (one short line under the name) and `color` (a dot for whose it is).
 //   load()   optional: asked once, the first time @ is typed, for a list that has to be fetched. It
 //            returns a promise, and the picker looks again when it is done.
 //   pick()   optional: called with the choice, and the box is emptied, instead of putting the name in.
@@ -1699,6 +1701,7 @@ function mentionBox(input, { names, load, pick }) {
   let active = 0;
   let span = null;
   let asked = false;
+  let query = '';
 
   function close() {
     list.hidden = true;
@@ -1720,26 +1723,53 @@ function mentionBox(input, { names, load, pick }) {
       .filter((item) => item.rank < 3)
       // I120: a choice marked `first`, such as @room, stays at the top while it matches.
       .sort((a, b) => Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first)) || a.rank - b.rank || a.choice.name.localeCompare(b.choice.name))
-      .slice(0, 8)
+      .slice(0, 12)
       .map((item) => item.choice);
   }
 
+  // #548: the choices grouped under their headings, in the order the groups first appear in names().
+  function grouped(options) {
+    const order = [];
+    for (const choice of names()) if (!order.includes(choice.group || '')) order.push(choice.group || '');
+    return [...options].sort((a, b) => order.indexOf(a.group || '') - order.indexOf(b.group || ''));
+  }
+
+  // #548: the typed letters in bold, as text only, since names are other people's words.
+  function marked(name, query) {
+    const at = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
+    if (at < 0) return [name];
+    return [name.slice(0, at), h('b', {}, name.slice(at, at + query.length)), name.slice(at + query.length)];
+  }
+
   function render() {
-    list.replaceChildren(...shown.map((choice, index) => h('li', {
-      id: `${id}-${index}`,
-      role: 'option',
-      class: 'mention-option',
-      'aria-selected': String(index === active),
-      // Keeps the cursor in the box while the list is clicked.
-      onpointerdown: (event) => event.preventDefault(),
-      onclick: () => pickChoice(index),
-    },
-    h('span', { class: 'mention-name' }, choice.name),
-    h('span', { class: 'mention-kind' }, choice.kind))));
+    const rows = [];
+    shown.forEach((choice, index) => {
+      // #548: a heading where a group starts. It's not an option, so the arrow keys skip it.
+      if (choice.group && choice.group !== shown[index - 1]?.group) {
+        rows.push(h('li', { class: 'mention-group', role: 'presentation' }, choice.group));
+      }
+      const dot = h('i', { class: 'mention-dot', 'aria-hidden': 'true' });
+      if (choice.color) dot.style.background = choice.color;
+      rows.push(h('li', {
+        id: `${id}-${index}`,
+        role: 'option',
+        class: 'mention-option',
+        'aria-selected': String(index === active),
+        // Keeps the cursor in the box while the list is clicked.
+        onpointerdown: (event) => event.preventDefault(),
+        onclick: () => pickChoice(index),
+      },
+      dot,
+      h('span', { class: 'mention-text' },
+        h('span', { class: 'mention-name' }, ...marked(choice.name, query)),
+        h('small', { class: 'mention-kind' }, choice.detail || choice.kind))));
+    });
+    list.replaceChildren(...rows);
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
     input.setAttribute('aria-activedescendant', `${id}-${active}`);
-    list.children[active]?.scrollIntoView({ block: 'nearest' });
+    // Headings sit between options, so find the chosen one rather than counting children.
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }
 
   function update() {
@@ -1750,7 +1780,8 @@ function mentionBox(input, { names, load, pick }) {
       asked = true;
       load().then(update, () => {});
     }
-    const options = matching(found[1]);
+    query = found[1];
+    const options = grouped(matching(found[1]));
     if (!options.length) return close();
     span = { from: caret - found[1].length - 1, to: caret };
     if (shown.length !== options.length || shown.some((choice, index) => choice.name !== options[index].name || choice.kind !== options[index].kind)) active = 0;
@@ -4969,20 +5000,26 @@ async function roomView(id) {
   const mentionable = () => {
     const choices = [];
     const seen = new Set();
-    const add = (name, kind) => {
+    const add = (name, kind, extra = {}) => {
       if (name && !seen.has(`${kind}:${name}`)) {
         seen.add(`${kind}:${name}`);
-        choices.push({ name, kind });
+        choices.push({ name, kind, ...extra });
       }
+    };
+    // #548: one short line each, and a dot in the colour of whose it is.
+    const botLine = (bot) => {
+      const owner = bot.owner_id === snapshot.you.person_id ? 'Your' : person(bot.owner_id) ? `${person(bot.owner_id).name}'s` : 'A';
+      const how = bot.away ? 'away' : bot.activity ? 'working' : STATE_TEXT[bot.state]?.toLowerCase() || bot.state;
+      return `${owner} bot${how ? ` · ${how}` : ''}`;
     };
     // I120: @room, like a person you can pick, where it would reach someone (its owner turned it on,
     // and you belong here). Picking it puts "@room " in, which is what the server listens for.
-    if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true });
-    for (const who of snapshot.people) if (who.id !== snapshot.you.person_id) add(who.name, 'person');
-    for (const bot of snapshot.agents) add(bot.name, 'bot');
+    if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true, group: 'Everyone', detail: 'every bot here that listens' });
+    for (const who of snapshot.people) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'Here', detail: 'person', color: colorOf(who.id) });
+    for (const bot of snapshot.agents) add(bot.name, 'bot', { group: 'Here', detail: botLine(bot), color: colorOf(bot.owner_id) });
     if (inSquare() && city) {
-      for (const who of city.people || []) if (who.id !== snapshot.you.person_id) add(who.name, 'person');
-      for (const bot of city.bots || []) if (!bot.is_house) add(bot.name, 'bot');
+      for (const who of city.people || []) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'In this city', detail: 'person' });
+      for (const bot of city.bots || []) if (!bot.is_house) add(bot.name, 'bot', { group: 'In this city', detail: 'bot' });
     }
     return choices;
   };
