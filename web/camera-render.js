@@ -42,15 +42,25 @@ function cameraPlaced(scene) {
   for(const item of placed)item.spots=spotsOf(item);
   return placed;
 }
-// #344: a bot using an item is at it, as on the page, if it has a free spot inside the frame.
-// Bots come sorted by id, so the same room always gives the same places. Everyone else stands in
-// one grid, and CP2 puts the people who had the floor open in it with the bots.
+// #344, CP8, CP9: each bot is where the page puts it, if that spot is free and inside the frame: one
+// working through another tool at a desk, one using an item at it, and an active one (or a working
+// one with no desk) in a seat at the table. Bots come sorted by id, so the same room always gives
+// the same places. Everyone else stands in one grid, and CP2 puts the people who had the floor open
+// in it with the bots.
 function cameraFigures(scene,placed) {
-  const frame=scene.frame,taken=new Set();
+  const frame=scene.frame,taken=new Set(),look=scene.look;
   // A whole figure has to fit, so a spot right at the frame's edge doesn't count.
   const inFrame=s=>s.x>=frame.x+10&&s.x<=frame.x+frame.width-10&&s.y>=frame.y+24&&s.y<=frame.y+frame.height-10;
-  const spotFor=f=>{const spot=f.using&&placed.find(i=>i.id===f.using)?.spots.find(s=>!taken.has(s)&&inFrame(s));if(spot)taken.add(spot);return spot||null;};
-  const who=[...scene.bots.map(b=>({...b,person:false,spot:spotFor(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null}))];
+  const claim=list=>{const spot=(list||[]).find(s=>!taken.has(s)&&inFrame(s));if(spot)taken.add(spot);return spot||null;};
+  const seats=shiftedSeats(tableShift(look.table));
+  const placeBot=b=>{
+    let spot=null,at=null;
+    if(b.working&&!(look.hidden||[]).includes('desk')){spot=claim(DESKS);if(spot)at='desk';}
+    if(!spot&&b.using){spot=claim(placed.find(i=>i.id===b.using)?.spots);if(spot)at='item';}
+    if(!spot&&(b.state==='active'||b.working)){spot=claim(seats);if(spot)at='table';}
+    return {spot,at};
+  };
+  const who=[...scene.bots.map(b=>({...b,person:false,...placeBot(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null,at:null}))];
   const loose=who.filter(f=>!f.spot);
   const cols=Math.min(frame.width<480?3:4,Math.max(1,loose.length)),rows=Math.ceil(loose.length/cols);
   return who.map(f=>{
@@ -74,7 +84,8 @@ function cameraSvg(scene) {
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
   for(const f of figures)f.spot?.busy?.(g,f,0);
   for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
-  // The ids of the bots drawn at an item, so the photo's metadata says only what the picture shows.
-  return {svg:g.svg(frame),at:figures.filter(f=>f.spot).map(f=>f.id)};
+  // Where each bot was drawn, so the photo's metadata says only what the picture shows.
+  const where=at=>figures.filter(f=>!f.person&&f.at===at).map(f=>f.id);
+  return {svg:g.svg(frame),at:where('item'),table:where('table'),desk:where('desk')};
 }
 JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));
