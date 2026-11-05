@@ -1850,11 +1850,12 @@ const MAX_BUILD_PICTURES = 600;
 function buildPicture(key, make) {
   let source = BUILD_PICTURES.get(key);
   if (source === undefined) {
-    if (BUILD_PICTURES.size >= MAX_BUILD_PICTURES) BUILD_PICTURES.clear();
     source = make() || null;
+    // Only a picture that drew is kept, so one whose art wasn't ready is tried again next time.
+    if (!source?.width || !source?.height) return source;
+    if (BUILD_PICTURES.size >= MAX_BUILD_PICTURES) BUILD_PICTURES.clear();
     BUILD_PICTURES.set(key, source);
   }
-  if (!source?.width || !source?.height) return source;
   const copy = document.createElement('canvas');
   copy.width = source.width;
   copy.height = source.height;
