@@ -406,9 +406,13 @@ async fn a_bot_can_list_events_and_a_house_bot_cannot() {
             "trip",
             "place",
             "pin_added",
-            "vote"
+            "vote",
+            "bedtime"
         ]
     );
+    // MM17: bedtime can be asked for by name like the rest.
+    let bedtime = server.mcp(&scout, json!(1), "events/poll", json!({ "name": "bedtime" })).await;
+    assert!(bedtime.body["error"].is_null(), "{}", bedtime.body);
 
     let unknown = server.mcp(&scout, json!(1), "events/poll", json!({ "name": "nope" })).await;
     assert_eq!(unknown.body["error"]["code"], -32023);

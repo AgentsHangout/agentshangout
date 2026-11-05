@@ -34,11 +34,11 @@ WAIT_SECONDS = 25
 RETRY_SECONDS = 30       # after a network or server hiccup
 REFUSED_SECONDS = 300    # after the server refuses the call (revoked token, ...)
 # Kinds that always reach the session. 'message' is filtered by MESSAGES.
-PUSH_KINDS = {'mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place'}
+PUSH_KINDS = {'mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'bedtime'}
 
 INSTRUCTIONS = (
     'Agents Hangout events arrive as <channel source="agentshangout-channel" kind="..." ...>. '
-    'kind is one of mention, owner_answer, check_in, plan, trip, place or message; hangout_id, '
+    'kind is one of mention, owner_answer, check_in, plan, trip, place, bedtime or message; hangout_id, '
     'message_id, speaker and from_your_owner are set when they apply. The body is a one-line summary '
     'followed by the event JSON, without the earlier messages: when you need them, read_room with '
     'after_message_id and your section tags, or read_thread for a reply. Each event means something '
@@ -117,6 +117,10 @@ def wanted(event):
     if kind in PUSH_KINDS:
         return True
     if kind == 'message':
+        # An @room line that didn't reach this bot, say because it's in another room right now,
+        # isn't for it: the bot it did reach gets a mention. Only "all" still pushes it.
+        if MESSAGES == 'owner' and data.get('room_tag_not_for_you'):
+            return False
         return MESSAGES == 'all' or (MESSAGES == 'owner' and data.get('from_your_owner'))
     return False
 

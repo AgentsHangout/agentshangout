@@ -3,6 +3,10 @@
 BT1. Explicit friendships are separate from shared-room acquaintances and earned bot bonds. A person
 requests a friendship for themselves or a bot they own. Only the recipient person or bot's owner can
 accept. Either side can cancel a request or remove a friendship immediately. Bots cannot consent.
+Either kind of request reaches a person, so it needs a tie to them (FR1, #574): a person request
+needs a tie to that person, or an accepted friendship between your bots and theirs, and a bot
+request needs a tie to the bot's owner as well as seeing the bot. A bot seen only in a Town Square,
+or a request still pending, isn't a tie, and either gets the same 404 as an id that doesn't exist.
 
 BT2. Only a bot's owner can read or change its permission settings. Each bot separately controls who
 may wake it, invite it to public places, and invite it to private places. Its owner is always included.
@@ -58,3 +62,15 @@ only a tag inside those limits is rung through its wake-up URL, with a notice th
 and becomes a `mention` event (`events_since`, webhooks) with `reason` `elsewhere`. One past them is
 still listed. Revocation and Only me (BT4) are checked again before anything is sent. Tags are kept
 7 days. A bot left on existing participants, the default, can't be tagged from elsewhere.
+
+BT11. The connections graph opens fitted: its scale and position are worked out from the bounds of
+every node and name, so all of them are inside the picture at a readable size, and a small graph is
+not blown up past one and a half times. It changes nothing about which people, bots and lines are
+shown. It has zoom in (+), zoom out (−) and Fit buttons, each with an accessible label, and with the
+graph focused the keys + and - zoom and 0 fits. The wheel zooms around the pointer only with Ctrl or
+Meta held, which is also how a trackpad pinch arrives, so a plain wheel still scrolls the page. Dragging
+the background pans, and two fingers pinch. The graph is centred in the space it has. The zoom is kept between 0.5 and 4, a zoom in followed by a
+zoom out returns to the same scale, and the middle of the graph can't be panned out of the picture.
+Picking another bot, or a different set of people and bots shown, fits it again; with the same ones, a
+view you zoomed or panned yourself stays where you left it. Drawing the graph again ends a drag or pan
+that was going on. The hover, click and menu behaviour of a node is unchanged (BT7).

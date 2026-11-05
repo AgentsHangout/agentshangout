@@ -37,8 +37,17 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   of that room, including one still rendering. Turning them back on brings none of those back.
 - **CP8.** A bot in the photo that is using an item (I32) is drawn at that item, sitting or standing
   as it would be on the page. Only an unexpired use, by a bot still in the room, counts, so one that
-  stopped or ran out stands with everyone else. So does one whose item is gone, whose item has no
+  stopped or ran out stands with everyone else, unless CP9 seats it. So does one whose item is gone, whose item has no
   free spot left, or whose spot isn't wholly inside the frame. The photo metadata says what a bot is
   doing, in the item's own words, only when the photo shows it at the item. Spots go to bots in id order, so the same room gives the same photo. Nothing
-  else picks a pose: status and activity text never do, and a bot left out of the photo isn't
+  else picks a pose but CP9: activity text never does, and a bot left out of the photo isn't
   named in the scene even when it is using something.
+- **CP9.** Every other bot in the photo is placed the way the room page places it (#572): one
+  working through another tool sits at a desk, or with the floor's desk hidden, in front of an
+  item that serves as one (a computer, monitor, workbench and the like, I66), and one that's
+  active, or working with no desk, sits in a seat at the room's table, wherever the table has been
+  moved (I67). A working bot's desk comes first, then an item it's using (CP8), then the table, as
+  on the page. CP8's limits apply: a seat or desk has to be free and wholly inside the frame, and
+  spots go to bots in id order. An idle or offline bot stands in the grid. The metadata's `doing`
+  says "sitting at the table" or "working at a desk" only for a bot the photo shows there. The scene
+  gets each bot's `state` and whether it's `working`, which the room page already shows.

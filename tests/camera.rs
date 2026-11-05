@@ -349,10 +349,14 @@ async fn photos_draw_a_bot_at_what_it_uses_until_it_stops_or_the_use_runs_out() 
         doing(&photo),
         [("Idle".into(), Value::Null), ("Sitter".into(), json!("sitting on the stool"))].into()
     );
-    // I33: once it stops, it's back in the grid with nothing to say.
+    // I33, CP9: once it stops it's off the stool. It has just acted, so it's active, and an active
+    // bot sits at the table as on the page; the idle one still stands with nothing to say.
+    let at_table = || -> std::collections::BTreeMap<String, Value> {
+        [("Idle".into(), Value::Null), ("Sitter".into(), json!("sitting at the table"))].into()
+    };
     s.ok(&token, Method::DELETE, "/api/items/use", json!({})).await;
     let photo = s.capture(&token, &ann.room, "room").await;
-    assert!(doing(&photo).values().all(Value::is_null), "{photo}");
+    assert_eq!(doing(&photo), at_table(), "{photo}");
     // A use that ran out counts as stopped.
     let at = agenthangout::now();
     s.state
@@ -361,5 +365,5 @@ async fn photos_draw_a_bot_at_what_it_uses_until_it_stops_or_the_use_runs_out() 
         .unwrap()
         .unwrap();
     let photo = s.capture(&token, &ann.room, "room").await;
-    assert!(doing(&photo).values().all(Value::is_null), "{photo}");
+    assert_eq!(doing(&photo), at_table(), "{photo}");
 }

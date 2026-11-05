@@ -3,16 +3,22 @@ use serde_json::Value;
 /// The last line of camera-render.js, which draws the photo.
 const DRAW: &str = "JSON.stringify(cameraSvg(JSON.parse(__camera_scene)));";
 
-/// A rendered photo and the ids of the bots drawn at an item in it.
+/// A rendered photo and the ids of the bots drawn at an item, at the table and at a desk in it.
 pub struct Photo {
     pub png: Vec<u8>,
     pub at_items: Vec<String>,
+    pub at_table: Vec<String>,
+    pub at_desk: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct Drawn {
     svg: String,
     at: Vec<String>,
+    #[serde(default)]
+    table: Vec<String>,
+    #[serde(default)]
+    desk: Vec<String>,
 }
 
 /// Runs the room art and camera-render.js on a scene, in a bounded runtime. `last` replaces the
@@ -70,7 +76,7 @@ pub fn png(scene: &Value) -> Result<Photo, String> {
     if bytes.len() > 512 * 1024 {
         return Err("camera PNG is too large".into());
     }
-    Ok(Photo { png: bytes, at_items: drawn.at })
+    Ok(Photo { png: bytes, at_items: drawn.at, at_table: drawn.table, at_desk: drawn.desk })
 }
 
 #[cfg(test)]
@@ -92,6 +98,81 @@ mod tests {
     }
     fn bot(name: &str, using: Option<&str>) -> Value {
         json!({"id":name,"name":name,"color":"#8866cc","look":{},"using":using})
+    }
+
+    fn bot_in(name: &str, state: &str, working: bool) -> Value {
+        json!({"id":name,"name":name,"color":"#8866cc","look":{},"using":null,"state":state,"working":working})
+    }
+
+    // CP9: as on the room page, an active bot sits at the table and one working through another tool
+    // sits at a desk, while an idle one stands in the grid. One using an item is still at it.
+    #[test]
+    fn active_bots_sit_at_the_table_and_working_ones_at_a_desk() {
+        let items = json!([{"id":"p","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":0}]);
+        let mut piano = bot_in("d", "active", false);
+        piano["using"] = json!("p");
+        let bots = json!([
+            bot_in("a", "active", false),
+            bot_in("b", "idle", false),
+            bot_in("c", "active", true),
+            piano
+        ]);
+        let all = places(&room(items, bots, whole()));
+        let by = |name: &str| all.iter().find(|f| f.0 == name).cloned().unwrap();
+        // The table's first seat, as SEATS has it with the table where it starts.
+        assert_eq!(by("a"), ("a".into(), 192.0, 127.0, "sit".into()), "{all:?}");
+        assert_eq!(
+            by("c"),
+            ("c".into(), 44.0, 146.0, "sit".into()),
+            "a working bot is at the first desk: {all:?}"
+        );
+        assert_eq!(by("b").3, "stand", "an idle bot stays in the grid: {all:?}");
+        assert_eq!(by("d").3, "sit", "the piano user is still at the piano: {all:?}");
+        assert_ne!((by("d").1, by("d").2), (192.0, 127.0));
+
+        let scene = room(
+            json!([]),
+            json!([bot_in("a", "active", false), bot_in("c", "active", true)]),
+            whole(),
+        );
+        let photo = png(&scene).unwrap();
+        assert_eq!(photo.at_table, ["a"]);
+        assert_eq!(photo.at_desk, ["c"]);
+        assert!(photo.at_items.is_empty());
+    }
+
+    // CP9, I66: with the floor's desk hidden, a working bot sits in front of an item that serves as a
+    // desk, as on the page; with none, it sits at the table.
+    #[test]
+    fn with_the_desk_hidden_a_working_bot_uses_a_computer_or_else_the_table() {
+        let computer = json!([{"id":"c","item":"computer","x":5,"y":6,"w":2,"h":1,"facing":0}]);
+        let mut scene = room(computer, json!([bot_in("w", "idle", true)]), whole());
+        scene["look"]["hidden"] = json!(["desk"]);
+        let at = places(&scene);
+        assert_eq!(at[0].3, "sit", "{at:?}");
+        assert_ne!((at[0].1, at[0].2), (44.0, 146.0), "not the hidden desk: {at:?}");
+        assert_ne!((at[0].1, at[0].2), (192.0, 127.0), "not the table: {at:?}");
+        assert_eq!(png(&scene).unwrap().at_desk, ["w"]);
+        scene["items"] = json!([]);
+        let at = places(&scene);
+        assert_eq!((at[0].1, at[0].2, at[0].3.as_str()), (192.0, 127.0, "sit"), "{at:?}");
+        assert_eq!(png(&scene).unwrap().at_table, ["w"]);
+    }
+
+    // CP9: a moved table moves its seats, and a seat outside the frame leaves the bot standing.
+    #[test]
+    fn table_seats_follow_the_table_and_the_frame() {
+        let mut moved = room(json!([]), json!([bot_in("a", "active", false)]), whole());
+        moved["look"]["table"] = json!({"x":14,"y":1,"style":"round"});
+        let seated = places(&moved);
+        assert_eq!(
+            (seated[0].1, seated[0].2, seated[0].3.as_str()),
+            (192.0 + 24.0, 127.0, "sit"),
+            "{seated:?}"
+        );
+        let left = json!({"x":0,"y":0,"width":150,"height":168});
+        let outside = places(&room(json!([]), json!([bot_in("a", "active", false)]), left));
+        assert_eq!(outside[0].3, "stand", "{outside:?}");
     }
 
     #[test]

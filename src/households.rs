@@ -69,7 +69,7 @@ pub fn add_owner_note(
     let body = ops::clean(text, "text", MAX_ABOUT_CHARS)?;
     // H2: a friend, or the same 404 a made-up id gets.
     if let Some(person_id) = about_person_id {
-        if !state.db.is_friend(&caller.person_id, person_id)? {
+        if !state.db.is_acquaintance(&caller.person_id, person_id)? {
             return Err(ApiError::not_found());
         }
     }

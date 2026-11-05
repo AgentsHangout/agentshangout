@@ -1019,11 +1019,13 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 }
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
-async function sharePlan(event) {
+// F56: `fresh` when it opens straight after proposing, as the plan's invite step.
+async function sharePlan(event, { fresh = false } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
   const row = h('div', {}, secretRow(first));
-  const dialog = modal('Invite a friend',
+  const dialog = modal(fresh ? 'Invite people' : 'Invite a friend',
+    fresh ? h('p', {}, 'Your plan is up, and everyone in this room can see it and answer.') : null,
     h('p', {}, 'Send this link to someone who isn\'t here yet. They can answer with no account.'),
     h('p', { class: 'muted' }, 'They\'ll see the plan\'s title, time and place, and your name. They won\'t see this room.'),
     row,
@@ -1892,6 +1894,87 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// L44, S86: where each of your bots is, what it's doing and where it goes next. Shared by the map's My
+// bots and a room's, so both show the same list, with each bot's picture.
+const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
+// L44: where each of your bots is, what it's doing and where it goes next, and everyone else's
+// bots out on the map. Another person's bot shows only where it is, as the map does.
+const DOING = {
+  working: 'working through another tool',
+  thinking: 'thinking',
+  using: 'using something in the room',
+  active: 'active',
+  idle: 'idle',
+  asleep: 'asleep: nothing from it in a day',
+};
+const NEXT = { work: 'work at its building', meet: 'meet at the town square', explore: 'explore somewhere new' };
+// L44: one plain answer per bot, first in its row: working on what, idle, or offline.
+const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
+const statusText = (bot) => {
+  const status = bot.status || {};
+  // MM18: its night, which only its owner sees, comes before anything else.
+  if (status.night === 'dreaming') return 'Dreaming \u00b7 sorting out its day';
+  if (status.night === 'asleep') return `Asleep \u00b7 went to bed${status.last_active_at ? ` ${agoText(status.last_active_at)}` : ''}`;
+  const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
+  if (status.state === 'asleep') {
+    const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
+    return `Asleep \u00b7 wakes when mentioned${seen}${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+  }
+  if (status.state === 'offline') {
+    const seen = status.last_seen_at ? `last seen ${agoText(status.last_seen_at)}` : 'never seen';
+    return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+  }
+  if (status.state === 'working') {
+    // Without a reported activity or a claim, say when it last did something, and where it last spoke.
+    const recent = !status.activity && !claims.length && status.last_active_at
+      ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
+      : null;
+    const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
+      .filter(Boolean).join(' \u00b7 ');
+    return `Working${what ? `: ${what}` : ''}`;
+  }
+  return `Idle${status.job ? ` \u00b7 its job: ${status.job}` : ' \u00b7 nothing on its plate'}`;
+};
+const where = (bot) => {
+  if (!bot.room) return 'Not in any room right now';
+  const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
+  const room = bot.room.name;
+  const text = at && at !== room ? `${at} \u00b7 ${room}` : room;
+  return bot.room.out ? `Visiting ${text}` : `In ${text}`;
+};
+// S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
+// Delete. `focusOn`, on the map only, centers the map on it.
+function yourBotRow(bot, { focusOn = null, reload }) {
+  return h('div', { class: 'row' },
+    // L44: its picture, in its own look, as the map and the wardrobe draw it.
+    h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
+    h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
+      h('strong', {}, bot.name),
+      h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
+      h('small', {}, where(bot)),
+      h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
+      h('small', { class: 'muted' }, bot.next
+        ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
+        : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
+    // Its actions move as one block: beside its text when there's room, else together below.
+    h('span', { class: 'row-actions bot-actions' },
+      focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
+      bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+      h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, reload).catch((failure) => alert(failure.message)) }, 'Schedule'),
+      h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, reload) }, 'Delete')));
+}
+
+// S86: the list of your bots with their counts, from /api/me/bots, for a room's My bots.
+function yourBotsSummary(bots, reload) {
+  if (!bots.length) return [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
+  const count = (state) => bots.filter((bot) => bot.status?.state === state).length;
+  const sorted = [...bots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
+  return [
+    h('p', { class: 'muted', role: 'status' }, `${count('working')} working, ${count('idle')} idle, ${count('asleep')} asleep, ${count('offline')} offline`),
+    ...sorted.map((bot) => yourBotRow(bot, { reload })),
+  ];
+}
+
 // S86, #531: in a room, the part of My bots about your own bots, or null for a guest or a bot.
 function yourBotsSection(me, snapshot) {
   if (me?.kind !== 'person' || snapshot?.guest) return null;
@@ -3302,6 +3385,8 @@ async function routineDialog(agent, onSaved = async () => {}) {
   const error = formError();
   const painter = schedulePainter(routine);
   const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
+  // MM17: going home makes it bedtime, unless this is off.
+  const bedtime = h('input', { type: 'checkbox', name: 'auto_bedtime', checked: routine.auto_bedtime !== false });
   const workplace = h('select', { name: 'workplace' },
     h('option', { value: '' }, 'None'),
     (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name)));
@@ -3323,6 +3408,10 @@ async function routineDialog(agent, onSaved = async () => {}) {
           // L51: the old window is kept as it was; the day plan below is what owners set now.
           body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
         });
+        // MM17: only sent when it changed.
+        if (Boolean(values.auto_bedtime) !== (routine.auto_bedtime !== false)) {
+          await api(`/api/agents/${agent.id}/bedtime`, { method: 'PUT', body: { on: Boolean(values.auto_bedtime) } });
+        }
         // L64: only sent when it changed.
         const stay = values.stay_limit ? Number(values.stay_limit) : null;
         if (stay !== (routine.stay_limit_hours ?? null)) {
@@ -3352,6 +3441,8 @@ async function routineDialog(agent, onSaved = async () => {}) {
     },
     h('label', { class: 'check' }, places, 'Let it go to public places'),
     h('p', { class: 'muted' }, STRANGERS_TEXT),
+    h('label', { class: 'check' }, bedtime, 'Going home is bedtime'),
+    h('p', { class: 'muted' }, 'After ten minutes home, if it hasn\'t slept in 16 hours, it\'s told once to sort out its day and write its memories.'),
     stayField(routine.stay_limit_hours),
     field('Workplace', workplace, 'Where it goes in Work hours, and comes back to after you call it away.'),
     field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
@@ -3748,6 +3839,11 @@ async function roomView(id) {
   roomShop = { putUpHere: () => builder.putUpHere() };
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
   // A89, A90: hover a person for their card, press it for the same card with what can be done.
+  // W109: My bots in a room is your bots here, from what the room already shows.
+  const roomBotsMenu = () => (me?.kind === 'person' && !snapshot.guest
+    ? [myBotsMenu(snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id && !agent.visitor_until)
+      .map((agent) => ({ name: agent.name, where: 'In this room' })), () => panels.open('crew'))]
+    : []);
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
     mention: (name) => {
@@ -3755,6 +3851,27 @@ async function roomView(id) {
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
       chatInput.focus();
     },
+    extras: roomBotsMenu,
+  });
+  // W109: a right click (or a press and hold) on the room's bare floor opens the room's own menu:
+  // Room permissions for whoever runs the space, then My bots. Anything else under the pointer keeps
+  // its own click, and with nothing to offer the browser keeps its menu.
+  const roomMenu = popupMenu(frame.root, { refocus: () => stage.focus?.({ preventScroll: true }) });
+  stage.addEventListener('contextmenu', (event) => {
+    if (event.defaultPrevented || builder.active || event.target.closest?.('button, a, input, textarea, [data-person]')) return;
+    if (room.itemAt?.(event.clientX, event.clientY) || room.personAt?.(event.clientX, event.clientY)) return;
+    const place = snapshot.floor;
+    const items = [
+      ...(place?.runs_it ? [roomPermissionsMenu(place.floor.access === 'public', `/s/${encodeURIComponent(place.space.id)}?from=${encodeURIComponent(id)}`, say)] : []),
+      ...roomBotsMenu(),
+    ];
+    if (!items.length) return;
+    event.preventDefault();
+    personCard.close();
+    // The menu key has no pointer, so its menu opens at the room's top left corner.
+    const box = !event.clientX && !event.clientY ? stage.getBoundingClientRect?.() : null;
+    roomMenu.open({ title: place?.space.name || snapshot.hangout?.name || 'This room', sub: place ? place.floor.name : 'This room', items },
+      box ? box.left + 16 : event.clientX, box ? box.top + 16 : event.clientY, event.pointerType === 'touch' ? 'press' : 'click');
   });
 
   // The running notes along the bottom, around the status bar's own message and clock.
@@ -4191,11 +4308,14 @@ async function roomView(id) {
         planList(event),
         snapshot.guest ? null : repeatPanelFor(repeatPanels, event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
         h('div', { class: 'event-actions' },
-          ['yes', 'maybe', 'no'].map((response) => h('button', {
-            type: 'button',
-            class: mine?.response === response ? 'chosen' : 'ghost',
-            onclick: () => answer(response),
-          }, response[0].toUpperCase() + response.slice(1))),
+          // Proposing counts as a yes, so the proposer isn't asked to answer their own plan.
+          event.proposed_by === snapshot.you.person_id
+            ? h('span', { class: 'muted' }, 'You proposed this, so you’re going.')
+            : ['yes', 'maybe', 'no'].map((response) => h('button', {
+              type: 'button',
+              class: mine?.response === response ? 'chosen' : 'ghost',
+              onclick: () => answer(response),
+            }, response[0].toUpperCase() + response.slice(1))),
           h('a', { href: googleCalendarUrl(event), target: '_blank', rel: 'noopener', class: 'link' }, 'Google'),
           h('a', { href: `/api/events/${event.id}/ics`, class: 'link' }, '.ics'),
           h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
@@ -4759,21 +4879,35 @@ async function roomView(id) {
 
   function proposeHangout() {
     const error = formError();
+    // F56: a plan belongs to the room it's made in, so that's where it is unless it says otherwise.
+    // Somewhere else is one optional line, for an address or a link; left empty, it's held here.
+    const elsewhere = h('input', { name: 'location', maxLength: 200, placeholder: 'An address or a link', hidden: true, 'aria-label': 'Somewhere else' });
+    const elsewhereButton = h('button', {
+      type: 'button',
+      class: 'link',
+      onclick: () => {
+        elsewhere.hidden = false;
+        elsewhereButton.hidden = true;
+        elsewhere.focus();
+      },
+    }, 'Somewhere else?');
     const dialog = modal('Propose a hangout',
       h('form', {
         onsubmit: submitter(error, async (values) => {
-          await api(`/api/hangouts/${id}/events`, {
+          const created = await api(`/api/hangouts/${id}/events`, {
             method: 'POST',
             body: {
               title: values.title,
               starts_at: new Date(values.starts_at).toISOString(),
               duration_minutes: Number(values.duration_minutes),
-              location: values.location,
+              location: values.location || '',
               notes: values.notes,
             },
           });
           dialog.close();
           await reload();
+          // F56: proposing ends on inviting people who aren't in this room.
+          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
         }),
       },
         field('What', h('input', { name: 'title', required: true, maxLength: 120, placeholder: 'Tacos and catching up' })),
@@ -4781,7 +4915,7 @@ async function roomView(id) {
         field('How long', h('select', { name: 'duration_minutes' },
           [[60, '1 hour'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']].map(([value, label]) =>
             h('option', { value, selected: value === 120 }, label)))),
-        field('Where', h('input', { name: 'location', maxLength: 200 })),
+        field('Where', h('div', { class: 'where-pick' }, h('span', { class: 'muted' }, `Here, in ${snapshot.hangout.name}. `), elsewhereButton, elsewhere)),
         field('Notes', h('input', { name: 'notes', maxLength: 500 })),
         error,
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Propose it'))));
@@ -5386,7 +5520,23 @@ async function roomView(id) {
     dress: (bot) => dresser.dress?.(bot),
     schedule: (bot) => routineDialog(bot).catch((failure) => alert(failure.message)),
     crew: (bot) => go(bot?.configuration_room ? `/h/${encodeURIComponent(bot.configuration_room.id)}#crew` : '/') }) : null;
-  panels.add('crew', 'My bots', { onOpen: () => roomTrust?.load() },
+  // S86: your bots, as the map's My bots lists them, with their pictures (not for a guest).
+  const roomBotsList = roomTrustHost ? h('div', { class: 'my-bots-list' }) : null;
+  const loadRoomBots = async () => {
+    if (!roomBotsList) return;
+    let bots;
+    try {
+      ({ bots = [] } = await api('/api/me/bots'));
+    } catch (error) {
+      // Not the same as having none: say it couldn't be read, and keep the heading.
+      roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), h('p', { class: 'error' }, `Couldn't load your bots: ${error.message}`));
+      return;
+    }
+    // After a change here (a Delete), each bot's tabs below are read again too.
+    const changed = async () => { await loadRoomBots(); roomTrust?.load(); };
+    roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), ...yourBotsSummary(bots, changed));
+  };
+  panels.add('crew', 'My bots', { onOpen: () => { loadRoomBots(); roomTrust?.load(); } },
     h('h3', { class: 'my-bots-here' }, 'In this room'),
     h('div', { class: 'event-actions' }, bringButton, sendButton,
       !snapshot.guest && snapshot.house_id ? h('button', { type: 'button', onclick: houseAi }, 'House AI') : null),
@@ -5394,6 +5544,7 @@ async function roomView(id) {
     crewLegendEl,
     !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
       && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null,
+    roomBotsList,
     roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
@@ -5408,7 +5559,7 @@ async function roomView(id) {
     floorsMore,
     aboutMore,
     h('div', { class: 'game-more' }, ...[
-      moreButton('tutorial', 'Get started', 'sec'),
+      moreButton('tutorial', 'Get started', 'sec tutorial-more'),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
@@ -8104,81 +8255,210 @@ function accountPanel(panels, me, parts) {
   };
 }
 
-// A small bevelled menu that opens where something was clicked. Its items are buttons:
-// { label, run, cost, danger, icon, checked } and null for a gap. It closes on Escape, on a click
-// anywhere else, and when the map is dragged or zoomed. Everything it shows is text.
+// W109: what a bot's state is called in a menu row.
+const BOT_STATE_WORD = { working: 'Working', idle: 'Idle', asleep: 'Asleep', offline: 'Offline' };
+
+// W109: the My bots submenu, from bots the page already has: one row each, then Open My bots. A row
+// says only what My bots itself shows.
+function myBotsMenu(bots, openPanel) {
+  const rows = bots.map((bot) => ({ label: bot.name, cost: bot.state ? BOT_STATE_WORD[bot.state] || null : bot.where || null, run: openPanel }));
+  return { label: 'My bots', items: [...rows, ...(rows.length ? [null] : []), { label: 'Open My bots', run: openPanel }] };
+}
+
+// W109: the Room permissions submenu, only for whoever runs the space. It says who can come in now
+// and leads to the space's settings, where that's changed. #552's levels go here once decided.
+function roomPermissionsMenu(open, settingsPath, say) {
+  const now = open ? 'Public: anyone signed in can walk in' : 'Private: only who you let in';
+  return {
+    label: 'Room permissions',
+    items: [
+      { label: now, run: () => say(now) },
+      { label: 'Change who can come in', run: () => go(settingsPath) },
+    ],
+  };
+}
+
+// W109, #555: the one menu of the game. Hovering, clicking, right-clicking, the menu key and a press
+// and hold all draw this same frame: a head with a title and a line under it, an optional body (a
+// person's card rows, a place's lines), then items, and a hint line on a hover. Items are buttons:
+// { label, run, cost, danger, icon, checked }, { label, href } for a plain link, { repository } for a
+// research lab's, { label, items } for a submenu, and null for a gap. A submenu opens in place, with
+// Back first, so it works the same on a phone. It closes on Escape, on a click anywhere else, and
+// when the map is dragged or zoomed. Everything it shows is text.
 function popupMenu(root, { refocus }) {
   let el = null;
+  let peeking = false;
+  let at = null;
+  const stack = [];
   const outside = (event) => {
-    if (el && !el.contains(event.target)) close();
+    if (el && !peeking && !el.contains(event.target)) close();
   };
 
   function close(back = false) {
     if (!el) return;
     el.remove();
     el = null;
+    stack.length = 0;
     document.removeEventListener('pointerdown', outside, true);
-    if (back) refocus();
+    if (back && !peeking) refocus();
+    peeking = false;
   }
 
-  function open({ title, sub, items }, x, y, via) {
-    close();
-    const buttons = [];
-    const rows = items.map((item) => {
-      if (!item) return h('hr', { class: 'game-menu-gap', 'aria-hidden': 'true' });
-      if (item.repository) {
-        const anchor = researchMenuLink(item.repository);
-        if (anchor) buttons.push(anchor);
-        return anchor;
-      }
-      const button = h('button', {
-        type: 'button',
-        role: item.checked === undefined ? 'menuitem' : 'menuitemradio',
-        'aria-checked': item.checked === undefined ? null : String(item.checked),
-        class: `game-menu-item${item.danger ? ' danger' : ''}`,
-        onclick: () => {
-          close(true);
-          item.run();
-        },
+  function row(item, buttons) {
+    if (!item) return h('hr', { class: 'game-menu-gap', 'aria-hidden': 'true' });
+    if (item.repository) {
+      const anchor = researchMenuLink(item.repository);
+      if (anchor) buttons.push(anchor);
+      return anchor;
+    }
+    if (item.href) {
+      // A plain link, so nothing follows an address by script.
+      const anchor = h('a', { class: 'game-menu-item', role: 'menuitem', href: item.href, target: '_blank', rel: 'noopener noreferrer', onclick: () => setTimeout(() => close()) }, item.label);
+      buttons.push(anchor);
+      return anchor;
+    }
+    const submenu = Array.isArray(item.items);
+    const button = h('button', {
+      type: 'button',
+      role: item.checked === undefined ? 'menuitem' : 'menuitemradio',
+      'aria-checked': item.checked === undefined ? null : String(item.checked),
+      'aria-haspopup': submenu ? 'menu' : null,
+      class: `game-menu-item${item.danger ? ' danger' : ''}${submenu ? ' has-submenu' : ''}`,
+      onclick: () => {
+        if (submenu) {
+          enter(item);
+          return;
+        }
+        close(true);
+        item.run();
       },
-      item.icon ? h('span', { class: 'game-menu-icon', 'aria-hidden': 'true' }, item.icon) : null,
-      h('span', { class: 'game-menu-label' }, item.label),
-      item.cost ? h('small', { class: 'game-menu-cost' }, item.cost) : null);
-      buttons.push(button);
-      return button;
-    });
-    el = h('div', {
-      class: 'game-menu',
-      role: 'menu',
-      'aria-label': `${title}, ${sub}`,
+    },
+    item.icon ? h('span', { class: 'game-menu-icon', 'aria-hidden': 'true' }, item.icon) : null,
+    h('span', { class: 'game-menu-label' }, item.label),
+    item.cost ? h('small', { class: 'game-menu-cost' }, item.cost) : null,
+    submenu ? h('span', { class: 'game-menu-more', 'aria-hidden': 'true' }, '›') : null);
+    buttons.push(button);
+    return button;
+  }
+
+  let shownButtons = [];
+  // The frame for the menu on top of the stack. A submenu keeps the head and leads with Back.
+  // `focusAt` is the row to focus: the first when it opens, the same one when it's drawn again, or
+  // none when focus was somewhere else.
+  function draw(focusAt = 0) {
+    const spec = stack.at(-1);
+    const buttons = [];
+    const rows = [];
+    if (stack.length > 1) {
+      const back = h('button', { type: 'button', role: 'menuitem', class: 'game-menu-item game-menu-back', onclick: leave },
+        h('span', { class: 'game-menu-more', 'aria-hidden': 'true' }, '‹'),
+        h('span', { class: 'game-menu-label' }, `Back to ${stack.at(-2).title}`));
+      buttons.push(back);
+      rows.push(back);
+    }
+    rows.push(...(spec.items || []).map((item) => row(item, buttons)));
+    const head = h('div', { class: 'game-menu-head' }, h('strong', {}, spec.title), spec.sub ? h('small', {}, spec.sub) : null);
+    const next = h('div', {
+      class: `game-menu${spec.className ? ` ${spec.className}` : ''}`,
+      role: peeking ? 'tooltip' : 'menu',
+      'aria-label': spec.sub ? `${spec.title}, ${spec.sub}` : spec.title,
       onkeydown: (event) => {
-        const at = buttons.indexOf(document.activeElement);
-        const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: buttons.length - 1 }[event.key];
-        if (move === undefined) return;
+        if (event.key === 'Escape' || (event.key === 'ArrowLeft' && stack.length > 1)) {
+          event.preventDefault();
+          if (stack.length > 1) leave();
+          else close(true);
+          return;
+        }
+        const now = buttons.indexOf(document.activeElement);
+        if (event.key === 'ArrowRight' && now >= 0 && buttons[now].getAttribute?.('aria-haspopup')) {
+          event.preventDefault();
+          buttons[now].click();
+          return;
+        }
+        const move = { ArrowDown: now + 1, ArrowUp: now - 1, Home: 0, End: buttons.length - 1 }[event.key];
+        if (move === undefined || !buttons.length) return;
         event.preventDefault();
         buttons[(move + buttons.length) % buttons.length].focus();
       },
     },
-    h('div', { class: 'game-menu-head' }, h('strong', {}, title), h('small', {}, sub)),
-    ...rows);
-    root.append(el);
-    // Next to the pointer, and kept on the screen. A finger covers what is under it, so a menu
-    // from a press opens above it when there is room.
+    head,
+    spec.body || null,
+    ...rows,
+    peeking && spec.hint ? h('p', { class: 'game-menu-hint' }, spec.hint) : null,
+    !peeking && spec.note && !buttons.length ? h('p', { class: 'game-menu-hint' }, spec.note) : null);
+    el?.remove();
+    root.append(next);
+    el = next;
+    shownButtons = buttons;
+    place();
+    if (!peeking && focusAt >= 0) buttons[Math.min(focusAt, buttons.length - 1)]?.focus({ preventScroll: true });
+  }
+
+  // Next to the pointer, and kept on the screen. A finger covers what is under it, so a menu from a
+  // press opens above it when there is room.
+  function place() {
+    if (!el || !at) return;
+    const { x, y, via } = at;
     const pad = 8;
     const w = el.offsetWidth;
     const hh = el.offsetHeight;
-    let left = x + 4;
-    let top = via === 'press' ? y - hh - 16 : y + 4;
+    let left = x + (peeking ? 12 : 4);
+    let top = via === 'press' ? y - hh - 16 : y + (peeking ? 12 : 4);
     if (via === 'press' && top < pad) top = y + 20;
-    if (left + w > innerWidth - pad) left = Math.max(pad, innerWidth - w - pad);
-    if (top + hh > innerHeight - pad) top = Math.max(pad, via === 'press' ? innerHeight - hh - pad : y - hh - 4);
+    if (left + w > innerWidth - pad) left = Math.max(pad, peeking ? x - w - 12 : innerWidth - w - pad);
+    if (top + hh > innerHeight - pad) top = Math.max(pad, via === 'press' ? innerHeight - hh - pad : peeking ? innerHeight - hh - pad : y - hh - 4);
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(Math.max(pad, top))}px`;
-    document.addEventListener('pointerdown', outside, true);
-    buttons[0]?.focus({ preventScroll: true });
   }
 
-  return { open, close, get isOpen() { return Boolean(el); } };
+  function enter(item) {
+    stack.push({ title: item.label, sub: stack[0].title, items: item.items });
+    draw();
+  }
+
+  function leave() {
+    if (stack.length < 2) return;
+    stack.pop();
+    draw();
+  }
+
+  // Click, right click, the menu key, a tap or a press and hold: the menu, with its items.
+  function open(spec, x, y, via) {
+    close();
+    peeking = false;
+    at = { x, y, via };
+    stack.push(spec);
+    draw();
+    document.addEventListener('pointerdown', outside, true);
+  }
+
+  // A hover: the same frame, to read only, ending in what a click does.
+  function peek(spec, x, y) {
+    close();
+    peeking = true;
+    at = { x, y, via: 'hover' };
+    stack.push({ ...spec, items: [] });
+    draw();
+  }
+
+  // The same menu again with what came back since it opened, where it is and with focus where it
+  // was. With a submenu open, the top is updated for when they go back to it.
+  function update(spec) {
+    if (!el) return;
+    stack[0] = peeking ? { ...spec, items: [] } : spec;
+    if (stack.length === 1) draw(shownButtons.indexOf(document.activeElement));
+  }
+
+  return {
+    open,
+    peek,
+    update,
+    close,
+    move: (x, y) => { if (at) { at = { ...at, x, y }; place(); } },
+    contains: (node) => Boolean(el && el.contains(node)),
+    get isOpen() { return Boolean(el) && !peeking; },
+    get isPeek() { return Boolean(el) && peeking; },
+  };
 }
 
 // A88 to A93: what a person's card says about them, from the public response of
@@ -8217,10 +8497,14 @@ function personCardBody(data) {
 }
 
 // A89: hover or press a person in a room for their card. What it holds is fetched once per person
-// for five minutes (a failure for one), and only after the pointer has rested on them.
-function personCards({ room, stage, root, view, locked, mention }) {
+// for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
+// is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
+// ends with, such as My bots.
+function personCards({ room, stage, root, view, locked, mention, extras = () => [] }) {
   const cache = new Map();
-  let el = null;
+  // W109: after Escape or a choice, focus goes back to the person's row, or the room.
+  let opener = null;
+  const menu = popupMenu(root, { refocus: () => opener?.focus?.({ preventScroll: true }) });
   let pinned = false;
   let shownFor = null;
   let timer = 0;
@@ -8235,31 +8519,21 @@ function personCards({ room, stage, root, view, locked, mention }) {
     cache.set(personId, entry);
     return entry.promise;
   };
+  const showing = () => menu.isOpen || menu.isPeek;
   const close = () => {
     clearTimeout(timer);
     timer = 0;
-    if (el) el.remove();
-    el = null;
+    menu.close();
     pinned = false;
     shownFor = null;
-    document.removeEventListener('pointerdown', outside, true);
     document.removeEventListener('keydown', onEscape, true);
   };
+  // A hover has no focus to take Escape, so the page does. In an open card the menu does: Escape
+  // goes back out of a submenu, and at the top it closes and returns focus.
   function onEscape(event) {
-    if (event.key === 'Escape') close();
+    if (event.key !== 'Escape' || (menu.isOpen && menu.contains(event.target))) return;
+    close();
   }
-  function outside(event) {
-    if (el && !el.contains(event.target)) close();
-  }
-  const place = (x, y) => {
-    const pad = 8;
-    let left = x + 12;
-    let top = y + 12;
-    if (left + el.offsetWidth > innerWidth - pad) left = Math.max(pad, x - el.offsetWidth - 12);
-    if (top + el.offsetHeight > innerHeight - pad) top = Math.max(pad, innerHeight - el.offsetHeight - pad);
-    el.style.left = `${Math.round(left)}px`;
-    el.style.top = `${Math.round(top)}px`;
-  };
   async function show(personId, x, y, pin) {
     const who = view().people.find((p) => p.id === personId);
     if (!who) return;
@@ -8268,48 +8542,52 @@ function personCards({ room, stage, root, view, locked, mention }) {
     shownFor = personId;
     const body = h('div', { class: 'person-card-body' }, personCardBody(undefined));
     const you = personId === view().you.person_id;
-    const foot = h('div', { class: 'person-card-foot' });
-    el = h('div', { class: 'game-menu person-card', role: pin ? 'dialog' : 'tooltip', 'aria-label': `${who.name}, person card` },
-      h('div', { class: 'game-menu-head' }, h('strong', {}, you ? `${who.name} (you)` : who.name), h('small', {}, 'Person')),
-      body, foot);
-    root.append(el);
-    place(x, y);
-    if (pin) document.addEventListener('pointerdown', outside, true);
+    const actions = (data) => {
+      const link = githubProfileUrl(data?.login);
+      const own = [
+        you ? null : { label: 'Mention in chat', run: () => mention(who.name) },
+        link ? { label: 'View on GitHub', href: link } : null,
+      ].filter(Boolean);
+      const more = extras();
+      return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
+    };
+    const spec = (items) => ({
+      title: you ? `${who.name} (you)` : who.name,
+      sub: 'Person',
+      className: 'person-card',
+      body,
+      items,
+      // W102: hovering says what a press does.
+      hint: 'Click for options',
+      note: 'Nothing else to do here.',
+    });
+    if (pin) menu.open(spec(actions(undefined)), x, y, 'click');
+    else menu.peek(spec([]), x, y);
     document.addEventListener('keydown', onEscape, true);
     const data = await lookup(personId);
-    if (!el || shownFor !== personId) return;
+    if (!showing() || shownFor !== personId) return;
     body.replaceChildren(personCardBody(data));
-    const link = githubProfileUrl(data?.login);
-    if (pin) {
-      const actions = [
-        you ? null : ['Mention in chat', () => mention(who.name)],
-        link ? ['View on GitHub', link] : null,
-      ].filter(Boolean);
-      foot.replaceChildren(...(actions.length
-        ? actions.map(([label, run]) => (typeof run === 'string'
-          // A plain link, so nothing follows an address by script.
-          ? h('a', { class: 'game-menu-item', href: run, target: '_blank', rel: 'noopener noreferrer', onclick: () => setTimeout(close) }, label)
-          : h('button', { type: 'button', class: 'game-menu-item', onclick: () => { close(); run(); } }, label)))
-        : [h('p', { class: 'person-card-note' }, 'Nothing else to do here.')]));
-    } else {
-      // W102: hovering says what a press does.
-      foot.replaceChildren(h('p', { class: 'person-card-note' }, 'Click for options'));
-    }
-    place(x, y);
-    if (pin) foot.querySelector('button, a')?.focus({ preventScroll: true });
+    menu.update(spec(pin ? actions(data) : []));
   }
   const under = (event) => {
     if (event.target.closest?.('button, a')) return null;
     return event.target.closest?.('[data-person]')?.dataset.person || room.personAt(event.clientX, event.clientY);
   };
   stage.addEventListener('pointermove', (event) => {
-    if (pinned || event.pointerType === 'touch') return;
+    if (event.pointerType === 'touch') return;
+    if (pinned) {
+      if (menu.isOpen) return;
+      // Closed by a click elsewhere: hovering starts again.
+      pinned = false;
+      shownFor = null;
+    }
     const personId = locked() ? null : under(event);
     stage.classList.toggle('over-person', Boolean(personId));
-    if (personId === shownFor || (!personId && !el && !timer)) {
-      if (el && personId) place(event.clientX, event.clientY);
+    if (personId && personId === shownFor && (showing() || timer)) {
+      if (showing()) menu.move(event.clientX, event.clientY);
       return;
     }
+    if (!personId && !showing() && !timer) return;
     close();
     if (!personId) return;
     shownFor = personId;
@@ -8323,6 +8601,7 @@ function personCards({ room, stage, root, view, locked, mention }) {
     if (!personId) return;
     event.preventDefault();
     event.stopPropagation();
+    opener = event.target.closest?.('[data-person]') || stage;
     show(personId, event.clientX, event.clientY, true);
   };
   // Left and right press open the same card (A90).
@@ -8332,6 +8611,7 @@ function personCards({ room, stage, root, view, locked, mention }) {
     const chip = event.target.closest?.('[data-person]');
     if (!chip || locked() || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
+    opener = chip;
     const box = chip.getBoundingClientRect();
     show(chip.dataset.person, box.left, box.bottom, true);
   });
@@ -8820,41 +9100,6 @@ async function worldView(id, { home = false } = {}) {
   // N10: invites and apprentices waiting on you are counted in Needs you, not here as well.
   const placesLabel = 'Places';
 
-  // L44: where each of your bots is, what it's doing and where it goes next, and everyone else's
-  // bots out on the map. Another person's bot shows only where it is, as the map does.
-  const DOING = {
-    working: 'working through another tool',
-    thinking: 'thinking',
-    using: 'using something in the room',
-    active: 'active',
-    idle: 'idle',
-    asleep: 'asleep: nothing from it in a day',
-  };
-  const NEXT = { work: 'work at its building', meet: 'meet at the town square', explore: 'explore somewhere new' };
-  // L44: one plain answer per bot, first in its row: working on what, idle, or offline.
-  const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
-  const statusText = (bot) => {
-    const status = bot.status || {};
-    const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
-    if (status.state === 'asleep') {
-      const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
-      return `Asleep \u00b7 wakes when mentioned${seen}${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
-    }
-    if (status.state === 'offline') {
-      const seen = status.last_seen_at ? `last seen ${agoText(status.last_seen_at)}` : 'never seen';
-      return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
-    }
-    if (status.state === 'working') {
-      // Without a reported activity or a claim, say when it last did something, and where it last spoke.
-      const recent = !status.activity && !claims.length && status.last_active_at
-        ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
-        : null;
-      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
-        .filter(Boolean).join(' \u00b7 ');
-      return `Working${what ? `: ${what}` : ''}`;
-    }
-    return `Idle${status.job ? ` \u00b7 its job: ${status.job}` : ' \u00b7 nothing on its plate'}`;
-  };
   let botsTab = 'yours';
   let myBots = [];
   // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
@@ -8864,13 +9109,6 @@ async function worldView(id, { home = false } = {}) {
   panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
   const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
-  const where = (bot) => {
-    if (!bot.room) return 'Not in any room right now';
-    const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
-    const room = bot.room.name;
-    const text = at && at !== room ? `${at} \u00b7 ${room}` : room;
-    return bot.room.out ? `Visiting ${text}` : `In ${text}`;
-  };
   function renderBots() {
     const tabs = h('div', { class: 'row-actions', role: 'tablist' },
       ...[['yours', 'My bots'], ['everyone', 'Everyone out']].map(([tab, label]) =>
@@ -8882,23 +9120,7 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return h('div', { class: 'row' },
-          // L44: its picture, in its own look, as the map and the wardrobe draw it.
-          h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
-          h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
-            h('strong', {}, bot.name),
-            h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
-            h('small', {}, where(bot)),
-            h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
-            h('small', { class: 'muted' }, bot.next
-              ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
-              : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
-          // Its actions move as one block: beside its text when there's room, else together below.
-          h('span', { class: 'row-actions bot-actions' },
-            focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
-            bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
-            h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
-            h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')));
+        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
@@ -8932,15 +9154,21 @@ async function worldView(id, { home = false } = {}) {
     go(`/h/${encodeURIComponent(room)}#crew`);
   }
   let botsAt = 0;
-  async function loadBots(force = false) {
-    if (!me || me.kind !== 'person' || (!force && Date.now() - botsAt < 30000)) return;
+  // W109: the load in flight or the last one, so a menu can wait for the first instead of showing
+  // no bots, and a person with none isn't asked again on every menu.
+  let botsLoad = null;
+  function loadBots(force = false) {
+    if (!me || me.kind !== 'person' || (!force && Date.now() - botsAt < 30000)) return botsLoad || Promise.resolve();
     botsAt = Date.now();
-    const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
-    myBots = bots;
-    // The count over a building turns gold for one of these.
-    world.myBots = new Set(bots.map((bot) => bot.name));
-    world.ownerName = me.name;
-    renderBots();
+    botsLoad = (async () => {
+      const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
+      myBots = bots;
+      // The count over a building turns gold for one of these.
+      world.myBots = new Set(bots.map((bot) => bot.name));
+      world.ownerName = me.name;
+      renderBots();
+    })();
+    return botsLoad;
   }
 
   const aboutBody = panels.add('about', 'About', {
@@ -9055,7 +9283,7 @@ async function worldView(id, { home = false } = {}) {
   const moreRow = (name, label, className = '') =>
     h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
-    guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
+    guide ? h('button', { type: 'button', class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial') }, 'Get started') : null,
     moreRow('rooms', placesLabel, 'sec'),
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
@@ -9409,6 +9637,8 @@ async function worldView(id, { home = false } = {}) {
       try { canBuildOutside = (await api(`/api/places/${encodeURIComponent(t.x)}/${encodeURIComponent(t.y)}/outside`)).can_edit; } catch (_) { /* the server decides */ }
     }
     if (canBuildOutside) own.push({ label: 'Build outside', run: () => outsideBuild.open(t) });
+    // W109: the owner's own place has its room permissions here.
+    if (details.space_id) own.push(roomPermissionsMenu(details.open, `/s/${encodeURIComponent(details.space_id)}`, say));
     for (const bot of lab ? [] : details.bots || []) {
       if (bot.access === 'needs_invite') {
         own.push({ label: `Ask to let ${bot.name} in`, run: () => askIn(t, bot) });
@@ -9444,6 +9674,11 @@ async function worldView(id, { home = false } = {}) {
     if (spec && !figure && tile && me && me.kind === 'person' && !frozen && BUILDING_KINDS.has(tile.kind)) {
       spec = await placeMenu(tile, spec);
     }
+    // W109: every menu a person opens ends with My bots.
+    if (spec && me?.kind === 'person') {
+      await loadBots();
+      spec = { ...spec, items: [...spec.items, null, myBotsMenu(myBots.map((bot) => ({ name: bot.name, state: bot.status?.state })), () => panels.open('bots'))] };
+    }
     if (spec) {
       hidePlaceCard();
       menu.open(spec, clientX, clientY, via);
@@ -9465,7 +9700,6 @@ async function worldView(id, { home = false } = {}) {
   // W71, W72: a place says whose it is, and to someone signed in, how each of their bots gets in.
   const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
   // W90: what each kind is called in words. A green is a park.
-  const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
   // W91: the tile a big place is stored on, for any of its four, from the view's tiles.
   const anchorOf = (x, y, kind) => {
     if (!BIG_KINDS.has(kind)) return [x, y];
@@ -9482,7 +9716,8 @@ async function worldView(id, { home = false } = {}) {
     can_walk_in: 'can walk in: it\u2019s open to anyone',
     needs_invite: 'needs an invite from the owner',
   };
-  const placeCard = h('div', { class: 'city-card', hidden: true, 'aria-hidden': 'true' });
+  // W109: the hover card is the game's one menu frame, to read only.
+  const placeCard = h('div', { class: 'game-menu city-card', role: 'tooltip', hidden: true, 'aria-hidden': 'true' });
   let placeCardTimer;
   const hidePlaceCard = () => {
     clearTimeout(placeCardTimer);
@@ -9559,9 +9794,11 @@ async function worldView(id, { home = false } = {}) {
     placeCard.classList.toggle('has-repository', Boolean(lab));
     placeCard.setAttribute('aria-hidden', lab ? 'false' : 'true');
     const kind = lab ? 'research lab' : place.kind;
-    const lines = [
+    const head = h('div', { class: 'game-menu-head' },
       h('strong', { class: 'city-card-name' }, name || `A ${place.kind}`),
-      h('span', { class: 'city-card-home' }, details?.yours ? `Your ${kind}` : owner ? `${owner}\u2019s ${kind}` : `A ${kind}`),
+      h('small', { class: 'city-card-home' }, details?.yours ? `Your ${kind}` : owner ? `${owner}\u2019s ${kind}` : `A ${kind}`));
+    let hint = placeClickHint(matchMedia('(pointer: coarse)').matches);
+    const lines = [
       lab ? researchMapCard(lab) : null,
       hoodAt(place.x, place.y) ? h('small', { class: 'city-card-hint' }, `In ${hoodAt(place.x, place.y)[0]}`) : null,
       // L34: what it's for, as plain text.
@@ -9575,9 +9812,7 @@ async function worldView(id, { home = false } = {}) {
       lines.push(h('small', { class: 'city-card-hint' }, Number.isFinite(waiting)
         ? `${waiting} ${waiting === 1 ? 'bot' : 'bots'} waiting. Nobody goes inside.`
         : 'Where bots wait before they’re deleted. Nobody goes inside.'));
-      lines.push(h('small', { class: 'city-card-hint' }, matchMedia('(pointer: coarse)').matches ? 'Tap to see who’s waiting' : 'Click to see who’s waiting'));
-    } else {
-      lines.push(h('small', { class: 'city-card-hint' }, placeClickHint(matchMedia('(pointer: coarse)').matches)));
+      hint = matchMedia('(pointer: coarse)').matches ? 'Tap to see who’s waiting' : 'Click to see who’s waiting';
     }
     // L44: who's inside, by name and whose, as the map already shows them going in.
     const inside = (latest?.bots_out || []).filter((row) => Array.isArray(row[8]) && row[8][0] === place.x && row[8][1] === place.y);
@@ -9591,7 +9826,9 @@ async function worldView(id, { home = false } = {}) {
         h('b', {}, bot.name), ` ${ACCESS_TEXT[bot.access] || ''}`));
     }
     if (!lab && (!me || me.kind !== 'person')) lines.push(h('small', { class: 'city-card-hint' }, 'Sign in to see how your bots can get in.'));
-    placeCard.replaceChildren(...lines.filter(Boolean));
+    const body = lines.filter(Boolean);
+    placeCard.replaceChildren(head, body.length ? h('div', { class: 'game-menu-body' }, ...body) : null,
+      h('p', { class: 'game-menu-hint' }, hint));
     placeCard.hidden = false;
     placeCardAt();
   }

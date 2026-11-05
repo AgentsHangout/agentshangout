@@ -61,9 +61,12 @@ fn endpoint_owner(state: &AppState, kind: &str, id: &str) -> ApiResult<String> {
     .ok_or_else(ApiError::not_found)
 }
 
+/// BT1: the people this person may ask to be friends: their ties (FR1), and the owners of bots in a
+/// friendship they're part of once it's accepted. A pending request, which anyone could make,
+/// is no tie (#574).
 fn candidate_people(state: &AppState, person: &str) -> ApiResult<Vec<crate::db::Person>> {
     let mut people = state.db.friends_of(person, 200)?;
-    for f in state.db.explicit_friendships(person)? {
+    for f in state.db.explicit_friendships(person)?.into_iter().filter(|f| f.status == "accepted") {
         for id in [&f.from_id, &f.to_id] {
             let owner = endpoint_owner(state, &f.kind, id).ok();
             if let Some(owner) = owner.filter(|id| id != person) {
@@ -172,10 +175,15 @@ async fn request(
     if f.from_id == f.to_id {
         return Err(ApiError::bad_request("choose someone else"));
     }
+    // BT1, #574: either kind reaches a person, so either needs a tie to them. A bot seen only in
+    // a Town Square isn't enough: its owner has to be someone this person could ask themselves.
     let visible = if f.kind == "person" {
         candidate_people(&state, &caller.person_id)?.iter().any(|p| p.id == f.to_id)
     } else {
+        let owner = endpoint_owner(&state, "bot", &f.to_id)?;
         visible_bot(&state, &caller.person_id, &f.to_id)?
+            && (owner == caller.person_id
+                || candidate_people(&state, &caller.person_id)?.iter().any(|p| p.id == owner))
     };
     if !visible {
         return Err(ApiError::not_found());

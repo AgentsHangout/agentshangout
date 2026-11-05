@@ -6195,6 +6195,126 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
         .is_client_error());
 }
 
+// I88, #536: @room reaches every subscribed bot that belongs here and is here, and nobody else: not
+// a subscribed member that's in another room, not a guest, not an unsubscribed bot. The sender is
+// told how many it left out and why.
+#[tokio::test]
+async fn room_mentions_reach_every_subscribed_bot_here_and_nobody_elsewhere() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let here: Vec<Bot> = bots_named(&server, &ann, &room, ["Fido", "Rex", "Kip"]).await;
+    let kit = server.bot(&ann, &room, "Kit").await;
+    // Mo belongs here too, but is in Ann's other room right now (S59).
+    let den = server
+        .post(&ann.key, "/api/hangouts", json!({ "name": "Ann's den", "create_code": CODE }))
+        .await
+        .ok();
+    let den = text(&den["hangout"]["id"]);
+    let mo = server.bot(&ann, &den, "Mo").await;
+    server.state.db.add_agent_to_room(&room, &mo.id).unwrap();
+    // Pip is a guest: Eve walked it onto Ann's public floor.
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    server
+        .put(
+            &ann.key,
+            &format!("/api/hangouts/{room}/room-mentions"),
+            json!({ "policy": "members" }),
+        )
+        .await
+        .ok();
+    for bot in here.iter().chain([&mo]) {
+        let path = format!("/api/hangouts/{room}/room-mentions/bots/{}", bot.id);
+        server.put(&ann.key, &path, json!({ "subscribed": true })).await.ok();
+    }
+    let sent = server
+        .tool(&rover.token, "say", json!({ "hangout_id": room, "text": "@room standup now" }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(sent["room_mention"]["reached"], 3, "{sent}");
+    assert_eq!(sent["room_mention"]["left_out"], json!({ "not_subscribed": 1, "guests": 1 }));
+
+    let heard = |token: String| {
+        let server = &server;
+        async move {
+            let inbox = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
+            inbox["mentions"].as_array().unwrap().iter().any(|m| m["text"] == "@room standup now")
+        }
+    };
+    for bot in &here {
+        assert!(heard(bot.token.clone()).await, "every subscribed bot here hears it");
+    }
+    assert!(!heard(mo.token.clone()).await, "a member in another room doesn't");
+    assert!(!heard(kit.token.clone()).await, "an unsubscribed bot doesn't");
+    assert!(!heard(pip.token.clone()).await, "a guest doesn't");
+    assert!(!heard(rover.token.clone()).await, "nor the one that said it");
+
+    // Mo still gets the line as a plain message event, since it belongs here, but marked as an
+    // @room that wasn't for it, so a wake (the starter channel) leaves it out even from its owner.
+    server.state.db.age_room_mentions(&room, 11 * 60).unwrap();
+    let cursor = |token: String| {
+        let server = &server;
+        async move {
+            let page = server.tool(&token, "events_since", json!({ "wait_seconds": 0 })).await;
+            page["structuredContent"]["cursor"].clone()
+        }
+    };
+    let (mo_from, fido_from) =
+        (cursor(mo.token.clone()).await, cursor(here[0].token.clone()).await);
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &messages, json!({ "text": "@room lunch at noon" })).await.ok();
+    let line_for = |token: String, since: Value| {
+        let server = &server;
+        async move {
+            let args = json!({ "wait_seconds": 0, "since": since });
+            let page = server.tool(&token, "events_since", args).await["structuredContent"].clone();
+            page["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["name"] == "message" && e["data"]["body"] == "@room lunch at noon")
+                .cloned()
+                .unwrap_or_else(|| panic!("{page}"))
+        }
+    };
+    let elsewhere = line_for(mo.token.clone(), mo_from).await;
+    assert_eq!(elsewhere["data"]["room_tag_not_for_you"], true, "{elsewhere}");
+    assert_eq!(elsewhere["data"]["from_your_owner"], true);
+    let reached = line_for(here[0].token.clone(), fido_from).await;
+    assert!(reached["data"].get("room_tag_not_for_you").is_none(), "{reached}");
+
+    // What the starter channel does with each, run rather than read.
+    let script = "import json,sys; sys.path.insert(0, 'starter/claude-code'); import channel; \
+                  print(json.dumps([channel.wanted(json.loads(e)) for e in sys.argv[1:]]))";
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .args(["-c", script, &elsewhere.to_string(), &reached.to_string()])
+        .env("AGENTSHANGOUT_TOKEN", "unused")
+        .output()
+        .expect("python runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "[false, true]");
+}
+
+async fn bots_named<const N: usize>(
+    server: &Server,
+    owner: &Who,
+    room: &str,
+    names: [&str; N],
+) -> Vec<Bot> {
+    let mut bots = Vec::new();
+    for name in names {
+        bots.push(server.bot(owner, room, name).await);
+    }
+    bots
+}
+
 // I93: station actions are fixed catalog metadata, including in bot snapshots.
 #[tokio::test]
 async fn functional_stations_open_the_existing_room_features() {
@@ -7636,7 +7756,9 @@ async fn read_room_brief_section_tags_and_known_cache() {
     server
         .tool(&fern.token, "share_note", json!({ "hangout_id": room, "text": "Initial note" }))
         .await;
-    let item_id = server.item(&owner, &room, "plant", spot(0)).await;
+    // A stool, since a brief read counts a plant as decoration and moving one changes nothing it
+    // sends (I122).
+    let item_id = server.item(&owner, &room, "stool", spot(0)).await;
 
     // 1. Initial brief read without known: returns all 6 sections and section_tags
     let init = server
@@ -8380,6 +8502,157 @@ async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
     assert!(first["section_tags_hint"].is_string() && first["clock"]["note"].is_string());
     assert!(again.get("section_tags_hint").is_none(), "{again}");
     assert!(again["clock"].get("note").is_none() && again["clock"]["now"].is_string(), "{again}");
+}
+
+// I122: a brief read lists only the items a bot can do something with and counts the rest as
+// decor, and says when each bot here last spoke. A full read still lists everything.
+#[tokio::test]
+async fn a_brief_read_counts_decoration_and_says_when_bots_last_spoke() {
+    let w = waiting_world().await;
+    let nothing_checked =
+        |_: &str, _: &[String], _: &[agenthangout::db::FloorItem]| Ok::<(), ()>(());
+    for (id, x) in [("plant-a", 1), ("plant-b", 3), ("plant-c", 5)] {
+        let plant = agenthangout::db::NewFloorItem {
+            id,
+            hangout_id: &w.room,
+            kind: "plant",
+            x,
+            y: 9,
+            facing: 0,
+            placed_by: &w.ann.id,
+            now: now(),
+        };
+        w.server.state.db.place_item(&plant, nothing_checked).unwrap().unwrap();
+    }
+    w.mention("hello").await;
+    let full = w.server.read_room(&w.scout.token, &w.room).await;
+    let brief = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let all = full["items"].as_array().unwrap();
+    let listed = brief["items"].as_array().unwrap();
+    let decor = brief["decor"].as_u64().unwrap() as usize;
+    assert!(decor >= 3, "the plants are decoration: {brief}");
+    assert_eq!(listed.len() + decor, all.len(), "every item is listed or counted");
+    assert!(listed.iter().all(|item| item["kind"] != "plant"), "{brief}");
+    for item in listed {
+        let usable = item["holds_notes"] == true
+            || item.get("opens").is_some()
+            || item.get("does").is_some();
+        let from_full = all.iter().find(|one| one["id"] == item["id"]).unwrap();
+        let ruled = from_full["closes_at"].is_string() || from_full["kind"] == "quiet_sign";
+        assert!(usable || ruled, "only what a bot can use: {item}");
+    }
+    assert!(full.get("decor").is_none(), "a full read lists everything instead");
+
+    // Pip spoke, Scout hasn't, and both say whether they're away.
+    let bots = brief["bots"].as_array().unwrap();
+    let bot = |name: &str| bots.iter().find(|bot| bot["name"] == name).unwrap().clone();
+    assert!(bot("Pip")["last_posted_at"].is_string(), "{brief}");
+    assert!(bot("Scout")["last_posted_at"].is_null(), "{brief}");
+    assert!(bot("Pip")["away"].is_boolean() && bot("Scout")["away"].is_boolean());
+    assert!(brief["trust_note"].is_string());
+
+    // Less to read on a first brief read than before the decoration went: the items alone shrink.
+    assert!(
+        brief["items"].to_string().len() * 2 < full["items"].to_string().len(),
+        "{} vs {}",
+        brief["items"].to_string().len(),
+        full["items"].to_string().len()
+    );
+}
+
+// I122: sections asks for only some of a read; trust_note always comes, a section left out isn't
+// remembered as sent, and a name that isn't a section is refused.
+#[tokio::test]
+async fn a_read_can_ask_for_only_some_sections() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    let read = |args: Value| {
+        let server = &w.server;
+        let token = w.scout.token.clone();
+        async move { server.tool(&token, "read_room", args).await }
+    };
+    let only = read(json!({ "hangout_id": w.room, "brief": true, "sections": ["messages"] })).await
+        ["structuredContent"]
+        .clone();
+    assert!(only["trust_note"].is_string(), "always: {only}");
+    assert!(only["messages"].is_array() && only["last_message_id"].as_i64().unwrap() > 0);
+    for gone in ["items", "decor", "bots", "people_here", "notes", "pins", "calendar", "votes"] {
+        assert!(only.get(gone).is_none(), "{gone}: {only}");
+    }
+    let tags = only["section_tags"].as_object().unwrap();
+    assert!(!tags.contains_key("items") && !tags.contains_key("bots"), "{only}");
+
+    // The next incremental read wasn't sent the items or bots before, so it gets them now.
+    let after = only["last_message_id"].clone();
+    let next = read(json!({ "hangout_id": w.room, "brief": true, "after_message_id": after }))
+        .await["structuredContent"]
+        .clone();
+    assert!(next["items"].is_array() && next["bots"].is_array(), "{next}");
+
+    // A full read can choose too, and the choice is all it gets.
+    let two = read(json!({ "hangout_id": w.room, "sections": ["bots", "votes"] })).await
+        ["structuredContent"]
+        .clone();
+    assert!(two["bots"].is_array() && two["votes"].is_array() && two["trust_note"].is_string());
+    assert!(two.get("messages").is_none() && two.get("items").is_none(), "{two}");
+
+    let wrong = read(json!({ "hangout_id": w.room, "sections": ["secrets"] })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+    let wrong = read(json!({ "hangout_id": w.room, "sections": 3 })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+    let wrong = read(json!({ "hangout_id": w.room, "sections": "bots, secrets" })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+
+    // A client with an old tool list sends it as text: the list as JSON, or names with commas.
+    for text in ["[\"bots\", \"votes\"]", "bots, votes", "bots votes"] {
+        let read = read(json!({ "hangout_id": w.room, "sections": text })).await
+            ["structuredContent"]
+            .clone();
+        assert!(read["bots"].is_array() && read["votes"].is_array(), "{text}: {read}");
+        assert!(read.get("messages").is_none() && read["trust_note"].is_string(), "{text}: {read}");
+    }
+}
+
+// I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
+// move on to; a later read with them still has them, mentions included.
+#[tokio::test]
+async fn leaving_out_messages_leaves_them_unread() {
+    let w = waiting_world().await;
+    w.mention("are you there").await;
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions WHERE agent_id = ? AND read_at IS NULL",
+                [&w.scout.id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(unread(), 1);
+    let bots = w
+        .server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "brief": true, "sections": ["bots"] }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(bots["bots"].is_array(), "{bots}");
+    assert!(bots.get("messages").is_none() && bots.get("last_message_id").is_none(), "{bots}");
+    assert_eq!(unread(), 1, "not shown, so not read");
+    let read = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let said = read["messages"].as_array().unwrap();
+    assert!(said.iter().any(|m| m["text"].as_str().unwrap_or("").contains("are you there")));
+    assert_eq!(unread(), 0, "read once shown");
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,

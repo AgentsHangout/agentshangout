@@ -720,33 +720,24 @@ textarea.plain { font-family: inherit; font-size: 14px; }
 .world-live.city-over canvas { cursor: pointer; }
 /* What a house on the city map is and what your bots may do there, beside the pointer. */
 .wd-city .wd-well, .wd-hovercard { position: relative; }
-.city-card {
+.game-menu.city-card {
+  /* W109: the frame is .game-menu's; only where it sits is the map's own. */
   position: absolute;
   z-index: 3;
-  display: grid;
-  gap: 3px;
   max-width: 280px;
-  padding: 8px 11px;
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 8px;
-  background: rgba(18, 20, 28, .9);
-  color: #fff3d2;
   font-size: 13px;
   line-height: 1.35;
   pointer-events: none;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
 }
-.city-card[hidden] { display: none; }
-.city-card-name { font-size: 14px; }
-.city-card.has-repository { pointer-events: auto; }
+.game-menu.city-card[hidden] { display: none; }
+.game-menu.city-card.has-repository { pointer-events: auto; }
 .city-card a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
 .build-collections { margin-bottom: 12px; }
 .build-collections .field { margin: 0; }
 .build-collections select { max-width: 100%; }
-.city-card-home { color: #ffd27a; font-weight: 600; }
-.city-card-bot { color: #c9cfdc; }
-.city-card-bot.allowed { color: #8ee6b0; }
-.city-card-hint { color: #98a0b5; margin-top: 2px; }
+.city-card-bot { color: var(--text); }
+.city-card-bot.allowed { color: #1f6b3c; }
+.city-card-hint { color: var(--muted); }
 .house-access { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .house-access p { margin: 0; }
 .house-access .access.allowed strong { color: var(--good, #2a9560); }
@@ -1590,6 +1581,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .game-menu-icon canvas { display: block; width: 100%; height: 100%; }
 .game-menu-cost { margin-left: auto; padding-left: 10px; color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .game-menu-gap { margin: 3px 4px; border: 0; border-top: 2px groove rgba(120, 90, 44, .5); }
+/* W109: a card's rows, and the line under a hover saying what a click does. */
+.game-menu-body { display: grid; gap: 3px; padding: 6px 9px; }
+.game-menu-hint { margin: 0; padding: 4px 9px 5px; color: var(--muted); font-size: 12px; }
+.game-menu-more { margin-left: auto; padding-left: 10px; font-size: 16px; line-height: 1; }
+.game-menu-cost + .game-menu-more { margin-left: 0; }
+.game-menu .game-menu-back { color: var(--muted); }
+.game-menu .game-menu-back .game-menu-more { margin-left: 0; padding: 0 2px 0 0; }
 
 /* A phone held upright: the tools in a dock along the bottom, the view buttons over the map's
    corner, and panels as sheets from the bottom of the map. */
@@ -1702,6 +1700,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 @media (min-width: 1100px) {
   .wd-room .game-more .wd-btn.sec { display: none; }
 }
+/* G19: once Get started is done, its button leaves the bar and its row in More shows at every width. */
+.tutorial-done .wd-title-actions .tutorial-toggle { display: none !important; }
+.tutorial-done .game-more .wd-btn.tutorial-more { display: inline-flex !important; }
 /* The map keeps its narrower bar until 1360px, so its rows for those buttons stay until then too. */
 @media (min-width: 1360px) {
   .wd-map .game-more .wd-btn.sec { display: none; }

@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::closing::run_sweep(state.clone()));
     tokio::spawn(agenthangout::cadence::run(state.clone()));
     tokio::spawn(agenthangout::pulse::run(state.clone()));
+    tokio::spawn(agenthangout::memories::run(state.clone()));
     // U4, U8: usage counts are written every minute and old ones deleted.
     tokio::spawn(agenthangout::usage::run(state.clone()));
 

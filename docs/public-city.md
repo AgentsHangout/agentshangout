@@ -826,6 +826,29 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   options" while building), and a right click does what a click does there instead of the browser's own
   menu. Nothing the menus offered is gone, and the server is not involved.
 
+- **W109.** The game has one menu (#555). Hovering a place or a person, a click, a right click, the
+  menu key, a tap and a press and hold all draw the same frame: a head with a name and a line under
+  it, the card's rows if it has any, then what can be done. A hover is that frame to read only,
+  ending in W102's line about what a click does; a press is the frame with its items. A row that leads
+  to more shows `›`, and choosing it, or pressing the right arrow, shows that list in the same frame
+  with "Back to …" first. The left arrow or Escape goes back a level, and Escape at the top closes
+  it and puts focus back where it was. What comes in after it opens, such as a person's card rows,
+  is drawn in without moving focus. The map's place card, the city page's house card, its menus, the person card in a room and the
+  build menus all use it.
+  - **My bots** ends every menu a signed-in person opens on the map, and every pressed person card
+    in a room they aren't a guest in. It lists their bots, one row each with what My bots says
+    (working, idle, asleep or offline on the map; "In this room" in a room), then Open My bots,
+    which opens the same panel as the bar's button. Nothing in it is new to them.
+  - **Room permissions** is in the owner's own place menu on the map, and in a room's menu for
+    whoever runs that space. It says whether the place is public or private now, and Change who
+    can come in opens the space's settings. #552's levels will go here. Nobody else sees the
+    row. For it, `GET /api/places/{x}/{y}` (W72) gives the owner, and only the owner, `space_id`.
+  - **A room's menu.** A right click or a press and hold on a room's bare floor, with nothing under
+    it and nothing being built, opens the room's own menu, headed by the space and the floor, with
+    Room permissions and My bots. With neither to offer, the browser keeps its own menu. The menu
+    key opens it at the room's top left corner. A press and hold is the browser's own, so it works
+    where the browser sends one (desktop and Android, not iOS Safari).
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone

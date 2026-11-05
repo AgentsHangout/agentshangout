@@ -177,17 +177,48 @@ impl Server {
 
 // FR1
 #[tokio::test]
-async fn your_friends_are_the_people_you_share_a_room_or_a_city_with() {
+async fn your_friends_are_the_people_you_share_a_room_with_not_a_city() {
     let server = Server::start().await;
     let (_, ann, bo, cy) = server.three().await;
     assert_eq!(server.friends(&ann).await, ["Bo"]);
     assert_eq!(server.friends(&bo).await, ["Ann", "Cy"]);
     assert_eq!(server.friends(&cy).await, ["Bo"]);
 
+    // #574: sharing only a city, or its Town Square, isn't a tie, so neither can reach the other.
     let (_, code, dee) = server.city("Dee").await;
     let eve = server.join_city(&code, "Eve").await;
+    assert!(server.friends(&dee).await.is_empty(), "a city alone doesn't make friends");
+    assert!(server.friends(&eve).await.is_empty());
+}
+
+// FR1, #574: a stranger in the same city can't invite you or ask to be your friend, since both reach
+// you. Saying yes to the same plan, or an accepted friendship, is a real tie.
+#[tokio::test]
+async fn a_stranger_in_the_same_city_cant_reach_you_until_there_is_a_real_tie() {
+    let server = Server::start().await;
+    let (_, code, dee) = server.city("Dee").await;
+    let eve = server.join_city(&code, "Eve").await;
+    let made = server
+        .post(&dee.key, "/api/hangouts", json!({ "name": "Dee's den", "create_code": CODE }))
+        .await
+        .ok();
+    let room = text(&made["hangout"]["id"]);
+    // Dee can't invite Eve to Dee's room, and gets the same 404 as for nobody.
+    assert_eq!(server.invite_to_room(&dee, &room, &eve.id).await.status, StatusCode::NOT_FOUND);
+    // Nor ask Eve to be a friend.
+    let ask = json!({ "kind": "person", "from_id": dee.id, "to_id": eve.id });
+    assert_eq!(
+        server.post(&dee.key, "/api/trust/friendships", ask).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // An accepted friendship is a tie.
+    let at = agenthangout::now();
+    server.state.db.request_explicit_friend("person", &dee.id, &eve.id, at).unwrap();
+    server.state.db.accept_explicit_friend("person", &dee.id, &eve.id).unwrap();
     assert_eq!(server.friends(&dee).await, ["Eve"]);
     assert_eq!(server.friends(&eve).await, ["Dee"]);
+    server.invite_to_room(&dee, &room, &eve.id).await.ok();
 }
 
 // FR1
@@ -282,7 +313,8 @@ async fn only_whoever_looks_after_a_citys_link_can_invite_to_it_and_managed_room
     let square =
         text(&server.get(&ann.key, &format!("/api/cities/{city}")).await.ok()["city"]["square_id"]);
     assert_eq!(server.invite_to_room(&ann, &square, &bo.id).await.status, StatusCode::FORBIDDEN);
-    server.invite_to_room(&bo, &room, &ann.id).await.ok();
+    // #574: Bo and Ann share only a city, so Bo can't invite Ann anywhere (the same 404 as nobody).
+    assert_eq!(server.invite_to_room(&bo, &room, &ann.id).await.status, StatusCode::NOT_FOUND);
 }
 
 // FR4, FR5
@@ -605,4 +637,105 @@ async fn replacing_a_link_gives_nobody_a_days_invites_back() {
     server.invite_to_room(&ann, &room, &cy.id).await.ok();
     server.post(&ann.key, &format!("/api/hangouts/{room}/invite/rotate"), json!({})).await.ok();
     assert_eq!(server.state.db.friend_invites_sent_since(&ann.id, now() - 60).unwrap(), 1);
+}
+
+// FR1, #574: saying yes or maybe to the same plan is a tie that outlasts the room, unlike sharing it.
+#[tokio::test]
+async fn people_who_said_yes_to_the_same_plan_stay_friends_after_one_leaves() {
+    let server = Server::start().await;
+    let (room, code, ann) = server.room("Ann").await;
+    let bo = server.join(&code, "Bo").await;
+    let made = server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/events"),
+            json!({ "title": "Tacos", "starts_at": LATER }),
+        )
+        .await
+        .ok();
+    let event = text(&made["id"]);
+    server
+        .post(&bo.key, &format!("/api/events/{event}/rsvp"), json!({ "response": "yes" }))
+        .await
+        .ok();
+    server.post(&bo.key, &format!("/api/hangouts/{room}/leave"), json!({})).await.ok();
+    assert_eq!(server.friends(&ann).await, ["Bo"], "the plan they both said yes to is a tie");
+    assert_eq!(server.friends(&bo).await, ["Ann"]);
+}
+
+// FR1, #574: a plan in a Town Square is a gathering the whole city can answer (R40), so saying yes
+// to the same one isn't a tie.
+#[tokio::test]
+async fn saying_yes_to_the_same_town_square_plan_is_no_tie() {
+    let server = Server::start().await;
+    let (city, code, dee) = server.city("Dee").await;
+    let eve = server.join_city(&code, "Eve").await;
+    let square = server.state.db.city(&city).unwrap().unwrap().square_id;
+    let made = server
+        .post(
+            &dee.key,
+            &format!("/api/hangouts/{square}/events"),
+            json!({ "title": "Picnic", "starts_at": LATER }),
+        )
+        .await
+        .ok();
+    let event = text(&made["id"]);
+    for who in [&dee, &eve] {
+        server
+            .post(&who.key, &format!("/api/events/{event}/rsvp"), json!({ "response": "yes" }))
+            .await
+            .ok();
+    }
+    assert!(server.friends(&dee).await.is_empty(), "a gathering isn't a tie");
+    assert!(server.friends(&eve).await.is_empty());
+}
+
+// FR1, #574: someone only named on a plan, who hasn't answered it, has no tie to its room (#571).
+#[tokio::test]
+async fn someone_named_on_a_plan_who_hasnt_answered_is_no_tie() {
+    let server = Server::start().await;
+    let (room, _, ann) = server.room("Ann").await;
+    let (_, _, bo) = server.room("Bo").await;
+    let made = server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/events"),
+            json!({ "title": "Tacos", "starts_at": LATER }),
+        )
+        .await
+        .ok();
+    let event = text(&made["id"]);
+    server.state.db.add_plan_invitee(&event, &bo.id, 30, now()).unwrap();
+    assert!(server.friends(&ann).await.is_empty(), "named, not answered");
+    server.state.db.upsert_rsvp(&event, &bo.id, "yes", None, "", now()).unwrap();
+    assert_eq!(server.friends(&ann).await, ["Bo"], "answering it is the tie");
+}
+
+// BT1, #574: a bot seen only in a Town Square can't be asked to be friends, and a pending request
+// about a bot doesn't let its owner be asked either. An accepted one does.
+#[tokio::test]
+async fn a_stranger_cant_reach_you_through_your_bot() {
+    let server = Server::start().await;
+    let (city, code, dee) = server.city("Dee").await;
+    let eve = server.join_city(&code, "Eve").await;
+    let square = server.state.db.city(&city).unwrap().unwrap().square_id;
+    let (dee_bot, _) = support::legacy_bot(&server.state, &dee.id, &square, "Dee bot");
+    let (eve_bot, _) = support::legacy_bot(&server.state, &eve.id, &square, "Eve bot");
+    let ask_bot = json!({ "kind": "bot", "from_id": dee_bot.id, "to_id": eve_bot.id });
+    assert_eq!(
+        server.post(&dee.key, "/api/trust/friendships", ask_bot).await.status,
+        StatusCode::NOT_FOUND,
+        "a bot seen in the Town Square isn't a tie"
+    );
+
+    // A request Dee managed to make anyway, still pending, isn't a tie to Eve.
+    server.state.db.request_explicit_friend("bot", &dee_bot.id, &eve_bot.id, now()).unwrap();
+    let ask_eve = json!({ "kind": "person", "from_id": dee.id, "to_id": eve.id });
+    assert_eq!(
+        server.post(&dee.key, "/api/trust/friendships", ask_eve.clone()).await.status,
+        StatusCode::NOT_FOUND
+    );
+    // Once Eve accepts it, Dee may ask Eve too.
+    server.state.db.accept_explicit_friend("bot", &dee_bot.id, &eve_bot.id).unwrap();
+    server.post(&dee.key, "/api/trust/friendships", ask_eve).await.ok();
 }

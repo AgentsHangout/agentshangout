@@ -260,7 +260,9 @@ export class City {
     this.frame.message.textContent = HINT;
     stage.append(this.frame.root);
     // The card that follows the pointer over a house: whose it is and what your bots may do there.
-    this.card = el('div', 'city-card');
+    // W109: the hover card is the game's one menu frame, to read only.
+    this.card = el('div', 'game-menu city-card');
+    this.card.setAttribute('role', 'tooltip');
     this.card.hidden = true;
     this.card.setAttribute('aria-hidden', 'true');
     this.frame.host.parentElement.append(this.card);
@@ -463,14 +465,18 @@ export class City {
       return;
     }
     const mine = house.id === this.view.you.house_id;
-    const lines = [el('strong', 'city-card-name', house.name), el('span', 'city-card-home', homeOf(this.view, house))];
+    const head = el('div', 'game-menu-head');
+    head.append(el('strong', 'city-card-name', house.name), el('small', 'city-card-home', homeOf(this.view, house)));
+    const lines = [];
     for (const bot of houseAccess(this.view, house)) {
       const row = el('span', bot.allowed ? 'city-card-bot allowed' : 'city-card-bot');
       row.append(el('b', '', bot.name), ` ${bot.text}`);
       lines.push(row);
     }
-    lines.push(el('small', 'city-card-hint', mine ? 'Click to open your house.' : 'Click to ask for a visit for one of your bots.'));
-    this.card.replaceChildren(...lines);
+    const body = el('div', 'game-menu-body');
+    body.append(...lines);
+    const hint = el('p', 'game-menu-hint', mine ? 'Click to open your house.' : 'Click to ask for a visit for one of your bots.');
+    this.card.replaceChildren(head, ...(lines.length ? [body] : []), hint);
     this.card.hidden = false;
     this.placeCard();
   }

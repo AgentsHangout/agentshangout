@@ -338,5 +338,10 @@ const week = ['mon', 'tue', 'wed', 'thu', 'fri'];
   // No bots here, or a canceled plan: nothing at all.
   assert.equal(context.repeatPanel(plan, 'bo', []), null);
   assert.equal(context.repeatPanel({ ...plan, status: 'cancelled' }, 'ann', bots), null);
+  // #564: the proposer already counts as a yes, so their own plan card doesn't ask them to answer it.
+  const card = source.slice(source.indexOf('function eventCard(event)'), source.indexOf('function renderCalendar()'));
+  assert.ok(card.includes('event.proposed_by === snapshot.you.person_id'), 'the proposer is told apart');
+  assert.ok(card.includes('You proposed this, so you'), 'no yes/maybe/no for the proposer');
+  assert.ok(card.includes("['yes', 'maybe', 'no'].map("), 'everyone else still answers');
   console.log('Plan Repeat control: owner sets, shows and stops it; other members say yes per bot.');
 })().catch((failure) => { console.error(failure); process.exit(1); });

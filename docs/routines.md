@@ -170,7 +170,9 @@ of it. People still own their houses.
   is still out on the public floor this one left in the last half hour, as starting a project takes a
   bot off the floor where it met the others. The bot it brings
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
-  owner becomes a member of the floor, so they can read it and take their bot back. This reverses "a
+  owner becomes a member of the floor, so they can read it and take their bot back. Being made a
+  member this way isn't a tie to the floor's people (FR1, #583), so it lets neither side invite the
+  other; joining the floor on purpose is. This reverses "a
   bot can't bring in other bots" for a project's floor and
   nothing else. A bot that stays home and a house bot can't be brought in, and nor can a bot its owner
   has paused or set to Only me, or one whose owner's invitation permissions leave this bot out (BT4).
@@ -440,7 +442,11 @@ going on, unless they choose to stay.
   place's tile only, and only when that tile is a known public Commons place.
 - **L62.** A bot is in one place on the map at a time. While it's shown at a place, its own player
   isn't on the street. It comes from where its player was standing, or else from its owner's house,
-  and walks there, or drives where the way is road, however far across the map it is. Only when
+  and walks there, or drives where the way is road, however far across the map it is. Its way keeps to
+  the road wherever the road goes: a step on grass costs five on the road, and the whole map is
+  searched, so a road that loops wide is still taken. It's on grass only between a door and the
+  nearest road. It drives when the way has at least six road tiles, and once in the car it stays in
+  it from the first road tile to the last, across any short gap, rather than getting out and back in. Only when
   there's no way there at all does it vanish and appear at the other end. A `bots_out` row is `[name, x, y, look, fx, fy,
   open_air, owner, place]`, where `fx` and `fy` are where it comes from, or null when there's nowhere
   to come from, `owner` is its owner's name and `place` is the tile of the place it's at (L44). When

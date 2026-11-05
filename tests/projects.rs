@@ -48,6 +48,7 @@ struct Who {
 struct Town {
     ann: Who,
     bo: Who,
+    cy: Who,
     cafe: String,
     fern: String,
     rover: String,
@@ -150,7 +151,7 @@ impl Server {
         )
         .await
         .ok();
-        Town { ann, bo, cafe, fern, rover, rover_id }
+        Town { ann, bo, cy, cafe, fern, rover, rover_id }
     }
 
     /// Both bots' owners send them onto Cy's public floor, where they meet.
@@ -1860,10 +1861,13 @@ async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
         reply[list].as_array().unwrap().iter().map(|one| one[key].clone()).collect()
     };
     assert_eq!(field(&brief, "bots", "name"), field(&full, "bots", "name"));
-    assert_eq!(field(&brief, "items", "id"), field(&full, "items", "id"));
+    // I122: only the items a bot can use, in the same order, with the decoration counted.
+    let (listed, every) = (field(&brief, "items", "id"), field(&full, "items", "id"));
+    assert!(listed.iter().all(|id| every.contains(id)), "{brief}");
+    assert_eq!(listed.len() + brief["decor"].as_u64().unwrap() as usize, every.len());
     assert!(!full["items"].as_array().unwrap().is_empty());
     for item in brief["items"].as_array().unwrap() {
-        assert!(item["kind"].is_string() && item.get("does").is_none());
+        assert!(item["kind"].is_string() && item.get("facing").is_none());
         assert!(item.get("notes").is_none() && item.get("placed_by").is_none());
     }
     for bot in brief["bots"].as_array().unwrap() {
@@ -1883,4 +1887,78 @@ async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
     );
     assert!(size(&last) < size(&full) && size(&brief) < size(&full));
     assert!(size(&both) < size(&last) && size(&both) < size(&brief));
+}
+
+// FR1, #583: a bot brought into a project makes its owner a member who can see where it went, but
+// that's no tie to the project's people, so neither owner can invite the other. Joining on purpose
+// is.
+#[tokio::test]
+async fn being_brought_into_a_project_is_no_tie_between_owners() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+    server.meet(&town).await;
+    server
+        .tool(&town.fern, "invite_to_project", json!({ "project_id": project, "bot": "rover" }))
+        .await;
+    server.get(&town.bo.key, &format!("/api/hangouts/{floor}")).await.ok();
+    let friends = |who: &Who| {
+        let key = who.key.clone();
+        let server = &server;
+        async move {
+            let body = server.get(&key, "/api/friends").await.ok();
+            body["friends"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|friend| text(&friend["name"]))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert!(!friends(&town.ann).await.contains(&"Bo".to_string()), "brought in isn't a tie");
+    assert!(!friends(&town.bo).await.contains(&"Ann".to_string()));
+    let ask = json!({ "kind": "person", "from_id": town.ann.id, "to_id": town.bo.id });
+    assert_eq!(
+        server.post(&town.ann.key, "/api/trust/friendships", ask).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Joining it on purpose is a tie, like any room.
+    server.state.db.add_member(&floor, &town.bo.id, agenthangout::now()).unwrap();
+    assert!(friends(&town.ann).await.contains(&"Bo".to_string()));
+}
+
+// FR1, #583: someone who walked onto a public floor can't answer a plan there (S19), so two
+// strangers can't tie themselves by it. TIES_OF leaves public floors' plans out as well, in case
+// that ever changes.
+#[tokio::test]
+async fn saying_yes_to_a_plan_on_a_public_floor_is_no_tie() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let made = server
+        .post(
+            &town.cy.key,
+            &format!("/api/hangouts/{}/events", town.cafe),
+            json!({ "title": "Open mic", "starts_at": "2031-06-06T18:00:00-05:00" }),
+        )
+        .await
+        .ok();
+    let event = text(&made["id"]);
+    for who in [&town.ann, &town.bo] {
+        server.post(&who.key, &format!("/api/floors/{}/walk-in", town.cafe), json!({})).await.ok();
+        let answered = server
+            .post(&who.key, &format!("/api/events/{event}/rsvp"), json!({ "response": "yes" }))
+            .await;
+        assert_eq!(answered.status, StatusCode::FORBIDDEN, "{}", answered.body);
+    }
+    // Even with both answers in, which only the database can do now, it isn't a tie.
+    for who in [&town.ann, &town.bo] {
+        server.state.db.upsert_rsvp(&event, &who.id, "yes", None, "", agenthangout::now()).unwrap();
+    }
+    let friends = server.get(&town.ann.key, "/api/friends").await.ok();
+    let names: Vec<String> =
+        friends["friends"].as_array().unwrap().iter().map(|f| text(&f["name"])).collect();
+    assert!(!names.contains(&"Bo".to_string()), "{names:?}");
 }

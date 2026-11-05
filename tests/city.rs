@@ -4993,6 +4993,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "bot_sleep",
             "bot_memory_uses",
             "bot_rooms_seen",
+            "brought_in_owners",
+            "bedtime_told",
+            "bedtime_off",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
@@ -7730,11 +7733,17 @@ async fn guest_does_not_see_pre_arrival_root_in_thread_mention() {
         "pre-arrival root must not leak to guest in mention event: {mention}"
     );
 
-    // Scout calling read_thread on pre_id must be refused / not found
+    // Scout calling read_thread on pre_id never sees the root. It's refused while no reply is
+    // visible to Scout; once the welcome counts as after its arrival, which depends on whether the
+    // clock passed a second between the two, it gets the reply with the root's text hidden.
     let th = server
         .tool(&scout.token, "read_thread", json!({ "hangout_id": porch, "root": pre_id }))
         .await;
-    assert_eq!(th["isError"], true, "{th}");
+    if th["isError"] != true {
+        let root = &th["structuredContent"]["root"];
+        assert!(root["text"].is_null() && root["text_hidden"].is_string(), "{th}");
+        assert!(!th.to_string().contains("Secret pre-arrival chat"), "{th}");
+    }
 }
 
 #[tokio::test]
@@ -7810,7 +7819,14 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     let msgs_lim = poll_lim["structuredContent"]["messages"].as_array().unwrap();
     assert_eq!(msgs_lim.len(), 1, "poll_lim returned 1 message: {poll_lim}");
     assert_eq!(msgs_lim[0]["id"], c_id, "poll_lim returns newest reply C: {poll_lim}");
-    assert_eq!(poll_lim["structuredContent"]["earlier_messages"], 1);
+    // Everything else Scout can see after A is counted: reply B, and the line saying it arrived
+    // when that was written a second after its arrival, which depends on the clock.
+    let everything = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": porch, "after_message_id": pre_id }))
+        .await;
+    let seen = everything["structuredContent"]["messages"].as_array().unwrap().len();
+    assert!(seen >= 2, "{everything}");
+    assert_eq!(poll_lim["structuredContent"]["earlier_messages"], seen - 1);
     assert_eq!(poll_lim["structuredContent"]["last_message_id"], c_id);
 
     // Reading incrementally after reply B returns reply C

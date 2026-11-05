@@ -1910,6 +1910,27 @@ WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) 
  INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
  WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
 END;
+-- I122: when a bot last said something in a room, for a brief read_room, in one seek per bot.
+CREATE INDEX IF NOT EXISTS messages_by_room_bot ON messages (hangout_id, agent_id, kind, id);
+-- FR1, #583: owners made members only because another bot brought theirs into a project (L12).
+-- They can read where their bot went, but nobody agreed to a tie, so TIES_OF leaves them out.
+CREATE TABLE IF NOT EXISTS brought_in_owners (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    PRIMARY KEY (hangout_id, person_id)
+);
+CREATE TRIGGER IF NOT EXISTS brought_in_owners_left AFTER DELETE ON members BEGIN
+ DELETE FROM brought_in_owners WHERE hangout_id = OLD.hangout_id AND person_id = OLD.person_id;
+END;
+-- MM17: when a bot was last told it's bedtime, so it's told once a night, and the bots whose
+-- owners turned going-home bedtime off.
+CREATE TABLE IF NOT EXISTS bedtime_told (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bedtime_off (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -5170,12 +5191,43 @@ impl Db {
         rows.collect()
     }
 
-    pub fn add_member(&self, hangout_id: &str, person_id: &str, now: i64) -> rusqlite::Result<()> {
-        self.conn().execute(
+    /// L12, #583: makes a bot's owner a member of the project room it was brought into, so they can
+    /// see where it went, and marks them as brought in, which isn't a tie (FR1). Someone who was
+    /// already a member stays an ordinary one.
+    pub fn add_brought_in_owner(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let fresh = tx.execute(
             "INSERT OR IGNORE INTO members (hangout_id, person_id, joined_at) VALUES (?, ?, ?)",
             params![hangout_id, person_id, now],
         )?;
-        Ok(())
+        if fresh > 0 {
+            tx.execute(
+                "INSERT OR IGNORE INTO brought_in_owners (hangout_id, person_id) VALUES (?, ?)",
+                params![hangout_id, person_id],
+            )?;
+        }
+        tx.commit()
+    }
+
+    /// Joining on purpose also makes someone brought in by L12 an ordinary member (#583).
+    pub fn add_member(&self, hangout_id: &str, person_id: &str, now: i64) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO members (hangout_id, person_id, joined_at) VALUES (?, ?, ?)",
+            params![hangout_id, person_id, now],
+        )?;
+        tx.execute(
+            "DELETE FROM brought_in_owners WHERE hangout_id = ? AND person_id = ?",
+            params![hangout_id, person_id],
+        )?;
+        tx.commit()
     }
 
     /// Leaving takes the person's bots out of the room with them.
@@ -8811,6 +8863,30 @@ impl Db {
             )
             .optional()?;
         Ok(tags.and_then(|tags| serde_json::from_str(&tags).ok()))
+    }
+
+    /// I122: when each of these bots last said something (a chat line) in this room, at or after
+    /// `since`. Bots that haven't are left out.
+    pub fn last_posted_at(
+        &self,
+        hangout_id: &str,
+        agent_ids: &[&str],
+        since: i64,
+    ) -> rusqlite::Result<HashMap<String, i64>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare_cached(
+            "SELECT created_at FROM messages INDEXED BY messages_by_room_bot
+             WHERE hangout_id = ? AND agent_id = ? AND kind = 'chat' ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut found = HashMap::new();
+        for agent_id in agent_ids {
+            let at: Option<i64> =
+                statement.query_row(params![hangout_id, agent_id], |row| row.get(0)).optional()?;
+            if let Some(at) = at.filter(|at| *at >= since) {
+                found.insert((*agent_id).to_string(), at);
+            }
+        }
+        Ok(found)
     }
 
     /// I116: what this brief read returned, in place of what the last one did.
@@ -12617,6 +12693,38 @@ const FRIENDS_OF: &str = "(
     UNION SELECT i.person_id FROM members a JOIN events e ON e.hangout_id = a.hangout_id
       JOIN plan_invitees i ON i.event_id = e.id WHERE a.person_id = ?1)";
 
+/// FR1, #574: the people a person has a real tie with, which is who they can invite or ask to be a
+/// friend, since both reach the other person: everyone in a room with them, apart from a city's
+/// Town Square; everyone who said yes or maybe to a plan they said yes or maybe to, unless it was
+/// held in a Town Square, where a gathering (R40) is open to the whole city; everyone who answered
+/// a plan in one of their rooms through its link, but not someone only named on it who hasn't
+/// answered (#571); and their accepted friendships (BT1). Sharing only a city, or its Town Square,
+/// isn't a tie, and nor is a plan on a public floor, which anyone walking in can answer, or a room
+/// someone is in only because their bot was brought into its project (L12, #583). Someone who answered through a plan's link
+/// gets no tie back to the room's people from it, so the link stays one way (F11). FRIENDS_OF stays
+/// the wider count. Takes the person as ?1.
+const TIES_OF: &str = "(
+    SELECT b.person_id FROM members a JOIN members b ON b.hangout_id = a.hangout_id
+      WHERE a.person_id = ?1
+        AND NOT EXISTS (SELECT 1 FROM cities c WHERE c.square_id = a.hangout_id)
+        AND NOT EXISTS (SELECT 1 FROM brought_in_owners o WHERE o.hangout_id = a.hangout_id
+          AND o.person_id IN (a.person_id, b.person_id))
+    UNION SELECT b.person_id FROM rsvps a JOIN rsvps b ON b.event_id = a.event_id
+      JOIN events e ON e.id = a.event_id
+      WHERE a.person_id = ?1 AND a.response IN ('yes', 'maybe') AND b.response IN ('yes', 'maybe')
+        AND NOT EXISTS (SELECT 1 FROM plan_invitees i WHERE i.event_id = a.event_id AND i.person_id = ?1)
+        AND NOT EXISTS (SELECT 1 FROM cities c WHERE c.square_id = e.hangout_id)
+        AND NOT EXISTS (SELECT 1 FROM floors f WHERE f.hangout_id = e.hangout_id AND f.access = 'public')
+        AND NOT EXISTS (SELECT 1 FROM brought_in_owners o WHERE o.hangout_id = e.hangout_id
+          AND o.person_id IN (a.person_id, b.person_id))
+    UNION SELECT i.person_id FROM members a JOIN events e ON e.hangout_id = a.hangout_id
+      JOIN plan_invitees i ON i.event_id = e.id
+      JOIN rsvps r ON r.event_id = i.event_id AND r.person_id = i.person_id WHERE a.person_id = ?1
+        AND NOT EXISTS (SELECT 1 FROM brought_in_owners o WHERE o.hangout_id = a.hangout_id
+          AND o.person_id = ?1)
+    UNION SELECT CASE WHEN f.from_id = ?1 THEN f.to_id ELSE f.from_id END FROM explicit_friendships f
+      WHERE f.kind = 'person' AND f.status = 'accepted' AND (f.from_id = ?1 OR f.to_id = ?1))";
+
 /// What `item_from_row` reads, and where from.
 const ITEM_COLS: &str =
     "i.id, i.hangout_id, i.kind, i.x, i.y, i.facing, i.placed_by, p.name, i.placed_at";
@@ -13147,17 +13255,28 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT id, name, color FROM people
-             WHERE id != ?1 AND id IN {FRIENDS_OF}
+             WHERE id != ?1 AND id IN {TIES_OF}
              ORDER BY name, id LIMIT ?2"
         ))?;
         let rows = stmt.query_map(params![person_id, limit], person_from_row)?;
         rows.collect()
     }
 
-    pub fn is_friend(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+    /// H2: whether this person shares a room or a city with the other, which is enough to write a
+    /// private note about them for their own bots. Nothing reaches the other person, so it keeps
+    /// the wider FRIENDS_OF rather than the ties an invite needs (#574).
+    pub fn is_acquaintance(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
             &format!("SELECT 1 FROM people WHERE id = ?2 AND id != ?1 AND id IN {FRIENDS_OF}"),
+            params![person_id, other_id],
+        )
+    }
+
+    pub fn is_friend(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            &format!("SELECT 1 FROM people WHERE id = ?2 AND id != ?1 AND id IN {TIES_OF}"),
             params![person_id, other_id],
         )
     }

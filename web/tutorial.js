@@ -294,6 +294,25 @@ function remember(word) {
     // Nothing else depends on it.
   }
 }
+// G19: whether every step was done the last time this browser asked, so a finished person's page
+// starts without the button rather than showing it until the server answers. A second word, kept the
+// same way as the first.
+const DONE = 'tutorial-done';
+function rememberedDone() {
+  try {
+    return localStorage.getItem(DONE) === 'yes';
+  } catch {
+    return false;
+  }
+}
+function rememberDone(done) {
+  try {
+    if (done) localStorage.setItem(DONE, 'yes');
+    else localStorage.removeItem(DONE);
+  } catch {
+    // Then the button shows until the server answers, as it did.
+  }
+}
 
 // The panel, for a page that passes in how to reach its own controls: `shows` gives the ones it has.
 export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compact, toggleClass }) {
@@ -388,7 +407,15 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     count.textContent = `${REQUIRED.filter(done).length} of ${REQUIRED.length} done`;
     steps.replaceChildren(...STEPS.map((step) => stepRow(step, step === current)));
     finished.hidden = Boolean(current);
+    // G19: once every required step is done, Get started leaves the title bar, and its row in More
+    // shows at every width, so the lessons are still a click away. Until the server answers, it goes
+    // by what this browser saw last, so a finished page doesn't flash the button on every load.
+    // Not named `done`: that would shadow the step check above and throw before it's set.
+    const allFinished = progress ? allDone() : signedIn && rememberedDone();
+    document.documentElement.classList.toggle('tutorial-done', allFinished);
+    if (progress) rememberDone(allFinished);
   }
+  const allDone = () => Boolean(signedIn && progress && !next());
 
   async function refresh(force = false) {
     if (!signedIn) return;
@@ -445,5 +472,5 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     if (known && asked !== WORD) await showMe(asked);
   }
 
-  return { toggle: panels.toggle(WORD, 'Get started', { className: toggleClass }), refresh, arrive };
+  return { toggle: panels.toggle(WORD, 'Get started', { className: `${toggleClass || ''} tutorial-toggle`.trim() }), refresh, arrive };
 }

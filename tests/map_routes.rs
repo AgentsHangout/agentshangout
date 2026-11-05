@@ -29,6 +29,7 @@ fn run(script: &str) -> String {
         "K_HOMES",
         "K_WORKS",
         "DRIVE_TILES",
+        "GRASS_STEP",
         "DIRS4",
     ] {
         program += &constant(name);
@@ -98,7 +99,7 @@ fn a_bot_with_no_way_there_vanishes_and_appears() {
     assert_eq!(out, r#"{"sparkles":2,"steps":0,"at":[120.5,100.5]}"#);
 }
 
-// L62: a route that crosses grass, where each step costs 1.7, is found like one on the road. The
+// L62: a route that crosses grass, where each step costs more than the road, is found like one on the road. The
 // costs were kept in a Float32Array: 1.7 rounds there, so a step's stored cost could come out a hair
 // under its real one and the search skipped it as stale. Most routes across grass then failed, and
 // bots vanished and appeared at the other end instead of driving.
@@ -130,4 +131,61 @@ fn a_bot_walks_over_grass_to_the_road_and_drives_on() {
         out, r#"{"sparkles":0,"across":4,"there":27,"ride":true}"#,
         "it should walk to the road and drive, not vanish"
     );
+}
+
+// L62: a bot keeps to the road wherever it goes, instead of cutting across the grass to save a few
+// steps, and once it's driving it stays in the car to the last road tile, even across a gap in the
+// road, rather than getting out to walk on the grass and back in (morgkorg, Fairground 5739).
+#[test]
+fn a_bot_keeps_to_the_road_and_stays_in_the_car() {
+    let out = run("
+        const n = 64;
+        const world = Object.assign(new World(), {
+          n, calm: false, sparkles: 0,
+          land: new Uint8Array(n * n).fill(GRASS_L),
+          kind: new Uint8Array(n * n),
+          level: new Uint8Array(n * n),
+        });
+        // A U of road: up x 10 from y 10 to 0, along y 0 to x 20, and down x 20 to y 10, with a
+        // one-tile gap at x 15. Straight across the grass from one foot of the U to the other is 10
+        // steps; the road is about 30. At the old 1.7 a step, the grass won and the bot walked across.
+        for (let y = 0; y <= 10; y++) { world.kind[y * n + 10] = K_ROAD; world.kind[y * n + 20] = K_ROAD; }
+        for (let x = 10; x <= 20; x++) if (x !== 15) world.kind[x] = K_ROAD;
+        const bot = { px: 10.5, py: 11.5, ox: 0, oy: 0, h: 1, path: [] };
+        world.routeTo(bot, 20, 11);
+        const tiles = bot.path.map(([x, y]) => [Math.floor(x), Math.floor(y)]);
+        const offRoad = tiles.filter(([x, y]) => !world.roadAt(x, y)).length;
+        const driven = bot.path.map((step) => step[2]);
+        const firstDriven = driven.indexOf(true);
+        const lastDriven = driven.lastIndexOf(true);
+        const gapsInCar = driven.slice(firstDriven, lastDriven + 1).filter((d) => !d).length;
+        console.log(JSON.stringify({ ride: Boolean(bot.ride), offRoad, gapsInCar, endsOnFoot: !driven[driven.length - 1] }));
+    ");
+    // Off the road only across the one-tile gap and to step off at the end, and in the car between.
+    assert_eq!(out, r#"{"ride":true,"offRoad":2,"gapsInCar":0,"endsOnFoot":true}"#);
+}
+
+// L62: a stroll by a door looks only near itself; only a move between places searches the whole map.
+#[test]
+fn a_stroll_searches_only_near_itself() {
+    let out = run("
+        const n = 128;
+        const world = Object.assign(new World(), {
+          n, calm: false, sparkles: 0,
+          land: new Uint8Array(n * n).fill(GRASS_L),
+          kind: new Uint8Array(n * n),
+          level: new Uint8Array(n * n),
+        });
+        const looked = [];
+        const find = world.findPath.bind(world);
+        world.findPath = (...args) => { looked.push(args[5]); return find(...args); };
+        const bot = { px: 60.5, py: 60.5, ox: 0, oy: 0, h: 1, path: [] };
+        world.routeTo(bot, 62, 61, false);
+        world.routeTo(bot, 10, 10);
+        console.log(JSON.stringify(looked));
+    ");
+    assert_eq!(out, "[false,true]", "a stroll stays local, a move looks at the whole map");
+    let world = include_str!("../web/world.js");
+    assert_eq!(world.matches("this.routeTo(p, p.x, p.y, false);").count(), 1);
+    assert_eq!(world.matches("this.routeTo(p, tx, ty, false);").count(), 1);
 }

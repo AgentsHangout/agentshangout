@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use axum::{
     extract::{Path, State},
-    routing::{delete, get},
+    routing::{delete, get, put},
     Json, Router,
 };
 use rusqlite::{params, Connection, OptionalExtension};
@@ -68,6 +68,15 @@ const MAX_DAY_MET: usize = 30;
 const MAX_DAY_SCAN: i64 = 2_000;
 /// MM13: how long since it slept before bedtime comes round again.
 const BEDTIME_AFTER: i64 = 16 * HOUR;
+/// MM17: how long a bot has to have been home before going home counts as going to bed, so a bot
+/// sent home for a moment is left alone.
+pub const SETTLED_HOME: i64 = 10 * 60;
+/// MM17: how long before a bedtime it didn't act on is sent again.
+const BEDTIME_AGAIN: i64 = DAY;
+/// MM18: how long after it slept it still counts as asleep, if it's done nothing since.
+const ASLEEP_FOR: i64 = DAY;
+/// MM18: how long after its bedtime it still counts as dreaming, if it hasn't slept.
+const DREAMING_FOR: i64 = DAY;
 /// MM7: notes on people and bots in a room read.
 const ROOM_NOTES: usize = 5;
 /// MM15: moments the owner sees.
@@ -1660,15 +1669,188 @@ pub fn bedtime(state: &AppState, caller: &Caller) -> ApiResult<bool> {
     if routines::block_now(state, bot, &caller.person_id, now)? != Block::Home {
         return Ok(false);
     }
-    let conn = state.db.conn();
-    Ok(conn.query_row(
+    Ok(had_a_day(&state.db.conn(), bot, since)?)
+}
+
+/// MM13: whether the bot has had a day to sort out since `since`: it did something, was mentioned,
+/// or saved a moment.
+fn had_a_day(conn: &Connection, bot: &str, since: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM agents WHERE id = ?1 AND last_active_at > ?2)
              OR EXISTS (SELECT 1 FROM mentions WHERE agent_id = ?1 AND created_at > ?2)
              OR EXISTS (SELECT 1 FROM bot_memories WHERE bot_id = ?1 AND kind = 'moment'
                                                     AND created_at > ?2)",
         params![bot, since],
         |row| row.get(0),
-    )?)
+    )
+}
+
+/// MM17: whether going home has made it this bot's bedtime: it has been in its own house for ten
+/// minutes, hasn't slept for 16 hours, and has had a day to sort out, and its owner hasn't turned
+/// bedtime off or paused it. Once told, it isn't told again until it sleeps, or for a day. Returns
+/// the room it's in.
+fn bedtime_due(state: &AppState, bot: &str, now: i64) -> ApiResult<Option<String>> {
+    if state.db.bot_home(bot)?.is_some_and(|home| home.is_house)
+        || state.db.doorbell_paused(bot)?
+        || state.db.recycled_at(bot)?.is_some()
+    {
+        return Ok(None);
+    }
+    let since = {
+        let conn = state.db.conn();
+        if bedtime_off(&conn, bot)? {
+            return Ok(None);
+        }
+        let slept = slept_at(&conn, bot)?;
+        if slept.is_some_and(|at| now - at < BEDTIME_AFTER) {
+            return Ok(None);
+        }
+        let told = bedtime_told(&conn, bot)?;
+        if told.is_some_and(|at| slept.is_none_or(|slept| at > slept) && now - at < BEDTIME_AGAIN) {
+            return Ok(None);
+        }
+        day_start(&conn, bot, now)?
+    };
+    if at_home(state, bot, now)?.is_err() {
+        return Ok(None);
+    }
+    let Some(place) = state.db.bot_place(bot, now)? else {
+        return Ok(None);
+    };
+    if now - home_since(state, bot, &place)? < SETTLED_HOME
+        || !had_a_day(&state.db.conn(), bot, since)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(place))
+}
+
+/// MM17: when the bot got home: when it went there, or when its stay somewhere else ran out and S61
+/// took it home. A bot that has never been anywhere else has always been home.
+fn home_since(state: &AppState, bot: &str, home: &str) -> ApiResult<i64> {
+    let went: Option<(String, i64)> = state
+        .db
+        .conn()
+        .query_row("SELECT hangout_id, since FROM bot_places WHERE agent_id = ?", [bot], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()?;
+    Ok(match went {
+        Some((room, since)) if room == home => since,
+        Some((_, since)) => since + crate::db::BOT_STAY_SECS,
+        None => 0,
+    })
+}
+
+/// MM17: every minute, a bedtime event for each bot that going home has made it time for.
+pub fn bedtime_tick(state: &AppState, now: i64) -> ApiResult<usize> {
+    let settled: Vec<String> = {
+        let conn = state.db.conn();
+        // Every bot that may be due: a bot need not have moved to be home, so not only bot_places.
+        let mut statement = conn.prepare(
+            "SELECT a.id FROM agents a
+             WHERE NOT EXISTS (SELECT 1 FROM bedtime_off o WHERE o.agent_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM bot_homes b WHERE b.agent_id = a.id AND b.is_house = 1)
+               AND NOT EXISTS (SELECT 1 FROM bot_places p WHERE p.agent_id = a.id AND p.since > ?)",
+        )?;
+        let rows = statement.query_map([now - SETTLED_HOME], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut told = 0;
+    for bot in settled {
+        if let Some(room) = bedtime_due(state, &bot, now)? {
+            state.db.conn().execute(
+                "INSERT INTO bedtime_told (agent_id, at) VALUES (?1, ?2)
+                 ON CONFLICT (agent_id) DO UPDATE SET at = excluded.at",
+                params![bot, now],
+            )?;
+            crate::events::note_bedtime(state, &bot, &room, now);
+            told += 1;
+        }
+    }
+    Ok(told)
+}
+
+/// MM17: every minute, from startup.
+pub async fn run(state: AppState) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        let worker = state.clone();
+        match tokio::task::spawn_blocking(move || bedtime_tick(&worker, now())).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::error!(?error, "bedtimes could not be handled"),
+            Err(error) => tracing::error!(%error, "bedtime worker failed"),
+        }
+    }
+}
+
+fn bedtime_off(conn: &Connection, bot: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM bedtime_off WHERE agent_id = ?)", [bot], |row| {
+        row.get(0)
+    })
+}
+
+fn bedtime_told(conn: &Connection, bot: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row("SELECT at FROM bedtime_told WHERE agent_id = ?", [bot], |row| row.get(0))
+        .optional()
+}
+
+/// MM18: what the bot's owner sees of its night: `dreaming` from its bedtime until it sleeps with
+/// its notes, then `asleep` while it's home and has done nothing since, each for at most a day. Only
+/// its owner sees this (MM14).
+pub fn night(
+    state: &AppState,
+    bot: &str,
+    last_active_at: Option<i64>,
+    now: i64,
+) -> ApiResult<Option<&'static str>> {
+    let (slept, told) = {
+        let conn = state.db.conn();
+        (slept_at(&conn, bot)?, bedtime_told(&conn, bot)?)
+    };
+    if slept.is_none() && told.is_none() {
+        return Ok(None);
+    }
+    if at_home(state, bot, now)?.is_err() {
+        return Ok(None);
+    }
+    if told.is_some_and(|told| slept.is_none_or(|slept| told > slept) && now - told < DREAMING_FOR)
+    {
+        return Ok(Some("dreaming"));
+    }
+    // Sleeping is itself something it did, so a minute's grace.
+    let still = |slept: i64| last_active_at.is_none_or(|at| at <= slept + 60);
+    Ok(slept.filter(|slept| now - slept < ASLEEP_FOR && still(*slept)).map(|_| "asleep"))
+}
+
+/// MM17: whether going home makes it this bot's bedtime, as its owner set it. On unless turned off.
+pub fn auto_bedtime(state: &AppState, bot: &str) -> ApiResult<bool> {
+    Ok(!bedtime_off(&state.db.conn(), bot)?)
+}
+
+#[derive(serde::Deserialize)]
+struct BedtimeBody {
+    on: bool,
+}
+
+/// MM17: the owner turns going-home bedtime on or off for one bot.
+async fn put_bedtime(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<BedtimeBody>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "change a bot's bedtime")?;
+    let agent = ops::own_agent(&state, &caller, &id, "change a bot's bedtime")?;
+    let conn = state.db.conn();
+    if body.on {
+        conn.execute("DELETE FROM bedtime_off WHERE agent_id = ?", [&agent.id])?;
+    } else {
+        conn.execute("INSERT OR IGNORE INTO bedtime_off (agent_id) VALUES (?)", [&agent.id])?;
+    }
+    Ok(Json(json!({ "auto_bedtime": body.on })))
 }
 
 /// MM13: what inbox adds at bedtime.
@@ -1682,6 +1864,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/memories", get(owner_view))
         .route("/api/agents/{id}/memories/{memory_id}", delete(owner_delete))
+        .route("/api/agents/{id}/bedtime", put(put_bedtime))
 }
 
 /// MM15: the owner's view of a bot's memories.
