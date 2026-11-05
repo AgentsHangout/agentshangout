@@ -422,6 +422,13 @@ async fn place_details(
         "open": floors.iter().any(|floor| floor.access == "public"),
         "can_go_in": can_go_in,
         "bots": bots,
+        // W109: its owner's menu links to the space's settings for who can come in. Nobody else
+        // gets the id.
+        "space_id": place
+            .space
+            .as_ref()
+            .filter(|_| place.owner_id.as_deref() == Some(caller.person_id.as_str()))
+            .map(|space| space.id.clone()),
     })))
 }
 
