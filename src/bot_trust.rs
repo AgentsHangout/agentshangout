@@ -258,21 +258,22 @@ pub fn may_wake(state: &AppState, bot: &Agent, message: &Message) -> ApiResult<b
     allowed(state, bot, &state.db.bot_trust(&bot.id)?.wake, person, message.agent_id.as_deref())
 }
 
-/// BT10 (#460): a bot named in this message that isn't in its room, and whose wake setting
-/// (friends or selected) lets the speaker reach it, is told who tagged it and the room's name, and
-/// nothing else: never the words, and it gets no way into the room. `here` are the bots in the room,
-/// which the room's own mentions handle. The ring takes E22/E31's holds and a pause stops it.
+/// BT10 (#460): a bot `@`-tagged in this message that isn't in its room, and whose wake setting
+/// (friends or selected) lets the speaker reach it, is told who tagged it and the room's name, or
+/// "a private room" when it isn't a public floor, and nothing else: never the words, and no way
+/// into the room. `here` are the bots in the room, which the room's own mentions handle. Only a
+/// tag that may ring (E22/E31's holds, not paused) is recorded as an event and rung.
 pub fn note_absent_tags(
     state: &AppState,
     message: &Message,
     here: &std::collections::HashSet<String>,
 ) -> ApiResult<()> {
-    if message.kind != "chat" {
+    if message.kind != "chat" || !message.body.contains('@') {
         return Ok(());
     }
     let at = message.created_at;
     let mut room = None;
-    for id in state.db.bots_reachable_elsewhere()? {
+    for id in state.db.bots_tagged_elsewhere(&message.body)? {
         if here.contains(&id) || message.agent_id.as_deref() == Some(id.as_str()) {
             continue;
         }
@@ -281,10 +282,7 @@ pub fn note_absent_tags(
         {
             continue;
         }
-        // Only me (BT4) still means only its owner.
-        let from_owner = message.agent_id.is_none()
-            && message.person_id.as_deref() == Some(bot.owner_id.as_str());
-        if state.db.wakes_only_for_owner(&bot.id)? && !from_owner {
+        if !only_me_allows(state, &bot, message)? {
             continue;
         }
         let (tagger, tagger_id) = match (&message.agent_id, &message.person_id) {
@@ -296,17 +294,35 @@ pub fn note_absent_tags(
             }
             (None, None) => continue,
         };
-        if room.is_none() {
-            room = Some(state.db.hangout(&message.hangout_id)?.map(|h| h.name).unwrap_or_default());
+        if tagger.trim().is_empty() {
+            continue;
         }
-        let room = room.as_deref().unwrap_or_default();
-        let (tag, ring) = state.db.add_absent_tag(&bot.id, &tagger, &tagger_id, room, at)?;
-        crate::events::note_absent_tag(state, &bot.id, tag, &tagger, room);
+        if room.is_none() {
+            let public = state.db.floor(&message.hangout_id)?.is_some_and(|f| f.access == "public");
+            let name = state.db.hangout(&message.hangout_id)?.map(|h| h.name).unwrap_or_default();
+            room = Some(if public && !name.trim().is_empty() {
+                name
+            } else {
+                "a private room".to_string()
+            });
+        }
+        let room = room.as_deref().unwrap_or("a private room");
+        let paused = state.db.doorbell_paused(&bot.id)?;
+        let (tag, ring) =
+            state.db.add_absent_tag(&bot.id, &tagger, &tagger_id, room, message.id, paused, at)?;
         if ring {
-            crate::notify::send_absent_tag(state, &bot.id, &tagger);
+            crate::events::note_absent_tag(state, &bot.id, tag, &tagger, room);
+            crate::notify::send_absent_tag(state, &bot.id, &tagger, message.clone());
         }
     }
     Ok(())
+}
+
+/// BT4, BT10: Only me still means only its owner.
+pub fn only_me_allows(state: &AppState, bot: &Agent, message: &Message) -> ApiResult<bool> {
+    let from_owner =
+        message.agent_id.is_none() && message.person_id.as_deref() == Some(bot.owner_id.as_str());
+    Ok(from_owner || !state.db.wakes_only_for_owner(&bot.id)?)
 }
 
 /// MU11: whether `bot` lets this other bot wake it, as a mention from that bot would be judged.

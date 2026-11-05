@@ -1791,14 +1791,16 @@ CREATE TABLE IF NOT EXISTS owner_answers_seen (
     question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
     seen_at      INTEGER NOT NULL
 );
--- BT10: a bot named in a room it isn't in, by someone its wake setting lets reach it (#460). Who
--- tagged it and the room's name, never the words, and whether it was rung.
+-- BT10: a bot tagged in a room it isn't in, by someone its wake setting lets reach it (#460). Who
+-- tagged it and the room's name or "a private room", and whether it was rung. message_id is kept
+-- only to check the tagger again before a webhook goes; the bot is never told it. Kept 7 days.
 CREATE TABLE IF NOT EXISTS absent_tags (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     tagger      TEXT NOT NULL,
     tagger_id   TEXT NOT NULL,
     room        TEXT NOT NULL,
+    message_id  INTEGER NOT NULL,
     at          INTEGER NOT NULL,
     rung        INTEGER NOT NULL
 );

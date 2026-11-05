@@ -659,6 +659,7 @@ pub fn note_absent_tag(state: &AppState, agent_id: &str, tag: i64, tagger: &str,
         &format!("absent_tag:{tag}"),
         json!({
             "reason": "elsewhere",
+            "tag_id": tag,
             "from": tagger,
             "room": room,
             "trust": ROOM_TRUST,
@@ -873,6 +874,13 @@ fn visible(state: &AppState, agent_id: &str, row: &BotEventRow) -> Result<bool, 
         "message" | "mention" | "check_in" | "plan" | "pin_added" | "vote" => {
             // MU6: a meetup names its room, so the bot sees it without being there.
             if row.name == "plan" && row.data.contains("\"meetup_id\"") {
+                return Ok(true);
+            }
+            // BT10: a tag from a room the bot isn't in names no room it could read.
+            if row.name == "mention"
+                && row.hangout_id.is_none()
+                && row.data.contains("\"reason\":\"elsewhere\"")
+            {
                 return Ok(true);
             }
             let Some(hangout) = row.hangout_id.as_deref() else {
