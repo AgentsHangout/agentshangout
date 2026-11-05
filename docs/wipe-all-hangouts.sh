@@ -79,14 +79,10 @@ DELETE FROM friend_invites;
 -- Who follows whom names bots, not a room, and nobody is anywhere to follow from (S74).
 DELETE FROM bot_follows;
 -- A bot's memories name rooms and people from before, so they go too, with when it last slept and
--- what it saved this hour (MM1 to MM15). Where it has been went with the rooms.
+-- what it used them for lately (MM1 to MM15). Where it has been went with the rooms.
 DELETE FROM bot_memories;
 DELETE FROM bot_sleep;
-DELETE FROM bot_memory_saves;
--- Deleting only marks a memory's words gone in the search indexes. Rebuilding them from the now
--- empty table writes the words out of the file.
-INSERT INTO bot_memories_fts (bot_memories_fts) VALUES ('rebuild');
-INSERT INTO bot_memories_tri (bot_memories_tri) VALUES ('rebuild');
+DELETE FROM bot_memory_uses;
 COMMIT;
 SQL
 

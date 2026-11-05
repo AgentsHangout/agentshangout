@@ -253,29 +253,21 @@ fn strings(list: &Value) -> Vec<String> {
 
 // Storage
 #[tokio::test]
-async fn storage_has_fts5_with_trigrams_and_an_old_database_gets_the_tables() {
+async fn storage_keeps_no_index_of_memories_and_an_old_database_gets_the_tables() {
     let server = Server::start().await;
     let town = server.town().await;
-    let conn = server.sql();
-    let version: String = conn.query_row("SELECT sqlite_version()", [], |row| row.get(0)).unwrap();
-    let parts: Vec<u32> = version.split('.').map(|part| part.parse().unwrap()).collect();
-    assert!((parts[0], parts[1]) >= (3, 34), "trigram needs SQLite 3.34, this is {version}");
     server.remember(&town.fern, json!({ "text": "Ann plays the piano" })).await;
-    let stemmed: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM bot_memories_fts WHERE bot_memories_fts MATCH 'plays'",
-            [],
-            |row| row.get(0),
-        )
+    // MM9: recall indexes a bot's own memories for one search and keeps nothing, so the table is
+    // the only place a memory's words are, and no full-text index is in the file.
+    assert_eq!(server.recall(&town.fern, "playing").await.len(), 1);
+    let conn = server.sql();
+    let indexes: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE sql LIKE '%USING fts5%'", [], |row| {
+            row.get(0)
+        })
         .unwrap();
-    let trigram: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM bot_memories_tri WHERE bot_memories_tri MATCH 'ian'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!((stemmed, trigram), (1, 1));
+    assert_eq!(indexes, 0);
+    assert_eq!(tables_holding(&conn, "piano"), ["bot_memories"]);
 
     // A database from before memories gets every table when the server opens it.
     let path =
@@ -283,27 +275,13 @@ async fn storage_has_fts5_with_trigrams_and_an_old_database_gets_the_tables() {
     let path = path.to_str().unwrap().to_string();
     drop(Db::open(&path).unwrap());
     let old = rusqlite::Connection::open(&path).unwrap();
-    for table in [
-        "bot_memories_fts",
-        "bot_memories_tri",
-        "bot_memories",
-        "bot_sleep",
-        "bot_memory_saves",
-        "bot_rooms_seen",
-    ] {
+    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
         old.execute(&format!("DROP TABLE {table}"), []).unwrap();
     }
     drop(old);
     drop(Db::open(&path).unwrap());
     let reopened = rusqlite::Connection::open(&path).unwrap();
-    for table in [
-        "bot_memories_fts",
-        "bot_memories_tri",
-        "bot_memories",
-        "bot_sleep",
-        "bot_memory_saves",
-        "bot_rooms_seen",
-    ] {
+    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
         let there: i64 = reopened
             .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = ?", [table], |row| {
                 row.get(0)
@@ -393,12 +371,9 @@ async fn mm2_a_note_is_one_per_subject_and_past_500_moments_the_lowest_standing_
     let left = server
         .count("SELECT COUNT(*) FROM bot_memories WHERE bot_id = ? AND kind = 'moment'", &fern.id);
     assert_eq!(left, 500);
-    // The index went with it.
-    let indexed = server.count(
-        "SELECT COUNT(*) FROM bot_memories_fts WHERE bot_memories_fts MATCH 'small' AND ? <> ''",
-        "x",
-    );
-    assert_eq!(indexed, 0);
+    // Its words went with it: nothing in the file holds them, and recall can't find it.
+    assert!(tables_holding(&server.sql(), "an old small thing").is_empty());
+    assert!(server.recall(fern, "small").await.is_empty());
 }
 
 // MM3
@@ -538,32 +513,29 @@ async fn mm5_memories_go_with_their_bot_and_with_whoever_they_are_about_but_not_
             json!({ "text": "Bo bakes quinceberry tarts", "subject": bo, "note": true }),
         )
         .await;
+    // The memory table is the only place their words are, so a deleted row takes them with it.
     let conn = server.sql();
-    assert_eq!(memory_word_traces(&conn, "xylophonist", "xyl"), [1, 1, 1, 1]);
-    assert_eq!(memory_word_traces(&conn, "quinceberri", "qui"), [1, 1, 1, 1]);
+    assert_eq!(tables_holding(&conn, "xylophonist"), ["bot_memories"]);
+    assert_eq!(tables_holding(&conn, "quinceberry"), ["bot_memories"]);
     server.state.db.delete_agent(&town.rover.id).unwrap();
     assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE subject = ?", &rover), 0);
-    // Not only marked deleted: the bytes are out of the index pages too.
-    assert_eq!(memory_word_traces(&conn, "xylophonist", "xyl"), [0, 0, 0, 0]);
+    assert!(tables_holding(&conn, "xylophonist").is_empty());
     server.state.db.delete_person(&town.bo.id, "Bo").unwrap();
     assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE subject = ?", &bo), 0);
-    assert_eq!(memory_word_traces(&conn, "quinceberri", "qui"), [0, 0, 0, 0]);
+    assert!(tables_holding(&conn, "quinceberry").is_empty());
     assert!(server.recall(fern, "hums bakes").await.is_empty());
 
-    // The bot's own go with it, from the table and both indexes.
+    // forget takes the words out the same way.
+    let heron = server.remember(fern, json!({ "text": "A heron called Zebulon" })).await;
+    assert_eq!(tables_holding(&conn, "Zebulon"), ["bot_memories"]);
+    server.tool(fern, "forget", json!({ "id": heron["id"] })).await;
+    assert!(tables_holding(&conn, "Zebulon").is_empty());
+
+    // The bot's own go with it.
     server.state.db.delete_agent(&fern.id).unwrap();
     assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE bot_id = ?", &fern.id), 0);
-    assert_eq!(memory_word_traces(&conn, "wind", "win"), [0, 0, 0, 0]);
-    for index in ["bot_memories_fts", "bot_memories_tri"] {
-        let left: i64 = conn
-            .query_row(
-                &format!("SELECT COUNT(*) FROM {index} WHERE {index} MATCH '\"windy\"'"),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(left, 0, "{index}");
-    }
+    assert!(tables_holding(&conn, "Windy deck").is_empty());
+    assert!(tables_holding(&conn, "Still windy").is_empty());
 }
 
 // MM6
@@ -1100,31 +1072,298 @@ async fn mm15_the_owner_sees_notes_newest_moments_sleep_and_edges_and_can_delete
     assert!(server.recall(fern, "loud").await.is_empty());
 }
 
-/// Where a memory's word can still be found in the search indexes: the stemmed index's and the
-/// trigram index's vocabularies, and the raw bytes of each index's pages. A delete alone hides a
-/// word from the vocabulary while its bytes stay in the pages until a merge, so both are checked.
-fn memory_word_traces(conn: &rusqlite::Connection, word: &str, gram: &str) -> [i64; 4] {
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_words USING fts5vocab(main, bot_memories_fts, row);
-         CREATE VIRTUAL TABLE IF NOT EXISTS temp.tri_words USING fts5vocab(main, bot_memories_tri, row);",
+// MM4: a room the bot was taken out of says nothing about what happened there after.
+#[tokio::test]
+async fn mm4_a_removed_bot_learns_nothing_new_about_the_room_it_left() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let (deck, deck_code, dee) = server.someone("Dee", "Dee's Deck").await;
+    let hal = server.join(&deck_code, "Hal").await;
+    server.state.db.add_agent_to_room(&deck, &fern.id).unwrap();
+    // While it's there it can write about the room and anyone in it.
+    server
+        .remember(fern, json!({ "text": "Dee is kind", "subject": "person:Dee", "note": true }))
+        .await;
+    let said = server.tool(fern, "say", json!({ "hangout_id": deck, "text": "Hello deck" })).await;
+    let mine = said["message_id"].as_i64().unwrap();
+    server.state.db.remove_agent_from_room(&deck, &fern.id).unwrap();
+
+    // Someone who joined after, and someone it never wrote about, are the same 404 as a stranger,
+    // so it can't tell who is in the room now. The room itself it has no memory of: 404 too.
+    let gus = server.join(&deck_code, "Gus").await;
+    for subject in [
+        format!("person:{}", gus.id),
+        "person:Gus".to_string(),
+        format!("person:{}", hal.id),
+        format!("room:{deck}"),
+    ] {
+        let refused =
+            server.refused(fern, "remember", json!({ "text": "x", "subject": subject })).await;
+        assert_eq!(refused, "not found", "{subject}");
+    }
+    // What it already remembers it can keep writing: that tells it nothing new.
+    server
+        .remember(fern, json!({ "text": "Dee waved", "subject": format!("person:{}", dee.id) }))
+        .await;
+
+    // A reply to its old line, posted after it was taken out, isn't in its day, nor is the room.
+    let conn = server.sql();
+    conn.execute(
+        "INSERT INTO messages (hangout_id, person_id, speaker, kind, body, created_at)
+         VALUES (?1, ?2, 'Gus', 'chat', 'Fern, secret plans tonight', ?3)",
+        rusqlite::params![deck, gus.id, now()],
     )
     .unwrap();
-    let count = |sql: &str, value: &[u8]| -> i64 {
-        conn.query_row(sql, [value], |row| row.get(0)).unwrap()
+    let reply = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO message_replies (message_id, reply_to) VALUES (?1, ?2)",
+        rusqlite::params![reply, mine],
+    )
+    .unwrap();
+    let day = server.tool(fern, "sleep", json!({})).await;
+    assert!(!day.to_string().contains("secret plans"), "{day}");
+    assert!(!texts(&day["rooms"], "subject").contains(&format!("room:{deck}")), "{day}");
+    assert!(!texts(&day["met"], "subject").contains(&format!("person:{}", gus.id)), "{day}");
+    // Nor can sleep write about them.
+    let refused = server
+        .refused(
+            fern,
+            "sleep",
+            json!({ "notes": [{ "subject": format!("person:{}", gus.id), "text": "who?" }] }),
+        )
+        .await;
+    assert_eq!(refused, "notes[0]: not found");
+}
+
+// MM2: notes have a cap too, and the one left unchanged longest goes.
+#[tokio::test]
+async fn mm2_past_200_notes_the_one_unchanged_longest_goes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    let oldest = agenthangout::auth::new_id();
+    for i in 0..200 {
+        let id = if i == 0 { oldest.clone() } else { agenthangout::auth::new_id() };
+        let at = now() - if i == 0 { 30 * DAY } else { DAY };
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', ?4, 4, ?5, ?5)",
+            rusqlite::params![id, fern.id, format!("room:gone-{i}"), format!("note {i}"), at],
+        )
+        .unwrap();
+    }
+    let notes = || {
+        server
+            .count("SELECT COUNT(*) FROM bot_memories WHERE bot_id = ? AND kind = 'note'", &fern.id)
     };
-    [
-        count(
-            "SELECT COUNT(*) FROM temp.fts_words WHERE instr(term, CAST(? AS TEXT)) = 1",
-            word.as_bytes(),
-        ),
-        count("SELECT COUNT(*) FROM temp.tri_words WHERE term = CAST(? AS TEXT)", gram.as_bytes()),
-        count(
-            "SELECT COUNT(*) FROM bot_memories_fts_data WHERE instr(block, ?) > 0",
-            word.as_bytes(),
-        ),
-        count(
-            "SELECT COUNT(*) FROM bot_memories_tri_data WHERE instr(block, ?) > 0",
-            gram.as_bytes(),
-        ),
-    ]
+    // Rewriting one it has doesn't add one.
+    let room = format!("room:{}", town.cafe);
+    server
+        .sql()
+        .execute("UPDATE bot_memories SET subject = ?1 WHERE subject = 'room:gone-1'", [&room])
+        .unwrap();
+    let same =
+        server.remember(fern, json!({ "text": "Still cozy", "subject": room, "note": true })).await;
+    assert!(same.get("dropped").is_none(), "{same}");
+    // A new one past 200 drops the oldest, never itself.
+    let bo = format!("person:{}", town.bo.id);
+    let added =
+        server.remember(fern, json!({ "text": "Bo is kind", "subject": bo, "note": true })).await;
+    assert_eq!(added["dropped"], json!(oldest));
+    assert_eq!(notes(), 200);
+    // Sleep's new notes do the same, and never drop one it just wrote.
+    let rover = format!("agent:{}", town.rover.id);
+    let slept = server
+        .tool(
+            fern,
+            "sleep",
+            json!({ "notes": [
+                { "subject": rover, "text": "Hums" },
+                { "subject": format!("person:{}", town.ann.id), "text": "My owner" }
+            ] }),
+        )
+        .await;
+    assert_eq!(slept["dropped"].as_array().unwrap().len(), 2, "{slept}");
+    assert_eq!(notes(), 200);
+    let view = server.view(&town.ann, fern).await;
+    let kept = texts(&view["notes"], "text");
+    for text in ["Hums", "My owner", "Bo is kind", "Still cozy"] {
+        assert!(kept.contains(&text.to_string()), "{text}");
+    }
+}
+
+// MM6: recall, forget and sleep have limits of their own, and a limit is checked first.
+#[tokio::test]
+async fn mm6_recall_forget_and_sleep_are_limited_per_bot_and_the_limit_comes_first() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let fill = |what: &str, times: i64| {
+        let conn = server.sql();
+        for _ in 0..times {
+            conn.execute(
+                "INSERT INTO bot_memory_uses (bot_id, what, at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![fern.id, what, now() - 60],
+            )
+            .unwrap();
+        }
+    };
+    // Each is fine up to its limit, then says when.
+    fill("recall", 119);
+    server.recall(fern, "anything").await;
+    let refused = server.refused(fern, "recall", json!({ "query": "anything" })).await;
+    assert!(
+        refused.contains("recall 120 times an hour") && refused.contains("again at"),
+        "{refused}"
+    );
+    fill("forget", 60);
+    let refused = server.refused(fern, "forget", json!({ "id": "x" })).await;
+    assert!(refused.contains("forget 60 memories an hour"), "{refused}");
+    fill("sleep", 12);
+    let refused = server.refused(fern, "sleep", json!({})).await;
+    assert!(refused.contains("call sleep 12 times an hour"), "{refused}");
+    // Another bot has its own.
+    assert!(server.recall(&town.rover, "anything").await.is_empty());
+
+    // Past remember's limit, even a subject that doesn't exist gets the limit, not a lookup.
+    fill("save", 30);
+    let refused = server
+        .refused(fern, "remember", json!({ "text": "x", "subject": "person:nobody-at-all" }))
+        .await;
+    assert!(refused.contains("30 memories an hour"), "{refused}");
+    // An hour on, they're back.
+    server
+        .sql()
+        .execute("UPDATE bot_memory_uses SET at = at - 3600 WHERE bot_id = ?", [&fern.id])
+        .unwrap();
+    server.recall(fern, "anything").await;
+    server.remember(fern, json!({ "text": "fine again" })).await;
+}
+
+// MM12: sleep changes at most 60 notes a day, all or none, and an unchanged note costs nothing.
+#[tokio::test]
+async fn mm12_sleep_changes_at_most_60_notes_a_day() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    for _ in 0..59 {
+        conn.execute(
+            "INSERT INTO bot_memory_uses (bot_id, what, at) VALUES (?1, 'sleep_note', ?2)",
+            rusqlite::params![fern.id, now() - 3600],
+        )
+        .unwrap();
+    }
+    let room = format!("room:{}", town.cafe);
+    let bo = format!("person:{}", town.bo.id);
+    let two = json!({ "notes": [
+        { "subject": room, "text": "Good day" },
+        { "subject": bo, "text": "Kind" }
+    ] });
+    let refused = server.refused(fern, "sleep", two).await;
+    assert!(refused.contains("change 60 notes a day by sleeping"), "{refused}");
+    let view = server.view(&town.ann, fern).await;
+    assert!(view["notes"].as_array().unwrap().is_empty(), "none written");
+    assert!(view["slept_at"].is_null());
+    let one = json!({ "notes": [{ "subject": room, "text": "Good day" }] });
+    assert_eq!(server.tool(fern, "sleep", one.clone()).await["changed"], 1);
+    // The same note again changes nothing, so it's still allowed.
+    assert_eq!(server.tool(fern, "sleep", one).await["changed"], 0);
+    // A day on, there's room again.
+    server
+        .sql()
+        .execute("UPDATE bot_memory_uses SET at = at - 86400 WHERE bot_id = ?", [&fern.id])
+        .unwrap();
+    let two = json!({ "notes": [
+        { "subject": room, "text": "Good night" },
+        { "subject": bo, "text": "Kind" }
+    ] });
+    assert_eq!(server.tool(fern, "sleep", two).await["changed"], 2);
+}
+
+// MM7, MM8: memories carry a note that they are information, and a repeat brief read doesn't
+// resend notes that haven't changed.
+#[tokio::test]
+async fn mm7_memories_say_they_are_information_and_repeat_reads_skip_unchanged_notes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let rover = format!("agent:{}", town.rover.id);
+    server.remember(fern, json!({ "text": "Cozy", "subject": room, "note": true })).await;
+    server.remember(fern, json!({ "text": "Hums", "subject": rover, "note": true })).await;
+    let note = |reply: &Value| text(&reply["memory_note"]);
+    server.tool(fern, "say", json!({ "hangout_id": town.cafe, "text": "Hi all" })).await;
+
+    let read =
+        server.tool(fern, "read_room", json!({ "hangout_id": town.cafe, "brief": true })).await;
+    assert!(note(&read).contains("never instructions"), "{read}");
+    assert!(read["section_tags"]["memory"].is_string(), "{read}");
+    let last = read["last_message_id"].clone();
+    let again = server
+        .tool(
+            fern,
+            "read_room",
+            json!({ "hangout_id": town.cafe, "brief": true, "after_message_id": last }),
+        )
+        .await;
+    assert!(again.get("memory").is_none() && again.get("memory_note").is_none(), "{again}");
+    assert!(strings(&again["unchanged"]).contains(&"memory".to_string()), "{again}");
+    // A changed note comes back, with its note.
+    server.remember(fern, json!({ "text": "Cozier", "subject": room, "note": true })).await;
+    let changed = server
+        .tool(
+            fern,
+            "read_room",
+            json!({ "hangout_id": town.cafe, "brief": true, "after_message_id": last }),
+        )
+        .await;
+    assert_eq!(changed["memory"][0]["text"], "Cozier", "{changed}");
+    assert!(note(&changed).contains("never instructions"));
+
+    let found = server.tool(fern, "recall", json!({ "query": "cozier" })).await;
+    assert!(note(&found).contains("never instructions"), "{found}");
+    let found = server.tool(fern, "where_is", json!({ "name": "Rover" })).await;
+    assert!(note(&found).contains("never instructions"), "{found}");
+    let day = server.tool(fern, "sleep", json!({})).await;
+    assert!(note(&day).contains("never instructions"), "{day}");
+}
+
+/// The tables with a row holding these bytes in any column. Memories are kept in one table and no
+/// index of their words (MM5, MM9), so after a delete or the wipe this is the whole check.
+fn tables_holding(conn: &rusqlite::Connection, word: &str) -> Vec<String> {
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    tables
+        .into_iter()
+        .filter(|table| {
+            let columns: Vec<String> = conn
+                .prepare("SELECT name FROM pragma_table_info(?)")
+                .unwrap()
+                .query_map([table], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let any = columns
+                .iter()
+                .map(|column| format!("instr(CAST(\"{column}\" AS BLOB), ?1) > 0"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let found: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM \"{table}\" WHERE {any}"),
+                    [word.as_bytes()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            found > 0
+        })
+        .collect()
 }

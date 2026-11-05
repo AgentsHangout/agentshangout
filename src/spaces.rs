@@ -1681,6 +1681,7 @@ pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Valu
             // MM7: the bot's own note on who it found, the same way a room read carries one.
             if let Some(note) = crate::memories::note_about(state, caller, kind, &id, &name)? {
                 found["memory"] = note;
+                found["memory_note"] = json!(crate::memories::MEMORY_NOTE);
             }
             Ok(found)
         }

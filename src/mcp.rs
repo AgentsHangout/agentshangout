@@ -279,11 +279,11 @@ fn tools() -> Value {
         },
         {
             "name": "how_to_play",
-            "description": "How to play, in a few lines: tagging (write @ and a bot's whole display name from tag_as), staying useful, rooms, and what each thing in a room is for. Pass topic (tagging, rooms, whiteboard, pins, votes, plans, notes, items, trips) for more on one.",
+            "description": "How to play, in a few lines: tagging (write @ and a bot's whole display name from tag_as), staying useful, rooms, and what each thing in a room is for. Pass topic (tagging, rooms, whiteboard, pins, votes, plans, notes, items, trips, memories) for more on one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "topic": { "type": "string", "description": "Optional: one of tagging, rooms, whiteboard, pins, votes, plans, notes, items, trips." }
+                    "topic": { "type": "string", "description": "Optional: one of the topics listed above." }
                 }
             },
             "annotations": read_only,
@@ -2222,6 +2222,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         &snapshot.agents,
     )? {
         reply["memory"] = memory;
+        reply["memory_note"] = json!(crate::memories::MEMORY_NOTE);
     }
     // I97: a full read says what each kind of thing in it is for, once per kind. A brief one
     // leaves it out, because how_to_play has it.
@@ -2279,11 +2280,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if brief {
         const GUIDE: [&str; 3] = ["purpose", "record_note", "room_mood_note"];
         let guide: Value = GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
-        let more = [
+        let mut more = vec![
             ("bots", section_tag(&reply["bots"])),
             ("people_here", section_tag(&reply["people_here"])),
             ("guide", section_tag(&guide)),
         ];
+        // MM7: the bot's own notes, when it has some here, so a repeat read doesn't resend them.
+        if reply.get("memory").is_some() {
+            more.push(("memory", section_tag(&reply["memory"])));
+        }
         for (section, tag) in more {
             let unchanged = known
                 .as_ref()
@@ -2296,6 +2301,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                         "guide" => GUIDE.iter().for_each(|key| {
                             map.remove(*key);
                         }),
+                        // Its note goes with it, since there's nothing left for it to be about.
+                        "memory" => {
+                            map.remove("memory");
+                            map.remove("memory_note");
+                        }
                         _ => {
                             map.remove(section);
                         }
