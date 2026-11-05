@@ -28,6 +28,9 @@ pub const MIN_OPTIONS: usize = 2;
 pub const MAX_OPTIONS: usize = 6;
 pub const MAX_QUESTION_CHARS: usize = 200;
 pub const MAX_OPTION_CHARS: usize = 80;
+/// V9: how many votes one bot or person can open in a room in an hour, so opening, closing and
+/// opening again can't flood it.
+pub const OPENS_PER_HOUR: i64 = 6;
 /// V6: how long a closed vote stays in read_room.
 pub const SHOWN_SECS: i64 = 24 * 60 * 60;
 /// V8: said with every result, and in the tools, so nobody treats a poll as a yes.
@@ -104,8 +107,19 @@ pub fn open(
             "minutes must be from {MIN_MINUTES} to {MAX_MINUTES} (a day)"
         )));
     }
-    ops::note_agent_write(state, caller)?;
     let now = now();
+    let opened_lately = state.db.votes_opened_since(
+        hangout_id,
+        caller.agent_id.as_deref(),
+        &caller.person_id,
+        now - 3600,
+    )?;
+    if opened_lately >= OPENS_PER_HOUR {
+        return Err(ApiError::too_many_requests(format!(
+            "you've opened {OPENS_PER_HOUR} votes here this hour: try again later"
+        )));
+    }
+    ops::note_agent_write(state, caller)?;
     let opener = opener_name(state, caller)?;
     let announcement = format!(
         "{opener} opened a vote: {question} ({}). Everyone here can vote for {minutes} minutes. {NOT_APPROVAL}",
@@ -156,11 +170,20 @@ pub fn cast(state: &AppState, caller: &Caller, vote_id: &str, option: &str) -> A
             || ApiError::bad_request(format!("option must be one of: {}", vote.options.join(", "))),
         )?;
     ops::note_agent_write(state, caller)?;
+    // V10: whether they belong is as it is when they vote, and stays with the ballot.
+    let visitor = match caller.agent_id.as_deref() {
+        Some(agent_id) => !state.db.belongs_to_room(&vote.hangout_id, agent_id)?,
+        None => !state.db.is_member(&vote.hangout_id, &caller.person_id)?,
+    };
     let cast = match caller.agent_id.as_deref() {
-        Some(agent_id) => state.db.cast_ballot(&vote.id, agent_id, &caller.name, choice, now())?,
+        Some(agent_id) => {
+            state.db.cast_ballot(&vote.id, agent_id, &caller.name, choice, now())?
+                && state.db.mark_ballot_visitor(&vote.id, agent_id, visitor)?
+        }
         None => {
             let voter = opener_name(state, caller)?;
             state.db.cast_person_ballot(&vote.id, &caller.person_id, &voter, choice, now())?
+                && state.db.mark_ballot_visitor(&vote.id, &caller.person_id, visitor)?
         }
     };
     if !cast {
@@ -319,10 +342,11 @@ pub fn for_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     Ok(votes.iter().map(|vote| vote_for(vote, caller, now)).collect())
 }
 
-/// V11: a bot's inbox lists the open votes in the rooms it's in, with what it chose, so it knows
-/// there's something to vote on without reading every room.
-pub const VOTE_HOW: &str = "cast_vote with vote_id and one of the options, as written. You can \
-     change it while it's open. A room poll, not an owner's approval.";
+/// V11: a bot's inbox lists the open votes in the rooms it's in that it hasn't voted in, so it
+/// knows there's something to vote on without reading every room.
+pub const VOTE_HOW: &str = "Voting is up to you, even in a vote your owner opened: it's a \
+     question to the room, not a request from them. To vote, cast_vote with vote_id and one of the \
+     options as written; you can change it while it's open. A room poll, not an owner's approval.";
 
 pub fn open_for_bot(state: &AppState, caller: &Caller) -> ApiResult<Vec<Value>> {
     let Some(agent_id) = caller.agent_id.as_deref().filter(|_| !caller.is_house) else {
@@ -340,7 +364,10 @@ pub fn open_for_bot(state: &AppState, caller: &Caller) -> ApiResult<Vec<Value>> 
     }
     let mut shown = Vec::new();
     for vote in state.db.open_votes_in(&rooms, now, MAX_INBOX_VOTES)? {
-        if may_cast(state, caller, &vote.hangout_id).is_err() {
+        // Only what's still to do: one it voted in is in read_room, with you_voted.
+        if your_choice(&vote, caller).is_some()
+            || may_cast(state, caller, &vote.hangout_id).is_err()
+        {
             continue;
         }
         let room = state.db.hangout(&vote.hangout_id)?.map(|room| room.name).unwrap_or_default();
@@ -352,7 +379,6 @@ pub fn open_for_bot(state: &AppState, caller: &Caller) -> ApiResult<Vec<Value>> 
             "options": vote.options,
             "opened_by": vote.opener,
             "closes_at": iso(vote.closes_at),
-            "you_voted": your_choice(&vote, caller),
         }));
     }
     Ok(shown)

@@ -1954,6 +1954,12 @@ CREATE TABLE IF NOT EXISTS person_votes (
     vote_id     TEXT PRIMARY KEY REFERENCES votes(id) ON DELETE CASCADE,
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE
 );
+-- V10: ballots cast by someone who didn't belong to the room when they voted, bot or person.
+CREATE TABLE IF NOT EXISTS vote_visitors (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    voter_id    TEXT NOT NULL,
+    PRIMARY KEY (vote_id, voter_id)
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

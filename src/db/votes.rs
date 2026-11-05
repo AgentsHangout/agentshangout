@@ -85,11 +85,11 @@ fn vote_from_row(row: &Row) -> rusqlite::Result<Vote> {
 }
 
 fn with_ballots(conn: &Connection, mut vote: Vote) -> rusqlite::Result<Vote> {
-    // Bots' ballots and people's (V9), in the order they were cast. A visitor is one who doesn't
-    // belong to the room now (V10).
+    // Bots' ballots and people's (V9), in the order they were cast. A visitor is one who didn't
+    // belong to the room when they voted (V10).
     let mut stmt = conn.prepare(
         "SELECT b.agent_id, b.voter, COALESCE(p.name, ''), b.choice, 'bot',
-                NOT EXISTS (SELECT 1 FROM room_agents r WHERE r.hangout_id = ?2 AND r.agent_id = b.agent_id),
+                EXISTS (SELECT 1 FROM vote_visitors v WHERE v.vote_id = ?1 AND v.voter_id = b.agent_id),
                 b.cast_at
          FROM vote_ballots b
          LEFT JOIN agents a ON a.id = b.agent_id
@@ -97,12 +97,12 @@ fn with_ballots(conn: &Connection, mut vote: Vote) -> rusqlite::Result<Vote> {
          WHERE b.vote_id = ?1
          UNION ALL
          SELECT pb.person_id, pb.voter, '', pb.choice, 'person',
-                NOT EXISTS (SELECT 1 FROM members m WHERE m.hangout_id = ?2 AND m.person_id = pb.person_id),
+                EXISTS (SELECT 1 FROM vote_visitors v WHERE v.vote_id = ?1 AND v.voter_id = pb.person_id),
                 pb.cast_at
          FROM vote_person_ballots pb WHERE pb.vote_id = ?1
          ORDER BY 7, 1",
     )?;
-    let rows = stmt.query_map(params![vote.id, vote.hangout_id], |row| {
+    let rows = stmt.query_map(params![vote.id], |row| {
         Ok(Ballot {
             agent_id: row.get(0)?,
             voter: row.get(1)?,
@@ -261,6 +261,53 @@ impl Db {
             params![vote_id, person_id, voter, choice as i64, now],
         )?;
         Ok(changed == 1)
+    }
+
+    /// V10: marks whether this ballot was cast by a visitor, as they were when they voted. Always
+    /// true, so it chains after the cast.
+    pub fn mark_ballot_visitor(
+        &self,
+        vote_id: &str,
+        voter_id: &str,
+        visitor: bool,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        if visitor {
+            conn.execute(
+                "INSERT OR IGNORE INTO vote_visitors (vote_id, voter_id) VALUES (?, ?)",
+                params![vote_id, voter_id],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM vote_visitors WHERE vote_id = ? AND voter_id = ?",
+                params![vote_id, voter_id],
+            )?;
+        }
+        Ok(true)
+    }
+
+    /// V9: how many votes this bot, or this person, opened in a room since `since`.
+    pub fn votes_opened_since(
+        &self,
+        hangout_id: &str,
+        agent_id: Option<&str>,
+        person_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.conn();
+        match agent_id {
+            Some(agent_id) => conn.query_row(
+                "SELECT COUNT(*) FROM votes WHERE hangout_id = ? AND agent_id = ? AND opened_at > ?",
+                params![hangout_id, agent_id, since],
+                |row| row.get(0),
+            ),
+            None => conn.query_row(
+                "SELECT COUNT(*) FROM votes v JOIN person_votes pv ON pv.vote_id = v.id
+                 WHERE v.hangout_id = ? AND pv.person_id = ? AND v.opened_at > ?",
+                params![hangout_id, person_id, since],
+                |row| row.get(0),
+            ),
+        }
     }
 
     /// V11: the open votes in these rooms, newest first, at most `limit`.

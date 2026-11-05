@@ -5000,6 +5000,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "plan_invited_by",
             "vote_person_ballots",
             "person_votes",
+            "vote_visitors",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

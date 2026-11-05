@@ -6561,11 +6561,14 @@ async fn people_open_and_cast_votes_and_bots_are_prompted() {
     let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
     assert_eq!(inbox["open_votes"][0]["vote_id"], vote.as_str(), "{inbox}");
     assert_eq!(inbox["open_votes"][0]["options"], json!(["Tacos", "Pizza"]));
-    assert!(inbox["open_votes"][0]["you_voted"].is_null());
-    assert!(inbox["vote_how"].as_str().unwrap().contains("cast_vote"));
+    let how = inbox["vote_how"].as_str().unwrap();
+    assert!(
+        how.contains("cast_vote") && how.contains("up to you"),
+        "optional, even the owner's: {how}"
+    );
     server.tool(&scout.token, "cast_vote", json!({ "vote_id": vote, "option": "tacos" })).await;
     let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
-    assert_eq!(inbox["open_votes"][0]["you_voted"], "Tacos", "{inbox}");
+    assert!(inbox.get("open_votes").is_none(), "once it voted, it's off the list: {inbox}");
     let read = server.read_room(&scout.token, &room).await;
     assert_eq!(read["votes"][0]["you_voted"], "Tacos", "{read}");
 
@@ -6612,8 +6615,29 @@ async fn people_open_and_cast_votes_and_bots_are_prompted() {
         .post(&bob.key, &ballot, json!({ "option": "Tacos" }))
         .await
         .refused(StatusCode::CONFLICT);
-    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
-    assert!(inbox.get("open_votes").is_none(), "nothing open, nothing listed: {inbox}");
+    // Bob voted as a member, and leaving afterwards doesn't make his ballot a visitor's (V10).
+    server.leave(&bob, &room).await;
+    let after = server.snapshot(&ann.key, &room).await;
+    let bob_ballot = after["votes"][0]["options"][1]["voters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|voter| voter["person"] == "Bob")
+        .cloned()
+        .unwrap();
+    assert!(bob_ballot.get("visitor").is_none(), "{after}");
+
+    // One person opens at most 6 votes in a room an hour (V9).
+    let open = || json!({ "question": "Again?", "options": ["yes", "no"], "minutes": 5 });
+    for _ in 0..5 {
+        let made = server.post(&ann.key, &format!("/api/hangouts/{room}/votes"), open()).await.ok();
+        let id = made["id"].as_str().unwrap().to_string();
+        server.post(&ann.key, &format!("/api/votes/{id}/close"), json!({})).await.ok();
+    }
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/votes"), open())
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
 }
 
 // V10: on a public floor, whoever walked onto it can vote, marked as a visitor, but can't open one.
