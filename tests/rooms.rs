@@ -7636,7 +7636,9 @@ async fn read_room_brief_section_tags_and_known_cache() {
     server
         .tool(&fern.token, "share_note", json!({ "hangout_id": room, "text": "Initial note" }))
         .await;
-    let item_id = server.item(&owner, &room, "plant", spot(0)).await;
+    // A stool, since a brief read counts a plant as decoration and moving one changes nothing it
+    // sends (I122).
+    let item_id = server.item(&owner, &room, "stool", spot(0)).await;
 
     // 1. Initial brief read without known: returns all 6 sections and section_tags
     let init = server
@@ -8380,6 +8382,146 @@ async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
     assert!(first["section_tags_hint"].is_string() && first["clock"]["note"].is_string());
     assert!(again.get("section_tags_hint").is_none(), "{again}");
     assert!(again["clock"].get("note").is_none() && again["clock"]["now"].is_string(), "{again}");
+}
+
+// I122: a brief read lists only the items a bot can do something with and counts the rest as
+// decor, and says when each bot here last spoke. A full read still lists everything.
+#[tokio::test]
+async fn a_brief_read_counts_decoration_and_says_when_bots_last_spoke() {
+    let w = waiting_world().await;
+    let nothing_checked =
+        |_: &str, _: &[String], _: &[agenthangout::db::FloorItem]| Ok::<(), ()>(());
+    for (id, x) in [("plant-a", 1), ("plant-b", 3), ("plant-c", 5)] {
+        let plant = agenthangout::db::NewFloorItem {
+            id,
+            hangout_id: &w.room,
+            kind: "plant",
+            x,
+            y: 9,
+            facing: 0,
+            placed_by: &w.ann.id,
+            now: now(),
+        };
+        w.server.state.db.place_item(&plant, nothing_checked).unwrap().unwrap();
+    }
+    w.mention("hello").await;
+    let full = w.server.read_room(&w.scout.token, &w.room).await;
+    let brief = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let all = full["items"].as_array().unwrap();
+    let listed = brief["items"].as_array().unwrap();
+    let decor = brief["decor"].as_u64().unwrap() as usize;
+    assert!(decor >= 3, "the plants are decoration: {brief}");
+    assert_eq!(listed.len() + decor, all.len(), "every item is listed or counted");
+    assert!(listed.iter().all(|item| item["kind"] != "plant"), "{brief}");
+    for item in listed {
+        let usable = item["holds_notes"] == true
+            || item.get("opens").is_some()
+            || item.get("does").is_some();
+        let from_full = all.iter().find(|one| one["id"] == item["id"]).unwrap();
+        let ruled = from_full["closes_at"].is_string() || from_full["kind"] == "quiet_sign";
+        assert!(usable || ruled, "only what a bot can use: {item}");
+    }
+    assert!(full.get("decor").is_none(), "a full read lists everything instead");
+
+    // Pip spoke, Scout hasn't, and both say whether they're away.
+    let bots = brief["bots"].as_array().unwrap();
+    let bot = |name: &str| bots.iter().find(|bot| bot["name"] == name).unwrap().clone();
+    assert!(bot("Pip")["last_posted_at"].is_string(), "{brief}");
+    assert!(bot("Scout")["last_posted_at"].is_null(), "{brief}");
+    assert!(bot("Pip")["away"].is_boolean() && bot("Scout")["away"].is_boolean());
+    assert!(brief["trust_note"].is_string());
+
+    // Less to read on a first brief read than before the decoration went: the items alone shrink.
+    assert!(
+        brief["items"].to_string().len() * 2 < full["items"].to_string().len(),
+        "{} vs {}",
+        brief["items"].to_string().len(),
+        full["items"].to_string().len()
+    );
+}
+
+// I122: sections asks for only some of a read; trust_note always comes, a section left out isn't
+// remembered as sent, and a name that isn't a section is refused.
+#[tokio::test]
+async fn a_read_can_ask_for_only_some_sections() {
+    let w = waiting_world().await;
+    w.mention("hello").await;
+    let read = |args: Value| {
+        let server = &w.server;
+        let token = w.scout.token.clone();
+        async move { server.tool(&token, "read_room", args).await }
+    };
+    let only = read(json!({ "hangout_id": w.room, "brief": true, "sections": ["messages"] })).await
+        ["structuredContent"]
+        .clone();
+    assert!(only["trust_note"].is_string(), "always: {only}");
+    assert!(only["messages"].is_array() && only["last_message_id"].as_i64().unwrap() > 0);
+    for gone in ["items", "decor", "bots", "people_here", "notes", "pins", "calendar", "votes"] {
+        assert!(only.get(gone).is_none(), "{gone}: {only}");
+    }
+    let tags = only["section_tags"].as_object().unwrap();
+    assert!(!tags.contains_key("items") && !tags.contains_key("bots"), "{only}");
+
+    // The next incremental read wasn't sent the items or bots before, so it gets them now.
+    let after = only["last_message_id"].clone();
+    let next = read(json!({ "hangout_id": w.room, "brief": true, "after_message_id": after }))
+        .await["structuredContent"]
+        .clone();
+    assert!(next["items"].is_array() && next["bots"].is_array(), "{next}");
+
+    // A full read can choose too, and the choice is all it gets.
+    let two = read(json!({ "hangout_id": w.room, "sections": ["bots", "votes"] })).await
+        ["structuredContent"]
+        .clone();
+    assert!(two["bots"].is_array() && two["votes"].is_array() && two["trust_note"].is_string());
+    assert!(two.get("messages").is_none() && two.get("items").is_none(), "{two}");
+
+    let wrong = read(json!({ "hangout_id": w.room, "sections": ["secrets"] })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+    let wrong = read(json!({ "hangout_id": w.room, "sections": "messages" })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+}
+
+// I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
+// move on to; a later read with them still has them, mentions included.
+#[tokio::test]
+async fn leaving_out_messages_leaves_them_unread() {
+    let w = waiting_world().await;
+    w.mention("are you there").await;
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions WHERE agent_id = ? AND read_at IS NULL",
+                [&w.scout.id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(unread(), 1);
+    let bots = w
+        .server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "brief": true, "sections": ["bots"] }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(bots["bots"].is_array(), "{bots}");
+    assert!(bots.get("messages").is_none() && bots.get("last_message_id").is_none(), "{bots}");
+    assert_eq!(unread(), 1, "not shown, so not read");
+    let read = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let said = read["messages"].as_array().unwrap();
+    assert!(said.iter().any(|m| m["text"].as_str().unwrap_or("").contains("are you there")));
+    assert_eq!(unread(), 0, "read once shown");
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
