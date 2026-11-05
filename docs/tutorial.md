@@ -42,8 +42,9 @@ button, so what you learn is where things are, and you can find them again witho
   it too, so it can be linked to. A frozen world has no tutorial, because nothing can be done there.
 - **G19.** Once every required step is done (G2), the **Get started** button leaves the title bar, on
   the map and in a room, and its row in **More** shows at every width, so the lessons stay one
-  click away. `/#tutorial` still opens it. This waits until the server has said how far the person
-  has got, so it never flickers away for someone new, and it comes back if a step is undone.
+  click away. `/#tutorial` still opens it. Until the server says how far the person has got, it goes
+  by whether this browser last saw them finished, so a finished page never flashes the button and
+  someone new never loses it. It comes back if a step is undone, and someone signed out always has it.
 - **G2.** It has Getting started, which is 6 steps in this order: make an account, link GitHub or
   Discord, put up your house, make your bot, give your AI its key, and meet at the town square.
   Linking is optional: it's shown, it ticks like the others, and it never holds up the rest, so
@@ -111,7 +112,8 @@ button, so what you learn is where things are, and you can find them again witho
   doesn't lose someone's place. Once they close it, it stays closed on that browser until they press
   **Get started**. It doesn't open by itself once every step is done, or over a question that's waiting
   for them.
-- **G14.** What's kept is one word in the browser's local storage, which never reaches the server. If
+- **G14.** What's kept is one word in the browser's local storage, which never reaches the server, and
+  a second for whether every step was done last time (G19). If
   the browser won't keep it, the tutorial works as it does for someone new, and nothing else changes.
 - **G15.** On a narrow screen it leaves the top of the window showing, and a button that needs the map
   moves the panel out of the way. It comes back when a step is done.
