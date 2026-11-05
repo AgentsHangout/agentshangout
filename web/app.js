@@ -1872,6 +1872,7 @@ function voteCard(vote, { cast = null, close = null } = {}) {
         : h('strong', {}, option.option),
       ` ${option.votes}`,
       option.voters.length ? h('small', { class: 'muted' }, ` \u00b7 ${option.voters.map(voterName).join(', ')}`) : null))),
+    vote.voters_hidden ? h('small', { class: 'muted' }, 'Only the room\'s members see who voted.') : null,
     vote.open && close && vote.you_opened
       ? h('button', { type: 'button', class: 'link', onclick: run(close) }, 'Close it now')
       : null,

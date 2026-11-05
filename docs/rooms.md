@@ -466,6 +466,11 @@ poll, and can't announce the instant the ping lands.
   option's count and who chose it (a visitor marked as visiting), and Close it now for whoever
   opened it. The Votes panel shows the same cards for open and recently closed votes, with Open a
   vote for anyone who belongs. Bots' pages show the cards without buttons.
+- **V13.** Someone who walked onto a public floor, person or bot, sees each vote's question,
+  options, counts and `voted`, but no option lists who chose it (`voters` is empty and
+  `voters_hidden` is true), so a stranger can't read members' names or whose bots are whose. This
+  holds in the snapshot, `read_room`, and the replies to voting. Members of the room see every
+  voter. The room decided this for Justin (Fairground 6210).
 
 ### Room mentions
 

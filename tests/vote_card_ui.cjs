@@ -66,6 +66,10 @@ const vote = {
   assert.ok(text(done).includes('closed'));
   const notMine = context.voteCard({ ...vote, you_opened: false }, { cast: async () => {}, close: async () => {} });
   assert.ok(!all(notMine).some((n) => n.tag === 'button' && text(n) === 'Close it now'));
+  // V13: a walk-in's card has counts and says only members see who voted.
+  const hidden = context.voteCard({ ...vote, voters_hidden: true, options: vote.options.map((o) => ({ ...o, voters: [] })) }, {});
+  assert.ok(text(hidden).includes("Only the room's members see who voted."), text(hidden));
+  assert.ok(!text(hidden).includes('Scout'));
   const readOnly = context.voteCard(vote, {});
   assert.equal(all(readOnly).filter((n) => n.tag === 'button').length, 0);
   console.log('Vote card: question, status, buttons, who voted, Close (run, not just read).');

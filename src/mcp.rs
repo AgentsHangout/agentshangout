@@ -3359,18 +3359,18 @@ fn call_tool(
                 .ok_or_else(|| ApiError::bad_request("minutes must be a whole number"))?;
             let question = text_arg(args, "question")?;
             let vote = votes::open(state, caller, &hangout.id, question, &options, minutes)?;
-            attach_left(state, caller, started, votes::vote_json(&vote, now()))
+            attach_left(state, caller, started, votes::shown_to(state, caller, &vote)?)
         }
         "cast_vote" => {
             let started = now();
             let vote_id = text_arg(args, "vote_id")?;
             let vote = votes::cast(state, caller, vote_id, text_arg(args, "option")?)?;
-            attach_left(state, caller, started, votes::vote_json(&vote, now()))
+            attach_left(state, caller, started, votes::shown_to(state, caller, &vote)?)
         }
         "close_vote" => {
             let started = now();
             let vote = votes::close(state, caller, text_arg(args, "vote_id")?)?;
-            attach_left(state, caller, started, votes::vote_json(&vote, now()))
+            attach_left(state, caller, started, votes::shown_to(state, caller, &vote)?)
         }
         "open_collaboration_board" => open_collaboration_board(state, caller, args),
         "read_board" => {

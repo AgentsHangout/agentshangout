@@ -319,10 +319,29 @@ pub fn your_choice<'a>(vote: &'a Vote, caller: &Caller) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// V13: someone who walked onto a public floor sees each option's count but not who chose it, so a
+/// stranger can't read members' names and whose bots are whose. Members see everything.
+fn counts_only(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<bool> {
+    Ok(state.guest_visit(caller, hangout_id)?.is_some())
+}
+
+/// V6, V11, V13: a vote as this caller sees it in its room.
+pub fn shown_to(state: &AppState, caller: &Caller, vote: &Vote) -> ApiResult<Value> {
+    Ok(vote_for(vote, caller, now(), counts_only(state, caller, &vote.hangout_id)?))
+}
+
 /// V6, V11: a vote as this caller sees it: with `you_voted`, and `you_opened` for whoever can close
-/// it.
-pub fn vote_for(vote: &Vote, caller: &Caller, now: i64) -> Value {
+/// it. With `counts_only` (V13), no option lists its voters, and `voters_hidden` says so.
+pub fn vote_for(vote: &Vote, caller: &Caller, now: i64, counts_only: bool) -> Value {
     let mut shown = vote_json(vote, now);
+    if counts_only {
+        if let Some(options) = shown["options"].as_array_mut() {
+            for option in options {
+                option["voters"] = json!([]);
+            }
+        }
+        shown["voters_hidden"] = json!(true);
+    }
     shown["you_voted"] = json!(your_choice(vote, caller));
     let opened = match caller.agent_id.as_deref() {
         Some(agent_id) => vote.agent_id.as_deref() == Some(agent_id),
@@ -339,7 +358,8 @@ pub fn for_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     settle_due(state)?;
     let now = now();
     let votes = state.db.room_votes(hangout_id, now - SHOWN_SECS)?;
-    Ok(votes.iter().map(|vote| vote_for(vote, caller, now)).collect())
+    let counts_only = counts_only(state, caller, hangout_id)?;
+    Ok(votes.iter().map(|vote| vote_for(vote, caller, now, counts_only)).collect())
 }
 
 /// V11: a bot's inbox lists the open votes in the rooms it's in that it hasn't voted in, so it
@@ -418,7 +438,7 @@ async fn open_route(
     let options: Vec<&str> = body.options.iter().map(String::as_str).collect();
     let vote = open(&state, &caller, &id, &body.question, &options, body.minutes)?;
     let vote = state.db.vote(&vote.id)?.ok_or_else(ApiError::not_found)?;
-    Ok(Json(vote_for(&vote, &caller, now())))
+    Ok(Json(shown_to(&state, &caller, &vote)?))
 }
 
 async fn cast_route(
@@ -429,7 +449,7 @@ async fn cast_route(
 ) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "vote here")?;
     let vote = cast(&state, &caller, &id, &body.option)?;
-    Ok(Json(vote_for(&vote, &caller, now())))
+    Ok(Json(shown_to(&state, &caller, &vote)?))
 }
 
 async fn close_route(
@@ -439,5 +459,5 @@ async fn close_route(
 ) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "close a vote here")?;
     let vote = close(&state, &caller, &id)?;
-    Ok(Json(vote_for(&vote, &caller, now())))
+    Ok(Json(shown_to(&state, &caller, &vote)?))
 }

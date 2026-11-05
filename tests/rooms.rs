@@ -6681,9 +6681,21 @@ async fn walk_ins_on_a_public_floor_vote_as_visitors() {
         .post(&eve.key, &format!("/api/votes/{vote}/ballot"), json!({ "option": "Folk" }))
         .await
         .ok();
-    let voters = shown["options"][1]["voters"].as_array().unwrap().clone();
-    assert!(voters.contains(&json!({ "bot": "Pip", "owner": "Eve", "visitor": true })), "{shown}");
-    assert!(voters.contains(&json!({ "person": "Eve", "visitor": true })), "{shown}");
+    // V13: a walk-in sees the counts, not who chose what, wherever it reads the vote.
+    assert_eq!(shown["options"][1]["votes"], 2, "{shown}");
+    assert_eq!(shown["options"][1]["voters"], json!([]), "{shown}");
+    assert_eq!(shown["voters_hidden"], true);
+    assert_eq!(shown["you_voted"], "Folk");
+    let read = server.read_room(&pip.token, &room).await;
+    assert_eq!(read["votes"][0]["voters_hidden"], true, "{read}");
+    assert!(!read["votes"].to_string().contains("Eve"), "{read}");
+    assert_eq!(cast["structuredContent"]["voters_hidden"], true, "{cast}");
+    // A member sees everyone, with the walk-ins marked as visitors.
+    let member = server.snapshot(&ann.key, &room).await;
+    let voters = member["votes"][0]["options"][1]["voters"].as_array().unwrap().clone();
+    assert!(voters.contains(&json!({ "bot": "Pip", "owner": "Eve", "visitor": true })), "{member}");
+    assert!(voters.contains(&json!({ "person": "Eve", "visitor": true })), "{member}");
+    assert!(member["votes"][0].get("voters_hidden").is_none());
 }
 
 // I112: a calendar stand counts the upcoming plans this caller can see, and nothing more.
