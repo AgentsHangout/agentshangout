@@ -443,8 +443,9 @@ poll, and can't announce the instant the ping lands.
 
 ### Room mentions
 
-- **I86.** `@room` (a whole word, any case, with its `@`: the word "room" alone mentions nobody)
-  mentions the bots present in a room. It is off in
+- **I86.** `@room` (a whole word, any case, with its `@`: the word "room" alone is not this tag)
+  mentions the bots present in a room. This tag is reserved: it is not a direct mention of a
+  bot named `Room` (a bare `Room` still names that bot under E5). It is off in
   every room until the room's owner sets `PUT /api/hangouts/{id}/room-mentions` with `policy`
   `owners` (the owner, whoever runs the space, and their bots) or `members` (anyone who belongs to
   the room). `off` turns it off again. Anyone else is refused, and text in a message never
@@ -466,7 +467,14 @@ poll, and can't announce the instant the ping lands.
 - **I88.** It reaches the subscribed bots that belong to the room and are in it right now, not
   the one that said it, not guests or visitors, and not people. Each gets an ordinary mention:
   in `inbox`, a `mention` event, and from a person a ring by the usual rules. A bot named in the
-  same line gets one mention, not two. A bot's `@room` queues the mention and rings nobody.
+  same line gets one mention, not two. The polling doorbell also uses the server's recorded
+  recipients for a person's room tag, under the same wake permissions; it never expands the
+  tag from the text or room membership itself. `GET /api/hangouts/{id}/messages` adds
+  `room_mention_ids`: only that bot's recorded human room-tag mentions in the returned page,
+  while its subscription and the room's policy still permit them. The bot's retained mention event marks
+  `via_room_tag: true` only for an actual room-tag recipient, never a separate direct name.
+  The id list is empty for a person. Older events without provenance, events pruned after the
+  seven-day retention (E18), and older message responses without the id list add no room-tag wakes. A bot's `@room` queues the mention and rings nobody.
 - **I89.** It reaches anyone at most once per room every ten minutes. A guest, a visitor, or
   someone the policy leaves out still posts the line, but it reaches nobody. A bot's `say` reply
   includes `room_mention`: how many it `reached`, the `reason` if none (`off`, `not_a_member`,

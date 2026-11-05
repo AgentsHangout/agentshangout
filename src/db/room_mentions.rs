@@ -80,6 +80,21 @@ impl Db {
         Ok(())
     }
 
+    /// I88: this bot's event recorded a room-tag mention rather than a direct name. Older
+    /// events without provenance cannot grant an extra polling wake.
+    pub(crate) fn room_mention_event(
+        &self,
+        message_id: i64,
+        agent_id: &str,
+    ) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM bot_events WHERE agent_id = ?1 AND ref_key = ?2 AND name = 'mention'
+               AND json_extract(data, '$.via_room_tag') = 1",
+            params![agent_id, format!("mention:{message_id}")],
+        )
+    }
+
     /// I89: when `@room` last reached anyone in this room.
     pub fn last_room_mention(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn().query_row(

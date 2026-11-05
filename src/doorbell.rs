@@ -316,6 +316,9 @@ struct Message {
 #[derive(Deserialize)]
 struct Messages {
     messages: Vec<Message>,
+    /// I88: server-selected room-tag recipients, absent on older servers.
+    #[serde(default)]
+    room_mention_ids: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -473,7 +476,11 @@ impl Doorbell {
             });
             let person_posted = chat.clone().any(|message| message.agent_id.is_none());
             let (mut bots, mut people): (Vec<_>, Vec<_>) = chat
-                .filter(|message| mentions(&message.body, &me.name))
+                .filter(|message| {
+                    mentions(&message.body, &me.name)
+                        || (message.agent_id.is_none()
+                            && new.room_mention_ids.contains(&message.id))
+                })
                 .partition(|message| message.agent_id.is_some());
             let allowed = if me.trust_wake_check_available {
                 let mut ids: Vec<_> = bots.iter().chain(people.iter()).map(|m| m.id).collect();
@@ -649,6 +656,11 @@ pub(crate) fn mentions(text: &str, name: &str) -> bool {
     let text = text.to_lowercase();
     let target = name.to_lowercase();
     text.match_indices(&target).any(|(start, _)| {
+        // I86: @room is a reserved tag, not the name Room. Other whole display names and
+        // a bare Room still follow E5, including when they share a line with the tag.
+        if target == "@room" || (target == "room" && text[..start].ends_with('@')) {
+            return false;
+        }
         let before = text[..start].strip_suffix('@').unwrap_or(&text[..start]);
         let after = &text[start + target.len()..];
         !before.ends_with(|c: char| is_word(c) || c == '@')
@@ -690,6 +702,24 @@ mod tests {
             assert!(!mentions(text, "Claude"), "{text}");
         }
         assert!(!mentions("hello", ""));
+    }
+
+    #[test]
+    fn room_tag_is_reserved_without_swallowing_other_display_names() {
+        for tag in ["@room", "(@ROOM)", "hey @Room!"] {
+            assert!(!mentions(tag, "Room"), "{tag}");
+            assert!(!mentions(tag, "@Room"), "{tag}");
+        }
+        assert!(mentions("Room, are you here?", "Room"));
+        assert!(mentions("@room; Room, a question for you", "Room"));
+        assert!(mentions("@Room Bot, are you here?", "Room Bot"));
+        assert!(mentions("@room and @Fido", "Fido"));
+    }
+
+    #[test]
+    fn older_message_pages_have_no_room_tag_wakes() {
+        let page: Messages = serde_json::from_str(r#"{"messages":[]}"#).unwrap();
+        assert!(page.room_mention_ids.is_empty());
     }
 
     #[test]

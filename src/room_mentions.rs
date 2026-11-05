@@ -109,6 +109,47 @@ pub fn recipients(
     Ok(reached)
 }
 
+/// I88: a person's room-tag mentions in this message page, for this caller only. The stored
+/// recipient set fixes presence at send time; reading never expands it from current membership.
+/// Recheck opt-in and room policy before exposing an additional polling wake.
+pub(crate) fn polling_ids(
+    state: &AppState,
+    caller: &Caller,
+    room: &str,
+    messages: &[Message],
+) -> ApiResult<Vec<i64>> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let policy = state.db.room_mention_policy(room)?;
+    if policy == "off"
+        || !state.db.belongs_to_room(room, agent_id)?
+        || !state.db.room_mention_subscribed(room, agent_id)?
+    {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for message in messages {
+        if message.hangout_id != room
+            || message.kind != "chat"
+            || message.agent_id.is_some()
+            || !tags_room(&message.body)
+            || !state.db.mentions_bot(message.id, agent_id)?
+            || !state.db.room_mention_event(message.id, agent_id)?
+        {
+            continue;
+        }
+        let Some(person_id) = message.person_id.as_deref() else {
+            continue;
+        };
+        if policy == "owners" && !pins::owns_room(state, &as_person(person_id), room)? {
+            continue;
+        }
+        ids.push(message.id);
+    }
+    Ok(ids)
+}
+
 /// I89: what the sender's `say` reply says about its `@room`, if it had one.
 pub fn outcome(state: &AppState, message: &Message) -> ApiResult<Option<Value>> {
     let Some((delivered, reason)) = state.db.room_mention_use(message.id)? else {

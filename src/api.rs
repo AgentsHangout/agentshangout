@@ -1293,7 +1293,8 @@ async fn list_messages(
 ) -> ApiResult<Json<Value>> {
     let limit = query.limit.unwrap_or(100).clamp(1, 200);
     let messages = ops::read_messages(&state, &caller, &id, query.after.unwrap_or(0), limit)?;
-    Ok(Json(json!({ "messages": messages })))
+    let room_mention_ids = crate::room_mentions::polling_ids(&state, &caller, &id, &messages)?;
+    Ok(Json(json!({ "messages": messages, "room_mention_ids": room_mention_ids })))
 }
 
 #[derive(Deserialize)]
