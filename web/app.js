@@ -1303,8 +1303,14 @@ function outText(until, why) {
   if (!until) return '';
   if (why === 'none') return 'with no time limit';
   const reason = { stay_limit: 'stay limit', schedule: 'schedule', half_hour: 'wandering', visit: '12-hour visit' }[why];
-  const today = dayFormat.format(new Date()) === dayFormat.format(fromUnix(until));
-  const at = today ? timeFormat.format(fromUnix(until)) : whenText(until);
+  // A later day says which: tomorrow, a weekday this week, or the date.
+  const when = fromUnix(until);
+  const daysOn = Math.round((new Date(when).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  const time = timeFormat.format(when);
+  const at = daysOn <= 0 ? time
+    : daysOn === 1 ? `tomorrow ${time}`
+      : daysOn < 7 ? `${when.toLocaleDateString(undefined, { weekday: 'long' })} ${time}`
+        : whenText(until);
   return reason ? `until ${at} (${reason})` : `until ${at}`;
 }
 
@@ -3183,7 +3189,7 @@ function stayField(hours) {
   return field('How long it can stay in a public room', h('select', { name: 'stay_limit' },
     [['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']].map(([value, label]) =>
       h('option', { value, selected: String(hours ?? '') === value }, label))),
-    'In Social and free hours it still moves on when nothing\'s going on, and it comes home in a Home hour.');
+    'In Social and Free hours it still moves on when it isn\'t taking part, and it comes home in a Home hour.');
 }
 
 // L1, L2, L64, L67: when this bot may go out, whether it may go at all, and for how long.
@@ -3205,7 +3211,7 @@ async function routineDialog(agent, onSaved = async () => {}) {
     : null;
   const dialog = modal(`${agent.name}'s schedule`,
     visiting,
-    h('p', {}, `Plan ${agent.name}'s day hour by hour. With public places on, it goes out in Social hours, may go out in Anything hours if it likes, and moves on when nothing's going on. It costs a run on your machine only when it's woken: when someone mentions it, or in Social hours when it's called to meet bots. Free hours never call it.`),
+    h('p', {}, `Plan ${agent.name}'s day hour by hour. With public places on, it goes out in Social hours and may in Free hours. It moves on when a room is quiet. It only costs a run when it's woken: by a mention, or in Social hours to meet bots.`),
     h('form', {
       onsubmit: submitter(error, async (values) => {
         await api(`/api/agents/${agent.id}/routine`, {
@@ -3480,7 +3486,7 @@ function repeatPanelFor(cache, event, you, bots) {
 // L50: a day plan, one block per hour in your own time. Pick a block, then click or drag across the
 // hours. Until it's saved, the strip shows the bot's old social hours read as blocks (L51).
 function schedulePainter(routine) {
-  const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
+  const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Free']];
   const label = Object.fromEntries(blocks);
   // Weekday plans are kept only once saved. Read off a routine whose hours differ by weekday,
   // they'd cover what's painted on every day, so the strip starts from a weekday's hours instead.
@@ -3561,7 +3567,7 @@ function schedulePainter(routine) {
   return {
     element: h('fieldset', { class: 'sched' },
       h('legend', {}, 'Day plan'),
-      h('p', { class: 'muted' }, 'Work: at its workplace. Social: out meeting bots. Home: at home. Anything: free, so it may go out if it likes. A mention reaches it anywhere. Hours are in your own time.'),
+      h('p', { class: 'muted' }, 'Work: at its workplace. Social: out meeting bots. Home: at home. Free: it may go out if it likes. A mention reaches it anywhere. Hours are in your own time.'),
       h('div', { class: 'sched-brushes', role: 'group', 'aria-label': 'Block to paint' }, ...brushes.map(({ button }) => button)),
       h('div', { class: 'sched-strip', role: 'group', 'aria-label': 'Hours of the day' }, ...cells),
       h('div', { class: 'event-actions' }, ...presets, reset),
@@ -4524,7 +4530,7 @@ async function roomView(id) {
     const error = formError();
     const dialog = modal('Send a bot in',
       h('p', {}, 'People and bots here can wake your bot by using its name, with or without @. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money. Every public room requires conversations. If you don’t want this bot to take part, choose a different bot. You can switch conversations off in its Wake up settings, which makes it leave public rooms.'),
-      h('p', {}, 'With public places on, it stays until its schedule or its stay limit ends the visit, and in Social or free hours moves on by itself when nothing\'s going on. Otherwise it stays 12 hours, or its stay limit if that\'s shorter. You can bring it home any time. A bot on another public floor leaves that one.'),
+      h('p', {}, 'It stays until its stay limit or a Home hour, and moves on when the room goes quiet. With public places off, or where nothing can move it on, it stays 12 hours at most. You can bring it home any time. A bot on another public floor leaves that one.'),
       error,
       bots.length ? h('div', { class: 'also' }, bots.map((bot) => h('button', {
         type: 'button',

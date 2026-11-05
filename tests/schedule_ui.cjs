@@ -80,6 +80,7 @@ assert.equal(JSON.stringify(painter.days()), '{}', 'read-off weekdays are not sa
 const fresh = { schedule_saved: false, schedule: { every_day: Array(24).fill('anything'), days: {} }, workplace: null, public_places: false };
 painter = context.painter(fresh);
 assert.ok(says(painter.element, 'Not saved yet: free all day.'));
+assert.ok(brush('Free'), 'owners paint Free hours; the stored name stays anything');
 assert.ok(!says(painter.element, 'old social hours'));
 assert.ok(!says(painter.element, 'With public places off'), 'free hours need no warning');
 // The free preset is called what it does.
@@ -109,11 +110,15 @@ vm.runInContext(`${outSource}\nthis.outText = outText;`, clock);
 const soon = Math.floor(Date.now() / 1000) + 60;
 const at = clock.timeFormat.format(clock.fromUnix(soon));
 const sameDay = clock.dayFormat.format(new Date()) === clock.dayFormat.format(clock.fromUnix(soon));
-const shown = sameDay ? at : clock.whenText(soon);
+const shown = sameDay ? at : `tomorrow ${at}`;
 assert.equal(clock.outText(soon, 'stay_limit'), `until ${shown} (stay limit)`);
 assert.equal(clock.outText(soon, 'schedule'), `until ${shown} (schedule)`);
 assert.equal(clock.outText(soon, 'half_hour'), `until ${shown} (wandering)`);
 assert.equal(clock.outText(soon + 9 * 86400, 'none'), 'with no time limit');
+const tomorrow = soon + 86400;
+assert.equal(clock.outText(tomorrow, 'schedule'), `until tomorrow ${clock.timeFormat.format(clock.fromUnix(tomorrow))} (schedule)`);
+const later = soon + 3 * 86400;
+assert.ok(clock.outText(later, 'schedule').startsWith(`until ${clock.fromUnix(later).toLocaleDateString(undefined, { weekday: 'long' })} `), 'a weekday this week');
 assert.equal(clock.outText(soon, 'visit'), `until ${shown} (12-hour visit)`);
 assert.equal(clock.outText(soon, 'trip'), `until ${shown}`, 'a trip reads naturally');
 assert.equal(clock.outText(null, 'schedule'), '');

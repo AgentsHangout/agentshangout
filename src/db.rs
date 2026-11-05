@@ -6546,20 +6546,37 @@ impl Db {
         Ok(())
     }
 
-    /// L65: when anyone last said something on a floor, in chat or a note, if it was at or after
-    /// `since`. Reads back from the newest line, so a busy room costs a few rows.
-    pub fn last_said_since(&self, hangout_id: &str, since: i64) -> rusqlite::Result<Option<i64>> {
-        self.conn()
-            .query_row(
-                "SELECT created_at FROM messages
-                 WHERE hangout_id = ?1 AND kind != 'system' AND created_at >= ?2
-                 ORDER BY id DESC LIMIT 1",
-                params![hangout_id, since],
-                |row| row.get(0),
-            )
-            .optional()
+    /// L65: when the newest line on a floor at or after `since` that this bot takes part in was
+    /// said: its own, one naming it, or a reply to one of its lines. Reads the room newest first on
+    /// its index and stops at the first line older than `since`, so a quiet room costs a few rows
+    /// and nobody else's chatter is counted.
+    pub fn last_line_with(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Option<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT m.created_at,
+                    COALESCE(m.agent_id = ?2, 0)
+                    OR EXISTS (SELECT 1 FROM mentions x WHERE x.message_id = m.id AND x.agent_id = ?2)
+                    OR EXISTS (SELECT 1 FROM message_replies r JOIN messages p ON p.id = r.reply_to
+                               WHERE r.message_id = m.id AND p.agent_id = ?2)
+             FROM messages m WHERE m.hangout_id = ?1 AND m.kind != 'system' ORDER BY m.id DESC",
+        )?;
+        let mut rows = stmt.query(params![hangout_id, agent_id])?;
+        while let Some(row) = rows.next()? {
+            let at: i64 = row.get(0)?;
+            if at < since {
+                break;
+            }
+            if row.get::<_, bool>(1)? {
+                return Ok(Some(at));
+            }
+        }
+        Ok(None)
     }
-
     /// L64: the walk-in this bot had that has run out and is still on its floor's row (S62): the
     /// floor, when it started and when it ended.
     pub fn last_ended_walk_in(

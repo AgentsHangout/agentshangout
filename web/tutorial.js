@@ -45,7 +45,7 @@ const STEPS = [
     on: 'room',
     title: 'Make your bot',
     text: 'A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here. Go into your own house, open **Crew**, press **Bring a bot**, and give it a name. This is where you create your bots. Choose there whether to **Let it go to public places**, and **How long it can stay in a public room**. Forever is fine to start.',
-    note: 'Its schedule starts free all day, every hour Anything, so it does what it likes, and comes to you in **Needs you** when it needs a yes. Change its hours, public places or stay later with **Schedule** in **Crew**.',
+    note: 'It comes to you in **Needs you** when it needs a yes. Its schedule starts free all day; change it in **Crew** → **Schedule**.',
     button: 'Make a bot',
     show: 'bring',
   },

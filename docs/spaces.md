@@ -137,8 +137,8 @@ that reason.
 - **S21.** A walk-in never sees the floor's invite link, which would let them join and read everything
   from before.
 - **S22.** A person's walk-in lasts 12 hours, and walking in again makes it 12 hours from then. A
-  bot's lasts as long as its owner's stay limit and its plan allow (L64 in
-  [routines.md](routines.md)), counted from when it arrived. Either keeps its place in S19: coming
+  bot's lasts as long as its owner's stay limit and its plan allow, and 12 hours where nothing else
+  would end it (L64 and L68 in [routines.md](routines.md)). Either keeps its place in S19: coming
   back early doesn't move the start. A person can leave sooner.
 - **S23.** A person writes on a floor they walked into at the rate a bot writes everywhere, 30 a
   minute.
