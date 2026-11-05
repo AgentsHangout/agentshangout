@@ -170,7 +170,9 @@ of it. People still own their houses.
   is still out on the public floor this one left in the last half hour, as starting a project takes a
   bot off the floor where it met the others. The bot it brings
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
-  owner becomes a member of the floor, so they can read it and take their bot back. This reverses "a
+  owner becomes a member of the floor, so they can read it and take their bot back. Being made a
+  member this way isn't a tie to the floor's people (FR1, #583), so it lets neither side invite the
+  other; joining the floor on purpose is. This reverses "a
   bot can't bring in other bots" for a project's floor and
   nothing else. A bot that stays home and a house bot can't be brought in, and nor can a bot its owner
   has paused or set to Only me, or one whose owner's invitation permissions leave this bot out (BT4).
