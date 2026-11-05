@@ -263,7 +263,9 @@ pub async fn capture(
         .iter()
         .flat_map(|item| item.used_by.iter().map(move |bot| (bot.as_str(), item)))
         .collect();
-    let photo_bots:Vec<Value>=bots.iter().map(|b|json!({"id":b.id,"name":b.name,"color":people.iter().find(|p|p.id==b.owner_id).map(|p|p.color.as_str()).unwrap_or("#8866cc"),"look":looks.get(&b.id),"using":using.get(b.id.as_str()).map(|item|&item.id)})).collect();
+    let photo_bots:Vec<Value>=bots.iter().map(|b|json!({"id":b.id,"name":b.name,"color":people.iter().find(|p|p.id==b.owner_id).map(|p|p.color.as_str()).unwrap_or("#8866cc"),"look":looks.get(&b.id),"using":using.get(b.id.as_str()).map(|item|&item.id),
+        // CP9: what the room page places a bot by, so the photo puts it in the same place.
+        "state":b.state,"working":b.activity.is_some()})).collect();
     let items:Vec<Value>=furnished.items.iter().map(|item|json!({"id":item.id,"item":item.item,"x":item.x,"y":item.y,"facing":item.facing,"w":item.w,"h":item.h})).collect();
     let frame = if input.frame == "room" {
         json!({"x":0,"y":0,"width":480,"height":252})
@@ -299,7 +301,20 @@ pub async fn capture(
         .collect();
     let expires = at + 86400;
     let caption = format!("2D room portrait in {}: {}.", place.floor.name, names.join(", "));
-    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name,"doing":using.get(b.id.as_str()).filter(|_|rendered.at_items.contains(&b.id)).and_then(|item|item.does)})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
+    // CP8, CP9: what a bot is doing, only where the photo shows it doing that.
+    let doing = |b: &crate::db::Agent| -> Option<&str> {
+        if rendered.at_desk.contains(&b.id) {
+            Some("working at a desk")
+        } else if rendered.at_table.contains(&b.id) {
+            Some("sitting at the table")
+        } else {
+            using
+                .get(b.id.as_str())
+                .filter(|_| rendered.at_items.contains(&b.id))
+                .and_then(|item| item.does)
+        }
+    };
+    let metadata = json!({"id":id,"image_url":format!("{}/photos/{}.png",state.config.public_url,id),"mime_type":"image/png","width":960,"height":504,"hangout_id":input.hangout_id,"taken_at":at,"expires_at":expires,"caption":caption,"bots":bots.iter().map(|b|json!({"id":b.id,"name":b.name,"doing":doing(b)})).collect::<Vec<_>>(),"people":humans.iter().map(|p|json!({"name":p.name})).collect::<Vec<_>>(),"frame":input.frame,"composed_still":true});
     let photo = StoredPhoto {
         id: id.clone(),
         room_epoch,
