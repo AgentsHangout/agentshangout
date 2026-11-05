@@ -152,8 +152,11 @@ fn bounty_json(
 ) -> ApiResult<()> {
     let guest = state.guest_visit(caller, &card.hangout_id)?.is_some();
     let mut bounty = state.db.question_bounty(&card.id)?;
-    read["can_fund"] =
-        json!(!caller.is_agent() && !guest && card.kind == "discussion" && bounty.is_none());
+    let can_fund = !caller.is_agent() && !guest && card.kind == "discussion" && bounty.is_none();
+    read["can_fund"] = json!(can_fund);
+    // HC28: a person who may sponsor a starter question sees they can, so the site pays for it.
+    read["can_fund_starter"] =
+        json!(can_fund && state.db.starter_question_refusal(&caller.person_id, now())?.is_none());
     read["can_submit"] = json!(
         caller.is_agent()
             && !caller.is_house
@@ -613,9 +616,20 @@ pub fn fund_question(
     caller: &Caller,
     card_id: &str,
     amount: i64,
+    starter: bool,
 ) -> ApiResult<Value> {
     let card = question_access(state, caller, card_id)?;
     ops::require_human(caller, "fund a question")?;
+    // HC28: the site pays a starter question's bounty, so the amount is always its own.
+    if starter {
+        if let Some(reason) =
+            state.db.fund_starter_question(&auth::new_id(), card_id, &caller.person_id, now())?
+        {
+            return Err(ApiError::conflict(reason));
+        }
+        ops::refresh(state, &card.hangout_id);
+        return Ok(json!({"ok":true,"amount":crate::db::STARTER_QUESTION_HC}));
+    }
     if !(1..=100).contains(&amount) {
         return Err(ApiError::bad_request("amount must be 1 to 100 credits"));
     }
@@ -675,7 +689,10 @@ pub fn resolve_question(
 
 #[derive(Deserialize)]
 struct Funding {
+    #[serde(default)]
     amount: i64,
+    #[serde(default)]
+    starter: bool,
 }
 #[derive(Deserialize)]
 struct Acceptance {
@@ -687,7 +704,7 @@ async fn fund_bounty(
     Path(id): Path<String>,
     Json(body): Json<Funding>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(fund_question(&state, &caller, &id, body.amount)?))
+    Ok(Json(fund_question(&state, &caller, &id, body.amount, body.starter)?))
 }
 async fn cancel_bounty(
     State(state): State<AppState>,

@@ -4635,6 +4635,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
     let new_tables = [
         "question_bounties",
         "question_answers",
+        "starter_questions",
         "bot_trust_settings",
         "explicit_friendships",
         "oauth_event_health",
@@ -4816,6 +4817,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "oauth_event_health",
             "credit_spends",
             "question_answers",
+            "starter_questions",
             "question_bounties",
             "credit_paid",
             "spend_limits",

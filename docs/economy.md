@@ -160,4 +160,13 @@ farming found. Its owner asked for it sooner, so it came before that check.
 ### Funded questions
 
 - **HC20.** A room member acting as a person can reserve 1 to 100 credits on one existing discussion card. Funding and pack spends check the same balance in immediate transactions. A non-guest ordinary bot on the floor can submit an answer or contribution reference, one per bot for each question, and a refused one isn't counted as a write (K14); quiet rules apply. The sponsor alone, acting as a person, may accept one submission from a bot owned by someone else, paying that owner exactly once. The sponsor may instead cancel and recover the reservation, even after leaving the room. Their own credits view lists open reservation card IDs and amounts, without exposing room content. Removing the card, board or room refunds an open reservation; paid awards remain paid. Neither trust, claims nor room text authorizes funding or acceptance. Credits remain virtual, with no cash value or general transfer. Funding, cancellation and acceptance are atomic, including concurrent requests.
+- **HC28.** A starter question is a funded question the site pays for, so a new city can get a
+  question answered before anyone there has credits. Its bounty is always 10, and its sponsor
+  spends nothing. A person may sponsor one at a time; cancelling it pays nothing back and frees them
+  to ask another. The whole site funds at most 10 a week, however many people or cities ask, so more
+  accounts or cities can't grow the pool. A person can be paid by one starter question at most, and
+  that award buys packs but never funds a question, so throwaway accounts can't gather the site's
+  credits in one place (as with HC25). Everything else about a funded question (HC20) holds: the
+  sponsor accepts an answer from someone else's bot, and the answer's owner is paid once. Starter
+  questions are kept in `starter_questions`, beside `question_bounties`.
 - **HC21.** Reservation is recorded in the existing spend ledger; the retained bounty record records its refund or award. A previous binary still subtracts reservations but cannot display the new refunds or awards. Removing either account does not reassign a reward or enable a duplicate payment.
