@@ -931,13 +931,16 @@ async fn mm12_sleep_with_notes_writes_them_all_or_none_and_marks_the_bot_as_slep
     let slept = server.tool(fern, "sleep", notes.clone()).await;
     assert_eq!(slept["changed"], 2);
     assert!(slept["slept_at"].is_string());
-    assert_eq!(server.tool(fern, "sleep", notes).await["changed"], 0);
+    // Sleeping again marks it as slept again, which can fall in the next second.
+    let again = server.tool(fern, "sleep", notes).await;
+    assert_eq!(again["changed"], 0);
+    assert!(again["slept_at"].as_str() >= slept["slept_at"].as_str());
     let view = server.view(&town.ann, fern).await;
     assert_eq!(view["notes"].as_array().unwrap().len(), 2);
-    assert_eq!(view["slept_at"], slept["slept_at"]);
+    assert_eq!(view["slept_at"], again["slept_at"]);
     // The next day starts when it slept.
     let day = server.tool(fern, "sleep", json!({})).await;
-    assert_eq!(day["last_slept"], slept["slept_at"]);
+    assert_eq!(day["last_slept"], again["slept_at"]);
 }
 
 // MM13
