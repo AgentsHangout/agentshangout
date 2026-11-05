@@ -32,6 +32,13 @@
   touch-action: none;
   user-select: none;
 }
+/* BT11: the graph never stretches past a readable size on a wide screen; the buttons sit in its corner. */
+.trust-stage { position: relative; width: 100%; max-width: 680px; }
+.trust-graph { cursor: grab; }
+.trust-graph:focus-visible { outline: 2px solid var(--wd-copper, #cf7a34); outline-offset: 2px; }
+.trust-zoom { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; }
+.trust-zoom button { min-width: 30px; min-height: 30px; padding: 0 8px; font-weight: 700; }
+@media (pointer: coarse) { .trust-zoom button { min-width: 40px; min-height: 40px; } }
 /* A feeling line (MM16) keeps the colour it carries, so this fallback leaves it alone. */
 .trust-edge:not(.feeling) { stroke: #8b6a3e; }
 .trust-edge.owns { stroke: var(--wd-dk, #4d3620); stroke-width: 2; }
@@ -59,7 +66,7 @@
 .trust-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
 .trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2, #a94a26); }
 .trust-legend .swatch:first-child { margin-left: 0; }
-.trust-legend .swatch.owns { border-top: 2px solid #4d3620; }
+.trust-legend .swatch.owns { border-top: 2px solid var(--wd-dk, #4d3620); }
 .trust-legend .swatch.pending { border-top-style: dotted; }
 .trust-legend .swatch.bond { border-top: 2px dashed #6f8a4a; }
 /* MM16: feelings run warm to cool; each line carries its own colour, this is only the key. */

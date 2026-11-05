@@ -35,6 +35,10 @@ const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd
 // How big each kind of frame is: half its width, so the label can sit clear of it.
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
 const LABEL_HIGH = 13;
+// BT11: how far the graph can be zoomed, how much one press of + or - does, how little room a fitted
+// graph leaves round it, and how large a small graph may be fitted (so two nodes aren't blown up).
+const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25, FIT_PAD = 14, FIT_MAX = 1.5;
+const clampZoom = k => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k)) * 1e4) / 1e4;
 
 // #531: with `host`, it draws inside that element of the My bots view (opened as `hostPanel`) and has
 // no panel or top-bar button of its own; the view calls `load` when it opens.
@@ -47,6 +51,9 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   let memories;
   // Where every node was last drawn, so a change doesn't throw the graph around.
   const placed = new Map();
+  // BT11: where the graph is looking: scale `k` and offset (`x`, `y`) in the graph's own 480 by 300.
+  // `auto` is a fitted view, which is fitted again when the people shown change; null before the first draw.
+  let view = null;
   const body = host || panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
   body.classList.add('trust-body');
   const toggle = host ? null : panels.toggle('trust', 'Trust & bots', { short: 'Trust' });
@@ -145,7 +152,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     }
   }
   async function choose(id) {
-    selected = id; monitoring = bonds = config = usage = memories = undefined; notice = ''; dirty = false; focus = 'bot';
+    selected = id; monitoring = bonds = config = usage = memories = undefined; notice = ''; dirty = false; focus = 'bot'; view = null;
     saved = clone(bot().trust); draft = clone(saved);
     const request = ++generation;
     const healthRequest = ++healthGeneration;
@@ -412,8 +419,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     });
     const groups = new Map();
     const names = labels(nodes);
-    const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': selected ? `${bot().name}’s connections` : 'Your connections' },
-      svg('rect', { class: 'trust-ground', width: W, height: H, fill: TAN }),
+    const labelEls = [];
+    const world = svg('g', { class: 'trust-world' },
       ...lines.map(l => l.line),
       ...nodes.map(n => {
         const half = HALF[n.kind], round = n.kind === 'you' || n.kind === 'person';
@@ -426,6 +433,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         const side = round ? Math.round(half * 1.45) : half * 2 - 6;
         const face = head ? svg('image', { class: 'head', href: head, x: -side / 2, y: -side / 2, width: side, height: side, 'aria-hidden': 'true', 'pointer-events': 'none' }) : null;
         const label = names.get(n.id);
+        const labelEl = svg('text', { class: 'label', 'text-anchor': 'middle', x: label.x, y: label.y, fill: INK, stroke: TAN, 'stroke-width': 3, 'paint-order': 'stroke', 'font-size': 11, 'font-weight': n.id === focusId() ? 800 : 600 }, label.text);
+        labelEls.push(labelEl);
         const g = svg('g', {
           class: `trust-node ${n.kind}${n.id === focusId() ? ' focused' : ''}${editing ? ' editing' : ''}${n.friendship?.status === 'pending' ? ' waiting' : ''}${n.paused ? ' paused' : ''}`,
           transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-pressed': String(n.id === focusId()),
@@ -435,18 +444,100 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         }, svg('title', {}, `${n.name} · ${n.detail}`),
           svg('circle', { class: 'ring', r: half + 5, fill: 'none', stroke: n.id === focusId() ? '#cf7a34' : 'none', 'stroke-width': 3 }), shape, face,
           face ? null : svg('text', { class: 'initial', 'text-anchor': 'middle', dy: '0.35em', fill: n.kind === 'you' || n.kind === 'mine' ? '#fff3d2' : INK, 'font-size': 13, 'font-weight': 700 }, [...n.name][0]?.toUpperCase() || '?'),
-          svg('text', { class: 'label', 'text-anchor': 'middle', x: label.x, y: label.y, fill: INK, stroke: TAN, 'stroke-width': 3, 'paint-order': 'stroke', 'font-size': 11, 'font-weight': n.id === focusId() ? 800 : 600 }, label.text));
+          labelEl);
         groups.set(n.id, g);
         return g;
       }));
+    // BT11: the zoom, from the node bounds. Everything that can be seen: each frame with its ring and each name.
+    const bounds = () => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const n of nodes) {
+        const half = HALF[n.kind] + 5, label = names.get(n.id), w = [...label.text].length * 6.4 + 6;
+        x0 = Math.min(x0, n.x - half, n.x + label.x - w / 2); x1 = Math.max(x1, n.x + half, n.x + label.x + w / 2);
+        y0 = Math.min(y0, n.y - half, n.y + label.y - LABEL_HIGH + 3); y1 = Math.max(y1, n.y + half, n.y + label.y + 3);
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const key = nodes.map(n => n.id).sort().join('|');
+    const fitted = () => {
+      const { x0, y0, x1, y1 } = bounds();
+      const k = clampZoom(Math.min((W - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (H - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX));
+      return { k, x: W / 2 - (x0 + x1) / 2 * k, y: H / 2 - (y0 + y1) / 2 * k, auto: true, key };
+    };
+    if (!view || (view.auto && view.key !== key)) view = fitted();
+    const apply = () => {
+      world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
+      world.setAttribute('data-scale', String(view.k));
+      // Zoomed out, names are drawn larger so they stay as readable on screen.
+      for (const t of labelEls) t.setAttribute('font-size', view.k < 1 ? Math.min(15, 11 / view.k) : 11);
+    };
+    // The middle of the graph can't leave the picture, so panning never loses it.
+    const look = (k, x, y) => {
+      const { x0, y0, x1, y1 } = bounds();
+      const mx = (x0 + x1) / 2 * k, my = (y0 + y1) / 2 * k;
+      view = { k, x: Math.min(W - mx, Math.max(-mx, x)), y: Math.min(H - my, Math.max(-my, y)), auto: false, key };
+      apply();
+    };
+    // Zoom by `factor`, keeping the point (px, py) of the picture where it is.
+    const zoomAt = (factor, px = W / 2, py = H / 2) => {
+      const k = clampZoom(view.k * factor), r = k / view.k;
+      look(k, px - (px - view.x) * r, py - (py - view.y) * r);
+    };
+    const fit = () => { view = fitted(); apply(); };
+    // Where a pointer is on the picture, in the graph's 480 by 300 (the picture is scaled to its box).
+    const rootPoint = e => { const r = picture.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / (r.width || W), y: (e.clientY - r.top) * H / (r.height || H) }; };
+    const pointers = new Map();
+    let pan = null, pinch = null;
+    const move = e => {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pointers.size === 2) {
+        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = W / (r.width || W);
+        const k = clampZoom(pinch.k * Math.hypot(a.x - b.x, a.y - b.y) / pinch.dist);
+        const mx = ((a.x + b.x) / 2 - r.left) * s, my = ((a.y + b.y) / 2 - r.top) * s;
+        look(k, mx - pinch.at.x * k, my - pinch.at.y * k);
+      } else if (pan && pointers.size === 1) {
+        const s = W / (picture.getBoundingClientRect().width || W);
+        look(view.k, pan.x + (e.clientX - pan.from.x) * s, pan.y + (e.clientY - pan.from.y) * s);
+      }
+    };
+    const release = e => {
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+      if (pointers.size !== 1) pan = null;
+      if (!pointers.size) { removeEventListener('pointermove', move); removeEventListener('pointerup', release); removeEventListener('pointercancel', release); }
+    };
+    const press = e => {
+      if (!picture.getBoundingClientRect) return;
+      if (!pointers.size) { addEventListener('pointermove', move); addEventListener('pointerup', release); addEventListener('pointercancel', release); }
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = W / (r.width || W);
+        const mx = ((a.x + b.x) / 2 - r.left) * s, my = ((a.y + b.y) / 2 - r.top) * s;
+        pan = null; pinch = { k: view.k, dist: Math.max(Math.hypot(a.x - b.x, a.y - b.y), 1), at: { x: (mx - view.x) / view.k, y: (my - view.y) / view.k } };
+      } else if (e.button === 0 && !e.target?.closest?.('.trust-node')) pan = { from: { x: e.clientX, y: e.clientY }, x: view.x, y: view.y };
+    };
+    const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${W} ${H}`, role: 'group', tabindex: 0,
+      'aria-label': selected ? `${bot().name}’s connections` : 'Your connections', 'aria-keyshortcuts': '+ - 0',
+      onpointerdown: press,
+      onwheel: e => { e.preventDefault(); const p = rootPoint(e); zoomAt(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.04 : 0.0025)), p.x, p.y); },
+      onkeydown: e => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === '+' || e.key === '=') zoomAt(ZOOM_STEP); else if (e.key === '-' || e.key === '_') zoomAt(1 / ZOOM_STEP); else if (e.key === '0') fit(); else return;
+        e.preventDefault();
+      } },
+      svg('rect', { class: 'trust-ground', width: W, height: H, fill: TAN }), world);
+    apply();
     // Dragging moves a node and its lines without drawing the graph again; a press that doesn't
     // move picks the node.
     function drag(event, n) {
-      if (event.button !== 0 || !picture.getScreenCTM) return;
+      if (event.button !== 0 || !picture.getBoundingClientRect) return;
       const start = { x: event.clientX, y: event.clientY };
       let moved = false;
-      const at = e => { const p = picture.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(picture.getScreenCTM().inverse()); };
+      // The pointer is on the picture; the node lives in the zoomed graph.
+      const at = e => { const p = rootPoint(e); return { x: (p.x - view.x) / view.k, y: (p.y - view.y) / view.k }; };
       const move = e => {
+        if (pointers.size > 1) return;
         if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4) return;
         moved = true;
         const p = at(e);
@@ -463,8 +554,13 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       h('span', { class: 'swatch pending' }), 'Asked, not answered', h('span', { class: 'swatch bond' }), 'Bond (earned)',
       ...(edges.some(e => e.kind === 'feeling') ? [h('span', { class: 'swatch feeling' }), 'Feelings, warm to cool, dashed when distant'] : []));
     const about = text(`${selected ? `${bot().name}’s` : 'Your'} connections. Round is a person, square is a bot, and each wears its own look. The ringed one is open below.`, 'muted fine');
-    const hint = text('Pick anyone in the graph to see and change them. Drag to move them.', 'muted fine');
-    return [about, picture, legend, hint, inspector(byId.get(focusId()))];
+    const hint = text('Pick anyone in the graph to see and change them. Drag them to move them, or the background to pan. Scroll or pinch to zoom, or press + and − with the graph picked; 0 fits it.', 'muted fine');
+    // BT11: the buttons sit over the graph's corner, outside what is zoomed.
+    const zoom = h('div', { class: 'trust-zoom', role: 'group', 'aria-label': 'Zoom the connections' },
+      button('+', () => zoomAt(ZOOM_STEP), { 'aria-label': 'Zoom in', title: 'Zoom in' }),
+      button('−', () => zoomAt(1 / ZOOM_STEP), { 'aria-label': 'Zoom out', title: 'Zoom out' }),
+      button('Fit', fit, { 'aria-label': 'Fit the whole graph', title: 'Fit the whole graph' }));
+    return [about, h('div', { class: 'trust-stage' }, picture, zoom), legend, hint, inspector(byId.get(focusId()))];
   }
   function curve(a, b, bend) {
     if (!bend) return `M${a.x} ${a.y}L${b.x} ${b.y}`;

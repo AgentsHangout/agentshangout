@@ -172,6 +172,36 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
     if (a.name<b.name) assert.equal(meet(a.box,b.box),false,`names ${a.name} and ${b.name} overlap`);
     assert.equal(meet(a.box,{x:b.x-b.half,y:b.y-b.half,w:b.half*2,h:b.half*2}),false,`name of ${a.name} sits on ${b.name}`);
   }
+  // BT11: the graph opens fitted, with labelled zoom buttons; + then - returns to the same scale.
+  const scaleOf = () => Number(all(body).find(n=>n.props.class==='trust-world').props['data-scale']);
+  const inside = () => {
+    const world = all(body).find(n=>n.props.class==='trust-world');
+    const [ox,oy] = world.props.transform.match(/translate\(([-\d.e]+) ([-\d.e]+)\)/).slice(1).map(Number), k = scaleOf();
+    return all(body).filter(n=>n.tag==='g'&&n.props.class?.includes('trust-node')).map(g=>{
+      const [x,y] = g.props.transform.match(/-?[\d.]+/g).map(Number); return {name:g.props['aria-label'], x:ox+x*k, y:oy+y*k};
+    });
+  };
+  for (const [label,aria] of [['+','Zoom in'],['−','Zoom out'],['Fit','Fit the whole graph']]) assert.equal(findButton(body,label)?.props['aria-label'],aria,`${label} button is labelled`);
+  assert.ok(placed.length>=10);
+  assert.ok(scaleOf()>=0.5&&scaleOf()<=1.5,`fitted scale ${scaleOf()}`);
+  for (const p of inside()) assert.ok(p.x>0&&p.x<480&&p.y>0&&p.y<300,`${p.name} is inside the fitted view: ${p.x},${p.y}`);
+  const fitScale = scaleOf();
+  findButton(body,'+').props.onclick(); assert.ok(scaleOf()>fitScale,'zoom in enlarges');
+  findButton(body,'−').props.onclick(); assert.ok(Math.abs(scaleOf()-fitScale)<1e-3,'zoom out returns to the same scale');
+  for (let i=0;i<30;i++) findButton(body,'+').props.onclick(); assert.equal(scaleOf(),4,'zoom stops at its top');
+  for (let i=0;i<60;i++) findButton(body,'−').props.onclick(); assert.equal(scaleOf(),0.5,'zoom stops at its bottom');
+  findButton(body,'Fit').props.onclick(); assert.equal(scaleOf(),fitScale,'Fit goes back to the fitted view');
+  for (const p of inside()) assert.ok(p.x>0&&p.x<480&&p.y>0&&p.y<300,`${p.name} is inside after Fit`);
+  // The keys do the same with the graph focused, and the wheel zooms around the pointer.
+  const picture = all(body).find(n=>n.tag==='svg'&&n.props.class==='trust-graph');
+  picture.props.onkeydown({key:'+',preventDefault(){}}); assert.ok(scaleOf()>fitScale);
+  picture.props.onkeydown({key:'-',preventDefault(){}}); assert.ok(Math.abs(scaleOf()-fitScale)<1e-3);
+  picture.props.onkeydown({key:'+',preventDefault(){}}); picture.props.onkeydown({key:'0',preventDefault(){}}); assert.equal(scaleOf(),fitScale);
+  picture.getBoundingClientRect = () => ({left:0,top:0,width:480,height:300});
+  picture.props.onwheel({clientX:100,clientY:80,deltaY:-120,deltaMode:0,preventDefault(){}}); assert.ok(scaleOf()>fitScale,'the wheel zooms in');
+  // A view zoomed by hand stays put when the graph is drawn again; a new set of nodes is fitted again.
+  const hand = scaleOf(); data.looks.bots.one = {head:'wide'}; await busy.refreshLooks(); await tick();
+  assert.equal(scaleOf(),hand,'a zoom made by hand survives a redraw');
   crowd = false;
   // U22: a bot's owner sees the events handed to it each day beside its calls.
   const owned = build(); await owned.open(); await tick();
