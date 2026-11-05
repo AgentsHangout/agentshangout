@@ -8457,3 +8457,95 @@ async fn clearing_answered_thread_mentions_uses_indexes() {
     let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
     assert!(scans.is_empty(), "a full scan: {plan:?}");
 }
+
+// I86, I88, E5, #536: the room tag is not the display name of a bot called Room.
+#[tokio::test]
+async fn room_tag_cannot_name_an_unsubscribed_bot_in_another_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (elsewhere, _) = server.someone("Elsewhere").await;
+    let bot = server.bot(&ann, &room, "Room").await;
+    server.state.db.add_agent_to_room(&elsewhere, &bot.id).unwrap();
+    server.state.db.set_bot_place(&bot.id, &elsewhere, now()).unwrap();
+    assert_eq!(server.state.db.bot_place(&bot.id, now()).unwrap(), Some(elsewhere));
+    let messages = format!("/api/hangouts/{room}/messages");
+    let bell = agenthangout::doorbell::Doorbell::new(&server.base, &bot.token);
+    let mut seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+
+    for policy in ["off", "members"] {
+        server
+            .put(&ann.key, &format!("/api/hangouts/{room}/room-mentions"), json!({ "policy": policy }))
+            .await
+            .ok();
+        let message = server.post(&ann.key, &messages, json!({ "text": "(@ROOM) please listen" })).await.ok();
+        let id = message["id"].as_i64().unwrap();
+        assert!(!server.state.db.mentions_bot(id, &bot.id).unwrap(), "{policy}: {message}");
+        let events = server.tool(&bot.token, "events_since", json!({ "since": "0" })).await;
+        assert!(events["structuredContent"]["events"].as_array().unwrap().iter().all(|event| {
+            event["name"] != "mention" || event["data"]["message_id"] != id
+        }), "{events}");
+        let look = bell.look(&seen).await.unwrap();
+        assert!(look.wake.is_empty(), "{policy}: {:?}", look.wake);
+        seen = look.next;
+    }
+
+    // A bare display name remains a direct mention, including beside a room tag.
+    let direct = server
+        .post(&ann.key, &messages, json!({ "text": "@room; Room, this part is for you" }))
+        .await
+        .ok();
+    assert!(server.state.db.mentions_bot(direct["id"].as_i64().unwrap(), &bot.id).unwrap());
+}
+
+// I87, I88, #536: a person's room tag reaches every eligible polling bot, once.
+#[tokio::test]
+async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (elsewhere, _) = server.someone("Elsewhere").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let away = server.bot(&ann, &room, "Away").await;
+    let quiet = server.bot(&ann, &room, "Quiet").await;
+    server.state.db.add_agent_to_room(&elsewhere, &away.id).unwrap();
+    server.state.db.set_bot_place(&away.id, &elsewhere, now()).unwrap();
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    for bot in [&fido, &rex, &away] {
+        server
+            .put(
+                &ann.key,
+                &format!("{policy}/bots/{}", bot.id),
+                json!({ "subscribed": true }),
+            )
+            .await
+            .ok();
+    }
+    let mut bells = Vec::new();
+    for bot in [&fido, &rex, &away, &quiet] {
+        let bell = agenthangout::doorbell::Doorbell::new(&server.base, &bot.token);
+        let seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+        bells.push((bell, seen));
+    }
+    let sent = server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/messages"),
+            json!({ "text": "@room @ROOM standup" }),
+        )
+        .await
+        .ok();
+    let id = sent["id"].as_i64().unwrap();
+    for (n, (bell, seen)) in bells.into_iter().enumerate() {
+        let look = bell.look(&seen).await.unwrap();
+        if n < 2 {
+            assert_eq!(look.wake.from_owner, vec![agenthangout::doorbell::Mention {
+                hangout_id: room.clone(), message_id: id,
+            }]);
+        } else {
+            assert!(look.wake.is_empty(), "recipient {n}: {:?}", look.wake);
+        }
+        assert!(bell.look(&look.next).await.unwrap().wake.is_empty(), "no repeated wake");
+    }
+    assert_eq!(server.state.db.mentioned_agents(id, now()).unwrap().len(), 2);
+}
