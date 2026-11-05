@@ -330,9 +330,14 @@ pub fn note_message(state: &AppState, message: &Message) {
             message_data,
         );
         // I88: named, or reached by @room (a mention row the server just recorded).
+        let named = doorbell::mentions(&message.body, &bot.name);
         let room_tag = || state.db.mentions_bot(message.id, &bot.id).unwrap_or(false);
-        if doorbell::mentions(&message.body, &bot.name) || room_tag() {
+        if named || room_tag() {
             let mut mention = shared;
+            if !named {
+                // I88: provenance for polling, never inferred later from a renamed bot or text.
+                mention["via_room_tag"] = json!(true);
+            }
             if let Some(root_id) = thread_root {
                 mention["thread_id"] = json!(root_id);
                 mention["root_id"] = json!(root_id);

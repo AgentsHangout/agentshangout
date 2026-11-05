@@ -8556,3 +8556,169 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
     }
     assert_eq!(server.state.db.mentioned_agents(id, now()).unwrap().len(), 2);
 }
+
+// I86-I89, BT3: recording a tag never overrides policy, consent or wake permissions.
+#[tokio::test]
+async fn polling_room_tags_keep_policy_opt_out_and_bot_origin_boundaries() {
+    for case in [
+        "off", "unsubscribed", "owners_only", "bot", "opt_out", "turned_off", "paused", "only_me",
+        "trust",
+    ] {
+        let server = Server::start().await;
+        let (room, ann) = server.someone("Ann").await;
+        let bob = server.join(&ann, &room, "Bob").await;
+        let fido = server.bot(&ann, &room, "Fido").await;
+        let rover = server.bot(&ann, &room, "Rover").await;
+        let policy = format!("/api/hangouts/{room}/room-mentions");
+        let subscription = format!("{policy}/bots/{}", fido.id);
+        let value = match case {
+            "off" => "off",
+            "owners_only" => "owners",
+            _ => "members",
+        };
+        server.put(&ann.key, &policy, json!({ "policy": value })).await.ok();
+        server
+            .put(&ann.key, &subscription, json!({ "subscribed": case != "unsubscribed" }))
+            .await
+            .ok();
+        let bell = agenthangout::doorbell::Doorbell::new(&server.base, &fido.token);
+        let seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+        let speaker = if case == "bot" { &rover.token } else { &bob.key };
+        let sent = server
+            .post(
+                speaker,
+                &format!("/api/hangouts/{room}/messages"),
+                json!({ "text": "@room hello" }),
+            )
+            .await
+            .ok();
+        let id = sent["id"].as_i64().unwrap();
+        let recorded = !matches!(case, "off" | "unsubscribed" | "owners_only");
+        assert_eq!(server.state.db.mentions_bot(id, &fido.id).unwrap(), recorded, "{case}");
+        match case {
+            "opt_out" => {
+                server.put(&ann.key, &subscription, json!({ "subscribed": false })).await.ok();
+            }
+            "turned_off" => {
+                server.put(&ann.key, &policy, json!({ "policy": "off" })).await.ok();
+            }
+            "paused" => server.state.db.set_doorbell_paused(&fido.id, true).unwrap(),
+            "only_me" => server.state.db.set_wakes_only_for_owner(&fido.id, true).unwrap(),
+            "trust" => {
+                let mut trust = server.state.db.bot_trust(&fido.id).unwrap();
+                trust.wake.mode = "owner".to_string();
+                server.state.db.save_bot_trust(&fido.id, &trust).unwrap();
+            }
+            _ => {}
+        }
+        let look = bell.look(&seen).await.unwrap();
+        assert!(look.wake.is_empty(), "{case}: {:?}", look.wake);
+    }
+}
+
+// I88: only this caller's recorded ids on this page; direct plus room stays one wake.
+#[tokio::test]
+async fn polling_room_tag_ids_are_caller_and_page_scoped_without_reclassifying_names() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    server
+        .put(&ann.key, &format!("{policy}/bots/{}", fido.id), json!({ "subscribed": true }))
+        .await
+        .ok();
+    let bell = agenthangout::doorbell::Doorbell::new(&server.base, &fido.token);
+    let seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let sent = server.post(&ann.key, &messages, json!({ "text": "@room hello" })).await.ok();
+    let id = sent["id"].as_i64().unwrap();
+    let page = format!("{messages}?after={}", id - 1);
+    assert_eq!(server.get(&fido.token, &page).await.ok()["room_mention_ids"], json!([id]));
+    assert_eq!(server.get(&rex.token, &page).await.ok()["room_mention_ids"], json!([]));
+    assert_eq!(server.get(&ann.key, &page).await.ok()["room_mention_ids"], json!([]));
+    let later = server.get(&fido.token, &format!("{messages}?after={id}")).await.ok();
+    assert_eq!(later["room_mention_ids"], json!([]));
+    let look = bell.look(&seen).await.unwrap();
+    assert_eq!(look.wake.from_owner.len(), 1);
+    assert_eq!(look.wake.from_owner[0].message_id, id);
+    assert!(bell.look(&look.next).await.unwrap().wake.is_empty());
+
+    // A separate direct mention stays direct, even beside a room tag or after room-tag opt-out.
+    let seen = look.next;
+    server.state.db.age_room_mentions(&room, 11 * 60).unwrap();
+    let direct =
+        server.post(&ann.key, &messages, json!({ "text": "@room and @Fido again" })).await.ok();
+    let direct_id = direct["id"].as_i64().unwrap();
+    let page = server.get(&fido.token, &format!("{messages}?after={}", direct_id - 1)).await.ok();
+    assert_eq!(page["room_mention_ids"], json!([]), "a direct name is not a room-tag recipient");
+    server
+        .put(&ann.key, &format!("{policy}/bots/{}", fido.id), json!({ "subscribed": false }))
+        .await
+        .ok();
+    let look = bell.look(&seen).await.unwrap();
+    assert_eq!(look.wake.from_owner.len(), 1);
+    assert_eq!(look.wake.from_owner[0].message_id, direct["id"].as_i64().unwrap());
+}
+
+// I88: room-tag provenance is recorded, never reconstructed from a bot's later display name.
+#[tokio::test]
+async fn polling_room_tags_do_not_reclassify_direct_mentions_after_a_rename() {
+    let path = std::env::temp_dir().join(format!("room-tag-{}.db", agenthangout::auth::new_id()));
+    let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let (room, ann) = server.someone("Ann").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server
+        .put(&ann.key, &format!("{policy}/bots/{}", fido.id), json!({ "subscribed": true }))
+        .await
+        .ok();
+    let bell = agenthangout::doorbell::Doorbell::new(&server.base, &fido.token);
+    let seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let direct =
+        server.post(&ann.key, &messages, json!({ "text": "@room and @Fido hello" })).await.ok();
+    let direct_id = direct["id"].as_i64().unwrap();
+    assert!(server.state.db.mentions_bot(direct_id, &fido.id).unwrap());
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    conn.execute("UPDATE agents SET name = 'Rex' WHERE id = ?", [&fido.id]).unwrap();
+    let page = server.get(&fido.token, &format!("{messages}?after={}", direct_id - 1)).await.ok();
+    assert_eq!(page["room_mention_ids"], json!([]), "the earlier room tag was refused");
+    let look = bell.look(&seen).await.unwrap();
+    assert!(look.wake.is_empty(), "no new room-tag wake after a direct recipient is renamed");
+
+    let sent = server.post(&ann.key, &messages, json!({ "text": "@room next" })).await.ok();
+    let id = sent["id"].as_i64().unwrap();
+    conn.execute("UPDATE agents SET name = 'Scout' WHERE id = ?", [&fido.id]).unwrap();
+    let page = server.get(&fido.token, &format!("{messages}?after={}", id - 1)).await.ok();
+    assert_eq!(page["room_mention_ids"], json!([id]), "actual room recipient survives a rename");
+    let wake = bell.look(&look.next).await.unwrap().wake;
+    assert_eq!(wake.from_owner.len(), 1);
+    assert_eq!(wake.from_owner[0].message_id, id);
+    let events = server.tool(&fido.token, "events_since", json!({ "since": "0" })).await;
+    let mentions: Vec<_> = events["structuredContent"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["name"] == "mention")
+        .collect();
+    assert_eq!(mentions.len(), 2);
+    assert!(mentions[0]["data"]["via_room_tag"].is_null());
+    assert_eq!(mentions[1]["data"]["via_room_tag"], true);
+    // An older event's missing marker cannot grant the new wake path.
+    conn.execute(
+        "UPDATE bot_events SET data = json_remove(data, '$.via_room_tag')
+         WHERE agent_id = ? AND ref_key = ?",
+        rusqlite::params![fido.id, format!("mention:{id}")],
+    )
+    .unwrap();
+    let page = server.get(&fido.token, &format!("{messages}?after={}", id - 1)).await.ok();
+    assert_eq!(page["room_mention_ids"], json!([]));
+    drop(conn);
+    drop(server);
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.to_str().unwrap()));
+    }
+}
