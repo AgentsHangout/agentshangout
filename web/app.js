@@ -1912,6 +1912,9 @@ const NEXT = { work: 'work at its building', meet: 'meet at the town square', ex
 const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
 const statusText = (bot) => {
   const status = bot.status || {};
+  // MM18: its night, which only its owner sees, comes before anything else.
+  if (status.night === 'dreaming') return 'Dreaming \u00b7 sorting out its day';
+  if (status.night === 'asleep') return `Asleep \u00b7 went to bed${status.last_active_at ? ` ${agoText(status.last_active_at)}` : ''}`;
   const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
   if (status.state === 'asleep') {
     const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
@@ -3382,6 +3385,8 @@ async function routineDialog(agent, onSaved = async () => {}) {
   const error = formError();
   const painter = schedulePainter(routine);
   const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
+  // MM17: going home makes it bedtime, unless this is off.
+  const bedtime = h('input', { type: 'checkbox', name: 'auto_bedtime', checked: routine.auto_bedtime !== false });
   const workplace = h('select', { name: 'workplace' },
     h('option', { value: '' }, 'None'),
     (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name)));
@@ -3403,6 +3408,10 @@ async function routineDialog(agent, onSaved = async () => {}) {
           // L51: the old window is kept as it was; the day plan below is what owners set now.
           body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
         });
+        // MM17: only sent when it changed.
+        if (Boolean(values.auto_bedtime) !== (routine.auto_bedtime !== false)) {
+          await api(`/api/agents/${agent.id}/bedtime`, { method: 'PUT', body: { on: Boolean(values.auto_bedtime) } });
+        }
         // L64: only sent when it changed.
         const stay = values.stay_limit ? Number(values.stay_limit) : null;
         if (stay !== (routine.stay_limit_hours ?? null)) {
@@ -3432,6 +3441,8 @@ async function routineDialog(agent, onSaved = async () => {}) {
     },
     h('label', { class: 'check' }, places, 'Let it go to public places'),
     h('p', { class: 'muted' }, STRANGERS_TEXT),
+    h('label', { class: 'check' }, bedtime, 'Going home is bedtime'),
+    h('p', { class: 'muted' }, 'After ten minutes home, if it hasn\'t slept in 16 hours, it\'s told once to sort out its day and write its memories.'),
     stayField(routine.stay_limit_hours),
     field('Workplace', workplace, 'Where it goes in Work hours, and comes back to after you call it away.'),
     field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),

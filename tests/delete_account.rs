@@ -1985,12 +1985,14 @@ async fn what_was_only_the_bots_goes_with_it() {
     let (room, zeph, _) = server.room("Crew", ZEPH).await;
     let (bot, token) = server.bot(&zeph, &room, QUILL).await;
     let tool = |name: &str, arguments: Value| json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    // The question first: asking is a write, and a write after the wait would clear it (N6) once
+    // the clock passes a second between them.
+    let question = json!({ "hangout_id": room, "question": "Tacos?" });
+    server.post(&token, "/mcp", tool("ask_owner", question)).await.ok();
     server
         .post(&token, "/mcp", tool("waiting_on_owner", json!({ "about": "Permission" })))
         .await
         .ok();
-    let question = json!({ "hangout_id": room, "question": "Tacos?" });
-    server.post(&token, "/mcp", tool("ask_owner", question)).await.ok();
     let needs = server.get(&zeph.key, "/api/needs-you").await.ok();
     assert_eq!(needs["count"], 2, "{needs}");
 
