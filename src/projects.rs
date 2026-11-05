@@ -157,9 +157,10 @@ pub fn invite_to_project(
     spaces::check_can_join(state, &invitee.owner_id, &space.id)?;
     state.db.add_agent_to_room(&space.id, &invitee.id)?;
     crate::events::note_place(state, &invitee.id, &space.id, "moved");
-    // Its owner can read where it went and take it back (S9, ops::remove_agent).
+    // Its owner can read where it went and take it back (S9, ops::remove_agent). Being brought in
+    // isn't a tie to the room's people, so it can't open a way to invite them (FR1, #583).
     if invitee.owner_id != space.owner_id {
-        state.db.add_member(&space.id, &invitee.owner_id, now())?;
+        state.db.add_brought_in_owner(&space.id, &invitee.owner_id, now())?;
     }
     ops::announce(state, &space.id, &format!("{} brought in {}.", caller.name, invitee.name))?;
     state.worlds.mark_stale(COMMONS_ID);
