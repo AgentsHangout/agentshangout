@@ -8542,6 +8542,23 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
         .await
         .ok();
     let id = sent["id"].as_i64().unwrap();
+    assert!(!server.state.db.mentions_bot(id, &away.id).unwrap());
+    let inbox = server.tool(&away.token, "inbox", json!({})).await;
+    assert_eq!(inbox["structuredContent"]["mentions"], json!([]));
+    let events = server.tool(&away.token, "events_since", json!({ "since": "0" })).await;
+    assert!(
+        events["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| { event["name"] != "mention" || event["data"]["message_id"] != id }),
+        "{events}"
+    );
+    let page = server
+        .get(&away.token, &format!("/api/hangouts/{room}/messages?after={}", id - 1))
+        .await
+        .ok();
+    assert_eq!(page["room_mention_ids"], json!([]));
     for (n, (bell, seen)) in bells.into_iter().enumerate() {
         let look = bell.look(&seen).await.unwrap();
         if n < 2 {
@@ -8561,7 +8578,14 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
 #[tokio::test]
 async fn polling_room_tags_keep_policy_opt_out_and_bot_origin_boundaries() {
     for case in [
-        "off", "unsubscribed", "owners_only", "bot", "opt_out", "turned_off", "paused", "only_me",
+        "off",
+        "unsubscribed",
+        "owners_only",
+        "bot",
+        "opt_out",
+        "turned_off",
+        "paused",
+        "only_me",
         "trust",
     ] {
         let server = Server::start().await;

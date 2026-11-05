@@ -471,7 +471,8 @@ impl Doorbell {
             let (mut bots, mut people): (Vec<_>, Vec<_>) = chat
                 .filter(|message| {
                     mentions(&message.body, &me.name)
-                        || (message.agent_id.is_none() && new.room_mention_ids.contains(&message.id))
+                        || (message.agent_id.is_none()
+                            && new.room_mention_ids.contains(&message.id))
                 })
                 .partition(|message| message.agent_id.is_some());
             let allowed = if me.trust_wake_check_available {
