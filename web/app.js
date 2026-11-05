@@ -1842,6 +1842,12 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// S86, #531: in a room, the part of My bots about your own bots, or null for a guest or a bot.
+function yourBotsSection(me, snapshot) {
+  if (me?.kind !== 'person' || snapshot?.guest) return null;
+  return h('section', { class: 'my-bots-each', 'aria-label': 'Each of your bots' });
+}
+
 // #529: what the build catalog draws is the same on every open, but each picture paints a whole room
 // or scans every pixel of an item, and there are some two hundred. So each is drawn once, kept, and
 // copied onto a fresh canvas when a tile needs it, which is a single drawImage.
@@ -5168,8 +5174,7 @@ async function roomView(id) {
   // #531: the same My bots view as the map's, opening on who's in this room (what Crew showed), then
   // each of your bots. Who sees what is unchanged: other people's bots show what they did before,
   // and a guest gets no section about their own bots here.
-  const roomTrustHost = me?.kind === 'person' && !snapshot.guest
-    ? h('section', { class: 'my-bots-each', 'aria-label': 'Each of your bots' }) : null;
+  const roomTrustHost = yourBotsSection(me, snapshot);
   const roomTrust = roomTrustHost ? trustPanel({ h, api, panels, me, host: roomTrustHost, hostPanel: 'crew', figure: figurePicture,
     dress: (bot) => dresser.dress?.(bot),
     schedule: (bot) => routineDialog(bot).catch((failure) => alert(failure.message)),
@@ -7241,6 +7246,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
     } },
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
     ...(trust ? [{ id: 'bots', label: 'My bots', icon: '👥', action: () => { closeBuildSheet(); panels.open('bots'); } }] : []),
+    { id: 'around', label: 'Around', icon: '👀', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
   ];
 
@@ -7400,7 +7406,7 @@ function installAppleHigRoom({ frame, panels }) {
     { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
     { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
-    { id: 'guests', label: 'Guests', icon: '👥', action: () => panels.open('crew') },
+    { id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') },
     { id: 'more', label: 'More', icon: '⋯', action: () => panels.open('more') },
   ];
 

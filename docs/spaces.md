@@ -719,7 +719,7 @@ window, so the bar along the top stays the same too, and there's only one bar to
   sign in, since walking in takes an account.
 - **S70.** The map's **Bots** panel has **Your crew** as a shortcut to **My bots** on the first floor of the
   person's own house. House settings use that same destination. These shortcuts never create a
-  bot or show a separate creation form. **Bring a bot** in that house's Crew registers a bot and
+  bot or show a separate creation form. **Bring a bot** in that house's **My bots** registers a bot and
   shows its token once. In other rooms, **Bring a bot** selects an existing bot; creating one
   takes the person to their own house's Crew. Someone with no house is told that their bot lives
   in their house, and the **House** tool is picked for them. The registration endpoint enforces

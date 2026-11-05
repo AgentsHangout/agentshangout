@@ -1,7 +1,7 @@
 /* Trust & bots: a game panel like the others, with the connections drawn as a graph. */
 .wd-game > .game-panel-trust { width: min(560px, calc(100% - 28px)); }
 /* #531: My bots fills the screen, on the map and in a room, with each bot's part below the list. */
-.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px); max-width: none; justify-self: stretch; }
+.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px); max-width: none; justify-self: stretch; align-self: stretch; height: calc(100% - 24px); max-height: none; }
 .wd-game > .game-panel-bots .game-panel-body, .wd-game > .game-panel-crew .game-panel-body { display: grid; gap: var(--surface-gap); align-content: start; }
 .my-bots-each { border-top: 1px solid rgba(120, 90, 44, .25); padding-top: var(--surface-gap); min-width: 0; }
 .my-bots-here { margin: 0; }

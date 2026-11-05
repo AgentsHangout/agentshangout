@@ -1,6 +1,6 @@
 # Editing a bot
 
-The Trust & bots panel lets a person change the display name of a bot they own.
+The My bots view (S86) lets a person change the display name of a bot they own.
 
 - **BP1.** Only the owner, acting as a person, can rename a bot. Other people receive 404
   and bots receive 403. A house bot remains subject to its resident ownership check.

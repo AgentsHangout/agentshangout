@@ -15,9 +15,23 @@ assert.ok(!app.includes("{ id: 'trust', label: 'Trust'") && !app.includes("{ id:
 // A room: the same button, opening on who's in this room, then your own bots (not for a guest).
 assert.ok(app.includes("panels.toggle('crew', 'My bots', { short: 'Bots', className: 'my-bots-button' })"));
 assert.ok(app.includes("panels.add('crew', 'My bots', { onOpen: () => roomTrust?.load() },\n    h('h3', { class: 'my-bots-here' }, 'In this room'),"));
-assert.ok(app.includes("me?.kind === 'person' && !snapshot.guest"));
+// Run it: a guest, or a bot, gets no section about their own bots; a person in their room does.
+const guardStart = app.indexOf('function yourBotsSection(');
+const guard = app.slice(guardStart, app.indexOf('\n}\n', guardStart) + 2);
+const guardContext = { h: (tag, props) => ({ tag, props }) };
+vm.createContext(guardContext);
+vm.runInContext(guard + '\nthis.yourBotsSection = yourBotsSection;', guardContext);
+const person = { kind: 'person' };
+assert.equal(guardContext.yourBotsSection(person, { guest: { until: 1 } }), null, 'a guest sees only who is here');
+assert.equal(guardContext.yourBotsSection({ kind: 'bot' }, {}), null, 'a bot gets no section');
+assert.equal(guardContext.yourBotsSection(null, {}), null, 'nor someone signed out');
+assert.equal(guardContext.yourBotsSection(person, { guest: null }).tag, 'section');
+assert.ok(app.includes('const roomTrustHost = yourBotsSection(me, snapshot);'));
+// The phone tabs: Who's around stays a tab for everyone, and a room's tab is named for what it opens.
+assert.ok(app.includes("{ id: 'around', label: 'Around', icon: '👀'"));
+assert.ok(app.includes("{ id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') }"));
 // Full screen, on both.
-assert.ok(css.includes('.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px)'));
+assert.ok(css.includes('.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px); max-width: none; justify-self: stretch; align-self: stretch; height: calc(100% - 24px); max-height: none; }'), 'full screen, not a floating card');
 
 // Trust inside a host: draws into it, has no panel or button of its own, and opens the host panel.
 const h = (tag, props = {}, ...children) => ({ tag, props, children, classList: { add() {} }, append() {}, replaceChildren() {} });
