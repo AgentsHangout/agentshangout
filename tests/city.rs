@@ -5001,6 +5001,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "vote_person_ballots",
             "person_votes",
             "vote_visitors",
+            "memory_jobs",
+            "bot_jobs",
+            "bot_roles",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

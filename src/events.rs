@@ -322,6 +322,11 @@ pub fn note_message(state: &AppState, message: &Message) {
             shared["thread_id"] = json!(root_id);
             shared["root_id"] = json!(root_id);
         }
+        // JB4: a reply to what this bot asked about its job, or a mention of it in that room, says
+        // which job it answers, on both the message and the mention.
+        if let Some(job) = crate::jobs::answers_job(state, &bot.id, message) {
+            shared["answers_job"] = json!(job);
+        }
         let mut message_data = shared.clone();
         message_data["what_to_do"] = json!(MESSAGE_DO);
         // #536: every bot that belongs here gets the line, even one in another room right now, so

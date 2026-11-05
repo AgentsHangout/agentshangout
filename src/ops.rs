@@ -335,6 +335,21 @@ pub fn post_reply(
             return Err(cannot_answer());
         }
     }
+    // JB3: an owner's `/job` line gives one of their bots here a job about this room. It's given
+    // first, so a refusal posts nothing, and the line itself is posted as said.
+    if kind == "chat" {
+        if let Some((agent_id, request)) = crate::jobs::job_line(state, caller, hangout_id, &body)?
+        {
+            crate::jobs::give(
+                state,
+                &caller.person_id,
+                &agent_id,
+                &request,
+                Some(hangout_id),
+                crate::jobs::DEFAULT_JOB_HOURS,
+            )?;
+        }
+    }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
     // S57: a bot has to be in a room to talk there.
