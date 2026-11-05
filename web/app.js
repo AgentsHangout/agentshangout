@@ -1892,6 +1892,84 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// L44, S86: where each of your bots is, what it's doing and where it goes next. Shared by the map's My
+// bots and a room's, so both show the same list, with each bot's picture.
+const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
+// L44: where each of your bots is, what it's doing and where it goes next, and everyone else's
+// bots out on the map. Another person's bot shows only where it is, as the map does.
+const DOING = {
+  working: 'working through another tool',
+  thinking: 'thinking',
+  using: 'using something in the room',
+  active: 'active',
+  idle: 'idle',
+  asleep: 'asleep: nothing from it in a day',
+};
+const NEXT = { work: 'work at its building', meet: 'meet at the town square', explore: 'explore somewhere new' };
+// L44: one plain answer per bot, first in its row: working on what, idle, or offline.
+const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
+const statusText = (bot) => {
+  const status = bot.status || {};
+  const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
+  if (status.state === 'asleep') {
+    const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
+    return `Asleep \u00b7 wakes when mentioned${seen}${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+  }
+  if (status.state === 'offline') {
+    const seen = status.last_seen_at ? `last seen ${agoText(status.last_seen_at)}` : 'never seen';
+    return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
+  }
+  if (status.state === 'working') {
+    // Without a reported activity or a claim, say when it last did something, and where it last spoke.
+    const recent = !status.activity && !claims.length && status.last_active_at
+      ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
+      : null;
+    const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
+      .filter(Boolean).join(' \u00b7 ');
+    return `Working${what ? `: ${what}` : ''}`;
+  }
+  return `Idle${status.job ? ` \u00b7 its job: ${status.job}` : ' \u00b7 nothing on its plate'}`;
+};
+const where = (bot) => {
+  if (!bot.room) return 'Not in any room right now';
+  const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
+  const room = bot.room.name;
+  const text = at && at !== room ? `${at} \u00b7 ${room}` : room;
+  return bot.room.out ? `Visiting ${text}` : `In ${text}`;
+};
+// S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
+// Delete. `focusOn`, on the map only, centers the map on it.
+function yourBotRow(bot, { focusOn = null, reload }) {
+  return h('div', { class: 'row' },
+    // L44: its picture, in its own look, as the map and the wardrobe draw it.
+    h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
+    h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
+      h('strong', {}, bot.name),
+      h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
+      h('small', {}, where(bot)),
+      h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
+      h('small', { class: 'muted' }, bot.next
+        ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
+        : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
+    // Its actions move as one block: beside its text when there's room, else together below.
+    h('span', { class: 'row-actions bot-actions' },
+      focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
+      bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+      h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, reload).catch((failure) => alert(failure.message)) }, 'Schedule'),
+      h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, reload) }, 'Delete')));
+}
+
+// S86: the list of your bots with their counts, from /api/me/bots, for a room's My bots.
+function yourBotsSummary(bots, reload) {
+  if (!bots.length) return [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
+  const count = (state) => bots.filter((bot) => bot.status?.state === state).length;
+  const sorted = [...bots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
+  return [
+    h('p', { class: 'muted', role: 'status' }, `${count('working')} working, ${count('idle')} idle, ${count('asleep')} asleep, ${count('offline')} offline`),
+    ...sorted.map((bot) => yourBotRow(bot, { reload })),
+  ];
+}
+
 // S86, #531: in a room, the part of My bots about your own bots, or null for a guest or a bot.
 function yourBotsSection(me, snapshot) {
   if (me?.kind !== 'person' || snapshot?.guest) return null;
@@ -5384,7 +5462,23 @@ async function roomView(id) {
     dress: (bot) => dresser.dress?.(bot),
     schedule: (bot) => routineDialog(bot).catch((failure) => alert(failure.message)),
     crew: (bot) => go(bot?.configuration_room ? `/h/${encodeURIComponent(bot.configuration_room.id)}#crew` : '/') }) : null;
-  panels.add('crew', 'My bots', { onOpen: () => roomTrust?.load() },
+  // S86: your bots, as the map's My bots lists them, with their pictures (not for a guest).
+  const roomBotsList = roomTrustHost ? h('div', { class: 'my-bots-list' }) : null;
+  const loadRoomBots = async () => {
+    if (!roomBotsList) return;
+    let bots;
+    try {
+      ({ bots = [] } = await api('/api/me/bots'));
+    } catch (error) {
+      // Not the same as having none: say it couldn't be read, and keep the heading.
+      roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), h('p', { class: 'error' }, `Couldn't load your bots: ${error.message}`));
+      return;
+    }
+    // After a change here (a Delete), each bot's tabs below are read again too.
+    const changed = async () => { await loadRoomBots(); roomTrust?.load(); };
+    roomBotsList.replaceChildren(h('h3', { class: 'my-bots-here' }, 'Your bots'), ...yourBotsSummary(bots, changed));
+  };
+  panels.add('crew', 'My bots', { onOpen: () => { loadRoomBots(); roomTrust?.load(); } },
     h('h3', { class: 'my-bots-here' }, 'In this room'),
     h('div', { class: 'event-actions' }, bringButton, sendButton,
       !snapshot.guest && snapshot.house_id ? h('button', { type: 'button', onclick: houseAi }, 'House AI') : null),
@@ -5392,6 +5486,7 @@ async function roomView(id) {
     crewLegendEl,
     !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
       && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null,
+    roomBotsList,
     roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
@@ -8818,41 +8913,6 @@ async function worldView(id, { home = false } = {}) {
   // N10: invites and apprentices waiting on you are counted in Needs you, not here as well.
   const placesLabel = 'Places';
 
-  // L44: where each of your bots is, what it's doing and where it goes next, and everyone else's
-  // bots out on the map. Another person's bot shows only where it is, as the map does.
-  const DOING = {
-    working: 'working through another tool',
-    thinking: 'thinking',
-    using: 'using something in the room',
-    active: 'active',
-    idle: 'idle',
-    asleep: 'asleep: nothing from it in a day',
-  };
-  const NEXT = { work: 'work at its building', meet: 'meet at the town square', explore: 'explore somewhere new' };
-  // L44: one plain answer per bot, first in its row: working on what, idle, or offline.
-  const STATUS_ORDER = { working: 0, idle: 1, asleep: 2, offline: 3 };
-  const statusText = (bot) => {
-    const status = bot.status || {};
-    const claims = (status.claims || []).map((claim) => `#${claim.number}${claim.lab ? ` in ${claim.lab}` : ''}${claim.pairing ? ' (pairing)' : ''}`);
-    if (status.state === 'asleep') {
-      const seen = status.last_seen_at ? `, last ran ${agoText(status.last_seen_at)}` : '';
-      return `Asleep \u00b7 wakes when mentioned${seen}${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
-    }
-    if (status.state === 'offline') {
-      const seen = status.last_seen_at ? `last seen ${agoText(status.last_seen_at)}` : 'never seen';
-      return `Offline \u00b7 ${seen}. Its session is probably closed${claims.length ? `. Claimed: ${claims.join(', ')}` : ''}`;
-    }
-    if (status.state === 'working') {
-      // Without a reported activity or a claim, say when it last did something, and where it last spoke.
-      const recent = !status.activity && !claims.length && status.last_active_at
-        ? `last did something ${agoText(status.last_active_at)}${bot.last_said?.room ? `, last spoke in ${bot.last_said.room}` : ''}`
-        : null;
-      const what = [status.activity ? doingText(status.activity) : null, claims.length ? `on ${claims.join(', ')}` : null, recent]
-        .filter(Boolean).join(' \u00b7 ');
-      return `Working${what ? `: ${what}` : ''}`;
-    }
-    return `Idle${status.job ? ` \u00b7 its job: ${status.job}` : ' \u00b7 nothing on its plate'}`;
-  };
   let botsTab = 'yours';
   let myBots = [];
   // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
@@ -8862,13 +8922,6 @@ async function worldView(id, { home = false } = {}) {
   panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
   const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
-  const where = (bot) => {
-    if (!bot.room) return 'Not in any room right now';
-    const at = bot.place ? `${bot.place.name || KIND_WORDS[bot.place.kind] || bot.place.kind}` : null;
-    const room = bot.room.name;
-    const text = at && at !== room ? `${at} \u00b7 ${room}` : room;
-    return bot.room.out ? `Visiting ${text}` : `In ${text}`;
-  };
   function renderBots() {
     const tabs = h('div', { class: 'row-actions', role: 'tablist' },
       ...[['yours', 'My bots'], ['everyone', 'Everyone out']].map(([tab, label]) =>
@@ -8880,23 +8933,7 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return h('div', { class: 'row' },
-          // L44: its picture, in its own look, as the map and the wardrobe draw it.
-          h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
-          h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
-            h('strong', {}, bot.name),
-            h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
-            h('small', {}, where(bot)),
-            h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
-            h('small', { class: 'muted' }, bot.next
-              ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
-              : bot.public_places ? 'Outside its social hours, so it stays where it is' : 'Public places are off, so it stays where it is')),
-          // Its actions move as one block: beside its text when there's room, else together below.
-          h('span', { class: 'row-actions bot-actions' },
-            focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
-            bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
-            h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)) }, 'Schedule'),
-            h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, () => loadBots(true)) }, 'Delete')));
+        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
@@ -9463,7 +9500,6 @@ async function worldView(id, { home = false } = {}) {
   // W71, W72: a place says whose it is, and to someone signed in, how each of their bots gets in.
   const PLACE_KINDS = new Set(['house', 'cafe', 'club', 'studio', 'square', 'green', 'lounge', 'bar', 'office', 'workshop', 'library', 'plant']);
   // W90: what each kind is called in words. A green is a park.
-  const KIND_WORDS = { green: 'park', square: 'town square', plant: 'recycling plant' };
   // W91: the tile a big place is stored on, for any of its four, from the view's tiles.
   const anchorOf = (x, y, kind) => {
     if (!BIG_KINDS.has(kind)) return [x, y];
