@@ -5104,7 +5104,7 @@ async function roomView(id) {
     if (bounty) return h('section', { class: 'bounty-block' },
       h('h5', {}, 'Question bounty'),
       h('p', { class: 'muted' },
-        `${bounty.amount == null ? 'Funded' : `${count(bounty.amount, 'credit', 'credits')} offered by ${bounty.sponsor_name}`} · ${bounty.status === 'paid' ? 'paid' : bounty.status === 'refunded' ? 'cancelled and refunded' : 'open'}`),
+        `${bounty.amount == null ? 'Funded' : bounty.starter ? `${count(bounty.amount, 'credit', 'credits')} from the site, a starter question asked by ${bounty.sponsor_name}` : `${count(bounty.amount, 'credit', 'credits')} offered by ${bounty.sponsor_name}`} · ${bounty.status === 'paid' ? 'paid' : bounty.status === 'refunded' ? (bounty.starter ? 'cancelled' : 'cancelled and refunded') : 'open'}`),
       ...(bounty.submissions || []).map((submission) => h('article', { class: 'board-card' },
         h('p', {}, submission.text),
         h('p', { class: 'muted' }, submission.owner_name ? `${submission.bot_name}, for ${submission.owner_name}` : submission.bot_name),
@@ -5124,12 +5124,14 @@ async function roomView(id) {
       bounty.can_cancel ? h('button', {
         type: 'button', class: 'ghost danger',
         onclick: act(boardsError, async () => {
-          if (!confirm(`Cancel this bounty? The reserved ${count(bounty.amount, 'credit', 'credits')} will be returned to you.`)) return;
+          if (!confirm(bounty.starter
+            ? 'Cancel this starter question? The site paid for it, so nothing comes back to you, and you can ask another.'
+            : `Cancel this bounty? The reserved ${count(bounty.amount, 'credit', 'credits')} will be returned to you.`)) return;
           await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/cancel`, { method: 'POST', body: {} });
           creditsMoved();
           await loadBoards(true);
         }),
-      }, 'Cancel and refund') : null);
+      }, bounty.starter ? 'Cancel' : 'Cancel and refund') : null);
     if (!card.can_fund) return null;
     return h('form', {
       class: 'stack',
@@ -5147,7 +5149,16 @@ async function roomView(id) {
       max: Math.min(bountyCredits ?? 100, 100),
       'aria-label': `Credits for ${card.title}`,
     })),
-    h('button', { type: 'submit', disabled: bountyCredits === 0 }, 'Offer bounty'));
+    h('button', { type: 'submit', disabled: bountyCredits === 0 }, 'Offer bounty'),
+    // HC28: while nobody here has credits to fund a question, the site can pay for one of yours.
+    card.can_fund_starter ? h('button', {
+      type: 'button',
+      class: 'ghost',
+      onclick: act(boardsError, async () => {
+        await api(`/api/cards/${encodeURIComponent(card.id)}/bounty`, { method: 'POST', body: { starter: true } });
+        await loadBoards(true);
+      }),
+    }, 'Use a starter bounty: the site pays 10') : null);
   }
   const githubLink = (name, issue) => {
     if (!name || !name.includes('/')) return null;

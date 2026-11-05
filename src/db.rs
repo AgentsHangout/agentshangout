@@ -1472,6 +1472,14 @@ CREATE TABLE IF NOT EXISTS question_bounties (
     -- HC22: when it was refunded or paid, for the credit history.
     settled_at INTEGER
 );
+-- HC28: a question bounty the site paid for instead of its sponsor. Its refund pays nobody back,
+-- and its award buys packs but never funds another question.
+CREATE TABLE IF NOT EXISTS starter_questions (
+    bounty_id TEXT PRIMARY KEY REFERENCES question_bounties(id) ON DELETE CASCADE,
+    sponsor_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS starter_questions_at ON starter_questions(created_at);
 CREATE TABLE IF NOT EXISTS question_answers (
     id TEXT PRIMARY KEY,
     bounty_id TEXT NOT NULL REFERENCES question_bounties(id),
@@ -3056,6 +3064,33 @@ fn answer_refusal(
         return Ok(Err("question has 20 answers"));
     }
     Ok(Ok(bounty))
+}
+
+/// HC28: what a starter question's bounty is, paid by the site, and how many the whole site funds a
+/// week, so a new city can get a question answered before anyone there has credits to fund it.
+pub const STARTER_QUESTION_HC: i64 = 10;
+pub const STARTER_QUESTIONS_A_WEEK: i64 = 10;
+
+fn starter_refusal(
+    conn: &Connection,
+    person: &str,
+    now: i64,
+) -> rusqlite::Result<Option<&'static str>> {
+    // One that was cancelled or refunded doesn't count, so its sponsor can try again.
+    let live = "SELECT 1 FROM starter_questions s JOIN question_bounties q ON q.id=s.bounty_id
+                 WHERE q.status<>'refunded'";
+    if exists(conn, &format!("{live} AND s.sponsor_id=?"), [person])? {
+        return Ok(Some("you've already sponsored a starter question"));
+    }
+    let week: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM ({live} AND s.created_at > ?)"),
+        [now - 7 * crate::ops::DAY_SECS],
+        |r| r.get(0),
+    )?;
+    if week >= STARTER_QUESTIONS_A_WEEK {
+        return Ok(Some("this week's starter questions are all taken"));
+    }
+    Ok(None)
 }
 
 /// HC25: how `credit_paid.source_id` marks a first gathering that paid without the city's gate.
@@ -11403,7 +11438,7 @@ impl Db {
             },
         )?;
         totals.paid += conn.query_row(
-            "SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded') OR (recipient_id=?1 AND status='paid')",
+            "SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')",
             [person_id], |row| row.get::<_, i64>(0),
         )?;
         totals.spent = conn.query_row(
@@ -11431,7 +11466,8 @@ impl Db {
              SELECT CASE WHEN q.status = 'paid' THEN 'question_award' ELSE 'question_refund' END,
                     q.amount, COALESCE(q.settled_at, 0), COALESCE(q.settled_at, 0), NULL, NULL, NULL
                FROM question_bounties q
-              WHERE (q.sponsor_id = ?1 AND q.status = 'refunded')
+              WHERE (q.sponsor_id = ?1 AND q.status = 'refunded'
+                     AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id = q.id))
                  OR (q.recipient_id = ?1 AND q.status = 'paid')
              ORDER BY 3 DESC, 4 DESC, 1, 2
              LIMIT ?3",
@@ -11468,7 +11504,7 @@ impl Db {
 
     pub fn open_questions(&self, person_id: &str) -> rusqlite::Result<Vec<serde_json::Value>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT card_id,amount FROM question_bounties WHERE sponsor_id=? AND status='open' AND card_id IS NOT NULL ORDER BY id")?;
+        let mut stmt = conn.prepare("SELECT card_id,amount FROM question_bounties WHERE sponsor_id=? AND status='open' AND card_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id) ORDER BY id")?;
         let rows = stmt.query_map([person_id], |r| {
             Ok(serde_json::json!({"card_id":r.get::<_,String>(0)?,"amount":r.get::<_,i64>(1)?}))
         })?;
@@ -11489,16 +11525,19 @@ impl Db {
         if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
             return Ok(Some("already funded"));
         }
-        let balance: i64 = tx.query_row("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded') OR (recipient_id=?1 AND status='paid'))", [sponsor], |r| r.get(0))?;
+        let balance: i64 = tx.query_row("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid'))", [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
-        // HC25: a first gathering's credits never fund a question, or throwaway accounts could each
-        // collect one and pass it all to one person. Packs are paid for from them first, so only
-        // what packs haven't used is held back.
+        // HC25 and HC28: a first gathering's credits, and a starter question's award, never fund a
+        // question, or throwaway accounts could each collect one and pass it all to one person.
+        // Packs are paid for from them first, so only what packs haven't used is held back.
         let held: i64 = tx.query_row(
             "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
                             WHERE person_id=?1 AND source_id LIKE ?2)
+                         + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
+                            JOIN starter_questions s ON s.bounty_id=q.id
+                            WHERE q.recipient_id=?1 AND q.status='paid')
                          - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
                             WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
             params![sponsor, format!("{FIRST_GATHERING}%")],
@@ -11506,7 +11545,7 @@ impl Db {
         )?;
         if balance - held < amount {
             return Ok(Some(
-                "credits from your first gathering buy packs but can't fund a question",
+                "credits from your first gathering or a starter question buy packs but can't fund a question",
             ));
         }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
@@ -11549,6 +11588,44 @@ impl Db {
         Ok(answer_refusal(&self.conn(), card, bot, owner)?.err())
     }
 
+    /// HC28: why `person` can't sponsor a starter question now, if they can't.
+    pub fn starter_question_refusal(
+        &self,
+        person: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        starter_refusal(&self.conn(), person, now)
+    }
+
+    /// HC28: funds `card` with a starter bounty the site pays for. The checks and the funding are
+    /// one transaction, so two at once can't both pass.
+    pub fn fund_starter_question(
+        &self,
+        id: &str,
+        card: &str,
+        sponsor: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<&'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
+            return Ok(Some("already funded"));
+        }
+        if let Some(reason) = starter_refusal(&tx, sponsor, now)? {
+            return Ok(Some(reason));
+        }
+        tx.execute(
+            "INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')",
+            params![id, card, sponsor, STARTER_QUESTION_HC],
+        )?;
+        tx.execute(
+            "INSERT INTO starter_questions(bounty_id,sponsor_id,created_at) VALUES(?1,?2,?3)",
+            params![id, sponsor, now],
+        )?;
+        tx.commit()?;
+        Ok(None)
+    }
+
     pub fn resolve_question(
         &self,
         card: &str,
@@ -11566,6 +11643,17 @@ impl Db {
             let Some(recipient) = recipient else {
                 return Ok(Some("answer is unavailable"));
             };
+            // HC28: a person is paid by one starter question at most, however many accounts ask.
+            if exists(&tx, "SELECT 1 FROM starter_questions WHERE bounty_id=?", [&bounty])?
+                && exists(
+                    &tx,
+                    "SELECT 1 FROM question_bounties q JOIN starter_questions s ON s.bounty_id=q.id
+                      WHERE q.recipient_id=? AND q.status='paid'",
+                    [&recipient],
+                )?
+            {
+                return Ok(Some("that answer's owner has already had a starter question's award"));
+            }
             tx.execute("UPDATE question_bounties SET status='paid',recipient_id=?1,accepted_submission=?2,settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=?3 AND status='open'",params![recipient,answer,bounty])?;
         } else {
             tx.execute(
@@ -11589,6 +11677,7 @@ impl Db {
         let Some((id, sponsor, amount, status, accepted)) = bounty else {
             return Ok(None);
         };
+        let starter = exists(&conn, "SELECT 1 FROM starter_questions WHERE bounty_id=?", [&id])?;
         let sponsor_name: String = conn
             .query_row("SELECT name FROM people WHERE id=?", [&sponsor], |r| r.get(0))
             .optional()?
@@ -11596,7 +11685,7 @@ impl Db {
         let mut stmt = conn.prepare("SELECT a.id,a.bot_id,a.owner_id,a.text,COALESCE(b.name,'Bot who left'),COALESCE(p.name,'Someone who left'),(b.owner_id=a.owner_id AND p.id IS NOT NULL) FROM question_answers a LEFT JOIN agents b ON b.id=a.bot_id LEFT JOIN people p ON p.id=a.owner_id WHERE a.bounty_id=? ORDER BY a.created_at,a.id")?;
         let answers = stmt.query_map([&id],|r| Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"bot_id":r.get::<_,String>(1)?,"owner_id":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"bot_name":r.get::<_,String>(4)?,"owner_name":r.get::<_,String>(5)?,"eligible":r.get::<_,Option<bool>>(6)?.unwrap_or(false)})))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(Some(
-            serde_json::json!({"amount":amount,"status":status,"sponsor_id":sponsor,"sponsor_name":sponsor_name,"accepted_submission_id":accepted,"submissions":answers}),
+            serde_json::json!({"amount":amount,"status":status,"sponsor_id":sponsor,"sponsor_name":sponsor_name,"accepted_submission_id":accepted,"submissions":answers,"starter":starter}),
         ))
     }
 
@@ -11622,7 +11711,7 @@ impl Db {
         let balance: i64 = tx.query_row(
             "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
                   - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded') OR (recipient_id = ?1 AND status = 'paid'))",
+                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))",
             [person_id],
             |row| row.get(0),
         )?;
@@ -16637,7 +16726,7 @@ mod tests {
         assert_eq!(paid.balance, 20);
         assert_eq!(
             db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering buy packs but can't fund a question")
+            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
         );
         assert!(db.open_questions("p1").unwrap().is_empty());
 
@@ -16646,7 +16735,7 @@ mod tests {
         assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
         assert_eq!(
             db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering buy packs but can't fund a question")
+            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
         );
         assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
 
@@ -18067,6 +18156,88 @@ mod tests {
         db.conn().execute("DELETE FROM boards WHERE id='board'", []).unwrap();
         let totals = db.credit_totals("p1", 0).unwrap();
         assert_eq!(totals.paid - totals.spent, 8);
+    }
+
+    // HC28: the site pays a starter question's bounty, so its sponsor spends nothing and a cancel
+    // pays them nothing back. They can have one at a time, and a cancelled one frees the slot.
+    #[test]
+    fn a_starter_question_is_paid_by_the_site_one_per_sponsor() {
+        let db = funded_question_fixture();
+        let balance = |person| {
+            let totals = db.credit_totals(person, 0).unwrap();
+            totals.paid - totals.spent
+        };
+        assert_eq!(db.starter_question_refusal("p1", 1).unwrap(), None);
+        assert_eq!(db.fund_starter_question("s1", "q1", "p1", 1).unwrap(), None);
+        assert_eq!(balance("p1"), 20, "the sponsor spent nothing");
+        assert!(db.open_questions("p1").unwrap().is_empty(), "nothing of theirs is reserved");
+        assert_eq!(db.question_bounty("q1").unwrap().unwrap()["starter"], true);
+        assert_eq!(
+            db.fund_starter_question("s2", "q2", "p1", 2).unwrap(),
+            Some("you've already sponsored a starter question")
+        );
+
+        assert_eq!(db.resolve_question("q1", "p1", None).unwrap(), None);
+        assert_eq!(balance("p1"), 20, "a cancel pays nothing back");
+        assert!(db
+            .credit_history("p1", 50)
+            .unwrap()
+            .iter()
+            .all(|line| line.kind != "question_refund"));
+        assert_eq!(db.fund_starter_question("s2", "q2", "p1", 3).unwrap(), None);
+    }
+
+    // HC28: a person is paid by one starter question at most, and that award buys packs but never
+    // funds a question, so throwaway sponsors can't pool the site's credits in one account.
+    #[test]
+    fn a_starter_award_pays_once_and_never_funds_a_question() {
+        let db = funded_question_fixture();
+        db.create_person("p3", "Cy", "key3", "feed3", 0).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q3','board','Question','','p3',0,0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q4','board','Question','','p2',0,0)", []).unwrap();
+        assert_eq!(db.fund_starter_question("s1", "q1", "p1", 1).unwrap(), None);
+        assert_eq!(db.answer_question("a1", "q1", "b2", "p2", "evidence", 1).unwrap(), None);
+        assert_eq!(db.resolve_question("q1", "p1", Some("a1")).unwrap(), None);
+        assert_eq!(db.credit_totals("p2", 0).unwrap().paid, STARTER_QUESTION_HC);
+
+        // A second sponsor can't pay Bo another starter award.
+        assert_eq!(db.fund_starter_question("s3", "q3", "p3", 2).unwrap(), None);
+        assert_eq!(db.answer_question("a3", "q3", "b2", "p2", "more", 2).unwrap(), None);
+        assert_eq!(
+            db.resolve_question("q3", "p3", Some("a3")).unwrap(),
+            Some("that answer's owner has already had a starter question's award")
+        );
+        assert_eq!(db.credit_totals("p2", 0).unwrap().paid, STARTER_QUESTION_HC);
+
+        // Bo can't pass the award on through a question of his own.
+        assert_eq!(
+            db.fund_question("b4", "q4", "p2", 5, 3).unwrap(),
+            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
+        );
+    }
+
+    // HC28: the whole site funds only so many starter questions a week, however many people or
+    // cities ask, and the week moves on.
+    #[test]
+    fn the_site_funds_only_so_many_starter_questions_a_week() {
+        let db = funded_question_fixture();
+        for n in 0..STARTER_QUESTIONS_A_WEEK {
+            let person = format!("sp{n}");
+            let card = format!("sq{n}");
+            db.create_person(&person, "Sp", &format!("{person}-key"), &format!("{person}-feed"), 0)
+                .unwrap();
+            db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES(?1,'board','Question','',?2,0,0)", params![card, person]).unwrap();
+            assert_eq!(
+                db.fund_starter_question(&format!("s{n}"), &card, &person, 100).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            db.fund_starter_question("over", "q2", "p1", 200).unwrap(),
+            Some("this week's starter questions are all taken")
+        );
+        let next_week = 100 + 7 * crate::ops::DAY_SECS + 1;
+        assert_eq!(db.fund_starter_question("over", "q2", "p1", next_week).unwrap(), None);
     }
 
     #[test]

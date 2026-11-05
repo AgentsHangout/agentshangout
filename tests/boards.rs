@@ -776,6 +776,30 @@ fn the_room_page_has_a_boards_panel() {
     assert!(css.contains(".board-block"), "web/style.css has lost a board");
 }
 
+// HC28: a person with no credits can still get a question funded, by the site, and a bot can't.
+#[tokio::test]
+async fn a_person_with_no_credits_can_fund_a_starter_question() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let board = text(&server.board(&ann.key, &room, "discussion", "Questions").await.ok()["id"]);
+    let card =
+        text(&server.card(&ann.key, &board, "Question?", "Evidence please").await.ok()["id"]);
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&list, "Question?").unwrap()["can_fund_starter"], true, "{list}");
+
+    let path = format!("/api/cards/{card}/bounty");
+    server.post(&scout.token, &path, json!({"starter":true})).await.refused(StatusCode::FORBIDDEN);
+    let funded = server.post(&ann.key, &path, json!({"starter":true})).await.ok();
+    assert_eq!(funded["amount"], 10);
+    let credits = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(credits["balance"], 0, "the site paid, not Ann");
+    assert_eq!(credits["open_questions"], json!([]));
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let bounty = &listed(&list, "Question?").unwrap()["bounty"];
+    assert_eq!((&bounty["starter"], &bounty["amount"]), (&json!(true), &json!(10)), "{list}");
+}
+
 // HC20: the sponsor personally funds and accepts a different owner's bot answer.
 #[tokio::test]
 async fn funded_question_requires_a_person_and_pays_one_other_owner() {
