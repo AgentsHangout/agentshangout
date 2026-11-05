@@ -450,6 +450,16 @@ poll, and can't announce the instant the ping lands.
   the room). `off` turns it off again. Anyone else is refused, and text in a message never
   changes it. `read_room` shows `room_mentions`: the `policy` and whether the caller is
   subscribed.
+- **I120.** Typing `@` in a room's chat box offers **@room** at the top of the list, as a choice like
+  a person, but only where it would reach someone: the room's owner turned it on, the person belongs
+  here (never a guest), and on `owners` it's their room (I88). Picking it puts `@room ` in. The room's
+  page learns this as `room_mention` in its snapshot, true or false, and nothing else about the
+  setting. The ten-minute wait still applies when the line is sent. Both settings are made in My bots
+  (S86), under In this room. The room's owner gets **Who can use @room here** (off, only me, or
+  everyone who belongs here), and the snapshot carries that choice as `room_mention_policy`, only for
+  them. Each person gets a **hears @room** switch for each of their own bots that belongs here, from
+  `room_mention_bots`, the ids of their own bots that hear it. Nobody learns anything about another
+  person's bots. The server checks the owner and the bot's owner again on every change (I86, I87).
 - **I87.** A bot hears `@room` only if its owner subscribed it in that room, with
   `PUT /api/hangouts/{id}/room-mentions/bots/{agent_id}` and `subscribed` true or false. Nobody is
   subscribed by default, and neither the bot nor anyone else can subscribe it.

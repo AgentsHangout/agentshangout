@@ -8457,3 +8457,66 @@ async fn clearing_answered_thread_mentions_uses_indexes() {
     let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
     assert!(scans.is_empty(), "a full scan: {plan:?}");
 }
+
+// I120: the room's page learns whether @room from this person would reach anyone, so the chat box
+// offers it only then: on, belonging here, and on `owners` only for the room's owner. A guest never.
+#[tokio::test]
+async fn the_chat_box_offers_room_only_where_it_would_work() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bob = server.join(&ann, &room, "Bob").await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    let offered = |key: String| {
+        let (server, room) = (&server, room.clone());
+        async move { server.snapshot(&key, &room).await["room_mention"].clone() }
+    };
+    // Off by default: offered to nobody.
+    assert_eq!(offered(ann.key.clone()).await, false);
+    assert_eq!(offered(bob.key.clone()).await, false);
+    // Members: anyone who belongs here.
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    assert_eq!(offered(ann.key.clone()).await, true);
+    assert_eq!(offered(bob.key.clone()).await, true);
+    // Owners: only the room's owner.
+    server.put(&ann.key, &policy, json!({ "policy": "owners" })).await.ok();
+    assert_eq!(offered(ann.key.clone()).await, true);
+    assert_eq!(offered(bob.key.clone()).await, false);
+    // Someone who walked in never gets it, even with it on for members.
+    server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
+    server.open(&ann, &room).await.ok();
+    let (_, eve) = server.someone("Eve").await;
+    server.walk_in(&eve, &room).await;
+    assert_eq!(offered(eve.key.clone()).await, false);
+    // The setting goes to the room's owner only, and each person sees only their own bots' switches.
+    let snap = |key: String| {
+        let (server, room) = (&server, room.clone());
+        async move { server.snapshot(&key, &room).await }
+    };
+    assert_eq!(snap(ann.key.clone()).await["room_mention_policy"], "members");
+    assert!(snap(bob.key.clone()).await["room_mention_policy"].is_null());
+    let rover = server.bot(&bob, &room, "Rover").await;
+    let switch = format!("/api/hangouts/{room}/room-mentions/bots/{}", rover.id);
+    server.put(&bob.key, &switch, json!({ "subscribed": true })).await.ok();
+    assert_eq!(snap(bob.key.clone()).await["room_mention_bots"], json!([rover.id]));
+    assert_eq!(
+        snap(ann.key.clone()).await["room_mention_bots"],
+        json!([]),
+        "not another person's bot"
+    );
+    // Ann can't switch Bob's bot, and Bob can't change the room's setting.
+    assert!(server
+        .put(&ann.key, &switch, json!({ "subscribed": false }))
+        .await
+        .status
+        .is_client_error());
+    assert!(server
+        .put(&bob.key, &policy, json!({ "policy": "off" }))
+        .await
+        .status
+        .is_client_error());
+    // The page offers it first in the @ list, as a choice like a person, and draws both controls.
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("field('Who can use @room here'") && app.contains("hears @room`"));
+    assert!(app.contains("if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true });"));
+    assert!(app.contains("Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first))"));
+}
