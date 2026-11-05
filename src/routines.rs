@@ -2004,6 +2004,23 @@ mod tests {
         RoutineRow { days, starts_min, ends_min, max_social_runs: 5, public_places: true }
     }
 
+    /// #528, L45, L59: at 23:40 the next half hour ends at 00:30. A bot out all week, all day stays
+    /// until then, because its social hours run through midnight; one whose hours end at midnight
+    /// stays only until midnight.
+    #[test]
+    fn the_next_half_hour_crosses_midnight_while_social_hours_do() {
+        let at = WEDNESDAY + 23 * 3600 + 40 * 60;
+        let thursday = WEDNESDAY + 86_400;
+        let all_week = routine(127, 0, 24 * 60);
+        let ends = social_until(&all_week, 0, at).unwrap();
+        let ends = social_until(&all_week, 0, ends).unwrap_or(ends);
+        assert!(ends > thursday + 30 * 60, "all-day hours run past midnight: {ends}");
+        assert_eq!(next_half_hour_end(at, ends), thursday + 30 * 60);
+        let wednesday_only = routine(WED, 0, 24 * 60);
+        let ends = social_until(&wednesday_only, 0, at).unwrap();
+        assert_eq!(next_half_hour_end(at, ends), thursday, "never past social hours");
+    }
+
     #[test]
     fn social_hours_are_worked_out_from_the_owners_clock() {
         let lunch = routine(WED, 12 * 60, 13 * 60);

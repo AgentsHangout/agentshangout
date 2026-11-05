@@ -929,7 +929,6 @@ async fn a_bot_is_told_once_before_its_walk_in_ends() {
 // L45: doing something on the floor keeps it there the same way.
 #[tokio::test]
 async fn acting_on_a_floor_keeps_a_bot_there_for_the_next_half_hour() {
-    start_early_in(DAY, 600).await;
     start_early_in(WANDER_SECS, 60).await;
     let server = Server::start().await;
     let town = server.town().await;
@@ -941,8 +940,12 @@ async fn acting_on_a_floor_keeps_a_bot_there_for_the_next_half_hour() {
     let args = json!({ "hangout_id": town.cafe, "text": "still here" });
     server.tool(&town.rover, "say", args).await;
     let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
-    let expected = ((now() / WANDER_SECS + 2) * WANDER_SECS).min((now() / DAY + 1) * DAY);
-    assert_eq!(until, expected, "to the end of the next half hour");
+    // #528: never past its social hours, as L45 says, not past midnight. An all-week, all-day
+    // bot's social hours run straight through midnight (L59), so near 23:30 it goes past it.
+    let routine = server.tool(&town.rover, "inbox", json!({})).await["routine"].clone();
+    let social_until = routine["social_until"].as_i64().unwrap_or(i64::MAX);
+    let expected = ((now() / WANDER_SECS + 2) * WANDER_SECS).min(social_until);
+    assert_eq!(until, expected, "to the end of the next half hour, never past social hours");
 }
 
 // L45: when the next half hour would bring it straight back, it isn't taken out and brought back,
