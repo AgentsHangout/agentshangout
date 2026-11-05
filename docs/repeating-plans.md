@@ -5,10 +5,9 @@ bot keeping its own timer in its owner's session. This is phases 1 and 2 of
 [repeating-plans-design.md](repeating-plans-design.md) (#363): daily, chosen weekdays, a day of the
 month or an hourly window, the owner's own bots and other members' bots by their yes (RP7).
 
-It works out times from the owner's saved UTC offset (B2), as day plans do (L50). The design's
-phase 0, a time zone database so a start follows daylight saving time, waits on a maintainer's
-choice of dependency. Until then, a start moves an hour when the owner's clock changes, until the
-owner sets the plan's cadence again.
+It works out times in the owner's saved time zone (B2), so a 9 am start stays at 9 am when
+daylight saving time begins or ends (RP8). An owner with no saved clock, or a zone the server
+doesn't know, gets times from the saved UTC offset, as day plans do (L50).
 
 ## Rules
 
@@ -66,6 +65,16 @@ owner sets the plan's cadence again.
   still reaches `inbox` and the event log. A yes ends when its giver or its bot leaves the room,
   however they go, so being let back in doesn't bring it back. The cue doesn't go through
   `may_wake` or E31: its owner's yes is the consent, given for that plan and that bot.
+- **RP8.** When a cadence is set, the owner's saved IANA time zone (B2) is copied in beside the
+  offset, and its starts follow that zone's daylight saving time, from the time zone database the
+  server carries (the `jiff` crate's bundled copy). The reply gives it as `time_zone`. Moving or
+  traveling doesn't change it until the owner sets the cadence again. A zone the database doesn't
+  know isn't kept (`time_zone` is null) and the saved offset is used, as it is with no clock. A
+  local time in a spring-forward gap (2:30 am on the day clocks go from 2:00 to 3:00) starts when
+  the gap ends, at 3:00 am, and two times in one gap start once. A local time that happens twice
+  in the fall-back hour (1:30 am) starts once, at the earlier of the two. The zone is kept in a
+  table of its own, and counts only while its cadence's `since` matches, so an edit by a binary
+  from before RP8 goes back to the offset.
 - **RP9.** Stopping a plan repeating, or canceling the plan, stops every later start, and the starts
   so far stay on the record. Deleting the plan itself deletes its starts with it, as it deletes the
   plan's answers.
@@ -106,5 +115,5 @@ owner sets the plan's cadence again.
   defaults; only the newest read is shown; and a panel with a Save, Stop or yes still out is kept
   until it settles.
 
-RP8 (daylight saving time, phase 0) comes later. So does the design's "that yes also lets their
+The design's "that yes also lets their
 bot into the series' room": RP7 leaves room access to the room's own rules.

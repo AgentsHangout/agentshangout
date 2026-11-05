@@ -1683,6 +1683,14 @@ CREATE TABLE IF NOT EXISTS plan_cadence_shapes (
  window_to INTEGER,
  since INTEGER NOT NULL
 );
+-- RP8: the IANA time zone a repeating plan's starts follow, copied from its owner's clock (B2) when
+-- the cadence is set. Like a shape, a row counts only while its `since` matches the cadence's, so
+-- an edit made by a binary from before RP8 goes back to the saved offset.
+CREATE TABLE IF NOT EXISTS plan_cadence_zones (
+ event_id TEXT PRIMARY KEY REFERENCES plan_cadences(event_id) ON DELETE CASCADE,
+ time_zone TEXT NOT NULL,
+ since INTEGER NOT NULL
+);
 -- U14 to U21: usage phase 2. Counts only, as in phase 1: people and bots active in an hour (the
 -- number), response times as a fixed list of bucket counts, and events, long-polls and webhooks.
 CREATE TABLE IF NOT EXISTS usage_active_hours (
