@@ -4379,7 +4379,11 @@ const MAX_ANIMS = 60;
 const MAX_PLAYERS = 400;
 // A figure going this many tiles or more takes a car instead of walking. A ride is only how the move
 // looks: the server has already put them where they're going.
-const DRIVE_TILES = 8;
+const DRIVE_TILES = 6;
+// L62: what a step on grass costs against one on the road. High enough that a route keeps to the road
+// wherever the road goes, and leaves it only between a door and the nearest road (it was 1.7, so a
+// road a bit longer than the straight way across the grass lost, and bots cut across lawns).
+const GRASS_STEP = 5;
 // How much faster a ride is than the figure's own walk. Slow enough to watch where it goes.
 const DRIVE_FACTOR = 1.75;
 
@@ -5196,7 +5200,10 @@ export class World {
   findPath(sx, sy, tx, ty, maxLength = 90, whole = false) {
     const n = this.n;
     if (sx === tx && sy === ty) return [];
-    const pad = 8;
+    // A stroll looks only near itself. A move between places looks at the whole map, so a road that
+    // loops further out than the two ends is still found (it used to be cut to 8 tiles around them,
+    // and a bot walked straight across the grass because the road it should take was out of view).
+    const pad = whole ? n : 8;
     const x0 = Math.max(0, Math.min(sx, tx) - pad);
     const y0 = Math.max(0, Math.min(sy, ty) - pad);
     const x1 = Math.min(n - 1, Math.max(sx, tx) + pad);
@@ -5255,7 +5262,7 @@ export class World {
         const ay = ny + y0;
         const isGoal = ax === tx && ay === ty;
         if (!isGoal && !this.walkable(ax, ay)) continue;
-        const step = this.kind[ay * n + ax] === K_ROAD ? 1 : 1.7;
+        const step = this.kind[ay * n + ax] === K_ROAD ? 1 : GRASS_STEP;
         const j = ny * w + nx;
         if (c + step < cost[j]) {
           cost[j] = c + step;
@@ -5431,14 +5438,15 @@ export class World {
     // L62: however far it is across the map.
     const route = this.findPath(sx, sy, x, y, this.n * this.n, true);
     if (route) {
-      // A car keeps to the road. Only the legs of the route from one road tile to the next are
-      // driven, and only when there are enough of them: the walk to the road and from it is on foot.
+      // A car keeps to the road. The walk to the road and from it is on foot, and in between it
+      // stays in the car from the first road tile to the last, so it never gets out partway to cross
+      // a bit of grass and gets back in. It drives only when there's enough road to be worth it.
       const onRoad = route.map(([tx, ty]) => this.roadAt(tx, ty));
       const drives = onRoad.filter(Boolean).length >= DRIVE_TILES;
-      p.path = route.map(([tx, ty], i) => {
-        const fromRoad = i === 0 ? this.roadAt(sx, sy) : onRoad[i - 1];
-        return [tx + 0.5 + p.ox, ty + 0.5 + p.oy, drives && onRoad[i] && fromRoad];
-      });
+      const startsOnRoad = this.roadAt(sx, sy);
+      const first = startsOnRoad ? 0 : onRoad.indexOf(true) + 1;
+      const last = onRoad.lastIndexOf(true);
+      p.path = route.map(([tx, ty], i) => [tx + 0.5 + p.ox, ty + 0.5 + p.oy, drives && i >= first && i <= last]);
       p.ride = drives ? { color: ih(p.h, 4, 9) % 8 } : null;
     } else if (Math.abs(sx - x) + Math.abs(sy - y) < 14) {
       p.path = [[x + 0.5 + p.ox, y + 0.5 + p.oy, false]];
