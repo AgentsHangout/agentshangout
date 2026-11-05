@@ -358,6 +358,8 @@ pub fn post_reply(
         }
         state.db.note_bot_wake_owner_chat(message.id)?;
     }
+    // S88 (#548): the owner's @tag brings their own bot here first, so the mention reaches it here.
+    summon_own_bots(state, caller, &message)?;
     note_mentions(state, &message)?;
     // L10: a person's chat resets a bot-to-bot chain and delivers held mentions now.
     if caller.agent_id.is_none()
@@ -455,6 +457,38 @@ fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionR
         }
     }
 }
+
+/// S88 (#548): a person `@`-tagging one of their own bots that isn't in this room brings it here,
+/// as their Bring here would (S59): every check `bring_agent` makes still holds, so a room it
+/// couldn't be brought into isn't reached this way, and nothing is said if it can't come. Only a
+/// person's own chat does it, never a bot's, and a bot that changed place in the last 3 minutes
+/// isn't moved, so two people can't bounce it between rooms.
+fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiResult<()> {
+    if caller.agent_id.is_some() || message.kind != "chat" || !message.body.contains('@') {
+        return Ok(());
+    }
+    let now = message.created_at;
+    let body = message.body.to_lowercase();
+    for bot in state.db.agents_of(&caller.person_id, now)? {
+        let tag = format!("@{}", bot.name.to_lowercase());
+        if !body.contains(&tag) || !crate::doorbell::mentions(&message.body, &bot.name) {
+            continue;
+        }
+        if state.db.bot_place(&bot.id, now)?.as_deref() == Some(message.hangout_id.as_str()) {
+            continue;
+        }
+        if state.db.bot_place_since(&bot.id)?.is_some_and(|since| now - since < SUMMON_GAP_SECS) {
+            continue;
+        }
+        if let Err(error) = bring_agent(state, caller, &message.hangout_id, &bot.id) {
+            tracing::info!(status = %error.status, "an owner's tag couldn't bring their bot");
+        }
+    }
+    Ok(())
+}
+
+/// S88: a bot isn't summoned again within this long of changing place.
+const SUMMON_GAP_SECS: i64 = 3 * 60;
 
 /// B8: an @mention of a bot that's in this room, kept until that bot reads the room. E22 and E31:
 /// a person's can also ring it, and the owner can see why one did not.
@@ -1995,6 +2029,9 @@ pub struct Snapshot {
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
     pub visitor_history: bool,
+    /// S88: the caller's own bots that aren't in this room, which an @tag would bring here, for the
+    /// chat box's picker: id and name only, never where they are. Empty for a bot or a guest.
+    pub summonable: Vec<serde_json::Value>,
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
@@ -2103,6 +2140,19 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     } else {
         state.db.bots_without_moods(&caller.person_id)?
     };
+    let summonable = if caller.is_agent() || guest.is_some() {
+        Vec::new()
+    } else {
+        let here: std::collections::HashSet<&str> = agents.iter().map(|a| a.id.as_str()).collect();
+        let mut mine = Vec::new();
+        for bot in state.db.agents_of(&caller.person_id, now)? {
+            let at_home = state.db.bot_home(&bot.id)?.is_some_and(|h| h.is_house || h.stays_home);
+            if !here.contains(bot.id.as_str()) && !at_home {
+                mine.push(serde_json::json!({ "id": bot.id, "name": bot.name }));
+            }
+        }
+        mine
+    };
     let present = spaces::present(state, caller, &floor, &people, now);
     let looks = looks::in_room(state, caller, &present, &agents)?;
     let boards = if floor.is_some() {
@@ -2147,6 +2197,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         floor,
         furnishing,
         bots_without_moods,
+        summonable,
         room_mention: crate::room_mentions::may_use(state, caller, hangout_id)?,
         room_mention_policy,
         room_mention_bots,

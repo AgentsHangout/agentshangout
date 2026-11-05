@@ -4587,3 +4587,33 @@ async fn a_bot_walked_onto_a_floor_is_told_it_arrived_on_a_floor() {
     assert!(note.contains("this floor") && note.contains("arrived later"), "{note}");
     assert!(!note.contains("Porch"), "{note}");
 }
+
+// S88: an owner's @tag brings their own bot to the room from wherever it is; nobody else's does.
+#[tokio::test]
+async fn an_owners_tag_brings_their_bot_to_the_room() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (fern, _) = server.bot(&ann, &home, "Fern").await;
+    let beach = text(&server.third_space(&ann, "Beach Studio").await.ok()["hangout"]["id"]);
+    let bo = server.join(&ann, &beach, "Bo").await;
+    let at = |id: &str| server.state.db.bot_place(id, agenthangout::now()).unwrap();
+    // The picker lists it as one Ann can bring here, with no location.
+    let snap = server.get(&ann.key, &format!("/api/hangouts/{beach}")).await.ok();
+    assert_eq!(snap["summonable"], json!([{ "id": fern, "name": "Fern" }]), "{snap}");
+    assert_eq!(
+        server.get(&bo.key, &format!("/api/hangouts/{beach}")).await.ok()["summonable"],
+        json!([])
+    );
+
+    // Bo's tag doesn't move Ann's bot, and neither does Ann's name without the @.
+    server.say(&bo.key, &beach, "@Fern come here").await.ok();
+    server.say(&ann.key, &beach, "Fern would like this").await.ok();
+    assert_eq!(at(&fern).as_deref(), Some(home.as_str()));
+    // Ann's @tag brings it here.
+    server.state.db.set_bot_place(&fern, &home, agenthangout::now() - 600).unwrap();
+    server.say(&ann.key, &beach, "@Fern come help").await.ok();
+    assert_eq!(at(&fern).as_deref(), Some(beach.as_str()));
+    // Right away again from home, it isn't bounced back: it just moved.
+    server.say(&ann.key, &home, "@Fern back here").await.ok();
+    assert_eq!(at(&fern).as_deref(), Some(beach.as_str()));
+}
