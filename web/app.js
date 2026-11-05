@@ -1019,7 +1019,7 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 }
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
-// E46: `fresh` when it opens straight after proposing, as the plan's invite step.
+// F56: `fresh` when it opens straight after proposing, as the plan's invite step.
 async function sharePlan(event, { fresh = false } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
@@ -4865,7 +4865,7 @@ async function roomView(id) {
 
   function proposeHangout() {
     const error = formError();
-    // E46: a plan belongs to the room it's made in, so that's where it is unless it says otherwise.
+    // F56: a plan belongs to the room it's made in, so that's where it is unless it says otherwise.
     // Somewhere else is one optional line, for an address or a link; left empty, it's held here.
     const elsewhere = h('input', { name: 'location', maxLength: 200, placeholder: 'An address or a link', hidden: true, 'aria-label': 'Somewhere else' });
     const elsewhereButton = h('button', {
@@ -4892,7 +4892,7 @@ async function roomView(id) {
           });
           dialog.close();
           await reload();
-          // E46: proposing ends on inviting people who aren't in this room.
+          // F56: proposing ends on inviting people who aren't in this room.
           if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
         }),
       },
