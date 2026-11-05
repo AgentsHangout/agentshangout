@@ -1940,6 +1940,26 @@ CREATE TABLE IF NOT EXISTS plan_invited_by (
     invited_at  INTEGER NOT NULL,
     PRIMARY KEY (event_id, person_id)
 );
+-- V9: people's ballots, one per person per vote, changeable while it's open, and the votes a
+-- person opened.
+CREATE TABLE IF NOT EXISTS vote_person_ballots (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    voter       TEXT NOT NULL,
+    choice      INTEGER NOT NULL,
+    cast_at     INTEGER NOT NULL,
+    PRIMARY KEY (vote_id, person_id)
+);
+CREATE TABLE IF NOT EXISTS person_votes (
+    vote_id     TEXT PRIMARY KEY REFERENCES votes(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE
+);
+-- V10: ballots cast by someone who didn't belong to the room when they voted, bot or person.
+CREATE TABLE IF NOT EXISTS vote_visitors (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    voter_id    TEXT NOT NULL,
+    PRIMARY KEY (vote_id, voter_id)
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -16381,7 +16401,8 @@ mod tests {
         let vote = db
             .open_vote(&NewVote {
                 hangout_id: "h1",
-                agent_id: "a1",
+                agent_id: Some("a1"),
+                person_id: None,
                 opener: "Rover",
                 question: "Lunch?",
                 options: &options,
@@ -16430,7 +16451,8 @@ mod tests {
         let open = || {
             db.open_vote(&NewVote {
                 hangout_id: "h1",
-                agent_id: "a1",
+                agent_id: Some("a1"),
+                person_id: None,
                 opener: "Rover",
                 question: "Lunch?",
                 options: &options,

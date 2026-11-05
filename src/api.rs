@@ -143,6 +143,7 @@ pub fn routes() -> Router<AppState> {
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
+        .merge(crate::votes::routes())
         .merge(outside::routes())
         .merge(looks::routes())
         .merge(households::routes())
