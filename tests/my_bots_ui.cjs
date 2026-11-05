@@ -173,6 +173,10 @@ function makeMockContext() {
   const endStr = '    botsBody.replaceChildren(tabs, ...rows);\n  }';
   const end = appSource.indexOf(endStr, start) + endStr.length;
   const renderBotsCode = appSource.slice(start, end);
+  // S86: each row is drawn by the shared yourBotRow, which a room's My bots uses too.
+  const rowStart = appSource.indexOf('function yourBotRow(');
+  assert.ok(rowStart >= 0, 'yourBotRow not found in app.js');
+  const yourBotRowCode = appSource.slice(rowStart, appSource.indexOf('\n}\n', rowStart) + 2);
 
   vm.createContext(appContext);
   vm.runInContext(`
@@ -199,6 +203,7 @@ function makeMockContext() {
       ]
     };
     const botsBody = { children: [], replaceChildren(...next) { this.children = next.flat().filter(Boolean); } };
+    ${yourBotRowCode}
     ${renderBotsCode}
     this.renderBots = renderBots;
     this.setBotsTab = (t) => { botsTab = t; };
