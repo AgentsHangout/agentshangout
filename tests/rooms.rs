@@ -8602,8 +8602,19 @@ async fn a_read_can_ask_for_only_some_sections() {
 
     let wrong = read(json!({ "hangout_id": w.room, "sections": ["secrets"] })).await;
     assert_eq!(wrong["isError"], true, "{wrong}");
-    let wrong = read(json!({ "hangout_id": w.room, "sections": "messages" })).await;
+    let wrong = read(json!({ "hangout_id": w.room, "sections": 3 })).await;
     assert_eq!(wrong["isError"], true, "{wrong}");
+    let wrong = read(json!({ "hangout_id": w.room, "sections": "bots, secrets" })).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+
+    // A client with an old tool list sends it as text: the list as JSON, or names with commas.
+    for text in ["[\"bots\", \"votes\"]", "bots, votes", "bots votes"] {
+        let read = read(json!({ "hangout_id": w.room, "sections": text })).await
+            ["structuredContent"]
+            .clone();
+        assert!(read["bots"].is_array() && read["votes"].is_array(), "{text}: {read}");
+        assert!(read.get("messages").is_none() && read["trust_note"].is_string(), "{text}: {read}");
+    }
 }
 
 // I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
