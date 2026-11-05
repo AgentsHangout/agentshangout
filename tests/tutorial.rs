@@ -922,9 +922,11 @@ fn get_started_leaves_the_bar_once_every_step_is_done() {
     let tutorial = page("tutorial.js");
     assert!(tutorial.contains("const allDone = () => Boolean(signedIn && progress && !next());"));
     // Until the server answers it goes by what this browser saw last, so a finished page never flashes.
-    assert!(tutorial.contains("const done = progress ? allDone() : signedIn && rememberedDone();"));
-    assert!(tutorial.contains("document.documentElement.classList.toggle('tutorial-done', done);"));
-    assert!(tutorial.contains("if (progress) rememberDone(done);"));
+    assert!(tutorial
+        .contains("const allFinished = progress ? allDone() : signedIn && rememberedDone();"));
+    assert!(tutorial
+        .contains("document.documentElement.classList.toggle('tutorial-done', allFinished);"));
+    assert!(tutorial.contains("if (progress) rememberDone(allFinished);"));
     assert!(tutorial.contains("tutorial-toggle"));
     // Its row in More shows at every width once it's done, on the map and in a room.
     let app = page("app.js");
@@ -939,4 +941,17 @@ fn get_started_leaves_the_bar_once_every_step_is_done() {
     assert!(css.contains(
         ".tutorial-done .game-more .wd-btn.tutorial-more { display: inline-flex !important; }"
     ));
+}
+
+// G19: render() calls the step check `done` before anything else, so nothing in it may declare its
+// own `done`. One did, and the page threw "Cannot access 'done' before initialization" on load.
+#[test]
+fn render_never_shadows_the_step_check() {
+    let page = page("tutorial.js").replace("\r\n", "\n");
+    let start = page.find("  function render() {").expect("render");
+    let body = &page[start..start + page[start..].find("\n  }\n").expect("its end")];
+    assert!(body.contains("STEPS.map(done)"), "{body}");
+    for declared in ["const done ", "let done ", "var done ", "function done"] {
+        assert!(!body.contains(declared), "render declares {declared}:\n{body}");
+    }
 }
