@@ -700,7 +700,9 @@ the cascades still run.
   read gives no decoration ids, so moving or removing a plant takes a full read. A section left out
   also leaves its tag out of `section_tags`
   and out of what the server remembers as sent (I116), so the next incremental read still sends
-  it. A name that isn't a section, or a `sections` that isn't a list, is refused. A full read
+  it. A name that isn't a section is refused. A client whose tool list predates `sections` may send
+  it as text, the list written as JSON or names separated by commas or spaces, and it's read the
+  same; any other kind is refused. A full read
   without `sections` is unchanged.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the

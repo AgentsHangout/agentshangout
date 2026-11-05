@@ -2831,7 +2831,17 @@ const READ_SECTIONS: [(&str, &[&str], Option<&str>); 10] = [
 fn read_sections(args: &Value) -> ApiResult<Option<Vec<&'static str>>> {
     let list = match args.get("sections") {
         None | Some(Value::Null) => return Ok(None),
-        Some(Value::Array(list)) => list,
+        Some(Value::Array(list)) => list.clone(),
+        // I122: a client whose tool list predates `sections` sends it as text, either the list
+        // written out as JSON or names separated by commas or spaces, so both are read too.
+        Some(Value::String(text)) => match serde_json::from_str::<Value>(text) {
+            Ok(Value::Array(list)) => list,
+            _ => text
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|name| !name.is_empty())
+                .map(|name| json!(name))
+                .collect(),
+        },
         Some(_) => return Err(ApiError::bad_request("sections must be a list of section names")),
     };
     let mut chosen = Vec::new();
