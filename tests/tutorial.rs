@@ -881,3 +881,34 @@ fn someone_new_is_welcomed_first_with_a_way_in_and_a_way_out() {
     let panel = part(&tutorial, "panels.add(WORD, 'Get started',", "render();");
     assert!(panel.find("    welcome,").unwrap() < panel.find("'Getting started'").unwrap());
 }
+
+// G18
+#[test]
+fn making_a_bot_says_it_starts_free_and_asks_about_public_places_and_its_stay() {
+    let tutorial = page("tutorial.js");
+    let step = part(&tutorial, "id: 'bot',", "  },");
+    assert!(step.contains("**Let it go to public places**"), "{step}");
+    assert!(step.contains("**How long it can stay in a public room**"), "{step}");
+    assert!(step.contains("Its schedule starts free all day; change it in"), "{step}");
+    assert!(step.contains("**Crew** → **Schedule**"), "{step}");
+    let project = part(&tutorial, "title: 'Start a project with other bots',", "      },");
+    assert!(project.contains("public places on") && project.contains("**Schedule**"), "{project}");
+    assert!(!project.contains("social hours"), "a bot goes out in its free hours too: {project}");
+    // Bring a bot asks both, off and Forever to start, and saves them through the schedule's routes.
+    let app = page("app.js");
+    let bring = part(&app, "async function bringBot(", "  function proposeHangout(");
+    assert!(bring.contains(
+        "h('input', { type: 'checkbox', name: 'public_places' }), 'Let it go to public places'"
+    ));
+    assert!(bring.contains("h('p', { class: 'muted' }, STRANGERS_TEXT),"));
+    assert!(bring.contains("stayField(null),"));
+    assert!(bring.contains("/routine`, { method: 'PUT'"));
+    assert!(bring.contains("/stay_limit`, { method: 'PUT'"));
+    assert!(app.contains("field('How long it can stay in a public room'"));
+    assert!(
+        app.contains("[['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']]")
+    );
+    // The schedule says the same about strangers.
+    let schedule = part(&app, "async function routineDialog(", "\n}\n");
+    assert!(schedule.contains("h('p', { class: 'muted' }, STRANGERS_TEXT),"));
+}
