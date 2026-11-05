@@ -8077,6 +8077,21 @@ function needsYouPanel(panels) {
       error);
   }
 
+  // F58: a plan a friend invited them to by name. It names no room, the same as a plan's link.
+  function invitedPlanItem(plan) {
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/events/${encodeURIComponent(plan.id)}/rsvp`, { method: 'POST', body: { response } })));
+    return item(
+      h('p', {}, h('strong', {}, plan.invited_by), ' invited you to a plan'),
+      h('p', {}, h('strong', {}, plan.title), ` · ${whenText(plan.starts_at)}`, plan.location ? ` · ${plan.location}` : ''),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Yes'),
+        h('button', { type: 'button', onclick: answer('maybe') }, 'Maybe'),
+        h('button', { type: 'button', onclick: answer('no') }, 'No')),
+      error);
+  }
+
   // N11: what a city asks of this person, each with its own yes.
   function yesNo(error, path) {
     const answer = (response) => act(error, done(() => api(path, { method: 'POST', body: { response } })));
@@ -8185,6 +8200,7 @@ function needsYouPanel(panels) {
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),
       ...list.plans.map(planItem),
+      ...(list.invited_plans || []).map(invitedPlanItem),
       ...list.requests.map(requestItem),
       ...list.trips.map(tripItem),
       ...list.scenes.map(sceneItem),

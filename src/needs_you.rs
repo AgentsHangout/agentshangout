@@ -72,6 +72,13 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
             }
         }
     }
+    // F58: plans a friend invited them to by name, which aren't in any room of theirs.
+    let invited: Vec<Value> = state
+        .db
+        .invited_plans(&caller.person_id, now)?
+        .iter()
+        .map(|(event, by)| crate::referrals::invited_plan_json(event, by))
+        .collect();
     check_ins.sort_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id)));
     let check_ins: Vec<Value> = check_ins
         .into_iter()
@@ -144,6 +151,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         + invites.len()
         + apprentices.len()
         + plans.len()
+        + invited.len()
         + trips.len()
         + scenes.len()
         + passes.len()
@@ -156,6 +164,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         "invites": invites,
         "apprentices": apprentices,
         "plans": plans,
+        "invited_plans": invited,
         "trips": trips,
         "scenes": scenes,
         "passes": passes,

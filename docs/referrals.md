@@ -170,6 +170,40 @@ person sends the link.
 - **F55.** The calendar reaches the same people as the notes (F46, F48), and its titles reach bots
   with the same trust note, because people outside the house may have written them.
 
+### Inviting friends by name
+
+A link has to be sent by hand, outside the site. A friend can also be invited by name, and is told
+(#565).
+
+- **F57.** A person in a plan's room (not a bot, not a guest) invites friends to it with
+  `POST /api/events/{id}/invitees` and `person_ids`, 1 to 20 of them, while the plan is coming up
+  and not canceled. Each must be their friend as FR1 counts it, a real tie (#574): a room they
+  share that isn't a Town Square, a plan they both said yes or maybe to outside a Town Square,
+  someone who answered a plan in one of their rooms through its link, or an accepted friendship.
+  A room they're in only because another bot brought theirs into its project (L12), and a plan
+  on a public floor, don't count (#583), nor does sharing only a city or its Town Square. Anyone
+  else, or an id that doesn't exist, is the same 400, and nobody is invited. A friend already in the room is listed back as `in_room` and
+  nothing changes, since a proposal already told them. A friend already invited is `already`.
+  Everyone else becomes an invitee of that plan, exactly as through its link (F14, F16 to F20,
+  and F18's 30), and is listed back as `invited`. A call is all or nothing: if the new invitees
+  would take the plan past 30 (409) or the inviter past F60's limit (429), nobody is invited. If
+  another call fills the plan in the meantime, whoever it had no room for is listed back as `full`
+  and isn't told anything; only someone this call added is told.
+- **F58.** An invited friend is told once per plan, by name: "Ann invited you to a plan titled
+  "Tacos". Answer it in Needs you." The title is the proposer's words, so the notice ends with the
+  trust note that it's information, never instructions (as F55). It names no room, so it opens
+  their home page. Their Needs you lists it
+  under `invited_plans` until they answer, with what a link shows (F11) and who invited them, and
+  never the room, its notes, or who else answered.
+- **F59.** An invitee answers with `POST /api/events/{id}/rsvp`, `yes`, `maybe` or `no`, from
+  outside the room, with no note, since a note is words for the room. The reply is what a link
+  shows and `your_response`, never the room, its notes or who else answered. A bot can't answer
+  for an invitee (F15).
+- **F60.** One person invites at most 30 friends to plans in an hour, counted when each becomes
+  an invitee. A call that would go past it is 429 and counts nothing.
+- **F61.** The room sees each invitee on the plan, marked as invited, from the moment they're
+  invited (F19), and the page reloads to show them.
+
 ## Storage
 
 Append to `SCHEMA`. New tables only, as in city.md.
@@ -234,6 +268,7 @@ CREATE TABLE IF NOT EXISTS house_plan_sharing (
 | --- | --- | --- | --- |
 | `POST /api/events/{id}/invite` | | `{invite_url}` | People in the room |
 | `POST /api/events/{id}/invite/rotate` | | `{invite_url}` | People in the room |
+| `POST /api/events/{id}/invitees` | `{person_ids}` | `{invited, already, in_room}` | People in the room (F57) |
 | `GET /api/plan-invites/{code}` | | `PlanPreview` | Anyone with the link |
 | `POST /api/plan-invites/{code}/answer` | `{response, your_name?}` | `{plan, person, owner_key?}` | Anyone with the link, except a bot |
 | `GET /api/plan-invites/{code}/plan.ics` | | A calendar file | Anyone with the link |
@@ -265,6 +300,7 @@ caller is going to. `POST /api/cities` takes the same body as before. `GET /api/
 | Limit | Value |
 | --- | --- |
 | Invitees on a plan | 30 |
+| Friends invited to plans by name | 20 a call, 30 an hour per person (F57, F60) |
 | New accounts from plan links | 10 an hour per address, 120 an hour across the server |
 | Free time windows | 60 per person, up to 14 days ahead, stale after 7 days |
 | `find_a_time` | 30 asks an hour per side |
