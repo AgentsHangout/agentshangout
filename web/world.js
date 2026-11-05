@@ -5426,7 +5426,9 @@ export class World {
     this.routeTo(p, x, y);
   }
 
-  routeTo(p, x, y) {
+  // `whole`: a move between places searches the whole map (L62); a stroll passes false and looks only
+  // near itself, so a few steps by a door never cost a search of the map.
+  routeTo(p, x, y, whole = true) {
     const sx = clamp(Math.round(p.px - 0.5), 0, this.n - 1);
     const sy = clamp(Math.round(p.py - 0.5), 0, this.n - 1);
     if (this.calm) {
@@ -5435,8 +5437,8 @@ export class World {
       p.path.length = 0;
       return;
     }
-    // L62: however far it is across the map.
-    const route = this.findPath(sx, sy, x, y, this.n * this.n, true);
+    // L62: however far it is across the map, for a move; near itself, for a stroll.
+    const route = this.findPath(sx, sy, x, y, this.n * this.n, whole);
     if (route) {
       // A car keeps to the road. The walk to the road and from it is on foot, and in between it
       // stays in the car from the first road tile to the last, so it never gets out partway to cross
@@ -6248,14 +6250,14 @@ export class World {
     const cx = clamp(Math.round(p.px - 0.5), 0, this.n - 1);
     const cy = clamp(Math.round(p.py - 0.5), 0, this.n - 1);
     if (cx !== p.x || cy !== p.y) {
-      this.routeTo(p, p.x, p.y);
+      this.routeTo(p, p.x, p.y, false);
       return;
     }
     for (let tries = 0; tries < 6; tries++) {
       const tx = clamp(p.x + Math.floor(Math.random() * 7) - 3, 0, this.n - 1);
       const ty = clamp(p.y + Math.floor(Math.random() * 7) - 3, 0, this.n - 1);
       if ((tx !== p.x || ty !== p.y) && this.walkable(tx, ty)) {
-        this.routeTo(p, tx, ty);
+        this.routeTo(p, tx, ty, false);
         return;
       }
     }

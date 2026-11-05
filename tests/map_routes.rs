@@ -164,3 +164,28 @@ fn a_bot_keeps_to_the_road_and_stays_in_the_car() {
     // Off the road only across the one-tile gap and to step off at the end, and in the car between.
     assert_eq!(out, r#"{"ride":true,"offRoad":2,"gapsInCar":0,"endsOnFoot":true}"#);
 }
+
+// L62: a stroll by a door looks only near itself; only a move between places searches the whole map.
+#[test]
+fn a_stroll_searches_only_near_itself() {
+    let out = run("
+        const n = 128;
+        const world = Object.assign(new World(), {
+          n, calm: false, sparkles: 0,
+          land: new Uint8Array(n * n).fill(GRASS_L),
+          kind: new Uint8Array(n * n),
+          level: new Uint8Array(n * n),
+        });
+        const looked = [];
+        const find = world.findPath.bind(world);
+        world.findPath = (...args) => { looked.push(args[5]); return find(...args); };
+        const bot = { px: 60.5, py: 60.5, ox: 0, oy: 0, h: 1, path: [] };
+        world.routeTo(bot, 62, 61, false);
+        world.routeTo(bot, 10, 10);
+        console.log(JSON.stringify(looked));
+    ");
+    assert_eq!(out, "[false,true]", "a stroll stays local, a move looks at the whole map");
+    let world = include_str!("../web/world.js");
+    assert_eq!(world.matches("this.routeTo(p, p.x, p.y, false);").count(), 1);
+    assert_eq!(world.matches("this.routeTo(p, tx, ty, false);").count(), 1);
+}
