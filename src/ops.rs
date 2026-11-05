@@ -1977,6 +1977,12 @@ pub struct Snapshot {
     /// Which of this person's bots have moods turned off, for their own page (I10). Always empty
     /// for a bot, and nobody else's bots are ever in it.
     pub bots_without_moods: Vec<String>,
+    /// I120: whether `@room` from this caller would reach anyone, so the chat box can offer it.
+    pub room_mention: bool,
+    /// I120: the `@room` setting, only for the room's owner, so My bots can show it to change.
+    pub room_mention_policy: Option<String>,
+    /// I120: which of the caller's own bots hear `@room` here.
+    pub room_mention_bots: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
     /// I108: transient human composer hints, never returned to bots.
@@ -2107,6 +2113,8 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let pin_policy = crate::pins::policy_of(state, hangout_id)?;
     let can_pin = crate::pins::can_pin(state, caller, hangout_id, guest.as_ref())?;
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
+    let (room_mention_policy, room_mention_bots) =
+        crate::room_mentions::settings_for(state, caller, hangout_id)?;
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2137,6 +2145,9 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         floor,
         furnishing,
         bots_without_moods,
+        room_mention: crate::room_mentions::may_use(state, caller, hangout_id)?,
+        room_mention_policy,
+        room_mention_bots,
         present,
         typing: crate::typing::visible(state, caller, hangout_id)?,
         looks,

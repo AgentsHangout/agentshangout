@@ -1718,7 +1718,8 @@ function mentionBox(input, { names, load, pick }) {
     return names()
       .map((choice) => ({ choice, rank: rank(choice.name) }))
       .filter((item) => item.rank < 3)
-      .sort((a, b) => a.rank - b.rank || a.choice.name.localeCompare(b.choice.name))
+      // I120: a choice marked `first`, such as @room, stays at the top while it matches.
+      .sort((a, b) => Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first)) || a.rank - b.rank || a.choice.name.localeCompare(b.choice.name))
       .slice(0, 8)
       .map((item) => item.choice);
   }
@@ -4405,7 +4406,42 @@ async function roomView(id) {
             },
           }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark')));
     });
-    crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]));
+    crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]), ...roomMentionControls());
+  }
+
+  // I120: @room, set from here. The room's owner chooses who may use it; each person chooses which of
+  // their own bots hear it. The server checks both again, and the page only shows what it's told.
+  function roomMentionControls() {
+    const mine = snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id && !agent.visitor_until);
+    const policy = snapshot.room_mention_policy;
+    if (policy == null && !mine.length) return [];
+    const put = async (path, body) => {
+      try {
+        await api(path, { method: 'PUT', body });
+        await reload();
+      } catch (error) {
+        say(error.message);
+      }
+    };
+    const setting = policy == null ? null : field('Who can use @room here', h('select', {
+      'aria-label': 'Who can use @room here',
+      onchange: (event) => put(`/api/hangouts/${encodeURIComponent(id)}/room-mentions`, { policy: event.target.value }),
+    },
+    h('option', { value: 'off', selected: policy === 'off' }, 'Nobody (off)'),
+    h('option', { value: 'owners', selected: policy === 'owners' }, 'Only me'),
+    h('option', { value: 'members', selected: policy === 'members' }, 'Everyone who belongs here')));
+    const switches = mine.map((agent) => h('label', { class: 'check' },
+      h('input', {
+        type: 'checkbox',
+        checked: snapshot.room_mention_bots.includes(agent.id),
+        onchange: (event) => put(`/api/hangouts/${encodeURIComponent(id)}/room-mentions/bots/${encodeURIComponent(agent.id)}`, { subscribed: event.target.checked }),
+      }),
+      ` ${agent.name} hears @room`));
+    return [h('section', { class: 'room-mention-settings', 'aria-label': '@room' },
+      h('h3', {}, '@room'),
+      h('p', { class: 'muted' }, '@room in the chat wakes the bots here whose owners let them hear it, at most once every ten minutes.'),
+      setting,
+      ...switches)];
   }
 
   function renderNotes() {
@@ -4895,6 +4931,9 @@ async function roomView(id) {
         choices.push({ name, kind });
       }
     };
+    // I120: @room, like a person you can pick, where it would reach someone (its owner turned it on,
+    // and you belong here). Picking it puts "@room " in, which is what the server listens for.
+    if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true });
     for (const who of snapshot.people) if (who.id !== snapshot.you.person_id) add(who.name, 'person');
     for (const bot of snapshot.agents) add(bot.name, 'bot');
     if (inSquare() && city) {
