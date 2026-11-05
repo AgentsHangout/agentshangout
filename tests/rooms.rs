@@ -8474,16 +8474,26 @@ async fn room_tag_cannot_name_an_unsubscribed_bot_in_another_room() {
 
     for policy in ["off", "members"] {
         server
-            .put(&ann.key, &format!("/api/hangouts/{room}/room-mentions"), json!({ "policy": policy }))
+            .put(
+                &ann.key,
+                &format!("/api/hangouts/{room}/room-mentions"),
+                json!({ "policy": policy }),
+            )
             .await
             .ok();
-        let message = server.post(&ann.key, &messages, json!({ "text": "(@ROOM) please listen" })).await.ok();
+        let message =
+            server.post(&ann.key, &messages, json!({ "text": "(@ROOM) please listen" })).await.ok();
         let id = message["id"].as_i64().unwrap();
         assert!(!server.state.db.mentions_bot(id, &bot.id).unwrap(), "{policy}: {message}");
         let events = server.tool(&bot.token, "events_since", json!({ "since": "0" })).await;
-        assert!(events["structuredContent"]["events"].as_array().unwrap().iter().all(|event| {
-            event["name"] != "mention" || event["data"]["message_id"] != id
-        }), "{events}");
+        assert!(
+            events["structuredContent"]["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|event| { event["name"] != "mention" || event["data"]["message_id"] != id }),
+            "{events}"
+        );
         let look = bell.look(&seen).await.unwrap();
         assert!(look.wake.is_empty(), "{policy}: {:?}", look.wake);
         seen = look.next;
@@ -8513,11 +8523,7 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
     server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
     for bot in [&fido, &rex, &away] {
         server
-            .put(
-                &ann.key,
-                &format!("{policy}/bots/{}", bot.id),
-                json!({ "subscribed": true }),
-            )
+            .put(&ann.key, &format!("{policy}/bots/{}", bot.id), json!({ "subscribed": true }))
             .await
             .ok();
     }
@@ -8539,9 +8545,10 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
     for (n, (bell, seen)) in bells.into_iter().enumerate() {
         let look = bell.look(&seen).await.unwrap();
         if n < 2 {
-            assert_eq!(look.wake.from_owner, vec![agenthangout::doorbell::Mention {
-                hangout_id: room.clone(), message_id: id,
-            }]);
+            assert_eq!(
+                look.wake.from_owner,
+                vec![agenthangout::doorbell::Mention { hangout_id: room.clone(), message_id: id }]
+            );
         } else {
             assert!(look.wake.is_empty(), "recipient {n}: {:?}", look.wake);
         }
