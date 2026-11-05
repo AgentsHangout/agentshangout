@@ -1020,13 +1020,26 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
 // F56: `fresh` when it opens straight after proposing, as the plan's invite step.
-async function sharePlan(event, { fresh = false } = {}) {
+// F57: and friends picked by name, who are told and answer in their Needs you. `here()` is the
+// room's people, who can already see the plan; `reload()` shows each new invitee on it (F61).
+async function sharePlan(event, { fresh = false, here = () => [], reload = async () => {} } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
   const row = h('div', {}, secretRow(first));
+  const byName = friendInviter({
+    here,
+    invite: async (personId) => {
+      const result = await api(`/api/events/${event.id}/invitees`, { method: 'POST', body: { person_ids: [personId] } });
+      if (result.in_room?.length) throw new Error('They\'re in this room, so they can already see it.');
+      if (result.already?.length) throw new Error('They\'re already invited.');
+      if (result.full?.length) throw new Error('The plan is full: it has all the guests it can take.');
+      await reload();
+    },
+  });
   const dialog = modal(fresh ? 'Invite people' : 'Invite a friend',
     fresh ? h('p', {}, 'Your plan is up, and everyone in this room can see it and answer.') : null,
-    h('p', {}, 'Send this link to someone who isn\'t here yet. They can answer with no account.'),
+    byName,
+    h('p', {}, 'Or send this link to someone who isn\'t here yet. They can answer with no account.'),
     h('p', { class: 'muted' }, 'They\'ll see the plan\'s title, time and place, and your name. They won\'t see this room.'),
     row,
     error,
@@ -4318,7 +4331,7 @@ async function roomView(id) {
             }, response[0].toUpperCase() + response.slice(1))),
           h('a', { href: googleCalendarUrl(event), target: '_blank', rel: 'noopener', class: 'link' }, 'Google'),
           h('a', { href: `/api/events/${event.id}/ics`, class: 'link' }, '.ics'),
-          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
+          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event, { here: () => snapshot.people, reload }).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
           event.proposed_by === snapshot.you.person_id ? h('button', {
             type: 'button',
             class: 'link danger',
@@ -4913,7 +4926,7 @@ async function roomView(id) {
           dialog.close();
           await reload();
           // F56: proposing ends on inviting people who aren't in this room.
-          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
+          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true, here: () => snapshot.people, reload }).catch((failure) => say(failure.message));
         }),
       },
         field('What', h('input', { name: 'title', required: true, maxLength: 120, placeholder: 'Tacos and catching up' })),

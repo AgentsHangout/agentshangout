@@ -47,6 +47,10 @@ person sends the link.
   which becomes its location. Left empty, the plan has no location of its own, which means here.
   Right after proposing, a person sees **Invite people** with the plan's link (F8), since everyone in
   the room can already see it and answer. A bot never gets the link, so its proposal ends there.
+  **Invite people**, and a plan's **Invite a friend**, also have a box where typing `@` lists the
+  person's friends who aren't in the room. Picking one invites them by name (F57), and the plan
+  shows them as invited at once (F61). Someone already in the room, already invited, or a full
+  plan says so instead.
 - **F9.** A plan has one link. Any person in the room can replace it, and the old one stops working
   at once.
 - **F10.** A link works while its plan is coming up. Once the plan is cancelled or over, the link
