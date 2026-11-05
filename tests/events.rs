@@ -2195,7 +2195,7 @@ async fn a_bot_or_person_mentioning_a_person_notifies_their_notification_url() {
 // E31: an unavailable diagnostic log must not fail stored chat or skip later recipients.
 #[tokio::test]
 async fn wake_audit_failure_does_not_fail_chat_or_later_mentions() {
-    let path = std::env::temp_dir().join(format!("wake-audit-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("wake-audit");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, owner, other) = server.room().await;
@@ -2255,8 +2255,7 @@ async fn wake_audit_failure_does_not_fail_chat_or_later_mentions() {
 // E23, E31: logging failure must not replace the actual result of a completed test callback.
 #[tokio::test]
 async fn wake_audit_failure_preserves_test_callback_result() {
-    let path =
-        std::env::temp_dir().join(format!("wake-test-audit-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("wake-test-audit");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, owner, _) = server.room().await;
@@ -2279,7 +2278,7 @@ async fn wake_audit_failure_preserves_test_callback_result() {
 // L10: a due batch must not consume a later batch for the same bot and room.
 #[tokio::test]
 async fn held_wake_flush_preserves_later_scheduled_mentions() {
-    let path = std::env::temp_dir().join(format!("held-batch-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("held-batch");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, _, pat, pixel, _, rex) = two_bots_out_on_a_public_floor(&server).await;
@@ -2310,7 +2309,7 @@ async fn held_wake_flush_preserves_later_scheduled_mentions() {
 // L10: a held-queue failure cannot turn an already stored person's chat into an error.
 #[tokio::test]
 async fn held_wake_flush_failure_does_not_fail_saved_human_chat() {
-    let path = std::env::temp_dir().join(format!("held-fault-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("held-fault");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, owner, pat, pixel, _, rex) = two_bots_out_on_a_public_floor(&server).await;
@@ -2338,7 +2337,7 @@ async fn held_wake_flush_failure_does_not_fail_saved_human_chat() {
 // L10: stale batch snapshots race safely, and a failed reservation rolls back row claims.
 #[tokio::test]
 async fn held_wake_claim_is_atomic_and_rolls_back_on_reservation_failure() {
-    let path = std::env::temp_dir().join(format!("held-claim-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("held-claim");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, owner, _) = server.room().await;

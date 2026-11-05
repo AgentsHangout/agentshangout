@@ -6,6 +6,8 @@
 //! The clock on a place is real seconds, so a test that looks days ahead calls `worlds::act` with a
 //! time of its own. A disaster goes by steps, so a test jumps the world's step forward.
 
+mod support;
+
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},
@@ -69,11 +71,7 @@ fn who(body: &Value) -> Who {
 }
 
 fn temp_db() -> String {
-    let unique = auth::new_id();
-    std::env::temp_dir()
-        .join(format!("agenthangout-test-{unique}.db"))
-        .to_string_lossy()
-        .into_owned()
+    support::db_path("agenthangout-test").to_string_lossy().into_owned()
 }
 
 impl Server {

@@ -7,6 +7,8 @@
 
 #![allow(dead_code, unused_imports)]
 
+mod support;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::atomic::{AtomicU32, Ordering},
@@ -915,8 +917,7 @@ fn changed_tables(
 }
 
 fn temp_db(label: &str) -> String {
-    let path =
-        std::env::temp_dir().join(format!("attack-{label}-{}-{}.db", std::process::id(), now()));
+    let path = support::db_path(&format!("attack-{label}"));
     path.to_str().unwrap().to_string()
 }
 

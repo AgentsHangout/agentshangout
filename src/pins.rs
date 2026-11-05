@@ -934,7 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_preview_requests_fetch_once() {
-        let path = std::env::temp_dir().join(format!("pin-claim-{}.db", crate::auth::new_id()));
+        let path = crate::db::test_db_path("pin-claim");
         let db = crate::db::Db::open(path.to_str().unwrap()).unwrap();
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.pragma_update(None, "foreign_keys", true).unwrap();

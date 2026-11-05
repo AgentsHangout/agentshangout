@@ -5,6 +5,8 @@
 //! Time is real for anything that goes over HTTP. The tests that need to look days ahead call the
 //! functions in `worlds` directly with a time of their own.
 
+mod support;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::atomic::{AtomicU32, Ordering},
@@ -3457,11 +3459,7 @@ async fn frogs_and_visitors_are_in_memory_only() {
     assert_eq!(server.state.worlds.visitors(now()).len(), 1);
     // A new process, on the same database, starts with an empty street: only the daily count was kept.
     let day = worlds::today(now());
-    let db_file = std::env::temp_dir().join(format!(
-        "agenthangout-street-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let db_file = support::db_path("agenthangout-street");
     let path = db_file.to_str().unwrap().to_string();
     {
         let first = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -4484,11 +4482,7 @@ async fn sending_a_bot_home_ends_its_player_token_and_the_bot_joins_again_with_i
 // W3
 #[tokio::test]
 async fn a_bot_deleted_from_the_database_leaves_a_player_that_cannot_play_on_as_a_claimed_one() {
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-bot-gone-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-bot-gone");
     let path = path.to_str().unwrap().to_string();
     {
         let server = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -4622,11 +4616,7 @@ async fn a_new_commons_is_the_highway_and_nothing_else_and_nobody_can_bulldoze_i
 // W28
 #[tokio::test]
 async fn a_restart_leaves_the_commons_as_it_was() {
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-restart-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-restart");
     let path = path.to_str().unwrap().to_string();
     {
         let first = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -5078,11 +5068,7 @@ async fn a_person_has_one_house_and_three_other_places() {
 }
 
 fn temp_db() -> String {
-    let unique = auth::new_id();
-    std::env::temp_dir()
-        .join(format!("agenthangout-test-{unique}.db"))
-        .to_string_lossy()
-        .into_owned()
+    support::db_path("agenthangout-test").to_string_lossy().into_owned()
 }
 
 // W56
@@ -5583,8 +5569,7 @@ async fn road_losses_survive_rebuilding_and_rollback_but_never_change_owners() {
 // W97: the record is durable and bounded on read, and expired guests can't donate roads or history.
 #[test]
 fn road_history_survives_reopening_and_guest_expiry_never_reassigns_roads() {
-    let path =
-        std::env::temp_dir().join(format!("agentshangout-road-history-{}.db", auth::new_id()));
+    let path = support::db_path("agentshangout-road-history");
     let path_str = path.to_str().unwrap();
     let builder;
     {

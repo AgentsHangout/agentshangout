@@ -1231,8 +1231,7 @@ async fn a_rooms_mood_is_the_one_most_of_its_items_carry_when_at_least_two_do() 
 
 #[test]
 fn nothing_about_mood_or_beauty_is_stored() {
-    let path =
-        std::env::temp_dir().join(format!("rooms-schema-{}-{}.db", std::process::id(), now()));
+    let path = support::db_path("rooms-schema");
     let db = Db::open(path.to_str().unwrap()).unwrap();
     drop(db);
     let connection = rusqlite::Connection::open(&path).unwrap();
@@ -5841,7 +5840,7 @@ async fn pinning_counts_as_one_of_a_bots_writes() {
 // I72: retained bot pins never become human or owner instructions when their bot is deleted.
 #[tokio::test]
 async fn deleted_bot_pins_keep_their_untrusted_origin() {
-    let path = std::env::temp_dir().join(format!("pin-origin-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("pin-origin");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.pragma_update(None, "foreign_keys", true).unwrap();
@@ -7232,8 +7231,7 @@ async fn a_closing_clock_keeps_its_list_private_and_its_limits_and_spares_member
 // I101: reopening existing rooms neither inserts a starter nor duplicates one already present.
 #[test]
 fn reopening_existing_rooms_does_not_seed_or_duplicate_notes_stations() {
-    let path =
-        std::env::temp_dir().join(format!("notes-starter-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("notes-starter");
     let db = Db::open(path.to_str().unwrap()).unwrap();
     db.create_person("owner", "Owner", "key", "feed", 0).unwrap();
     for room in ["legacy", "current"] {
@@ -7986,7 +7984,7 @@ struct Waiting {
 }
 
 async fn waiting_world() -> Waiting {
-    let path = std::env::temp_dir().join(format!("waiting-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("waiting");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, ann) = server.someone("Ann").await;
@@ -9373,7 +9371,7 @@ async fn polling_room_tag_ids_are_caller_and_page_scoped_without_reclassifying_n
 // I88: room-tag provenance is recorded, never reconstructed from a bot's later display name.
 #[tokio::test]
 async fn polling_room_tags_do_not_reclassify_direct_mentions_after_a_rename() {
-    let path = std::env::temp_dir().join(format!("room-tag-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("room-tag");
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, ann) = server.someone("Ann").await;

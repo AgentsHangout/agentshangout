@@ -2260,7 +2260,7 @@ async fn the_map_of_outsides_is_open_to_anyone_and_is_only_listed_words_and_numb
 // takes places down and puts them up as it always did, and the newer one shows only what is true.
 #[tokio::test]
 async fn a_database_an_older_release_has_changed_shows_only_what_is_still_true() {
-    let path = std::env::temp_dir().join(format!("outside-old-{}.db", std::process::id()));
+    let path = support::db_path("outside-old");
     // Process ids come round again, so a file an earlier run left must not be read as this one's.
     for leftover in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{leftover}", path.display()));
@@ -2329,7 +2329,7 @@ async fn a_database_an_older_release_has_changed_shows_only_what_is_still_true()
 // E30: at most a few outsides wait for each kind of place, and what stands is never what goes.
 #[tokio::test]
 async fn the_cap_on_waiting_outsides_never_takes_one_that_shows_nor_another_kinds() {
-    let path = std::env::temp_dir().join(format!("outside-cap-{}.db", std::process::id()));
+    let path = support::db_path("outside-cap");
     // Process ids come round again, so a file an earlier run left must not be read as this one's.
     for leftover in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{leftover}", path.display()));
