@@ -91,6 +91,13 @@ const numberOfHex = (text) => (/^#[0-9a-f]{6}$/i.test(text) ? parseInt(text.slic
 //   beside                    a media query: wide enough for a panel to stand beside the stage
 //   current(x, y)             what the map has for a tile, for when the server can't be asked
 //   changed(x, y, outside)    told what the server stored, so the map shows it at once (E27)
+// #567: whether the map's sky is night, which the outside view opens on, so walking up to a
+// building at 11 PM doesn't jump to noon. Night is when the map's night overlay, (dim - 0.04) / 0.2,
+// is past halfway. Before the map has drawn a sky, it's day.
+export function nightOnMap(sky) {
+  return typeof sky?.dim === 'number' && (sky.dim - 0.04) / 0.2 > 0.5;
+}
+
 export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBuildCollection, collectionOffers, buildCollectionPicker, frame, world, panels, beside, say, current, changed }) {
   const coarse = matchMedia('(pointer: coarse)');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -1998,8 +2005,9 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     flying = 0;
     hand = null;
     chosen = null;
-    night = false;
-    nightButton.textContent = 'See it at night';
+    // #567: it opens as the map looks now, and the button still turns it to day or night.
+    night = nightOnMap(world.sky);
+    nightButton.textContent = night ? 'See it by day' : 'See it at night';
     layers = null;
     petKey = '';
     renderedKey = null;
