@@ -1723,18 +1723,30 @@ fn sighting(
     if !public && !shared_floor(state, caller, owner_id, agent_id, &hangout_id, now)? {
         return Ok(None);
     }
-    let go = go_tool(state, caller, &hangout_id, public, now)?;
     let mut body = json!({
         "name": name,
         "kind": kind,
         "here": { "id": hangout.id, "name": hangout.name },
+        "activity": WHERE_IS_ACTIVITY,
         "rule": PRESENCE_RULE,
     });
-    if let Some(go) = go {
+    // S87: already in the caller's own room, so there's nowhere to go.
+    let caller_here = match caller.agent_id.as_deref() {
+        Some(id) => state.db.bot_place(id, now)?.as_deref() == Some(hangout_id.as_str()),
+        None => false,
+    };
+    if caller_here {
+        body["same_room"] = json!(true);
+        body["note"] = json!("Already in your room. Read the room to see what they're doing.");
+    } else if let Some(go) = go_tool(state, caller, &hangout_id, public, now)? {
         body["go"] = json!(go);
     }
     Ok(Some(body))
 }
+
+/// S87: `where_is` says where, not what someone is doing, so missing activity doesn't read as idle.
+const WHERE_IS_ACTIVITY: &str =
+    "not shown by where_is; read_room in that room shows what each bot there is doing";
 
 fn shared_floor(
     state: &AppState,
