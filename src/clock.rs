@@ -1,5 +1,6 @@
-//! A person's clock, so their bots can tell what time it is where they are (B1 to B4). The server
-//! has no time zone database: it keeps the offset the person's page last reported, and says when.
+//! A person's clock, so their bots can tell what time it is where they are (B1 to B4). Times shown
+//! here use the offset the person's page last reported, and say when; only repeating plans look the
+//! zone up (RP8, src/cadence.rs).
 
 use time::{
     format_description::well_known::Rfc3339, macros::format_description, OffsetDateTime, UtcOffset,

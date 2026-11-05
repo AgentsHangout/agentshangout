@@ -299,6 +299,9 @@ struct Inbox {
 struct MeetCall {
     id: String,
     hangout_id: String,
+    /// L66: a `quiet` call only waits in inbox, so it wakes nothing.
+    #[serde(default)]
+    event: String,
 }
 
 #[derive(Deserialize)]
@@ -444,7 +447,11 @@ impl Doorbell {
         }
         // L38: nudged at its project or alone at the town square, once a half hour.
         if let Some(nudge) = inbox.nudge {
-            if !seen.items.contains(&nudge.id) && social_open && wake.meet.is_none() {
+            if !seen.items.contains(&nudge.id)
+                && social_open
+                && wake.meet.is_none()
+                && nudge.event != "quiet"
+            {
                 wake.nudge = Some(nudge.hangout_id);
             }
             items.insert(nudge.id);

@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+# RP8: a repeating plan's starts follow its owner's time zone. The bundled database means the
+# server needs no zoneinfo files.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
