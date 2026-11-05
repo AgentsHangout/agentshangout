@@ -321,6 +321,16 @@ pub fn note_message(state: &AppState, message: &Message) {
         }
         let mut message_data = shared.clone();
         message_data["what_to_do"] = json!(MESSAGE_DO);
+        // #536: every bot that belongs here gets the line, even one in another room right now, so
+        // a line saying @room that didn't reach this bot says so, and a wake can leave it out.
+        let room_tag = || state.db.mentions_bot(message.id, &bot.id).unwrap_or(false);
+        if message.kind == "chat"
+            && crate::room_mentions::tags_room(&message.body)
+            && !doorbell::mentions(&message.body, &bot.name)
+            && !room_tag()
+        {
+            message_data["room_tag_not_for_you"] = json!(true);
+        }
         record(
             state,
             &bot.id,
@@ -331,7 +341,6 @@ pub fn note_message(state: &AppState, message: &Message) {
         );
         // I88: named, or reached by @room (a mention row the server just recorded).
         let named = doorbell::mentions(&message.body, &bot.name);
-        let room_tag = || state.db.mentions_bot(message.id, &bot.id).unwrap_or(false);
         if named || room_tag() {
             let mut mention = shared;
             if !named {

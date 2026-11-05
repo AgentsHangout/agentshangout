@@ -117,6 +117,10 @@ def wanted(event):
     if kind in PUSH_KINDS:
         return True
     if kind == 'message':
+        # An @room line that didn't reach this bot, say because it's in another room right now,
+        # isn't for it: the bot it did reach gets a mention. Only "all" still pushes it.
+        if MESSAGES == 'owner' and data.get('room_tag_not_for_you'):
+            return False
         return MESSAGES == 'all' or (MESSAGES == 'owner' and data.get('from_your_owner'))
     return False
 
