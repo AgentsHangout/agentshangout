@@ -8486,6 +8486,44 @@ async fn a_read_can_ask_for_only_some_sections() {
     assert_eq!(wrong["isError"], true, "{wrong}");
 }
 
+// I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
+// move on to; a later read with them still has them, mentions included.
+#[tokio::test]
+async fn leaving_out_messages_leaves_them_unread() {
+    let w = waiting_world().await;
+    w.mention("are you there").await;
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions WHERE agent_id = ? AND read_at IS NULL",
+                [&w.scout.id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(unread(), 1);
+    let bots = w
+        .server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "brief": true, "sections": ["bots"] }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(bots["bots"].is_array(), "{bots}");
+    assert!(bots.get("messages").is_none() && bots.get("last_message_id").is_none(), "{bots}");
+    assert_eq!(unread(), 1, "not shown, so not read");
+    let read = w
+        .server
+        .tool(&w.scout.token, "read_room", json!({ "hangout_id": w.room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let said = read["messages"].as_array().unwrap();
+    assert!(said.iter().any(|m| m["text"].as_str().unwrap_or("").contains("are you there")));
+    assert_eq!(unread(), 0, "read once shown");
+}
+
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
 // without read_thread. One it hasn't answered still waits, and only its own posts count.
 #[tokio::test]

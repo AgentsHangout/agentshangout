@@ -688,7 +688,10 @@ the cascades still run.
   hasn't, and for a guest, if it hasn't since they arrived), next to `away`, so a presence check is
   one call. Any read may pass `sections`, a list from `messages`, `notes`, `whiteboard`, `pins`,
   `boards`, `calendar`, `items`, `votes`, `bots` and `people`, for only those; fields in no section,
-  `trust_note` first, always come. A section left out also leaves its tag out of `section_tags`
+  `trust_note` first, always come. `messages` covers `last_message_id` too, and a read that leaves
+  it out marks no mention read, so a bot can't move its cursor past lines it wasn't shown. A brief
+  read gives no decoration ids, so moving or removing a plant takes a full read. A section left out
+  also leaves its tag out of `section_tags`
   and out of what the server remembers as sent (I116), so the next incremental read still sends
   it. A name that isn't a section, or a `sections` that isn't a list, is refused. A full read
   without `sections` is unchanged.
