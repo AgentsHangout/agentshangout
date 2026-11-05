@@ -141,6 +141,24 @@ mod tests {
         assert!(photo.at_items.is_empty());
     }
 
+    // CP9, I66: with the floor's desk hidden, a working bot sits in front of an item that serves as a
+    // desk, as on the page; with none, it sits at the table.
+    #[test]
+    fn with_the_desk_hidden_a_working_bot_uses_a_computer_or_else_the_table() {
+        let computer = json!([{"id":"c","item":"computer","x":5,"y":6,"w":2,"h":1,"facing":0}]);
+        let mut scene = room(computer, json!([bot_in("w", "idle", true)]), whole());
+        scene["look"]["hidden"] = json!(["desk"]);
+        let at = places(&scene);
+        assert_eq!(at[0].3, "sit", "{at:?}");
+        assert_ne!((at[0].1, at[0].2), (44.0, 146.0), "not the hidden desk: {at:?}");
+        assert_ne!((at[0].1, at[0].2), (192.0, 127.0), "not the table: {at:?}");
+        assert_eq!(png(&scene).unwrap().at_desk, ["w"]);
+        scene["items"] = json!([]);
+        let at = places(&scene);
+        assert_eq!((at[0].1, at[0].2, at[0].3.as_str()), (192.0, 127.0, "sit"), "{at:?}");
+        assert_eq!(png(&scene).unwrap().at_table, ["w"]);
+    }
+
     // CP9: a moved table moves its seats, and a seat outside the frame leaves the bot standing.
     #[test]
     fn table_seats_follow_the_table_and_the_frame() {

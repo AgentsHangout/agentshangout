@@ -55,7 +55,8 @@ function cameraFigures(scene,placed) {
   const seats=shiftedSeats(tableShift(look.table));
   const placeBot=b=>{
     let spot=null,at=null;
-    if(b.working&&!(look.hidden||[]).includes('desk')){spot=claim(DESKS);if(spot)at='desk';}
+    // As on the page: the desk, or with the desk hidden, whatever serves as one (I66).
+    if(b.working){spot=claim((look.hidden||[]).includes('desk')?deskSpotsOf(placed):DESKS);if(spot)at='desk';}
     if(!spot&&b.using){spot=claim(placed.find(i=>i.id===b.using)?.spots);if(spot)at='item';}
     if(!spot&&(b.state==='active'||b.working)){spot=claim(seats);if(spot)at='table';}
     return {spot,at};
