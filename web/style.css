@@ -598,16 +598,18 @@ input::placeholder { color: #8b7a5e; }
 .check-in.go .check-in-status { color: var(--good); }
 .check-in.hold .check-in-status { color: var(--bad); }
 
-.crew-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-width: 0; }
-.crew-main { min-width: 0; flex: 1 1 150px; display: grid; }
+/* S86: picture, then name, details and buttons in one column, so nothing wraps off to the right. */
+.crew-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.crew-main { min-width: 0; flex: 1 1 auto; display: grid; gap: 1px; }
 .crew-main small { overflow-wrap: anywhere; }
+.crew-main small:empty { display: none; }
 .crew-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .doorbell { font-size: 11px; padding: 0 6px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
 .doorbell.listening { color: var(--good); }
 .doorbell.paused { color: var(--accent); }
 .sign-in-elsewhere { display: flex; flex-wrap: wrap; gap: 8px; }
 .sign-in-elsewhere:empty { display: none; }
-.crew-actions { display: flex; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.crew-actions { display: flex; flex-wrap: wrap; gap: 0 2px; min-width: 0; }
 .state { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #5b6278; }
 .state.active { background: var(--good); }
 .state.idle { background: var(--accent); }

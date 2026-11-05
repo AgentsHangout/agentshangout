@@ -6,6 +6,7 @@ const app = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 const slice = (from, end) => { const start = app.indexOf(from); assert.ok(start >= 0, from); return app.slice(start, app.indexOf(end, start) + end.length); };
 const proposeCode = slice('  function proposeHangout() {', '\n  }\n');
 const shareCode = slice('async function sharePlan(', '\n}\n');
+const inviterCode = slice('function friendInviter(', '\n}\n');
 
 class Node {
   constructor(tag, props = {}, children = []) {
@@ -20,29 +21,37 @@ const all = (n) => (n instanceof Node ? [n, ...n.children.flatMap(all)] : []);
 const text = (n) => (n instanceof Node ? n.children.map(text).join('') : String(n));
 const h = (tag, props, ...children) => new Node(tag, props || {}, children);
 
-function run({ agent = false } = {}) {
+function run({ agent = false, inviteReply = { invited: ['p2'], already: [], in_room: [] } } = {}) {
   const calls = [];
   const dialogs = [];
+  const boxes = [];
+  let reloads = 0;
   const context = {
     h, id: 'room1',
-    snapshot: { hangout: { name: "Ann's Cafe" }, you: { agent_id: agent ? 'b1' : null } },
+    // The @ box: the test picks from it as a person would.
+    mentionBox: (input, options) => { boxes.push(options); return h('div', {}, input); },
+    get reloads() { return reloads; },
+    boxes,
+    snapshot: { hangout: { name: "Ann's Cafe" }, people: [{ id: 'p1', name: 'Ann' }], you: { agent_id: agent ? 'b1' : null } },
     formError: () => h('p', { class: 'error', hidden: true }),
     field: (label, input) => h('label', {}, label, input),
     modal: (title, ...content) => { const d = { title, content, closed: false, close() { this.closed = true; } }; dialogs.push(d); return d; },
     submitter: (_err, action) => action,
     secretRow: (url) => h('code', {}, url),
     act: (_err, fn) => fn,
-    reload: async () => {},
+    reload: async () => { reloads += 1; },
     say: () => {},
     api: async (path, options = {}) => {
       calls.push({ path, body: options.body, method: options.method });
       if (path === '/api/hangouts/room1/events') return { id: 'plan9', title: options.body.title };
       if (path === '/api/events/plan9/invite') return { invite_url: 'https://x/p/abc' };
+      if (path === '/api/events/plan9/invitees') return inviteReply;
+      if (path === '/api/friends') return { friends: [{ id: 'p2', name: 'Bo' }, { id: 'p3', name: 'Cy' }] };
       return {};
     },
   };
   vm.createContext(context);
-  vm.runInContext(`${shareCode}\n${proposeCode}\nthis.proposeHangout = proposeHangout;`, context);
+  vm.runInContext(`${inviterCode}\n${shareCode}\n${proposeCode}\nthis.proposeHangout = proposeHangout; this.sharePlan = sharePlan;`, context);
   context.proposeHangout();
   return { context, calls, dialogs };
 }
@@ -71,6 +80,32 @@ function run({ agent = false } = {}) {
   assert.equal(invite.title, 'Invite people');
   assert.ok(invite.content.some((c) => c instanceof Node && text(c).includes('everyone in this room can see it')));
   assert.ok(invite.content.some((c) => c instanceof Node && text(c).includes('https://x/p/abc')));
+
+  // F57: a friend picked by name is invited to the plan, and the room reloads to show them (F61).
+  const first = run();
+  const firstForm = first.dialogs[0].content.find((c) => c instanceof Node && c.tag === 'form');
+  await firstForm.props.onsubmit({ title: 'Tacos', starts_at: '2026-11-07T18:00', duration_minutes: '120', location: '', notes: '' });
+  await new Promise((r) => setImmediate(r));
+  const picker = first.context.boxes.at(-1);
+  await picker.load();
+  assert.equal(JSON.stringify(picker.names().map((c) => c.name)), '["Bo","Cy"]', 'friends not in the room are offered');
+  const reloadsBefore = first.context.reloads;
+  await picker.pick({ id: 'p2', name: 'Bo' });
+  const sent = first.calls.find((c) => c.path === '/api/events/plan9/invitees');
+  assert.equal(JSON.stringify(sent.body), '{"person_ids":["p2"]}');
+  assert.equal(sent.method, 'POST');
+  assert.equal(first.context.reloads, reloadsBefore + 1, 'the plan shows its new invitee');
+  const status = (dialog) => dialog.content.flatMap(all).map((n) => n.textContent || '').join(' ');
+  assert.ok(status(first.dialogs[1]).includes('Invited Bo'), status(first.dialogs[1]));
+
+  // Someone already in the room isn't offered, and if they're picked anyway they're told so.
+  const inside = run({ inviteReply: { invited: [], already: [], in_room: ['p2'] } });
+  await inside.context.sharePlan({ id: 'plan9' }, { here: () => [{ id: 'p3' }] });
+  const insideBox = inside.context.boxes.at(-1);
+  await insideBox.load();
+  assert.equal(JSON.stringify(insideBox.names().map((c) => c.name)), '["Bo"]', 'someone already here is not offered');
+  await insideBox.pick({ id: 'p2', name: 'Bo' });
+  assert.ok(status(inside.dialogs.at(-1)).includes('already see it'), status(inside.dialogs.at(-1)));
 
   // Somewhere else, filled in, becomes the location.
   const second = run();

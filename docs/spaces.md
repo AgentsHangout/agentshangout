@@ -717,7 +717,9 @@ window, so the bar along the top stays the same too, and there's only one bar to
   Trust & bots, the map's Bots panel and a room's Crew (#531). It's bolder than the buttons around
   it, and it never folds into More. On the map it shows where each of your bots is and what it's
   doing (L44), with Everyone out, and then each bot's Connections, Monitoring and Usage. In a room it
-  opens on **In this room**, what Crew showed: who's here, Bring a bot, Send and House AI. Then
+  opens on **In this room**, what Crew showed: who's here, Bring a bot, Send and House AI. Each bot
+  there has its picture in its own look first, then its name and details, with its buttons, Bonds
+  among them, in one row under them. Then
   **Your bots**, the same list the map shows, with each bot's picture, how it is, where, what's next,
   Schedule and Delete, and then each bot's tabs, but none of that for a guest. Only the map has
   Center and Everyone out, since they're about the map. On a phone, the tab bar has one **My bots** tab

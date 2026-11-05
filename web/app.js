@@ -1020,13 +1020,26 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
 // F56: `fresh` when it opens straight after proposing, as the plan's invite step.
-async function sharePlan(event, { fresh = false } = {}) {
+// F57: and friends picked by name, who are told and answer in their Needs you. `here()` is the
+// room's people, who can already see the plan; `reload()` shows each new invitee on it (F61).
+async function sharePlan(event, { fresh = false, here = () => [], reload = async () => {} } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
   const row = h('div', {}, secretRow(first));
+  const byName = friendInviter({
+    here,
+    invite: async (personId) => {
+      const result = await api(`/api/events/${event.id}/invitees`, { method: 'POST', body: { person_ids: [personId] } });
+      if (result.in_room?.length) throw new Error('They\'re in this room, so they can already see it.');
+      if (result.already?.length) throw new Error('They\'re already invited.');
+      if (result.full?.length) throw new Error('The plan is full: it has all the guests it can take.');
+      await reload();
+    },
+  });
   const dialog = modal(fresh ? 'Invite people' : 'Invite a friend',
     fresh ? h('p', {}, 'Your plan is up, and everyone in this room can see it and answer.') : null,
-    h('p', {}, 'Send this link to someone who isn\'t here yet. They can answer with no account.'),
+    byName,
+    h('p', {}, 'Or send this link to someone who isn\'t here yet. They can answer with no account.'),
     h('p', { class: 'muted' }, 'They\'ll see the plan\'s title, time and place, and your name. They won\'t see this room.'),
     row,
     error,
@@ -4318,7 +4331,7 @@ async function roomView(id) {
             }, response[0].toUpperCase() + response.slice(1))),
           h('a', { href: googleCalendarUrl(event), target: '_blank', rel: 'noopener', class: 'link' }, 'Google'),
           h('a', { href: `/api/events/${event.id}/ics`, class: 'link' }, '.ics'),
-          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
+          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event, { here: () => snapshot.people, reload }).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
           event.proposed_by === snapshot.you.person_id ? h('button', {
             type: 'button',
             class: 'link danger',
@@ -4432,7 +4445,7 @@ async function roomView(id) {
     if (!doorbell) return null;
     const [state, text] = doorbell.paused ? ['paused', 'Paused']
       : doorbell.listening ? ['listening', 'Listening']
-        : ['quiet', 'Not listening'];
+        : ['not-listening', 'Not listening'];
     return h('span', { class: `doorbell ${state}` }, text);
   }
 
@@ -4475,10 +4488,14 @@ async function roomView(id) {
       const mark = marks.get(agent.id);
       // I10: only its owner sees this, and the server says which of their bots are without.
       const moodless = snapshot.bots_without_moods.includes(agent.id);
+      // K7: Bonds is a button with the others; what it finds shows under the bot's details.
+      const bonds = guest ? null : bondsLink(agent);
       return h('div', { class: 'crew-row' },
-        dot,
+        // S86: its picture, in its own look, as the map and My bots draw it.
+        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: colorOf(agent.owner_id), worn: snapshot.looks?.bots?.[agent.id] || {} }), LOOK_ZOOM_SMALL)),
         h('div', { class: 'crew-main' },
           h('div', { class: 'crew-name' },
+            dot,
             h('strong', {}, agent.name),
             guest ? h('span', { class: 'guest-tag' }, 'Guest') : null,
             // S55: it belongs here, but it's somewhere else.
@@ -4493,9 +4510,10 @@ async function roomView(id) {
           // K24: who an apprentice was made by.
           agent.apprenticed_by ? h('small', { class: 'muted' }, `Apprenticed by ${agent.apprenticed_by.join(' & ')}`) : null,
           // K7: the bots it has built with, for anyone who can see it here.
-          guest ? null : bondsLink(agent),
-          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null),
+          bonds?.shown,
+          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null,
         mine ? h('div', { class: 'crew-actions' },
+          bonds?.button,
           // S59: its owner can call it over, which takes it out of wherever it is.
           agent.away && !guest ? h('button', {
             type: 'button',
@@ -4592,6 +4610,7 @@ async function roomView(id) {
               await reload();
             },
           }, 'Send home')) : h('div', { class: 'crew-actions' },
+          bonds?.button,
           mark ? h('button', {
             type: 'button',
             class: 'link',
@@ -4599,7 +4618,7 @@ async function roomView(id) {
               await api(`/api/marks/${agent.id}`, { method: 'DELETE' });
               await loadMarks();
             },
-          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark')));
+          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark'))));
     });
     crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]), ...roomMentionControls());
   }
@@ -4907,7 +4926,7 @@ async function roomView(id) {
           dialog.close();
           await reload();
           // F56: proposing ends on inviting people who aren't in this room.
-          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
+          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true, here: () => snapshot.people, reload }).catch((failure) => say(failure.message));
         }),
       },
         field('What', h('input', { name: 'title', required: true, maxLength: 120, placeholder: 'Tacos and catching up' })),
@@ -5026,7 +5045,7 @@ async function roomView(id) {
         button.remove();
       },
     }, 'Bonds');
-    return h('small', {}, button, shown);
+    return { button, shown };
   }
 
   function discordDialog(agent) {
