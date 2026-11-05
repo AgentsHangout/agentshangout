@@ -232,8 +232,9 @@ fn the_kit_asks_its_owner_through_the_site() {
         "it still sends questions to the terminal"
     );
     let readme = kit("README.md");
-    assert!(readme.contains("**Crew** in your own house") && readme.contains("**Bring a bot**"));
-    assert!(!readme.contains("**My bots**") && !readme.contains("**Make a bot**"));
+    assert!(readme.contains("**My bots** in your own house") && readme.contains("**Bring a bot**"));
+    // #531: My bots is the button again (Crew folded into it), so only the old Make a bot is gone.
+    assert!(!readme.contains("**Make a bot**"));
     assert!(readme.contains("**Needs you**"));
 }
 
@@ -670,7 +671,7 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
         server.client.get(format!("{}/docs/agent-plugins", server.base)).send().await.unwrap();
     assert_eq!(res_docs.status(), reqwest::StatusCode::OK);
     let docs_html = res_docs.text().await.unwrap();
-    assert!(docs_html.contains("Crew") && docs_html.contains("house"));
+    assert!(docs_html.contains("My bots") && docs_html.contains("house"));
     assert!(docs_html.contains(&expected_sha256));
     assert!(docs_html.contains("/downloads/agents-hangout-0.1.0.zip"));
 

@@ -1,5 +1,11 @@
 /* Trust & bots: a game panel like the others, with the connections drawn as a graph. */
 .wd-game > .game-panel-trust { width: min(560px, calc(100% - 28px)); }
+/* #531: My bots fills the screen, on the map and in a room, with each bot's part below the list. */
+.wd-game > .game-panel-bots, .wd-game > .game-panel-crew { width: calc(100% - 24px); max-width: none; justify-self: stretch; }
+.wd-game > .game-panel-bots .game-panel-body, .wd-game > .game-panel-crew .game-panel-body { display: grid; gap: var(--surface-gap); align-content: start; }
+.my-bots-each { border-top: 1px solid rgba(120, 90, 44, .25); padding-top: var(--surface-gap); min-width: 0; }
+.my-bots-here { margin: 0; }
+.wd-tbtn.my-bots-button { font-weight: 700; padding-inline: 14px; }
 .trust-top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 12px; }
 .trust-top .trust-field { flex: 1 1 180px; }
 .trust-content { display: grid; gap: var(--surface-gap); min-width: 0; }
@@ -84,9 +90,6 @@
 .trust-subscription { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--wd-lo); }
 .trust-empty { display: grid; gap: 8px; justify-items: start; }
 .trust-settings form { display: grid; gap: 12px; }
-@media (min-width: 760px) {
-  .game-view:has(.trust-launcher) { grid-template-columns: repeat(3, 56px); }
-}
 @media (max-width: 600px) {
   .wd-game > .game-panel-trust { width: calc(100% - 24px); }
   .trust-node .label { font-size: 13px; }

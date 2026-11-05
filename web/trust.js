@@ -27,15 +27,17 @@ const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
 const LABEL_HIGH = 13;
 
-export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }) {
+// #531: with `host`, it draws inside that element of the My bots view (opened as `hostPanel`) and has
+// no panel or top-bar button of its own; the view calls `load` when it opens.
+export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, host = null, hostPanel = null }) {
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
   let usage, serverUsage;
   // Where every node was last drawn, so a change doesn't throw the graph around.
   const placed = new Map();
-  const body = panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
+  const body = host || panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
   body.classList.add('trust-body');
-  const toggle = panels.toggle('trust', 'Trust & bots', { short: 'Trust' });
+  const toggle = host ? null : panels.toggle('trust', 'Trust & bots', { short: 'Trust' });
   const button = (label, run, props = {}) => h('button', { type: 'button', onclick: run, ...props }, label);
   const path = () => `/api/agents/${encodeURIComponent(selected)}`;
   const bot = () => data?.agents.find(a => a.id === selected);
@@ -585,5 +587,11 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     if (!data || dirty || busy) return;
     try { data.looks = (await api('/api/trust')).looks; render(); } catch (_) { /* the next open reads it again */ }
   }
-  return { toggle, open: () => panels.open('trust'), refreshLooks };
+  return {
+    toggle,
+    open: () => panels.open(host ? hostPanel : 'trust'),
+    refreshLooks,
+    // #531: what opening the My bots view does for this part of it.
+    load: () => { if (!dirty && !busy) load(); },
+  };
 }

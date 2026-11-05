@@ -1776,7 +1776,7 @@ async fn a_person_sees_where_each_of_their_bots_is_and_whats_next() {
 
     // The page has the panel and the count over a building.
     let app = include_str!("../web/app.js");
-    assert!(app.contains("panels.add('bots', 'Bots'"));
+    assert!(app.contains("panels.add('bots', 'My bots'"));
     assert!(app.contains("api('/api/me/bots')"));
     assert!(include_str!("../web/world.js").contains("this.myBots?.has(p.name)"));
 }
