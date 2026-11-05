@@ -1730,7 +1730,7 @@ fn sighting(
         "activity": WHERE_IS_ACTIVITY,
         "rule": PRESENCE_RULE,
     });
-    // S86: already in the caller's own room, so there's nowhere to go.
+    // S87: already in the caller's own room, so there's nowhere to go.
     let caller_here = match caller.agent_id.as_deref() {
         Some(id) => state.db.bot_place(id, now)?.as_deref() == Some(hangout_id.as_str()),
         None => false,
@@ -1744,7 +1744,7 @@ fn sighting(
     Ok(Some(body))
 }
 
-/// S86: `where_is` says where, not what someone is doing, so missing activity doesn't read as idle.
+/// S87: `where_is` says where, not what someone is doing, so missing activity doesn't read as idle.
 const WHERE_IS_ACTIVITY: &str =
     "not shown by where_is; read_room in that room shows what each bot there is doing";
 
