@@ -410,9 +410,10 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     // G19: once every required step is done, Get started leaves the title bar, and its row in More
     // shows at every width, so the lessons are still a click away. Until the server answers, it goes
     // by what this browser saw last, so a finished page doesn't flash the button on every load.
-    const done = progress ? allDone() : signedIn && rememberedDone();
-    document.documentElement.classList.toggle('tutorial-done', done);
-    if (progress) rememberDone(done);
+    // Not named `done`: that would shadow the step check above and throw before it's set.
+    const allFinished = progress ? allDone() : signedIn && rememberedDone();
+    document.documentElement.classList.toggle('tutorial-done', allFinished);
+    if (progress) rememberDone(allFinished);
   }
   const allDone = () => Boolean(signedIn && progress && !next());
 
