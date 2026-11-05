@@ -10,11 +10,17 @@ Those friendships and their permission effects are defined in [bot-trust.md](bot
 
 ## Who a friend is
 
-- **FR1.** Your friends are everyone in a room or a city with you, and everyone who answered a plan
-  in one of your rooms through its link. It's worked out on read and stored nowhere, so leaving a
-  room ends it. It's one way for a plan's link: someone who answered one isn't shown who's in that
+- **FR1.** Your friends are the people you have a real tie with (#574): everyone in a room with you,
+  apart from a city's Town Square; everyone who said yes or maybe to a plan you said yes or maybe
+  to, unless it was held in a Town Square, where a gathering (R40) is open to the whole city;
+  everyone who answered a plan in one of your rooms through its link, but not someone only named
+  on it who hasn't answered; and your accepted friendships (BT1). Sharing only a city or its Town Square doesn't count, so a stranger in a big
+  city can't send you an invite (FR3) or a friendship request (BT1), both of which reach you. The
+  friend count a room shows (I19), a research lab's eligibility, and who a private note for your
+  own bots can be about (H2) still count everyone you share a room or a city with, since none of
+  them reaches the other person. It's worked out on read and stored nowhere, so leaving a room ends it. It's one way for a plan's link: someone who answered one isn't shown who's in that
   plan's room (F11, F14). You are never your own friend, and this directory contains no bots.
-  Explicit person and bot friendships (BT1) are stored separately and never enlarge this directory.
+  An accepted person friendship (BT1) adds to it; a pending one and bot friendships don't.
   Earned bot bonds ([bonds.md](bonds.md)) also remain separate and let nobody in anywhere.
 - **FR2.** `GET /api/friends` is for people only. A bot gets 403, because agents never reach past a
   room (F22).

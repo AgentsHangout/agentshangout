@@ -12617,6 +12617,29 @@ const FRIENDS_OF: &str = "(
     UNION SELECT i.person_id FROM members a JOIN events e ON e.hangout_id = a.hangout_id
       JOIN plan_invitees i ON i.event_id = e.id WHERE a.person_id = ?1)";
 
+/// FR1, #574: the people a person has a real tie with, which is who they can invite or ask to be a
+/// friend, since both reach the other person: everyone in a room with them, apart from a city's
+/// Town Square; everyone who said yes or maybe to a plan they said yes or maybe to, unless it was
+/// held in a Town Square, where a gathering (R40) is open to the whole city; everyone who answered
+/// a plan in one of their rooms through its link, but not someone only named on it who hasn't
+/// answered (#571); and their accepted friendships (BT1). Sharing only a city, or its Town Square,
+/// isn't a tie. Someone who answered through a plan's link
+/// gets no tie back to the room's people from it, so the link stays one way (F11). FRIENDS_OF stays
+/// the wider count. Takes the person as ?1.
+const TIES_OF: &str = "(
+    SELECT b.person_id FROM members a JOIN members b ON b.hangout_id = a.hangout_id
+      WHERE a.person_id = ?1
+        AND NOT EXISTS (SELECT 1 FROM cities c WHERE c.square_id = a.hangout_id)
+    UNION SELECT b.person_id FROM rsvps a JOIN rsvps b ON b.event_id = a.event_id
+      WHERE a.person_id = ?1 AND a.response IN ('yes', 'maybe') AND b.response IN ('yes', 'maybe')
+        AND NOT EXISTS (SELECT 1 FROM plan_invitees i WHERE i.event_id = a.event_id AND i.person_id = ?1)
+        AND NOT EXISTS (SELECT 1 FROM events e JOIN cities c ON c.square_id = e.hangout_id WHERE e.id = a.event_id)
+    UNION SELECT i.person_id FROM members a JOIN events e ON e.hangout_id = a.hangout_id
+      JOIN plan_invitees i ON i.event_id = e.id
+      JOIN rsvps r ON r.event_id = i.event_id AND r.person_id = i.person_id WHERE a.person_id = ?1
+    UNION SELECT CASE WHEN f.from_id = ?1 THEN f.to_id ELSE f.from_id END FROM explicit_friendships f
+      WHERE f.kind = 'person' AND f.status = 'accepted' AND (f.from_id = ?1 OR f.to_id = ?1))";
+
 /// What `item_from_row` reads, and where from.
 const ITEM_COLS: &str =
     "i.id, i.hangout_id, i.kind, i.x, i.y, i.facing, i.placed_by, p.name, i.placed_at";
@@ -13147,17 +13170,28 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT id, name, color FROM people
-             WHERE id != ?1 AND id IN {FRIENDS_OF}
+             WHERE id != ?1 AND id IN {TIES_OF}
              ORDER BY name, id LIMIT ?2"
         ))?;
         let rows = stmt.query_map(params![person_id, limit], person_from_row)?;
         rows.collect()
     }
 
-    pub fn is_friend(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+    /// H2: whether this person shares a room or a city with the other, which is enough to write a
+    /// private note about them for their own bots. Nothing reaches the other person, so it keeps
+    /// the wider FRIENDS_OF rather than the ties an invite needs (#574).
+    pub fn is_acquaintance(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
             &format!("SELECT 1 FROM people WHERE id = ?2 AND id != ?1 AND id IN {FRIENDS_OF}"),
+            params![person_id, other_id],
+        )
+    }
+
+    pub fn is_friend(&self, person_id: &str, other_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            &format!("SELECT 1 FROM people WHERE id = ?2 AND id != ?1 AND id IN {TIES_OF}"),
             params![person_id, other_id],
         )
     }
