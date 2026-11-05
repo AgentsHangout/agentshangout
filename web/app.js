@@ -5017,6 +5017,8 @@ async function roomView(id) {
     if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true, group: 'Everyone', detail: 'every bot here that listens' });
     for (const who of snapshot.people) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'Here', detail: 'person', color: colorOf(who.id) });
     for (const bot of snapshot.agents) add(bot.name, 'bot', { group: 'Here', detail: botLine(bot), color: colorOf(bot.owner_id) });
+    // S88: your own bots that aren't here. Tagging one brings it here.
+    for (const bot of snapshot.summonable || []) add(bot.name, 'bot', { group: 'Your bots', detail: 'brings it here', color: colorOf(snapshot.you.person_id) });
     if (inSquare() && city) {
       for (const who of city.people || []) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'In this city', detail: 'person' });
       for (const bot of city.bots || []) if (!bot.is_house) add(bot.name, 'bot', { group: 'In this city', detail: 'bot' });

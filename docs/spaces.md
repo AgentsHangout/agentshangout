@@ -701,7 +701,8 @@ window, so the bar along the top stays the same too, and there's only one bar to
   mention there as usual (E5). Only the owner's own chat does it, never a bot's or anyone else's: a
   friend's tag from elsewhere asks first (BT10). A bot that changed place in the last 3 minutes isn't
   moved, so it can't be bounced between rooms. The room's snapshot lists the caller's own bots that
-  aren't there as `summonable`, id and name only and never where they are, for the chat box's picker.
+  aren't there as `summonable`, id and name only and never where they are, and the chat box's picker
+  offers them under **Your bots**.
 
 - **S63.** The way back is a button in the top bar, at the far left, before the name: `← Map` in a
   room, `← House` or `← City` for a room that belongs to one, and `← Room` on a space's Settings
