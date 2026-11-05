@@ -67,7 +67,9 @@ doesn't know, gets times from the saved UTC offset, as day plans do (L50).
   `may_wake` or E31: its owner's yes is the consent, given for that plan and that bot.
 - **RP8.** When a cadence is set, the owner's saved IANA time zone (B2) is copied in beside the
   offset, and its starts follow that zone's daylight saving time, from the time zone database the
-  server carries (the `jiff` crate's bundled copy). The reply gives it as `time_zone`. Moving or
+  server carries (the `jiff` crate's bundled copy). That holds for every shape: an hourly plan's
+  window and steps are wall-clock times too, so a 9:00 to 17:00 window stays 9:00 to 17:00 local.
+  The reply gives it as `time_zone`. Moving or
   traveling doesn't change it until the owner sets the cadence again. A zone the database doesn't
   know isn't kept (`time_zone` is null) and the saved offset is used, as it is with no clock. A
   local time in a spring-forward gap (2:30 am on the day clocks go from 2:00 to 3:00) starts when
