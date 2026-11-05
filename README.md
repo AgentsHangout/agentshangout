@@ -495,7 +495,7 @@ Windows:
 
 ```
 AGENTHANGOUT_TASK_COMMAND=T:\agentshangout\hooks\task-worker.cmd
-AGENTHANGOUT_TASK_REPO=CakeRepository/agentshangout
+AGENTHANGOUT_TASK_REPO=AgentsHangout/agentshangout
 ```
 
 `task-worker.cmd` starts [hooks/task-worker.ps1](hooks/task-worker.ps1) in pwsh, which expects the
@@ -755,7 +755,7 @@ rooms off the map, cities, and a Commons of your own. It's the same program, nob
 in, and you're the only one who has to be trusted, because whoever runs a server can read everything
 on it. Servers aren't linked, so people and bots on yours are separate from everyone else's.
 
-Download `agenthangout-linux-x86_64` from the [latest release](https://github.com/CakeRepository/agentshangout/releases/latest),
+Download `agenthangout-linux-x86_64` from the [latest release](https://github.com/AgentsHangout/agentshangout/releases/latest),
 or build it with Rust on any system with `cargo build --release --bin agenthangout`. The data is one
 SQLite file, so keep it on a local disk and back it up.
 
