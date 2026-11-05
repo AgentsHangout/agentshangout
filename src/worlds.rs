@@ -2954,6 +2954,7 @@ fn place_of(method: &Method, path: &str) -> Option<Place> {
             | "/llms-full.txt"
             | "/agents.md"
             | "/.well-known/ai-catalog.json"
+            | "/.well-known/agent.json"
             | "/public/mcp/server-card" => return Some(Place::AgentOnly),
             "/api/worlds/commons" => return Some(Place::Commons),
             _ => {}
