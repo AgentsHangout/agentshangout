@@ -1495,10 +1495,18 @@ async fn a_free_hour_lets_a_bot_go_out_but_nothing_takes_it_out() {
     server.post(&town.rover, "/api/doorbell", json!({})).await.ok();
     server.minute();
     assert!(server.out_at(&town.rover).await.is_null(), "a free hour takes nobody out");
-    // It goes itself, and then it's out in its hours.
+    // It goes itself, and a free hour is still not its social hours: no meeting, no calls (L63).
     server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
     let me = server.get(&town.rover, "/api/me").await.ok();
-    assert_eq!(me["routine"]["social_now"], true, "{me}");
+    assert_eq!(me["routine"]["social_now"], false, "{me}");
+    // Another bot is out there with it, in its own social hours.
+    let (_, pip, _) = server.bot_out_all_day("Cy", "Pip").await;
+    server.tool(&pip, "go_out", json!({ "floor_id": town.cafe })).await;
+    let theirs = server.tool(&pip, "inbox", json!({})).await;
+    assert!(!theirs["meet"].is_null(), "Pip, in its social hours, is asked: {theirs}");
+    let inbox = server.tool(&town.rover, "inbox", json!({})).await;
+    assert!(inbox["meet"].is_null(), "no call to meet in a free hour: {inbox}");
+    assert!(inbox["nudge"].is_null(), "nothing to say yet, either: {inbox}");
     assert_eq!(me["routine"]["out_at"], town.cafe.as_str(), "{me}");
 }
 
@@ -1629,4 +1637,155 @@ async fn a_busy_bot_isnt_moved_on_from_a_quiet_place() {
     server.state.db.touch_agent_active(&town.rover_id, now() - 60).unwrap();
     server.wander_at(&town, now());
     assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());
+}
+
+// L63, L59: a routine's window that was never saved as a plan keeps the hours outside it closed.
+#[tokio::test]
+async fn an_old_window_keeps_the_hours_outside_it_closed() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.public_floor("Dee").await;
+    // A window that starts two hours from now, so this hour is outside it.
+    let hour = now().rem_euclid(DAY) / 3600;
+    let (starts, ends) = ((hour + 2) % 24, (hour + 3) % 24);
+    let body = json!({ "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": format!("{starts:02}:00"), "ends": format!("{ends:02}:00"), "public_places": true });
+    server.set_routine(&town.bo.key, &town.rover_id, body).await.ok();
+    let message = server.refused(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    assert!(message.contains("social hours"), "{message}");
+    let read = server.routine_of(&town).await;
+    assert!(text(&read["block_how"]).starts_with("No plan for this hour"), "{read}");
+    // Its owner sends it: outside its hours that's a 12-hour visit (L64), and nothing moves it on.
+    let walk_in = format!("/api/floors/{}/walk-in", town.cafe);
+    let sent = server.post(&town.bo.key, &walk_in, json!({ "agent_id": town.rover_id })).await.ok();
+    assert!((sent["until"].as_i64().unwrap() - (now() + 12 * 3600)).abs() <= 2, "{sent}");
+    assert_eq!(server.routine_of(&town).await["out_why"], "visit");
+    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
+    let arrived = now() - 7200;
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, arrived, until).unwrap());
+    server.state.db.touch_agent_active(&town.rover_id, arrived).unwrap();
+    server.wander_at(&town, now());
+    assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str(), "outside its hours, it stays");
+}
+
+// L64, S22: a bot its owner sends out that may not go out itself stays 12 hours, not forever.
+#[tokio::test]
+async fn a_bot_sent_out_with_public_places_off_stays_twelve_hours() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let walk_in = format!("/api/floors/{}/walk-in", town.cafe);
+    let sent = server.post(&town.bo.key, &walk_in, json!({ "agent_id": town.rover_id })).await.ok();
+    assert!((sent["until"].as_i64().unwrap() - (now() + 12 * 3600)).abs() <= 2, "{sent}");
+    assert_eq!(server.routine_of(&town).await["out_why"], "visit");
+    // With public places on and a free hour, moving on can take it on, so forever has no cap.
+    server.free_all_day(&town).await;
+    let sent = server.post(&town.bo.key, &walk_in, json!({ "agent_id": town.rover_id })).await.ok();
+    assert!(sent["until"].as_i64().unwrap() > now() + 7 * DAY, "{sent}");
+    assert_eq!(server.routine_of(&town).await["out_why"], "none");
+}
+
+// L64: a missing hours is refused, not read as forever.
+#[tokio::test]
+async fn a_stay_limit_needs_its_hours() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let path = format!("/api/agents/{}/stay_limit", town.rover_id);
+    server.put(&town.bo.key, &path, json!({ "hours": 4 })).await.ok();
+    server.put(&town.bo.key, &path, json!({})).await.is(StatusCode::BAD_REQUEST);
+    assert_eq!(server.routine_of(&town).await["stay_limit_hours"], 4, "unchanged");
+}
+
+// L64: nothing that keeps a walk-in going (L45) keeps it past the stay limit.
+#[tokio::test]
+async fn being_busy_doesnt_keep_a_bot_past_its_stay_limit() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.always_out(&town).await;
+    let path = format!("/api/agents/{}/stay_limit", town.rover_id);
+    server.put(&town.bo.key, &path, json!({ "hours": 1 })).await.ok();
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    // An hour less a minute there, and busy: L45 would keep it, but its hour is up.
+    let ends = now() + 60;
+    assert!(server
+        .state
+        .db
+        .set_visit_times(&town.cafe, &town.rover_id, ends - 3600, ends)
+        .unwrap());
+    server.state.db.touch_agent_active(&town.rover_id, now()).unwrap();
+    server.minute();
+    let (_, until) = server.state.db.visit_times(&town.cafe, &town.rover_id).unwrap().unwrap();
+    assert_eq!(until, ends, "not kept past its limit");
+    // Acting there doesn't keep it longer either.
+    server
+        .tool(&town.rover, "say", json!({ "hangout_id": town.cafe, "text": "one more thing" }))
+        .await;
+    let (_, until) = server.state.db.visit_times(&town.cafe, &town.rover_id).unwrap().unwrap();
+    assert_eq!(until, ends);
+}
+
+// L65: a Work hour never moves a bot on, however quiet.
+#[tokio::test]
+async fn a_work_hour_never_moves_a_bot_on() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.public_floor("Dee").await;
+    server.free_all_day(&town).await;
+    server.plan(&town, &[], "work").await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
+    let arrived = now() - 7200;
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, arrived, until).unwrap());
+    server.state.db.set_bot_place(&town.rover_id, &town.cafe, arrived).unwrap();
+    server.state.db.touch_agent_active(&town.rover_id, arrived).unwrap();
+    assert!(server.routine_of(&town).await.get("moves_on_at").is_none());
+    server.wander_at(&town, now());
+    assert_eq!(server.out_at(&town.rover).await, town.cafe.as_str());
+}
+
+// L66: a quiet notice waits in inbox and never rings a wake-up URL.
+#[tokio::test]
+async fn a_quiet_notice_never_rings() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.public_floor("Dee").await;
+    server.free_all_day(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let until = server.state.db.visit_until(&town.cafe, &town.rover_id, now()).unwrap().unwrap();
+    let arrived = now() - 7200;
+    assert!(server.state.db.set_visit_times(&town.cafe, &town.rover_id, arrived, until).unwrap());
+    server.state.db.set_bot_place(&town.rover_id, &town.cafe, now()).unwrap();
+    server.state.db.touch_agent_active(&town.rover_id, arrived).unwrap();
+    server.state.db.set_notify_url(&town.rover_id, Some("http://127.0.0.1:9/wake")).unwrap();
+    let inbox = server.tool(&town.rover, "inbox", json!({})).await;
+    assert_eq!(inbox["nudge"]["event"], "quiet", "{inbox}");
+    server.minute();
+    let slot = now().div_euclid(WANDER_SECS);
+    assert!(
+        server.state.db.note_meet_call(&town.rover_id, slot, &town.cafe, now()).unwrap(),
+        "nothing was rung this half hour"
+    );
+}
+
+// L67: only a guest bot's owner is told why its visit ends when it does.
+#[tokio::test]
+async fn only_its_owner_sees_why_a_guest_bots_visit_ends() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.free_all_day(&town).await;
+    server.tool(&town.rover, "go_out", json!({ "floor_id": town.cafe })).await;
+    let guest_of = |snapshot: &Value| {
+        snapshot["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["id"] == town.rover_id.as_str())
+            .cloned()
+            .unwrap()
+    };
+    let path = format!("/api/hangouts/{}", town.cafe);
+    let mine = guest_of(&server.get(&town.bo.key, &path).await.ok());
+    assert_eq!(mine["visitor_until_why"], "none", "{mine}");
+    let theirs = guest_of(&server.get(&town.ann.key, &path).await.ok());
+    assert!(theirs.get("visitor_until_why").is_none(), "{theirs}");
+    assert!(theirs["visitor_until"].is_number(), "when it leaves is still shown: {theirs}");
 }

@@ -346,12 +346,12 @@ fn follow_to(
     if !public {
         return Ok(Err("it doesn't belong there".into()));
     }
-    let ends = match crate::routines::out_until(state, agent_id, owner_id, now)? {
+    let ends = match crate::routines::may_go_out(state, agent_id, owner_id, now)? {
         Ok(ends) => ends,
         Err(reason) => return Ok(Err(format!("it can't go out now: {reason}"))),
     };
     // L64: until its time out ends or its stay limit, whichever is first.
-    let until = crate::routines::walk_in_until(state, agent_id, to, Some(ends), now)?;
+    let until = crate::routines::walk_in_until(state, agent_id, owner_id, to, Some(ends), now)?;
     let walked = match crate::routines::walk_bot_in(state, agent_id, owner_id, to, until) {
         Ok(walked) => walked,
         Err(error) => return Ok(Err(error.message)),

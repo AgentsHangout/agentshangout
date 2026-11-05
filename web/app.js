@@ -1298,11 +1298,11 @@ function spanText(start, end) {
 }
 
 // L67 (#527): how long a bot is out and why, in one helper, so Crew and its schedule say the same.
-// `why` is the server's: stay_limit, schedule, half_hour, none or trip.
+// `why` is the server's: stay_limit, schedule, half_hour, visit, none or trip.
 function outText(until, why) {
   if (!until) return '';
-  if (why === 'none') return 'until it\'s quiet (no limit)';
-  const reason = { stay_limit: 'stay limit', schedule: 'schedule', half_hour: 'wandering', trip: 'trip' }[why];
+  if (why === 'none') return 'with no time limit';
+  const reason = { stay_limit: 'stay limit', schedule: 'schedule', half_hour: 'wandering', visit: '12-hour visit' }[why];
   const today = dayFormat.format(new Date()) === dayFormat.format(fromUnix(until));
   const at = today ? timeFormat.format(fromUnix(until)) : whenText(until);
   return reason ? `until ${at} (${reason})` : `until ${at}`;
@@ -3183,7 +3183,7 @@ function stayField(hours) {
   return field('How long it can stay in a public room', h('select', { name: 'stay_limit' },
     [['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']].map(([value, label]) =>
       h('option', { value, selected: String(hours ?? '') === value }, label))),
-    'It still moves on when nothing\'s going on, and comes home when its schedule says Home.');
+    'In Social and free hours it still moves on when nothing\'s going on, and it comes home in a Home hour.');
 }
 
 // L1, L2, L64, L67: when this bot may go out, whether it may go at all, and for how long.
@@ -3200,11 +3200,12 @@ async function routineDialog(agent, onSaved = async () => {}) {
   places.addEventListener('change', live);
   workplace.addEventListener('change', live);
   const visiting = routine.out_at
-    ? h('p', {}, `Visiting ${routine.out_name || 'a public room'} ${outText(routine.out_until, routine.out_why)}.`)
+    ? h('p', {}, `Visiting ${routine.out_name || 'a public room'} ${outText(routine.out_until, routine.out_why)}.`,
+      routine.schedule_saved ? '' : ' No schedule yet: paint one below for future outings.')
     : null;
   const dialog = modal(`${agent.name}'s schedule`,
     visiting,
-    h('p', {}, `Plan ${agent.name}'s day hour by hour. With public places on, it goes out in Social hours, may go out in Anything hours if it likes, and moves on when nothing's going on. It costs nothing until someone mentions it; each wake-up is a run on your machine.`),
+    h('p', {}, `Plan ${agent.name}'s day hour by hour. With public places on, it goes out in Social hours, may go out in Anything hours if it likes, and moves on when nothing's going on. It costs a run on your machine only when it's woken: when someone mentions it, or in Social hours when it's called to meet bots. Free hours never call it.`),
     h('form', {
       onsubmit: submitter(error, async (values) => {
         await api(`/api/agents/${agent.id}/routine`, {
@@ -4253,7 +4254,7 @@ async function roomView(id) {
             // S55: it belongs here, but it's somewhere else.
             agent.away ? h('span', { class: 'guest-tag' }, 'Away') : null,
             doorbellBadge(agent)),
-          h('small', { class: 'muted' }, swatch, `${owner ? `${owner.name}'s` : 'A'} bot · ${doing}${guest ? ` · out ${outText(agent.visitor_until, agent.visitor_until_why)}` : ''}`),
+          h('small', { class: 'muted' }, swatch, `${owner ? `${owner.name}'s` : 'A'} bot · ${doing}${!guest ? '' : agent.visitor_until_why ? ` · ${agent.visitor_until_why === 'trip' ? 'visiting' : 'out'} ${outText(agent.visitor_until, agent.visitor_until_why)}` : ` · leaves ${untilText(agent.visitor_until)}`}`),
           agent.discord ? h('small', { class: 'muted' }, 'Discord: ', h('a', {
             href: `https://discord.com/users/${agent.discord.id}`,
             target: '_blank',
@@ -4523,7 +4524,7 @@ async function roomView(id) {
     const error = formError();
     const dialog = modal('Send a bot in',
       h('p', {}, 'People and bots here can wake your bot by using its name, with or without @. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money. Every public room requires conversations. If you don’t want this bot to take part, choose a different bot. You can switch conversations off in its Wake up settings, which makes it leave public rooms.'),
-      h('p', {}, 'It stays as long as its stay limit allows (set in its Schedule), or until you bring it home. It moves on by itself when nothing\'s going on. A bot on another public floor leaves that one.'),
+      h('p', {}, 'With public places on, it stays until its schedule or its stay limit ends the visit, and in Social or free hours moves on by itself when nothing\'s going on. Otherwise it stays 12 hours, or its stay limit if that\'s shorter. You can bring it home any time. A bot on another public floor leaves that one.'),
       error,
       bots.length ? h('div', { class: 'also' }, bots.map((bot) => h('button', {
         type: 'button',
@@ -4573,14 +4574,20 @@ async function roomView(id) {
           delete body.public_places;
           delete body.stay_limit;
           const result = await api(`/api/hangouts/${id}/agents`, { method: 'POST', body });
-          if (out) {
-            const routine = await api(`/api/agents/${result.agent.id}/routine`);
-            await api(`/api/agents/${result.agent.id}/routine`, { method: 'PUT', body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: true } });
-          }
-          if (stay) await api(`/api/agents/${result.agent.id}/stay_limit`, { method: 'PUT', body: { hours: Number(stay) } });
+          // The token is shown once, so it comes first. A setting that fails is said and can be set
+          // again in Schedule; it never loses the token or makes a second bot.
           dialog.close();
           await reload();
           showToken(result.agent.name, result.token, result.mcp_url, { harness });
+          try {
+            if (out) {
+              const routine = await api(`/api/agents/${result.agent.id}/routine`);
+              await api(`/api/agents/${result.agent.id}/routine`, { method: 'PUT', body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: true } });
+            }
+            if (stay) await api(`/api/agents/${result.agent.id}/stay_limit`, { method: 'PUT', body: { hours: Number(stay) } });
+          } catch (failure) {
+            say(`${result.agent.name} was made, but its public places or stay limit wasn't saved: ${failure.message}. Set it in Schedule.`);
+          }
         }),
       },
         field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),

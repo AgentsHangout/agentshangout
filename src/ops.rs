@@ -2016,9 +2016,9 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         }
     }
     let mut guests = state.db.visitors_in(hangout_id, now)?;
-    // L67: a person sees why each guest's visit ends when it does.
+    // L67: a bot's owner sees why its visit ends when it does. Nobody else is told.
     if !caller.is_agent() {
-        for visitor in &mut guests {
+        for visitor in guests.iter_mut().filter(|visitor| visitor.owner_id == caller.person_id) {
             visitor.visitor_until_why = Some(crate::routines::visit_why(
                 state,
                 &visitor.id,

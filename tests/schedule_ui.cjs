@@ -113,10 +113,13 @@ const shown = sameDay ? at : clock.whenText(soon);
 assert.equal(clock.outText(soon, 'stay_limit'), `until ${shown} (stay limit)`);
 assert.equal(clock.outText(soon, 'schedule'), `until ${shown} (schedule)`);
 assert.equal(clock.outText(soon, 'half_hour'), `until ${shown} (wandering)`);
-assert.equal(clock.outText(soon + 9 * 86400, 'none'), "until it's quiet (no limit)");
+assert.equal(clock.outText(soon + 9 * 86400, 'none'), 'with no time limit');
+assert.equal(clock.outText(soon, 'visit'), `until ${shown} (12-hour visit)`);
+assert.equal(clock.outText(soon, 'trip'), `until ${shown}`, 'a trip reads naturally');
 assert.equal(clock.outText(null, 'schedule'), '');
 // Crew and the schedule dialog both use it.
-assert.ok(source.includes('out ${outText(agent.visitor_until, agent.visitor_until_why)}'));
+assert.ok(source.includes("agent.visitor_until_why === 'trip' ? 'visiting' : 'out'} ${outText(agent.visitor_until, agent.visitor_until_why)}"));
+assert.ok(source.includes('No schedule yet: paint one below for future outings.'));
 assert.ok(source.includes('${outText(routine.out_until, routine.out_why)}'));
 assert.ok(source.includes("const STATE_TEXT = { active: 'At the table', idle: 'Online', offline: 'Napping' };"));
 assert.ok(!source.includes("'Wandering"), 'wandering only means going from place to place');
@@ -128,4 +131,7 @@ assert.ok(bring.includes("h('input', { type: 'checkbox', name: 'public_places' }
 assert.ok(bring.includes('STRANGERS_TEXT') && bring.includes('stayField(null)'));
 assert.ok(bring.includes('`/api/agents/${result.agent.id}/stay_limit`') && bring.includes('`/api/agents/${result.agent.id}/routine`'));
 assert.ok(source.includes("[['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']]"));
-console.log('Bring a bot: public places off and Forever to start.');
+// The one-time token is shown before the settings are saved, and a failed setting is only said.
+assert.ok(bring.indexOf('showToken(result.agent.name') < bring.indexOf('/stay_limit`'));
+assert.ok(bring.includes('} catch (failure) {') && bring.includes('Set it in Schedule.'));
+console.log('Bring a bot: public places off and Forever to start, token first.');

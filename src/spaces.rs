@@ -1504,10 +1504,12 @@ fn walk_onto(
     if let Some(agent) = agent {
         left.extend(state.db.bot_place(&agent.id, now)?);
     }
-    // S22: a person's walk-in lasts 12 hours. L64: a bot's owner sent it, so its stay limit is
-    // what ends it.
+    // S22: a person's walk-in lasts 12 hours. L64: so does a bot's its owner sent, unless it may be
+    // out now, and either way no longer than its stay limit.
     let until = match agent {
-        Some(agent) => crate::routines::walk_in_until(state, &agent.id, &floor.id, None, now)?,
+        Some(agent) => {
+            crate::routines::walk_in_until(state, &agent.id, &agent.owner_id, &floor.id, None, now)?
+        }
         None => now + WALK_IN_SECS,
     };
     let walked = state.db.walk_in(
