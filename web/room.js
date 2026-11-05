@@ -4438,6 +4438,15 @@ const USES = {
 
 // Where an item stands, in the room's own pixels. `w` and `h` are cells as it's turned now, and
 // `x` and `y` are its back left corner, as the server has it.
+// I66: with no desk, whatever serves as one: a working bot sits in front of it. The camera uses the
+// same spots (CP9).
+function deskSpotsOf(items) {
+  return items.filter((item) => DESK_KINDS.has(item.kind)).map((item) => {
+    const [ax, ay] = clearOf(item.left + item.wide / 2, item.y + 3);
+    return { x: ax, y: ay - 12, ax, ay, pose: 'sit', facing: 'back', drop: 0 };
+  });
+}
+
 function standing({ id, item, x, y, w = 1, h = 1, facing = 0 }) {
   const wide = w * FLOOR_CELL;
   const deep = h * FLOOR_CELL;
@@ -5284,11 +5293,7 @@ export class Room {
     this.describe();
     fillGrid(this.look.hidden, this.items, tableShift(this.look.table));
     for (const item of this.items) item.spots = spotsOf(item);
-    // I66: with no desk, whatever serves as one: a working bot sits in front of it.
-    this.deskSpots = this.items.filter((item) => DESK_KINDS.has(item.kind)).map((item) => {
-      const [ax, ay] = clearOf(item.left + item.wide / 2, item.y + 3);
-      return { x: ax, y: ay - 12, ax, ay, pose: 'sit', facing: 'back', drop: 0 };
-    });
+    this.deskSpots = deskSpotsOf(this.items);
     for (const bot of this.bots.values()) if (bot.working) this.place(bot, bot.state, 'walk');
     this.clearTheWay();
     // A bot using something goes with it, wherever it went (I38).
