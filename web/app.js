@@ -1860,6 +1860,12 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// S86, #531: in a room, the part of My bots about your own bots, or null for a guest or a bot.
+function yourBotsSection(me, snapshot) {
+  if (me?.kind !== 'person' || snapshot?.guest) return null;
+  return h('section', { class: 'my-bots-each', 'aria-label': 'Each of your bots' });
+}
+
 // #529: what the build catalog draws is the same on every open, but each picture paints a whole room
 // or scans every pixel of an item, and there are some two hundred. So each is drawn once, kept, and
 // copied onto a fresh canvas when a tile needs it, which is a single drawImage.
@@ -3655,7 +3661,7 @@ async function roomView(id) {
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
   const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
-  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open Crew');
+  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open My bots');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
   // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
@@ -5226,7 +5232,7 @@ async function roomView(id) {
     builder.toggle,
     chatToggle.button,
     ...[research?.toggle].filter(Boolean),
-    panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    panels.toggle('crew', 'My bots', { short: 'Bots', className: 'my-bots-button' }),
     ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
@@ -5245,13 +5251,23 @@ async function roomView(id) {
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
-  panels.add('crew', 'Crew', {},
+  // #531: the same My bots view as the map's, opening on who's in this room (what Crew showed), then
+  // each of your bots. Who sees what is unchanged: other people's bots show what they did before,
+  // and a guest gets no section about their own bots here.
+  const roomTrustHost = yourBotsSection(me, snapshot);
+  const roomTrust = roomTrustHost ? trustPanel({ h, api, panels, me, host: roomTrustHost, hostPanel: 'crew', figure: figurePicture,
+    dress: (bot) => dresser.dress?.(bot),
+    schedule: (bot) => routineDialog(bot).catch((failure) => alert(failure.message)),
+    crew: (bot) => go(bot?.configuration_room ? `/h/${encodeURIComponent(bot.configuration_room.id)}#crew` : '/') }) : null;
+  panels.add('crew', 'My bots', { onOpen: () => roomTrust?.load() },
+    h('h3', { class: 'my-bots-here' }, 'In this room'),
     h('div', { class: 'event-actions' }, bringButton, sendButton,
       !snapshot.guest && snapshot.house_id ? h('button', { type: 'button', onclick: houseAi }, 'House AI') : null),
     crewEl,
     crewLegendEl,
     !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
-      && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null);
+      && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null,
+    roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
@@ -7308,9 +7324,9 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
       if (buildSheet.classList.contains('open')) closeBuildSheet();
       else openBuildSheet();
     } },
-    ...(trust ? [{ id: 'trust', label: 'Trust', icon: '✦', action: () => { closeBuildSheet(); trust.open(); } }] : []),
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
-    { id: 'crew', label: 'Crew', icon: '👥', action: () => { closeBuildSheet(); panels.open('around'); } },
+    ...(trust ? [{ id: 'bots', label: 'My bots', icon: '👥', action: () => { closeBuildSheet(); panels.open('bots'); } }] : []),
+    { id: 'around', label: 'Around', icon: '👀', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
   ];
 
@@ -7470,7 +7486,7 @@ function installAppleHigRoom({ frame, panels }) {
     { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
     { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
-    { id: 'guests', label: 'Guests', icon: '👥', action: () => panels.open('crew') },
+    { id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') },
     { id: 'more', label: 'More', icon: '⋯', action: () => panels.open('more') },
   ];
 
@@ -8714,8 +8730,12 @@ async function worldView(id, { home = false } = {}) {
   };
   let botsTab = 'yours';
   let myBots = [];
-  const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
+  // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
+  // bot's connections, monitoring and usage (what Trust & bots showed), in one place.
+  const botsBody = h('div', { class: 'my-bots-list' });
+  const trustHost = me?.kind === 'person' ? h('section', { class: 'my-bots-each', 'aria-label': 'Each bot' }) : null;
+  panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
@@ -8893,7 +8913,7 @@ async function worldView(id, { home = false } = {}) {
     guide?.toggle,
     squareButton,
     research?.toggle,
-    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
+    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     creditCoin(me, account),
     needs ? needs.toggle : null,
@@ -8909,7 +8929,6 @@ async function worldView(id, { home = false } = {}) {
     h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
-    me?.kind === 'person' ? moreRow('bots', 'My bots', 'mid') : null,
     moreRow('rooms', placesLabel, 'sec'),
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
@@ -9026,12 +9045,6 @@ async function worldView(id, { home = false } = {}) {
     toolsToggle.addEventListener('click', () => showTools(!shown));
     viewGroup.append(toolsToggle);
     showTools(shown);
-  }
-  if (trust) {
-    trust.toggle.classList.add('wd-btn', 'wd-view-btn', 'trust-launcher');
-    trust.toggle.replaceChildren(h('span', { class: 'wd-glyph', 'aria-hidden': 'true' }, '✦'), h('span', { class: 'wd-btn-label' }, 'Trust'));
-    trust.toggle.title = 'Trust & bots';
-    viewGroup.append(trust.toggle);
   }
   // The tools float over the map on a wide screen, and sit in a dock along the bottom on a narrow one.
   frame.root.insertBefore(h('div', { class: 'game-palette' }, frame.tools, viewGroup), well);

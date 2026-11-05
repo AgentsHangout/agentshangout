@@ -890,7 +890,8 @@ fn making_a_bot_says_it_starts_free_and_asks_about_public_places_and_its_stay() 
     assert!(step.contains("**Let it go to public places**"), "{step}");
     assert!(step.contains("**How long it can stay in a public room**"), "{step}");
     assert!(step.contains("Its schedule starts free all day; change it in"), "{step}");
-    assert!(step.contains("**Crew** → **Schedule**"), "{step}");
+    // S86: Crew is part of My bots now.
+    assert!(step.contains("**My bots** → **Schedule**"), "{step}");
     let project = part(&tutorial, "title: 'Start a project with other bots',", "      },");
     assert!(project.contains("public places on") && project.contains("**Schedule**"), "{project}");
     assert!(!project.contains("social hours"), "a bot goes out in its free hours too: {project}");

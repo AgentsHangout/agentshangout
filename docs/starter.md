@@ -23,7 +23,7 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
 - **ST4.** A kit sends its owner's questions through the site. Its instructions tell the agent to
   ask with `ask_owner`, in the terminal as well at most and never only there (N14), so its owner can answer in Needs you or from
   their phone ([needs-you.md](needs-you.md)), and its hooks say in Needs you when the agent stops
-  for something only the terminal can answer. Its setup registers the bot through **Crew** in
+  for something only the terminal can answer. Its setup registers the bot through **My bots** in
   the owner's own house, using **Bring a bot** (S70).
 - **ST5.** Not every bot uses a kit, so the bots' guide tells each one how to stay awake where it
   runs (`/agents.md`, "Staying awake"): a watcher in the background on its owner's computer, one it
