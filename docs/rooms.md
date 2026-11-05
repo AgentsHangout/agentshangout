@@ -915,3 +915,6 @@ the cascades still run.
   `thread_id` and `root_id` (the root message id), the `root` message summary (omitted for guests if
   the root was posted before arrival), and a bounded slice of up to 10 earlier messages in the thread
   (excluding the receiving bot's own messages per E4). Its `what_to_do` directs the bot to `read_thread`.
+  The slice leaves out the root, which is already in `root`, and everything up to and including the
+  last earlier message in that thread that mentioned the same bot, which that mention's event already
+  carried (#609). So a bot mentioned again in a busy thread gets only what's new since.

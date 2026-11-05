@@ -453,7 +453,8 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
         .collect()
 }
 
-/// I105: bounded slice of up to 10 earlier messages in a thread before a mention.
+/// I105: bounded slice of up to 10 earlier messages in a thread before a mention, leaving out the
+/// root and what this bot's last mention in the thread already carried (#609).
 const THREAD_MENTION_CONTEXT: i64 = 10;
 
 fn thread_mention_context(

@@ -7769,6 +7769,7 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
     let ctx_ids: Vec<i64> = ctx.iter().map(|m| m["message_id"].as_i64().unwrap()).collect();
     assert!(ctx_ids.contains(&c_id));
     assert!(!ctx_ids.contains(&b_id), "Rover's own line is excluded under E4");
+    assert!(!ctx_ids.contains(&a_id), "#609: the root is in `root`, not again in context");
     assert!(d_mention["data"]["what_to_do"].as_str().unwrap().contains("read_thread"));
 
     // I104: inbox has both mentions before reading thread
@@ -9277,6 +9278,61 @@ async fn clearing_answered_thread_mentions_uses_indexes() {
         .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::ANSWERED_THREAD_MENTIONS))
         .unwrap()
         .query_map(rusqlite::params![0, "bot", "room"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
+    assert!(scans.is_empty(), "a full scan: {plan:?}");
+}
+
+// I105, #609: a bot mentioned twice in one thread gets, the second time, only what came after its
+// last mention: the root, the first mention and the lines before it were in the first event.
+#[tokio::test]
+async fn a_second_mention_in_a_thread_carries_only_what_is_new() {
+    let w = waiting_world().await;
+    let say = |text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(to) = reply_to {
+            args["reply_to"] = json!(to);
+        }
+        let token = w.pip.token.clone();
+        let server = &w.server;
+        async move {
+            let said = server.tool(&token, "say", args).await;
+            said["structuredContent"]["message_id"].as_i64().expect("posted")
+        }
+    };
+    let root = say("A long first post about the plan", None).await;
+    let before = say("an early reply", Some(root)).await;
+    let first = say("@Scout what do you think?", Some(root)).await;
+    let after = say("a reply after the first mention", Some(root)).await;
+    let later = say("and another", Some(root)).await;
+    let second = say("@Scout and now?", Some(root)).await;
+
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap().clone();
+    let context_of = |id: i64| -> Vec<i64> {
+        let event = events
+            .iter()
+            .find(|e| e["name"] == "mention" && e["data"]["message_id"] == id)
+            .unwrap_or_else(|| panic!("a mention event for {id}"));
+        assert_eq!(event["data"]["root"]["message_id"], root, "the root is still sent as root");
+        let lines = event["data"]["context"].as_array().unwrap();
+        lines.iter().map(|line| line["message_id"].as_i64().unwrap()).collect()
+    };
+    assert_eq!(context_of(first), [before], "the root isn't repeated in context");
+    assert_eq!(context_of(second), [after, later], "nothing the first mention already carried");
+}
+
+// #609: finding a bot's last mention in a thread uses indexes, so it doesn't scan every mention.
+#[tokio::test]
+async fn the_last_mention_in_a_thread_is_found_by_index() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::LAST_THREAD_MENTION))
+        .unwrap()
+        .query_map(rusqlite::params![1, 2, 0, "bot"], |r| r.get::<_, String>(3))
         .unwrap()
         .map(Result::unwrap)
         .collect();
