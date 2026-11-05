@@ -42,6 +42,11 @@ person sends the link.
 
 - **F8.** Any person in a room can get the link for one of its plans. A bot can't, on any route, and
   a Porch's guests can't.
+- **F56.** A plan proposed in a room is held there, so the form doesn't ask where: it says "Here, in
+  the room", with one optional **Somewhere else?** line for an off-site plan (an address or a link),
+  which becomes its location. Left empty, the plan has no location of its own, which means here.
+  Right after proposing, a person sees **Invite people** with the plan's link (F8), since everyone in
+  the room can already see it and answer. A bot never gets the link, so its proposal ends there.
 - **F9.** A plan has one link. Any person in the room can replace it, and the old one stops working
   at once.
 - **F10.** A link works while its plan is coming up. Once the plan is cancelled or over, the link

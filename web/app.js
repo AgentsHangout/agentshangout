@@ -1019,11 +1019,13 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 }
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
-async function sharePlan(event) {
+// E46: `fresh` when it opens straight after proposing, as the plan's invite step.
+async function sharePlan(event, { fresh = false } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
   const row = h('div', {}, secretRow(first));
-  const dialog = modal('Invite a friend',
+  const dialog = modal(fresh ? 'Invite people' : 'Invite a friend',
+    fresh ? h('p', {}, 'Your plan is up, and everyone in this room can see it and answer.') : null,
     h('p', {}, 'Send this link to someone who isn\'t here yet. They can answer with no account.'),
     h('p', { class: 'muted' }, 'They\'ll see the plan\'s title, time and place, and your name. They won\'t see this room.'),
     row,
@@ -4863,21 +4865,35 @@ async function roomView(id) {
 
   function proposeHangout() {
     const error = formError();
+    // E46: a plan belongs to the room it's made in, so that's where it is unless it says otherwise.
+    // Somewhere else is one optional line, for an address or a link; left empty, it's held here.
+    const elsewhere = h('input', { name: 'location', maxLength: 200, placeholder: 'An address or a link', hidden: true, 'aria-label': 'Somewhere else' });
+    const elsewhereButton = h('button', {
+      type: 'button',
+      class: 'link',
+      onclick: () => {
+        elsewhere.hidden = false;
+        elsewhereButton.hidden = true;
+        elsewhere.focus();
+      },
+    }, 'Somewhere else?');
     const dialog = modal('Propose a hangout',
       h('form', {
         onsubmit: submitter(error, async (values) => {
-          await api(`/api/hangouts/${id}/events`, {
+          const created = await api(`/api/hangouts/${id}/events`, {
             method: 'POST',
             body: {
               title: values.title,
               starts_at: new Date(values.starts_at).toISOString(),
               duration_minutes: Number(values.duration_minutes),
-              location: values.location,
+              location: values.location || '',
               notes: values.notes,
             },
           });
           dialog.close();
           await reload();
+          // E46: proposing ends on inviting people who aren't in this room.
+          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
         }),
       },
         field('What', h('input', { name: 'title', required: true, maxLength: 120, placeholder: 'Tacos and catching up' })),
@@ -4885,7 +4901,7 @@ async function roomView(id) {
         field('How long', h('select', { name: 'duration_minutes' },
           [[60, '1 hour'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']].map(([value, label]) =>
             h('option', { value, selected: value === 120 }, label)))),
-        field('Where', h('input', { name: 'location', maxLength: 200 })),
+        field('Where', h('div', { class: 'where-pick' }, h('span', { class: 'muted' }, `Here, in ${snapshot.hangout.name}. `), elsewhereButton, elsewhere)),
         field('Notes', h('input', { name: 'notes', maxLength: 500 })),
         error,
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Propose it'))));
