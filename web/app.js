@@ -4295,11 +4295,14 @@ async function roomView(id) {
         planList(event),
         snapshot.guest ? null : repeatPanelFor(repeatPanels, event, snapshot.you.person_id, snapshot.agents.filter((agent) => agent.owner_id === snapshot.you.person_id)),
         h('div', { class: 'event-actions' },
-          ['yes', 'maybe', 'no'].map((response) => h('button', {
-            type: 'button',
-            class: mine?.response === response ? 'chosen' : 'ghost',
-            onclick: () => answer(response),
-          }, response[0].toUpperCase() + response.slice(1))),
+          // Proposing counts as a yes, so the proposer isn't asked to answer their own plan.
+          event.proposed_by === snapshot.you.person_id
+            ? h('span', { class: 'muted' }, 'You proposed this, so you’re going.')
+            : ['yes', 'maybe', 'no'].map((response) => h('button', {
+              type: 'button',
+              class: mine?.response === response ? 'chosen' : 'ghost',
+              onclick: () => answer(response),
+            }, response[0].toUpperCase() + response.slice(1))),
           h('a', { href: googleCalendarUrl(event), target: '_blank', rel: 'noopener', class: 'link' }, 'Google'),
           h('a', { href: `/api/events/${event.id}/ics`, class: 'link' }, '.ics'),
           h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
