@@ -561,3 +561,59 @@ async fn the_trust_view_says_what_its_people_and_bots_wear() {
         assert!(view["bots"].as_array().unwrap().iter().any(|b| &b["id"] == id), "{id}");
     }
 }
+
+// BT10: a bot that lets friends wake it can be tagged from a room it isn't in, and learns only who
+// tagged it and the room's name.
+#[tokio::test]
+async fn a_friend_can_tag_a_bot_from_a_room_it_isnt_in() {
+    let f = Fixture::new().await;
+    let db = &f.state.db;
+    db.create_hangout("den", "Bob's Den", "den-code", "bob", now()).unwrap();
+    db.add_agent_to_room("den", "b").unwrap();
+    db.add_member("den", "eve", now()).unwrap();
+    let bob = f.state.authenticate(&auth::hash_secret("bob")).unwrap().unwrap();
+    let eve = f.state.authenticate(&auth::hash_secret("eve")).unwrap().unwrap();
+    let tags = || db.absent_tags_since("a", now() - 60, 10).unwrap();
+
+    // On the default, existing participants, a tag from elsewhere reaches nobody.
+    ops::post_message(&f.state, &bob, "den", "chat", "@a are you around?").unwrap();
+    assert!(tags().is_empty());
+
+    // With friends, only an accepted friend reaches it: Bob does, Eve doesn't.
+    f.config("friends");
+    db.request_explicit_friend("person", "alice", "bob", now()).unwrap();
+    db.accept_explicit_friend("person", "alice", "bob").unwrap();
+    ops::post_message(&f.state, &eve, "den", "chat", "@a hi from eve").unwrap();
+    assert!(tags().is_empty());
+    ops::post_message(&f.state, &bob, "den", "chat", "@a secret plans inside").unwrap();
+    let listed = tags();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!((listed[0].0.as_str(), listed[0].1.as_str()), ("bob", "Bob's Den"));
+    // Who and the room's name, never the words, and it's still not in the room.
+    let events = db.list_bot_events("a", 0, Some("mention"), None, 0, false, 50).unwrap();
+    let event = events.iter().find(|e| e.name == "mention").expect("a mention event");
+    let data = &event.data;
+    assert!(event.hangout_id.is_none(), "{data}");
+    assert!(data.contains("elsewhere") && data.contains("Bob's Den"), "{data}");
+    assert!(!data.contains("secret plans") && !data.contains("\"den\""), "{data}");
+    assert!(!db.belongs_to_room("den", "a").unwrap());
+
+    // A second tag from Bob within 3 minutes is listed but doesn't ring again (E22, E31), while
+    // someone else's still rings, up to 20 an hour.
+    ops::post_message(&f.state, &bob, "den", "chat", "@a again").unwrap();
+    assert_eq!(tags().len(), 2);
+    let later = now() + 600;
+    assert!(db.add_absent_tag("e", "Bob", "bob", "Den", later).unwrap().1);
+    assert!(!db.add_absent_tag("e", "Bob", "bob", "Den", later + 60).unwrap().1);
+    assert!(db.add_absent_tag("e", "Bob", "bob", "Den", later + 181).unwrap().1);
+    for n in 0..18 {
+        assert!(db.add_absent_tag("e", "X", &format!("x{n}"), "Den", later + 200).unwrap().1);
+    }
+    assert!(!db.add_absent_tag("e", "Y", "y", "Den", later + 300).unwrap().1, "past 20 an hour");
+
+    // Only me (BT4) still means only its owner: Bob's own bot is a friend's, and doesn't reach it.
+    db.set_wakes_only_for_owner("a", true).unwrap();
+    let b = f.state.authenticate(&auth::hash_secret("b")).unwrap().unwrap();
+    ops::post_message(&f.state, &b, "den", "chat", "@a from b").unwrap();
+    assert_eq!(tags().len(), 2);
+}

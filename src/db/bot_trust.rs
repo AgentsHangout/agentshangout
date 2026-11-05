@@ -51,6 +51,71 @@ impl Db {
         .map(|v| v.unwrap_or_default())
     }
 
+    /// BT10: the bots whose wake setting names who may reach them (friends or selected people and
+    /// bots), the only ones a tag from a room they aren't in can reach.
+    pub fn bots_reachable_elsewhere(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id FROM bot_trust_settings
+              WHERE json_extract(settings, '$.wake.mode') IN ('friends', 'selected')",
+        )?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// BT10: notes a tag from a room the bot isn't in, and whether it may ring: not when this
+    /// tagger rang it in the last 3 minutes, or when 20 rang it in the last hour (E22, E31).
+    /// Returns the tag's id and whether it rings.
+    pub fn add_absent_tag(
+        &self,
+        agent_id: &str,
+        tagger: &str,
+        tagger_id: &str,
+        room: &str,
+        at: i64,
+    ) -> rusqlite::Result<(i64, bool)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let held: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM absent_tags
+              WHERE agent_id = ?1 AND tagger_id = ?2 AND rung = 1 AND at > ?3)",
+            params![agent_id, tagger_id, at - 180],
+            |r| r.get(0),
+        )?;
+        let hour: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM absent_tags WHERE agent_id = ?1 AND rung = 1 AND at > ?2",
+            params![agent_id, at - 3600],
+            |r| r.get(0),
+        )?;
+        let ring = !held && hour < 20;
+        tx.execute(
+            "INSERT INTO absent_tags (agent_id, tagger, tagger_id, room, at, rung)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![agent_id, tagger, tagger_id, room, at, ring],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok((id, ring))
+    }
+
+    /// BT10: a bot's tags from rooms it isn't in since `since`, newest first: who and which room.
+    pub fn absent_tags_since(
+        &self,
+        agent_id: &str,
+        since: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<(String, String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT tagger, room, at FROM absent_tags WHERE agent_id = ?1 AND at >= ?2
+              ORDER BY at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![agent_id, since, limit], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn save_bot_trust(&self, agent_id: &str, trust: &Trust) -> rusqlite::Result<()> {
         self.conn().execute("INSERT INTO bot_trust_settings(agent_id,settings) VALUES(?1,?2) ON CONFLICT(agent_id) DO UPDATE SET settings=excluded.settings", params![agent_id, serde_json::to_string(trust).expect("serializable trust")])?;
         Ok(())

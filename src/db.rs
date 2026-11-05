@@ -1791,6 +1791,18 @@ CREATE TABLE IF NOT EXISTS owner_answers_seen (
     question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
     seen_at      INTEGER NOT NULL
 );
+-- BT10: a bot named in a room it isn't in, by someone its wake setting lets reach it (#460). Who
+-- tagged it and the room's name, never the words, and whether it was rung.
+CREATE TABLE IF NOT EXISTS absent_tags (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    tagger      TEXT NOT NULL,
+    tagger_id   TEXT NOT NULL,
+    room        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    rung        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS absent_tags_by_bot ON absent_tags (agent_id, at);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.

@@ -258,6 +258,57 @@ pub fn may_wake(state: &AppState, bot: &Agent, message: &Message) -> ApiResult<b
     allowed(state, bot, &state.db.bot_trust(&bot.id)?.wake, person, message.agent_id.as_deref())
 }
 
+/// BT10 (#460): a bot named in this message that isn't in its room, and whose wake setting
+/// (friends or selected) lets the speaker reach it, is told who tagged it and the room's name, and
+/// nothing else: never the words, and it gets no way into the room. `here` are the bots in the room,
+/// which the room's own mentions handle. The ring takes E22/E31's holds and a pause stops it.
+pub fn note_absent_tags(
+    state: &AppState,
+    message: &Message,
+    here: &std::collections::HashSet<String>,
+) -> ApiResult<()> {
+    if message.kind != "chat" {
+        return Ok(());
+    }
+    let at = message.created_at;
+    let mut room = None;
+    for id in state.db.bots_reachable_elsewhere()? {
+        if here.contains(&id) || message.agent_id.as_deref() == Some(id.as_str()) {
+            continue;
+        }
+        let Some(bot) = state.db.agent(&id, at)? else { continue };
+        if !crate::doorbell::mentions(&message.body, &bot.name) || !may_wake(state, &bot, message)?
+        {
+            continue;
+        }
+        // Only me (BT4) still means only its owner.
+        let from_owner = message.agent_id.is_none()
+            && message.person_id.as_deref() == Some(bot.owner_id.as_str());
+        if state.db.wakes_only_for_owner(&bot.id)? && !from_owner {
+            continue;
+        }
+        let (tagger, tagger_id) = match (&message.agent_id, &message.person_id) {
+            (Some(agent), _) => {
+                (state.db.agent(agent, at)?.map(|a| a.name).unwrap_or_default(), agent.clone())
+            }
+            (None, Some(person)) => {
+                (state.db.person(person)?.map(|p| p.name).unwrap_or_default(), person.clone())
+            }
+            (None, None) => continue,
+        };
+        if room.is_none() {
+            room = Some(state.db.hangout(&message.hangout_id)?.map(|h| h.name).unwrap_or_default());
+        }
+        let room = room.as_deref().unwrap_or_default();
+        let (tag, ring) = state.db.add_absent_tag(&bot.id, &tagger, &tagger_id, room, at)?;
+        crate::events::note_absent_tag(state, &bot.id, tag, &tagger, room);
+        if ring {
+            crate::notify::send_absent_tag(state, &bot.id, &tagger);
+        }
+    }
+    Ok(())
+}
+
 /// MU11: whether `bot` lets this other bot wake it, as a mention from that bot would be judged.
 pub fn may_wake_from(state: &AppState, bot: &Agent, sender: &Agent) -> ApiResult<bool> {
     allowed(state, bot, &state.db.bot_trust(&bot.id)?.wake, &sender.owner_id, Some(&sender.id))

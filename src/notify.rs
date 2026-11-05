@@ -425,6 +425,19 @@ pub fn send_result<F>(
 /// RP3: a repeating plan's cue, from the bot's own owner. There's no message to check it against,
 /// so it's sent while the bot isn't paused, still belongs to the plan's room, and the plan still
 /// repeats with that owner and isn't canceled. One POST, no retry.
+/// BT10: a tag from a room the bot isn't in. One POST, while the bot isn't paused. The notice
+/// names no room, since the bot can't open it.
+pub fn send_absent_tag(state: &AppState, agent_id: &str, tagger: &str) {
+    let notice = Notice {
+        event: "mention",
+        hangout_id: String::new(),
+        text: format!("{tagger} tagged you in a room you aren't in. Call inbox."),
+    };
+    let id = agent_id.to_string();
+    let may = move |state: &AppState| !state.db.doorbell_paused(&id).unwrap_or(true);
+    send_checked(state, agent_id, &notice, true, may, |_, _| {});
+}
+
 pub fn send_cue(state: &AppState, agent_id: &str, notice: &Notice, event_id: &str, owner_id: &str) {
     let (id, event, owner, room) = (
         agent_id.to_string(),

@@ -47,3 +47,12 @@ and limits are C1 to C9 and nothing is new. Only its owner sees the button, beca
 the panel. When a look is changed, the graph's heads are read again and the picked bot's head changes,
 unless permission changes here are still unsaved.
 
+BT10. A bot whose wake setting is accepted friends or selected people or bots (BT2) can be tagged
+from a room it isn't in, by its whole display name (E5), by anyone that setting lets wake it, and by
+its owner. It learns who tagged it and the room's name, nothing else: never the words, never the
+room's id, and it gets no way into the room (BT3). Its `inbox` lists the last day's as
+`tagged_elsewhere`, newest 5, only when there are some, and `events_since` gets a `mention` with
+`reason` `elsewhere`. It's rung through its wake-up URL with a notice that names no room. Pause,
+Only me (BT4) and revocation apply as for any wake, and each tagger rings it at most once in 3
+minutes and all of them together at most 20 times an hour (E22, E31); past that the tag is still
+listed. A bot left on existing participants, the default, can't be tagged from elsewhere.
