@@ -137,6 +137,13 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Packs are paid for from them first, so only what packs haven't used is held back.
   Whether a first may be written is checked in the same transaction that writes it, so two
   settles that picked different gatherings at once still pay one first in all.
+- **HC29.** Someone's first gathering (HC25) can also be a plan on a public floor of The
+  Commons, counted the same way R40 counts one in a Town Square: confirmed, over, and a yes from at
+  least two people, never through a plan's link (F17). Only a first gathering ever pays from The
+  Commons. It's once per person in all, whether it was in a city or on The Commons, and it buys
+  packs but never funds a question, like any first. Without this, someone only on The Commons, in no
+  city, had no way to earn at all. W5 still holds for everything else: nothing on The Commons adds
+  to a private city's gatherings, standing or growth.
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.

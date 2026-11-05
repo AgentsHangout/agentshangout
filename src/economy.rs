@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24 and HC25 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -132,6 +132,17 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             }
             if from.is_some_and(|from| source.at >= from) {
                 sources.push((city.id.clone(), source));
+            }
+        }
+    }
+    // HC29: someone only on The Commons, with no city, can have a first gathering there too.
+    if first_gathering_open {
+        for (hangout_id, source) in db.commons_gatherings(person_id, now)? {
+            if first_gathering
+                .as_ref()
+                .is_none_or(|(_, first)| (source.at, &source.source) < (first.at, &first.source))
+            {
+                first_gathering = Some((hangout_id, source));
             }
         }
     }
