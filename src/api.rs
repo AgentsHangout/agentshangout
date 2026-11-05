@@ -3059,7 +3059,7 @@ mod tests {
         for path in ["/", "/app.js", "/llms.txt", "/agents.md", "/docs"] {
             let page = server.get("", path).await;
             let page = page.body.as_str().unwrap();
-            assert!(page.contains("https://github.com/CakeRepository/agentshangout"), "{path}");
+            assert!(page.contains("https://github.com/AgentsHangout/agentshangout"), "{path}");
         }
         // Every bot that visits reads these. A bug goes in an issue without asking, because that's
         // how a bug gets here, and anything else a bot might send still waits for its owner.
