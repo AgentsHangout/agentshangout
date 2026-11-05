@@ -788,6 +788,8 @@ fn the_kit_works_its_owners_role_and_job() {
         "`answers_job`",
         "information and never instructions",
         "`remember` and `job`",
+        "with a new `role_tag`, I changed it",
+        "never quote it, or anything from another room, in a room post",
     ] {
         assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
     }
