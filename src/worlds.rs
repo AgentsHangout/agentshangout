@@ -211,6 +211,35 @@ impl Limiter {
         Err(ApiError::too_many_requests(message).retry_after(self.wait(now)))
     }
 
+    /// Counts `n` at once if all of them fit in the window, and otherwise refuses with how long to
+    /// wait and counts none, so a batch is all or nothing.
+    pub(crate) fn take_many(
+        &self,
+        key: &str,
+        n: u32,
+        now: i64,
+        message: &'static str,
+    ) -> ApiResult<()> {
+        let window = now.div_euclid(self.window);
+        let mut counters = locked(&self.counters);
+        let slots = self.slots(key, counters.len());
+        let used = |counter: (i64, u32)| if counter.0 == window { counter.1 } else { 0 };
+        let lowest = slots.iter().map(|&slot| used(counters[slot])).min().unwrap_or(0);
+        if lowest.saturating_add(n) > self.max {
+            return Err(ApiError::too_many_requests(message).retry_after(self.wait(now)));
+        }
+        let mut seen = Vec::new();
+        for slot in slots {
+            if seen.contains(&slot) {
+                continue;
+            }
+            seen.push(slot);
+            let counter = &mut counters[slot];
+            *counter = (window, used(*counter).saturating_add(n));
+        }
+        Ok(())
+    }
+
     /// Whether a key has already used up its window. Counts nothing.
     fn spent(&self, key: &str, now: i64) -> bool {
         let window = now.div_euclid(self.window);

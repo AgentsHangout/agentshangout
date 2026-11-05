@@ -1091,7 +1091,16 @@ pub fn rsvp(
     note: Option<&str>,
 ) -> ApiResult<Event> {
     let event = state.db.event(event_id)?.ok_or_else(ApiError::not_found)?;
-    no_guests(state, caller, &event.hangout_id, "answer a plan")?;
+    // F59: a person invited to this plan answers it from outside the room, without a note, since
+    // a note is words for a room they can't read. A bot never answers for an invitee (F15).
+    let invitee = !caller.is_agent()
+        && !state.db.is_member(&event.hangout_id, &caller.person_id)?
+        && state.db.is_plan_invitee(&event.id, &caller.person_id)?;
+    if !invitee {
+        no_guests(state, caller, &event.hangout_id, "answer a plan")?;
+    } else if note.is_some_and(|note| !note.trim().is_empty()) {
+        return Err(ApiError::bad_request("an invitee answers without a note"));
+    }
     if !matches!(response, "yes" | "maybe" | "no") {
         return Err(ApiError::bad_request(
             "response must be yes, maybe or no: send one of those three",

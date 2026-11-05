@@ -120,6 +120,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/events/{id}/ics", get(event_ics))
         .route("/api/events/{id}/invite", post(plan_link))
         .route("/api/events/{id}/invite/rotate", post(replace_plan_link))
+        .route("/api/events/{id}/invitees", post(invite_people))
         .route("/api/plan-invites/{code}", get(plan_invite_preview))
         .route("/api/plan-invites/{code}/answer", post(answer_plan_invite))
         .route("/api/plan-invites/{code}/plan.ics", get(plan_invite_ics))
@@ -1513,6 +1514,22 @@ async fn replace_plan_link(
     Ok(Json(json!({ "invite_url": referrals::replace_plan_link(&state, &caller, &id)? })))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvitePeople {
+    person_ids: Vec<String>,
+}
+
+/// F57: invites friends to a plan by name.
+async fn invite_people(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<InvitePeople>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(referrals::invite_people(&state, &caller, &id, &body.person_ids)?))
+}
+
 async fn plan_invite_preview(
     State(state): State<AppState>,
     MaybeCaller(caller): MaybeCaller,
@@ -1846,6 +1863,13 @@ async fn rsvp(
     Json(body): Json<RsvpBody>,
 ) -> ApiResult<Json<Value>> {
     let event = ops::rsvp(&state, &caller, &id, &body.response, body.note.as_deref())?;
+    // F59: an invitee answering from outside the room gets back only what a link shows, never the
+    // room, its notes or who else answered.
+    if !caller.is_agent() && !state.db.is_member(&event.hangout_id, &caller.person_id)? {
+        let mut plan = referrals::plan_preview_json(&event);
+        plan["your_response"] = json!(body.response);
+        return Ok(Json(plan));
+    }
     Ok(Json(json!(event)))
 }
 

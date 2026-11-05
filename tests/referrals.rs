@@ -984,3 +984,136 @@ async fn turning_someone_out_leaves_their_answers_to_plans_that_have_started() {
     assert!(db.rsvp("over-plan-5512", &bo.id).unwrap().is_some(), "that rewrote what happened");
     assert!(db.rsvp("under-way-5512", &bo.id).unwrap().is_some(), "that rewrote what's happening");
 }
+
+// F57 to F59, F61: a friend from another room is invited to a plan by name. They're told in Needs you
+// with no room, answer from outside it, and the room sees them. Anyone who isn't a friend is the
+// same 400; someone in the room, or invited already, is said back and nothing changes.
+#[tokio::test]
+async fn a_friend_is_invited_to_a_plan_by_name_and_answers_from_needs_you() {
+    let server = Server::start().await;
+    let here = server.room("Ann").await;
+    let ann = here.ann.clone();
+    let dee = server.join(&here.invite, "Dee").await;
+    let plan = server.plan(&ann, &here.id, 2).await;
+    // Bo and Ann share Bo's room, so they're friends. Cy shares nothing with Ann.
+    let bos = server.room("Bo").await;
+    let bo = bos.ann.clone();
+    server.post(&ann.key, &format!("/api/invites/{}/join", bos.invite), json!({})).await.ok();
+    let cy = server.room("Cy").await.ann;
+    let path = format!("/api/events/{plan}/invitees");
+    let at = &server;
+    let invite = |who: &Who, ids: Vec<&str>| {
+        let (key, path) = (who.key.clone(), path.clone());
+        let body = json!({ "person_ids": ids });
+        async move { at.post(&key, &path, body).await }
+    };
+
+    // Not a friend, and nobody at all, are the same 400, and nobody is invited.
+    let stranger = invite(&ann, vec![&cy.id]).await;
+    let nobody = invite(&ann, vec!["no-such-person"]).await;
+    assert_eq!(stranger.status, StatusCode::BAD_REQUEST, "{}", stranger.show());
+    assert_eq!(stranger.body, nobody.body);
+    assert_eq!(invite(&ann, vec![&bo.id, &cy.id]).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+
+    // F57: only a person invites; their bot can't.
+    let scout = server.bot(&ann, &here.id).await;
+    let by_bot = server.post(&scout, &path, json!({ "person_ids": [bo.id] })).await;
+    assert_eq!(by_bot.status, StatusCode::FORBIDDEN, "{}", by_bot.show());
+
+    let sent = invite(&ann, vec![&bo.id, &dee.id]).await.ok();
+    assert_eq!(sent["invited"], json!([{ "id": bo.id, "name": "Bo" }]));
+    assert_eq!(sent["in_room"], json!([{ "id": dee.id, "name": "Dee" }]));
+    let again = invite(&ann, vec![&bo.id]).await.ok();
+    assert_eq!(again["already"], json!([{ "id": bo.id, "name": "Bo" }]));
+    assert_eq!(again["invited"], json!([]));
+
+    // F58: Bo's Needs you has it, with who invited him and nothing from the room.
+    let needs = server.get(&bo.key, "/api/needs-you").await.ok();
+    let listed = &needs["invited_plans"];
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{needs}");
+    assert_eq!(listed[0]["title"], "Tacos");
+    assert_eq!(listed[0]["invited_by"], "Ann");
+    assert_eq!(listed[0]["location"], "Veracruz");
+    let shown = listed.to_string();
+    for hidden in [ROOM_NAME, PLAN_NOTES, here.id.as_str(), "rsvps", "hangout_id"] {
+        assert!(!shown.contains(hidden), "{hidden} leaked: {shown}");
+    }
+    // F61: the room sees him on the plan as invited.
+    let view = server.room_view(&ann, &here.id).await;
+    assert!(view["invitees"].to_string().contains("\"Bo\""), "{}", view["invitees"]);
+
+    // F59: he answers from outside the room, without a note; Cy, not invited, can't answer.
+    let rsvp = format!("/api/events/{plan}/rsvp");
+    let noted = server.post(&bo.key, &rsvp, json!({ "response": "yes", "note": "hi" })).await;
+    assert_eq!(noted.status, StatusCode::BAD_REQUEST, "{}", noted.show());
+    assert!(server
+        .post(&cy.key, &rsvp, json!({ "response": "yes" }))
+        .await
+        .status
+        .is_client_error());
+    let answered = server.post(&bo.key, &rsvp, json!({ "response": "yes" })).await.ok();
+    assert_eq!(answered["your_response"], "yes");
+    let shown = answered.to_string();
+    for hidden in ["hangout_id", "notes", "rsvps", ROOM_NAME, PLAN_NOTES, here.id.as_str()] {
+        assert!(!shown.contains(hidden), "{hidden} leaked in the answer: {shown}");
+    }
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+    // F16: his yes counts, so with Ann's it's on the calendar; F14: he still can't read the room.
+    let view = server.room_view(&ann, &here.id).await;
+    let event =
+        view["events"].as_array().unwrap().iter().find(|e| e["id"] == plan.as_str()).cloned();
+    assert_eq!(event.map(|e| e["status"].clone()), Some(json!("confirmed")), "{}", view["events"]);
+    assert!(server
+        .get(&bo.key, &format!("/api/hangouts/{}", here.id))
+        .await
+        .status
+        .is_client_error());
+}
+
+// F57, F60: a batch is all or nothing. One person invites at most 30 friends an hour, and the call
+// that would pass that invites nobody; a plan's 30 invitees are checked the same way.
+#[tokio::test]
+async fn inviting_is_all_or_nothing_and_thirty_an_hour() {
+    let server = Server::start().await;
+    let here = server.room("Ann").await;
+    let ann = here.ann.clone();
+    let first = server.plan(&ann, &here.id, 2).await;
+    let second = server.plan(&ann, &here.id, 2).await;
+    // 31 friends, from a room of Ann's they share but the plans' room doesn't hold.
+    let theirs = server.room("Zed").await;
+    server.post(&ann.key, &format!("/api/invites/{}/join", theirs.invite), json!({})).await.ok();
+    let mut friends = Vec::new();
+    for n in 0..31 {
+        friends.push(server.join(&theirs.invite, &format!("Friend {n}")).await.id);
+    }
+    let ids = |range: std::ops::Range<usize>| -> Vec<String> { friends[range].to_vec() };
+    let invite = |plan: &str, ids: Vec<String>| {
+        let path = format!("/api/events/{plan}/invitees");
+        (path, json!({ "person_ids": ids }))
+    };
+
+    let (path, body) = invite(&first, ids(0..20));
+    assert_eq!(
+        server.post(&ann.key, &path, body).await.ok()["invited"].as_array().map(Vec::len),
+        Some(20)
+    );
+    let (path, body) = invite(&second, ids(20..30));
+    assert_eq!(
+        server.post(&ann.key, &path, body).await.ok()["invited"].as_array().map(Vec::len),
+        Some(10)
+    );
+    // The 31st is refused, and nobody in that call is invited.
+    let (path, body) = invite(&second, ids(29..31));
+    let over = server.post(&ann.key, &path, body).await;
+    assert_eq!(over.status, StatusCode::TOO_MANY_REQUESTS, "{}", over.show());
+    let view = server.room_view(&ann, &here.id).await;
+    let last = &friends[30];
+    assert!(!view["invitees"].to_string().contains(last.as_str()), "{}", view["invitees"]);
+    // Inviting someone already invited costs nothing.
+    let (path, body) = invite(&first, ids(0..1));
+    assert_eq!(
+        server.post(&ann.key, &path, body).await.ok()["already"].as_array().map(Vec::len),
+        Some(1)
+    );
+}

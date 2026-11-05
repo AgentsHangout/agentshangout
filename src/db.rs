@@ -1930,6 +1930,16 @@ CREATE TABLE IF NOT EXISTS bedtime_told (
 );
 CREATE TABLE IF NOT EXISTS bedtime_off (
     agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+
+);
+-- F57 to F61: who invited a friend to a plan by name, and when. The invitee itself is a row in
+-- plan_invitees, as through a link. This says it came from someone, so Needs you can say who.
+CREATE TABLE IF NOT EXISTS plan_invited_by (
+    event_id    TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    invited_by  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    invited_at  INTEGER NOT NULL,
+    PRIMARY KEY (event_id, person_id)
 );
 "#;
 
@@ -10739,6 +10749,64 @@ impl Db {
             params![event_id, person_id, now],
         )?;
         Ok(Invited::New)
+    }
+
+    /// F57: notes that `by` invited `person_id` to this plan by name. False when someone already
+    /// had, so a friend is told once per plan however often they're invited.
+    pub fn note_invited_by(
+        &self,
+        event_id: &str,
+        person_id: &str,
+        by: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let added = self.conn().execute(
+            "INSERT OR IGNORE INTO plan_invited_by (event_id, person_id, invited_by, invited_at)
+             VALUES (?, ?, ?, ?)",
+            params![event_id, person_id, by, now],
+        )?;
+        Ok(added > 0)
+    }
+
+    /// F57: how many invitees a plan has, by link and by name.
+    pub fn plan_invitee_count(&self, event_id: &str) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM plan_invitees WHERE event_id = ?",
+            [event_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// F59: whether this person is an invitee of this plan, by link or by name.
+    pub fn is_plan_invitee(&self, event_id: &str, person_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2",
+            params![event_id, person_id],
+        )
+    }
+
+    /// F58: the plans this person was invited to by name and hasn't answered, still coming up and
+    /// not canceled, soonest first, each with who invited them.
+    pub fn invited_plans(
+        &self,
+        person_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(Event, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {EVENT_COLS}, p.name FROM plan_invited_by b
+             JOIN events e ON e.id = b.event_id
+             JOIN people p ON p.id = b.invited_by
+             JOIN plan_invitees i ON i.event_id = b.event_id AND i.person_id = b.person_id
+             WHERE b.person_id = ?1 AND e.status != 'cancelled' AND e.ends_at >= ?2
+               AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.person_id = ?1)
+             ORDER BY e.starts_at, e.id"
+        ))?;
+        let rows = stmt.query_map(params![person_id, now], |row| {
+            Ok((event_from_row(row)?, row.get::<_, String>(14)?))
+        })?;
+        rows.collect()
     }
 
     /// The invitees of a room's plans that are still coming up, first to answer first.
