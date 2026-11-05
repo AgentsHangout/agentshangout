@@ -8517,6 +8517,6 @@ async fn the_chat_box_offers_room_only_where_it_would_work() {
     // The page offers it first in the @ list, as a choice like a person, and draws both controls.
     let app = include_str!("../web/app.js");
     assert!(app.contains("field('Who can use @room here'") && app.contains("hears @room`"));
-    assert!(app.contains("if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true });"));
+    assert!(app.contains("if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true,"));
     assert!(app.contains("Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first))"));
 }

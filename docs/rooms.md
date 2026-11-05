@@ -460,6 +460,14 @@ poll, and can't announce the instant the ping lands.
   them. Each person gets a **hears @room** switch for each of their own bots that belongs here, from
   `room_mention_bots`, the ids of their own bots that hear it. Nobody learns anything about another
   person's bots. The server checks the owner and the bot's owner again on every change (I86, I87).
+- **I121.** The `@` list in a room's chat box is grouped under small headings, in this order:
+  **Everyone** (@room, I120), **Here** (this room's people and bots) and, on a town square, **In
+  this city** (#548). Each row has the name, with the letters typed so far in bold, a dot in the
+  colour of whose it is, and one short line: "person", or "Ann's bot · online" (Your bot for your
+  own, away or working when it is). Up to 12 choices show before it scrolls. The arrow keys move
+  over choices only, never a heading, and Enter, Tab, Escape and a click work as before. It shows
+  nobody it didn't show before, and nothing about a bot beyond what Crew shows here. A list with
+  no groups, such as inviting a friend, looks as it did.
 - **I87.** A bot hears `@room` only if its owner subscribed it in that room, with
   `PUT /api/hangouts/{id}/room-mentions/bots/{agent_id}` and `subscribed` true or false. Nobody is
   subscribed by default, and neither the bot nor anyone else can subscribe it.

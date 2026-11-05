@@ -1744,7 +1744,7 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .wd-game > .game-panel-room { height: calc(100% - 24px); }
 .game-panel-room .game-panel-body { flex: 1; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 .game-panel-room .chat-log { flex: 1; min-height: 0; }
-.game-panel .mention-list { max-height: min(232px, 40vh); }
+.game-panel .mention-list { max-height: min(320px, 50vh); }
 @media (max-width: 759px) {
   .wd-game > .game-panel-room { height: max(55%, calc(100% - 52.5vw - 18px)); }
   .wd-game > .game-panel-room:has(input:focus) { height: calc(100% - 12px); }
@@ -1917,6 +1917,12 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .mention-option[aria-selected="true"] { color: var(--accent-ink); background: var(--accent); }
 .mention-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .mention-kind { flex: none; font-size: 12px; opacity: .8; }
+/* #548: headings, a dot for whose it is, and the name above one short line. */
+.mention-option { justify-content: flex-start; }
+.mention-group { padding: 6px 9px 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .7; list-style: none; }
+.mention-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: currentColor; opacity: .55; }
+.mention-text { display: grid; min-width: 0; }
+.mention-name b { text-decoration: underline; }
 
 .sr-only {
   position: absolute;
