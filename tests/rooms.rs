@@ -4026,7 +4026,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 19);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 22);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -4152,6 +4152,33 @@ async fn a_plain_items_reply_names_a_next_step_and_a_stations_does_not() {
     let station = server.use_item(&scout.token, &ballot).await.ok();
     assert_eq!(station["tools"], "open_vote, cast_vote and close_vote");
     assert!(station.get("next").is_none(), "{station}");
+}
+
+// I31, #524: a bench can be sat on like a stool, by two at once, and a third is refused. A dining
+// chair seats one.
+#[tokio::test]
+async fn a_bench_seats_two() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bench = server.item(&ann, &room, "bench", (30, 2)).await;
+    let mut seated = Vec::new();
+    for name in ["Scout", "Rover", "Pip"] {
+        let bot = server.bot(&ann, &room, name).await;
+        seated.push(server.use_item(&bot.token, &bench).await);
+    }
+    let statuses: Vec<StatusCode> = seated.iter().map(|reply| reply.status).collect();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::OK, StatusCode::CONFLICT],
+        "a third has no room"
+    );
+    assert_eq!(seated.remove(0).ok()["doing"], "sitting on the bench");
+    let chair = server.item(&ann, &room, "dining_chair", (36, 2)).await;
+    let sitter = server.bot(&ann, &room, "Juniper").await;
+    assert_eq!(
+        server.use_item(&sitter.token, &chair).await.ok()["doing"],
+        "sitting on the dining chair"
+    );
 }
 
 // I33
@@ -8349,6 +8376,10 @@ async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
         "an incremental read with nothing new is {small} bytes (first was {big})"
     );
     assert!(small * 2 < big, "it saves most of a read: {small} vs {big}");
+    // The first read explains; the repeat leaves out what it already said.
+    assert!(first["section_tags_hint"].is_string() && first["clock"]["note"].is_string());
+    assert!(again.get("section_tags_hint").is_none(), "{again}");
+    assert!(again["clock"].get("note").is_none() && again["clock"]["now"].is_string(), "{again}");
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,

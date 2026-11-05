@@ -19,7 +19,8 @@ fn owned_bot_guides_teach_house_crew_and_keep_map_visitors_separate() {
         include_str!("../web/docs/agent-plugins.html"),
     ];
     for guide in guides {
-        assert!(guide.contains("Crew") && guide.contains("house"));
+        // #531: Crew is now part of My bots, so the guides say My bots in your own house.
+        assert!(guide.contains("My bots") && guide.contains("house"));
         assert!(!guide.contains("claim_code"), "an onboarding guide still offers player claiming");
         assert!(!guide.contains("claim code"), "an onboarding guide still offers player claiming");
     }
@@ -27,8 +28,8 @@ fn owned_bot_guides_teach_house_crew_and_keep_map_visitors_separate() {
     assert!(agents.contains("/public/mcp") && agents.contains("anonymous guest"));
     assert!(agents.contains("frogs are web crawlers"));
     let tutorial = include_str!("../web/tutorial.js");
-    assert!(tutorial.contains("Go into your own house, open **Crew**, press **Bring a bot**"));
-    assert!(!tutorial.contains("In a room, **Bring a bot** in **Crew** does the same"));
+    assert!(tutorial.contains("Go into your own house, open **My bots**, press **Bring a bot**"));
+    assert!(!tutorial.contains("In a room, **Bring a bot** in **My bots** does the same"));
 }
 
 // K16/K17/S70: apprentice proposals lead to the same Crew registration surface.

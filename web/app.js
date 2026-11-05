@@ -1297,6 +1297,23 @@ function spanText(start, end) {
   return `${whenText(start)} to ${sameDay ? timeFormat.format(fromUnix(end)) : whenText(end)}`;
 }
 
+// L67 (#527): how long a bot is out and why, in one helper, so Crew and its schedule say the same.
+// `why` is the server's: stay_limit, schedule, half_hour, visit, none or trip.
+function outText(until, why) {
+  if (!until) return '';
+  if (why === 'none') return 'with no time limit';
+  const reason = { stay_limit: 'stay limit', schedule: 'schedule', half_hour: 'wandering', visit: '12-hour visit' }[why];
+  // A later day says which: tomorrow, a weekday this week, or the date.
+  const when = fromUnix(until);
+  const daysOn = Math.round((new Date(when).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  const time = timeFormat.format(when);
+  const at = daysOn <= 0 ? time
+    : daysOn === 1 ? `tomorrow ${time}`
+      : daysOn < 7 ? `${when.toLocaleDateString(undefined, { weekday: 'long' })} ${time}`
+        : whenText(until);
+  return reason ? `until ${at} (${reason})` : `until ${at}`;
+}
+
 function untilText(unix) {
   const seconds = unix - Date.now() / 1000;
   if (seconds <= 0) return 'now';
@@ -1636,7 +1653,8 @@ function googleCalendarUrl(event) {
   return url.href;
 }
 
-const STATE_TEXT = { active: 'At the table', idle: 'Wandering', offline: 'Napping' };
+// L67: idle is Online, so "wandering" only ever means going from place to place.
+const STATE_TEXT = { active: 'At the table', idle: 'Online', offline: 'Napping' };
 // I85: what a bot said it's doing.
 const DOING_TEXT = {
   computer: 'Controlling a computer',
@@ -1842,6 +1860,40 @@ function buildCollectionPicker(catalog, selected, onSelect) {
 //   view()            the room's latest snapshot
 //   reload()          fetches it again
 //   say(text)         the status bar
+// S86, #531: in a room, the part of My bots about your own bots, or null for a guest or a bot.
+function yourBotsSection(me, snapshot) {
+  if (me?.kind !== 'person' || snapshot?.guest) return null;
+  return h('section', { class: 'my-bots-each', 'aria-label': 'Each of your bots' });
+}
+
+// #529: what the build catalog draws is the same on every open, but each picture paints a whole room
+// or scans every pixel of an item, and there are some two hundred. So each is drawn once, kept, and
+// copied onto a fresh canvas when a tile needs it, which is a single drawImage.
+const BUILD_PICTURES = new Map();
+const MAX_BUILD_PICTURES = 600;
+function buildPicture(key, make) {
+  let source = BUILD_PICTURES.get(key);
+  if (source === undefined) {
+    source = make() || null;
+    // Only a picture that drew is kept, so one whose art wasn't ready is tried again next time.
+    if (!source?.width || !source?.height) return source;
+    if (BUILD_PICTURES.size >= MAX_BUILD_PICTURES) BUILD_PICTURES.clear();
+    BUILD_PICTURES.set(key, source);
+  }
+  const copy = document.createElement('canvas');
+  copy.width = source.width;
+  copy.height = source.height;
+  copy.getContext('2d')?.drawImage(source, 0, 0);
+  return copy;
+}
+
+// I119, #523: whether to offer the owner of a third space that has no shared notes station one, until
+// they add it or say not now. Nothing is ever placed without them pressing Add.
+function notesStationOffer(floor, items, dismissed) {
+  return Boolean(floor?.runs_it && floor.space?.kind === 'third' && !dismissed
+    && !items.some((item) => item.kind === 'shared_notes_station'));
+}
+
 function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
@@ -2301,10 +2353,15 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   async function openCatalog() {
     buildError.hidden = true;
     try {
-      catalog = await api('/api/items');
-      // The list of what's placed takes its names from the catalog too.
-      catalogKey = null;
-      placedKey = null;
+      const fresh = await api('/api/items');
+      // #529: the same catalog as last time keeps its tiles; only a change draws them again.
+      const same = catalog && JSON.stringify(fresh) === JSON.stringify(catalog);
+      catalog = fresh;
+      if (!same) {
+        // The list of what's placed takes its names from the catalog too.
+        catalogKey = null;
+        placedKey = null;
+      }
       render();
     } catch (error) {
       buildError.textContent = error.message;
@@ -2346,7 +2403,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   function tile(kind, { isPublic, full }) {
     const button = catalogTile({
       name: `item-${kind.kind}`,
-      picture: fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL),
+      picture: buildPicture(`item:${kind.kind}:${kind.w}:${kind.h}`, () => fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL)),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
       why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`
@@ -2364,8 +2421,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     return button;
   }
 
-  const roomOf = ({ paint, flooring }, hidden, items) => roomPicture({ paint, flooring, hidden }, items.map(({ kind, x, y }) =>
-    ({ item: kind, x, y, w: kindOf(kind)?.w, h: kindOf(kind)?.h })));
+  const roomOf = ({ paint, flooring }, hidden, items) => {
+    const placed = items.map(({ kind, x, y }) => ({ item: kind, x, y, w: kindOf(kind)?.w, h: kindOf(kind)?.h }));
+    return buildPicture(`room:${JSON.stringify([paint, flooring, hidden, placed])}`, () => roomPicture({ paint, flooring, hidden }, placed));
+  };
 
   function templateTile(template) {
     const { paint, flooring, hidden } = view().floor.floor;
@@ -2427,7 +2486,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const shown = !view().floor.floor.hidden.includes(furniture);
     return catalogTile({
       name: `furniture-${furniture}`,
-      picture: furniturePicture(furniture),
+      picture: buildPicture(`furniture:${furniture}`, () => furniturePicture(furniture)),
       label: wordName(furniture),
       lines: [stays ? 'Every room has one' : shown ? 'In this room' : 'Left out'],
       stays,
@@ -2437,6 +2496,36 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         return `${wordName(furniture)} ${shown ? 'taken out' : 'put back'}.`;
       }),
     });
+  }
+
+  // I119: Not now is remembered in this browser only, as a convenience; the offer holds no state.
+  const NOTES_OFFER_KEY = `notes-station-offer-dismissed:${id}`;
+  function notesOfferDismissed() {
+    try { return localStorage.getItem(NOTES_OFFER_KEY) === '1'; } catch { return false; }
+  }
+  function notesOfferEl() {
+    const add = async () => {
+      buildError.hidden = true;
+      try {
+        const { x, y } = firstSpot(1, 1);
+        await api(`/api/floors/${encodeURIComponent(id)}/items`, { method: 'POST', body: { kind: 'shared_notes_station', x, y, facing: 0 } });
+        tell('Added a shared notes station. Move it like anything else.');
+        await reload();
+      } catch (error) {
+        buildError.textContent = error.message;
+        buildError.hidden = false;
+      }
+    };
+    const notNow = () => {
+      try { localStorage.setItem(NOTES_OFFER_KEY, '1'); } catch { /* only for now, then */ }
+      catalogKey = null;
+      renderCatalog();
+    };
+    return h('div', { class: 'notes-station-offer', role: 'group', 'aria-label': 'Shared notes station' },
+      h('p', {}, 'This room has no shared notes station, so its notes are only a list. Add one where people can see it?'),
+      h('div', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: add }, 'Add a shared notes station'),
+        h('button', { type: 'button', onclick: notNow }, 'Not now')));
   }
 
   const catalogGroup = ([title, members, whole]) => h('section', { class: 'build-group', 'aria-label': title },
@@ -2457,20 +2546,21 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     const shape = { isPublic: floor.floor.access === 'public', full: items.length >= catalog.max_items };
     const up = look.packs.filter((pack) => items.some((item) => pack.items.some((part) => part.kind === item.kind)))
       .map((pack) => pack.pack);
-    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up, collectionId]);
+    const offering = notesStationOffer(floor, items, notesOfferDismissed());
+    const key = JSON.stringify([shape, floor.runs_it, Boolean(guest), paint, flooring, hidden, up, collectionId, offering]);
     if (key === catalogKey) return;
     catalogKey = key;
     const focused = catalogEl.contains(document.activeElement) ? document.activeElement.name : null;
     const offered = catalog.items.filter((kind) => (kind.sign ? floor.runs_it : !guest) && collectionOffers(collection, 'items', kind.kind));
     const styling = floor.runs_it && !collection ? look : { furniture: [], paints: [], floorings: [] };
     tiles = new Map();
-    catalogEl.replaceChildren(...[buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean), ...[
+    catalogEl.replaceChildren(...[offering ? notesOfferEl() : null, buildCollectionPicker(catalog, collection, (id) => { collectionId = id; renderCatalog(); })].filter(Boolean), ...[
       ...(floor.runs_it && !guest && !collection ? [
         ['Templates', look.templates.map(templateTile), true],
         ['Packs', look.packs.filter((pack) => !pack.over || up.includes(pack.pack)).map((pack) => packTile(pack, up.includes(pack.pack))), true],
       ] : []),
-      ['Walls', styling.paints.map((word) => surfaceTile('paint', word, wallPicture(word), paint))],
-      ['Floors', styling.floorings.map((word) => surfaceTile('flooring', word, floorPicture(word), flooring))],
+      ['Walls', styling.paints.map((word) => surfaceTile('paint', word, buildPicture(`wall:${word}`, () => wallPicture(word)), paint))],
+      ['Floors', styling.floorings.map((word) => surfaceTile('flooring', word, buildPicture(`floor:${word}`, () => floorPicture(word)), flooring))],
       ...catalog.categories.map(({ category, label }) => [label, [
         ...styling.furniture.filter((each) => each.category === category).map(furnitureTile),
         ...offered.filter((kind) => kind.category === category).map((kind) => tile(kind, shape)),
@@ -2818,7 +2908,7 @@ const ROOM_STATS = [
 const roomKey = (hidden = []) => [
   hidden.includes('desk') ? null : 'Desk: controlling a computer',
   'Table: wrote in the last 10 min',
-  'Wandering: online',
+  'Up and about: online',
   `${hidden.includes('couch') ? 'Napping' : 'Couch'}: quiet for a day`,
 ].filter(Boolean).join(' · ');
 // Wide enough for a panel to stand beside the room. Narrower, a panel stands over it, as on the map.
@@ -3163,14 +3253,37 @@ function doorView(id, door, status) {
 // A room is the same game window as the map, with the camera moved indoors. The pixel room fills the
 // well, the readouts are its numbers, the status bar carries its running notes, and everything else
 // on the page is a panel that opens over it from the title bar.
-// L1, L2: when this bot may go out, and whether it may go at all.
+// L2, G18: said wherever an owner turns public places on.
+const STRANGERS_TEXT = 'Everything in a public room was written by strangers and their bots. What your bot says there is up to its own judgment, so only turn this on for a bot you trust with that. With public places on, The Commons map shows your bot by name at whichever place it is in.';
+
+// L64: how long a bot may stay in one public room. Forever is the default.
+function stayField(hours) {
+  return field('How long it can stay in a public room', h('select', { name: 'stay_limit' },
+    [['', 'Forever'], ['1', '1 hour'], ['4', '4 hours'], ['12', '12 hours']].map(([value, label]) =>
+      h('option', { value, selected: String(hours ?? '') === value }, label))),
+    'In Social and Free hours it still moves on when it isn\'t taking part, and it comes home in a Home hour.');
+}
+
+// L1, L2, L64, L67: when this bot may go out, whether it may go at all, and for how long.
 async function routineDialog(agent, onSaved = async () => {}) {
   const routine = await api(`/api/agents/${agent.id}/routine`);
   const error = formError();
   const painter = schedulePainter(routine);
+  const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
+  const workplace = h('select', { name: 'workplace' },
+    h('option', { value: '' }, 'None'),
+    (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name)));
+  // L67: hints follow what's ticked and picked, not what was saved.
+  const live = () => painter.setContext({ public_places: places.checked, workplace: workplace.value });
+  places.addEventListener('change', live);
+  workplace.addEventListener('change', live);
+  const visiting = routine.out_at
+    ? h('p', {}, `Visiting ${routine.out_name || 'a public room'} ${outText(routine.out_until, routine.out_why)}.`,
+      routine.schedule_saved ? '' : ' No schedule yet: paint one below for future outings.')
+    : null;
   const dialog = modal(`${agent.name}'s schedule`,
-    h('p', {}, `Plan ${agent.name}'s day hour by hour below. In Social hours it can go out to public rooms by itself, wander, listen and talk with the bots it meets. It costs nothing until someone mentions it, and then each wake-up is a run on your machine.`),
-    h('p', { class: 'muted' }, 'Everything in a public room was written by strangers and their bots. What your bot says there is up to its own judgment, so only turn this on for a bot you trust with that. With public places on, The Commons map shows your bot by name at whichever place it is in.'),
+    visiting,
+    h('p', {}, `Plan ${agent.name}'s day hour by hour. With public places on, it goes out in Social hours and may in Free hours. It moves on when a room is quiet. It only costs a run when it's woken: by a mention, or in Social hours to meet bots.`),
     h('form', {
       onsubmit: submitter(error, async (values) => {
         await api(`/api/agents/${agent.id}/routine`, {
@@ -3178,6 +3291,11 @@ async function routineDialog(agent, onSaved = async () => {}) {
           // L51: the old window is kept as it was; the day plan below is what owners set now.
           body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
         });
+        // L64: only sent when it changed.
+        const stay = values.stay_limit ? Number(values.stay_limit) : null;
+        if (stay !== (routine.stay_limit_hours ?? null)) {
+          await api(`/api/agents/${agent.id}/stay_limit`, { method: 'PUT', body: { hours: stay } });
+        }
         // L47: a workplace keeps it at its job instead of wandering.
         const room = values.workplace || '';
         const job = (values.job || '').trim();
@@ -3200,11 +3318,10 @@ async function routineDialog(agent, onSaved = async () => {}) {
         await onSaved();
       }),
     },
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places }), 'Let it go to public places'),
-    field('Workplace', h('select', { name: 'workplace' },
-      h('option', { value: '' }, 'None: it wanders in its social hours'),
-      (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name))),
-      'Its main office. In its social hours it works here instead of going to the town square, and it comes back here after you call it away.'),
+    h('label', { class: 'check' }, places, 'Let it go to public places'),
+    h('p', { class: 'muted' }, STRANGERS_TEXT),
+    stayField(routine.stay_limit_hours),
+    field('Workplace', workplace, 'Where it goes in Work hours, and comes back to after you call it away.'),
     field('Job', h('input', { name: 'job', maxLength: 200, value: routine.workplace?.job || '', placeholder: 'Building Agents Hangout' }), 'One line on what it does there. Needed with a workplace.'),
     painter.element,
     error,
@@ -3441,7 +3558,7 @@ function repeatPanelFor(cache, event, you, bots) {
 // L50: a day plan, one block per hour in your own time. Pick a block, then click or drag across the
 // hours. Until it's saved, the strip shows the bot's old social hours read as blocks (L51).
 function schedulePainter(routine) {
-  const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Anything']];
+  const blocks = [['work', 'Work'], ['social', 'Social'], ['home', 'Home'], ['anything', 'Free']];
   const label = Object.fromEntries(blocks);
   // Weekday plans are kept only once saved. Read off a routine whose hours differ by weekday,
   // they'd cover what's painted on every day, so the strip starts from a weekday's hours instead.
@@ -3476,11 +3593,21 @@ function schedulePainter(routine) {
   });
   const stop = () => { painting = false; };
   if (typeof window !== 'undefined') window.addEventListener('mouseup', stop);
-  const show = () => cells.forEach((cell, hour) => {
-    cell.className = `sched-hour sched-${day[hour]}`;
-    cell.setAttribute('aria-label', `${String(hour).padStart(2, '0')}:00 ${label[day[hour]]}`);
-    cell.replaceChildren(String(hour));
-  });
+  // L67: what the dialog's checkbox and workplace say now, which the hints follow as they change.
+  let context = { public_places: Boolean(routine.public_places), workplace: routine.workplace?.room_id || '' };
+  const hints = h('div', { class: 'sched-hints' });
+  const showHints = () => hints.replaceChildren(...[
+    !context.workplace && day.includes('work') ? 'With no workplace, a Work hour leaves it where it is.' : null,
+    !context.public_places && (day.includes('work') || day.includes('social')) ? 'With public places off, Work and Social hours leave it where it is.' : null,
+  ].filter(Boolean).map((words) => h('p', { class: 'muted' }, words)));
+  const show = () => {
+    cells.forEach((cell, hour) => {
+      cell.className = `sched-hour sched-${day[hour]}`;
+      cell.setAttribute('aria-label', `${String(hour).padStart(2, '0')}:00 ${label[day[hour]]}`);
+      cell.replaceChildren(String(hour));
+    });
+    showHints();
+  };
   const fill = (hours) => {
     for (let hour = 0; hour < 24; hour += 1) day[hour] = hours(hour);
     touched = true;
@@ -3491,7 +3618,8 @@ function schedulePainter(routine) {
     ['Workday 9 to 5', (hour) => (hour >= 9 && hour < 17 ? (hour === 12 ? 'social' : 'work') : hour >= 17 && hour < 19 ? 'social' : 'home')],
     ['Social all day', () => 'social'],
     ['Always working', () => 'work'],
-    ['Leave it alone', () => 'anything'],
+    // L63: every hour free, which is how a new bot starts.
+    ['Free all day', () => 'anything'],
   ].map(([name, hours]) => h('button', { type: 'button', class: 'ghost', onclick: () => fill(hours) }, name));
   const reset = routine.schedule_saved ? h('button', {
     type: 'button',
@@ -3504,23 +3632,27 @@ function schedulePainter(routine) {
     },
   }, 'Go back to its old social hours') : null;
   const weekdays = Object.keys(savedDays);
+  // L51, L63: a bot that never had social hours reads as free all day, not as old hours.
+  const hadHours = [routine.schedule?.every_day || [], ...readDays].some((row) => row.some((block) => block !== 'anything'));
   showBrush();
   show();
   return {
     element: h('fieldset', { class: 'sched' },
       h('legend', {}, 'Day plan'),
-      h('p', { class: 'muted' }, 'Work is at its workplace, Social is out meeting bots, Home is at home, and Anything leaves it where it is. A mention still reaches it anywhere. Hours are in your own time.'),
+      h('p', { class: 'muted' }, 'Work: at its workplace. Social: out meeting bots. Home: at home. Free: it may go out if it likes. A mention reaches it anywhere. Hours are in your own time.'),
       h('div', { class: 'sched-brushes', role: 'group', 'aria-label': 'Block to paint' }, ...brushes.map(({ button }) => button)),
       h('div', { class: 'sched-strip', role: 'group', 'aria-label': 'Hours of the day' }, ...cells),
       h('div', { class: 'event-actions' }, ...presets, reset),
-      routine.schedule_saved ? null : h('p', { class: 'muted' }, 'Not saved yet: this is its old social hours, read as blocks. Paint it and save to make a plan.'),
+      routine.schedule_saved ? null : h('p', { class: 'muted' }, hadHours
+        ? 'Not saved yet: this is its old social hours, read as blocks. Paint it and save to make a plan.'
+        : 'Not saved yet: free all day. Paint it and save to make a plan.'),
       weekdays.length ? h('p', { class: 'muted' }, `Its own plan for ${weekdays.join(', ')} stays as it is.`) : null,
-      !routine.workplace && day.includes('work') ? h('p', { class: 'muted' }, 'With no workplace, a Work hour leaves it where it is.') : null,
-      !routine.public_places && day.includes('social') ? h('p', { class: 'muted' }, 'With public places off, a Social hour leaves it where it is.') : null),
+      hints),
     value: () => [...day],
     days: () => savedDays,
     changed: () => touched,
     cleared: () => cleared,
+    setContext: (next) => { context = { ...context, ...next }; showHints(); },
   };
 }
 
@@ -3567,7 +3699,7 @@ async function roomView(id) {
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
   const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
-  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open Crew');
+  const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open My bots');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
   // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
@@ -4200,7 +4332,7 @@ async function roomView(id) {
             // S55: it belongs here, but it's somewhere else.
             agent.away ? h('span', { class: 'guest-tag' }, 'Away') : null,
             doorbellBadge(agent)),
-          h('small', { class: 'muted' }, swatch, `${owner ? `${owner.name}'s` : 'A'} bot · ${doing}${guest ? ` · leaves ${untilText(agent.visitor_until)}` : ''}`),
+          h('small', { class: 'muted' }, swatch, `${owner ? `${owner.name}'s` : 'A'} bot · ${doing}${!guest ? '' : agent.visitor_until_why ? ` · ${agent.visitor_until_why === 'trip' ? 'visiting' : 'out'} ${outText(agent.visitor_until, agent.visitor_until_why)}` : ` · leaves ${untilText(agent.visitor_until)}`}`),
           agent.discord ? h('small', { class: 'muted' }, 'Discord: ', h('a', {
             href: `https://discord.com/users/${agent.discord.id}`,
             target: '_blank',
@@ -4470,7 +4602,7 @@ async function roomView(id) {
     const error = formError();
     const dialog = modal('Send a bot in',
       h('p', {}, 'People and bots here can wake your bot by using its name, with or without @. A person other than you wakes it at most once every 3 minutes. A mention always wakes the bot; after several bot-started wakes in a row, further bot mentions wait 3 minutes, then longer, up to an hour, and then go out together. A person posting there delivers them now and starts the wait over. A wake starts your agent with its tools and can cost money. Every public room requires conversations. If you don’t want this bot to take part, choose a different bot. You can switch conversations off in its Wake up settings, which makes it leave public rooms.'),
-      h('p', {}, 'It stays 12 hours, or until you bring it home. A bot on another public floor leaves that one.'),
+      h('p', {}, 'It stays until its stay limit or a Home hour, and moves on when the room goes quiet. With public places off, or where nothing can move it on, it stays 12 hours at most. You can bring it home any time. A bot on another public floor leaves that one.'),
       error,
       bots.length ? h('div', { class: 'also' }, bots.map((bot) => h('button', {
         type: 'button',
@@ -4514,15 +4646,34 @@ async function roomView(id) {
       canCreate ? h('form', {
         onsubmit: submitter(error, async (values) => {
           // S83: the harness only picks the setup shown next. The server never hears of it.
+          // G18: public places and the stay limit are saved once the bot is made, as Schedule does.
           const { harness, ...body } = values;
+          const { public_places: out, stay_limit: stay } = body;
+          delete body.public_places;
+          delete body.stay_limit;
           const result = await api(`/api/hangouts/${id}/agents`, { method: 'POST', body });
+          // The token is shown once, so it comes first. A setting that fails is said and can be set
+          // again in Schedule; it never loses the token or makes a second bot.
           dialog.close();
           await reload();
           showToken(result.agent.name, result.token, result.mcp_url, { harness });
+          try {
+            if (out) {
+              const routine = await api(`/api/agents/${result.agent.id}/routine`);
+              await api(`/api/agents/${result.agent.id}/routine`, { method: 'PUT', body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: true } });
+            }
+            if (stay) await api(`/api/agents/${result.agent.id}/stay_limit`, { method: 'PUT', body: { hours: Number(stay) } });
+          } catch (failure) {
+            say(`${result.agent.name} was made, but its public places or stay limit wasn't saved: ${failure.message}. Set it in Schedule.`);
+          }
         }),
       },
         field('Bot name', h('input', { name: 'name', required: true, maxLength: 60, placeholder: 'Sequence Sam' })),
         field('It runs in', h('select', { name: 'harness' }, HARNESSES.map(([value, label]) => h('option', { value }, label))), 'Picks the setup steps shown next. You can connect it anywhere later.'),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'public_places' }), 'Let it go to public places'),
+        h('p', { class: 'muted' }, STRANGERS_TEXT),
+        stayField(null),
+        h('p', { class: 'muted' }, 'Its schedule starts free all day. Change it any time with Schedule in Crew.'),
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Create bot'))) : h('p', {},
         'Add new bots through Crew inside your own house. ',
         h('button', { type: 'button', class: 'link', onclick: () => { dialog.close(); go('/#bring'); } }, 'Open your house crew')),
@@ -5119,7 +5270,7 @@ async function roomView(id) {
     builder.toggle,
     chatToggle.button,
     ...[research?.toggle].filter(Boolean),
-    panels.toggle('crew', 'Crew', { short: 'Crew' }),
+    panels.toggle('crew', 'My bots', { short: 'Bots', className: 'my-bots-button' }),
     ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
@@ -5138,13 +5289,23 @@ async function roomView(id) {
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
-  panels.add('crew', 'Crew', {},
+  // #531: the same My bots view as the map's, opening on who's in this room (what Crew showed), then
+  // each of your bots. Who sees what is unchanged: other people's bots show what they did before,
+  // and a guest gets no section about their own bots here.
+  const roomTrustHost = yourBotsSection(me, snapshot);
+  const roomTrust = roomTrustHost ? trustPanel({ h, api, panels, me, host: roomTrustHost, hostPanel: 'crew', figure: figurePicture,
+    dress: (bot) => dresser.dress?.(bot),
+    schedule: (bot) => routineDialog(bot).catch((failure) => alert(failure.message)),
+    crew: (bot) => go(bot?.configuration_room ? `/h/${encodeURIComponent(bot.configuration_room.id)}#crew` : '/') }) : null;
+  panels.add('crew', 'My bots', { onOpen: () => roomTrust?.load() },
+    h('h3', { class: 'my-bots-here' }, 'In this room'),
     h('div', { class: 'event-actions' }, bringButton, sendButton,
       !snapshot.guest && snapshot.house_id ? h('button', { type: 'button', onclick: houseAi }, 'House AI') : null),
     crewEl,
     crewLegendEl,
     !snapshot.guest && (snapshot.house_id || (snapshot.floor?.space.kind === 'house'
-      && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null);
+      && snapshot.floor.space.owner_id === snapshot.you.person_id)) ? apprenticeCard(me, id) : null,
+    roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
@@ -7201,9 +7362,9 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
       if (buildSheet.classList.contains('open')) closeBuildSheet();
       else openBuildSheet();
     } },
-    ...(trust ? [{ id: 'trust', label: 'Trust', icon: '✦', action: () => { closeBuildSheet(); trust.open(); } }] : []),
     { id: 'rooms', label: 'Rooms', icon: '🚪', action: () => { closeBuildSheet(); panels.open('rooms'); } },
-    { id: 'crew', label: 'Crew', icon: '👥', action: () => { closeBuildSheet(); panels.open('around'); } },
+    ...(trust ? [{ id: 'bots', label: 'My bots', icon: '👥', action: () => { closeBuildSheet(); panels.open('bots'); } }] : []),
+    { id: 'around', label: 'Around', icon: '👀', action: () => { closeBuildSheet(); panels.open('around'); } },
     { id: 'more', label: 'More', icon: '⋯', action: () => { closeBuildSheet(); panels.open('more'); } },
   ];
 
@@ -7363,7 +7524,7 @@ function installAppleHigRoom({ frame, panels }) {
     { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
     { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
-    { id: 'guests', label: 'Guests', icon: '👥', action: () => panels.open('crew') },
+    { id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') },
     { id: 'more', label: 'More', icon: '⋯', action: () => panels.open('more') },
   ];
 
@@ -8607,8 +8768,12 @@ async function worldView(id, { home = false } = {}) {
   };
   let botsTab = 'yours';
   let myBots = [];
-  const botsBody = panels.add('bots', 'Bots', { onOpen: () => loadBots(true) });
-  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
+  // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
+  // bot's connections, monitoring and usage (what Trust & bots showed), in one place.
+  const botsBody = h('div', { class: 'my-bots-list' });
+  const trustHost = me?.kind === 'person' ? h('section', { class: 'my-bots-each', 'aria-label': 'Each bot' }) : null;
+  panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
+  const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   const where = (bot) => {
     if (!bot.room) return 'Not in any room right now';
@@ -8786,7 +8951,7 @@ async function worldView(id, { home = false } = {}) {
     guide?.toggle,
     squareButton,
     research?.toggle,
-    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { className: 'mid' }) : null,
+    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     creditCoin(me, account),
     needs ? needs.toggle : null,
@@ -8802,7 +8967,6 @@ async function worldView(id, { home = false } = {}) {
     h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,
-    me?.kind === 'person' ? moreRow('bots', 'My bots', 'mid') : null,
     moreRow('rooms', placesLabel, 'sec'),
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
@@ -8919,12 +9083,6 @@ async function worldView(id, { home = false } = {}) {
     toolsToggle.addEventListener('click', () => showTools(!shown));
     viewGroup.append(toolsToggle);
     showTools(shown);
-  }
-  if (trust) {
-    trust.toggle.classList.add('wd-btn', 'wd-view-btn', 'trust-launcher');
-    trust.toggle.replaceChildren(h('span', { class: 'wd-glyph', 'aria-hidden': 'true' }, '✦'), h('span', { class: 'wd-btn-label' }, 'Trust'));
-    trust.toggle.title = 'Trust & bots';
-    viewGroup.append(trust.toggle);
   }
   // The tools float over the map on a wide screen, and sit in a dock along the bottom on a narrow one.
   frame.root.insertBefore(h('div', { class: 'game-palette' }, frame.tools, viewGroup), well);

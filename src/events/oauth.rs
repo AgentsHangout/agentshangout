@@ -282,6 +282,21 @@ fn wake_permitted(state: &AppState, agent: &str, row: &BotEventRow) -> bool {
         return false;
     }
     let data: Value = serde_json::from_str(&row.data).unwrap_or_default();
+    // BT10: a tag from elsewhere is checked against the message that made it, kept server side.
+    if data["reason"] == "elsewhere" {
+        let Some((owner_bot, message_id)) =
+            data["tag_id"].as_i64().and_then(|tag| state.db.absent_tag(tag).ok().flatten())
+        else {
+            return false;
+        };
+        let message = state.db.trust_message(message_id).ok().flatten();
+        let bot = state.db.agent(agent, now()).ok().flatten();
+        return owner_bot == agent
+            && message.zip(bot).is_some_and(|(message, bot)| {
+                crate::bot_trust::may_wake(state, &bot, &message).unwrap_or(false)
+                    && crate::bot_trust::only_me_allows(state, &bot, &message).unwrap_or(false)
+            });
+    }
     let Some(id) = data["message_id"].as_i64() else {
         // Legacy rows cannot establish that the sender is the owner.
         return !state.db.wakes_only_for_owner(agent).unwrap_or(true)

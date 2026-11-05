@@ -422,6 +422,30 @@ pub fn send_result<F>(
     send_checked(state, agent_id, notice, once, may, done);
 }
 
+/// BT10: a tag from a room the bot isn't in. One POST, while the bot isn't paused and its wake
+/// setting still lets this tagger reach it (revocation applies). The notice names no room.
+pub fn send_absent_tag(
+    state: &AppState,
+    agent_id: &str,
+    tagger: &str,
+    message: crate::db::Message,
+) {
+    let notice = Notice {
+        event: "mention",
+        hangout_id: String::new(),
+        text: format!("{tagger} tagged you in a room you aren't in. Call inbox."),
+    };
+    let id = agent_id.to_string();
+    let may = move |state: &AppState| {
+        !state.db.doorbell_paused(&id).unwrap_or(true)
+            && state.db.agent(&id, crate::now()).ok().flatten().is_some_and(|bot| {
+                crate::bot_trust::may_wake(state, &bot, &message).unwrap_or(false)
+                    && crate::bot_trust::only_me_allows(state, &bot, &message).unwrap_or(false)
+            })
+    };
+    send_checked(state, agent_id, &notice, true, may, |_, _| {});
+}
+
 /// RP3: a repeating plan's cue, from the bot's own owner. There's no message to check it against,
 /// so it's sent while the bot isn't paused, still belongs to the plan's room, and the plan still
 /// repeats with that owner and isn't canceled. One POST, no retry.

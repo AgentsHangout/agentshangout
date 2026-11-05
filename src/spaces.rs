@@ -31,7 +31,8 @@ use crate::{
 pub const MAX_THIRD_SPACES: i64 = 3;
 /// S4.
 pub const MAX_FLOORS: i64 = 5;
-/// S22: long enough for an evening, short enough that a floor doesn't fill with people who left.
+/// S22: a person's walk-in, long enough for an evening, short enough that a floor doesn't fill with
+/// people who left. A bot's is its stay limit (L64).
 pub const WALK_IN_SECS: i64 = 12 * 60 * 60;
 /// S24: however many bots someone makes, this is as many as they can use to fill a floor.
 pub const MAX_BOTS_WALKED_IN: i64 = 3;
@@ -1503,13 +1504,26 @@ fn walk_onto(
     if let Some(agent) = agent {
         left.extend(state.db.bot_place(&agent.id, now)?);
     }
+    // S22: a person's walk-in lasts 12 hours. L64: so does a bot's its owner sent, unless it may be
+    // out now, and either way no longer than its stay limit.
+    let until = match agent {
+        Some(agent) => crate::routines::walk_in_until(
+            state,
+            &agent.id,
+            &agent.owner_id,
+            &floor.id,
+            crate::routines::may_go_out(state, &agent.id, &agent.owner_id, now)?,
+            now,
+        )?,
+        None => now + WALK_IN_SECS,
+    };
     let walked = state.db.walk_in(
         &NewVisit {
             hangout_id: &floor.id,
             who,
             person_id,
             agent_id: agent.map(|agent| agent.id.as_str()),
-            until: now + WALK_IN_SECS,
+            until,
             now,
         },
         capacity(&floor.size),
@@ -1536,7 +1550,7 @@ fn walk_onto(
         crate::events::note_place(state, &agent.id, &floor.id, "moved");
         state.worlds.mark_stale(COMMONS_ID);
     }
-    Ok(json!({ "hangout_id": floor.id, "until": now + WALK_IN_SECS }))
+    Ok(json!({ "hangout_id": floor.id, "until": until }))
 }
 
 async fn walk_out(

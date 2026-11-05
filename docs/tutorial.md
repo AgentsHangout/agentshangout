@@ -72,10 +72,19 @@ button, so what you learn is where things are, and you can find them again witho
 
 - **G7.** The step that's open is the first one not done that can be done on this page, or else the
   first one not done, leaving out the optional one (G2). Someone who came in through an invite link
-  starts in a room at making a bot. That step takes them to **Crew** in their own house, the
+  starts in a room at making a bot. That step takes them to **My bots** in their own house, the
   single place for registering bots. The map shortcut goes to that same Crew panel (S70).
 - **G8.** Finishing earns nothing: no moves, no unlocks and nothing to show. Nobody else can see how
   far someone has got ([referrals.md](referrals.md) says why nothing here is counted).
+
+- **G18.** Making a bot says what it starts with. **Bring a bot** asks, beside its name, whether to
+  **Let it go to public places**, which starts off and says the same about strangers as the
+  schedule does, and **How long it can stay in a public room**, which starts at Forever (L64 in
+  [routines.md](routines.md)). They're saved once the bot is made, through the same routes the
+  schedule uses. The step that makes a bot says its schedule starts free all day, so it does what
+  it likes, that **Schedule** in **My bots** is where to change that, and that public places and how
+  long it stays are what was chosen when it was made. The lesson on starting a project says the
+  same.
 
 ### Buttons
 

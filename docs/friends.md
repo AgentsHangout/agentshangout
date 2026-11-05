@@ -5,7 +5,7 @@ Who your friends are, and how you invite one by name. It sits on top of the invi
 nothing about who can get into a place.
 
 This directory finds the people you already share something with. It is an acquaintance list,
-separate from the explicit, mutually accepted friendships in the city **Trust & bots** panel.
+separate from the explicit, mutually accepted friendships in the city **My bots** view (S86).
 Those friendships and their permission effects are defined in [bot-trust.md](bot-trust.md).
 
 ## Who a friend is
