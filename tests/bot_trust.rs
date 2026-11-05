@@ -561,3 +561,82 @@ async fn the_trust_view_says_what_its_people_and_bots_wear() {
         assert!(view["bots"].as_array().unwrap().iter().any(|b| &b["id"] == id), "{id}");
     }
 }
+
+// BT10: a bot that lets friends wake it can be tagged from a room it isn't in, and learns only who
+// tagged it and that it was a private room. Only tags inside E22/E31's limits become events.
+#[tokio::test]
+async fn a_friend_can_tag_a_bot_from_a_room_it_isnt_in() {
+    let f = Fixture::new().await;
+    let db = &f.state.db;
+    db.create_hangout("den", "Layoffs Q3", "den-code", "bob", now()).unwrap();
+    db.add_agent_to_room("den", "b").unwrap();
+    db.add_member("den", "eve", now()).unwrap();
+    let bob = f.state.authenticate(&auth::hash_secret("bob")).unwrap().unwrap();
+    let eve = f.state.authenticate(&auth::hash_secret("eve")).unwrap().unwrap();
+    let tags = || db.absent_tags_since("a", now() - 60, 10).unwrap();
+    let events = || async {
+        let (status, body) = f.call("a", Method::GET, "/api/events", json!(null)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["name"] == "mention")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // On the default, existing participants, a tag from elsewhere reaches nobody.
+    ops::post_message(&f.state, &bob, "den", "chat", "@a are you around?").unwrap();
+    assert!(tags().is_empty());
+
+    // With friends, only an accepted friend reaches it, and only with an @tag.
+    f.config("friends");
+    db.request_explicit_friend("person", "alice", "bob", now()).unwrap();
+    db.accept_explicit_friend("person", "alice", "bob").unwrap();
+    ops::post_message(&f.state, &eve, "den", "chat", "@a hi from eve").unwrap();
+    ops::post_message(&f.state, &bob, "den", "chat", "a said something").unwrap();
+    assert!(tags().is_empty());
+    ops::post_message(&f.state, &bob, "den", "chat", "@a secret plans inside").unwrap();
+    let listed = tags();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    // A private room is "a private room", not its name.
+    assert_eq!((listed[0].0.as_str(), listed[0].1.as_str()), ("bob", "a private room"));
+
+    // events_since shows it: who and where, never the words or the room, and no way in.
+    let seen = events().await;
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let data = seen[0]["data"].to_string();
+    assert!(data.contains("elsewhere") && data.contains("a private room"), "{data}");
+    for hidden in ["secret plans", "Layoffs", "\"den\"", "message_id", "hangout_id"] {
+        assert!(!data.contains(hidden), "{hidden} in {data}");
+    }
+    assert!(!db.belongs_to_room("den", "a").unwrap());
+
+    // A flood from Bob within 3 minutes is listed, but rings and becomes an event only once.
+    for n in 0..5 {
+        ops::post_message(&f.state, &bob, "den", "chat", &format!("@a again {n}")).unwrap();
+    }
+    assert_eq!(tags().len(), 6);
+    assert_eq!(events().await.len(), 1);
+    let later = now() + 600;
+    assert!(db.add_absent_tag("e", "Bob", "bob", "Den", 1, false, later).unwrap().1);
+    assert!(!db.add_absent_tag("e", "Bob", "bob", "Den", 1, false, later + 60).unwrap().1);
+    assert!(db.add_absent_tag("e", "Bob", "bob", "Den", 1, false, later + 181).unwrap().1);
+    for n in 0..18 {
+        let id = format!("x{n}");
+        assert!(db.add_absent_tag("e", "X", &id, "Den", 1, false, later + 200).unwrap().1);
+    }
+    assert!(
+        !db.add_absent_tag("e", "Y", "y", "Den", 1, false, later + 300).unwrap().1,
+        "20 an hour"
+    );
+    // Paused, it's listed and never rings.
+    assert!(!db.add_absent_tag("e", "Z", "z", "Den", 1, true, later + 4000).unwrap().1);
+
+    // Only me (BT4) still means only its owner: Bob's own bot is a friend's, and doesn't reach it.
+    db.set_wakes_only_for_owner("a", true).unwrap();
+    let b = f.state.authenticate(&auth::hash_secret("b")).unwrap().unwrap();
+    ops::post_message(&f.state, &b, "den", "chat", "@a from b").unwrap();
+    assert_eq!(tags().len(), 6);
+}
