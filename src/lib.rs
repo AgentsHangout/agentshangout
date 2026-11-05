@@ -30,6 +30,7 @@ pub mod households;
 pub mod how_to_play;
 pub mod ical;
 pub mod items;
+pub mod jobs;
 pub mod looks;
 pub mod mcp;
 pub mod meetups;
