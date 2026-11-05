@@ -4609,11 +4609,21 @@ async fn an_owners_tag_brings_their_bot_to_the_room() {
     server.say(&bo.key, &beach, "@Fern come here").await.ok();
     server.say(&ann.key, &beach, "Fern would like this").await.ok();
     assert_eq!(at(&fern).as_deref(), Some(home.as_str()));
-    // Ann's @tag brings it here.
+    // Only `@` right before the whole name counts: not a longer bot's name, a longer word or an
+    // email address.
+    server.bot(&ann, &home, "Fern Two").await;
     server.state.db.set_bot_place(&fern, &home, agenthangout::now() - 600).unwrap();
-    server.say(&ann.key, &beach, "@Fern come help").await.ok();
+    for near_miss in ["@Fern Two hi", "@Fernando, ask Fern", "x@fern.org says Fern"] {
+        server.say(&ann.key, &beach, near_miss).await.ok();
+        assert_eq!(at(&fern).as_deref(), Some(home.as_str()), "{near_miss}");
+    }
+    // Ann's @tag brings it here, even at the end of a sentence.
+    server.say(&ann.key, &beach, "come help @Fern.").await.ok();
     assert_eq!(at(&fern).as_deref(), Some(beach.as_str()));
     // Right away again from home, it isn't bounced back: it just moved.
     server.say(&ann.key, &home, "@Fern back here").await.ok();
     assert_eq!(at(&fern).as_deref(), Some(beach.as_str()));
+    // The picker goes by where a bot is, so neither is offered on the Beach now.
+    let snap = server.get(&ann.key, &format!("/api/hangouts/{beach}")).await.ok();
+    assert_eq!(snap["summonable"], json!([]), "{snap}");
 }

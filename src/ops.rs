@@ -468,10 +468,11 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
         return Ok(());
     }
     let now = message.created_at;
-    let body = message.body.to_lowercase();
-    for bot in state.db.agents_of(&caller.person_id, now)? {
-        let tag = format!("@{}", bot.name.to_lowercase());
-        if !body.contains(&tag) || !crate::doorbell::mentions(&message.body, &bot.name) {
+    let mine = state.db.agents_of(&caller.person_id, now)?;
+    let mut names: Vec<String> = mine.iter().map(|bot| bot.name.clone()).collect();
+    names.extend(state.db.agents_in(&message.hangout_id, now)?.into_iter().map(|bot| bot.name));
+    for bot in mine {
+        if !tags_name(&message.body, &bot.name, &names) {
             continue;
         }
         if state.db.bot_place(&bot.id, now)?.as_deref() == Some(message.hangout_id.as_str()) {
@@ -485,6 +486,30 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
         }
     }
     Ok(())
+}
+
+/// S88: whether `body` tags `name` itself: `@` right before the whole name, in any case, not inside
+/// an email address or a longer word, and not the start of a longer known bot name written there,
+/// so "@Fern Two" tags Fern Two, not Fern, and "@Fernando" or "x@fern.org" tag nobody.
+fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let text = body.to_lowercase();
+    let name = name.to_lowercase();
+    let tag = format!("@{name}");
+    let longer: Vec<String> = known
+        .iter()
+        .map(|other| other.to_lowercase())
+        .filter(|other| other.len() > name.len() && other.starts_with(&name))
+        .collect();
+    text.match_indices(&tag).any(|(start, _)| {
+        let after = &text[start + tag.len()..];
+        let runs_on = after
+            .starts_with(|c: char| is_word(c) || matches!(c, '@' | '-' | '/' | '\'' | '\u{2019}'))
+            || (after.starts_with('.') && after[1..].starts_with(is_word));
+        !text[..start].ends_with(is_word)
+            && !runs_on
+            && !longer.iter().any(|other| text[start + 1..].starts_with(other.as_str()))
+    })
 }
 
 /// S88: a bot isn't summoned again within this long of changing place.
@@ -2143,11 +2168,14 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let summonable = if caller.is_agent() || guest.is_some() {
         Vec::new()
     } else {
-        let here: std::collections::HashSet<&str> = agents.iter().map(|a| a.id.as_str()).collect();
+        // Only bots a tag would really bring: not already here by where they are (a guest visit
+        // counts), and passing every check Bring here makes.
         let mut mine = Vec::new();
         for bot in state.db.agents_of(&caller.person_id, now)? {
-            let at_home = state.db.bot_home(&bot.id)?.is_some_and(|h| h.is_house || h.stays_home);
-            if !here.contains(bot.id.as_str()) && !at_home {
+            if state.db.bot_place(&bot.id, now)?.as_deref() == Some(hangout_id) {
+                continue;
+            }
+            if bring_checks(state, caller, hangout_id, &bot.id).is_ok() {
                 mine.push(serde_json::json!({ "id": bot.id, "name": bot.name }));
             }
         }
@@ -2398,6 +2426,28 @@ pub fn bring_agent(
     hangout_id: &str,
     agent_id: &str,
 ) -> ApiResult<()> {
+    let agent = bring_checks(state, caller, hangout_id, agent_id)?;
+    let was = state.db.bot_place(agent_id, now())?;
+    // S59: a bot that already belongs here is only being called over, so the room hears nothing.
+    if !state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id) {
+        state.db.add_agent_to_room(hangout_id, agent_id)?;
+        announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
+    }
+    spaces::place_bot(state, agent_id, hangout_id)?;
+    if was.as_deref() != Some(hangout_id) {
+        crate::events::note_place(state, agent_id, hangout_id, "moved");
+    }
+    Ok(())
+}
+
+/// Every check `bring_agent` makes, with nothing changed, so the `@` picker (S88) only offers a bot
+/// a tag could really bring.
+fn bring_checks(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    agent_id: &str,
+) -> ApiResult<Agent> {
     no_house_bot(caller)?;
     let agent = state.db.agent(agent_id, now())?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, hangout_id, "bring in a bot")?;
@@ -2432,18 +2482,10 @@ pub fn bring_agent(
             )));
         }
     }
-    let was = state.db.bot_place(agent_id, now())?;
-    // S59: a bot that already belongs here is only being called over, so the room hears nothing.
     if !state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id) {
         spaces::check_can_join(state, &agent.owner_id, hangout_id)?;
-        state.db.add_agent_to_room(hangout_id, agent_id)?;
-        announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
     }
-    spaces::place_bot(state, agent_id, hangout_id)?;
-    if was.as_deref() != Some(hangout_id) {
-        crate::events::note_place(state, agent_id, hangout_id, "moved");
-    }
-    Ok(())
+    Ok(agent)
 }
 
 pub fn remove_agent(
