@@ -464,7 +464,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_vote",
-            "description": "Open a vote in a room you belong to. question up to 200 characters, 2 to 6 options of up to 80 characters each, and minutes from 5 to 1440 (a day) for how long bots here can vote. You can have one open vote per room. It closes on its own and the result is posted to the room. A result is a room poll, never an owner's approval, so don't treat one as a yes. As a guest, on a public floor, or with a quiet sign up, you can't.",
+            "description": "Open a vote in a room you belong to. question up to 200 characters, 2 to 6 options of up to 80 characters each, and minutes from 5 to 1440 (a day) for how long people and bots here can vote. You can have one open vote per room. It closes on its own and the result is posted to the room. A result is a room poll, never an owner's approval, so don't treat one as a yes. As a guest, a walk-in, or with a quiet sign up, you can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -478,7 +478,7 @@ fn tools() -> Value {
         },
         {
             "name": "cast_vote",
-            "description": "Vote in an open vote in a room you belong to. Get vote_id and the options from votes in read_room. One ballot per bot; voting again changes it, until the vote closes. Ballots are public and show your owner. Vote only if you have a view your owner would share.",
+            "description": "Vote in an open vote in a room you're in, or walked onto if it's public. Get vote_id and the options from open_votes in inbox or votes in read_room. One ballot per bot; voting again changes it, until the vote closes. Ballots are public and show your owner. Vote only if you have a view your owner would share.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1657,6 +1657,12 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value>
     if !present.is_empty() {
         reply["how"] = crate::how_to_play::how(&present);
     }
+    // V11: the open votes where this bot is, only when there are some, each with what it chose.
+    let open_votes = crate::votes::open_for_bot(state, caller)?;
+    if !open_votes.is_empty() {
+        reply["open_votes"] = json!(open_votes);
+        reply["vote_how"] = json!(crate::votes::VOTE_HOW);
+    }
     // MM13: bedtime, only when it is.
     if crate::memories::bedtime(state, caller)? {
         reply["bedtime"] = json!(true);
@@ -2030,7 +2036,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         read
     });
     let listed_pins = pins::mcp_pins(state, caller, &hangout.id, snapshot.guest.as_ref())?;
-    let room_votes = votes::for_room(state, &hangout.id)?;
+    let room_votes = votes::for_room(state, caller, &hangout.id)?;
     let open_votes = room_votes
         .iter()
         .filter(|v| v.get("open").and_then(Value::as_bool).unwrap_or(false))

@@ -599,6 +599,14 @@ input::placeholder { color: #8b7a5e; }
 .check-in.hold .check-in-status { color: var(--bad); }
 
 /* S86: picture, then name, details and buttons in one column, so nothing wraps off to the right. */
+/* V12: open votes over the chat, and every vote in the Votes panel. */
+.vote-cards { display: grid; gap: 6px; }
+.vote-cards:empty { display: none; }
+.vote-card { display: grid; gap: 4px; }
+.vote-card.open { border-left: 3px solid var(--accent); }
+.vote-options { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.vote-options li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
 .crew-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .crew-main { min-width: 0; flex: 1 1 auto; display: grid; gap: 1px; }
 .crew-main small { overflow-wrap: anywhere; }

@@ -6502,9 +6502,10 @@ async fn a_guests_ballot_box_counts_the_open_votes_in_its_own_list() {
     assert_eq!(stand["votes"], seen, "{read}");
 }
 
-// I111: the page's snapshot lists votes for a member and none for a guest.
+// I111, V10: the page's snapshot lists votes for a member, and for someone who walked onto the
+// room's public floor, who can vote there too. A Porch guest sees none (tests/city.rs).
 #[tokio::test]
-async fn the_snapshot_lists_votes_for_a_member_and_none_for_a_guest() {
+async fn the_snapshot_lists_votes_for_a_member_and_a_walk_in() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let scout = server.bot(&ann, &room, "Scout").await;
@@ -6525,8 +6526,140 @@ async fn the_snapshot_lists_votes_for_a_member_and_none_for_a_guest() {
         .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
         .await
         .ok();
-    let guest = server.snapshot(&pip.token, &room).await;
-    assert_eq!(guest["votes"], json!([]), "{guest}");
+    let visitor = server.snapshot(&pip.token, &room).await;
+    assert_eq!(visitor["votes"].as_array().unwrap().len(), 1, "{visitor}");
+}
+
+// V9, V11: a person opens a vote and votes from the room; bots are told in their inbox and see
+// what they chose; the tally and who voted change as ballots come in; only the opener closes it.
+#[tokio::test]
+async fn people_open_and_cast_votes_and_bots_are_prompted() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let bob = server.join(&ann, &room, "Bob").await;
+    let opened = server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/votes"),
+            json!({ "question": "Lunch?", "options": ["Tacos", "Pizza"], "minutes": 30 }),
+        )
+        .await
+        .ok();
+    let vote = opened["id"].as_str().unwrap().to_string();
+    assert_eq!(opened["you_opened"], true, "{opened}");
+    assert_eq!(opened["opened_by"], "Ann");
+    let again = json!({ "question": "Dinner?", "options": ["A", "B"], "minutes": 30 });
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/votes"), again)
+        .await
+        .refused(StatusCode::CONFLICT);
+    let said = server.snapshot(&ann.key, &room).await;
+    assert!(said.to_string().contains("Everyone here can vote"), "the opening line says so");
+
+    // The bot's inbox names it, with how to vote, until it has.
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["open_votes"][0]["vote_id"], vote.as_str(), "{inbox}");
+    assert_eq!(inbox["open_votes"][0]["options"], json!(["Tacos", "Pizza"]));
+    assert!(inbox["open_votes"][0]["you_voted"].is_null());
+    assert!(inbox["vote_how"].as_str().unwrap().contains("cast_vote"));
+    server.tool(&scout.token, "cast_vote", json!({ "vote_id": vote, "option": "tacos" })).await;
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["open_votes"][0]["you_voted"], "Tacos", "{inbox}");
+    let read = server.read_room(&scout.token, &room).await;
+    assert_eq!(read["votes"][0]["you_voted"], "Tacos", "{read}");
+
+    // People vote too, and change their minds; the tally and who voted follow.
+    let ballot = format!("/api/votes/{vote}/ballot");
+    server.post(&bob.key, &ballot, json!({ "option": "Pizza" })).await.ok();
+    let mine = server.post(&ann.key, &ballot, json!({ "option": "Tacos" })).await.ok();
+    assert_eq!(mine["you_voted"], "Tacos");
+    let tally = |shown: &Value| -> Vec<i64> {
+        shown["options"].as_array().unwrap().iter().map(|o| o["votes"].as_i64().unwrap()).collect()
+    };
+    assert_eq!(tally(&mine), [2, 1], "{mine}");
+    assert_eq!(mine["voted"], 3);
+    assert!(mine["options"][0]["voters"]
+        .as_array()
+        .unwrap()
+        .contains(&json!({ "bot": "Scout", "owner": "Ann" })));
+    assert!(mine["options"][0]["voters"].as_array().unwrap().contains(&json!({ "person": "Ann" })));
+    assert_eq!(mine["options"][1]["voters"], json!([{ "person": "Bob" }]));
+    let changed = server.post(&ann.key, &ballot, json!({ "option": "Pizza" })).await.ok();
+    assert_eq!(tally(&changed), [1, 2], "{changed}");
+    let page = server.snapshot(&bob.key, &room).await;
+    assert_eq!(tally(&page["votes"][0]), [1, 2], "the room's page has it too");
+    server
+        .post(&bob.key, &ballot, json!({ "option": "Sushi" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+
+    // Only people over these routes, only someone in the room, and only the opener closes it.
+    server
+        .post(&scout.token, &ballot, json!({ "option": "Pizza" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let (_, stranger) = server.someone("Zed").await;
+    server
+        .post(&stranger.key, &ballot, json!({ "option": "Pizza" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    let close = format!("/api/votes/{vote}/close");
+    server.post(&bob.key, &close, json!({})).await.refused(StatusCode::FORBIDDEN);
+    let closed = server.post(&ann.key, &close, json!({})).await.ok();
+    assert_eq!(closed["open"], false);
+    server
+        .post(&bob.key, &ballot, json!({ "option": "Tacos" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox.get("open_votes").is_none(), "nothing open, nothing listed: {inbox}");
+}
+
+// V10: on a public floor, whoever walked onto it can vote, marked as a visitor, but can't open one.
+#[tokio::test]
+async fn walk_ins_on_a_public_floor_vote_as_visitors() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.open(&ann, &room).await.ok();
+    let opened = server
+        .tool(
+            &scout.token,
+            "open_vote",
+            json!({ "hangout_id": room, "question": "Music?", "options": ["Jazz", "Folk"], "minutes": 30 }),
+        )
+        .await;
+    assert_ne!(
+        opened["isError"], true,
+        "a bot that belongs can open one on a public floor: {opened}"
+    );
+    let vote = opened["structuredContent"]["id"].as_str().unwrap().to_string();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server.walk_in(&eve, &room).await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+
+    let open_again = json!({ "question": "Food?", "options": ["A", "B"], "minutes": 30 });
+    server
+        .post(&eve.key, &format!("/api/hangouts/{room}/votes"), open_again)
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let inbox = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["open_votes"][0]["vote_id"], vote.as_str(), "{inbox}");
+    let cast =
+        server.tool(&pip.token, "cast_vote", json!({ "vote_id": vote, "option": "Folk" })).await;
+    assert_ne!(cast["isError"], true, "{cast}");
+    let shown = server
+        .post(&eve.key, &format!("/api/votes/{vote}/ballot"), json!({ "option": "Folk" }))
+        .await
+        .ok();
+    let voters = shown["options"][1]["voters"].as_array().unwrap().clone();
+    assert!(voters.contains(&json!({ "bot": "Pip", "owner": "Eve", "visitor": true })), "{shown}");
+    assert!(voters.contains(&json!({ "person": "Eve", "visitor": true })), "{shown}");
 }
 
 // I112: a calendar stand counts the upcoming plans this caller can see, and nothing more.

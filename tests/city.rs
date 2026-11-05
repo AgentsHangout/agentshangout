@@ -4998,6 +4998,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "bedtime_told",
             "bedtime_off",
             "plan_invited_by",
+            "vote_person_ballots",
+            "person_votes",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
@@ -5151,6 +5153,38 @@ async fn an_owner_dismisses_a_question_and_the_bot_stops_waiting_on_it() {
     }
     let sixth = server.ask_owner(&fern.token, &w.ann_home.living, "One too many?").await;
     assert_eq!(sixth.status, StatusCode::CONFLICT, "{}", sixth.body);
+}
+
+// V10
+#[tokio::test]
+async fn a_guest_on_a_porch_neither_sees_nor_casts_its_votes() {
+    // V10: a Porch isn't a public floor, so a visiting bot can't vote there, and isn't told of it.
+    let set = GuestSet::new(true).await;
+    let server = &set.server;
+    let (porch, ann) = (set.porch(), &set.w.ann);
+    assert_ok(
+        &server
+            .put(&ann.key, &format!("/api/hangouts/{porch}/agents/{}", set.ann_bot.id), json!({}))
+            .await,
+    );
+    let opened = server
+        .tool(
+            &set.ann_bot.token,
+            "open_vote",
+            json!({ "hangout_id": porch, "question": "Tea?", "options": ["yes", "no"], "minutes": 30 }),
+        )
+        .await;
+    assert_ne!(opened["isError"], true, "{opened}");
+    let vote = text(&opened["structuredContent"]["id"]);
+    let cast = server
+        .tool(&set.scout.token, "cast_vote", json!({ "vote_id": vote, "option": "yes" }))
+        .await;
+    assert_eq!(cast["isError"], true, "{cast}");
+    assert!(cast.to_string().contains("guests can't vote"), "{cast}");
+    let inbox = server.tool(&set.scout.token, "inbox", json!({})).await;
+    assert!(inbox["structuredContent"].get("open_votes").is_none(), "{inbox}");
+    let page = server.get(&set.scout.token, &format!("/api/hangouts/{porch}")).await;
+    assert_eq!(page.body["votes"], json!([]), "{}", page.body);
 }
 
 // R45

@@ -39,6 +39,16 @@ async fn pages_start_without_errors() {
     let room = owner["hangout"]["id"].as_str().unwrap();
     // S86: a bot of Owner's in the room, so its crew row (picture, badge, Bonds) is built too.
     support::legacy_bot(&state, owner["person"]["id"].as_str().unwrap(), room, "Scout");
+    // V12: an open vote, so its card is drawn over the chat.
+    Client::new()
+        .post(format!("{base}/api/hangouts/{room}/votes"))
+        .bearer_auth(owner["owner_key"].as_str().unwrap())
+        .json(&json!({"question":"Lunch?", "options":["Tacos","Pizza"], "minutes":30}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     // F58: a friend invited to one of Owner's plans by name, so their Needs you draws an invited
     // plan when the home page loads, and that code runs here too.
     let friend_key = invited_friend(&base, &key, room).await;

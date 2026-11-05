@@ -2139,10 +2139,13 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         pin_policy,
         can_pin,
         can_clear_pins,
-        votes: if guest.is_some() {
+        // V10: a guest on a Porch sees none; someone who walked onto a public floor can vote there.
+        votes: if guest.is_some()
+            && !state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public")
+        {
             Vec::new()
         } else {
-            crate::votes::for_room(state, hangout_id)?
+            crate::votes::for_room(state, caller, hangout_id)?
         },
         events,
         invitees,

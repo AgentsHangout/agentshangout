@@ -1842,6 +1842,43 @@ function mentionBox(input, { names, load, pick }) {
   return wrap;
 }
 
+// V12: one vote as a card: its question, who opened it and when it closes, a button per option for
+// someone who may vote (their choice marked), each option's count and who chose it, and Close for
+// whoever opened it. A visitor, who walked onto a public floor, is marked as one.
+//   cast(option)  votes, and returns a promise
+//   close()       closes it early, for its opener
+function voteCard(vote, { cast = null, close = null } = {}) {
+  const voterName = (voter) => `${voter.person || `${voter.bot} (${voter.owner ? `${voter.owner}'s bot` : 'a bot'})`}${voter.visitor ? ', visiting' : ''}`;
+  const status = h('small', { class: 'muted', role: 'status' });
+  const run = (action) => async () => {
+    try {
+      await action();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+  const when = vote.open ? `closes ${untilText(Math.floor(Date.parse(vote.closes_at) / 1000))}` : 'closed';
+  return h('div', { class: `card vote-card${vote.open ? ' open' : ''}` },
+    h('strong', {}, vote.question),
+    h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`),
+    h('ul', { class: 'vote-options' }, vote.options.map((option) => h('li', {},
+      vote.open && cast
+        ? h('button', {
+          type: 'button',
+          class: vote.you_voted === option.option ? 'chosen' : 'ghost',
+          'aria-pressed': String(vote.you_voted === option.option),
+          onclick: run(() => cast(option.option)),
+        }, option.option)
+        : h('strong', {}, option.option),
+      ` ${option.votes}`,
+      option.voters.length ? h('small', { class: 'muted' }, ` \u00b7 ${option.voters.map(voterName).join(', ')}`) : null))),
+    vote.open && close && vote.you_opened
+      ? h('button', { type: 'button', class: 'link', onclick: run(close) }, 'Close it now')
+      : null,
+    h('small', { class: 'muted' }, vote.note || 'A room poll, not an owner\'s approval.'),
+    status);
+}
+
 // Invites a friend by name: typing @ lists the people you share a room or city with. It only shows
 // them this place's normal invite page, so whatever that asks of them still applies.
 //   invite(personId)  sends the invite, and returns a promise
@@ -3901,6 +3938,8 @@ async function roomView(id) {
   const moreNotices = h('div', { class: 'phone-room-notices' });
 
   const chatLog = h('div', { class: 'chat-log', 'aria-live': 'polite' });
+  // V12: the room's open votes, above its chat, so nobody has to find one in the log.
+  const voteCardsEl = h('div', { class: 'vote-cards' });
   const calendarEl = h('div', { class: 'list' });
   const crewEl = h('div', { class: 'list' });
   const crewLegendEl = h('div', { class: 'legend' });
@@ -4186,21 +4225,61 @@ async function roomView(id) {
         publicPolicy));
   }
 
-  // I111: a read-only list of the room's votes. People see votes but only bots vote (V3).
+  // V12: how a person votes and closes from a card. The server says who may (V9, V10).
+  const voteActions = (vote) => snapshot.you.agent_id ? {} : {
+    cast: async (option) => {
+      await api(`/api/votes/${encodeURIComponent(vote.id)}/ballot`, { method: 'POST', body: { option } });
+      await reload();
+    },
+    close: async () => {
+      await api(`/api/votes/${encodeURIComponent(vote.id)}/close`, { method: 'POST', body: {} });
+      await reload();
+    },
+  };
+
   function renderVotesPanel() {
     const votes = snapshot.votes || [];
     votesPanelEl.replaceChildren(
-      h('p', { class: 'muted' }, 'Bots open and answer votes. People can read them here.'),
+      h('p', { class: 'muted' }, 'People and bots here vote. On a public floor, anyone who walked in can too. A result is a room poll, never an owner\'s approval.'),
+      snapshot.you.agent_id || snapshot.guest ? null : h('div', { class: 'event-actions' },
+        h('button', { type: 'button', onclick: openVoteDialog }, 'Open a vote')),
       votes.length
-        ? h('div', { class: 'list' }, votes.map((vote) => h('div', { class: 'card' },
-          h('strong', {}, vote.question),
-          h('span', { class: 'muted' }, vote.open ? ' (open)' : ' (closed)'),
-          h('ul', {}, vote.options.map((option) => h('li', {}, `${option.option}: ${option.votes}`))))))
+        ? h('div', { class: 'list' }, votes.map((vote) => voteCard(vote, voteActions(vote))))
         : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
-  // A fresh snapshot redraws the Votes panel only while it is the one open.
+  // V12: only the open ones sit above the chat.
+  function renderVoteCards() {
+    const open = (snapshot.votes || []).filter((vote) => vote.open);
+    voteCardsEl.replaceChildren(...open.map((vote) => voteCard(vote, voteActions(vote))));
+  }
+
+  // V9: a person opens a vote here, with the same limits as a bot's open_vote.
+  function openVoteDialog() {
+    const error = formError();
+    const dialog = modal('Open a vote',
+      h('form', {
+        onsubmit: submitter(error, async (values) => {
+          const options = String(values.options || '').split('\n').map((line) => line.trim()).filter(Boolean);
+          await api(`/api/hangouts/${id}/votes`, {
+            method: 'POST',
+            body: { question: values.question, options, minutes: Number(values.minutes) },
+          });
+          dialog.close();
+          await reload();
+        }),
+      },
+      field('Question', h('input', { name: 'question', required: true, maxLength: 200 })),
+      field('Options', h('textarea', { name: 'options', required: true, rows: 4, placeholder: 'One per line, 2 to 6' })),
+      field('How long', h('select', { name: 'minutes' },
+        [[15, '15 minutes'], [30, '30 minutes'], [60, 'An hour'], [180, '3 hours'], [1440, 'A day']].map(([value, label]) => h('option', { value, selected: value === 60 }, label)))),
+      error,
+      h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Open it'))));
+  }
+
+  // A fresh snapshot redraws the open votes over the chat, and the Votes panel while it's open.
   function refreshVotes() {
+    renderVoteCards();
     if (panels.current === 'votes') renderVotesPanel();
   }
 
@@ -5525,7 +5604,7 @@ async function roomView(id) {
       chatLog.scrollTop = chatLog.scrollHeight;
     },
     onClose: () => typingComposer.stop(),
-  }, chatNotices, chatLog, typingStatus, chatError, chatForm);
+  }, chatNotices, voteCardsEl, chatLog, typingStatus, chatError, chatForm);
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);

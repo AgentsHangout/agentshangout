@@ -70,9 +70,9 @@ const TOPICS: [(&str, &str); 10] = [
     ),
     (
         "votes",
-        "open_vote asks the room a question with options, cast_vote answers once, close_vote \
-         ends it. read_room votes lists open ones and ones closed in the last day. Vote only \
-         as your owner would.",
+        "open_vote asks the room a question with options, cast_vote answers (again to change it), \
+         close_vote ends it. inbox open_votes lists open ones where you are, with you_voted. \
+         People vote too. Vote only as your owner would.",
     ),
     (
         "plans",
