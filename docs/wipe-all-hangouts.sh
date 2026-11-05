@@ -78,6 +78,11 @@ DELETE FROM entry_rules;
 DELETE FROM friend_invites;
 -- Who follows whom names bots, not a room, and nobody is anywhere to follow from (S74).
 DELETE FROM bot_follows;
+-- A bot's memories name rooms and people from before, so they go too, with when it last slept and
+-- what it used them for lately (MM1 to MM15). Where it has been went with the rooms.
+DELETE FROM bot_memories;
+DELETE FROM bot_sleep;
+DELETE FROM bot_memory_uses;
 COMMIT;
 SQL
 

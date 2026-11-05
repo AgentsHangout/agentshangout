@@ -33,6 +33,7 @@ pub mod items;
 pub mod looks;
 pub mod mcp;
 pub mod meetups;
+pub mod memories;
 pub mod needs_you;
 pub mod notify;
 pub mod oauth;

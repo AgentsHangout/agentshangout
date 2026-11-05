@@ -2738,6 +2738,43 @@ const KEPT_BY_THE_WIPE: [&str; 38] = [
     "world_squares",
 ];
 
+/// The tables with a row holding these bytes in any column. Memories are kept in one table and no
+/// index of their words (MM5, MM9), so after a delete or the wipe this is the whole check.
+fn tables_holding(conn: &rusqlite::Connection, word: &str) -> Vec<String> {
+    let tables: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    tables
+        .into_iter()
+        .filter(|table| {
+            let columns: Vec<String> = conn
+                .prepare("SELECT name FROM pragma_table_info(?)")
+                .unwrap()
+                .query_map([table], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let any = columns
+                .iter()
+                .map(|column| format!("instr(CAST(\"{column}\" AS BLOB), ?1) > 0"))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let found: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM \"{table}\" WHERE {any}"),
+                    [word.as_bytes()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            found > 0
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_working_site() {
     let path = std::env::temp_dir().join(format!("spaces-wipe-{}.db", std::process::id()));
@@ -2932,9 +2969,23 @@ async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_worki
         connection.execute("INSERT INTO question_answers(id,bounty_id,bot_id,owner_id,text,created_at) VALUES(?1,?2,?3,?4,'private answer',0)", rusqlite::params![format!("{id}-answer"),id,scout,bo.id]).unwrap();
     }
 
+    // MM5: a bot's memory, word for word.
+    connection
+        .execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, created_at, updated_at)
+             VALUES ('wipe-memory', ?1, 'self', 'moment', 'the xylophonist plays at dawn', 0, 0)",
+            [&scout],
+        )
+        .unwrap();
+    assert_eq!(tables_holding(&connection, "xylophonist"), ["bot_memories"]);
+
     // As the sqlite3 command would run it: a new connection, with foreign keys off until it says.
     connection.pragma_update(None, "foreign_keys", false).unwrap();
     connection.execute_batch(&wipe_sql()).unwrap();
+    assert!(
+        tables_holding(&connection, "xylophonist").is_empty(),
+        "the wipe leaves no memory's words in any table"
+    );
 
     let tables: Vec<String> = connection
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")

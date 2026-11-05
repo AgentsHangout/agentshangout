@@ -1819,6 +1819,89 @@ CREATE TABLE IF NOT EXISTS absent_tags (
     rung        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS absent_tags_by_bot ON absent_tags (agent_id, at);
+-- MM1 to MM3: what a bot remembers, a note per subject or one of many moments. `n` is the row
+-- recall's index of the bot's own memories points at (MM9), so it never changes.
+CREATE TABLE IF NOT EXISTS bot_memories (
+    n           INTEGER PRIMARY KEY,
+    id          TEXT NOT NULL UNIQUE,
+    bot_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    subject     TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('note', 'moment')),
+    text        TEXT NOT NULL,
+    feeling     TEXT,
+    closeness   INTEGER,
+    importance  INTEGER NOT NULL DEFAULT 3,
+    recalls     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_memories_by_bot ON bot_memories (bot_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS bot_memories_by_subject ON bot_memories (subject);
+CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_one_note ON bot_memories (bot_id, subject) WHERE kind = 'note';
+-- MM5: memories about a bot or a person go with them. A bot's own go with it by its foreign key.
+CREATE TRIGGER IF NOT EXISTS bot_memories_about_a_bot_gone AFTER DELETE ON agents BEGIN
+ DELETE FROM bot_memories WHERE subject = 'agent:' || OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS bot_memories_about_a_person_gone AFTER DELETE ON people BEGIN
+ DELETE FROM bot_memories WHERE subject = 'person:' || OLD.id;
+END;
+-- MM11, MM12: when a bot last slept.
+CREATE TABLE IF NOT EXISTS bot_sleep (
+    bot_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    slept_at  INTEGER NOT NULL
+);
+-- MM6, MM12: each use of a bot's memories that has a limit, kept as long as its limit looks back:
+-- `save` (remember), `recall`, `forget`, `sleep` (a call) and `sleep_note` (a note sleep changed).
+CREATE TABLE IF NOT EXISTS bot_memory_uses (
+    bot_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    what    TEXT NOT NULL,
+    at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_memory_uses_by_bot ON bot_memory_uses (bot_id, what, at);
+-- MM4, MM9, MM11: every room a bot has been in, and when it last went there: a room it belongs
+-- to, one it went to, a walk-in and a trip's Porch. Triggers keep it, and leaving keeps the row.
+CREATE TABLE IF NOT EXISTS bot_rooms_seen (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    seen_at     INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
+CREATE INDEX IF NOT EXISTS bot_rooms_seen_by_room ON bot_rooms_seen (hangout_id);
+-- Each one updates the row or adds it, never both, so it can't conflict whatever the statement
+-- that set it off says to do on a conflict.
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_joined AFTER INSERT ON room_agents BEGIN
+ UPDATE bot_rooms_seen SET seen_at = CAST(strftime('%s', 'now') AS INTEGER) WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, CAST(strftime('%s', 'now') AS INTEGER)
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_went AFTER INSERT ON bot_places BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_went_again AFTER UPDATE ON bot_places BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_walked_in AFTER INSERT ON floor_visits
+WHEN NEW.agent_id IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_arrived AFTER UPDATE OF status ON trips
+WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER)) WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id);
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_arrived_at_once AFTER INSERT ON trips
+WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER)) WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id);
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
+END;
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -4268,6 +4351,9 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
+        // MM5, MM9: recall's index of a bot's memories lives in the temporary database for one
+        // search. Kept in memory, its words never reach a file on disk.
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
         remake_index(&conn, "players_one_own_per_person", "removed = 0")?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self { conn: Mutex::new(conn), outside_map: Mutex::new(None) })

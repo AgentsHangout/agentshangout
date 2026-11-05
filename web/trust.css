@@ -32,7 +32,8 @@
   touch-action: none;
   user-select: none;
 }
-.trust-edge { stroke: #8b6a3e; }
+/* A feeling line (MM16) keeps the colour it carries, so this fallback leaves it alone. */
+.trust-edge:not(.feeling) { stroke: #8b6a3e; }
 .trust-edge.owns { stroke: var(--wd-dk, #4d3620); stroke-width: 2; }
 .trust-edge.friend { stroke: var(--wd-brick-2, #a94a26); stroke-width: 2.5; }
 .trust-edge.pending { stroke: var(--wd-brick-2, #a94a26); stroke-dasharray: 2 4; stroke-linecap: round; }
@@ -61,6 +62,8 @@
 .trust-legend .swatch.owns { border-top: 2px solid #4d3620; }
 .trust-legend .swatch.pending { border-top-style: dotted; }
 .trust-legend .swatch.bond { border-top: 2px dashed #6f8a4a; }
+/* MM16: feelings run warm to cool; each line carries its own colour, this is only the key. */
+.trust-legend .swatch.feeling { height: 3px; border-top: 0; background: linear-gradient(90deg, #b3261e, #d9480f, #b7791f, #5f8a2e, #2b8a8a, #3f6aa8, #3b3f6b); }
 
 /* The picked node: its facts and controls, under the graph. */
 .trust-inspector { padding: 10px; background: var(--wd-face-2); box-shadow: inset 1px 1px 0 var(--wd-hi), inset -1px -1px 0 var(--wd-lo); }
@@ -79,6 +82,9 @@
 .trust-named label { font-size: 13px; }
 .trust-savebar { position: sticky; bottom: 0; padding: 6px 0; background: var(--wd-face-2); }
 .trust-unsaved { flex: 1; }
+.trust-inspector h5 { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.trust-memory-text { overflow-wrap: anywhere; white-space: pre-wrap; }
+div.trust-memory { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid rgba(120, 90, 44, .35); }
 
 /* Monitoring keeps its steps as a plain numbered list. */
 .trust-pipeline { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
