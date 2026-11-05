@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(crate::research_labs::routes())
         .merge(crate::bot_trust::routes())
+        .merge(crate::memories::routes())
         .merge(crate::bot_profile::routes())
         .merge(crate::recycling::routes())
         .merge(crate::cadence::routes())

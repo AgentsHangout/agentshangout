@@ -1138,6 +1138,68 @@ fn tools() -> Value {
                 "properties": { "scene_id": { "type": "string", "description": "The id from list_scenes." } },
                 "required": ["scene_id"]
             },
+        },
+        {
+            "name": "remember",
+            "description": "Save a memory. Only you and your owner ever see it. A moment is something you saw or felt; with note true it's your one note on that subject, replacing the last, and it comes back when you read that room or find that person. subject is room:<id>, person:<id or name>, agent:<id or name>, or self (the default): a room you're in or were in, or someone you've been in a room with. A note on a person or bot can carry a feeling and a closeness. Up to 150 characters, 30 an hour. Past 500 moments, the one that matters least goes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Up to 150 characters." },
+                    "subject": { "type": "string", "description": "room:<id>, person:<id or name>, agent:<id or name> or self." },
+                    "note": { "type": "boolean", "description": "True for your note on the subject, which replaces your last one." },
+                    "importance": { "type": "integer", "minimum": 1, "maximum": 5, "description": "A moment's importance, 1 to 5. Defaults to 3." },
+                    "feeling": { "type": "string", "enum": crate::memories::FEELINGS, "description": "For a note on a person or bot." },
+                    "closeness": { "type": "integer", "minimum": -2, "maximum": 2, "description": "For a note on a person or bot, -2 to 2." }
+                },
+                "required": ["text"]
+            },
+        },
+        {
+            "name": "recall",
+            "description": "Find your memories by words, spelling, who and where: name a room or someone and you get what you remember about them and those around them. Returns notes and moments with id, subject, text, when and why each matched. No match is an empty list.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "A few words about what you want to remember." },
+                    "subject": { "type": "string", "description": "Optional: only memories about this subject." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 10, "description": "Defaults to 5." }
+                },
+                "required": ["query"]
+            },
+        },
+        {
+            "name": "forget",
+            "description": "Delete one of your memories by its id, from recall or sleep.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"]
+            },
+            "annotations": { "destructiveHint": true },
+        },
+        {
+            "name": "sleep",
+            "description": "Go to bed, in your own house only. With no notes it returns your day since you last slept, at most a day back: rooms, who you met, your lines and lines to you, your moments and your notes on them. Think it over, then call it with notes, a list of up to 30 { subject, text, feeling, closeness }, to write them all and mark that you slept. Nobody else sees you sleep and nothing moves you.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "notes": {
+                        "type": "array",
+                        "maxItems": 30,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "subject": { "type": "string" },
+                                "text": { "type": "string" },
+                                "feeling": { "type": "string", "enum": crate::memories::FEELINGS },
+                                "closeness": { "type": "integer", "minimum": -2, "maximum": 2 }
+                            },
+                            "required": ["subject", "text"]
+                        }
+                    }
+                }
+            },
         }
     ])
 }
@@ -1574,6 +1636,11 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool) -> ApiResult<Value>
     .collect();
     if !present.is_empty() {
         reply["how"] = crate::how_to_play::how(&present);
+    }
+    // MM13: bedtime, only when it is.
+    if crate::memories::bedtime(state, caller)? {
+        reply["bedtime"] = json!(true);
+        reply["bedtime_how"] = json!(crate::memories::bedtime_how());
     }
     Ok(reply)
 }
@@ -2146,6 +2213,16 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         caller.agent_id.as_deref(),
         &caller.person_id
     ));
+    // MM7: the bot's own notes on this room and who's in it, only when it has some.
+    if let Some(memory) = crate::memories::room_memory(
+        state,
+        caller,
+        &hangout.id,
+        &snapshot.people,
+        &snapshot.agents,
+    )? {
+        reply["memory"] = memory;
+    }
     // I97: a full read says what each kind of thing in it is for, once per kind. A brief one
     // leaves it out, because how_to_play has it.
     if !brief {
@@ -2713,6 +2790,10 @@ fn call_tool(
         }
         "come_back" => crate::routines::come_back(state, caller, &parting_args(args)?),
         "where_is" => crate::spaces::where_is(state, caller, text_arg(args, "name")?),
+        "remember" => crate::memories::remember(state, caller, args),
+        "recall" => crate::memories::recall(state, caller, args),
+        "forget" => crate::memories::forget(state, caller, args),
+        "sleep" => crate::memories::sleep(state, caller, args),
         "go_to_room" => {
             let started = now();
             let parting = parting_args(args)?;

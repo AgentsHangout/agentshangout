@@ -3467,6 +3467,13 @@ async fn the_database_the_live_server_has_upgrades_safely_and_the_same_way_every
         upgraded.keys().filter(|t| !old_tables.contains_key(*t)).collect();
     assert!(new_tables.len() >= 13, "{new_tables:?}");
     for table in &new_tables {
+        // FTS5 keeps its own settings and index structure in shadow tables from the moment the
+        // index is made (MM9). Those rows are SQLite's, not anyone's data.
+        if ["bot_memories_fts_", "bot_memories_tri_"].iter().any(|fts| table.starts_with(fts))
+            && ["config", "data"].iter().any(|shadow| table.ends_with(shadow))
+        {
+            continue;
+        }
         assert!(
             upgraded[*table].is_empty(),
             "{table} has rows nobody put there: {:?}",

@@ -1791,6 +1791,104 @@ CREATE TABLE IF NOT EXISTS owner_answers_seen (
     question_id  TEXT PRIMARY KEY REFERENCES owner_questions(id) ON DELETE CASCADE,
     seen_at      INTEGER NOT NULL
 );
+-- MM1 to MM3: what a bot remembers, a note per subject or one of many moments. `n` is the row the
+-- full-text indexes point at, so it never changes, even if the file is vacuumed.
+CREATE TABLE IF NOT EXISTS bot_memories (
+    n           INTEGER PRIMARY KEY,
+    id          TEXT NOT NULL UNIQUE,
+    bot_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    subject     TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('note', 'moment')),
+    text        TEXT NOT NULL,
+    feeling     TEXT,
+    closeness   INTEGER,
+    importance  INTEGER NOT NULL DEFAULT 3,
+    recalls     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_memories_by_bot ON bot_memories (bot_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS bot_memories_by_subject ON bot_memories (subject);
+CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_one_note ON bot_memories (bot_id, subject) WHERE kind = 'note';
+-- MM9: stemmed words and trigrams, kept in step with the table by the triggers below.
+CREATE VIRTUAL TABLE IF NOT EXISTS bot_memories_fts USING fts5(text, content='bot_memories', content_rowid='n', tokenize='porter unicode61');
+CREATE VIRTUAL TABLE IF NOT EXISTS bot_memories_tri USING fts5(text, content='bot_memories', content_rowid='n', tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS bot_memories_indexed AFTER INSERT ON bot_memories BEGIN
+ INSERT INTO bot_memories_fts (rowid, text) VALUES (NEW.n, NEW.text);
+ INSERT INTO bot_memories_tri (rowid, text) VALUES (NEW.n, NEW.text);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_memories_unindexed AFTER DELETE ON bot_memories BEGIN
+ INSERT INTO bot_memories_fts (bot_memories_fts, rowid, text) VALUES ('delete', OLD.n, OLD.text);
+ INSERT INTO bot_memories_tri (bot_memories_tri, rowid, text) VALUES ('delete', OLD.n, OLD.text);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_memories_reindexed AFTER UPDATE OF text ON bot_memories BEGIN
+ INSERT INTO bot_memories_fts (bot_memories_fts, rowid, text) VALUES ('delete', OLD.n, OLD.text);
+ INSERT INTO bot_memories_tri (bot_memories_tri, rowid, text) VALUES ('delete', OLD.n, OLD.text);
+ INSERT INTO bot_memories_fts (rowid, text) VALUES (NEW.n, NEW.text);
+ INSERT INTO bot_memories_tri (rowid, text) VALUES (NEW.n, NEW.text);
+END;
+-- MM5: memories about a bot or a person go with them. A bot's own go with it by its foreign key.
+CREATE TRIGGER IF NOT EXISTS bot_memories_about_a_bot_gone AFTER DELETE ON agents BEGIN
+ DELETE FROM bot_memories WHERE subject = 'agent:' || OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS bot_memories_about_a_person_gone AFTER DELETE ON people BEGIN
+ DELETE FROM bot_memories WHERE subject = 'person:' || OLD.id;
+END;
+-- MM11, MM12: when a bot last slept.
+CREATE TABLE IF NOT EXISTS bot_sleep (
+    bot_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    slept_at  INTEGER NOT NULL
+);
+-- MM6: each memory a bot saved in the last hour, for its 30 an hour.
+CREATE TABLE IF NOT EXISTS bot_memory_saves (
+    bot_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_memory_saves_by_bot ON bot_memory_saves (bot_id, at);
+-- MM4, MM9, MM11: every room a bot has been in, and when it last went there: a room it belongs
+-- to, one it went to, a walk-in and a trip's Porch. Triggers keep it, and leaving keeps the row.
+CREATE TABLE IF NOT EXISTS bot_rooms_seen (
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    seen_at     INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, hangout_id)
+);
+CREATE INDEX IF NOT EXISTS bot_rooms_seen_by_room ON bot_rooms_seen (hangout_id);
+-- Each one updates the row or adds it, never both, so it can't conflict whatever the statement
+-- that set it off says to do on a conflict.
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_joined AFTER INSERT ON room_agents BEGIN
+ UPDATE bot_rooms_seen SET seen_at = CAST(strftime('%s', 'now') AS INTEGER) WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, CAST(strftime('%s', 'now') AS INTEGER)
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_went AFTER INSERT ON bot_places BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_went_again AFTER UPDATE ON bot_places BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_walked_in AFTER INSERT ON floor_visits
+WHEN NEW.agent_id IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = NEW.since WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id;
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, NEW.hangout_id, NEW.since
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = NEW.hangout_id);
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_arrived AFTER UPDATE OF status ON trips
+WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER)) WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id);
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
+END;
+CREATE TRIGGER IF NOT EXISTS bot_rooms_seen_arrived_at_once AFTER INSERT ON trips
+WHEN NEW.status = 'here' AND (SELECT porch FROM houses WHERE id = NEW.house_id) IS NOT NULL BEGIN
+ UPDATE bot_rooms_seen SET seen_at = COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER)) WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id);
+ INSERT INTO bot_rooms_seen (agent_id, hangout_id, seen_at) SELECT NEW.agent_id, (SELECT porch FROM houses WHERE id = NEW.house_id), COALESCE(NEW.arrived_at, CAST(strftime('%s', 'now') AS INTEGER))
+ WHERE NOT EXISTS (SELECT 1 FROM bot_rooms_seen WHERE agent_id = NEW.agent_id AND hangout_id = (SELECT porch FROM houses WHERE id = NEW.house_id));
+END;
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -3428,6 +3526,14 @@ fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
+    Ok(())
+}
+
+/// MM5: a delete in an FTS5 index only marks the words gone, and they stay in its pages until a
+/// merge. After an account or a bot goes, merging both memory indexes writes them out for good.
+fn purge_memory_words(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("INSERT INTO bot_memories_fts (bot_memories_fts) VALUES ('optimize')", [])?;
+    conn.execute("INSERT INTO bot_memories_tri (bot_memories_tri) VALUES ('optimize')", [])?;
     Ok(())
 }
 
@@ -5306,7 +5412,8 @@ impl Db {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         delete_agent_in(&tx, agent_id)?;
-        tx.commit()
+        tx.commit()?;
+        purge_memory_words(&conn)
     }
 
     pub fn touch_agent_seen(&self, agent_id: &str, now: i64) -> rusqlite::Result<()> {
@@ -14777,6 +14884,7 @@ impl Db {
         )?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;
         tx.commit()?;
+        purge_memory_words(&conn)?;
         Ok(gone)
     }
 }

@@ -751,6 +751,7 @@ through the real routes, and requires every table to be on the list below or lef
 | Every space and floor, walk-ins and who was turned out, and every item and its notes | Notes people keep for their own bots, marks on bots, which bots have moods turned off, and how people and bots look |
 | House bots, and with them the tokens on whatever ran a home | The public worlds, players and buildings |
 | Invite links of every kind, and invites between friends | |
+| Bots' memories, when they last slept and where they have been | |
 
 - **House bots go with their houses.** A house bot belongs to its house (R44), and the row that keeps
   it to its queue goes with the house. Left behind, it would be an ordinary bot with a live token.

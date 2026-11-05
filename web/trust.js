@@ -11,7 +11,7 @@ const ANCHOR = {
   you: [W / 2, 52], mine: [W / 2, 150], person: [80, 110], bot: [W - 80, 170], bond: [W / 2 + 70, H - 40],
 };
 // How long each kind of line wants to be.
-const REACH = { owns: 90, friend: 120, pending: 130, bond: 110 };
+const REACH = { owns: 90, friend: 120, pending: 130, bond: 110, feeling: 115 };
 
 // Shapes and colours every part of the graph carries itself (BT8). trust.css restyles them, but a
 // stylesheet that is late, missing or without its variables can't leave black blobs with no lines.
@@ -22,6 +22,15 @@ const EDGE = {
   pending: { stroke: BRICK, 'stroke-width': 1.5, 'stroke-dasharray': '2 4', 'stroke-linecap': 'round' },
   bond: { stroke: '#6f8a4a', 'stroke-width': 1.5, 'stroke-dasharray': '7 4' },
 };
+// MM16: a bot's feelings, warm to cool. A feeling the graph doesn't know is drawn as neutral.
+const FEELINGS = {
+  fond: '#b3261e', warm: '#d9480f', grateful: '#b7791f', trusting: '#5f8a2e', curious: '#2b8a8a',
+  neutral: '#7a6a55', wary: '#3f6aa8', annoyed: '#5b4a9e', hurt: '#3b3f6b',
+};
+const feelingEdge = (feeling, closeness) => ({
+  stroke: FEELINGS[feeling] || FEELINGS.neutral, 'stroke-width': 1.5 + Math.min(Math.abs(Number(closeness) || 0), 2) * 0.5,
+  'stroke-linecap': 'round', ...(Number(closeness) < 0 ? { 'stroke-dasharray': '5 4' } : {}),
+});
 const TILE = { you: '#6b2216', mine: '#cf7a34', person: '#ecdfbd', bot: '#ecdfbd', bond: '#ecdfbd' };
 // How big each kind of frame is: half its width, so the label can sit clear of it.
 const HALF = { you: 22, person: 17, mine: 19, bot: 16, bond: 16 };
@@ -31,6 +40,9 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
   let data, selected, tab = 'connections', draft, saved, busy = false, generation = 0, healthGeneration = 0;
   let monitoring, bonds, config, notice = '', dirty = false, focus = 'bot';
   let usage, serverUsage;
+  // MM15: what the chosen bot remembers, for its owner, as memoriesFrom shapes it. Undefined while
+  // reading, false when there's none to show.
+  let memories;
   // Where every node was last drawn, so a change doesn't throw the graph around.
   const placed = new Map();
   const body = panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
@@ -42,6 +54,19 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
   const personName = id => data.people.find(p => p.id === id)?.name || 'Person';
   const botName = id => data.bots.find(p => p.id === id)?.name || 'Bot';
   const clone = value => JSON.parse(JSON.stringify(value));
+  const memoriesPath = () => `${path()}/memories`;
+  const when = iso => { const at = new Date(iso); return iso && !Number.isNaN(at.getTime()) ? at.toLocaleString() : null; };
+  // MM15: the server's reply, read once into what the graph uses. Edges come as a bare id with
+  // `to_kind`; notes are keyed by subject (`person:<id>`, `agent:<id>`), so each edge gets that key.
+  function memoriesFrom(value, botId) {
+    if (!value || typeof value !== 'object') return false;
+    const list = v => Array.isArray(v) ? v.filter(m => m && typeof m === 'object') : [];
+    const notes = list(value.notes), moments = list(value.moments);
+    const edges = list(value.edges)
+      .filter(e => e.from === botId && typeof e.to === 'string' && e.to && ['person', 'bot'].includes(e.to_kind))
+      .map(e => ({ subject: `${e.to_kind === 'bot' ? 'agent' : 'person'}:${e.to}`, kind: e.to_kind, id: e.to, name: e.name, feeling: e.feeling, closeness: e.closeness }));
+    return { slept: value.slept_at || null, notes, moments, total: Number(value.moments_total) || moments.length, edges };
+  }
   // BT7: a node's head, drawn by the same art as rooms from what the server says it wears (C16).
   // It's a picture of the head only, scaled up whole so it stays sharp, or null where there's none.
   const heads = new Map();
@@ -118,7 +143,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     }
   }
   async function choose(id) {
-    selected = id; monitoring = bonds = config = usage = undefined; notice = ''; dirty = false; focus = 'bot';
+    selected = id; monitoring = bonds = config = usage = memories = undefined; notice = ''; dirty = false; focus = 'bot';
     saved = clone(bot().trust); draft = clone(saved);
     const request = ++generation;
     const healthRequest = ++healthGeneration;
@@ -140,6 +165,27 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
         if (!dirty) render();
       });
     }
+    // MM16: memories draw on the graph when they come; without them nothing changes.
+    api(memoriesPath()).then(value => {
+      if (generation !== request) return;
+      memories = memoriesFrom(value, id);
+      if (!dirty && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) render();
+    }).catch(() => { if (generation === request) memories = false; });
+  }
+  // The subject a bot's note on a node in the graph is written under.
+  function subjectOf(n) {
+    if (n.kind === 'you') return `person:${data.owner_id}`;
+    if (n.kind === 'person') return n.id;
+    if (n.kind === 'mine') return `agent:${n.id.slice(5)}`;
+    return n.botId ? `agent:${n.botId}` : null;
+  }
+  const noteOn = subject => memories ? memories.notes.find(m => m.subject === subject) : undefined;
+  async function forget(memory) {
+    const asked = selected;
+    await action(async () => {
+      await api(`${memoriesPath()}/${encodeURIComponent(memory.id)}`, { method: 'DELETE' });
+      try { const value = await api(memoriesPath()); if (asked === selected) memories = memoriesFrom(value, asked); } catch (_) { if (asked === selected) memories = false; }
+    });
   }
   function render() {
     if (!data) return;
@@ -234,6 +280,21 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
       Object.assign(n, { bond: b, botId: n.botId || id });
       edges.push({ from: centre, to: at, kind: 'bond', strength: b.strength });
     });
+    // MM16: a line for each feeling, and a node for anyone the bot has a note on but no other link.
+    for (const e of memories ? memories.edges : []) {
+      const { kind, id } = e;
+      if (kind === 'bot' && id === selected) continue;
+      const named = e.name || noteOn(e.subject)?.name;
+      let at;
+      if (kind === 'person') {
+        at = id === owner ? 'you' : `person:${id}`;
+        if (!nodes.has(at)) node(at, 'person', named || personName(id), `In ${bot().name}’s memories`);
+      } else {
+        at = [`mine:${id}`, `bot:${id}`, `bond:${id}`].find(k => nodes.has(k)) || `bot:${id}`;
+        if (!nodes.has(at)) Object.assign(node(at, 'bot', named || botName(id), `In ${bot().name}’s memories`), { botId: id });
+      }
+      edges.push({ from: centre, to: at, kind: 'feeling', feeling: e.feeling, closeness: e.closeness });
+    }
     return finish();
   }
   // A small force layout: nodes push apart, lines pull together. Nodes already on screen barely move.
@@ -333,13 +394,18 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     if (!nodes.some(n => n.id === focusId())) focus = selected ? 'bot' : 'you';
     const byId = new Map(nodes.map(n => [n.id, n]));
     // A friend who is also a bond gets two lines, so the second one bows out to stay visible.
-    const seen = new Set();
+    // A third line between the same two bows out the other way.
+    const seen = new Map();
     const lines = edges.map(e => {
       const pair = [e.from, e.to].sort().join(' ');
-      const bend = seen.has(pair) ? 24 : 0; seen.add(pair);
+      const count = seen.get(pair) || 0; seen.set(pair, count + 1);
+      const bend = count ? (count % 2 ? 1 : -1) * 24 * Math.ceil(count / 2) : 0;
       const a = byId.get(e.from), b = byId.get(e.to);
-      const line = svg('path', { class: `trust-edge ${e.kind}`, d: curve(a, b, bend), fill: 'none', ...EDGE[e.kind],
-        ...(e.kind === 'bond' ? { 'stroke-width': 1 + Math.min(Number(e.strength) || 0, 9) / 3 } : {}) });
+      const feeling = e.kind === 'feeling';
+      const said = feeling ? `${a.name} ${FEELINGS[e.feeling] ? `feels ${e.feeling} about` : 'has a note on'} ${b.name}${Number(e.closeness) < 0 ? ', at a distance' : ''}` : null;
+      const line = svg('path', { class: `trust-edge ${e.kind}${feeling ? ` ${FEELINGS[e.feeling] ? e.feeling : 'neutral'}` : ''}`, d: curve(a, b, bend), fill: 'none',
+        ...(feeling ? { ...feelingEdge(e.feeling, e.closeness), role: 'img', 'aria-label': said } : EDGE[e.kind]),
+        ...(e.kind === 'bond' ? { 'stroke-width': 1 + Math.min(Number(e.strength) || 0, 9) / 3 } : {}) }, said ? svg('title', {}, said) : null);
       return { e, line, a, b, bend };
     });
     const groups = new Map();
@@ -392,7 +458,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     }
     const legend = h('p', { class: 'trust-legend fine' },
       h('span', { class: 'swatch owns' }), 'Yours', h('span', { class: 'swatch friend' }), 'Friends',
-      h('span', { class: 'swatch pending' }), 'Asked, not answered', h('span', { class: 'swatch bond' }), 'Bond (earned)');
+      h('span', { class: 'swatch pending' }), 'Asked, not answered', h('span', { class: 'swatch bond' }), 'Bond (earned)',
+      ...(edges.some(e => e.kind === 'feeling') ? [h('span', { class: 'swatch feeling' }), 'Feelings, warm to cool, dashed when distant'] : []));
     const about = text(`${selected ? `${bot().name}’s` : 'Your'} connections. Round is a person, square is a bot, and each wears its own look. The ringed one is open below.`, 'muted fine');
     const hint = text('Pick anyone in the graph to see and change them. Drag to move them.', 'muted fine');
     return [about, picture, legend, hint, inspector(byId.get(focusId()))];
@@ -418,7 +485,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     const box = (...children) => h('section', { class: 'trust-inspector', 'aria-live': 'polite' }, ...children);
     if (!n || n.kind === 'you') {
       const owner = data.owner_id;
-      return box(h('h3', { tabindex: -1 }, 'You'),
+      return box(h('h3', { tabindex: -1 }, 'You'), selected ? noteView(noteOn(`person:${owner}`)) : null,
         !data.agents.length ? h('div', { class: 'trust-empty' }, text('You have no bots yet. Add one through Crew in your house, and its relationships, permissions and monitoring will be here.'), button('Open your crew', crew, { class: 'primary' })) : null,
         h('h4', {}, 'Your people friendships'), text('Friendships between you and other people. Both people agree, and “Friends” permissions include their bots.', 'muted fine'),
         h('ul', { class: 'room-list trust-list' }, ...friendshipRows('person', owner)), addFriend('person', owner));
@@ -430,13 +497,40 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
     const f = n.friendship;
     const from = n.kind === 'person' ? data.owner_id : selected;
     const canAsk = !f && n.botId && data.bots.some(b => b.id === n.botId);
-    return box(h('h3', { tabindex: -1 }, n.name),
+    return box(h('h3', { tabindex: -1 }, n.name), noteView(noteOn(subjectOf(n))),
       h('dl', { class: 'facts' }, ...facts.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       n.bond && !f ? text('A bond grows from time together and grants no permissions.', 'muted fine') : null,
       h('div', { class: 'row-actions' },
         f?.status === 'pending' && f.to_id === from ? button('Accept', () => friendship('POST', f, true), { class: 'primary' }) : null,
         f ? button(f.status === 'accepted' ? 'Remove friend' : f.from_id === from ? 'Cancel request' : 'Decline', () => friendship('DELETE', f)) : null,
         canAsk ? button(`Ask to be ${bot().name}’s friend`, () => friendship('POST', { kind: 'bot', from_id: selected, to_id: n.botId })) : null));
+  }
+  // MM16: the bot's note on the picked node. A bot wrote it, so it is only ever text.
+  function noteView(note) {
+    if (!note) return null;
+    return h('div', { class: 'trust-memory' }, h('h4', {}, `${bot().name}’s note`), text(note.text, 'trust-memory-text'),
+      h('div', { class: 'row-actions' }, note.feeling ? state(`Feels ${note.feeling}`) : null,
+        note.closeness != null ? state(`Closeness ${note.closeness}`) : null, button('Delete note', () => forget(note), { class: 'link' })));
+  }
+  // MM16: picking the bot shows when it last slept, its notes and its newest moments.
+  function memoryRows() {
+    if (!memories) return [];
+    const b = bot();
+    const notes = memories.notes;
+    // The server sends the newest first.
+    const moments = memories.moments.slice(0, 10);
+    const about = m => m.subject === 'self' ? 'Itself' : m.name || (String(m.subject).startsWith('room:') ? 'A room' : 'Someone');
+    const row = (m, extra) => h('li', { class: 'trust-person trust-memory' },
+      h('span', {}, h('strong', {}, about(m)), h('small', { class: 'trust-memory-text' }, m.text), extra ? h('small', { class: 'muted' }, extra) : null),
+      button('Delete', () => forget(m), { class: 'link', 'aria-label': `Delete memory about ${about(m)}` }));
+    const feels = m => [m.feeling ? `Feels ${m.feeling}` : null, m.closeness != null ? `closeness ${m.closeness}` : null].filter(Boolean).join(', ');
+    return [h('h4', {}, `What ${b.name} remembers`),
+      text(when(memories.slept) ? `Last slept ${when(memories.slept)}.` : 'Hasn’t slept yet.', 'muted fine'),
+      h('h5', {}, 'Notes'),
+      h('ul', { class: 'room-list trust-list' }, ...(notes.length ? notes.map(m => row(m, feels(m))) : [h('li', { class: 'muted' }, 'No notes yet.')])),
+      h('h5', {}, 'Lately'),
+      memories.total > moments.length ? text(`The newest ${moments.length} of ${memories.total}.`, 'muted fine') : null,
+      h('ul', { class: 'room-list trust-list' }, ...(moments.length ? moments.map(m => row(m, when(m.when))) : [h('li', { class: 'muted' }, 'No moments yet.')]))];
   }
   function botEditor() {
     const b = bot();
@@ -466,7 +560,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule }
         h('small', { class: 'trust-unsaved muted', role: 'status' }, dirty ? 'Unsaved changes' : 'All changes saved')),
       text('“Friends” means your accepted people friends, their bots, and this bot’s accepted bot friends. Requests and bonds don’t count.', 'muted fine'),
       h('h4', {}, `${b.name}’s bot friends`), text('Both bots’ owners agree. Your other bots aren’t included on their own.', 'muted fine'),
-      h('ul', { class: 'room-list trust-list' }, ...friendshipRows('bot', selected)), addFriend('bot', selected)];
+      h('ul', { class: 'room-list trust-list' }, ...friendshipRows('bot', selected)), addFriend('bot', selected),
+      ...memoryRows()];
   }
   function friendshipRows(kind, from) {
     const friends = data.friendships.filter(f => f.kind === kind && [f.from_id, f.to_id].includes(from));

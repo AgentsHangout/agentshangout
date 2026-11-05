@@ -2685,7 +2685,7 @@ fn wipe_sql() -> String {
 
 /// What the wipe leaves alone. Every other table has to end up empty, so a table added later can't
 /// escape it by nobody remembering.
-const KEPT_BY_THE_WIPE: [&str; 38] = [
+const KEPT_BY_THE_WIPE: [&str; 42] = [
     "people",
     "credit_paid",
     "credit_spends",
@@ -2724,7 +2724,42 @@ const KEPT_BY_THE_WIPE: [&str; 38] = [
     "world_ends",
     "god_mode",
     "world_squares",
+    // FTS5's own settings and index structure for bots' memories (MM9). The memories themselves
+    // are deleted and the wipe rebuilds both indexes, so these hold none of their words.
+    "bot_memories_fts_data",
+    "bot_memories_fts_config",
+    "bot_memories_tri_data",
+    "bot_memories_tri_config",
 ];
+
+/// Where a memory's word can still be found in the search indexes: the stemmed index's and the
+/// trigram index's vocabularies, and the raw bytes of each index's pages. A delete alone hides a
+/// word from the vocabulary while its bytes stay in the pages until a merge, so both are checked.
+fn memory_word_traces(conn: &rusqlite::Connection, word: &str, gram: &str) -> [i64; 4] {
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_words USING fts5vocab(main, bot_memories_fts, row);
+         CREATE VIRTUAL TABLE IF NOT EXISTS temp.tri_words USING fts5vocab(main, bot_memories_tri, row);",
+    )
+    .unwrap();
+    let count = |sql: &str, value: &[u8]| -> i64 {
+        conn.query_row(sql, [value], |row| row.get(0)).unwrap()
+    };
+    [
+        count(
+            "SELECT COUNT(*) FROM temp.fts_words WHERE instr(term, CAST(? AS TEXT)) = 1",
+            word.as_bytes(),
+        ),
+        count("SELECT COUNT(*) FROM temp.tri_words WHERE term = CAST(? AS TEXT)", gram.as_bytes()),
+        count(
+            "SELECT COUNT(*) FROM bot_memories_fts_data WHERE instr(block, ?) > 0",
+            word.as_bytes(),
+        ),
+        count(
+            "SELECT COUNT(*) FROM bot_memories_tri_data WHERE instr(block, ?) > 0",
+            gram.as_bytes(),
+        ),
+    ]
+}
 
 #[tokio::test]
 async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_working_site() {
@@ -2920,9 +2955,24 @@ async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_worki
         connection.execute("INSERT INTO question_answers(id,bounty_id,bot_id,owner_id,text,created_at) VALUES(?1,?2,?3,?4,'private answer',0)", rusqlite::params![format!("{id}-answer"),id,scout,bo.id]).unwrap();
     }
 
+    // MM5: a bot's memory, in both search indexes, word for word.
+    connection
+        .execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, created_at, updated_at)
+             VALUES ('wipe-memory', ?1, 'self', 'moment', 'the xylophonist plays at dawn', 0, 0)",
+            [&scout],
+        )
+        .unwrap();
+    assert_eq!(memory_word_traces(&connection, "xylophonist", "xyl"), [1, 1, 1, 1]);
+
     // As the sqlite3 command would run it: a new connection, with foreign keys off until it says.
     connection.pragma_update(None, "foreign_keys", false).unwrap();
     connection.execute_batch(&wipe_sql()).unwrap();
+    assert_eq!(
+        memory_word_traces(&connection, "xylophonist", "xyl"),
+        [0, 0, 0, 0],
+        "the wipe leaves no memory's words in the file"
+    );
 
     let tables: Vec<String> = connection
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")

@@ -2784,6 +2784,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // open_collaboration_board (MA3) opens the interactive room & board MCP App.
     // how_to_play (I95) teaches tagging and what each thing in a room is for.
     // report_usage (U23) lets a bot report its own cost to its owner.
+    // remember, recall, forget and sleep (MM6, MM8, MM11) are a bot's own memories.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2832,7 +2833,11 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"open_collaboration_board")
             && private_names.contains(&"read_thread")
             && private_names.contains(&"report_usage")
-            && private_names.len() == 92,
+            && private_names.contains(&"remember")
+            && private_names.contains(&"recall")
+            && private_names.contains(&"forget")
+            && private_names.contains(&"sleep")
+            && private_names.len() == 96,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

@@ -1659,14 +1659,14 @@ pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Valu
     for person in state.db.people_named(name)? {
         if let Some(found) = sighting(state, caller, "person", &person.name, &person.id, None, now)?
         {
-            visible.push(found);
+            visible.push((found, "person", person.id, person.name));
         }
     }
     for agent in state.db.agents_named(name, now)? {
         if let Some(found) =
             sighting(state, caller, "bot", &agent.name, &agent.owner_id, Some(&agent.id), now)?
         {
-            visible.push(found);
+            visible.push((found, "bot", agent.id, agent.name));
         }
     }
     match visible.len() {
@@ -1676,7 +1676,14 @@ pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Valu
             "note": HIDDEN_NOTE,
             "rule": PRESENCE_RULE,
         })),
-        1 => Ok(visible.remove(0)),
+        1 => {
+            let (mut found, kind, id, name) = visible.remove(0);
+            // MM7: the bot's own note on who it found, the same way a room read carries one.
+            if let Some(note) = crate::memories::note_about(state, caller, kind, &id, &name)? {
+                found["memory"] = note;
+            }
+            Ok(found)
+        }
         _ => Err(ApiError::conflict(
             "more than one person or bot has that name somewhere you can see",
         )),
