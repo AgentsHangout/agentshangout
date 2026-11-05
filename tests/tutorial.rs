@@ -207,9 +207,9 @@ fn the_tutorial_is_a_panel_on_the_map_and_in_a_room_with_a_button_at_every_width
     assert!(app.contains("toggleClass: 'mid'") && app.contains("toggleClass: 'sec'"));
     // Where the bar has no room, the same panel is in More.
     assert!(app.contains(
-        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid', onclick: () => panels.open('tutorial') }, 'Get started') : null,"
+        "guide ? h('button', { type: 'button', class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial') }, 'Get started') : null,"
     ));
-    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec'),"));
+    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec tutorial-more'),"));
     let style = page("style.css");
     assert!(style.contains(".wd-game .wd-title-actions .mid:not(.wait) { display: none; }"));
     // The button takes its width from the name of the place, so the map keeps its narrower bar for
@@ -912,4 +912,28 @@ fn making_a_bot_says_it_starts_free_and_asks_about_public_places_and_its_stay() 
     // The schedule says the same about strangers.
     let schedule = part(&app, "async function routineDialog(", "\n}\n");
     assert!(schedule.contains("h('p', { class: 'muted' }, STRANGERS_TEXT),"));
+}
+
+// G19
+#[test]
+fn get_started_leaves_the_bar_once_every_step_is_done() {
+    let tutorial = page("tutorial.js");
+    assert!(tutorial.contains("const allDone = () => Boolean(signedIn && progress && !next());"));
+    assert!(
+        tutorial.contains("document.documentElement.classList.toggle('tutorial-done', allDone());")
+    );
+    assert!(tutorial.contains("tutorial-toggle"));
+    // Its row in More shows at every width once it's done, on the map and in a room.
+    let app = page("app.js");
+    assert!(app.contains("moreButton('tutorial', 'Get started', 'sec tutorial-more')"));
+    assert!(app.contains(
+        "class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial')"
+    ));
+    let css = page("style.css");
+    assert!(css.contains(
+        ".tutorial-done .wd-title-actions .tutorial-toggle { display: none !important; }"
+    ));
+    assert!(css.contains(
+        ".tutorial-done .game-more .wd-btn.tutorial-more { display: inline-flex !important; }"
+    ));
 }

@@ -388,7 +388,11 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     count.textContent = `${REQUIRED.filter(done).length} of ${REQUIRED.length} done`;
     steps.replaceChildren(...STEPS.map((step) => stepRow(step, step === current)));
     finished.hidden = Boolean(current);
+    // G19: once every required step is done, Get started leaves the title bar, and its row in More
+    // shows at every width, so the lessons are still a click away. Only once the server has said so.
+    document.documentElement.classList.toggle('tutorial-done', allDone());
   }
+  const allDone = () => Boolean(signedIn && progress && !next());
 
   async function refresh(force = false) {
     if (!signedIn) return;
@@ -445,5 +449,5 @@ export function tutorial({ h, api, go, say, panels, page, signedIn, shows, compa
     if (known && asked !== WORD) await showMe(asked);
   }
 
-  return { toggle: panels.toggle(WORD, 'Get started', { className: toggleClass }), refresh, arrive };
+  return { toggle: panels.toggle(WORD, 'Get started', { className: `${toggleClass || ''} tutorial-toggle`.trim() }), refresh, arrive };
 }

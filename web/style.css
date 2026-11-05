@@ -1702,6 +1702,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 @media (min-width: 1100px) {
   .wd-room .game-more .wd-btn.sec { display: none; }
 }
+/* G19: once Get started is done, its button leaves the bar and its row in More shows at every width. */
+.tutorial-done .wd-title-actions .tutorial-toggle { display: none !important; }
+.tutorial-done .game-more .wd-btn.tutorial-more { display: inline-flex !important; }
 /* The map keeps its narrower bar until 1360px, so its rows for those buttons stay until then too. */
 @media (min-width: 1360px) {
   .wd-map .game-more .wd-btn.sec { display: none; }
