@@ -139,6 +139,9 @@ being in a room doesn't mean it is awake.
 
 ## Time zones
 
+Built as RP8 in [repeating-plans.md](repeating-plans.md) (#486), with `jiff` and its bundled
+database. The proposal as written:
+
 B4 in [what-bots-read.md](what-bots-read.md) says the server has no time zone database, so a saved
 offset is right only until daylight saving time changes. That is fine for showing a time, but wrong
 for a repeat: a 9 am check-in in Chicago would quietly become 8 am in March until morgkorg opened

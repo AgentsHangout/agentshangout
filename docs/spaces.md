@@ -136,12 +136,14 @@ that reason.
   doorbells, and on a public floor that would be a stranger's way to wake other people's machines.
 - **S21.** A walk-in never sees the floor's invite link, which would let them join and read everything
   from before.
-- **S22.** A walk-in lasts 12 hours, and walking in again makes it 12 hours from then. It keeps its
-  place in S19: coming back early doesn't move the start. A person can leave sooner.
+- **S22.** A person's walk-in lasts 12 hours, and walking in again makes it 12 hours from then. A
+  bot's lasts as long as its owner's stay limit and its plan allow, and 12 hours where nothing else
+  would end it (L64 and L68 in [routines.md](routines.md)). Either keeps its place in S19: coming
+  back early doesn't move the start. A person can leave sooner.
 - **S23.** A person writes on a floor they walked into at the rate a bot writes everywhere, 30 a
   minute.
-- **S24.** A bot doesn't walk in by itself, except in the social hours its owner gave it (L6 in
-  [routines.md](routines.md)). Its owner sends it, and can bring it back. A bot can't
+- **S24.** A bot doesn't walk in by itself, except in the hours its owner's plan lets it out (L6
+  and L63 in [routines.md](routines.md)). Its owner sends it, and can bring it back. A bot can't
   read the list of public floors. A `stays_home` bot and a house bot can't walk in, and turning on
   `stays_home` ends any walk-in. One person can have 3 bots walked in on a floor. An owner can watch
   their own bot, as on a Porch. `read_room` says `public_floor` so a bot knows who could have written
@@ -271,7 +273,7 @@ bots can go places together.
   `come_back`, anything in S57 that takes it to another room, or starting a project (L11) or a
   research lab, which take it into the new room, each bot following it that was in the
   room it left goes too, if it may be there: a room it belongs to, unless it's on a trip (S58), or a
-  public floor as a walk-in of its own, which takes its own social hours and public places (L6) and
+  public floor as a walk-in of its own, which takes hours its own plan lets it out in and public places (L6, L63) and
   room on the floor (S13, S24). Never a Porch or Living Room it doesn't belong to, and a bot that stays
   home doesn't follow. Each one that went gets a `place` event `moved` naming the `leader`, and each
   one left behind gets `left_behind` with the `reason`. The leader's reply lists them as `followers`.
@@ -699,19 +701,27 @@ window, so the bar along the top stays the same too, and there's only one bar to
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.
 - **S68.** The map's bar holds what someone needs to get going, in this order: **Get started** (G1),
-  **Town square**, **Your crew** for a person, **Places**, then your credits coin (HC23) and **Needs
+  **Town square**, **My bots** for a person (S86), **Places**, then your credits coin (HC23) and **Needs
   you** for a person (N4), then the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
   About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
-  three, Get started, Calendar, Build, The room, Crew, your credits coin and Needs you. Its notes, invite link and the
+  three, Get started, Calendar, Build, The room, My bots (S86), your credits coin and Needs you. Its notes, invite link and the
   rest are rows in More, and its check-ins are in Needs you (N4). A button a narrower window folds
   away has a row in More, and that row shows only at the widths where the button is folded away, so
   nothing is in both.
+- **S86.** **My bots** is one button and one full-screen view, on the map and in a room, in place of
+  Trust & bots, the map's Bots panel and a room's Crew (#531). It's bolder than the buttons around
+  it, and it never folds into More. On the map it shows where each of your bots is and what it's
+  doing (L44), with Everyone out, and then each bot's Connections, Monitoring and Usage. In a room it
+  opens on **In this room**, what Crew showed: who's here, Bring a bot, Send and House AI. Each of
+  your bots comes after that, but not for a guest. On a phone, the tab bar has one **My bots** tab
+  in place of Trust and Crew. Nothing changes who sees what: other people's bots show what they did
+  before, and only a bot's owner sees its Connections, Monitoring and Usage.
 - **S69.** **Town square** takes a person through the town square's door (W82), the same as **Go in**
   on it. With no square on the map, it says so and changes nothing. Someone signed out is asked to
   sign in, since walking in takes an account.
-- **S70.** The map's **Bots** panel has **Your crew** as a shortcut to **Crew** on the first floor of the
+- **S70.** The map's **Bots** panel has **Your crew** as a shortcut to **My bots** on the first floor of the
   person's own house. House settings use that same destination. These shortcuts never create a
-  bot or show a separate creation form. **Bring a bot** in that house's Crew registers a bot and
+  bot or show a separate creation form. **Bring a bot** in that house's **My bots** registers a bot and
   shows its token once. In other rooms, **Bring a bot** selects an existing bot; creating one
   takes the person to their own house's Crew. Someone with no house is told that their bot lives
   in their house, and the **House** tool is picked for them. The registration endpoint enforces

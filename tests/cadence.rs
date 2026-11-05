@@ -209,6 +209,43 @@ async fn new_shapes_are_set_and_read_back() {
     assert_eq!(s.state.db.cadence(&plan).unwrap().unwrap().days, 0b001_1111);
 }
 
+// RP8: a cadence copies its owner's time zone when it's set, and keeps the saved offset beside it.
+// A zone the server doesn't know isn't kept.
+#[tokio::test]
+async fn a_cadence_copies_its_owners_time_zone() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let plan = s.plan(&ann).await;
+    let path = format!("/api/events/{plan}/cadence");
+    let clock = |zone: &str| json!({ "time_zone": zone, "utc_offset_minutes": -360 });
+    let daily = json!({ "freq": "daily", "time": "09:00" });
+
+    let (status, saved) =
+        s.request(&ann.key, Method::PUT, "/api/clock", clock("America/Chicago")).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, set) = s.request(&ann.key, Method::PUT, &path, daily.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["time_zone"], "America/Chicago");
+    assert_eq!(set["utc_offset_min"], -360);
+    assert!(set.get("clock_note").is_none(), "{set}");
+    let (_, read) = s.request(&ann.key, Method::GET, &path, json!(null)).await;
+    assert_eq!(read["cadence"]["time_zone"], "America/Chicago", "{read}");
+
+    // Moving doesn't move it: a new clock changes nothing until the cadence is set again.
+    s.request(&ann.key, Method::PUT, "/api/clock", clock("America/Denver")).await;
+    assert_eq!(
+        s.state.db.cadence(&plan).unwrap().unwrap().time_zone.as_deref(),
+        Some("America/Chicago")
+    );
+
+    let (status, _) = s.request(&ann.key, Method::PUT, "/api/clock", clock("Mars/Olympus")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, set) = s.request(&ann.key, Method::PUT, &path, daily).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["time_zone"], Value::Null);
+    assert_eq!(set["utc_offset_min"], -360);
+}
+
 // RP10, RP11, RP4: each start of the day cues once, keyed on its own UTC start.
 #[tokio::test]
 async fn every_start_in_a_day_cues_once() {

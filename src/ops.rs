@@ -493,6 +493,8 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
             deliver_ring(state, message, bot, ring);
         }
     }
+    // BT10: a bot named here that isn't here, if its wake setting lets this speaker reach it.
+    crate::bot_trust::note_absent_tags(state, message, &seen)?;
     // I88: `@room` reaches the subscribed bots present here that weren't named already. A bot's
     // `@room` queues the mention for them to read, and rings nobody.
     for bot in crate::room_mentions::recipients(state, message, &named)? {
@@ -1977,6 +1979,12 @@ pub struct Snapshot {
     /// Which of this person's bots have moods turned off, for their own page (I10). Always empty
     /// for a bot, and nobody else's bots are ever in it.
     pub bots_without_moods: Vec<String>,
+    /// I120: whether `@room` from this caller would reach anyone, so the chat box can offer it.
+    pub room_mention: bool,
+    /// I120: the `@room` setting, only for the room's owner, so My bots can show it to change.
+    pub room_mention_policy: Option<String>,
+    /// I120: which of the caller's own bots hear `@room` here.
+    pub room_mention_bots: Vec<String>,
     /// The ids of the people with this floor open. Empty anywhere but a floor, and for a bot.
     pub present: Vec<String>,
     /// I108: transient human composer hints, never returned to bots.
@@ -2015,7 +2023,20 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
             agent.apprenticed_by = crate::bonds::apprenticed_by(state, &agent.id)?;
         }
     }
-    agents.extend(state.db.visitors_in(hangout_id, now)?);
+    let mut guests = state.db.visitors_in(hangout_id, now)?;
+    // L67: a bot's owner sees why its visit ends when it does. Nobody else is told.
+    if !caller.is_agent() {
+        for visitor in guests.iter_mut().filter(|visitor| visitor.owner_id == caller.person_id) {
+            visitor.visitor_until_why = Some(crate::routines::visit_why(
+                state,
+                &visitor.id,
+                &visitor.owner_id,
+                hangout_id,
+                now,
+            )?);
+        }
+    }
+    agents.extend(guests);
     // S55: they all belong here, or are guests, but each is in only one place.
     for agent in &mut agents {
         agent.away = state.db.bot_place(&agent.id, now)?.as_deref() != Some(hangout_id);
@@ -2094,6 +2115,8 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let pin_policy = crate::pins::policy_of(state, hangout_id)?;
     let can_pin = crate::pins::can_pin(state, caller, hangout_id, guest.as_ref())?;
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
+    let (room_mention_policy, room_mention_bots) =
+        crate::room_mentions::settings_for(state, caller, hangout_id)?;
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2124,6 +2147,9 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         floor,
         furnishing,
         bots_without_moods,
+        room_mention: crate::room_mentions::may_use(state, caller, hangout_id)?,
+        room_mention_policy,
+        room_mention_bots,
         present,
         typing: crate::typing::visible(state, caller, hangout_id)?,
         looks,

@@ -4707,8 +4707,10 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "plan_starts",
         "plan_start_bots",
         "owner_answers_seen",
+        "absent_tags",
         "plan_cadence_shapes",
         "plan_cue_bots",
+        "plan_cadence_zones",
         "projects",
         "person_looks",
         "bot_looks",
@@ -4912,11 +4914,13 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "meetups",
             "recycled_bots",
             "plan_cue_bots",
+            "plan_cadence_zones",
             "plan_cadence_shapes",
             "plan_cadences",
             "plan_starts",
             "plan_start_bots",
             "owner_answers_seen",
+            "absent_tags",
             "world_ends",
             "place_clocks",
             "friend_invite_ends",
@@ -4982,6 +4986,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "waiting_push_on",
             "brief_seen",
             "closing_clocks",
+            "bot_stay_limits",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

@@ -29,6 +29,21 @@ impl Db {
         Ok(())
     }
 
+    /// I120: which of this person's bots hear `@room` in this room, by id.
+    pub fn room_mention_bots_of(
+        &self,
+        hangout_id: &str,
+        owner_id: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT s.agent_id FROM room_mention_subscriptions s JOIN agents a ON a.id = s.agent_id
+             WHERE s.hangout_id = ? AND a.owner_id = ? ORDER BY s.agent_id",
+        )?;
+        let rows = statement.query_map(params![hangout_id, owner_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
     /// I87: whether this bot's owner subscribed it to `@room` in this room.
     pub fn room_mention_subscribed(
         &self,

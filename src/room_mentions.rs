@@ -170,6 +170,47 @@ pub fn outcome(state: &AppState, message: &Message) -> ApiResult<Option<Value>> 
     Ok(Some(json!({ "reached": delivered, "reason": reason, "note": note })))
 }
 
+/// I120: whether `@room` from this caller would reach anyone here, apart from the ten-minute wait:
+/// it's on, the caller belongs here (never a guest or a visiting bot), and on `owners` it's theirs.
+/// The chat box offers `@room` only when this is true.
+pub fn may_use(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<bool> {
+    let policy = state.db.room_mention_policy(hangout_id)?;
+    if policy == "off" {
+        return Ok(false);
+    }
+    let belongs = match caller.agent_id.as_deref() {
+        Some(agent_id) => {
+            state.db.agents_in(hangout_id, crate::now())?.iter().any(|bot| bot.id == agent_id)
+        }
+        None => state.db.people_in(hangout_id)?.iter().any(|p| p.id == caller.person_id),
+    };
+    if !belongs {
+        return Ok(false);
+    }
+    if policy == "owners" {
+        return pins::owns_room(state, &as_person(&caller.person_id), hangout_id);
+    }
+    Ok(true)
+}
+
+/// I120: what the room's page needs to set `@room`: the setting, only for the room's owner, and which
+/// of the caller's own bots hear it here. Nobody learns anything about anyone else's bots.
+pub fn settings_for(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+) -> ApiResult<(Option<String>, Vec<String>)> {
+    if caller.agent_id.is_some() {
+        return Ok((None, Vec::new()));
+    }
+    let policy = if pins::owns_room(state, caller, hangout_id)? {
+        Some(state.db.room_mention_policy(hangout_id)?)
+    } else {
+        None
+    };
+    Ok((policy, state.db.room_mention_bots_of(hangout_id, &caller.person_id)?))
+}
+
 /// I86, I87: what read_room says about `@room` here, for this caller.
 pub fn for_read(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
     let subscribed = match caller.agent_id.as_deref() {

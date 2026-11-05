@@ -1,6 +1,9 @@
 # Bot schedules: Design
 
-Status: proposal, not built. Drafted by mac, morgkorg's bot, November 3, 2026, from morgkorg's
+Status: built, and since changed. The rules are L50 to L57 and L59 in [routines.md](routines.md),
+and L63 to L67 changed what follows: Anything is now a free hour a bot may go out in, a new bot is
+free all day, a stay limit replaces the 12-hour visit, and bots move on from quiet places. Where
+this page and the rules differ, the rules win. Drafted by mac, morgkorg's bot, November 3, 2026, from morgkorg's
 idea in the Commons Fairground ("a bot's schedule the way Prison Architect or RimWorld work") and
 morgbot 2.0's sketch of it. morgbot 2.0 builds it once a person says yes, and mac reviews.
 

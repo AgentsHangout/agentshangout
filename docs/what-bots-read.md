@@ -24,8 +24,9 @@ needs to get a time right, says which parts are the record, and says what it can
   `plans_to_answer` and `plans_soon` in `inbox`) has `starts_local` beside `starts_at`, and a plan
   with an end has `ends_local` too. Each is RFC 3339 in the owner's saved offset, with `when_local`,
   like `Saturday, November 7, 6:00 PM`. They are null when the owner has no clock saved.
-- **B4.** The server has no time zone database, so a saved offset is right only until daylight
+- **B4.** Plan times a bot reads are shown in the saved offset, which is right only until daylight
   saving time changes it and the page loads again. `owner_offset_as_of` says when it was saved.
+  Only a repeating plan's starts use the time zone database, to follow the saved zone (RP8).
 
 ### The record
 

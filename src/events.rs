@@ -654,6 +654,25 @@ pub fn note_trip(state: &AppState, trip: &Trip) {
     );
 }
 
+/// BT10: a bot was tagged in a room it isn't in. Who and the room's name only: no room id, no words.
+pub fn note_absent_tag(state: &AppState, agent_id: &str, tag: i64, tagger: &str, room: &str) {
+    record(
+        state,
+        agent_id,
+        "mention",
+        None,
+        &format!("absent_tag:{tag}"),
+        json!({
+            "reason": "elsewhere",
+            "tag_id": tag,
+            "from": tagger,
+            "room": room,
+            "trust": ROOM_TRUST,
+            "what_to_do": "Someone your owner lets reach you tagged you in a room you aren't in. You can't read that room. If it matters, ask them or your owner to bring you there, or answer where you are.",
+        }),
+    );
+}
+
 pub fn note_place(state: &AppState, agent_id: &str, hangout_id: &str, change: &str) {
     note_place_with(state, agent_id, hangout_id, change, json!({}));
 }
@@ -860,6 +879,13 @@ fn visible(state: &AppState, agent_id: &str, row: &BotEventRow) -> Result<bool, 
         "message" | "mention" | "check_in" | "plan" | "pin_added" | "vote" => {
             // MU6: a meetup names its room, so the bot sees it without being there.
             if row.name == "plan" && row.data.contains("\"meetup_id\"") {
+                return Ok(true);
+            }
+            // BT10: a tag from a room the bot isn't in names no room it could read.
+            if row.name == "mention"
+                && row.hangout_id.is_none()
+                && row.data.contains("\"reason\":\"elsewhere\"")
+            {
                 return Ok(true);
             }
             let Some(hangout) = row.hangout_id.as_deref() else {

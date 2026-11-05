@@ -256,8 +256,11 @@ async fn set(
     }
     let (days, shape, until_day) = parse(&input)?;
     let now = now();
-    let offset_min =
-        state.db.person_clock(&caller.person_id)?.map_or(0, |clock| clock.utc_offset_minutes);
+    let clock = state.db.person_clock(&caller.person_id)?;
+    let offset_min = clock.as_ref().map_or(0, |clock| clock.utc_offset_minutes);
+    // RP8: the zone is kept only if the bundled database knows it; otherwise the offset holds.
+    let time_zone =
+        clock.map(|clock| clock.time_zone).filter(|zone| jiff::tz::TimeZone::get(zone).is_ok());
     if until_day.is_some_and(|until| until < (now + offset_min * 60).div_euclid(DAY_SECS)) {
         return Err(ApiError::bad_request("until is already past"));
     }
@@ -271,6 +274,7 @@ async fn set(
         days,
         shape,
         offset_min,
+        time_zone,
         until_day,
         paused: input.paused,
         // A start in the last tick's 30 seconds that nothing has handled yet still counts: the key
@@ -398,13 +402,67 @@ fn starts_on(cadence: &Cadence, local_day: i64) -> Vec<i64> {
     if !on || cadence.until_day.is_some_and(|until| local_day > until) {
         return Vec::new();
     }
-    let midnight = local_day * DAY_SECS - cadence.offset_min * 60;
-    cadence.shape.times().into_iter().map(|time| midnight + time * 60).collect()
+    let times = cadence.shape.times().into_iter();
+    match zone(cadence) {
+        Some(zone) => {
+            let mut starts: Vec<i64> =
+                times.filter_map(|time| zoned_start(&zone, local_day, time)).collect();
+            // Two times in a spring-forward gap both start when it ends: once.
+            starts.sort_unstable();
+            starts.dedup();
+            starts
+        }
+        None => {
+            let midnight = local_day * DAY_SECS - cadence.offset_min * 60;
+            times.map(|time| midnight + time * 60).collect()
+        }
+    }
+}
+
+/// RP8: the cadence's time zone, if it has one the bundled database knows.
+fn zone(cadence: &Cadence) -> Option<jiff::tz::TimeZone> {
+    cadence.time_zone.as_deref().and_then(|name| jiff::tz::TimeZone::get(name).ok())
+}
+
+/// RP8: when `minute` after midnight on `local_day` happens in `zone`. A time in a spring-forward
+/// gap starts at the first instant after it; a time that happens twice in the fall-back hour starts
+/// at the earlier of the two.
+fn zoned_start(zone: &jiff::tz::TimeZone, local_day: i64, minute: i64) -> Option<i64> {
+    use jiff::tz::AmbiguousOffset;
+    let (y, m, d) = civil(local_day);
+    let at = jiff::civil::DateTime::new(
+        i16::try_from(y).ok()?,
+        i8::try_from(m).ok()?,
+        i8::try_from(d).ok()?,
+        i8::try_from(minute / 60).ok()?,
+        i8::try_from(minute % 60).ok()?,
+        0,
+        0,
+    )
+    .ok()?;
+    let instant = match zone.to_ambiguous_timestamp(at).offset() {
+        AmbiguousOffset::Unambiguous { offset } | AmbiguousOffset::Fold { before: offset, .. } => {
+            offset.to_timestamp(at).ok()?
+        }
+        // Read with the offset after the gap, the time falls just before it, so the next
+        // transition is the gap's end.
+        AmbiguousOffset::Gap { after, .. } => {
+            zone.following(after.to_timestamp(at).ok()?).next()?.timestamp()
+        }
+    };
+    Some(instant.as_second())
+}
+
+/// The cadence's offset from UTC at `at`, in seconds: its zone's then, or the saved one.
+fn offset_at(cadence: &Cadence, at: i64) -> i64 {
+    zone(cadence)
+        .zip(jiff::Timestamp::from_second(at).ok())
+        .map_or(cadence.offset_min * 60, |(zone, at)| i64::from(zone.to_offset(at).seconds()))
 }
 
 /// RP1: the next start after `now`, if there is one. A monthly plan's is at most a month away.
 pub fn next_start(cadence: &Cadence, now: i64) -> Option<i64> {
-    let today = (now + cadence.offset_min * 60).div_euclid(DAY_SECS);
+    let today = (now + offset_at(cadence, now)).div_euclid(DAY_SECS);
     (today..today + 32).flat_map(|day| starts_on(cadence, day)).find(|start| *start > now)
 }
 
@@ -412,8 +470,8 @@ pub fn next_start(cadence: &Cadence, now: i64) -> Option<i64> {
 /// back than a week.
 fn due_starts(cadence: &Cadence, now: i64) -> Vec<i64> {
     let from = cadence.since.max(now - LOOK_BACK_SECS);
-    let first = (from + cadence.offset_min * 60).div_euclid(DAY_SECS);
-    let last = (now + cadence.offset_min * 60).div_euclid(DAY_SECS);
+    let first = (from + offset_at(cadence, from)).div_euclid(DAY_SECS);
+    let last = (now + offset_at(cadence, now)).div_euclid(DAY_SECS);
     (first..=last)
         .flat_map(|day| starts_on(cadence, day))
         .filter(|start| *start >= from && *start <= now)
@@ -436,6 +494,7 @@ fn cadence_json(cadence: &Cadence, now: i64) -> Value {
         "time": times.first(),
         "times": times,
         "utc_offset_min": cadence.offset_min,
+        "time_zone": cadence.time_zone,
         "until": cadence.until_day.map(|day| {
             let (y, m, d) = civil(day);
             format!("{y:04}-{m:02}-{d:02}")
@@ -588,10 +647,95 @@ mod tests {
             days: 0b001_1111,
             shape: Shape::Days { weekly: true, times: vec![9 * 60] },
             offset_min: -360,
+            time_zone: None,
             until_day: None,
             paused: false,
             since: 0,
         }
+    }
+
+    /// Every day at `times`, in Chicago's zone (its saved offset says CST).
+    fn chicago_daily(times: Vec<i64>) -> Cadence {
+        Cadence {
+            days: 127,
+            shape: Shape::Days { weekly: false, times },
+            time_zone: Some("America/Chicago".into()),
+            ..weekdays_at_nine()
+        }
+    }
+
+    fn utc(text: &str) -> i64 {
+        text.parse::<jiff::Timestamp>().unwrap().as_second()
+    }
+
+    // RP8: 9 am stays 9 am on both sides of each daylight saving change, on fixed dates.
+    #[test]
+    fn a_start_keeps_its_local_time_across_daylight_saving() {
+        let nine = chicago_daily(vec![9 * 60]);
+        let day = |date| day_of(date).unwrap();
+        // Spring forward on Sunday 8 March 2026: CST (-6) before, CDT (-5) after.
+        assert_eq!(starts_on(&nine, day("2026-03-07")), [utc("2026-03-07T15:00:00Z")]);
+        assert_eq!(starts_on(&nine, day("2026-03-09")), [utc("2026-03-09T14:00:00Z")]);
+        // Fall back on Sunday 1 November 2026.
+        assert_eq!(starts_on(&nine, day("2026-10-31")), [utc("2026-10-31T14:00:00Z")]);
+        assert_eq!(starts_on(&nine, day("2026-11-02")), [utc("2026-11-02T15:00:00Z")]);
+        // Asked across the change, the next start is the local 9 am after it.
+        assert_eq!(
+            next_start(&nine, utc("2026-03-08T15:30:00Z")),
+            Some(utc("2026-03-09T14:00:00Z"))
+        );
+        // The same plan with only the saved offset drifts to 8 am, as before RP8.
+        let fixed = Cadence { time_zone: None, ..nine.clone() };
+        assert_eq!(starts_on(&fixed, day("2026-03-09")), [utc("2026-03-09T15:00:00Z")]);
+        // A zone the database doesn't know falls back to the saved offset too.
+        let unknown = Cadence { time_zone: Some("Mars/Olympus".into()), ..nine };
+        assert_eq!(starts_on(&unknown, day("2026-03-09")), [utc("2026-03-09T15:00:00Z")]);
+    }
+
+    // RP8: an hourly window is wall-clock time too: 9:00 to 17:00 every 4 hours in Chicago is
+    // 9, 13 and 17 local on both sides of the 8 March 2026 change.
+    #[test]
+    fn an_hourly_window_keeps_its_local_hours_across_daylight_saving() {
+        let hourly = Cadence {
+            shape: Shape::Hourly { every_hours: 4, from: 9 * 60, to: 17 * 60 },
+            ..chicago_daily(Vec::new())
+        };
+        let day = |date| day_of(date).unwrap();
+        let at = |times: [&str; 3]| times.map(utc).to_vec();
+        assert_eq!(
+            starts_on(&hourly, day("2026-03-07")),
+            at(["2026-03-07T15:00:00Z", "2026-03-07T19:00:00Z", "2026-03-07T23:00:00Z"])
+        );
+        assert_eq!(
+            starts_on(&hourly, day("2026-03-09")),
+            at(["2026-03-09T14:00:00Z", "2026-03-09T18:00:00Z", "2026-03-09T22:00:00Z"])
+        );
+    }
+
+    // RP8: 2:30 am doesn't exist on 8 March 2026 in Chicago, so it starts at 3:00 am CDT.
+    #[test]
+    fn a_time_in_the_spring_forward_gap_starts_when_the_gap_ends() {
+        let gap = day_of("2026-03-08").unwrap();
+        let end = utc("2026-03-08T08:00:00Z");
+        assert_eq!(starts_on(&chicago_daily(vec![2 * 60 + 30]), gap), [end]);
+        // Two times in the gap start once, not twice, beside a time after it.
+        let both = chicago_daily(vec![2 * 60, 2 * 60 + 30, 4 * 60]);
+        assert_eq!(starts_on(&both, gap), [end, utc("2026-03-08T09:00:00Z")]);
+    }
+
+    // RP8: 1:30 am happens twice on 1 November 2026 in Chicago; it starts once, at the first.
+    #[test]
+    fn a_time_in_the_fall_back_hour_starts_once_at_the_earlier() {
+        let fold = day_of("2026-11-01").unwrap();
+        let half_past_one = chicago_daily(vec![60 + 30]);
+        assert_eq!(starts_on(&half_past_one, fold), [utc("2026-11-01T06:30:00Z")]);
+        // The loop over that whole day finds it once.
+        let day_start = utc("2026-11-01T05:00:00Z");
+        let cadence = Cadence { since: day_start, ..half_past_one };
+        assert_eq!(
+            due_starts(&cadence, utc("2026-11-02T05:59:00Z")),
+            [utc("2026-11-01T06:30:00Z")]
+        );
     }
 
     #[test]

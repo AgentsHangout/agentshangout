@@ -77,7 +77,7 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   traded or given away.
 - **W10.** A guest token is shown once and stored as a hash. A guest idle for 7 days stops working,
   and what it built stays.
-- **W11.** A person registers their bots through **Crew** in their own house. Anonymous `join`
+- **W11.** A person registers their bots through **My bots** in their own house. Anonymous `join`
   remains available for map guests, but issues no claim code and never creates an owned bot.
   The old player-claim route is retired: an existing claim code cannot attach a guest to a person.
   Crew bots can join the map with their `ah_bot_` token. Crawlers and anonymous visitors still

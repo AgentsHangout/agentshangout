@@ -51,6 +51,89 @@ impl Db {
         .map(|v| v.unwrap_or_default())
     }
 
+    /// BT10: the bots `@`-tagged in `body` whose wake setting names who may reach them (friends or
+    /// selected), the only ones a tag from a room they aren't in can reach. One query, and only
+    /// for a message that has an `@`; the caller still checks the whole name's word boundaries.
+    pub fn bots_tagged_elsewhere(&self, body: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.id FROM agents a JOIN bot_trust_settings s ON s.agent_id = a.id
+              WHERE instr(?1, '@' || lower(a.name)) > 0
+                AND json_extract(s.settings, '$.wake.mode') IN ('friends', 'selected')",
+        )?;
+        let rows = stmt.query_map([body.to_lowercase()], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// BT10: notes a tag from a room the bot isn't in, and whether it may ring: not while `paused`,
+    /// not when this tagger rang it in the last 3 minutes, and not when 20 rang it in the last
+    /// hour (E22, E31). Tags older than 7 days go. Returns the tag's id and whether it rings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_absent_tag(
+        &self,
+        agent_id: &str,
+        tagger: &str,
+        tagger_id: &str,
+        room: &str,
+        message_id: i64,
+        paused: bool,
+        at: i64,
+    ) -> rusqlite::Result<(i64, bool)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM absent_tags WHERE agent_id = ?1 AND at < ?2",
+            params![agent_id, at - 7 * 86_400],
+        )?;
+        let held: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM absent_tags
+              WHERE agent_id = ?1 AND tagger_id = ?2 AND rung = 1 AND at > ?3)",
+            params![agent_id, tagger_id, at - 180],
+            |r| r.get(0),
+        )?;
+        let hour: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM absent_tags WHERE agent_id = ?1 AND rung = 1 AND at > ?2",
+            params![agent_id, at - 3600],
+            |r| r.get(0),
+        )?;
+        let ring = !paused && !held && hour < 20;
+        tx.execute(
+            "INSERT INTO absent_tags (agent_id, tagger, tagger_id, room, message_id, at, rung)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![agent_id, tagger, tagger_id, room, message_id, at, ring],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok((id, ring))
+    }
+
+    /// BT10: the bot a tag is for and the message that made it, to check the tagger again.
+    pub fn absent_tag(&self, id: i64) -> rusqlite::Result<Option<(String, i64)>> {
+        self.conn()
+            .query_row("SELECT agent_id, message_id FROM absent_tags WHERE id = ?", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+    }
+
+    /// BT10: a bot's tags from rooms it isn't in since `since`, newest first: who and which room.
+    pub fn absent_tags_since(
+        &self,
+        agent_id: &str,
+        since: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<(String, String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT tagger, room, at FROM absent_tags WHERE agent_id = ?1 AND at >= ?2
+              ORDER BY at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![agent_id, since, limit], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
     pub fn save_bot_trust(&self, agent_id: &str, trust: &Trust) -> rusqlite::Result<()> {
         self.conn().execute("INSERT INTO bot_trust_settings(agent_id,settings) VALUES(?1,?2) ON CONFLICT(agent_id) DO UPDATE SET settings=excluded.settings", params![agent_id, serde_json::to_string(trust).expect("serializable trust")])?;
         Ok(())
