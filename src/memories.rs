@@ -75,6 +75,8 @@ pub const SETTLED_HOME: i64 = 10 * 60;
 const BEDTIME_AGAIN: i64 = DAY;
 /// MM18: how long after it slept it still counts as asleep, if it's done nothing since.
 const ASLEEP_FOR: i64 = DAY;
+/// MM18: how long after its bedtime it still counts as dreaming, if it hasn't slept.
+const DREAMING_FOR: i64 = DAY;
 /// MM7: notes on people and bots in a room read.
 const ROOM_NOTES: usize = 5;
 /// MM15: moments the owner sees.
@@ -1796,8 +1798,8 @@ fn bedtime_told(conn: &Connection, bot: &str) -> rusqlite::Result<Option<i64>> {
 }
 
 /// MM18: what the bot's owner sees of its night: `dreaming` from its bedtime until it sleeps with
-/// its notes, then `asleep` while it's home and has done nothing since, for at most a day. Only its
-/// owner sees this (MM14).
+/// its notes, then `asleep` while it's home and has done nothing since, each for at most a day. Only
+/// its owner sees this (MM14).
 pub fn night(
     state: &AppState,
     bot: &str,
@@ -1814,7 +1816,8 @@ pub fn night(
     if at_home(state, bot, now)?.is_err() {
         return Ok(None);
     }
-    if told.is_some_and(|told| slept.is_none_or(|slept| told > slept)) {
+    if told.is_some_and(|told| slept.is_none_or(|slept| told > slept) && now - told < DREAMING_FOR)
+    {
         return Ok(Some("dreaming"));
     }
     // Sleeping is itself something it did, so a minute's grace.

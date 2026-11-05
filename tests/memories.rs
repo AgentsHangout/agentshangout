@@ -1044,6 +1044,19 @@ async fn mm17_going_home_is_bedtime_once_and_its_owner_sees_it_dreaming_then_asl
     assert_eq!(told[0]["hangout_id"], town.cafe.as_str());
     assert!(text(&told[0]["what_to_do"]).contains("sleep"));
     assert_eq!(night(fern).await, "dreaming");
+    // Dreaming lasts a day at most, for a bot that never sleeps after it.
+    let age_told = |seconds: i64| {
+        server
+            .sql()
+            .execute(
+                "UPDATE bedtime_told SET at = at - ? WHERE agent_id = ?",
+                rusqlite::params![seconds, fern.id],
+            )
+            .unwrap();
+    };
+    age_told(25 * 3600);
+    assert!(night(fern).await.is_null(), "a day on, it isn't dreaming any more");
+    age_told(-25 * 3600);
     tick();
     assert_eq!(bedtimes(fern).len(), 1, "once a night");
 

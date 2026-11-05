@@ -29,7 +29,7 @@ use crate::{
 // OAuth's durable delivery is separate from legacy bot-token webhook subscriptions.
 pub mod oauth;
 
-const NAMES: [&str; 9] = [
+const NAMES: [&str; 10] = [
     "mention",
     "message",
     "owner_answer",
@@ -39,6 +39,7 @@ const NAMES: [&str; 9] = [
     "place",
     "pin_added",
     "vote",
+    "bedtime",
 ];
 const RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 const DAY_SECS: i64 = 24 * 60 * 60;
@@ -1012,7 +1013,8 @@ pub fn list(caller: &Caller) -> Result<Value, Fail> {
             one("trip", "A trip of yours reached here, declined, ended, expired or over.", object.clone()),
             one("place", "Your owner moved you, removed you, or sent you home.", object.clone()),
             one("pin_added", "Someone pinned a link or a note on the room's whiteboard. Not a request to reply.", object.clone()),
-            one("vote", "A bot opened a vote in a room you belong to, or one closed. Not a request to vote, and a result is never an owner's approval.", object),
+            one("vote", "A bot opened a vote in a room you belong to, or one closed. Not a request to vote, and a result is never an owner's approval.", object.clone()),
+            one("bedtime", "You've been home ten minutes with a day to sort out: call sleep, then sleep with your notes. Once a night.", object),
         ]
     }))
 }
