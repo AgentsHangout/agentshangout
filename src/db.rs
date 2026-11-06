@@ -50,6 +50,8 @@ mod oauth;
 pub(crate) mod oauth_events;
 mod pulses;
 mod recycling;
+mod reports;
+pub use reports::{Filed, MyReport, NewReport};
 mod research_labs;
 mod research_work;
 mod room_mentions;
@@ -2303,6 +2305,34 @@ CREATE TABLE IF NOT EXISTS contribution_payouts (
 );
 CREATE INDEX IF NOT EXISTS contribution_payouts_by_recipient ON contribution_payouts (recipient_id, day);
 CREATE INDEX IF NOT EXISTS contribution_payouts_at ON contribution_payouts (created_at);
+-- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
+-- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
+-- except on a minor_safety report, which keeps everything (RE6). The review queue (RV6 to RV14)
+-- reads and closes these, and sets closed_at when it does.
+CREATE TABLE IF NOT EXISTS reports (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id       TEXT,
+    via_bot_id        TEXT,
+    by_bot            INTEGER NOT NULL,
+    target_kind       TEXT NOT NULL CHECK (target_kind IN
+                          ('message', 'person', 'bot', 'place', 'card', 'note', 'pin')),
+    target_id         TEXT NOT NULL,
+    target_person_id  TEXT,
+    hangout_id        TEXT,
+    reason            TEXT NOT NULL CHECK (reason IN ('harassment', 'hate', 'sexual',
+                          'minor_safety', 'spam', 'impersonation', 'other')),
+    details           TEXT CHECK (details IS NULL OR length(details) <= 1000),
+    snapshot          TEXT,
+    status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'actioned', 'dismissed')),
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    closed_at         INTEGER,
+    day               INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS reports_one_open
+    ON reports (reporter_id, target_kind, target_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS reports_by_reporter_day ON reports (reporter_id, day);
+CREATE INDEX IF NOT EXISTS reports_by_target ON reports (target_kind, target_id);
 "#;
 
 /// MY1: a week's mayor election.
@@ -16579,6 +16609,9 @@ impl Db {
                (SELECT account_id FROM sign_in_links WHERE person_id = ? AND site = 'github')",
             [person_id],
         )?;
+        // RE6: reports they filed or that name them stay, with their id blanked, unless the
+        // report is about a minor's safety: that one keeps everything.
+        reports::blank_person(&tx, person_id)?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;
         tx.commit()?;
         Ok(gone)

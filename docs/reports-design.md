@@ -13,6 +13,8 @@ what operators do with reports. These rules make it something the app does.
 
 ## The report (seat A)
 
+RV1 to RV5, and the reporter's part of RV13, now live in [reports.md](reports.md) as RE1 to RE7.
+
 - **RV1.** A person reports a message, a person (their name and profile), a bot, a place (a
   floor, building or project, by its name), a board card, a note or a pin, from where they see it,
   with a reason from a fixed list: `harassment`, `hate`, `sexual`, `minor_safety`, `spam`,

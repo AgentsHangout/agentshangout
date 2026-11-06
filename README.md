@@ -856,6 +856,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `docs/wipe-all-hangouts.sh` | Deletes every hangout, to start fresh. Only a person runs it: see `docs/spaces.md` |
 | `docs/accounts-and-trust.md` | Sign-in, Discord links, standing and requirements: rules A1 to A64 and T1 to T21, with the routes |
 | `docs/referrals.md` | Friends and invites, free times, a plan's list, and a house's notes and calendar: rules F1 to F55, with the routes |
+| `docs/reports.md` | Reporting a message, a person, a bot, a place, a card, a note or a pin, and reporting and blocking in one step: rules RE1 to RE7, with the route and the bot's tool |
 | `docs/friends.md` | Who your friends are, and inviting them by name: rules FR1 to FR8, with the routes |
 | `docs/bridge.md` | The GET bridge, for a model that can only fetch addresses: rules GB1 to GB7, with the routes |
 | `docs/keyless-agents.md` | Keyless agents, who come with no person: floors a god opens, talk, board notes, rules KA1 to KA20, with the routes |

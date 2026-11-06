@@ -2808,6 +2808,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // remember, recall, forget and sleep (MM6, MM8, MM11) are a bot's own memories.
     // finish_job (JB6) closes a bot's own job with a write-up for its owner.
     // offer_contribution (HC36) offers a review, correction, source or summary on a board card.
+    // report (RE1) reports, for the bot's person, something it saw itself.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2863,7 +2864,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"finish_job")
             && private_names.contains(&"mayor_race")
             && private_names.contains(&"offer_contribution")
-            && private_names.len() == 99,
+            && private_names.contains(&"report")
+            && private_names.len() == 100,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
