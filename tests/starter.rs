@@ -312,6 +312,11 @@ struct Channel {
 
 impl Channel {
     fn start(server: &Server, token: &str, cursor: &Path) -> Self {
+        Self::start_batching(server, token, cursor, None)
+    }
+
+    /// As `start`, with `AGENTSHANGOUT_CHANNEL_BATCH` set to `batch` seconds when given.
+    fn start_batching(server: &Server, token: &str, cursor: &Path, batch: Option<u64>) -> Self {
         use std::io::{BufRead, Write};
         let py = if cfg!(windows) { "python" } else { "python3" };
         let mut child = std::process::Command::new(py)
@@ -321,6 +326,7 @@ impl Channel {
             .env("AGENTSHANGOUT_URL", &server.base)
             .env("AGENTSHANGOUT_CHANNEL_STATE", cursor)
             .env_remove("AGENTSHANGOUT_CHANNEL_MESSAGES")
+            .env("AGENTSHANGOUT_CHANNEL_BATCH", batch.map_or("8".to_string(), |s| s.to_string()))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -495,6 +501,101 @@ async fn the_channel_wakes_only_for_what_is_new_and_for_the_bot() {
     // And the cursor is never left empty: it's written aside and swapped in.
     assert!(kit("channel.py").contains("os.replace(temporary, STATE)"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ST11: other bots' mentions that come close together wake the session once, with every line;
+// the owner's line still comes at once, after them; and a restart before they go out still sends
+// them, since the cursor never passes what's waiting.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_channel_gathers_other_bots_mentions_into_one_wake() {
+    let server = Server::start().await;
+    let made = server
+        .post(
+            "",
+            "/api/hangouts",
+            json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE }),
+        )
+        .await;
+    let (room, ann) =
+        (made["hangout"]["id"].as_str().unwrap(), made["owner_key"].as_str().unwrap());
+    let (_, token) =
+        support::legacy_bot(&server.state, made["person"]["id"].as_str().unwrap(), room, "Mac");
+    let bo = server
+        .post(
+            "",
+            "/api/hangouts",
+            json!({ "name": "Bo's room", "your_name": "Bo", "create_code": CODE }),
+        )
+        .await;
+    let bo_id = bo["person"]["id"].as_str().unwrap();
+    let (_, wren) = support::legacy_bot(&server.state, bo_id, room, "Wren");
+    let (_, kit) = support::legacy_bot(&server.state, bo_id, room, "Kit");
+    let by = |bot: &str, text: &str| {
+        let args = json!({ "hangout_id": room, "text": text });
+        let (server, bot) = (&server, bot.to_string());
+        async move { server.tool(&bot, "say", args).await }
+    };
+    let dir = std::env::temp_dir().join(format!("channel-{}", agenthangout::auth::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cursor = dir.join(".channel_cursor");
+    let channel = Channel::start_batching(&server, &token, &cursor, Some(3));
+    tokio::task::block_in_place(|| channel.pushed_until("Call inbox", 20));
+
+    // A burst from two bots: one wake that lists both.
+    by(&wren, "@Mac first of the burst").await;
+    by(&kit, "@Mac second of the burst").await;
+    let pushed =
+        tokio::task::block_in_place(|| channel.pushed_until("mentions from other bots", 20));
+    let batch = pushed.last().expect("a push");
+    assert_eq!(batch["meta"]["batch"], "2", "{pushed:?}");
+    let text = batch["content"].as_str().unwrap();
+    assert!(text.contains("first of the burst") && text.contains("second of the burst"), "{text}");
+    let events: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(events.as_array().map(Vec::len), Some(2), "{events}");
+
+    // The owner's line goes out at once, ahead of what was gathered, which follows right after.
+    by(&wren, "@Mac before the owner").await;
+    let said = format!("/api/hangouts/{room}/messages");
+    server.post(ann, &said, json!({ "text": "stop for now" })).await;
+    let mut pushed = tokio::task::block_in_place(|| channel.pushed_until("stop for now", 20));
+    pushed.extend(tokio::task::block_in_place(|| channel.pushed_until("before the owner", 10)));
+    let order: Vec<String> = pushed
+        .iter()
+        .map(|p| p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").to_string())
+        .collect();
+    let owner = order.iter().position(|line| line.contains("stop for now")).expect("owner line");
+    let before = order
+        .iter()
+        .position(|line| line.contains("before the owner"))
+        .unwrap_or_else(|| panic!("the gathered mention still goes: {order:?}"));
+    assert!(owner < before, "the owner's line first: {order:?}");
+
+    // Stopped before a gathered mention goes out, a restart still sends it.
+    by(&kit, "@Mac while it waited").await;
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    drop(channel);
+    let channel = Channel::start_batching(&server, &token, &cursor, Some(3));
+    let again = tokio::task::block_in_place(|| channel.pushed_until("while it waited", 30));
+    assert_eq!(kinds_with(&again, "while it waited"), ["mention"], "{again:?}");
+    drop(channel);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ST12: the batching's failure paths, run with a fake transport (tests/channel_batching.py).
+#[test]
+fn the_channel_loses_nothing_when_a_write_fails() {
+    let py = if cfg!(windows) { "python" } else { "python3" };
+    let out = std::process::Command::new(py)
+        .args(["-I", "-B"])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/channel_batching.py"))
+        .output()
+        .expect("python runs");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 // ST7
@@ -725,7 +826,7 @@ channel.events_since = flaky
 channel.time.sleep = lambda seconds: None
 channel.load_cursor = lambda: None
 channel.save_cursor = lambda cursor: calls.append(('saved', cursor))
-def stop(page, cursor, seen):
+def stop(*args):
     raise SystemExit(0)
 channel.handle = stop
 try:
