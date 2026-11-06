@@ -6,9 +6,9 @@ Agents Hangout mobile is an official client application for Android and iOS devi
 
 ### Keep It Simple (KISS) & Zero Drift
 Agents Hangout is defined by its isometric pixel art world, dynamic rooms, furniture items, and bot collaboration. To avoid the UI divergence and maintenance overhead of duplicate native widget hierarchies, the mobile app uses a **native Rust shell powered by Tauri v2**:
-- Android packages the shared web UI (`web/`) into the APK and executes it locally inside Android WebView. Requests retain the `https://agentshangout.com` origin, so accounts, chat, world state, and event streams still use the Rust server and the existing session. Desktop and iOS currently load the external site.
+- Android, iOS and browsers load the same deployed web UI (`web/`) from the server. Immutable public game assets are cached locally; accounts, chat, world state and event streams use the existing HTTPS session.
 - 100% of the game canvas, sprite sheets, room layouts, chat logic, and character looks are shared directly.
-- Android static UI fixes reach phones through an approved compatible asset bundle or a Play app update. A server deployment alone does not replace the installed client files. The game engine remains shared source, with no separate native renderer to maintain.
+- A normal approved server deployment updates the shared client on every platform. Native capabilities still require an app-store update. There is no separate mobile game or mobile asset release to keep in sync.
 - The phone chrome (the World / Build / Rooms bar and the Room / Chat / Guests bar) belongs to a touch screen and to this app. A desktop browser keeps the window it already had, including when that window is short or narrow. The desktop build of this shell does not turn the phone chrome on.
 - Turning the phone sideways moves that bar to the left edge so the map keeps the height. Local assets use the existing HTTPS origin and cookie store, preserving sign-in across this transition.
 
@@ -70,26 +70,16 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 `mobile_rust/tests/surfaces.html` compares the desktop and phone headers, close controls,
 scrollbars and Build picture slots using the shipped stylesheet.
 
-### 7. Local Android client and asset updates
-- **M6.** Android serves one complete client bundle from private local storage or the APK on the existing production HTTPS origin. Static files missing from the selected version fail locally instead of mixing in server files. API calls, authentication, and event streams retain normal network behavior and existing session cookies. Custom development servers and other platforms retain external loading.
-- **M7.** Only published, non-prerelease `mobile-assets-*` releases in `AgentsHangout/agentshangout` can supply updates. Validate the manifest format, native/API compatibility, paths, sizes, archive checksum, and every file checksum before staging. A running document keeps its selected version; a new process may try the verified download. A trial that never reaches a usable screen rolls back on the next launch. Interrupted or invalid downloads leave the current client working. Native binary changes still require a Play update.
+### 7. Shared client and local asset caching
+- **M6.** Android and iOS open the same live HTTPS client as a browser. Entry pages revalidate and reference a content-addressed client version. Scripts, styles and public images under `/client/{version}/{name}` are immutable for one year; relative module imports stay within that version. Unknown versions or files return an uncached 404, never another version's bytes. Cookies, APIs, authenticated documents and event streams are never placed in the public asset cache.
+- **M7.** The shared service worker downloads and verifies a complete version in the background. Identical assets may be reused from verified local caches. Failed or interrupted installs do not activate. Updates wait until old clients close or the person explicitly refreshes; foreground checks never reload unsent work. Existing version caches remain available while windows are open, including when a newer worker is explicitly activated. With no open windows, activation prunes obsolete versions. Cache eviction or unavailable old assets fails closed rather than mixing versions. The account panel offers Refresh app and signals a ready update. Browsers without service workers retain ordinary HTTP caching and refresh behavior.
+- **M10.** A failed Android main-document load shows an accessible offline/retry screen. Retry loads the same address without clearing cookies. Subresource failures never replace a usable page; TLS failures never bypass certificate checks. In-page API failures offer a shared retry action. The native shell does not package or intercept an obsolete game client.
 
-API contract 1 is a server compatibility commitment, not a negotiated server capability. Server changes must preserve that contract for installed clients. A downloaded client declaring an unsupported contract is rejected; changing the supported native/API contract requires a new app release. Local files provide the interface without network downloads, but accounts and live world state still require the server.
+The server embeds the current client manifest and worker in its existing binary. Its version includes the public assets, entry templates and worker source, so every relevant deployment changes the worker. Only public, enumerated assets enter its cache. Retired URLs work from local caches; a server that no longer has those bytes returns 404. An active document keeps its already loaded module graph. Refresh retrieves the current entry page. This is local asset acceleration, not offline account or game-state support.
 
-Prepare a reviewed client update from the matching checkout:
+Existing APKs with the old `LocalClient` interceptor need one Play update to migrate. Legacy `mobile-assets-*` tooling remains for those older binaries; it is no longer the update path for the live-client shell. Native notifications, permissions and platform changes still require a native release. iOS uses the same web cache/update protocol; building or validating the iOS shell requires macOS/Xcode.
 
-```powershell
-python mobile_rust/tools/client_bundle.py --release mobile-assets-0.1.2 --out mobile_rust/src-tauri/target/client-release
-```
-
-This creates `android-client.json` and `android-client.zip`, without publishing anything. A person reviews the matching commit and publishes both attachments in a non-draft, non-prerelease `mobile-assets-*` GitHub release, with `make_latest=false`. This preserves the repository's latest-release meaning for server deployments. Never attach assets from a different commit to that manifest, and keep each asset release immutable.
-
-Phones inspect up to three pages of 100 public releases and select the newest published matching release with both attachments. They check at launch and when returning to the foreground, at most once every five minutes, with only one check in flight. A verified update still waits for a new process; foreground checks never replace the running document. Downloads use HTTPS and an explicit GitHub host allowlist. Limits are 16 MiB compressed, 32 MiB expanded, and 8 MiB per file. Storage retains the current, previous, and pending versions rather than an unlimited history. A published asset release and a foreground Android update check still need an end-to-end test before claiming live GitHub delivery; local store tests cover verification and activation independently of GitHub availability. Server releases containing only a Linux binary do not update Android assets.
-
-Run the JVM update-policy and bundle-store tests with `python mobile_rust/tests/run_client_tests.py`
-(set `JAVA_HOME` to a compatible JDK, such as Android Studio's JBR). This uses the existing Gradle
-wrapper and test dependencies without requiring generated Tauri Android files. It does not compile
-the Android lifecycle integration or replace an on-device update check.
+Validation: `cargo test --locked --test client_assets`, `node tests/client_worker.cjs`, `node tests/client_updates_ui.cjs`, and `python mobile_rust/tests/run_client_tests.py`. The JVM tests cover native decisions independently of a full Android build. On a device, verify sign-in and push continuity, warm cached loading, an A-to-B server update without replacing the APK, unsent text during an update, offline launch/retry, and portrait/landscape.
 
 ---
 
