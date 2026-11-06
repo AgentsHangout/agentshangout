@@ -210,10 +210,13 @@ async fn request(
     }
     let to_owner = endpoint_owner(&state, &f.kind, &f.to_id)?;
     state.db.request_explicit_friend(&f.kind, &f.from_id, &f.to_id, now())?;
-    // A103: across a block it's kept as pending for the sender, and goes nowhere.
+    // A103: across a block it's kept as pending for the sender, and goes nowhere. Asked again with
+    // no block between them, it's a real ask, and any old mark comes off.
+    let key = crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]);
     if crate::blocks::apart(&state, &caller.person_id, &to_owner)? {
-        let key = crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]);
         state.db.quiet_ask("friendship", &key, now())?;
+    } else {
+        state.db.unquiet_ask("friendship", &key)?;
     }
     Ok(Json(json!({"ok":true})))
 }
@@ -258,6 +261,10 @@ async fn remove(
         ops::own_agent(&state, &caller, owned, "remove a bot friendship")?;
     }
     state.db.remove_explicit_friend(&f.kind, &f.from_id, &f.to_id)?;
+    // A103: the ask is over, so its mark goes too.
+    state
+        .db
+        .unquiet_ask("friendship", &crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]))?;
     Ok(Json(json!({"ok":true})))
 }
 

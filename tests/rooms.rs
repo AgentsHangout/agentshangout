@@ -11576,9 +11576,19 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
     let bos = server.get(&bo.key, "/api/trust").await.ok();
     assert_eq!(bos["friendships"][0]["status"], "pending", "{bos}");
     server
-        .post(&ann.key, "/api/trust/friendships/accept", ask)
+        .post(&ann.key, "/api/trust/friendships/accept", ask.clone())
         .await
         .refused(StatusCode::NOT_FOUND);
+    // Bo takes it back: it's gone, and so is its mark.
+    let key = format!("person|{}|{}", bo.id, ann.id);
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
+    server.send(&bo.key, Method::DELETE, "/api/trust/friendships", Some(ask.clone())).await.ok();
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"], json!([]), "{bos}");
+    assert!(!server.state.db.is_quiet("friendship", &key).unwrap());
+    // Asked again during the block, it's quiet again.
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
 
     let asked = server
         .tool(
@@ -11609,5 +11619,12 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
     assert!(!page.to_string().contains("May I post the notes?"), "{page}");
     let pips = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
     assert!(pips.to_string().contains("May I post the notes?"), "the asker sees it: {pips}");
-}
 
+    // With the block gone, Bo's friendship ask made again reaches Ann, and she can say yes.
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "the old one stays quiet: {anns}");
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"][0]["status"], "pending", "{anns}");
+    server.post(&ann.key, "/api/trust/friendships/accept", ask).await.ok();
+}

@@ -8011,3 +8011,43 @@ async fn a_block_ends_trips_and_keys_between_them_the_ordinary_way() {
     let passes = server.get(&w.ann.key, &format!("/api/houses/{}/passes", w.ann_home.id)).await;
     assert!(!passes.body.to_string().contains(&scout.id), "the key is taken back: {}", passes.body);
 }
+
+// A103: a trip asked across a block stays with the side that asked. Asked by the bot's side, the
+// house never sees it; asked by a resident, the bot and its person never see it.
+#[tokio::test]
+async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+    let pixel = server.bot(&w.bo, &w.bo_home.living, "Pixel").await;
+    assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": w.bo.id })).await);
+
+    let trip_ids = |body: &Value, key: &str| -> Vec<String> {
+        body[key].as_array().unwrap().iter().map(|trip| text(&trip["id"])).collect()
+    };
+
+    // The bot's side asks: it waits for them, and Ann's house never sees it.
+    let asked = server.ask_trip(&scout.token, None, &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    assert_eq!(asked.body["status"], "asking", "{}", asked.body);
+    let id = text(&asked.body["id"]);
+    let bos = server.get(&w.bo.key, "/api/needs-you").await.body;
+    assert!(trip_ids(&bos, "trips").contains(&id), "Bo can still say yes: {bos}");
+    let anns = server.get(&w.ann.key, "/api/needs-you").await.body;
+    assert!(!trip_ids(&anns, "trips").contains(&id), "{anns}");
+    assert_not_found(&server.get(&w.ann.key, &format!("/api/trips/{id}")).await);
+    assert_not_found(&server.answer_trip(&w.ann.key, &id, "yes").await);
+
+    // A resident asks for the bot: it waits for Ann, and Bo and Pixel never see it.
+    let asked =
+        server.ask_trip(&w.ann.key, Some(&pixel.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    let id = text(&asked.body["id"]);
+    assert_ok(&server.get(&w.ann.key, &format!("/api/trips/{id}")).await);
+    let bos = server.get(&w.bo.key, "/api/needs-you").await.body;
+    assert!(!trip_ids(&bos, "trips").contains(&id), "{bos}");
+    assert_not_found(&server.get(&w.bo.key, &format!("/api/trips/{id}")).await);
+    assert_not_found(&server.answer_trip(&w.bo.key, &id, "yes").await);
+    let inbox = server.tool(&pixel.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(!inbox.to_string().contains(&id), "Pixel never hears of it: {inbox}");
+}

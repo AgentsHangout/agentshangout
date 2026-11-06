@@ -4119,7 +4119,9 @@ fn floors_seen_by(
             OR EXISTS (SELECT 1 FROM messages l
                        WHERE l.hangout_id = f.hangout_id AND l.kind = 'system' AND l.body = ?3)
             OR EXISTS (SELECT 1 FROM friend_invites i
-                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2))",
+                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2
+                         AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                         WHERE q.kind = 'friend_invite' AND q.ask_id = i.id)))",
         params![space_id, person_id, left],
     )
 }
@@ -11345,7 +11347,9 @@ impl Db {
     pub fn is_plan_invitee(&self, event_id: &str, person_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
-            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2",
+            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = ?1 || '|' || ?2)",
             params![event_id, person_id],
         )
     }
@@ -15550,6 +15554,7 @@ impl Db {
              LEFT JOIN cities c ON f.kind = 'city' AND c.id = f.place_id
              WHERE f.to_person = ?1 AND f.declined_at IS NULL AND f.created_at > ?2
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = f.place_id AND t.person_id = ?1)
                AND (h.id IS NOT NULL OR c.id IS NOT NULL)
@@ -16482,6 +16487,8 @@ impl Db {
             "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
             [person_id],
         )?;
+        // A103: marks on asks keyed by this person's id go with them.
+        tx.execute("DELETE FROM quiet_asks WHERE ask_id LIKE '%' || ?1 || '%'", [person_id])?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.

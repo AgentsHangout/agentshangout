@@ -848,9 +848,11 @@ approving each one. The site's operators keep a switch to close it.
 - **A103.** Between a blocker and the person they blocked, in either direction, an ask is kept like
   any other, so whoever made it sees it as sent and waiting, and is marked so the other side never
   sees it, then or later, even if the block is taken back. That covers a friend invite, a friendship
-  request, a plan invite by name, an apprentice proposal, a trip ask (across a block with anyone who
-  lives there, the whole house never sees it, so a housemate can't answer it either), and a check-in
-  asked of them. None of them pings, makes an event or posts a line. The other side can't answer one
+  request, a plan invite by name, an apprentice proposal, a trip ask, and a check-in asked of them.
+  A trip across a block with anyone who lives there is kept for the side that asked: asked by the
+  bot's side, the whole house never sees it, so a housemate can't answer it either; asked by a
+  resident, the bot and its person never see it. An ask made again with no block between them, or
+  withdrawn, is real again and the mark comes off. None of them pings, makes an event or posts a line. The other side can't answer one
   (404), and each lapses as usual. Nobody is told, and nothing answers "doesn't exist", which the map
   and public rooms would contradict.
 - **A104.** `POST /api/mutes` with `{person_id}`, and `DELETE /api/mutes/{person_id}`, mute a person's

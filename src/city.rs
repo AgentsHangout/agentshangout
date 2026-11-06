@@ -832,13 +832,16 @@ impl Standing {
 }
 
 fn standing(state: &AppState, caller: &Caller, trip: &Trip) -> ApiResult<Standing> {
+    // A103: a trip asked across a block belongs to the side that asked; the other never sees it.
+    let from_house = crate::blocks::quiet(state, "trip_from_house", &trip.id)?;
     if let Some(agent_id) = &caller.agent_id {
-        return Ok(Standing { bot: *agent_id == trip.agent_id, owner: false, resident: false });
+        let bot = *agent_id == trip.agent_id && !from_house;
+        return Ok(Standing { bot, owner: false, resident: false });
     }
-    // A103: a trip asked across a block is the bot's side's only; the house never sees it.
     let resident = state.db.is_resident(&trip.house_id, &caller.person_id)?
         && !crate::blocks::quiet(state, "trip", &trip.id)?;
-    Ok(Standing { bot: false, owner: trip.owner_id == caller.person_id, resident })
+    let owner = trip.owner_id == caller.person_id && !from_house;
+    Ok(Standing { bot: false, owner, resident })
 }
 
 /// A trip, for the bot it's for, that bot's owner and the house's residents. Anyone else gets 404.
@@ -995,17 +998,18 @@ pub fn create_trip(state: &AppState, caller: &Caller, input: &TripInput) -> ApiR
 
     // Ping whoever still has to answer. The goal goes to the two sides only.
     let mut to_ask = Vec::new();
-    if !owner_side {
-        to_ask.push(agent.owner_id.clone());
-    }
-    // A103: across a block with anyone who lives here, the ask is kept as waiting for the bot's side,
-    // and the house never sees it or is asked, so it lapses as usual.
+    // A103: across a block with anyone who lives here, the trip is kept for the side that asked and
+    // the other side never sees it or is asked, so it lapses as usual. A resident asking hides it from
+    // the bot's side ("trip_from_house"); the bot's side asking hides it from the house ("trip").
     let mut across = false;
     for resident in resident_ids(state, &house.id)? {
         across |= crate::blocks::apart(state, &resident, &agent.owner_id)?;
     }
     if across {
-        state.db.quiet_ask("trip", &id, now)?;
+        state.db.quiet_ask(if host_side { "trip_from_house" } else { "trip" }, &id, now)?;
+    }
+    if !owner_side && !(across && host_side) {
+        to_ask.push(agent.owner_id.clone());
     }
     if !host_side && !across {
         to_ask.extend(resident_ids(state, &house.id)?);
@@ -1678,11 +1682,12 @@ pub fn trips_to_answer(state: &AppState, caller: &Caller, now: i64) -> ApiResult
             }
         }
     }
-    // A103: an ask made across a block waits, unseen by the house, and lapses.
+    // A103: an ask made across a block waits, unseen by the side that didn't ask, and lapses.
     let mut shown = Vec::new();
     for trip in trips {
-        let mine = trip.owner_id == caller.person_id;
-        if mine || !crate::blocks::quiet(state, "trip", &trip.id)? {
+        let hidden_from =
+            if trip.owner_id == caller.person_id { "trip_from_house" } else { "trip" };
+        if !crate::blocks::quiet(state, hidden_from, &trip.id)? {
             shown.push(trip);
         }
     }
@@ -1713,10 +1718,18 @@ pub fn scenes_to_answer(
 
 /// The trips of this bot, or of all this person's bots: open, under way or recent.
 pub fn your_trips(state: &AppState, caller: &Caller, now: i64) -> ApiResult<Vec<Trip>> {
-    Ok(match &caller.agent_id {
+    let trips = match &caller.agent_id {
         Some(agent_id) => state.db.trips_for_bot(agent_id, now - DAY_SECS, now)?,
         None => state.db.trips_for_owner(&caller.person_id, now - DAY_SECS, now)?,
-    })
+    };
+    // A103: a house's ask made across a block never reaches the bot's side.
+    let mut shown = Vec::new();
+    for trip in trips {
+        if !crate::blocks::quiet(state, "trip_from_house", &trip.id)? {
+            shown.push(trip);
+        }
+    }
+    Ok(shown)
 }
 
 /// Passes offered to this person's bots that nobody has accepted. Without this, an owner would

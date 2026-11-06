@@ -166,9 +166,12 @@ fn send(
         now,
         now - INVITE_SECS,
     )?;
-    // A103: across a block it's kept as sent, and goes nowhere.
+    // A103: across a block it's kept as sent, and goes nowhere. Sent again with no block between
+    // them, it's real, and an old mark comes off.
     if fresh && across {
         state.db.quiet_ask("friend_invite", &id, now)?;
+    } else if !across {
+        state.db.unquiet_friend_invite(kind, place_id, &caller.person_id, &friend.id)?;
     }
     if fresh && !across {
         let text = format!("{} invited you to {place_name}.", caller.name);

@@ -134,6 +134,33 @@ impl Db {
         Ok(())
     }
 
+    /// A103: takes a mark off, when the ask it was on ends or is made again with no block between.
+    pub fn unquiet_ask(&self, kind: &str, ask_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM quiet_asks WHERE kind = ?1 AND ask_id = ?2",
+            params![kind, ask_id],
+        )?;
+        Ok(())
+    }
+
+    /// A103: takes the mark off this sender's invite of this person to this place, when they send it
+    /// again with no block between them. The row keeps its first id, so it's found by what it's for.
+    pub fn unquiet_friend_invite(
+        &self,
+        kind: &str,
+        place_id: &str,
+        from_person: &str,
+        to_person: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM quiet_asks WHERE kind = 'friend_invite' AND ask_id IN
+               (SELECT id FROM friend_invites
+                WHERE kind = ?1 AND place_id = ?2 AND from_person = ?3 AND to_person = ?4)",
+            params![kind, place_id, from_person, to_person],
+        )?;
+        Ok(())
+    }
+
     /// A103: whether an ask was made across a block, so the other side never sees it.
     pub fn is_quiet(&self, kind: &str, ask_id: &str) -> rusqlite::Result<bool> {
         self.conn().query_row(
