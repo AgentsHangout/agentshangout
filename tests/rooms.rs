@@ -7407,11 +7407,22 @@ async fn the_daily_card_limit_counts_every_add_and_holds_under_a_race() {
         || server.state.db.lific_cards_added_since(&ann.id, agenthangout::now() - 86_400).unwrap();
     seed_lific_adds(&server, &ann.id, &room, 27);
 
-    // The 28th, then taken down: the count stays.
+    // The 28th, then taken down: the count stays, and the replies say so (I142).
     let added = server.post(&ann.key, &path, json!({ "title": "Down soon" })).await.ok();
+    assert_eq!(added["cards_today"], json!({ "used": 28, "left": 2, "most": 30 }), "{added}");
     let card = text(&added["card"]["id"]);
-    server.delete(&ann.key, &format!("{path}/{card}")).await.ok();
+    let removed = server.delete(&ann.key, &format!("{path}/{card}")).await.ok();
+    assert_eq!(removed["cards_today"]["used"], 28, "{removed}");
     assert_eq!(today(), 28);
+    let read = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(read["cards_today"]["left"], 2, "{read}");
+    // Someone who can't change the board doesn't get it.
+    let (_, stranger) = server.someone("Stranger").await;
+    server.open(&ann, &room).await.ok();
+    server.walk_in(&stranger, &room).await;
+    let theirs = server.get(&stranger.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(theirs["can_change"], false);
+    assert!(theirs.get("cards_today").is_none(), "{theirs}");
 
     // Three at once with two left: two pass, one is refused, and Lific gets two.
     let made_before = fake.issues.lock().unwrap().len();

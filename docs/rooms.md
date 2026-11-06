@@ -869,6 +869,10 @@ the cascades still run.
   `unavailable` in words, and nothing is recorded here: no card, no add toward the day's 30, and no
   bot moved (#651). It still counts as one of the bot's writes a minute. A card Lific no longer
   has is `404`.
+- **I142.** A board's read for someone who can change it (I137), and every card added, changed or
+  taken down, says `cards_today`: `used`, how many cards this person and their bots have added in
+  the last day, from the same log the limit counts (I134), so a card taken down still counts;
+  `left`, how many more they can add; and `most`, the 30 (#672). Nobody else's reads have it.
 - **I140.** On the page the board is a corkboard and its cards are sticky notes: square-ish paper
   with a strip of tape, tilted a little, coloured by priority (yellow for none, green low, blue
   medium, orange high, pink urgent), in a handwriting font where the device has one. Anyone who can
