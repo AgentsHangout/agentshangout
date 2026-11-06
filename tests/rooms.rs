@@ -4919,7 +4919,15 @@ fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
         assert!(app.contains(here), "the wall has lost {here}");
     }
     let css = include_str!("../web/style.css");
-    for here in [".pin-button", ".pin-glyph", ".pin-count", ".pin-card", ".pin-kind", ".pin-title", ".pin-by"] {
+    for here in [
+        ".pin-button",
+        ".pin-glyph",
+        ".pin-count",
+        ".pin-card",
+        ".pin-kind",
+        ".pin-title",
+        ".pin-by",
+    ] {
         assert!(css.contains(here), "the pin has lost {here}");
     }
     // I81: the pin is drawn in pixels like the room, not an emoji.
