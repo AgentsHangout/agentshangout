@@ -6786,6 +6786,8 @@ struct FakeMaker {
     projects: Arc<std::sync::Mutex<Vec<MadeProject>>>,
     /// Every Authorization header that reached it.
     auth: Arc<std::sync::Mutex<Vec<String>>>,
+    /// I134 to I136: every issue made on it, as Lific would keep it.
+    issues: Arc<std::sync::Mutex<Vec<Value>>>,
 }
 
 const MAKER_KEY: &str = "lific_sk-live-test-only-key";
@@ -6865,18 +6867,104 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
         if tail == "modules" {
             return axum::Json(json!([])).into_response();
         }
-        axum::Json(json!({ "cursor": 1, "pages": [], "issues": [
-            { "identifier": format!("{project}-1"), "title": "First", "status": "todo",
-              "priority": "none", "module_id": null, "sort_order": 1.0, "deleted": false },
-        ] }))
-        .into_response()
+        let mut issues = vec![json!({ "identifier": format!("{project}-1"), "title": "First",
+            "status": "todo", "priority": "none", "module_id": null, "sort_order": 1.0,
+            "deleted": false })];
+        if *fake.mode.lock().unwrap() == "full" {
+            issues.extend((2..=200).map(|n| {
+                json!({ "identifier": format!("{project}-{n}"),
+                "title": "Full", "status": "backlog", "priority": "none", "module_id": null,
+                "sort_order": n as f64, "deleted": false })
+            }));
+        }
+        let made = fake.issues.lock().unwrap();
+        issues.extend(
+            made.iter()
+                .filter(|issue| {
+                    issue["deleted"] == false
+                        && issue["identifier"].as_str().unwrap().starts_with(&format!("{project}-"))
+                })
+                .cloned(),
+        );
+        axum::Json(json!({ "cursor": 1, "pages": [], "issues": issues })).into_response()
+    }
+    // I134: makes an issue in a project this stand-in made.
+    async fn add_issue(
+        State(fake): State<FakeMaker>,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let projects = fake.projects.lock().unwrap();
+        let Some(project) = projects.iter().find(|p| json!(p.0) == body["project_id"]) else {
+            return Code::BAD_REQUEST.into_response();
+        };
+        let mut issues = fake.issues.lock().unwrap();
+        let number =
+            issues.iter().filter(|issue| issue["project_id"] == body["project_id"]).count() + 2;
+        let mut issue = body.clone();
+        issue["id"] = json!(500 + issues.len());
+        issue["identifier"] = json!(format!("{}-{number}", project.1));
+        issue["deleted"] = json!(false);
+        issue["module_id"] = json!(null);
+        issue["sort_order"] = json!(issues.len() as f64);
+        issues.push(issue.clone());
+        axum::Json(issue).into_response()
+    }
+    async fn resolve_issue(
+        State(fake): State<FakeMaker>,
+        Path(identifier): Path<String>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        let issues = fake.issues.lock().unwrap();
+        match issues.iter().find(|i| i["identifier"] == identifier && i["deleted"] == false) {
+            Some(issue) => axum::Json(issue.clone()).into_response(),
+            None => Code::NOT_FOUND.into_response(),
+        }
+    }
+    async fn change_issue(
+        State(fake): State<FakeMaker>,
+        Path(id): Path<u64>,
+        headers: HeaderMap,
+        method: axum::http::Method,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        let mut issues = fake.issues.lock().unwrap();
+        let Some(issue) = issues.iter_mut().find(|i| i["id"] == id && i["deleted"] == false) else {
+            return Code::NOT_FOUND.into_response();
+        };
+        if method == axum::http::Method::DELETE {
+            issue["deleted"] = json!(true);
+            return axum::Json(json!({ "deleted": true })).into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        for (field, value) in body.as_object().unwrap() {
+            issue[field] = value.clone();
+        }
+        axum::Json(issue.clone()).into_response()
     }
     let fake = FakeMaker {
         mode: Arc::new(std::sync::Mutex::new("ok")),
         projects: Arc::new(std::sync::Mutex::new(Vec::new())),
         auth: Arc::new(std::sync::Mutex::new(Vec::new())),
+        issues: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let router = Router::new()
+        .route("/api/issues", post(add_issue))
+        .route("/api/issues/resolve/{identifier}", get(resolve_issue))
+        .route("/api/issues/{id}", put(change_issue).delete(change_issue))
         .route("/api/projects", post(make))
         .route("/api/projects/{id}", put(publish))
         .route("/public/api/projects/{project}/{tail}", get(public))
@@ -7008,6 +7096,317 @@ async fn the_lific_key_goes_only_to_the_local_instance() {
     // And the setting never says the key, even when logged.
     let shown = format!("{:?}", agenthangout::lific::Settings::default().with_key(Some(MAKER_KEY)));
     assert!(!shown.contains(MAKER_KEY), "{shown}");
+}
+
+/// I133 to I139: a room whose Lific board shows its own project, made on a stand-in instance.
+async fn lific_room(server: &Server) -> (String, Who, FakeMaker, String, String, String) {
+    let (room, ann) = server.someone("Ann").await;
+    let (fake, origin) = fake_lific_maker().await;
+    lific_with_key(server, "", &origin, MAKER_KEY);
+    let board = server.lific_board(&ann, &room);
+    let shown = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(shown["available"], true, "{shown}");
+    let project = text(&shown["project"]);
+    (room, ann, fake, board, project, origin)
+}
+
+fn lific_card<'a>(board: &'a Value, card: &str) -> Option<(&'a str, &'a Value)> {
+    board["columns"].as_array()?.iter().find_map(|column| {
+        let found = column["issues"].as_array()?.iter().find(|issue| issue["id"] == card)?;
+        Some((column["status"].as_str()?, found))
+    })
+}
+
+// I134, I135, I137, I138: people in the room and their bots add and move cards; Lific gets the
+// words and nothing about who; the board says who added each one, and what each reader may do.
+#[tokio::test]
+async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, project, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific");
+
+    let added = server
+        .post(&ann.key, &format!("{path}/cards"), json!({ "title": "Paint\nthe door" }))
+        .await
+        .ok();
+    assert_eq!(added["ok"], true, "{added}");
+    let ann_card = text(&added["card"]["id"]);
+    assert!(ann_card.starts_with(&format!("{project}-")), "{ann_card}");
+    assert_eq!(added["card"]["status"], "backlog");
+
+    let by_bot = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({ "board_id": board, "title": "Tune the piano", "status": "todo", "priority": "high" }),
+        )
+        .await;
+    let bot_card = text(&by_bot["structuredContent"]["card"]["id"]);
+
+    // Lific got the words, the column and the priority, never a name.
+    let sent = fake.issues.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0]["title"], "Paint the door");
+    assert_eq!(sent[1]["priority"], "high");
+    for issue in &sent {
+        assert_eq!(issue["source"], "agentshangout");
+        for name in ["Ann", "Bo", "Scout"] {
+            assert!(!issue.to_string().contains(name), "{issue}");
+        }
+    }
+
+    let as_ann = server.get(&ann.key, &path).await.ok();
+    assert_eq!(as_ann["can_change"], true);
+    let (column, card) = lific_card(&as_ann, &ann_card).unwrap();
+    assert_eq!(column, "backlog");
+    assert_eq!(card["added_by"], json!({ "name": "Ann", "is_bot": false }));
+    assert_eq!((&card["you_added"], &card["can_remove"]), (&json!(true), &json!(true)));
+    let (column, card) = lific_card(&as_ann, &bot_card).unwrap();
+    assert_eq!(column, "todo");
+    assert_eq!(card["added_by"], json!({ "name": "Scout", "is_bot": true }));
+    // The room's owner may take down anyone's card.
+    assert_eq!(card["can_remove"], true);
+
+    let as_bo = server.get(&bo.key, &path).await.ok();
+    let (_, card) = lific_card(&as_bo, &ann_card).unwrap();
+    assert_eq!((&card["you_added"], &card["can_remove"]), (&json!(false), &json!(false)));
+    let (_, card) = lific_card(&as_bo, &bot_card).unwrap();
+    assert_eq!(card["you_added"], true, "a card Bo's bot added is Bo's");
+
+    // Anyone in the room moves any card, and everyone sees it at once.
+    let moved = server
+        .put(&bo.key, &format!("{path}/cards/{ann_card}"), json!({ "status": "active" }))
+        .await
+        .ok();
+    assert_eq!(moved["ok"], true, "{moved}");
+    let after = server.get(&ann.key, &path).await.ok();
+    assert_eq!(lific_card(&after, &ann_card).unwrap().0, "active");
+    let by_tool = server
+        .tool(
+            &scout.token,
+            "set_board_card",
+            json!({ "board_id": board, "card_id": ann_card, "status": "done", "priority": "urgent" }),
+        )
+        .await;
+    assert_eq!(by_tool["structuredContent"]["ok"], true, "{by_tool}");
+    let after = server.get(&bo.key, &path).await.ok();
+    let (column, card) = lific_card(&after, &ann_card).unwrap();
+    assert_eq!((column, &card["priority"]), ("done", &json!("urgent")));
+
+    // Only whoever added a card changes its words.
+    server
+        .put(&bo.key, &format!("{path}/cards/{ann_card}"), json!({ "title": "Mine now" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &format!("{path}/cards/{ann_card}"), json!({ "title": "Paint it red" }))
+        .await
+        .ok();
+
+    // Only the server's key ever reached Lific, and no reply carried it.
+    assert!(fake.auth.lock().unwrap().iter().all(|auth| *auth == format!("Bearer {MAKER_KEY}")));
+    for reply in [added.to_string(), by_bot.to_string(), as_ann.to_string(), by_tool.to_string()] {
+        assert!(!reply.contains(MAKER_KEY), "{reply}");
+    }
+}
+
+// I136: whoever added a card, their bots, and the room's owner take it down, into Lific's trash.
+#[tokio::test]
+async fn a_lific_card_is_taken_down_by_whoever_added_it_or_the_rooms_owner() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let cy = server.join(&ann, &room, "Cy").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let add = |title: &'static str| {
+        let (server, key, path) = (&server, bo.key.clone(), path.clone());
+        async move {
+            text(&server.post(&key, &path, json!({ "title": title })).await.ok()["card"]["id"])
+        }
+    };
+    let first = add("First").await;
+    let second = add("Second").await;
+
+    server.delete(&cy.key, &format!("{path}/{first}")).await.refused(StatusCode::FORBIDDEN);
+    let by_bot = server
+        .tool(
+            &scout.token,
+            "set_board_card",
+            json!({ "board_id": board, "card_id": first, "remove": true }),
+        )
+        .await;
+    assert_eq!(by_bot["structuredContent"]["removed"], true, "{by_bot}");
+    server.delete(&ann.key, &format!("{path}/{second}")).await.ok();
+
+    let left = server.get(&bo.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert!(lific_card(&left, &first).is_none() && lific_card(&left, &second).is_none(), "{left}");
+    assert!(fake.issues.lock().unwrap().iter().all(|issue| issue["deleted"] == true));
+    assert!(server.state.db.lific_cards(&room).unwrap().is_empty());
+    // A card that's gone is missing, not an error page.
+    server.delete(&ann.key, &format!("{path}/{first}")).await.refused(StatusCode::NOT_FOUND);
+}
+
+// I133: only the room's own project changes. A hand-made link is read-only, even on the local
+// instance, and a card id from anywhere else is missing before Lific is asked.
+#[tokio::test]
+async fn only_the_rooms_own_lific_project_can_be_changed() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, local) = lific_room(&server).await;
+    let (other_room, bo) = server.someone("Bo").await;
+    let theirs = server.lific_board(&bo, &other_room);
+    let shown = server.get(&bo.key, &format!("/api/items/{theirs}/lific")).await.ok();
+    let their_card = text(
+        &server
+            .post(&bo.key, &format!("/api/items/{theirs}/lific/cards"), json!({ "title": "Bo's" }))
+            .await
+            .ok()["card"]["id"],
+    );
+    assert_ne!(shown["project"], json!(null));
+
+    let asked = fake.auth.lock().unwrap().len();
+    for card in [their_card.as_str(), "NOPE-1", "../projects/1"] {
+        server
+            .put(
+                &ann.key,
+                &format!("/api/items/{board}/lific/cards/{}", card.replace('/', "%2F")),
+                json!({ "status": "done" }),
+            )
+            .await
+            .refused(StatusCode::NOT_FOUND);
+    }
+    assert_eq!(fake.auth.lock().unwrap().len(), asked, "nothing was sent to Lific for them");
+
+    // Linked by hand to another project on the same instance: read-only.
+    let hand = server.lific_board(&ann, &room);
+    server
+        .put(
+            &ann.key,
+            &format!("/api/items/{hand}/lific"),
+            json!({ "base": local, "project": "ELSE" }),
+        )
+        .await
+        .ok();
+    let read = server.get(&ann.key, &format!("/api/items/{hand}/lific")).await.ok();
+    assert_eq!(read["can_change"], false, "{read}");
+    server
+        .post(&ann.key, &format!("/api/items/{hand}/lific/cards"), json!({ "title": "No" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+}
+
+// I134: like pins, a guest can't, a stranger gets 404, a quiet sign stops a bot but not a person,
+// and on a public floor the pin setting decides.
+#[tokio::test]
+async fn lific_cards_follow_who_may_pin() {
+    let server = Server::start().await;
+    let (room, ann, _fake, board, _, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let card = json!({ "title": "Hello" });
+
+    server.item(&ann, &room, items::QUIET, spot(40)).await;
+    let quiet = server
+        .tool(&scout.token, "add_board_card", json!({ "board_id": board, "title": "Hi" }))
+        .await;
+    assert_eq!(quiet["isError"], true, "{quiet}");
+    assert_eq!(quiet["content"][0]["text"], items::QUIET_REASON);
+    server.post(&bo.key, &path, card.clone()).await.ok();
+
+    let (_, stranger) = server.someone("Stranger").await;
+    server.post(&stranger.key, &path, card.clone()).await.refused(StatusCode::NOT_FOUND);
+
+    server.open(&ann, &room).await.ok();
+    let (_, guest) = server.someone("Guest").await;
+    server.walk_in(&guest, &room).await;
+    server.post(&guest.key, &path, card.clone()).await.refused(StatusCode::FORBIDDEN);
+    let as_guest = server.get(&guest.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(as_guest["can_change"], false);
+
+    server
+        .put(&ann.key, &format!("/api/hangouts/{room}/pin-policy"), json!({ "policy": "owners" }))
+        .await
+        .ok();
+    server.post(&bo.key, &path, card.clone()).await.refused(StatusCode::FORBIDDEN);
+    server.post(&ann.key, &path, card.clone()).await.ok();
+    server
+        .put(&ann.key, &format!("/api/hangouts/{room}/pin-policy"), json!({ "policy": "anyone" }))
+        .await
+        .ok();
+}
+
+// I134: titles are 1 to 120 characters with control characters out; a room's project holds 200
+// cards, and a person and their bots add 30 a day.
+#[tokio::test]
+async fn lific_cards_have_short_titles_and_limits() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, origin) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    for title in ["", "   ", &"x".repeat(121)] {
+        server
+            .post(&ann.key, &path, json!({ "title": title }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
+    server
+        .post(&ann.key, &path, json!({ "title": "ok", "status": "cancelled" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, &path, json!({ "title": "ok", "priority": "huge" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server.post(&ann.key, &path, json!({ "title": "x".repeat(120) })).await.ok();
+
+    for n in 0..29 {
+        server
+            .state
+            .db
+            .add_lific_card(&agenthangout::db::LificCard {
+                hangout_id: room.clone(),
+                card: format!("OLD-{n}"),
+                issue_id: n.to_string(),
+                person_id: ann.id.clone(),
+                agent_id: None,
+                via_bot: false,
+                added_at: agenthangout::now(),
+                added_by: String::new(),
+            })
+            .unwrap();
+    }
+    server
+        .post(&ann.key, &path, json!({ "title": "one too many" }))
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+
+    let bo = server.join(&ann, &room, "Bo").await;
+    fake.set("full");
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    let full = server
+        .post(&bo.key, &path, json!({ "title": "no room" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(text(&full["error"]).starts_with("board_full"), "{full}");
+}
+
+// I139: Lific not taking a change says so, and nothing is kept here or tried again.
+#[tokio::test]
+async fn a_lific_card_lific_wont_take_changes_nothing() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    fake.set("down");
+    let reply = server
+        .post(&ann.key, &format!("/api/items/{board}/lific/cards"), json!({ "title": "Hi" }))
+        .await
+        .ok();
+    assert_eq!((&reply["ok"], &reply["available"]), (&json!(false), &json!(false)), "{reply}");
+    assert_eq!(reply["reason"], "down");
+    assert!(server.state.db.lific_cards(&room).unwrap().is_empty());
+    assert!(fake.issues.lock().unwrap().is_empty());
+    assert!(!reply.to_string().contains(MAKER_KEY));
 }
 
 // I111: ballot_box counts open votes the caller can see, and names open_vote, cast_vote and close_vote.

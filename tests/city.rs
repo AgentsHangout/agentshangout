@@ -5016,6 +5016,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "mayor_candidates",
             "mayor_elections",
             "lific_room_projects",
+            "lific_cards",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
