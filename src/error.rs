@@ -17,17 +17,31 @@ pub struct ApiError {
     pub retry_after: Option<u64>,
     /// A 429 that was the move's fault rather than a limit's, so it counts as a refused move (W30).
     pub refused_move: bool,
+    /// Fields a caller can branch on, such as a `code`, sent beside `error` (CP15).
+    pub details: Option<serde_json::Value>,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self { status, message: message.into(), retry_after: None, refused_move: false }
+        Self {
+            status,
+            message: message.into(),
+            retry_after: None,
+            refused_move: false,
+            details: None,
+        }
     }
 
     pub fn refused_move(mut self) -> Self {
         self.refused_move = true;
+        self
+    }
+
+    /// Adds fields beside `error`. `details` is an object.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
         self
     }
 
@@ -78,7 +92,13 @@ impl From<rusqlite::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let wait = self.wait();
-        let mut response = (self.status, Json(json!({ "error": self.message }))).into_response();
+        let mut body = json!({ "error": self.message });
+        if let Some(serde_json::Value::Object(details)) = self.details {
+            for (key, value) in details {
+                body.as_object_mut().unwrap().entry(key).or_insert(value);
+            }
+        }
+        let mut response = (self.status, Json(body)).into_response();
         if let Some(secs) = wait {
             response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
         }
