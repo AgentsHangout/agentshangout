@@ -39,6 +39,11 @@ pub fn new_owner_key() -> String {
     format!("ah_owner_{}", random_string(40))
 }
 
+/// GB1: what a bridge address carries. It is never a bot token, so it works only on the bridge.
+pub fn new_bridge_key() -> String {
+    format!("ah_bridge_{}", random_string(40))
+}
+
 pub fn new_agent_token() -> String {
     format!("ah_bot_{}", random_string(40))
 }
