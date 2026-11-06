@@ -2129,6 +2129,9 @@ pub struct Snapshot {
     pub emotes: Vec<crate::emotes::Emote>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
+    /// MY10: the mayor, when they're in this room: a person among its people, or one of its bots.
+    /// The page draws their sash. Nobody can wear it otherwise.
+    pub mayor: Option<crate::elections::Sash>,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
@@ -2291,6 +2294,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     };
     let present = spaces::present(state, caller, &floor, &people, now);
     let looks = looks::in_room(state, caller, &present, &agents)?;
+    let mayor = crate::elections::sash_in_room(state, &people, &agents)?;
     let boards = if floor.is_some() {
         state.db.board_summaries(hangout_id, guest.as_ref().map_or(0, |visit| visit.since))?
     } else {
@@ -2346,6 +2350,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         typing: crate::typing::visible(state, caller, hangout_id)?,
         emotes: crate::emotes::visible(state, caller, hangout_id)?,
         looks,
+        mayor,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
         keyless_welcome: state.db.is_keyless_floor(hangout_id)?,
