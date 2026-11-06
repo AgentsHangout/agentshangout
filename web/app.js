@@ -1693,7 +1693,8 @@ function creditsCard(credits) {
       ['Trips you let in', String(now.hosted_trips)],
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
-    const packName = (word) => `${sentence(word)} pack`;
+    // HC45: a piece bought on its own is spent as `piece:<kind>`.
+    const packName = (word) => word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
     // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
@@ -1723,7 +1724,21 @@ function creditsCard(credits) {
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
           }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
-      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
+      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
+      // HC45: without the pack, each piece can be bought on its own.
+      !offer.bought && !offer.over && offer.sold_alone?.length ? h('details', { class: 'shop-pieces' },
+        h('summary', {}, 'Or buy pieces one at a time'),
+        h('ul', { class: 'room-list' }, offer.sold_alone.map((piece) => h('li', {},
+          h('span', {}, `${piece.label} · ${count(piece.cost, 'credit', 'credits')} `),
+          piece.bought ? h('span', { class: 'pill on' }, 'Yours') : h('button', {
+            type: 'button',
+            class: 'ghost',
+            disabled: now.balance < piece.cost,
+            onclick: act(error, async () => {
+              if (!confirm(`Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+              render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+            }),
+          }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'))))) : null);
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),

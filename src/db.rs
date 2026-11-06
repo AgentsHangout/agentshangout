@@ -18826,6 +18826,40 @@ mod tests {
         crate::items::PACKS.iter().find(|pack| pack.cost > 0 && !pack.over).unwrap()
     }
 
+    // HC45: a piece bought on its own costs 2 to 10, all of a pack's pieces cost more than the pack,
+    // and buying one unlocks only that piece
+    #[test]
+    fn a_piece_is_bought_on_its_own_and_unlocks_only_itself() {
+        use crate::items::{piece_price, PACKS, PIECE};
+        for pack in PACKS.iter().filter(|pack| pack.cost > 0) {
+            let mut kinds: Vec<&str> = pack.items.iter().map(|item| item.kind).collect();
+            kinds.sort();
+            kinds.dedup();
+            let all: i64 = kinds.iter().map(|kind| piece_price(kind).unwrap()).sum();
+            assert!(all > pack.cost, "{}'s pieces cost {all}, no more than the pack", pack.pack);
+            assert!(kinds.iter().all(|kind| (2..=10).contains(&piece_price(kind).unwrap())));
+            assert_eq!(piece_price(pack.paint), None, "a paint comes only with its pack");
+        }
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 1);
+        let pack = a_pack_for_sale();
+        let piece = pack.items[0].kind;
+        let price = piece_price(piece).unwrap();
+        let after =
+            crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now).unwrap();
+        assert_eq!(after.balance, 20 - price);
+        let offer = after.packs.iter().find(|offer| offer.pack == pack.pack).unwrap();
+        assert!(!offer.bought, "a piece isn't the pack");
+        assert!(offer.sold_alone.iter().any(|alone| alone.kind == piece && alone.bought));
+        assert!(db.has_bought("p1", &format!("{PIECE}{piece}")).unwrap());
+        // Once is enough, and a piece of a pack you have can't be bought again.
+        assert!(crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now + 1)
+            .is_err());
+        assert!(
+            crate::economy::spend(&db, &ann(None), "piece:nothing_at_all", None, now + 1).is_err()
+        );
+    }
+
     // HC14, HC15, HC16
     #[test]
     fn buying_a_pack_spends_its_cost_once_and_only_from_what_was_paid() {

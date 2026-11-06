@@ -601,13 +601,30 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
     })
 }
 
+/// HC45: how a piece bought on its own is written in `credit_spends.pack`.
+pub const PIECE: &str = "piece:";
+
+/// HC45: what a piece from a paid pack costs on its own, 2 to 10: more for one that takes more floor
+/// and is more beautiful. Paints and floorings come only with their pack, so they have no price.
+pub fn piece_price(word: &str) -> Option<i64> {
+    let kind = kind_of(word)?;
+    paid_pack_with(word)?.items.iter().any(|part| part.kind == word).then_some(())?;
+    Some((1 + kind.w * kind.h + kind.beauty / 4).clamp(2, 10))
+}
+
+/// HC45: whether this person may use `word` from a paid pack: they bought the pack, or that piece.
+pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> ApiResult<bool> {
+    Ok(state.db.has_bought(person_id, pack.pack)?
+        || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?)
+}
+
 /// HC14: a kind, paint or flooring from a pack that costs credits is only for someone who bought
 /// that pack, and their bots, or someone with God mode on (W79), which unlocks everything. Taking
 /// one down or out never needs it.
 pub fn may_use_paid(state: &AppState, person_id: &str, word: &str) -> ApiResult<()> {
     match paid_pack_with(word) {
         Some(pack)
-            if !state.db.has_bought(person_id, pack.pack)?
+            if !owns_paid(state, person_id, pack, word)?
                 && !god_mode::is_on(state, person_id)? =>
         {
             Err(ApiError::forbidden(format!(
@@ -2187,8 +2204,11 @@ fn discovery_collection_items(catalog: &[Kind]) -> Vec<&'static str> {
 fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
     json!({
         "items": CATALOG.iter().map(|kind| {
-            let paid = paid_pack_with(kind.kind)
-                .filter(|pack| !god && !bought.iter().any(|word| word == pack.pack));
+            // HC45: the whole pack, or this piece bought on its own, unlocks it.
+            let piece = format!("{PIECE}{}", kind.kind);
+            let paid = paid_pack_with(kind.kind).filter(|pack| {
+                !god && !bought.iter().any(|word| word == pack.pack || *word == piece)
+            });
             // I128: a Lific board only for someone with god mode on.
             let gods_only = kind.kind == "lific_board";
             let unlocked = (god || kind.friends <= friends) && paid.is_none() && (god || !gods_only);
