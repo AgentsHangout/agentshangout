@@ -815,7 +815,8 @@ pub async fn add_card(
         "title": title,
         "status": status,
         "priority": priority,
-        "source": "agentshangout",
+        // Lific keeps a source unique among live issues, so each card names its own add.
+        "source": format!("agentshangout:{add}"),
     });
     let made = match keyed(&settings, reqwest::Method::POST, "/api/issues", Some(body)).await {
         Ok(made) => made,
