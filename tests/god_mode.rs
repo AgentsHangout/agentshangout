@@ -749,6 +749,40 @@ async fn every_item_is_unlocked_while_it_is_on_and_what_was_placed_stays() {
     assert_eq!(snapshot["items"].as_array().map(Vec::len), Some(1), "{snapshot}");
 }
 
+// I128
+#[tokio::test]
+async fn only_someone_with_god_mode_on_puts_up_a_lific_board() {
+    let (server, justin, _) = Server::start().await;
+    server.switch(&justin, true).await;
+    let house = server.build(&justin, "house").await;
+    let room = text(&server.go_in(&justin.key, house).await.ok()["hangout_id"]);
+    let items = format!("/api/floors/{room}/items");
+    server.post(&justin.key, &items, json!({ "kind": "lific_board", "x": 30, "y": 2 })).await.ok();
+
+    // With it off, the same person can't put up another, and the catalog says why.
+    server.switch(&justin, false).await;
+    let catalog = server.get(&justin.key, "/api/items").await.ok();
+    let entry = catalog["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "lific_board")
+        .unwrap()
+        .clone();
+    assert_eq!((&entry["unlocked"], &entry["god_needed"]), (&json!(false), &json!(true)));
+    let another = json!({ "kind": "lific_board", "x": 34, "y": 2 });
+    server.post(&justin.key, &items, another.clone()).await.refused(StatusCode::FORBIDDEN);
+
+    // A bot never can, even with its owner's switch on.
+    server.switch(&justin, true).await;
+    let (_, token) = server.bot(&justin, &room, "Scout").await;
+    server.post(&token, &items, another).await.refused(StatusCode::FORBIDDEN);
+    let snapshot = server.get(&justin.key, &format!("/api/hangouts/{room}")).await.ok();
+    let boards =
+        snapshot["items"].as_array().unwrap().iter().filter(|item| item["kind"] == "lific_board");
+    assert_eq!(boards.count(), 1, "{snapshot}");
+}
+
 // W79, W80, S34
 #[tokio::test]
 async fn turning_it_off_takes_nothing_down_and_the_limits_come_back() {

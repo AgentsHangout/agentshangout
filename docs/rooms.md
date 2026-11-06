@@ -789,6 +789,11 @@ the cascades still run.
   `available: false`, a `reason` and `unavailable` in words, and no issues: never older ones, and
   never an error page. At most 50 issues show, the earliest in board order, with `total`
   counting them all and `truncated` saying some were left out. The room works the same either way.
+- **I128.** Only someone with god mode on (W75) can put up a `lific_board`, by placing it or with a
+  pack or template, which leaves it out for anyone else as it does a piece that doesn't fit; a bot
+  never can. Each board is its own item in its room, and its owner links it to an existing
+  published project (I124), which another board may show too. Making a project in Lific from here
+  would need a key that writes, so it waits for v2.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

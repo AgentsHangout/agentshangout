@@ -243,6 +243,24 @@ impl Server {
         text(&self.place(&who.key, room, kind, at).await.ok()["id"])
     }
 
+    /// A Lific board put straight into the room. Placing one takes god mode (I128), which nobody on
+    /// this server has; tests/god_mode.rs covers that part.
+    fn lific_board(&self, who: &Who, room: &str) -> String {
+        let id = agenthangout::auth::new_id();
+        let item = agenthangout::db::NewFloorItem {
+            id: &id,
+            hangout_id: room,
+            kind: "lific_board",
+            x: 0,
+            y: 0,
+            facing: 0,
+            placed_by: &who.id,
+            now: now(),
+        };
+        self.state.db.place_item(&item, |_, _, _| Ok::<(), ()>(())).unwrap().unwrap();
+        id
+    }
+
     async fn change(&self, token: &str, item: &str, body: Value) -> Reply {
         self.put(token, &format!("/api/items/{item}"), body).await
     }
@@ -2718,7 +2736,11 @@ async fn starter_items_are_for_everyone_and_the_rest_unlock_with_friends() {
     let (room, ann) = server.someone("Ann").await;
     // HC14: a kind from a pack that costs credits is starter too, but waits for the pack to be
     // bought, which a_pack_that_costs_credits_and_everything_in_it_waits_for_someone_to_buy_it covers.
-    let free = |kind: &&items::Kind| items::paid_pack_with(kind.kind).is_none();
+    // I128: a Lific board is starter but only for someone with god mode on, which
+    // only_someone_with_god_mode_on_puts_up_a_lific_board (tests/god_mode.rs) covers.
+    let free = |kind: &&items::Kind| {
+        items::paid_pack_with(kind.kind).is_none() && kind.kind != "lific_board"
+    };
     for kind in
         items::CATALOG.iter().filter(|kind| kind.tier == "starter" && !kind.sign).filter(free)
     {
@@ -6328,7 +6350,6 @@ async fn functional_stations_open_the_existing_room_features() {
         ("corkboard", "pins"),
         ("research_board", "research"),
         ("ballot_box", "votes"),
-        ("lific_board", "lific"),
     ]
     .iter()
     .enumerate()
@@ -6365,6 +6386,26 @@ async fn functional_stations_open_the_existing_room_features() {
             .unwrap()
             .contains(&json!(scout.id)));
     }
+    // I128: the Lific board is locked to anyone without god mode, and placing one is refused. One put
+    // in another way opens `lific` like the rest.
+    let entry =
+        catalog["items"].as_array().unwrap().iter().find(|item| item["kind"] == "lific_board");
+    let entry = entry.unwrap();
+    assert_eq!(
+        (&entry["opens"], &entry["unlocked"], &entry["god_needed"]),
+        (&json!("lific"), &json!(false), &json!(true))
+    );
+    assert_eq!(
+        server.place(&ann.key, &room, "lific_board", (0, 6)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let id = server.lific_board(&ann, &room);
+    let bot = server.read_room(&scout.token, &room).await;
+    assert_eq!(
+        bot["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap()["opens"],
+        "lific"
+    );
+    assert_eq!(server.use_item(&scout.token, &id).await.ok()["opens"], "lific");
 }
 
 // I101: a new room starts with one notes station, and read_room counts only the notes the caller can read.
@@ -6520,7 +6561,7 @@ async fn a_lific_board_shows_a_published_project_by_status() {
     let scout = server.bot(&ann, &room, "Scout").await;
     let (_fake, origin) = fake_lific().await;
     allow_lific(&server, "https://lific.example", &origin);
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     let unlinked = server.get(&ann.key, &path).await.ok();
     assert_eq!(unlinked["linked"], false, "{unlinked}");
@@ -6569,7 +6610,7 @@ async fn a_lific_board_links_only_to_an_allowed_address() {
     let (room, ann) = server.someone("Ann").await;
     let (_fake, origin) = fake_lific().await;
     allow_lific(&server, "https://lific.example", &origin);
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     let other_port = origin.replace("127.0.0.1:", "127.0.0.1:1");
     for base in [
@@ -6607,7 +6648,7 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
     let (room, ann) = server.someone("Ann").await;
     let (fake, origin) = fake_lific().await;
     allow_lific(&server, "", &origin);
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
     assert_eq!(server.get(&ann.key, &path).await.ok()["available"], true);
@@ -6661,7 +6702,7 @@ async fn a_lific_board_asks_lific_once_for_many_readers() {
     let scout = server.bot(&ann, &room, "Scout").await;
     let (fake, origin) = fake_lific().await;
     allow_lific(&server, "", &origin);
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
     for _ in 0..3 {
@@ -6688,7 +6729,7 @@ async fn a_lific_board_reaches_a_listed_origin_through_its_pinned_address() {
         local: None,
         test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
     });
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     server.put(&ann.key, &path, json!({ "base": listed, "project": "DEMO" })).await.ok();
     let board = server.get(&ann.key, &path).await.ok();
@@ -6704,7 +6745,7 @@ async fn deleting_whoever_linked_a_lific_board_keeps_the_board() {
     let bo = server.join(&ann, &room, "Bo").await;
     let (_fake, origin) = fake_lific().await;
     allow_lific(&server, "", &origin);
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     // As if Bo had run the room when it was linked.
     server.state.db.set_lific_link(&id, &room, &origin, "DEMO", &bo.id, now()).unwrap();
     server.state.db.delete_person(&bo.id, "Bo").expect("deleting Bo");
@@ -6718,7 +6759,7 @@ async fn a_lific_board_never_asks_a_private_address() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     allow_lific(&server, "https://localhost", "");
-    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let id = server.lific_board(&ann, &room);
     let path = format!("/api/items/{id}/lific");
     server
         .put(&ann.key, &path, json!({ "base": "https://localhost", "project": "DEMO" }))
