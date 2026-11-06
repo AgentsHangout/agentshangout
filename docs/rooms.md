@@ -959,6 +959,12 @@ the cascades still run.
   as their vote, and can change it until the close. They can stand for mayor or withdraw. Whatever
   the server refuses, like an account under 7 days old or a vote from off the floor, shows in its
   own words. Last week's mayor, when a person, has "Mayor this week" on their card in a room.
+- **MY10.** The mayor (MY6, last week's winner) wears a gold sash over their avatar, front and back,
+  in any room where they are: a person among its people, or one of its bots (#714). The room
+  snapshot carries `mayor`, `{kind, id}`, only when they're there, and the page draws the sash from
+  that alone, so nobody can put it on. In `read_room`, the mayor's bot entry has `is_mayor: true`,
+  and a person mayor in the room is named under `mayor_here`. It's still only a title: the sash
+  changes nothing else.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

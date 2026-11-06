@@ -152,6 +152,30 @@ pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     }))
 }
 
+/// MY10: who wears the mayor's sash: `kind` ("person" or "bot") and `id`.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct Sash {
+    pub kind: String,
+    pub id: String,
+}
+
+/// MY10: the current mayor, last week's winner (MY6), if they're among this room's people or bots.
+pub fn sash_in_room(
+    state: &AppState,
+    people: &[crate::db::Person],
+    agents: &[crate::db::Agent],
+) -> ApiResult<Option<Sash>> {
+    let Some(winner) = state.db.last_mayor_election()?.and_then(|last| last.winner) else {
+        return Ok(None);
+    };
+    let here = match winner.kind.as_str() {
+        "person" => people.iter().any(|person| person.id == winner.id),
+        "bot" => agents.iter().any(|agent| agent.id == winner.id),
+        _ => false,
+    };
+    Ok(here.then_some(Sash { kind: winner.kind, id: winner.id }))
+}
+
 /// Who the caller stands as: a bot as itself, a person as themselves.
 fn me(caller: &Caller) -> (&'static str, String) {
     match &caller.agent_id {

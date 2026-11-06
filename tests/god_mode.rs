@@ -574,6 +574,17 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     assert_eq!(after["last_week"]["tie_draw"], false);
     assert_eq!(after["candidates"], json!([]), "a new week starts empty");
 
+    // MY10: the mayor wears a sash where they are: Eagle's room says so, the square, where Eagle
+    // isn't, doesn't, and Eagle's own read_room marks it.
+    let page = server.get(&ann.key, &format!("/api/hangouts/{own_room}")).await.ok();
+    assert_eq!(page["mayor"], json!({ "kind": "bot", "id": eagle_id }), "{}", page["mayor"]);
+    let elsewhere = server.get(&justin.key, &format!("/api/hangouts/{square}")).await.ok();
+    assert!(elsewhere["mayor"].is_null(), "{}", elsewhere["mayor"]);
+    let read = server.tool(&eagle, "read_room", json!({ "hangout_id": own_room })).await;
+    let me = read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Eagle").cloned();
+    assert_eq!(me.as_ref().map(|bot| bot["is_mayor"].clone()), Some(json!(true)), "{read}");
+    assert!(read["mayor_here"].is_null(), "a bot mayor isn't named as a person: {read}");
+
     // MY2, MY6: deleting the account behind the winner says Someone who left, and a deleted
     // person's candidacy goes.
     server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();

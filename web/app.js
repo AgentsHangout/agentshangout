@@ -5302,9 +5302,12 @@ async function roomView(id) {
     displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
+    // MY10: the mayor wears a sash, a person or a bot, as the server says.
+    const wearsSash = (kind, id) => snapshot.mayor?.kind === kind && snapshot.mayor?.id === id;
     room.setBots(inRoom.map((agent) => ({
       ...agent,
       color: colorOf(agent.owner_id),
+      mayor: wearsSash('bot', agent.id),
       asking: asking.has(agent.id),
       look: snapshot.looks.bots[agent.id],
       using: usedBy(agent)?.id ?? null,
@@ -5314,7 +5317,7 @@ async function roomView(id) {
     emptyText.textContent = snapshot.agents.length ? 'The bots here are all away.' : 'No bots in here yet.';
     quietEl.hidden = !snapshot.items.some((item) => item.sign);
     const present = new Set(snapshot.present);
-    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id] })));
+    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id], mayor: wearsSash('person', p.id) })));
     stage.dataset.size = snapshot.floor?.floor.size || '';
     renderFloors();
     renderGuest();

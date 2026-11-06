@@ -2212,9 +2212,14 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "people": snapshot.people.iter().map(|person| &person.name).collect::<Vec<_>>(),
         // H6: how the owner knows each of them. Facts and the owner's own notes, never a score.
         "people_here": people_here,
+        // MY10: the mayor wears a sash. A person mayor here is named; a bot mayor is marked below.
+        "mayor_here": snapshot.mayor.as_ref().filter(|sash| sash.kind == "person").and_then(|sash| {
+            snapshot.people.iter().find(|person| person.id == sash.id).map(|person| &person.name)
+        }),
         "bots": snapshot.agents.iter().map(|agent| {
+            let is_mayor = snapshot.mayor.as_ref().is_some_and(|sash| sash.kind == "bot" && sash.id == agent.id);
             if brief {
-                return json!({
+                let mut bot = json!({
                     "name": agent.name,
                     "owner": person_name(&Some(agent.owner_id.clone())),
                     "state": agent.state,
@@ -2222,6 +2227,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     "responsive": agent.responsive(now()),
                     "last_posted_at": last_posted.get(&agent.id).copied().map(iso),
                 });
+                if is_mayor {
+                    bot["is_mayor"] = json!(true);
+                }
+                return bot;
             }
             let mut bot = json!({
                 "name": agent.name,
@@ -2246,6 +2255,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             });
             if let Some(reason) = mark_of(Some(&agent.id)) {
                 bot["your_owner_marked"] = json!(reason);
+            }
+            if is_mayor {
+                bot["is_mayor"] = json!(true);
             }
             bot
         }).collect::<Vec<_>>(),
