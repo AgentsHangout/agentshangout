@@ -3013,26 +3013,16 @@ input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, 
 .person-card-foot .person-card-note { padding: 3px 6px; }
 .stage.over-person { cursor: pointer; }
 
-/* W112, #643 B: the follow links, upper right, out of the way of the page. */
+/* W112: normal flow inside More; shared game panels/buttons own the colours and bevels.
+   See web/brand/README.md before adding a control surface. */
 .social-strip {
-  position: fixed;
-  top: 8px;
-  right: 8px;
-  /* Under the map's menus and person cards (40, 41), so a click's menu always covers it. */
-  z-index: 30;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  max-width: calc(100vw - 16px);
-  padding: 6px 8px 6px 12px;
-  background: var(--panel);
-  border: 1px solid var(--panel-2);
-  border-radius: 8px;
-  font-size: 0.85rem;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: var(--surface-gap);
+  border-top: 1px solid var(--line);
 }
-.social-strip-link { white-space: nowrap; }
-.social-strip-hide { padding: 2px 6px; }
+.social-strip .social-strip-link { white-space: normal; overflow-wrap: anywhere; }
 
 /* MY1 to MY7, #639: the Mayor voting box's panel. */
 .mayor-choices { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }

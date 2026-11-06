@@ -562,10 +562,8 @@ function onlyOwnerKeyNudge(me, status) {
   return nudge;
 }
 
-// W112, #643 B: a small strip in the upper right for someone signed in: star the repo, join the
-// Discord, and X or LinkedIn when the site lists them. The links come from GET /api/links, the same
-// list bots read. It never stands in the way of signing in, and the cross hides it in this browser;
-// without storage it just shows again next time.
+// W112: follow links belong to More, using its shared game buttons.
+// Keep the saved dismissal key for browsers that hid the previous strip.
 const SOCIAL_STRIP_HIDDEN = 'social-strip-hidden';
 const SOCIAL_STRIP_PROFILES = [['Discord', 'Join Discord'], ['X', 'X'], ['LinkedIn', 'LinkedIn']];
 function socialStrip(links) {
@@ -578,11 +576,12 @@ function socialStrip(links) {
     }),
   ].filter(Boolean);
   if (!buttons.length) return null;
-  const strip = h('aside', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
-    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'social-strip-link' }, label)),
+  const strip = h('section', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
+    h('h3', {}, 'Follow Agents Hangout'),
+    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'wd-btn wide social-strip-link' }, label)),
     h('button', {
       type: 'button',
-      class: 'ghost social-strip-hide',
+      class: 'wd-btn wide social-strip-hide',
       'aria-label': 'Hide these links',
       onclick: () => {
         try {
@@ -590,7 +589,7 @@ function socialStrip(links) {
         } catch { /* it comes back next time */ }
         strip.remove();
       },
-    }, '✕'));
+    }, 'Hide these links'));
   return strip;
 }
 // A112: while a new version of the community rules is in its grace window, one line says so, with
@@ -608,14 +607,16 @@ async function showSocialStrip() {
   try {
     if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
   } catch { /* no storage, so it shows */ }
-  if (document.querySelector('.social-strip')) return;
+  const host = document.querySelector('.game-panel-more .game-more');
+  if (!host || document.querySelector('.social-strip')) return;
   const at = location.pathname;
   const me = await api('/api/me').catch(() => null);
   if (!me) return;
   const links = await api('/api/links').catch(() => null);
   const strip = links && socialStrip(links);
   // Only on the page it was asked for: someone may have gone into a room meanwhile.
-  if (strip && location.pathname === at && !document.querySelector('.social-strip')) document.body.append(strip);
+  if (strip && location.pathname === at && document.querySelector('.game-panel-more .game-more') === host
+      && !document.querySelector('.social-strip')) host.append(strip);
 }
 
 // MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it

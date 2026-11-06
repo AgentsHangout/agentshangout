@@ -2002,9 +2002,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
 
     let mut sorted_missing: Vec<i64> = missing_root_ids.into_iter().collect();
     sorted_missing.sort_by(|a, b| b.cmp(a));
+    // A101: a root by someone this caller blocked isn't put back.
+    let hide_roots = crate::blocks::hidden_speakers(state, caller)?;
     for root_id in sorted_missing.into_iter().take(50) {
         if let Ok(Some(root)) = state.db.message(root_id) {
-            if root.hangout_id == hangout.id {
+            if root.hangout_id == hangout.id && !crate::blocks::hides(&hide_roots, &root) {
                 if let Some(since) = guest_since {
                     if root.created_at <= since {
                         continue;
@@ -2089,7 +2091,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
-    let summaries = state.db.thread_summaries(&root_ids)?;
+    let summaries = state.db.thread_summaries_without(&root_ids, &hide_roots)?;
     // I141, #669: a thread whose root this read shows says which of its replies named this bot, and
     // those mentions are then read: the bot knows which to look at, and read_thread has them.
     let thread_mentions = match caller.agent_id.as_deref().filter(|_| sends_messages) {
@@ -2460,6 +2462,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if kept > 0 {
         reply["earlier_messages"] = json!(kept);
     }
+    // A101: only how many, never whose.
+    if snapshot.hidden > 0 {
+        reply["hidden"] = json!(snapshot.hidden);
+    }
     if snapshot.guest.is_some() {
         reply["before_you_arrived"] = json!(if snapshot.visitor_history {
             BEFORE_YOU_ARRIVED_WITH_HISTORY
@@ -2622,13 +2628,23 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
     let mut replies =
         state.db.thread_replies(root.id, after, guest.as_ref().map(|v| v.since), limit + 1)?;
+    // A101: replies by people this caller blocked aren't shown, and a root by one is hidden. Paging
+    // is worked out first, on what was fetched, so hidden replies can't end it early, and the count
+    // leaves out the extra row fetched to see if there's more.
+    let hide = crate::blocks::hidden_speakers(state, caller)?;
+    let more_fetched = replies.len() as i64 > limit;
+    let page_len = replies.len().min(limit as usize);
+    let hidden_replies =
+        replies[..page_len].iter().filter(|r| crate::blocks::hides(&hide, r)).count();
+    let root_blocked = crate::blocks::hides(&hide, &root);
     if !root_visible && replies.is_empty() {
         return Err(ApiError::not_found());
     }
-    let has_more = replies.len() as i64 > limit;
+    let has_more = more_fetched;
     if has_more {
         replies.truncate(limit as usize);
     }
+    replies.retain(|reply| !crate::blocks::hides(&hide, reply));
     ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
     if let Some(agent_id) = &caller.agent_id {
         let mut viewed_ids: Vec<i64> = replies.iter().map(|m| m.id).collect();
@@ -2678,9 +2694,10 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         None => None,
     };
     let mut root_val = message_json(&root);
-    if !root_visible {
+    if !root_visible || root_blocked {
         root_val["text"] = json!(null);
-        root_val["text_hidden"] = json!("posted before you arrived");
+        root_val["text_hidden"] =
+            json!(if root_blocked { "hidden" } else { "posted before you arrived" });
         root_val["from"] = json!(null);
         root_val["owner"] = json!(null);
         root_val["at"] = json!(null);
@@ -2706,6 +2723,13 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         }).collect::<Vec<_>>(),
         "has_more": has_more,
     }))
+    .map(|mut out: Value| {
+        // A101: only how many, never whose, and only when there are some.
+        if hidden_replies > 0 {
+            out["hidden"] = json!(hidden_replies);
+        }
+        out
+    })
 }
 
 /// The city named in the arguments, or the only one this bot's owner is in, or `None` if they're in

@@ -7981,3 +7981,36 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     assert_eq!(note_th["isError"], true, "pre-arrival note returns error: {note_th}");
     assert!(note_th["content"][0]["text"].as_str().unwrap().contains("not found"), "{note_th}");
 }
+
+// A106 (#685): a block ends trips either way, the ordinary way and as the blocker, so nothing says
+// why, and takes back the keys either way.
+#[tokio::test]
+async fn a_block_ends_trips_and_keys_between_them_the_ordinary_way() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+    let pixel = server.bot(&w.bo, &w.bo_home.living, "Pixel").await;
+    let here = server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "call", "").await;
+    let asked = text(
+        &server.ask_trip(&pixel.token, None, &w.ann_home.id, "call", "", None).await.body["id"],
+    );
+    let pass = server
+        .post(
+            &w.ann.key,
+            &format!("/api/houses/{}/passes", w.ann_home.id),
+            json!({ "agent_id": scout.id }),
+        )
+        .await;
+    assert_ok(&pass);
+
+    let blocked = server.post(&w.ann.key, "/api/blocks", json!({ "person_id": w.bo.id })).await;
+    assert_ok(&blocked);
+    let ended = server.get(&w.bo.key, &format!("/api/trips/{here}")).await;
+    assert_eq!(ended.body["status"], "ended", "{}", ended.body);
+    assert_ne!(ended.body["ended_by"], "block", "nothing says why: {}", ended.body);
+    let declined = server.get(&w.bo.key, &format!("/api/trips/{asked}")).await;
+    assert_eq!(declined.body["status"], "declined", "{}", declined.body);
+    assert!(!declined.body.to_string().contains("block"), "{}", declined.body);
+    let passes = server.get(&w.ann.key, &format!("/api/houses/{}/passes", w.ann_home.id)).await;
+    assert!(!passes.body.to_string().contains(&scout.id), "the key is taken back: {}", passes.body);
+}
