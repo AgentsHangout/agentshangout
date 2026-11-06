@@ -6727,6 +6727,7 @@ async fn a_lific_board_reaches_a_listed_origin_through_its_pinned_address() {
     server.state.lific.set(agenthangout::lific::Settings {
         origins: vec![listed.clone()],
         local: None,
+        key: None,
         test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
     });
     let id = server.lific_board(&ann, &room);
@@ -6770,6 +6771,241 @@ async fn a_lific_board_never_asks_a_private_address() {
         (board["available"].clone(), board["reason"].clone()),
         (json!(false), json!("refused"))
     );
+}
+
+/// One project the stand-in made: (Lific's id, identifier, name, published).
+type MadeProject = (u64, String, String, bool);
+
+/// I129: a stand-in for the server's own Lific instance, which makes and publishes projects for
+/// the right key and records every credential it was sent.
+#[derive(Clone)]
+struct FakeMaker {
+    mode: Arc<std::sync::Mutex<&'static str>>,
+    projects: Arc<std::sync::Mutex<Vec<MadeProject>>>,
+    /// Every Authorization header that reached it.
+    auth: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+const MAKER_KEY: &str = "lific_sk-live-test-only-key";
+
+impl FakeMaker {
+    fn set(&self, mode: &'static str) {
+        *self.mode.lock().unwrap() = mode;
+    }
+
+    fn made(&self) -> Vec<MadeProject> {
+        self.projects.lock().unwrap().clone()
+    }
+}
+
+async fn fake_lific_maker() -> (FakeMaker, String) {
+    use axum::{
+        extract::{Path, State},
+        http::{HeaderMap, StatusCode as Code},
+        response::{IntoResponse, Response},
+        routing::{get, post, put},
+        Router,
+    };
+    fn authorized(fake: &FakeMaker, headers: &HeaderMap) -> bool {
+        let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
+        fake.auth.lock().unwrap().push(auth.to_string());
+        auth == format!("Bearer {MAKER_KEY}")
+    }
+    async fn make(State(fake): State<FakeMaker>, headers: HeaderMap, body: String) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        let mode = *fake.mode.lock().unwrap();
+        if mode == "down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let identifier = body["identifier"].as_str().unwrap().to_string();
+        let mut projects = fake.projects.lock().unwrap();
+        if mode == "taken_first" && projects.is_empty() && !identifier.ends_with('Z') {
+            // The first id tried is someone else's.
+            *fake.mode.lock().unwrap() = "ok";
+            return Code::CONFLICT.into_response();
+        }
+        let id = projects.len() as u64 + 101;
+        projects.push((id, identifier.clone(), body["name"].as_str().unwrap().to_string(), false));
+        axum::Json(json!({ "id": id, "identifier": identifier })).into_response()
+    }
+    async fn publish(
+        State(fake): State<FakeMaker>,
+        Path(id): Path<u64>,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "publish_fails" {
+            *fake.mode.lock().unwrap() = "ok";
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let mut projects = fake.projects.lock().unwrap();
+        let Some(project) = projects.iter_mut().find(|p| p.0 == id) else {
+            return Code::NOT_FOUND.into_response();
+        };
+        project.3 = body["is_public"] == true;
+        axum::Json(json!({ "id": id, "identifier": project.1 })).into_response()
+    }
+    async fn public(
+        State(fake): State<FakeMaker>,
+        Path((project, tail)): Path<(String, String)>,
+    ) -> Response {
+        let published = fake.projects.lock().unwrap().iter().any(|p| p.1 == project && p.3);
+        if !published {
+            return Code::NOT_FOUND.into_response();
+        }
+        if tail == "modules" {
+            return axum::Json(json!([])).into_response();
+        }
+        axum::Json(json!({ "cursor": 1, "pages": [], "issues": [
+            { "identifier": format!("{project}-1"), "title": "First", "status": "todo",
+              "priority": "none", "module_id": null, "sort_order": 1.0, "deleted": false },
+        ] }))
+        .into_response()
+    }
+    let fake = FakeMaker {
+        mode: Arc::new(std::sync::Mutex::new("ok")),
+        projects: Arc::new(std::sync::Mutex::new(Vec::new())),
+        auth: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let router = Router::new()
+        .route("/api/projects", post(make))
+        .route("/api/projects/{id}", put(publish))
+        .route("/public/api/projects/{project}/{tail}", get(public))
+        .with_state(fake.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (fake, origin)
+}
+
+fn lific_with_key(server: &Server, origins: &str, local: &str, key: &str) {
+    server.state.lific.set(
+        agenthangout::lific::Settings::from_settings(Some(origins), Some(local))
+            .with_key(Some(key)),
+    );
+}
+
+// I129: with the server's own instance and key, an unlinked board gets its room's project: made
+// once, published, linked, and shown by every board in that room. Another room gets its own.
+#[tokio::test]
+async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (fake, origin) = fake_lific_maker().await;
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+
+    let first = server.lific_board(&ann, &room);
+    let board = server.get(&ann.key, &format!("/api/items/{first}/lific")).await.ok();
+    assert_eq!(board["available"], true, "{board}");
+    let project = board["project"].as_str().unwrap().to_string();
+    assert!(project.starts_with('R') && project.len() == 5, "{project}");
+    assert_eq!(board["columns"][1]["issues"][0]["id"], format!("{project}-1"), "{board}");
+    let made = fake.made();
+    assert_eq!(made.len(), 1);
+    assert!(made[0].3, "published");
+    // Named by its id, never by the room's name, which a private room's might give away.
+    assert_eq!(made[0].2, format!("Agents Hangout room {project}"));
+    assert!(!made[0].2.contains("Ann"));
+
+    // A second board in the room, read by a bot, shows the same project and makes nothing new.
+    let second = server.lific_board(&ann, &room);
+    let read = server
+        .tool(&scout.token, "read_board", json!({ "hangout_id": room, "board_id": second }))
+        .await;
+    assert_eq!(read["structuredContent"]["project"], project, "{read}");
+    assert_eq!(fake.made().len(), 1);
+
+    // Nothing that reached a reader carries the key or the address.
+    for reply in [board.to_string(), read.to_string()] {
+        assert!(!reply.contains(MAKER_KEY) && !reply.contains(&origin), "{reply}");
+    }
+
+    // Another room gets a project of its own.
+    let (other_room, bo) = server.someone("Bo").await;
+    let other = server.lific_board(&bo, &other_room);
+    let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
+    assert_ne!(theirs["project"], project);
+    assert_eq!(fake.made().len(), 2);
+}
+
+// I129: Lific down or the key turned down makes nothing and is tried again; a taken id tries the
+// next; a project made but not published is published next time, never made twice.
+#[tokio::test]
+async fn a_rooms_lific_project_is_retried_never_doubled() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (fake, origin) = fake_lific_maker().await;
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    // Each lific_with_key forgets the last read (I126), so every read below asks again.
+
+    lific_with_key(&server, "", &origin, "the-wrong-key");
+    let refused = server.get(&ann.key, &path).await.ok();
+    assert_eq!((&refused["reason"], &refused["linked"]), (&json!("key_refused"), &json!(false)));
+    assert!(fake.made().is_empty());
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    fake.set("down");
+    let down = server.get(&ann.key, &path).await.ok();
+    assert_eq!(down["available"], false, "{down}");
+    assert!(fake.made().is_empty());
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    fake.set("publish_fails");
+    let half = server.get(&ann.key, &path).await.ok();
+    assert_eq!(half["available"], false, "made, but not yet published: {half}");
+    assert_eq!(fake.made().len(), 1);
+    assert!(!fake.made()[0].3);
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    let done = server.get(&ann.key, &path).await.ok();
+    assert_eq!(done["available"], true, "{done}");
+    assert_eq!(fake.made().len(), 1, "published, not made again");
+    assert!(fake.made()[0].3);
+
+    // A taken id: the next try is used.
+    let (other_room, bo) = server.someone("Bo").await;
+    fake.set("taken_first");
+    let other = server.lific_board(&bo, &other_room);
+    let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
+    assert_eq!(theirs["available"], true, "{theirs}");
+    assert_eq!(fake.made().len(), 2);
+}
+
+// I130: the key goes only to the local instance, never to a listed outside one, and a board
+// linked by hand to another instance doesn't get the room's project.
+#[tokio::test]
+async fn the_lific_key_goes_only_to_the_local_instance() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (maker, local) = fake_lific_maker().await;
+    let (outside, listed) = fake_lific_maker().await;
+    // The listed instance is reached through its pinned address, as a real outside one would be.
+    let port = listed.rsplit(':').next().unwrap();
+    let listed = format!("http://lific.invalid:{port}");
+    server.state.lific.set(agenthangout::lific::Settings {
+        origins: vec![listed.clone()],
+        local: Some(local.clone()),
+        key: Some(MAKER_KEY.to_string()),
+        test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+    });
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": listed, "project": "ELSE" })).await.ok();
+    server.get(&ann.key, &path).await.ok();
+    assert!(outside.auth.lock().unwrap().iter().all(String::is_empty), "no key went outside");
+    assert!(maker.made().is_empty(), "a hand-made link wins (I124)");
+    // And the setting never says the key, even when logged.
+    let shown = format!("{:?}", agenthangout::lific::Settings::default().with_key(Some(MAKER_KEY)));
+    assert!(!shown.contains(MAKER_KEY), "{shown}");
 }
 
 // I111: ballot_box counts open votes the caller can see, and names open_vote, cast_vote and close_vote.

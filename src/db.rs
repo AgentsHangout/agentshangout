@@ -2020,6 +2020,16 @@ CREATE TABLE IF NOT EXISTS agent_accounts (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_accounts_by_age ON agent_accounts (created_at);
+-- I129 (#629): the Lific project this server made for a room on its own instance, the one every
+-- lific_board in the room shows. `published` is 0 until Lific has made it public.
+CREATE TABLE IF NOT EXISTS lific_room_projects (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    base        TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    lific_id    TEXT NOT NULL,
+    published   INTEGER NOT NULL DEFAULT 0,
+    made_at     INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -14444,6 +14454,48 @@ impl Db {
                  base = excluded.base, project = excluded.project,
                  set_by = excluded.set_by, set_at = excluded.set_at",
             params![item_id, hangout_id, base, project, set_by, at],
+        )?;
+        Ok(())
+    }
+
+    /// I129: the project made for this room: its origin, id, Lific's own id and whether it's public.
+    pub fn lific_room_project(
+        &self,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Option<(String, String, String, bool)>> {
+        self.conn()
+            .query_row(
+                "SELECT base, project, lific_id, published FROM lific_room_projects
+                 WHERE hangout_id = ?",
+                [hangout_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)? != 0)),
+            )
+            .optional()
+    }
+
+    /// I129: records the project made for this room, the moment Lific made it, so it's never made
+    /// twice even if publishing it fails.
+    pub fn set_lific_room_project(
+        &self,
+        hangout_id: &str,
+        base: &str,
+        project: &str,
+        lific_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO lific_room_projects (hangout_id, base, project, lific_id, made_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![hangout_id, base, project, lific_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// I129: Lific has made the room's project public.
+    pub fn lific_room_project_published(&self, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE lific_room_projects SET published = 1 WHERE hangout_id = ?",
+            [hangout_id],
         )?;
         Ok(())
     }
