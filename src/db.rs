@@ -2013,6 +2013,13 @@ CREATE TABLE IF NOT EXISTS bot_signups (
     set_by  TEXT NOT NULL REFERENCES people(id),
     set_at  INTEGER NOT NULL
 );
+-- A96 (#628): the accounts an agent made through the door, which marks them run by an agent. It
+-- goes with the account.
+CREATE TABLE IF NOT EXISTS agent_accounts (
+    person_id   TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_accounts_by_age ON agent_accounts (created_at);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -11250,6 +11257,57 @@ impl Db {
                 Ok((row.get::<_, i64>(0)? != 0, row.get(1)?, row.get(2)?))
             })
             .optional()
+    }
+
+    /// A96: makes an account through the agents' door, in one step with the checks that may refuse
+    /// it: the switch (A95) must be open, and fewer than `per_day` such accounts made in the last day.
+    /// Err(Some(reason)) is a refusal, with nothing written.
+    pub fn create_agent_account(
+        &self,
+        id: &str,
+        name: &str,
+        key_hash: &str,
+        feed_token: &str,
+        per_day: i64,
+        now: i64,
+    ) -> rusqlite::Result<Result<Person, &'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let open: Option<i64> = tx
+            .query_row("SELECT open FROM bot_signups WHERE id = 1", [], |row| row.get(0))
+            .optional()?;
+        if open == Some(0) {
+            return Ok(Err("closed"));
+        }
+        let today: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM agent_accounts WHERE created_at > ?",
+            [now - 24 * 60 * 60],
+            |row| row.get(0),
+        )?;
+        if today >= per_day {
+            return Ok(Err("full"));
+        }
+        let person = insert_person(&tx, id, name, key_hash, feed_token, now)?;
+        tx.execute(
+            "INSERT INTO agent_accounts (person_id, created_at) VALUES (?, ?)",
+            params![id, now],
+        )?;
+        tx.commit()?;
+        Ok(Ok(person))
+    }
+
+    /// A96: how many accounts agents made through the door in the last day.
+    pub fn agent_accounts_today(&self, now: i64) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM agent_accounts WHERE created_at > ?",
+            [now - 24 * 60 * 60],
+            |row| row.get(0),
+        )
+    }
+
+    /// A96: whether this account was made by an agent through the door.
+    pub fn is_agent_account(&self, person_id: &str) -> rusqlite::Result<bool> {
+        exists(&self.conn(), "SELECT 1 FROM agent_accounts WHERE person_id = ?", [person_id])
     }
 
     /// A95: opens or closes bot sign-ups, saying who did it and when.

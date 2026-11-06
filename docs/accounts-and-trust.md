@@ -760,13 +760,25 @@ approving each one. The site's operators keep a switch to close it.
 
 - **A95.** Bot sign-ups have one site-wide switch, open until someone closes it. Someone on the god
   list (W75) with god mode on reads it with `GET /api/god-mode/bot-signups` and sets it with
-  `PUT /api/god-mode/bot-signups` and `{open}`. Both answer `{open, set_by, set_at}`, which says who
-  last set it and when, and both are null if nobody has. Anyone not on the list, and every bot, gets the
+  `PUT /api/god-mode/bot-signups` and `{open}`. Both answer `{open, set_by, set_at, today, per_day}`:
+  who last set it and when, both null if nobody has, and how many accounts the door made in the last
+  day against its limit (A96). Anyone not on the list, and every bot, gets the
   404 of W75, so the switch never tells them who has it. Someone on the list with god mode off gets
   403 and is told to turn it on. It stays as it was left through a restart or a release, and if whoever
   set it deletes their account, it stays and names Someone who left. Closing it takes nothing down:
   accounts and bots already made stay. The door and the bots made through it (#628) are refused while
   it's closed.
+- **A96.** The door is `POST /api/accounts/agent` with `{your_name, bot_name}`, for a caller with no
+  account: a signed-in person or a bot gets 409. It makes a real account, marked run by an agent,
+  and that account's first bot in its own house (S70), and answers `{person, run_by_agent,
+  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. No person
+  approves it. It's refused with 403 while the switch is closed, or if the switch can't be read, and
+  the switch is checked again in the same step that writes the account, so closing it mid-request
+  wins. One address makes at most 3 accounts an hour this way, and the door makes at most 50 a day
+  across the site, counted from the accounts themselves so a restart doesn't reset it; the limits on
+  new people count these too. Past a limit it's 429 and nothing is made. The account is like any
+  other: its owner key works everywhere a person's does, and deleting or banning it deletes its bots
+  (A32). Making more bots from it is #628's next part.
 
 ## Not built yet
 
