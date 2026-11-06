@@ -361,11 +361,11 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     let server = Server::start().await;
     let (_, ann) = server.someone("Ann").await;
     server.fake.lock().unwrap().merged_items = json!([
-        { "number": 12, "user": { "id": 1001 }, "pull_request": { "merged_at": "2026-11-01T10:00:00Z" } },
-        { "number": 15, "user": { "id": 1001 }, "pull_request": { "merged_at": "2026-11-02T10:00:00Z" } },
-        { "number": 16, "user": { "id": 1001 }, "pull_request": { "merged_at": null } },
+        { "number": 12, "created_at": "2099-01-01T09:00:00Z", "user": { "id": 1001 }, "pull_request": { "merged_at": "2099-01-01T10:00:00Z" } },
+        { "number": 15, "created_at": "2099-01-02T09:00:00Z", "user": { "id": 1001 }, "pull_request": { "merged_at": "2099-01-02T10:00:00Z" } },
+        { "number": 16, "created_at": "2099-01-03T09:00:00Z", "user": { "id": 1001 }, "pull_request": { "merged_at": null } },
         // Someone else's pull request under a login that was once Ann's: not hers.
-        { "number": 17, "user": { "id": 2002 }, "pull_request": { "merged_at": "2026-11-03T10:00:00Z" } },
+        { "number": 17, "created_at": "2099-01-04T09:00:00Z", "user": { "id": 2002 }, "pull_request": { "merged_at": "2099-01-04T10:00:00Z" } },
     ]);
     let before = server.get(&ann.key, "/api/credits").await.ok();
     assert_eq!(before["balance"], 0, "nothing is looked up before GitHub is linked");
@@ -376,10 +376,14 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     assert_eq!((&paid["balance"], &paid["merged_prs"]), (&json!(20), &json!(2)), "{paid}");
     assert!(paid["history"].as_array().unwrap().iter().any(|line| line["kind"] == "merged_pr"));
     let hits = server.fake.lock().unwrap().hits.clone();
+    // The first look starts when merged pull requests started paying: this server's first open.
+    let today = time::OffsetDateTime::now_utc().date();
     assert_eq!(
         hits,
-        ["search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout"],
-        "only the project's repo, and only what's merged"
+        [format!(
+            "search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout merged:>={today}"
+        )],
+        "only the project's repo, only what's merged, and only from the start"
     );
 
     // Within the hour it isn't looked up again, and nothing pays twice.
@@ -393,7 +397,7 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     server.get(&ann.key, "/api/credits").await.ok();
     assert_eq!(
         server.fake.lock().unwrap().hits.last().unwrap(),
-        "search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout merged:>=2026-11-02"
+        "search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout merged:>=2099-01-02"
     );
 }
 
