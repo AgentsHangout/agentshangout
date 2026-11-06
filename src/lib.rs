@@ -61,6 +61,7 @@ pub mod research_labs;
 pub mod research_work;
 pub mod room_mentions;
 pub mod routines;
+pub mod rules;
 pub mod sign_in;
 pub mod spaces;
 pub mod travel;
@@ -112,6 +113,10 @@ pub struct Config {
     pub keeper_id: Option<String>,
     /// The people who have the God mode switch (W75): their ids, from `AGENTHANGOUT_GODS`.
     pub god_ids: Vec<String>,
+    /// A107-A112: writing what others read takes the community rules accepted. Always on for a
+    /// deployed server (main.rs). Off only in tests that aren't about the rules, which build their
+    /// own Config.
+    pub require_rules: bool,
 }
 
 /// The apps registered elsewhere that prove someone's account there. A server has none by default.
@@ -151,6 +156,8 @@ pub struct Shared {
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
     pub emotes: emotes::Runtime,
+    /// A111: bots refused for their owner's community rules, for Needs you.
+    pub rules_refused: rules::Refused,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
@@ -237,6 +244,10 @@ impl AppState {
         let (bot_events, _) = broadcast::channel(1024);
         let (shutting_down, _) = watch::channel(false);
         let webauthn = passkey::webauthn_for(&config.public_url);
+        // A112: the grace for a rules version runs from the first start with it, at the latest.
+        if let Err(error) = db.note_rules_version(rules::version(), now()) {
+            tracing::error!(%error, "couldn't note the rules version");
+        }
         Self(Arc::new(Shared {
             db,
             config,
@@ -255,6 +266,7 @@ impl AppState {
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
             emotes: emotes::Runtime::default(),
+            rules_refused: rules::Refused::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -315,7 +327,9 @@ pub fn app(state: AppState) -> Router {
         .route("/mcp", post(mcp::handle))
         .route("/public/mcp", post(public_mcp::handle))
         .fallback(web::not_found)
-        // Innermost, so it sees what the handler answered and the route it matched (U1).
+        // A109: every /api write route takes the community rules accepted, but the ungated ones.
+        .layer(middleware::from_fn_with_state(state.clone(), rules::gate_writes))
+        // Inside everything but the rules gate, so it sees what was answered and the route (U1).
         .layer(middleware::from_fn_with_state(state.clone(), usage::observe))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), web::security_headers))

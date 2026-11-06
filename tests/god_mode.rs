@@ -85,6 +85,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: god_ids.iter().map(|id| id.to_string()).collect(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -519,7 +520,10 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
         .await
         .refused(StatusCode::FORBIDDEN);
 
-    // MY2: a person and a bot stand. A new account has to wait 7 days to.
+    // MY2: a person and a bot stand. A new account, made after the founders' cutoff, has to wait
+    // 7 days to.
+    let founded = agenthangout::elections::FOUNDED_BEFORE;
+    server.state.db.backdate_person(&ann.id, founded.max(now())).unwrap();
     server.post(&ann.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
     ready(&ann).await;
     let race = server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
@@ -560,6 +564,17 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     let (_, cy) = server.someone("Cy").await;
     server.state.db.backdate_person(&cy.id, now() - 8 * 86_400).unwrap();
     server.put(&cy.key, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    // MY3 (#713): an account made before the founders' cutoff votes at once, however new, while
+    // one made a second after still waits.
+    let (_, dee) = server.someone("Dee").await;
+    server.go_in(&dee.key, spot).await.ok();
+    server.post(&dee.key, &format!("/api/floors/{square}/walk-in"), json!({})).await;
+    server.get(&dee.key, &format!("/api/hangouts/{square}")).await.ok();
+    server.state.db.backdate_person(&dee.id, founded.max(now())).unwrap();
+    server.put(&dee.key, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    server.state.db.backdate_person(&dee.id, founded - 60).unwrap();
+    let voted = server.put(&dee.key, "/api/mayor/ballot", ballot(&square)).await.ok();
+    assert_eq!(voted["your_ballot"]["id"], eagle_id, "{voted}");
     let nobody = json!({ "kind": "person", "id": "no-such", "hangout_id": square });
     ready(&justin).await;
     server.put(&justin.key, "/api/mayor/ballot", nobody).await.refused(StatusCode::BAD_REQUEST);
@@ -569,9 +584,20 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     agenthangout::elections::settle_due(&server.state, closes + 1).unwrap();
     let after = server.get(&ann.key, "/api/mayor").await.ok();
     assert_eq!(after["last_week"]["mayor"]["name"], "Eagle", "{after}");
-    assert_eq!(after["last_week"]["votes"], 1);
+    assert_eq!(after["last_week"]["votes"], 2, "Ann's and Dee's");
     assert_eq!(after["last_week"]["tie_draw"], false);
     assert_eq!(after["candidates"], json!([]), "a new week starts empty");
+
+    // MY10: the mayor wears a sash where they are: Eagle's room says so, the square, where Eagle
+    // isn't, doesn't, and Eagle's own read_room marks it.
+    let page = server.get(&ann.key, &format!("/api/hangouts/{own_room}")).await.ok();
+    assert_eq!(page["mayor"], json!({ "kind": "bot", "id": eagle_id }), "{}", page["mayor"]);
+    let elsewhere = server.get(&justin.key, &format!("/api/hangouts/{square}")).await.ok();
+    assert!(elsewhere["mayor"].is_null(), "{}", elsewhere["mayor"]);
+    let read = server.tool(&eagle, "read_room", json!({ "hangout_id": own_room })).await;
+    let me = read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Eagle").cloned();
+    assert_eq!(me.as_ref().map(|bot| bot["is_mayor"].clone()), Some(json!(true)), "{read}");
+    assert!(read["mayor_here"].is_null(), "a bot mayor isn't named as a person: {read}");
 
     // MY2, MY6: deleting the account behind the winner says Someone who left, and a deleted
     // person's candidacy goes.
@@ -600,7 +626,10 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     agenthangout::elections::settle_due(&server.state, now()).unwrap();
     let nominate = json!({ "kind": "bot", "id": eagle_id });
 
-    // God mode off: Justin is new, so he can't stand, and can't nominate.
+    // God mode off: Justin is new (made after the founders' cutoff), so he can't stand, and can't
+    // nominate.
+    let founded = agenthangout::elections::FOUNDED_BEFORE;
+    server.state.db.backdate_person(&justin.id, founded.max(now())).unwrap();
     server.post(&justin.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
     server
         .post(&justin.key, "/api/mayor/candidates", nominate.clone())

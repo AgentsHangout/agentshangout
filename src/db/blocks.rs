@@ -162,7 +162,8 @@ impl Db {
     }
 
     /// A103: a real invite takes over one that was kept quiet, as if that one had never been sent:
-    /// it's the new sender's, from now, with its mark off. False if there was no quiet one.
+    /// it's the new sender's, from now, with its mark off. One the person turned down stays turned
+    /// down, as it would for anyone (FR6). False if there was no quiet one to take.
     pub fn take_quiet_friend_invite(
         &self,
         kind: &str,
@@ -177,6 +178,7 @@ impl Db {
             .query_row(
                 "SELECT f.id FROM friend_invites f
                  WHERE f.kind = ?1 AND f.place_id = ?2 AND f.to_person = ?3
+                   AND f.declined_at IS NULL
                    AND EXISTS (SELECT 1 FROM quiet_asks q
                                WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)",
                 params![kind, place_id, to_person],
@@ -187,8 +189,7 @@ impl Db {
             return Ok(false);
         };
         tx.execute(
-            "UPDATE friend_invites SET from_person = ?2, created_at = ?3, declined_at = NULL
-             WHERE id = ?1",
+            "UPDATE friend_invites SET from_person = ?2, created_at = ?3 WHERE id = ?1",
             params![id, from_person, now],
         )?;
         tx.execute("DELETE FROM friend_invite_ends WHERE invite_id = ?1", [&id])?;

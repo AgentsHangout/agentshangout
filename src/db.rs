@@ -2312,6 +2312,18 @@ CREATE TABLE IF NOT EXISTS quiet_asks (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (kind, ask_id)
 );
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
+-- A112: the first time this server ran with each version of the rules, where its grace starts.
+CREATE TABLE IF NOT EXISTS rules_versions (
+    version     TEXT PRIMARY KEY,
+    first_seen  INTEGER NOT NULL
+);
 "#;
 
 /// MY1: a week's mayor election.
@@ -16492,6 +16504,52 @@ impl Db {
         rows.collect()
     }
 
+    /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
+    /// version, and when their account was made.
+    pub fn rules_accepted(
+        &self,
+        person_id: &str,
+        version: &str,
+    ) -> rusqlite::Result<(bool, bool, Option<i64>)> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2),
+                    (SELECT created_at FROM people WHERE id = ?1)",
+            params![person_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
+    /// A112: notes that this server is running with rules `version`, the first time only.
+    pub fn note_rules_version(&self, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_versions (version, first_seen) VALUES (?, ?)",
+            params![version, now],
+        )?;
+        Ok(())
+    }
+
+    /// A112: when this server first ran with rules `version`.
+    pub fn rules_version_first_seen(&self, version: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT first_seen FROM rules_versions WHERE version = ?",
+                [version],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// A108: records that `person_id` accepted `version`. Accepting it again keeps the first time.
+    pub fn accept_rules(&self, person_id: &str, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_acceptances (person_id, version, accepted_at)
+             VALUES (?, ?, ?)",
+            params![person_id, version, now],
+        )?;
+        Ok(())
+    }
+
     // Deleting an account
 
     /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
@@ -18766,6 +18824,40 @@ mod tests {
 
     fn a_pack_for_sale() -> &'static crate::items::Pack {
         crate::items::PACKS.iter().find(|pack| pack.cost > 0 && !pack.over).unwrap()
+    }
+
+    // HC45: a piece bought on its own costs 2 to 10, all of a pack's pieces cost more than the pack,
+    // and buying one unlocks only that piece
+    #[test]
+    fn a_piece_is_bought_on_its_own_and_unlocks_only_itself() {
+        use crate::items::{piece_price, PACKS, PIECE};
+        for pack in PACKS.iter().filter(|pack| pack.cost > 0) {
+            let mut kinds: Vec<&str> = pack.items.iter().map(|item| item.kind).collect();
+            kinds.sort();
+            kinds.dedup();
+            let all: i64 = kinds.iter().map(|kind| piece_price(kind).unwrap()).sum();
+            assert!(all > pack.cost, "{}'s pieces cost {all}, no more than the pack", pack.pack);
+            assert!(kinds.iter().all(|kind| (2..=10).contains(&piece_price(kind).unwrap())));
+            assert_eq!(piece_price(pack.paint), None, "a paint comes only with its pack");
+        }
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 1);
+        let pack = a_pack_for_sale();
+        let piece = pack.items[0].kind;
+        let price = piece_price(piece).unwrap();
+        let after =
+            crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now).unwrap();
+        assert_eq!(after.balance, 20 - price);
+        let offer = after.packs.iter().find(|offer| offer.pack == pack.pack).unwrap();
+        assert!(!offer.bought, "a piece isn't the pack");
+        assert!(offer.sold_alone.iter().any(|alone| alone.kind == piece && alone.bought));
+        assert!(db.has_bought("p1", &format!("{PIECE}{piece}")).unwrap());
+        // Once is enough, and a piece of a pack you have can't be bought again.
+        assert!(crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now + 1)
+            .is_err());
+        assert!(
+            crate::economy::spend(&db, &ann(None), "piece:nothing_at_all", None, now + 1).is_err()
+        );
     }
 
     // HC14, HC15, HC16

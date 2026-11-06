@@ -17,6 +17,8 @@ pub struct ApiError {
     pub retry_after: Option<u64>,
     /// A 429 that was the move's fault rather than a limit's, so it counts as a refused move (W30).
     pub refused_move: bool,
+    /// A short word saying why, for a caller to act on rather than read (A109: `rules_not_accepted`).
+    pub reason: Option<&'static str>,
     /// Fields a caller can branch on, such as a `code`, sent beside `error` (CP15).
     pub details: Option<serde_json::Value>,
 }
@@ -30,12 +32,18 @@ impl ApiError {
             message: message.into(),
             retry_after: None,
             refused_move: false,
+            reason: None,
             details: None,
         }
     }
 
     pub fn refused_move(mut self) -> Self {
         self.refused_move = true;
+        self
+    }
+
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
         self
     }
 
@@ -92,7 +100,10 @@ impl From<rusqlite::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let wait = self.wait();
-        let mut body = json!({ "error": self.message });
+        let mut body = match self.reason {
+            Some(reason) => json!({ "error": self.message, "reason": reason }),
+            None => json!({ "error": self.message }),
+        };
         if let Some(serde_json::Value::Object(details)) = self.details {
             for (key, value) in details {
                 body.as_object_mut().unwrap().entry(key).or_insert(value);

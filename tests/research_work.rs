@@ -139,6 +139,7 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
         Apps { github: Some(app), discord: None },
     );

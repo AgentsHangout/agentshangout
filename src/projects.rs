@@ -59,6 +59,8 @@ pub fn start_project(
     name: &str,
     purpose: Option<&str>,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let agent_id = bot_of(caller)?;
     if !may_take_part(state, agent_id)? {
         return Err(ApiError::forbidden("you stay home, so you can't start a project"));
@@ -460,6 +462,8 @@ pub fn decorate_building(
         ApiError::conflict("this project has no building yet: put it up with build_studio first")
     })?;
     let mut look = crate::outside::current(state, x, y)?;
+    // E41: a lab's building is dressed as a lab.
+    let dressed = crate::outside::look_at(state, x, y, &kind)?;
     if template.is_none() && pack.is_none() && outside.is_none() {
         return Ok(json!({ "x": x, "y": y, "kind": kind, "outside": look }));
     }
@@ -473,17 +477,17 @@ pub fn decorate_building(
             .into_iter()
             .find(|one| one.template == name)
             .ok_or_else(|| ApiError::bad_request("that isn't a template: see building_catalog"))?;
-        if !chosen.kinds.contains(&kind.as_str()) {
-            return Err(ApiError::bad_request(format!("that template isn't for a {kind}")));
+        if !chosen.kinds.contains(&dressed.as_str()) {
+            return Err(ApiError::bad_request(format!("that template isn't for a {dressed}")));
         }
-        crate::outside::lay_over(&kind, &mut look, &chosen.outside)?;
+        crate::outside::lay_over(&dressed, &mut look, &chosen.outside)?;
     }
     if let Some(name) = pack {
         let chosen = crate::outside::packs()
             .into_iter()
             .find(|one| one.pack == name)
             .ok_or_else(|| ApiError::bad_request("that isn't a pack: see building_catalog"))?;
-        crate::outside::lay_over(&kind, &mut look, &chosen.outside)?;
+        crate::outside::lay_over(&dressed, &mut look, &chosen.outside)?;
     }
     crate::outside::save_for_project(state, caller, &space.owner_id, x, y, &look)?;
     let title = crate::spaces::place_title(&kind).to_lowercase();
@@ -540,6 +544,8 @@ pub fn build_studio(
     kind: Option<&str>,
     purpose: Option<&str>,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let (space, _) = if let Some(lab) = state.db.research_lab(project_id)? {
         // RL5: the owner, or an ordinary bot of theirs, can build a research lab.
         ops::require_room(state, caller, project_id)?;

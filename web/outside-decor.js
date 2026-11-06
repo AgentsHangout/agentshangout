@@ -20,7 +20,7 @@ function toneOf(col, nu, nv, nz) {
 }
 
 // A ball with its light up and to the left.
-function ball(g, x, y, r, col, rx = r, ry = r) {
+export function ball(g, x, y, r, col, rx = r, ry = r) {
   const gr = g.createRadialGradient(x - rx * 0.35, y - ry * 0.4, Math.min(rx, ry) * 0.1, x, y, Math.max(rx, ry));
   gr.addColorStop(0, lite(col, 0.45));
   gr.addColorStop(0.55, col);
@@ -32,7 +32,7 @@ function ball(g, x, y, r, col, rx = r, ry = r) {
 }
 
 // Light spilling into the air round a lamp (E29), for the night pass.
-function glow(g, x, y, r, color, a = 0.55) {
+export function glow(g, x, y, r, color, a = 0.55) {
   const gr = g.createRadialGradient(x, y, 0, x, y, r);
   gr.addColorStop(0, rgba(color, a));
   gr.addColorStop(0.35, rgba(color, a * 0.4));
@@ -44,7 +44,7 @@ function glow(g, x, y, r, color, a = 0.55) {
 }
 
 // And the same light where it lands on the ground, which is squashed like the ground is.
-function pool(g, x, y, r, color, a = 0.4) {
+export function pool(g, x, y, r, color, a = 0.4) {
   g.save();
   g.translate(x, y);
   g.scale(1, 0.5);
@@ -79,7 +79,7 @@ function strokeArc(g, col, w, x, y, rx, ry, from, to) {
 
 // The frame an item draws in. `at` gives a screen point, `box` a lit block, `q` a flat face that is
 // only painted when it faces the viewer, and `parts` paints several things back to front.
-function kit(S, item) {
+export function kit(S, item) {
   const g = S.g;
   const [cw, ch] = YARD_SIZES[item.kind] || [1, 1];
   const A = cw * CELL;
