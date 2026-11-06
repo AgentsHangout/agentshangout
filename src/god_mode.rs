@@ -4,7 +4,7 @@
 
 use axum::{
     extract::{rejection::JsonRejection, State},
-    routing::put,
+    routing::{get, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -17,7 +17,68 @@ use crate::{
 };
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/god-mode", put(set))
+    Router::new()
+        .route("/api/god-mode", put(set))
+        .route("/api/god-mode/bot-signups", get(bot_signups).put(set_bot_signups))
+        .route("/api/god-mode/place-removals", get(place_removals))
+}
+
+/// A95: whether agents may sign up through the door (#628) and make bots there. Open until someone
+/// with god mode on closes it.
+pub fn bot_signups_open(state: &AppState) -> ApiResult<bool> {
+    Ok(state.db.bot_signups()?.is_none_or(|(open, _, _)| open))
+}
+
+/// A95: anyone off the list gets the 404 of W75, and someone on it with god mode off is told to turn
+/// it on first.
+fn may_set_signups(state: &AppState, caller: &Caller) -> ApiResult<()> {
+    if caller.is_agent() || !may_use(state, &caller.person_id) {
+        return Err(ApiError::not_found());
+    }
+    if !is_on(state, &caller.person_id)? {
+        return Err(ApiError::forbidden("turn god mode on first"));
+    }
+    Ok(())
+}
+
+fn signups_json(state: &AppState) -> ApiResult<Value> {
+    let mut said = match state.db.bot_signups()? {
+        Some((open, by, at)) => json!({ "open": open, "set_by": by, "set_at": at }),
+        None => json!({ "open": true, "set_by": null, "set_at": null }),
+    };
+    // A96: how many accounts agents made through the door in the last day, and the most allowed.
+    said["today"] = json!(state.db.agent_accounts_today(now())?);
+    said["per_day"] = json!(crate::agent_door::PER_DAY);
+    Ok(said)
+}
+
+/// W113: the last 100 places that came down on The Commons, and why. God mode on only.
+async fn place_removals(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    may_set_signups(&state, &caller)?;
+    let removals = state.db.place_removals(crate::worlds::COMMONS_ID, 100)?;
+    Ok(Json(json!({ "removals": removals })))
+}
+
+async fn bot_signups(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    may_set_signups(&state, &caller)?;
+    Ok(Json(signups_json(&state)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Signups {
+    open: bool,
+}
+
+async fn set_bot_signups(
+    State(state): State<AppState>,
+    caller: Caller,
+    body: Result<Json<Signups>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    may_set_signups(&state, &caller)?;
+    let Json(body) = body.map_err(|rejection| ApiError::bad_request(rejection.body_text()))?;
+    state.db.set_bot_signups(body.open, &caller.person_id, now())?;
+    Ok(Json(signups_json(&state)?))
 }
 
 /// W75: whether this person has the switch at all.

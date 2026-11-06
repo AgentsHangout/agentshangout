@@ -1,4 +1,5 @@
 //! The page and the bot guide, compiled into the binary so a deployment is one file.
+mod client;
 
 use std::{
     sync::{Arc, Mutex, PoisonError},
@@ -47,6 +48,7 @@ const OUTSIDE_DECOR_JS: &str = include_str!("../web/outside-decor.js");
 const PETS_JS: &str = include_str!("../web/pets.js");
 const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
+const BOT_SETUP_JS: &str = include_str!("../web/bot-setup.js");
 const TUTORIAL_JS: &str = include_str!("../web/tutorial.js");
 const FAVICON: &str = include_str!("../web/favicon.svg");
 const FAVICON_ICO: &[u8] = include_bytes!("../web/favicon.ico");
@@ -145,12 +147,12 @@ async fn discovery_preflight() -> Response {
 }
 
 async fn index(State(state): State<AppState>) -> Response {
-    addressed(&state, "text/html; charset=utf-8", INDEX)
+    client::page(&state, INDEX)
 }
 
 /// The home page is meant to be found. Rooms and invites are not.
 async fn home(State(state): State<AppState>) -> Response {
-    let mut response = addressed(&state, "text/html; charset=utf-8", HOME);
+    let mut response = client::page(&state, HOME);
     response.headers_mut().insert(header::LINK, HeaderValue::from_static(HOME_LINKS));
     response
 }
@@ -249,6 +251,7 @@ pub async fn not_found(method: Method, uri: Uri) -> Response {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(client::routes())
         .route("/", get(home))
         .route("/h/{id}", get(index))
         .route("/join/{code}", get(index))
@@ -260,6 +263,8 @@ pub fn routes() -> Router<AppState> {
         .route("/join-city/{code}", get(index))
         .route("/join-house/{code}", get(index))
         .route("/p/{code}", get(index))
+        // #647 B: where a person approves the bot their agent drafted.
+        .route("/setup/{id}", get(index))
         // Where Discord sends people back to. The page finishes the step, not this (A17).
         .route("/discord/linked", get(index))
         .route("/sign-in/back", get(index))
@@ -301,6 +306,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/plan-invite.js",
             get(|| async { asset("text/javascript; charset=utf-8", PLAN_INVITE_JS) }),
+        )
+        .route(
+            "/bot-setup.js",
+            get(|| async { asset("text/javascript; charset=utf-8", BOT_SETUP_JS) }),
         )
         .route(
             "/tutorial.js",

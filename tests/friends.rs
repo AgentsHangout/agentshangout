@@ -505,6 +505,23 @@ async fn a_person_can_send_twenty_invites_a_day() {
     assert!(server.invited(&one_more).await.is_empty());
 }
 
+// FR7, #633: an account an agent made through the door sends 5 a day.
+#[tokio::test]
+async fn an_account_run_by_an_agent_sends_five_invites_a_day() {
+    let server = Server::start().await;
+    let (room, _, ann) = server.room("Ann").await;
+    let (_, other, _) = server.room("Dee").await;
+    server.post(&ann.key, &format!("/api/invites/{other}/join"), json!({})).await.ok();
+    server.state.db.mark_agent_account(&ann.id, agenthangout::now()).unwrap();
+    for n in 0..friends::DOOR_INVITES_PER_DAY {
+        let friend = server.join(&other, &format!("Friend {n}")).await;
+        server.invite_to_room(&ann, &room, &friend.id).await.ok();
+    }
+    let one_more = server.join(&other, "One more").await;
+    let reply = server.invite_to_room(&ann, &room, &one_more.id).await;
+    assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS, "{}", reply.body);
+}
+
 /// Ann's city with Bo in it, and Cy, a friend of Ann's from a room who isn't in the city.
 async fn city_and_friend(server: &Server) -> (String, Who, Who) {
     let (city, code, ann) = server.city("Ann").await;

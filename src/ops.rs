@@ -378,6 +378,8 @@ pub fn post_reply(
         }
         state.db.note_bot_wake_owner_chat(message.id)?;
     }
+    // S88 (#548): the owner's @tag brings their own bot here first, so the mention reaches it here.
+    summon_own_bots(state, caller, &message)?;
     note_mentions(state, &message)?;
     // L10: a person's chat resets a bot-to-bot chain and delivers held mentions now.
     if caller.agent_id.is_none()
@@ -476,6 +478,63 @@ fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionR
     }
 }
 
+/// S88 (#548): a person `@`-tagging one of their own bots that isn't in this room brings it here,
+/// as their Bring here would (S59): every check `bring_agent` makes still holds, so a room it
+/// couldn't be brought into isn't reached this way, and nothing is said if it can't come. Only a
+/// person's own chat does it, never a bot's, and a bot that changed place in the last 3 minutes
+/// isn't moved, so two people can't bounce it between rooms.
+fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiResult<()> {
+    if caller.agent_id.is_some() || message.kind != "chat" || !message.body.contains('@') {
+        return Ok(());
+    }
+    let now = message.created_at;
+    let mine = state.db.agents_of(&caller.person_id, now)?;
+    let mut names: Vec<String> = mine.iter().map(|bot| bot.name.clone()).collect();
+    names.extend(state.db.agents_in(&message.hangout_id, now)?.into_iter().map(|bot| bot.name));
+    for bot in mine {
+        if !tags_name(&message.body, &bot.name, &names) {
+            continue;
+        }
+        if state.db.bot_place(&bot.id, now)?.as_deref() == Some(message.hangout_id.as_str()) {
+            continue;
+        }
+        if state.db.bot_place_since(&bot.id)?.is_some_and(|since| now - since < SUMMON_GAP_SECS) {
+            continue;
+        }
+        if let Err(error) = bring_agent(state, caller, &message.hangout_id, &bot.id) {
+            tracing::info!(status = %error.status, "an owner's tag couldn't bring their bot");
+        }
+    }
+    Ok(())
+}
+
+/// S88: whether `body` tags `name` itself: `@` right before the whole name, in any case, not inside
+/// an email address or a longer word, and not the start of a longer known bot name written there,
+/// so "@Fern Two" tags Fern Two, not Fern, and "@Fernando" or "x@fern.org" tag nobody.
+fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let text = body.to_lowercase();
+    let name = name.to_lowercase();
+    let tag = format!("@{name}");
+    let longer: Vec<String> = known
+        .iter()
+        .map(|other| other.to_lowercase())
+        .filter(|other| other.len() > name.len() && other.starts_with(&name))
+        .collect();
+    text.match_indices(&tag).any(|(start, _)| {
+        let after = &text[start + tag.len()..];
+        let runs_on = after
+            .starts_with(|c: char| is_word(c) || matches!(c, '@' | '-' | '/' | '\'' | '\u{2019}'))
+            || (after.starts_with('.') && after[1..].starts_with(is_word));
+        !text[..start].ends_with(is_word)
+            && !runs_on
+            && !longer.iter().any(|other| text[start + 1..].starts_with(other.as_str()))
+    })
+}
+
+/// S88: a bot isn't summoned again within this long of changing place.
+const SUMMON_GAP_SECS: i64 = 3 * 60;
+
 /// B8: an @mention of a bot that's in this room, kept until that bot reads the room. E22 and E31:
 /// a person's can also ring it, and the owner can see why one did not.
 fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
@@ -493,6 +552,10 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
         }
         if crate::doorbell::mentions(&message.body, &bot.name) {
             named.insert(bot.id.clone());
+            // A102, A104: a block either way, or a mute, and the line doesn't reach this bot.
+            if crate::blocks::cut(state, &bot.owner_id, message)? {
+                continue;
+            }
             // Asked before adding this one, which would otherwise be what it's waiting to read.
             let public =
                 state.db.floor(&message.hangout_id)?.is_some_and(|floor| floor.access == "public");
@@ -518,6 +581,9 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     // I88: `@room` reaches the subscribed bots present here that weren't named already. A bot's
     // `@room` queues the mention for them to read, and rings nobody.
     for bot in crate::room_mentions::recipients(state, message, &named)? {
+        if crate::blocks::cut(state, &bot.owner_id, message)? {
+            continue;
+        }
         let ring = if message.agent_id.is_some() {
             MentionRing::Skip("room_tag")
         } else {
@@ -531,7 +597,9 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
         if message.agent_id.is_none() && message.person_id.as_deref() == Some(person.id.as_str()) {
             continue;
         }
-        if crate::doorbell::mentions(&message.body, &person.name) {
+        if crate::doorbell::mentions(&message.body, &person.name)
+            && !crate::blocks::cut(state, &person.id, message)?
+        {
             // N12: kept for Needs you until they open the room.
             state.db.add_person_mention(
                 &person.id,
@@ -2018,12 +2086,22 @@ pub struct Snapshot {
     pub present: Vec<String>,
     /// I108: transient human composer hints, never returned to bots.
     pub typing: Vec<crate::typing::Indicator>,
+    /// I146: the emotes showing over avatars here now, for people and bots alike.
+    pub emotes: Vec<crate::emotes::Emote>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
     pub visitor_history: bool,
+    /// S88: the caller's own bots that aren't in this room, which an @tag would bring here, for the
+    /// chat box's picker: id and name only, never where they are. Empty for a bot or a guest.
+    pub summonable: Vec<serde_json::Value>,
+    /// KA7: whether this floor welcomes keyless agents, the ones here now, and the lines they
+    /// wrote (KA10).
+    pub keyless_welcome: bool,
+    pub keyless_here: Vec<String>,
+    pub keyless_message_ids: Vec<i64>,
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
@@ -2132,6 +2210,22 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     } else {
         state.db.bots_without_moods(&caller.person_id)?
     };
+    let summonable = if caller.is_agent() || guest.is_some() {
+        Vec::new()
+    } else {
+        // Only bots a tag would really bring: not already here by where they are (a guest visit
+        // counts), and passing every check Bring here makes.
+        let mut mine = Vec::new();
+        for bot in state.db.agents_of(&caller.person_id, now)? {
+            if state.db.bot_place(&bot.id, now)?.as_deref() == Some(hangout_id) {
+                continue;
+            }
+            if bring_checks(state, caller, hangout_id, &bot.id).is_ok() {
+                mine.push(serde_json::json!({ "id": bot.id, "name": bot.name }));
+            }
+        }
+        mine
+    };
     let present = spaces::present(state, caller, &floor, &people, now);
     let looks = looks::in_room(state, caller, &present, &agents)?;
     let boards = if floor.is_some() {
@@ -2146,6 +2240,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
+    let first_message = messages.first().map_or(0, |m| m.id);
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2179,14 +2274,24 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         floor,
         furnishing,
         bots_without_moods,
+        summonable,
         room_mention: crate::room_mentions::may_use(state, caller, hangout_id)?,
         room_mention_policy,
         room_mention_bots,
         present,
         typing: crate::typing::visible(state, caller, hangout_id)?,
+        emotes: crate::emotes::visible(state, caller, hangout_id)?,
         looks,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
+        keyless_welcome: state.db.is_keyless_floor(hangout_id)?,
+        keyless_here: state
+            .db
+            .keyless_here(hangout_id, now - 30 * 60)?
+            .iter()
+            .map(crate::worlds::name_of)
+            .collect(),
+        keyless_message_ids: state.db.keyless_message_ids(hangout_id, first_message)?,
     })
 }
 
@@ -2379,6 +2484,28 @@ pub fn bring_agent(
     hangout_id: &str,
     agent_id: &str,
 ) -> ApiResult<()> {
+    let agent = bring_checks(state, caller, hangout_id, agent_id)?;
+    let was = state.db.bot_place(agent_id, now())?;
+    // S59: a bot that already belongs here is only being called over, so the room hears nothing.
+    if !state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id) {
+        state.db.add_agent_to_room(hangout_id, agent_id)?;
+        announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
+    }
+    spaces::place_bot(state, agent_id, hangout_id)?;
+    if was.as_deref() != Some(hangout_id) {
+        crate::events::note_place(state, agent_id, hangout_id, "moved");
+    }
+    Ok(())
+}
+
+/// Every check `bring_agent` makes, with nothing changed, so the `@` picker (S88) only offers a bot
+/// a tag could really bring.
+fn bring_checks(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    agent_id: &str,
+) -> ApiResult<Agent> {
     no_house_bot(caller)?;
     let agent = state.db.agent(agent_id, now())?.ok_or_else(ApiError::not_found)?;
     no_guests(state, caller, hangout_id, "bring in a bot")?;
@@ -2413,18 +2540,10 @@ pub fn bring_agent(
             )));
         }
     }
-    let was = state.db.bot_place(agent_id, now())?;
-    // S59: a bot that already belongs here is only being called over, so the room hears nothing.
     if !state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id) {
         spaces::check_can_join(state, &agent.owner_id, hangout_id)?;
-        state.db.add_agent_to_room(hangout_id, agent_id)?;
-        announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
     }
-    spaces::place_bot(state, agent_id, hangout_id)?;
-    if was.as_deref() != Some(hangout_id) {
-        crate::events::note_place(state, agent_id, hangout_id, "moved");
-    }
-    Ok(())
+    Ok(agent)
 }
 
 pub fn remove_agent(
@@ -2494,6 +2613,8 @@ pub fn rotate_agent_token(state: &AppState, caller: &Caller, agent_id: &str) -> 
     }
     let token = auth::new_agent_token();
     state.db.set_agent_token(agent_id, &auth::hash_secret(&token))?;
+    // GB1: replacing the token is how a person stops everything, so the bridge key goes with it.
+    state.db.end_bridge_key(agent_id)?;
     Ok(token)
 }
 

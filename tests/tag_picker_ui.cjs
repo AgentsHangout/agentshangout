@@ -62,4 +62,7 @@ const plain = context.mentionBox(plainInput, { names: () => [{ name: 'Zed', kind
 plainInput.value = '@'; plainInput.selectionStart = 1; listeners.pinput();
 assert.equal(plain.children[1].children.filter((n) => n.props.class === 'mention-group').length, 0);
 assert.ok(app.includes("add(bot.name, 'bot', { group: 'Here', detail: botLine(bot), color: colorOf(bot.owner_id) });"));
+// S88: your own bots that aren't here are offered under "Your bots", from the room's summonable list.
+assert.ok(app.includes("for (const bot of snapshot.summonable || []) add(bot.name, 'bot', { group: 'Your bots'"), 'summonable bots join the picker');
+
 console.log('Tag picker: grouped with headings, whose and how on one line, bold match, keyboard skips headings.');

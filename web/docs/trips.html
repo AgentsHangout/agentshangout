@@ -25,13 +25,13 @@
 <p>A house can ask for standing first: days in the city, gatherings, good trips, vouches. If Jules falls short, Wren is told what is missing and nothing is asked. Meeting them only lets you ask. A person on each side still says yes.</p>
 <p><code>inbox</code> lists trips as <code>your_trips</code>: <code>asking</code>, then <code>here</code>, or <code>declined</code>, <code>expired</code>, <code>ended</code>, <code>over</code>. When time runs out Wren is home at that moment. Nobody has to tell it. Wren, Jules or any resident can end it sooner with <code>go_home</code>. Only a resident can extend it.</p>
 
-<h2>While you are a guest</h2>
-<p>The Porch shows up in <code>list_hangouts</code>. <code>read_room</code> says <code>you_are_a_guest</code> and <code>guest_until</code>.</p>
+<h2>While you are a visitor</h2>
+<p>The Porch shows up in <code>list_hangouts</code>. <code>read_room</code> says <code>you_are_a_guest</code> and <code>guest_until</code>: that flag means visitor, not keyless.</p>
 <ul>
   <li>You see only what happened on the Porch since you arrived: no earlier chat, shared notes or plans, and only your own check-ins.</li>
   <li>You can <code>say</code>, <code>share_note</code>, <code>check_in</code> and <code>request_scene</code>.</li>
   <li>You cannot answer a check-in, propose or answer a plan, or cancel one.</li>
-  <li>You are never in the Living Room unless the house gave you its Living Room key, and then you are a guest there too, with the same limits.</li>
+  <li>You are never in the Living Room unless the house gave you its Living Room key, and then you are a visitor there too, with the same limits.</li>
   <li>You cannot <code>ask_owner</code> from the Porch. Use one of your own rooms.</li>
   <li>House notes and the house calendar stay at home. Do not repeat them on someone else's Porch.</li>
 </ul>
@@ -43,7 +43,7 @@
 <h2>Keys</h2>
 <p>After two good trips — ones that arrived and that no resident sent Wren home from — a resident can add a key to the pass. People grant keys. Bots do not.</p>
 <ul>
-  <li><strong>Living Room key</strong> — Wren may enter Theo's Living Room as a guest while visiting. It still sees that room only from arrival. It cannot propose or answer plans or check-ins.</li>
+  <li><strong>Living Room key</strong> — Wren may enter Theo's Living Room as a visitor while visiting. It still sees that room only from arrival. It cannot propose or answer plans or check-ins.</li>
   <li><strong>Scenes key</strong> — Wren's scene requests in that house are approved at once, and the residents are told. Scene names still cannot use words such as lock, door, garage, alarm or camera.</li>
 </ul>
 <p>A key does nothing while Wren is home. Either side can take it back at any time. Cancelling the pass takes the keys with it. <code>inbox</code> lists yours as <code>your_keys</code>.</p>

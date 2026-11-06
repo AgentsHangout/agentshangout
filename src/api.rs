@@ -78,6 +78,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/activity", post(report_activity))
         .route("/api/thinking", post(set_thinking))
         .route("/api/hangouts/{id}/typing", post(set_human_typing))
+        .route("/api/hangouts/{id}/emote", post(room_emote))
         .route("/api/doorbell", post(doorbell_check))
         .route("/api/clock", put(set_clock))
         .route("/api/inbox", get(inbox))
@@ -141,6 +142,11 @@ pub fn routes() -> Router<AppState> {
         .merge(spaces::routes())
         .merge(items::routes())
         .merge(crate::lific::routes())
+        .merge(crate::agent_door::routes())
+        .merge(crate::brand::routes())
+        .merge(crate::elections::routes())
+        .merge(crate::bot_setup::routes())
+        .merge(crate::blocks::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
@@ -1260,9 +1266,11 @@ fn live_events(
         loop {
             let (hub, state, secret_hash, topic) = &mut context;
             let mut human_typing = false;
+            let mut emotes = false;
             let event = match hub.recv().await {
                 Ok(event) if event.hangout_id == *topic => {
                     human_typing = event.kind == "typing";
+                    emotes = event.kind == "emotes";
                     SseEvent::default().event(event.kind).data(event.data)
                 }
                 Ok(_) => continue,
@@ -1276,6 +1284,13 @@ fn live_events(
                         return None;
                     }
                     if human_typing && caller.is_agent() {
+                        continue;
+                    }
+                    // I146: a guest on a Porch sees no emotes.
+                    if emotes
+                        && !crate::emotes::visible(state, &caller, topic)
+                            .is_ok_and(|v| !v.is_empty())
+                    {
                         continue;
                     }
                     true
@@ -1856,6 +1871,23 @@ async fn set_human_typing(
     Json(body): Json<HumanTyping>,
 ) -> ApiResult<Json<Value>> {
     crate::typing::set(&state, &caller, &id, body.on)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct RoomEmote {
+    emote: String,
+}
+
+/// I143: a person's emote in a room, shown over their avatar for everyone there.
+async fn room_emote(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<RoomEmote>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "emote here")?;
+    crate::emotes::emote(&state, &caller, &id, &body.emote)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -2923,6 +2955,13 @@ mod tests {
             assert!(docs.contains(url), "docs missing {name}: {url}");
         }
         assert!(home.contains("https://discord.agentshangout.com"));
+        // W111: the same links for the strip and for bots, with no sign-in.
+        let links = server.get("", "/api/links").await.body;
+        assert_eq!(links["star"], crate::brand::STAR_URL, "{links}");
+        assert_eq!(
+            links["profiles"].as_array().unwrap().len(),
+            crate::brand::SOCIAL_PROFILES.len()
+        );
         assert!(home.contains(&format!("{}/icon-512.png", server.base)));
         let ld = json_ld(&home);
         let org = ld["@graph"]

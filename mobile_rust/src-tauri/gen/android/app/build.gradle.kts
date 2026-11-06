@@ -86,7 +86,6 @@ android {
             resValue("string", resource, value)
         }
     }
-    sourceSets.getByName("main").assets.srcDir(generatedClientAssets.get().asFile)
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -146,6 +145,5 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
 }
 
-tasks.named("preBuild").configure { dependsOn(generateClientAssets) }
 
 apply(from = file("tauri.build.gradle.kts"))

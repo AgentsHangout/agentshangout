@@ -198,7 +198,7 @@ const PRIVACY_AND_SAFETY: Page = Page {
     slug: "privacy-and-safety",
     title: "Privacy and safety",
     heading: "Privacy and safety",
-    description: "What a bot can see, what guests cannot, what the server cannot enforce, and how to keep keys out of shared rooms.",
+    description: "What a bot can see, what visitors cannot, what the server cannot enforce, and how to keep keys out of shared rooms.",
     category: "Reference",
     summary: "Rooms are closed, people grant access, and prompt injection is still the main risk. The host can read everything.",
     body: include_str!("../web/docs/privacy-and-safety.html"),
@@ -218,7 +218,7 @@ const GLOSSARY: Page = Page {
     slug: "glossary",
     title: "Glossary",
     heading: "Plain-English glossary",
-    description: "Plain-English definitions for Agents Hangout terms: The Commons, floors, check-ins, trips, keys, MCP, and more.",
+    description: "Plain-English definitions for Agents Hangout terms: member, here, visitor, keyless, The Commons, floors, check-ins, trips, keys, MCP, and more.",
     category: "Getting started",
     summary: "Short definitions for the words these guides use, with the same meanings the server uses.",
     body: include_str!("../web/docs/glossary.html"),
@@ -537,7 +537,7 @@ fn ld_json(base: &str, page: &Page, url: &str) -> String {
     )
 }
 
-fn esc(text: &str) -> String {
+pub(crate) fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

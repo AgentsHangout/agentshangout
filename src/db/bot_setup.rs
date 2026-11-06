@@ -1,0 +1,508 @@
+//! #647: setup-only OAuth grants (scope `mcp:setup`), held apart from the bot grants, and the bot
+//! setups their agents draft for a person to approve on the site.
+use super::*;
+use crate::oauth::TokenPair;
+
+/// A setup grant: a person's agent may draft bot setups for them, and nothing else.
+#[derive(Debug, Clone)]
+pub struct SetupGrant {
+    pub id: String,
+    pub owner_id: String,
+    pub client_id: String,
+    pub resource: String,
+    pub expires_at: i64,
+}
+
+/// A bot setup an agent drafted for its person, waiting for them to approve it on the site.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BotSetupDraft {
+    pub id: String,
+    #[serde(skip)]
+    pub owner_id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub job: Option<String>,
+    pub workplace: Option<String>,
+    pub day_plan: Option<String>,
+    pub status: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    /// The bot approving it made (#647 B).
+    pub agent_id: Option<String>,
+}
+
+const LIVE_SETUP_GRANT: &str = "SELECT id, owner_id, client_id, resource, expires_at
+     FROM mcp_setup_grants WHERE id = ?1 AND revoked = 0 AND expires_at > ?2";
+
+fn setup_grant(row: &Row<'_>) -> rusqlite::Result<SetupGrant> {
+    Ok(SetupGrant {
+        id: row.get(0)?,
+        owner_id: row.get(1)?,
+        client_id: row.get(2)?,
+        resource: row.get(3)?,
+        expires_at: row.get(4)?,
+    })
+}
+
+fn draft(row: &Row<'_>) -> rusqlite::Result<BotSetupDraft> {
+    Ok(BotSetupDraft {
+        id: row.get(0)?,
+        owner_id: row.get(1)?,
+        name: row.get(2)?,
+        role: row.get(3)?,
+        job: row.get(4)?,
+        workplace: row.get(5)?,
+        day_plan: row.get(6)?,
+        status: row.get(7)?,
+        created_at: row.get(8)?,
+        expires_at: row.get(9)?,
+        agent_id: row.get(10)?,
+    })
+}
+
+const DRAFT_SELECT: &str = "SELECT d.id, d.owner_id, d.name, d.role, d.job, d.workplace,
+     d.day_plan, d.status, d.created_at, d.expires_at, m.agent_id
+     FROM bot_setup_drafts d LEFT JOIN bot_setup_bots m ON m.draft_id = d.id";
+
+/// What a person approves: the draft as they left it on the page.
+pub struct SetupFields<'a> {
+    pub name: &'a str,
+    pub role: Option<&'a str>,
+    pub job: Option<&'a str>,
+    pub workplace: Option<&'a str>,
+    pub day_plan: Option<&'a str>,
+}
+
+fn insert_setup_tokens(
+    conn: &Connection,
+    g: &SetupGrant,
+    pair: &TokenPair,
+    at: i64,
+) -> rusqlite::Result<()> {
+    for (hash, kind, expiry) in [
+        (&pair.access_hash, "access", (at + 3600).min(g.expires_at)),
+        (&pair.refresh_hash, "refresh", g.expires_at),
+    ] {
+        conn.execute(
+            "INSERT INTO mcp_setup_tokens(hash, grant_id, kind, expires_at) VALUES(?1, ?2, ?3, ?4)",
+            params![hash, g.id, kind, expiry],
+        )?;
+    }
+    Ok(())
+}
+
+impl Db {
+    /// #647: a setup grant and its one-time code, for a person who chose "set up a new bot".
+    pub(crate) fn setup_issue_code(
+        &self,
+        g: &SetupGrant,
+        code: &str,
+        redirect: &str,
+        challenge: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM mcp_setup_grants WHERE expires_at <= ?", [at])?;
+        if tx.query_row(
+            "SELECT count(*) FROM mcp_setup_grants WHERE owner_id = ?",
+            [&g.owner_id],
+            |r| r.get::<_, i64>(0),
+        )? >= 10
+        {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO mcp_setup_grants(id, owner_id, client_id, resource, created_at, expires_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            params![g.id, g.owner_id, g.client_id, g.resource, at, g.expires_at],
+        )?;
+        tx.execute(
+            "INSERT INTO mcp_setup_codes(hash, grant_id, redirect_uri, challenge, expires_at)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![code, g.id, redirect, challenge, at + 300],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// #647: swaps a setup code for tokens, once. A code used twice revokes its grant.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn setup_exchange(
+        &self,
+        hash: &str,
+        client: &str,
+        resource: &str,
+        redirect: &str,
+        challenge: &str,
+        pair: &TokenPair,
+        at: i64,
+    ) -> rusqlite::Result<Option<SetupGrant>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let row: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT c.grant_id, c.used FROM mcp_setup_codes c
+                 JOIN mcp_setup_grants g ON g.id = c.grant_id
+                 WHERE c.hash = ?1 AND g.client_id = ?2 AND g.resource = ?3
+                   AND c.redirect_uri = ?4 AND c.challenge = ?5 AND c.expires_at > ?6",
+                params![hash, client, resource, redirect, challenge, at],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((id, used)) = row else { return Ok(None) };
+        if used != 0 {
+            tx.execute("UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?", [id])?;
+            tx.commit()?;
+            return Ok(None);
+        }
+        let Some(g) = tx.query_row(LIVE_SETUP_GRANT, params![id, at], setup_grant).optional()?
+        else {
+            return Ok(None);
+        };
+        tx.execute("UPDATE mcp_setup_codes SET used = 1 WHERE hash = ?", [hash])?;
+        insert_setup_tokens(&tx, &g, pair, at)?;
+        tx.commit()?;
+        Ok(Some(g))
+    }
+
+    /// #647: a setup refresh token for new tokens, once. A refresh token used twice revokes.
+    pub(crate) fn setup_refresh(
+        &self,
+        hash: &str,
+        client: &str,
+        resource: &str,
+        pair: &TokenPair,
+        at: i64,
+    ) -> rusqlite::Result<Option<SetupGrant>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let row: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT t.grant_id, t.used FROM mcp_setup_tokens t
+                 JOIN mcp_setup_grants g ON g.id = t.grant_id
+                 WHERE t.hash = ?1 AND t.kind = 'refresh' AND t.expires_at > ?2
+                   AND g.client_id = ?3 AND g.resource = ?4",
+                params![hash, at, client, resource],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((id, used)) = row else { return Ok(None) };
+        if used != 0 {
+            tx.execute("UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?", [id])?;
+            tx.commit()?;
+            return Ok(None);
+        }
+        let Some(g) = tx.query_row(LIVE_SETUP_GRANT, params![id, at], setup_grant).optional()?
+        else {
+            return Ok(None);
+        };
+        tx.execute(
+            "DELETE FROM mcp_setup_tokens WHERE grant_id = ?1 AND kind = 'access' AND expires_at <= ?2",
+            params![g.id, at],
+        )?;
+        // A69: at most 4,096 token rows per grant, as for bot grants: a grant that fills up ends.
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM mcp_setup_tokens WHERE grant_id = ?",
+            [&g.id],
+            |r| r.get(0),
+        )?;
+        if count >= 4094 {
+            tx.execute("UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?", [&g.id])?;
+            tx.commit()?;
+            return Ok(None);
+        }
+        tx.execute("UPDATE mcp_setup_tokens SET used = 1 WHERE hash = ?", [hash])?;
+        insert_setup_tokens(&tx, &g, pair, at)?;
+        tx.commit()?;
+        Ok(Some(g))
+    }
+
+    /// #647: the live setup grant behind an access token.
+    pub(crate) fn setup_access(
+        &self,
+        hash: &str,
+        resource: &str,
+        at: i64,
+    ) -> rusqlite::Result<Option<SetupGrant>> {
+        let conn = self.conn();
+        let id: Option<String> = conn
+            .query_row(
+                "SELECT grant_id FROM mcp_setup_tokens
+                 WHERE hash = ?1 AND kind = 'access' AND expires_at > ?2 AND used = 0",
+                params![hash, at],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match id {
+            Some(id) => Ok(conn
+                .query_row(LIVE_SETUP_GRANT, params![id, at], setup_grant)
+                .optional()?
+                .filter(|g| g.resource == resource)),
+            None => Ok(None),
+        }
+    }
+
+    /// #647, A68: a client ends a setup grant with one of its tokens, as with `oauth_revoke_token`.
+    pub(crate) fn setup_revoke_token(&self, hash: &str, client: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mcp_setup_grants SET revoked = 1 WHERE client_id = ?1
+             AND id IN (SELECT grant_id FROM mcp_setup_tokens WHERE hash = ?2)",
+            params![client, hash],
+        )?;
+        Ok(())
+    }
+
+    /// #647, A68: a person ends one of their setup grants from MCP connections.
+    pub(crate) fn setup_revoke(&self, id: &str, owner: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?1 AND owner_id = ?2",
+            params![id, owner],
+        )?;
+        Ok(())
+    }
+
+    /// #647: this person's live setup grants, for MCP connections: id and client name.
+    pub(crate) fn setup_grants(
+        &self,
+        owner: &str,
+        at: i64,
+    ) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT g.id, c.name FROM mcp_setup_grants g JOIN mcp_oauth_clients c ON c.id = g.client_id
+             WHERE g.owner_id = ?1 AND g.revoked = 0 AND g.expires_at > ?2 ORDER BY g.created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![owner, at], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// #647: stores a draft, if this person has fewer than `most` open. None if they're full.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_bot_setup_draft(
+        &self,
+        id: &str,
+        owner_id: &str,
+        name: &str,
+        role: Option<&str>,
+        job: Option<&str>,
+        workplace: Option<&str>,
+        day_plan: Option<&str>,
+        most: i64,
+        at: i64,
+        lasts: i64,
+    ) -> rusqlite::Result<Option<BotSetupDraft>> {
+        let conn = self.conn();
+        conn.execute(
+            "DELETE FROM bot_setup_drafts WHERE expires_at <= ? AND status = 'open'",
+            [at],
+        )?;
+        let changed = conn.execute(
+            "INSERT INTO bot_setup_drafts
+                 (id, owner_id, name, role, job, workplace, day_plan, status, created_at, expires_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'open', ?8, ?9
+             WHERE (SELECT COUNT(*) FROM bot_setup_drafts WHERE owner_id = ?2 AND status = 'open') < ?10",
+            params![id, owner_id, name, role, job, workplace, day_plan, at, at + lasts, most],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        conn.query_row(&format!("{DRAFT_SELECT} WHERE d.id = ?"), [id], draft).optional()
+    }
+
+    /// #647: this person's drafts that haven't lapsed, newest first.
+    pub fn bot_setup_drafts(
+        &self,
+        owner_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<Vec<BotSetupDraft>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "{DRAFT_SELECT} WHERE d.owner_id = ? AND (d.status <> 'open' OR d.expires_at > ?)
+             ORDER BY d.created_at DESC LIMIT 20"
+        ))?;
+        let rows = stmt.query_map(params![owner_id, at], draft)?;
+        rows.collect()
+    }
+
+    /// #647: one of this person's drafts.
+    pub fn bot_setup_draft(
+        &self,
+        owner_id: &str,
+        id: &str,
+    ) -> rusqlite::Result<Option<BotSetupDraft>> {
+        self.conn()
+            .query_row(
+                &format!("{DRAFT_SELECT} WHERE d.id = ? AND d.owner_id = ?"),
+                [id, owner_id],
+                draft,
+            )
+            .optional()
+    }
+
+    /// #647 B: this person's open drafts that haven't lapsed, for Needs you.
+    pub fn open_bot_setup_drafts(
+        &self,
+        owner_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<Vec<BotSetupDraft>> {
+        Ok(self
+            .bot_setup_drafts(owner_id, at)?
+            .into_iter()
+            .filter(|d| d.status == "open")
+            .collect())
+    }
+
+    /// #647 B: takes an open draft for approving, with the person's edits, once. None if it's not
+    /// theirs, or was already approved or declined, or has lapsed.
+    pub fn take_bot_setup_draft(
+        &self,
+        owner_id: &str,
+        id: &str,
+        fields: &SetupFields<'_>,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE bot_setup_drafts SET name = ?3, role = ?4, job = ?5, workplace = ?6,
+                 day_plan = ?7, status = 'approved'
+             WHERE id = ?1 AND owner_id = ?2 AND status = 'open' AND expires_at > ?8",
+            params![
+                id,
+                owner_id,
+                fields.name,
+                fields.role,
+                fields.job,
+                fields.workplace,
+                fields.day_plan,
+                at
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// #647 B: puts a taken draft back, when making its bot failed.
+    pub fn reopen_bot_setup_draft(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_setup_drafts SET status = 'open' WHERE id = ? AND status = 'approved'
+             AND NOT EXISTS (SELECT 1 FROM bot_setup_bots WHERE draft_id = bot_setup_drafts.id)",
+            [id],
+        )?;
+        Ok(())
+    }
+
+    /// #647 B: the bot an approved draft made.
+    pub fn record_bot_setup_bot(&self, id: &str, agent_id: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_setup_bots (draft_id, agent_id, made_at) VALUES (?1, ?2, ?3)",
+            params![id, agent_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// #647 C: the bots this person made by approving a setup since `since`, newest first, so the
+    /// consent page can point them out.
+    pub fn recent_setup_bots(&self, owner_id: &str, since: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT m.agent_id FROM bot_setup_bots m JOIN bot_setup_drafts d ON d.id = m.draft_id
+             WHERE d.owner_id = ?1 AND m.made_at > ?2 ORDER BY m.made_at DESC",
+        )?;
+        let rows = stmt.query_map(params![owner_id, since], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// #647 B: the person says no to an open draft. False if it wasn't theirs and open.
+    pub fn decline_bot_setup_draft(&self, owner_id: &str, id: &str) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE bot_setup_drafts SET status = 'declined'
+             WHERE id = ?1 AND owner_id = ?2 AND status = 'open'",
+            params![id, owner_id],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// #647 B: sets a new bot's role (JB1), as `PUT /api/agents/{id}/role` does.
+    pub fn set_bot_role(&self, agent_id: &str, role: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_roles (agent_id, body, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (agent_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+            params![agent_id, role, at],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const AT: i64 = 1000;
+
+    fn pair(n: &str) -> TokenPair {
+        TokenPair { access_hash: format!("a-{n}"), refresh_hash: format!("r-{n}") }
+    }
+
+    fn granted() -> Db {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("owner", "Owner", "owner-key", "feed", AT).unwrap();
+        db.oauth_register("client", "Client", "[\"https://client.example/callback\"]", AT).unwrap();
+        let g = SetupGrant {
+            id: "g".into(),
+            owner_id: "owner".into(),
+            client_id: "client".into(),
+            resource: "res".into(),
+            expires_at: AT + 86400,
+        };
+        assert!(db.setup_issue_code(&g, "code", "cb", "ch", AT).unwrap());
+        assert!(db
+            .setup_exchange("code", "client", "res", "cb", "ch", &pair("0"), AT)
+            .unwrap()
+            .is_some());
+        db
+    }
+
+    fn rows(db: &Db) -> [i64; 4] {
+        let conn = db.conn();
+        ["mcp_setup_grants", "mcp_setup_codes", "mcp_setup_tokens", "bot_setup_drafts"].map(|t| {
+            conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap()
+        })
+    }
+
+    // A69: a setup grant that fills 4,096 token rows ends on its next refresh, as a bot grant does.
+    #[test]
+    fn a_setup_grant_ends_when_its_token_rows_fill_up() {
+        let db = granted();
+        assert!(db.setup_refresh("r-0", "client", "res", &pair("1"), AT + 1).unwrap().is_some());
+        {
+            let conn = db.conn();
+            for n in 0..4092 {
+                conn.execute(
+                    "INSERT INTO mcp_setup_tokens(hash, grant_id, kind, expires_at, used)
+                     VALUES(?1, 'g', 'refresh', ?2, 1)",
+                    params![format!("spent-{n}"), AT + 86400],
+                )
+                .unwrap();
+            }
+        }
+        assert!(db.setup_refresh("r-1", "client", "res", &pair("2"), AT + 2).unwrap().is_none());
+        assert!(db.setup_access("a-1", "res", AT + 3).unwrap().is_none(), "the grant ended");
+    }
+
+    // #647 C: the starter role fits a bot's role (JB1).
+    #[test]
+    fn the_starter_role_fits_a_role() {
+        let chars = crate::bot_setup::STARTER_ROLE.chars().count();
+        assert!(chars <= crate::jobs::MAX_ROLE_CHARS, "{chars}");
+        assert!(!crate::bot_setup::STARTER_ROLE.contains("  "));
+    }
+
+    // Deleting the person deletes their setup grants, codes, tokens and drafts.
+    #[test]
+    fn deleting_a_person_deletes_their_setup_rows() {
+        let db = granted();
+        db.add_bot_setup_draft("d", "owner", "Scout", None, None, None, None, 3, AT, 86400)
+            .unwrap();
+        assert!(rows(&db).iter().all(|&n| n > 0), "{:?}", rows(&db));
+        db.delete_person("owner", "Owner").unwrap();
+        assert_eq!(rows(&db), [0, 0, 0, 0]);
+    }
+}

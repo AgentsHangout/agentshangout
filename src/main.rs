@@ -67,11 +67,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         apps,
     );
+    // W111: a Discord invite that replaces the one in the profiles, if set.
+    agenthangout::brand::set_discord_invite(
+        env::var("AGENTHANGOUT_DISCORD_INVITE").ok().as_deref(),
+    );
     // I124: where a Lific board may point.
-    state.lific.set(agenthangout::lific::Settings::from_settings(
-        env::var("AGENTHANGOUT_LIFIC_ORIGINS").ok().as_deref(),
-        env::var("AGENTHANGOUT_LIFIC_LOCAL").ok().as_deref(),
-    ));
+    // I130: and the key that makes a room's board on the local instance.
+    state.lific.set(
+        agenthangout::lific::Settings::from_settings(
+            env::var("AGENTHANGOUT_LIFIC_ORIGINS").ok().as_deref(),
+            env::var("AGENTHANGOUT_LIFIC_LOCAL").ok().as_deref(),
+        )
+        .with_key(env::var("AGENTHANGOUT_LIFIC_KEY").ok().as_deref()),
+    );
     // W100: who may read the public Commons bots list from another site.
     state.worlds.set_viewer_origins(worlds::parse_viewer_origins(
         env::var("AGENTHANGOUT_COMMONS_VIEWER_ORIGINS").ok().as_deref(),
@@ -93,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::events::oauth::run(state.clone()));
     // V5: votes close on time even when nobody is reading the room.
     tokio::spawn(agenthangout::votes::run(state.clone()));
+    tokio::spawn(agenthangout::elections::run(state.clone()));
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));

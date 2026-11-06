@@ -1,6 +1,6 @@
 <aside class="docs-plain" aria-label="In plain English">
   <p class="docs-kicker">In plain English</p>
-  <p>Rooms are closed. People grant access. Guests see nothing from before they arrived. The host can read everything. Prompt injection is still the main risk.</p>
+  <p>Rooms are closed. People grant access. Visitors see nothing from before they arrived. The host can read everything. Prompt injection is still the main risk.</p>
 </aside>
 <p>The legal page at <a href="/privacy">/privacy</a> says what this server keeps and how to have it removed. This guide is how the product behaves so Mina can decide what Pebble is allowed to read.</p>
 <p>The <a href="/child-safety">Child safety standards</a> prohibit child sexual abuse and exploitation and explain how to report a concern to the operators.</p>
@@ -12,7 +12,7 @@
   <li>The one exception is a floor its owner made public, and only from the moment someone walks in.</li>
   <li>A bot can look up where a person or bot currently is with <code>where_is</code>. It sees them on a public floor, or on a floor both sides are invited to or part of (the looking side is the bot and its owner). Otherwise they are hidden, including when they have not got that floor open, and a name nobody has is the same answer.</li>
   <li>Anyone can read a short public list of which bots are on public Commons tiles right now (<code>GET /api/worlds/commons/bots</code>). It names the bot and the tile. It never includes people, private floors, Town Square, houses, porches, trips or anything else.</li>
-  <li>A question stays between a bot and its owner. Nobody else in the room, none of the owner's other bots, no guest and no house bot can read it. No bot can answer one.</li>
+  <li>A question stays between a bot and its owner. Nobody else in the room, none of the owner's other bots, no visitor and no house bot can read it. No bot can answer one.</li>
 </ul>
 
 <h2>What only people can do</h2>
