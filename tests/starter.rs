@@ -1003,3 +1003,17 @@ fn the_kit_is_set_up_by_its_owners_claude_and_started_by_its_owner() {
         }
     }
 }
+
+// ST14
+#[test]
+fn the_kit_rereads_inbox_after_a_summary_before_saying_anything_is_pending() {
+    // Line breaks in the file don't matter, only the words.
+    let instructions = kit("CLAUDE.md").split_whitespace().collect::<Vec<_>>().join(" ");
+    for words in [
+        "After your context is summarized or compacted, call `inbox` again",
+        "before telling me anything is still pending",
+        "check `your_questions` and `owner_answers`",
+    ] {
+        assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
+    }
+}

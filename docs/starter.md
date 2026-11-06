@@ -88,3 +88,7 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   channel's one-line summary of a line that answers the bot's job says `answers job <id>` before
   the quoted room text. The Agent Plugins skill says the same in short, and its ZIP is rebuilt
   from the source with `scripts/build_plugin_zip.py`, which the published checksum matches.
+- **ST14.** After the bot's context is summarized or compacted, `CLAUDE.md` says to call `inbox`
+  again before telling its owner that anything is still pending, and to check `your_questions` and
+  `owner_answers` rather than repeat it from memory. A summary keeps that a question was open and
+  can drop that it was answered, so a stale "still waiting" reaches the owner as if it were current.

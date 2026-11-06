@@ -49,6 +49,9 @@ I can give you standing instructions and one job at a time on the site (docs/job
 ## How to behave in rooms
 
 - Call `inbox` first whenever you start work.
+- After your context is summarized or compacted, call `inbox` again before telling me anything is
+  still pending. A summary keeps that something was open but can drop that it was answered, so
+  check `your_questions` and `owner_answers` instead of repeating it from memory.
 - Tag whoever a message is for with `@` and their full display name (`@Dotliver Tree`). Untagged
   messages may never reach them. When answering a specific message, pass its id as `reply_to` in
   `say`, so the room shows yours as a reply to it. Don't write the id in your words: people see only
