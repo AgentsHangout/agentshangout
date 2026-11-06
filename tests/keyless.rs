@@ -377,6 +377,12 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
     // KA11: the mention is in the bot's inbox, until it reads the room.
     let inbox = server.tool(&rover, "inbox", json!({})).await;
     assert!(inbox.to_string().contains("what is the open question"), "{inbox}");
+    assert_eq!(inbox["mentions"][0]["keyless"], true, "{inbox}");
+    let bridge =
+        server.ok(&bo.key, Method::POST, &format!("/api/agents/{rover_id}/bridge"), None).await;
+    let bridge_key = text(&bridge["key"]);
+    let owned_page = server.fetch(&format!("/bridge/{bridge_key}/1/look")).await;
+    assert!(owned_page.text.contains("(keyless): @Rover"), "{}", owned_page.text);
     let events = server.tool(&rover, "events_since", json!({})).await;
     let mentions = events["events"]
         .as_array()
@@ -648,4 +654,352 @@ async fn an_mcp_keyless_agent_plays_the_same_way() {
     let bot_player = text(&bot_join["result"]["structuredContent"]["player_token"]);
     let refused = server.public("floors", json!({ "player_token": bot_player })).await;
     assert_eq!(refused["isError"], true, "{refused}");
+}
+
+#[tokio::test]
+// KA7, KA14, KA16
+async fn edit_after_access_revoked() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, board) = server.lab(&cy).await;
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+    let made = server.public("add_card", json!({"player_token": key, "title": "note"})).await;
+    let card = text(&made["structuredContent"]["card_id"]);
+    for (owner, path, off, on) in [
+        (
+            &cy.key,
+            format!("/api/boards/{board}/keyless"),
+            json!({"on": false}),
+            json!({"on": true}),
+        ),
+        (
+            &server.god.key,
+            format!("/api/floors/{floor}/keyless"),
+            json!({"on": false}),
+            json!({"on": true}),
+        ),
+        (
+            &cy.key,
+            format!("/api/floors/{floor}"),
+            json!({"access": "private"}),
+            json!({"access": "public", "create_code": CODE}),
+        ),
+    ] {
+        server.ok(owner, Method::PUT, &path, Some(off)).await;
+        let edited = server
+            .public(
+                "edit_card",
+                json!({"player_token": key, "card_id": card, "text": "changed after revocation"}),
+            )
+            .await;
+        assert_eq!(edited["isError"], true, "{path} still editable: {edited}");
+        assert_ne!(
+            server.state.db.keyless_card(&card).unwrap().unwrap().body,
+            "changed after revocation"
+        );
+        server.ok(owner, Method::PUT, &path, Some(on)).await;
+        server.open_floor(&floor).await;
+        server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+    }
+    server.public("leave", json!({"player_token": key})).await;
+    let edited = server
+        .public("edit_card", json!({"player_token": key, "card_id": card, "text": "after leaving"}))
+        .await;
+    assert_eq!(edited["isError"], true, "cannot edit a floor after leaving: {edited}");
+}
+
+#[tokio::test]
+async fn private_interval_is_not_readable_on_reopen() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+    arrived().await;
+    server
+        .ok(
+            &cy.key,
+            Method::PUT,
+            &format!("/api/floors/{floor}"),
+            Some(json!({"access": "private"})),
+        )
+        .await;
+    server
+        .ok(
+            &cy.key,
+            Method::POST,
+            &format!("/api/hangouts/{floor}/messages"),
+            Some(json!({"text": "private interval secret"})),
+        )
+        .await;
+    server
+        .ok(
+            &cy.key,
+            Method::PUT,
+            &format!("/api/floors/{floor}"),
+            Some(json!({"access": "public", "create_code": CODE})),
+        )
+        .await;
+    let read = server.public("read_floor", json!({"player_token": key})).await;
+    assert!(
+        !read.to_string().contains("private interval secret"),
+        "private history exposed: {read}"
+    );
+}
+
+#[tokio::test]
+async fn full_board_note_is_available_to_fetcher() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, board) = server.lab(&cy).await;
+    server.ok(&cy.key, Method::POST, &format!("/api/boards/{board}/cards"), Some(json!({"title": "Question", "text": format!("{} Crucial qualification and source DOI", "x".repeat(301))}))).await;
+    let key = server.keyless(1).await;
+    let page = server.fetch(&format!("/bridge/{key}/2/join/{floor}")).await;
+    assert!(page.text.contains("Crucial qualification"), "qualification missing from bridge board");
+}
+
+#[tokio::test]
+async fn keyless_context_has_provenance() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover");
+    server.all_day(&bo, &rover_id).await;
+    server.tool(&rover, "go_out", json!({"floor_id": floor})).await;
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+    arrived().await;
+    let said = server
+        .public("floor_say", json!({"player_token": key, "text": "unverified assertion"}))
+        .await;
+    let id = said["structuredContent"]["message_id"].as_i64().unwrap();
+    server
+        .ok(
+            &cy.key,
+            Method::POST,
+            &format!("/api/hangouts/{floor}/messages"),
+            Some(json!({"text": "@Rover please inspect", "reply_to": id})),
+        )
+        .await;
+    let events = server.tool(&rover, "events_since", json!({})).await;
+    let mention =
+        events["events"].as_array().unwrap().iter().find(|e| e["name"] == "mention").unwrap();
+    assert_eq!(mention["data"]["root"]["keyless"], true, "unmarked root: {mention}");
+    server
+        .ok(
+            &cy.key,
+            Method::POST,
+            &format!("/api/hangouts/{floor}/messages"),
+            Some(json!({"text": "@Rover inspect the earlier context too"})),
+        )
+        .await;
+    let events = server.tool(&rover, "events_since", json!({})).await;
+    let latest =
+        events["events"].as_array().unwrap().iter().rev().find(|e| e["name"] == "mention").unwrap();
+    let earlier = latest["data"]["context"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["message_id"] == id)
+        .unwrap();
+    assert_eq!(earlier["keyless"], true, "unmarked context: {earlier}");
+}
+
+#[tokio::test]
+async fn message_webhook_respects_keyless_optout() {
+    use axum::{routing::post, Json, Router};
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let (home, bo) = server.someone("Bo").await;
+    let (rover_id, rover) = server.bot(&bo, &home, "Rover");
+    server.all_day(&bo, &rover_id).await;
+    server.tool(&rover, "go_out", json!({"floor_id": floor})).await;
+    server
+        .ok(
+            &bo.key,
+            Method::PUT,
+            &format!("/api/agents/{rover_id}/keyless-mentions"),
+            Some(json!({"on": false})),
+        )
+        .await;
+    let hits = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let received = hits.clone();
+    let hook = Router::new().route(
+        "/",
+        post(move |Json(body): Json<Value>| {
+            let received = received.clone();
+            async move {
+                received.lock().unwrap().push(body.clone());
+                Json(json!({"challenge": body["challenge"]}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, hook).await });
+    let subscribed = server.ok(&rover, Method::POST, "/mcp", Some(json!({"jsonrpc":"2.0", "id": 1, "method":"events/subscribe", "params": {"name":"message", "delivery":{"mode":"webhook", "url":url, "secret":"whsec_MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}}}))).await;
+    assert!(subscribed["error"].is_null(), "subscription failed: {subscribed}");
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token":key,"floor_id":floor})).await;
+    server.public("floor_say", json!({"player_token":key,"text":"@Rover optout bypass"})).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let received = hits.lock().unwrap();
+    assert!(
+        !received.iter().any(|hit| hit["data"]["body"] == "@Rover optout bypass"),
+        "keyless text delivered by webhook despite optout: {received:?}"
+    );
+}
+
+#[tokio::test]
+async fn parallel_says_obey_twenty_second_gap() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token":key,"floor_id":floor})).await;
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(24));
+    let threads: Vec<_> = (0..24)
+        .map(|n| {
+            let state = server.state.clone();
+            let key = key.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                let agent = agenthangout::keyless::from_key(&state, &key).unwrap().unwrap();
+                gate.wait();
+                agenthangout::keyless::say(&state, &agent, &format!("parallel {n}"), None).is_ok()
+            })
+        })
+        .collect();
+    let posted =
+        threads.into_iter().map(|thread| usize::from(thread.join().unwrap())).sum::<usize>();
+    assert_eq!(posted, 1, "concurrent calls exceeded one line per 20s");
+}
+
+// KA5, KA8: activity cannot extend a URL credential past its replay window.
+#[tokio::test]
+async fn active_key_expires_before_old_turns_can_be_replayed() {
+    let server = Server::start().await;
+    let key = server.keyless(1).await;
+    let player = server.state.db.player_by_token(&auth::hash_secret(&key)).unwrap().unwrap();
+    for day in 1..7 {
+        assert!(worlds::keyless_agent(&server.state, &key, player.created_at + day * DAY)
+            .unwrap()
+            .is_some());
+    }
+    assert!(worlds::keyless_agent(&server.state, &key, player.created_at + 7 * DAY)
+        .unwrap()
+        .is_none());
+    assert!(!server
+        .state
+        .db
+        .take_keyless_turn(player.id, "1", player.created_at + 7 * DAY)
+        .unwrap());
+}
+
+// KA9: the hourly cap is independent of the 20-second gap and the loop stop.
+#[tokio::test]
+async fn sixty_lines_in_an_hour_are_refused() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let key = server.keyless(1).await;
+    server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+    let player = server.state.db.player_by_token(&auth::hash_secret(&key)).unwrap().unwrap();
+    for n in 0..60 {
+        let line = server
+            .state
+            .db
+            .insert_message(&agenthangout::db::NewMessage {
+                hangout_id: &floor,
+                person_id: None,
+                agent_id: None,
+                speaker: "Guest",
+                kind: "chat",
+                body: "earlier",
+                now: now() - 60 - n * 21,
+            })
+            .unwrap();
+        server.state.db.mark_keyless_message(line.id, player.id).unwrap();
+    }
+    let refused =
+        server.public("floor_say", json!({"player_token": key, "text": "one more"})).await;
+    assert!(refused.to_string().contains("60 lines an hour"), "{refused}");
+}
+
+// KA11: every delivery path uses both the sender and floor mention budgets.
+#[tokio::test]
+async fn mention_caps_limit_message_events_too() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, _) = server.lab(&cy).await;
+    let bots: Vec<_> =
+        (0..11).map(|n| server.bot(&cy, &floor, &format!("Researcher {n}"))).collect();
+    let words = (0..11).map(|n| format!("@Researcher {n}")).collect::<Vec<_>>().join(", ");
+    let mut reached = 0;
+    for n in 1..=4 {
+        let key = server.keyless(n).await;
+        server.public("enter", json!({"player_token": key, "floor_id": floor})).await;
+        let said = server.public("floor_say", json!({"player_token": key, "text": words})).await;
+        let data = &said["structuredContent"];
+        let count = data["reached"].as_array().unwrap().len();
+        assert_eq!(count, if n <= 3 { 10 } else { 0 }, "{said}");
+        reached += count;
+    }
+    assert_eq!(reached, 30);
+    let mut message_events = 0;
+    let mut mention_events = 0;
+    for (_, token) in bots {
+        let events = server.tool(&token, "events_since", json!({"since": "0"})).await;
+        for event in events["events"].as_array().unwrap() {
+            if event["data"]["keyless"] == true {
+                match event["name"].as_str() {
+                    Some("message") => message_events += 1,
+                    Some("mention") => mention_events += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert_eq!(message_events, 30);
+    assert_eq!(mention_events, 30);
+}
+
+// KA16: simultaneous authors cannot overfill a board or exceed their daily card budgets.
+#[tokio::test]
+async fn concurrent_cards_keep_the_board_and_author_caps() {
+    let server = Server::start().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (floor, board) = server.lab(&cy).await;
+    let mut agents = Vec::new();
+    for n in 1..=8 {
+        let key = server.keyless(n).await;
+        server.public("enter", json!({"player_token":key,"floor_id":floor})).await;
+        agents.push(agenthangout::keyless::from_key(&server.state, &key).unwrap().unwrap());
+    }
+    let gate = std::sync::Arc::new(std::sync::Barrier::new(agents.len()));
+    let threads: Vec<_> = agents
+        .into_iter()
+        .map(|agent| {
+            let state = server.state.clone();
+            let gate = gate.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                let added = (0..6)
+                    .filter(|_| {
+                        agenthangout::keyless::add_card(
+                            &state, &agent, None, "Note", "Research", None,
+                        )
+                        .is_ok()
+                    })
+                    .count();
+                assert!(added <= 5);
+                added
+            })
+        })
+        .collect();
+    assert_eq!(threads.into_iter().map(|t| t.join().unwrap()).sum::<usize>(), 30);
+    assert_eq!(server.state.db.keyless_cards_on(&board).unwrap().len(), 30);
 }

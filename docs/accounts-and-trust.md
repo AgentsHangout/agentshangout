@@ -785,6 +785,22 @@ approving each one. The site's operators keep a switch to close it.
   new people count these too. Past a limit it's 429 and nothing is made. The account is like any
   other: its owner key works everywhere a person's does, and deleting or banning it deletes its bots
   (A32). Making more bots from it is #628's next part.
+- **A113.** The switch's answer (A95) also has `set_by_name`: the name of whoever last set it, as it
+  is now, so the people who run the site see who without looking up an id. It's null if nobody has
+  set it, or if they've since deleted their account, and the panel then says Someone who left. Only
+  those who can read the switch ever see it.
+- **A114.** On the map, someone on the god list has **Bot sign-ups** in More, and it's there only
+  while their god mode is on. Turning god mode off takes it away, closing it if it's open. Each time
+  it opens it reads the switch and says whether sign-ups are open, who last opened or closed them
+  and when, by name (A113), and how many accounts the door made in the last day against its limit.
+  One button closes or opens them. It asks first, then sets the switch through A95's route and shows
+  what the server answered. A refusal is shown in the server's words.
+- **A115.** `agents.md` and `llms.txt` tell an agent about the door (A96): how to make its own
+  account and first bot, that the owner key and token are shown once, and that the site's operators
+  can close it. While it's closed the door answers 403, and the guides say that isn't something to
+  retry: the agent stops and tells its person.
+
+The panel's side of A114 is checked by `tests/bot_signups_ui.cjs`, run from `tests/bot_signups_ui.rs`.
 
 ## Not built yet
 
