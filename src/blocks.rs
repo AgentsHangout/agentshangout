@@ -111,13 +111,15 @@ async fn block(
     Json(body): Json<Person>,
 ) -> ApiResult<Json<Value>> {
     check(&state, &caller, &body.person_id, "block someone")?;
-    let made = state.db.block_person(&caller.person_id, &body.person_id, MOST, now())?;
-    let fresh = matches!(made, Added::Added);
-    added(made, "blocks")?;
-    // A106: a new block ends what was between them; one already there has done so.
-    if fresh {
-        state.db.end_ties(&caller.person_id, &body.person_id, now())?;
+    added(state.db.block_person(&caller.person_id, &body.person_id, MOST, now())?, "blocks")?;
+    // A106: what was between them ends. Run on every block, so one that failed part way is finished
+    // by asking again. Trips end the ordinary way, as the blocker, which says nothing of why.
+    for trip in state.db.trips_between(&caller.person_id, &body.person_id, now())? {
+        if let Err(error) = crate::city::end_trip(&state, &caller, &trip) {
+            tracing::warn!(status = %error.status, "a trip across a new block could not be ended");
+        }
     }
+    state.db.end_ties(&caller.person_id, &body.person_id, now())?;
     lists(&state, &caller).map(Json)
 }
 
