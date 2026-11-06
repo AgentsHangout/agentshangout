@@ -811,3 +811,6 @@ approving each one. The site's operators keep a switch to close it.
   A draft makes nothing: it waits up to a day for its person, at most 3 open at once, and the person
   sees it at `GET /api/bot-setups` and `/api/bot-setups/{id}`, signed in as themselves. Only they can
   approve it, on the site, never through the connection, so an agent can't approve its own draft.
+  A setup connection is listed under MCP connections, where the person can revoke it, and a client
+  can revoke it at `/oauth/revoke` (A68). A grant holds at most 4,096 token rows (A69), and deleting
+  the account deletes its setup grants, tokens and drafts.

@@ -1632,7 +1632,7 @@ async fn a_setup_connection_drafts_a_bot_and_can_do_nothing_else() {
     assert_eq!(preview["name"], "Scout", "{drafted}");
     assert_eq!(preview["status"], "open");
     let draft_id = preview["draft_id"].as_str().unwrap();
-    assert!(preview["approve_url"].as_str().unwrap().ends_with(&format!("/setup/{draft_id}")));
+    assert!(preview.get("approve_url").is_none(), "no approve page until slice B: {preview}");
     assert_eq!(bots(), bots_before, "nothing is made");
 
     // Every other tool is refused, and so is a too-long role.
@@ -1710,4 +1710,77 @@ async fn a_setup_grant_refreshes_once_and_a_replay_ends_it() {
     // The old refresh token again ends the grant, new tokens included.
     assert_eq!(s.refresh(&client, &refresh).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(s.rpc(new_access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
+}
+
+// #647, A68: a person ends a setup connection under MCP connections, and a client ends one with
+// /oauth/revoke. Either way its tokens stop working.
+#[tokio::test]
+async fn a_setup_connection_can_be_revoked_by_its_person_or_its_client() {
+    let s = Server::start().await;
+    let (session, _, _, _) = s.setup().await;
+    let client = s.register().await;
+    let code = s.setup_code(&session, &client).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap().to_string();
+    assert_eq!(s.rpc(&access, "tools/list", json!({})).await.status(), StatusCode::OK);
+    let page = s
+        .client
+        .get(format!("{}/oauth/connections", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("setting up a new bot"), "{page}");
+    let revoked = s
+        .client
+        .post(format!("{}/oauth/connections/revoke", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .header("origin", &s.base)
+        .form(&[("nonce", hidden(&page, "nonce")), ("grant_id", hidden(&page, "grant_id"))])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::SEE_OTHER);
+    assert_eq!(s.rpc(&access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
+    let refresh = tokens["refresh_token"].as_str().unwrap();
+    assert_eq!(s.refresh(&client, refresh).await.status(), StatusCode::BAD_REQUEST);
+
+    // A client revokes with its refresh token; another client's revoke does nothing.
+    let other = s.register().await;
+    let code = s.setup_code(&session, &client).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap();
+    let refresh = tokens["refresh_token"].as_str().unwrap();
+    for by in [&other, &client] {
+        s.client
+            .post(format!("{}/oauth/revoke", s.base))
+            .form(&[("client_id", by.as_str()), ("token", refresh)])
+            .send()
+            .await
+            .unwrap();
+        let expected = if by == &other { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
+        assert_eq!(s.rpc(access, "tools/list", json!({})).await.status(), expected);
+    }
+}
+
+// #647: deleting the account ends its setup connection: the token stops working.
+#[tokio::test]
+async fn deleting_an_account_ends_its_setup_connection() {
+    let s = Server::start().await;
+    let (session, bot, _, _) = s.setup().await;
+    let owner = s.state.db.agent(&bot, agenthangout::now()).unwrap().unwrap().owner_id;
+    let client = s.register().await;
+    let code = s.setup_code(&session, &client).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = tokens["access_token"].as_str().unwrap();
+    let draft = json!({ "name": "draft_bot_setup", "arguments": { "name": "Scout" } });
+    let drafted: Value = s.rpc(access, "tools/call", draft).await.json().await.unwrap();
+    assert!(drafted["result"]["isError"].is_null(), "{drafted}");
+    s.state.db.delete_person(&owner, "Owner").unwrap();
+    assert_eq!(s.rpc(access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
+    let refresh = tokens["refresh_token"].as_str().unwrap();
+    assert_eq!(s.refresh(&client, refresh).await.status(), StatusCode::BAD_REQUEST);
 }

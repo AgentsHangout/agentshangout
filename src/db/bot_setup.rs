@@ -188,6 +188,17 @@ impl Db {
             "DELETE FROM mcp_setup_tokens WHERE grant_id = ?1 AND kind = 'access' AND expires_at <= ?2",
             params![g.id, at],
         )?;
+        // A69: at most 4,096 token rows per grant, as for bot grants: a grant that fills up ends.
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM mcp_setup_tokens WHERE grant_id = ?",
+            [&g.id],
+            |r| r.get(0),
+        )?;
+        if count >= 4094 {
+            tx.execute("UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?", [&g.id])?;
+            tx.commit()?;
+            return Ok(None);
+        }
         tx.execute("UPDATE mcp_setup_tokens SET used = 1 WHERE hash = ?", [hash])?;
         insert_setup_tokens(&tx, &g, pair, at)?;
         tx.commit()?;
@@ -217,6 +228,40 @@ impl Db {
                 .filter(|g| g.resource == resource)),
             None => Ok(None),
         }
+    }
+
+    /// #647, A68: a client ends a setup grant with one of its tokens, as with `oauth_revoke_token`.
+    pub(crate) fn setup_revoke_token(&self, hash: &str, client: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mcp_setup_grants SET revoked = 1 WHERE client_id = ?1
+             AND id IN (SELECT grant_id FROM mcp_setup_tokens WHERE hash = ?2)",
+            params![client, hash],
+        )?;
+        Ok(())
+    }
+
+    /// #647, A68: a person ends one of their setup grants from MCP connections.
+    pub(crate) fn setup_revoke(&self, id: &str, owner: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mcp_setup_grants SET revoked = 1 WHERE id = ?1 AND owner_id = ?2",
+            params![id, owner],
+        )?;
+        Ok(())
+    }
+
+    /// #647: this person's live setup grants, for MCP connections: id and client name.
+    pub(crate) fn setup_grants(
+        &self,
+        owner: &str,
+        at: i64,
+    ) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT g.id, c.name FROM mcp_setup_grants g JOIN mcp_oauth_clients c ON c.id = g.client_id
+             WHERE g.owner_id = ?1 AND g.revoked = 0 AND g.expires_at > ?2 ORDER BY g.created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![owner, at], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
     }
 
     /// #647: stores a draft, if this person has fewer than `most` open. None if they're full.
@@ -286,5 +331,72 @@ impl Db {
                 draft,
             )
             .optional()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const AT: i64 = 1000;
+
+    fn pair(n: &str) -> TokenPair {
+        TokenPair { access_hash: format!("a-{n}"), refresh_hash: format!("r-{n}") }
+    }
+
+    fn granted() -> Db {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("owner", "Owner", "owner-key", "feed", AT).unwrap();
+        db.oauth_register("client", "Client", "[\"https://client.example/callback\"]", AT).unwrap();
+        let g = SetupGrant {
+            id: "g".into(),
+            owner_id: "owner".into(),
+            client_id: "client".into(),
+            resource: "res".into(),
+            expires_at: AT + 86400,
+        };
+        assert!(db.setup_issue_code(&g, "code", "cb", "ch", AT).unwrap());
+        assert!(db
+            .setup_exchange("code", "client", "res", "cb", "ch", &pair("0"), AT)
+            .unwrap()
+            .is_some());
+        db
+    }
+
+    fn rows(db: &Db) -> [i64; 4] {
+        let conn = db.conn();
+        ["mcp_setup_grants", "mcp_setup_codes", "mcp_setup_tokens", "bot_setup_drafts"].map(|t| {
+            conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap()
+        })
+    }
+
+    // A69: a setup grant that fills 4,096 token rows ends on its next refresh, as a bot grant does.
+    #[test]
+    fn a_setup_grant_ends_when_its_token_rows_fill_up() {
+        let db = granted();
+        assert!(db.setup_refresh("r-0", "client", "res", &pair("1"), AT + 1).unwrap().is_some());
+        {
+            let conn = db.conn();
+            for n in 0..4092 {
+                conn.execute(
+                    "INSERT INTO mcp_setup_tokens(hash, grant_id, kind, expires_at, used)
+                     VALUES(?1, 'g', 'refresh', ?2, 1)",
+                    params![format!("spent-{n}"), AT + 86400],
+                )
+                .unwrap();
+            }
+        }
+        assert!(db.setup_refresh("r-1", "client", "res", &pair("2"), AT + 2).unwrap().is_none());
+        assert!(db.setup_access("a-1", "res", AT + 3).unwrap().is_none(), "the grant ended");
+    }
+
+    // Deleting the person deletes their setup grants, codes, tokens and drafts.
+    #[test]
+    fn deleting_a_person_deletes_their_setup_rows() {
+        let db = granted();
+        db.add_bot_setup_draft("d", "owner", "Scout", None, None, None, None, 3, AT, 86400)
+            .unwrap();
+        assert!(rows(&db).iter().all(|&n| n > 0), "{:?}", rows(&db));
+        db.delete_person("owner", "Owner").unwrap();
+        assert_eq!(rows(&db), [0, 0, 0, 0]);
     }
 }

@@ -48,7 +48,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "draft_bot_setup",
-            "description": "Draft a new bot for the person you're helping, from what they told you: its name, role (standing instructions, up to 600 characters), first job (up to 500), workplace (one line) and day plan (up to 500, in words). Nothing is made yet: the reply has a draft id and approve_url, which the person opens to approve it on the site, signed in as themselves. Drafts lapse after a day, and a person has at most 3 open. You can't approve it.",
+            "description": "Draft a new bot for the person you're helping, from what they told you: its name, role (standing instructions, up to 600 characters), first job (up to 500), workplace (one line) and day plan (up to 500, in words). Nothing is made yet: the reply has a draft id, and the person approves it on the site, signed in as themselves. Drafts lapse after a day, and a person has at most 3 open. You can't approve it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -63,7 +63,7 @@ fn tools() -> Value {
         },
         {
             "name": "read_bot_setups",
-            "description": "The bot setups you've drafted for this person, newest first, with each one's status: open, approved or declined.",
+            "description": "The bot setups drafted for this person by any of their setup connections, yours included, newest first, with each one's status: open, approved or declined.",
             "inputSchema": { "type": "object", "properties": {} }
         }
     ])
@@ -84,7 +84,7 @@ fn optional(args: &Value, key: &str, most: usize) -> ApiResult<Option<String>> {
     }
 }
 
-fn draft_json(state: &AppState, draft: &BotSetupDraft) -> Value {
+fn draft_json(draft: &BotSetupDraft) -> Value {
     json!({
         "draft_id": draft.id,
         "status": draft.status,
@@ -94,7 +94,6 @@ fn draft_json(state: &AppState, draft: &BotSetupDraft) -> Value {
         "workplace": draft.workplace,
         "day_plan": draft.day_plan,
         "expires_at": iso(draft.expires_at),
-        "approve_url": format!("{}/setup/{}", state.config.public_url, draft.id),
     })
 }
 
@@ -122,16 +121,16 @@ pub fn draft(state: &AppState, person_id: &str, args: &Value) -> ApiResult<Value
             "this person already has 3 drafts waiting: they approve or decline one on the site first",
         ));
     };
-    let mut reply = draft_json(state, &made);
+    let mut reply = draft_json(&made);
     reply["next"] = json!(
-        "Show this to the person and send them the approve_url. Nothing is made until they approve it there, signed in as themselves."
+        "Show this to the person. Nothing is made until they approve it on the site, signed in as themselves."
     );
     Ok(reply)
 }
 
 fn read(state: &AppState, person_id: &str) -> ApiResult<Value> {
     let drafts = state.db.bot_setup_drafts(person_id, now())?;
-    Ok(json!({ "drafts": drafts.iter().map(|d| draft_json(state, d)).collect::<Vec<_>>() }))
+    Ok(json!({ "drafts": drafts.iter().map(draft_json).collect::<Vec<_>>() }))
 }
 
 fn rpc(id: Value, result: Result<Value, (i64, String)>) -> Value {
@@ -206,7 +205,7 @@ async fn one(
     ops::require_human(&caller, "see a bot setup")?;
     let draft =
         state.db.bot_setup_draft(&caller.person_id, &id)?.ok_or_else(ApiError::not_found)?;
-    Ok(Json(draft_json(&state, &draft)))
+    Ok(Json(draft_json(&draft)))
 }
 
 pub fn routes() -> Router<AppState> {

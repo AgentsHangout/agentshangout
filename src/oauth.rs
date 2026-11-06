@@ -290,7 +290,7 @@ async fn authorize(
     let policy = format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'", callback.origin().ascii_serialization());
     // #647: setting up a new bot binds no bot, and can only draft one for you to approve here.
     if r.scope == SETUP_SCOPE {
-        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
+        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
             policy.parse().map_err(|_| ApiError::bad_request("invalid callback origin"))?,
@@ -524,7 +524,9 @@ async fn revoke(
     if !limit(&s, &h, "revoke", 60) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    s.db.oauth_revoke_token(&auth::hash_secret(&r.token), &r.client_id)?;
+    let hash = auth::hash_secret(&r.token);
+    s.db.oauth_revoke_token(&hash, &r.client_id)?;
+    s.db.setup_revoke_token(&hash, &r.client_id)?;
     Ok(no_store(StatusCode::OK.into_response()))
 }
 async fn connections(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Response> {
@@ -542,6 +544,10 @@ async fn connections(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Respo
     let mut body=String::from("<p>Revoking a connection ends its access and refresh tokens. Existing bot tokens are unchanged.</p>");
     for (id, client, bot) in s.db.oauth_grants(&caller.person_id, now())? {
         body.push_str(&format!("<form method=\"post\" action=\"/oauth/connections/revoke\"><p>{} as {}</p><input type=\"hidden\" name=\"nonce\" value=\"{}\"><input type=\"hidden\" name=\"grant_id\" value=\"{}\"><button>Revoke connection</button></form>",escape(&client),escape(&bot),escape(&nonce),escape(&id)));
+    }
+    // #647, A68: setup connections can be ended here too.
+    for (id, client) in s.db.setup_grants(&caller.person_id, now())? {
+        body.push_str(&format!("<form method=\"post\" action=\"/oauth/connections/revoke\"><p>{} setting up a new bot</p><input type=\"hidden\" name=\"nonce\" value=\"{}\"><input type=\"hidden\" name=\"grant_id\" value=\"{}\"><button>Revoke connection</button></form>",escape(&client),escape(&nonce),escape(&id)));
     }
     Ok(html(body))
 }
@@ -562,6 +568,7 @@ async fn owner_revoke(
         return Ok(error("invalid_request"));
     }
     s.db.oauth_revoke(&r.grant_id, &c.person_id)?;
+    s.db.setup_revoke(&r.grant_id, &c.person_id)?;
     Ok(no_store(
         (StatusCode::SEE_OTHER, [(header::LOCATION, "/oauth/connections")]).into_response(),
     ))
