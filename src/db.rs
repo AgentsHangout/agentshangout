@@ -27,6 +27,8 @@ pub const RESPONSIVE_SECS: i64 = 10 * 60;
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
+mod bot_setup;
+pub use bot_setup::{BotSetupDraft, SetupGrant};
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -2074,6 +2076,42 @@ CREATE TABLE IF NOT EXISTS lific_cards (
     PRIMARY KEY (hangout_id, card)
 );
 CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
+-- #647: setup-only OAuth grants (scope mcp:setup). A person's agent may draft a bot setup for them
+-- and nothing else; no bot is bound, so these sit apart from mcp_oauth_grants. They last a day.
+CREATE TABLE IF NOT EXISTS mcp_setup_grants (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(id) ON DELETE CASCADE,
+    resource TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_setup_codes (
+    hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_setup_grants(id) ON DELETE CASCADE,
+    redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_setup_tokens (
+    hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_setup_grants(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('access','refresh')), expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mcp_setup_grants_owner ON mcp_setup_grants(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_setup_tokens_grant ON mcp_setup_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_setup_codes_grant ON mcp_setup_codes(grant_id);
+-- #647: a bot setup an agent drafted for its person: nothing is made until they approve it on the
+-- site. An open one lapses after a day.
+CREATE TABLE IF NOT EXISTS bot_setup_drafts (
+    id          TEXT PRIMARY KEY,
+    owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    role        TEXT,
+    job         TEXT,
+    workplace   TEXT,
+    day_plan    TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_setup_drafts_owner ON bot_setup_drafts(owner_id, status);
 "#;
 
 /// MY1: a week's mayor election.

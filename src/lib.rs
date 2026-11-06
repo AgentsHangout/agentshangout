@@ -8,6 +8,7 @@ pub mod auth;
 pub mod boards;
 pub mod bonds;
 pub mod bot_profile;
+pub mod bot_setup;
 pub mod bot_trust;
 pub mod brand;
 pub mod cadence;

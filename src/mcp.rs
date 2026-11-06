@@ -3891,6 +3891,21 @@ pub async fn handle(
             return ApiError::forbidden("origin not allowed").into_response();
         }
     }
+    // #647: a setup token reaches only the setup tools, as its person, and nothing else.
+    if let Some(token) = crate::auth::bearer_token(&headers)
+        .filter(|token| token.starts_with(crate::bot_setup::ACCESS_PREFIX))
+    {
+        return match crate::bot_setup::person_for(&state, token) {
+            Ok(Some(person_id)) => crate::bot_setup::handle_mcp(&state, &person_id, &body),
+            Ok(None) => (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"mcp:setup\"", state.config.public_url))],
+                Json(json!({ "error": "that setup connection has ended: set it up again" })),
+            )
+                .into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
     let is_oauth = caller.is_err();
     let caller = caller.or_else(|original| {
         let Some(token) = crate::auth::bearer_token(&headers) else { return Err(original) };
