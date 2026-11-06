@@ -159,6 +159,46 @@ mod tests {
         assert_eq!(png(&scene).unwrap().at_table, ["w"]);
     }
 
+    /// Each name tag's box as placed: [x left, y top, width, height].
+    fn tags(scene: &Value) -> Vec<(f64, f64, f64, f64)> {
+        let out = run(scene, Some("const s=JSON.parse(__camera_scene),g=new CameraCanvas();const p=cameraPlaced(s);JSON.stringify(placeLabels(g,cameraFigures(s,p),s.frame,s.frame.width<480?14:16).map(t=>[t.x-t.t.width/2,t.y-6,t.t.width,t.t.height]))")).unwrap();
+        serde_json::from_str(&out).unwrap()
+    }
+
+    fn apart(tags: &[(f64, f64, f64, f64)]) -> bool {
+        tags.iter().enumerate().all(|(i, a)| {
+            tags[i + 1..].iter().all(|b| {
+                a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1
+            })
+        })
+    }
+
+    // CP10: bots side by side at the table, with long names, get name tags that don't cover each
+    // other, and every tag stays in the frame. So does a crowded grid in a small frame.
+    #[test]
+    fn name_tags_never_cover_each_other() {
+        let mut bots = Vec::new();
+        for name in ["Grokliver Tree", "AgentsHangout PR", "morgbot 2.0", "Town Square Hermes"] {
+            bots.push(bot_in(name, "active", false));
+        }
+        let inside = |tags: &[(f64, f64, f64, f64)], w: f64, h: f64| {
+            tags.iter().all(|t| t.0 >= 0.0 && t.0 + t.2 <= w && t.1 >= 0.0 && t.1 + t.3 <= h)
+        };
+        let at_table = tags(&room(json!([]), json!(bots), whole()));
+        assert_eq!(at_table.len(), 4, "everyone at the table gets a tag: {at_table:?}");
+        assert!(apart(&at_table), "{at_table:?}");
+        assert!(inside(&at_table, 480.0, 252.0), "{at_table:?}");
+
+        // Too many for a small frame: tags shorten or drop, never cover each other or leave it.
+        let crowd: Vec<Value> =
+            (0..12).map(|n| bot(&format!("Visiting bot number {n}"), None)).collect();
+        let small = json!({"x":0,"y":0,"width":240,"height":126});
+        let grid = tags(&room(json!([]), json!(crowd), small));
+        assert!(!grid.is_empty() && grid.len() <= 12, "{grid:?}");
+        assert!(apart(&grid), "{grid:?}");
+        assert!(inside(&grid, 240.0, 126.0), "{grid:?}");
+    }
+
     // CP9: a moved table moves its seats, and a seat outside the frame leaves the bot standing.
     #[test]
     fn table_seats_follow_the_table_and_the_frame() {

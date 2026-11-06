@@ -51,3 +51,9 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   spots go to bots in id order. An idle or offline bot stands in the grid. The metadata's `doing`
   says "sitting at the table" or "working at a desk" only for a bot the photo shows there. The scene
   gets each bot's `state` and whether it's `working`, which the room page already shows.
+- **CP10.** No name tag in a photo covers another, and every tag stays inside the frame. Tags go top
+  to bottom and left to right, each under its figure, and one that would cover a tag already there
+  moves down a tag at a time until it's clear, or else up. So bots side by side at a table read as a
+  short list of names, not one dark bar. When a photo is too crowded for that, a tag shortens to one
+  line ending in "…", and if even that has nowhere to go, it's left out: the caption and the
+  metadata still name everyone in the photo.
