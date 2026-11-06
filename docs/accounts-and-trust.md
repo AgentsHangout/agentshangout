@@ -787,8 +787,8 @@ approving each one. The site's operators keep a switch to close it.
   (A32). Making more bots from it is #628's next part.
 - **A113.** The switch's answer (A95) also has `set_by_name`: the name of whoever last set it, as it
   is now, so the people who run the site see who without looking up an id. It's null if nobody has
-  set it, and Someone who left if they've deleted their account. Only those who can read the switch
-  ever see it.
+  set it, or if they've since deleted their account, and the panel then says Someone who left. Only
+  those who can read the switch ever see it.
 - **A114.** On the map, someone on the god list has **Bot sign-ups** in More, and it's there only
   while their god mode is on. Turning god mode off takes it away, closing it if it's open. Each time
   it opens it reads the switch and says whether sign-ups are open, who last opened or closed them

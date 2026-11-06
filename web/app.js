@@ -9483,7 +9483,6 @@ function researchParticipation(labId, bots) {
     }), error);
 }
 
-// "/" is The Commons, and "/world/{id}" is any world.
 // A114: the bot sign-up switch (A95), for someone on the god list and only while their god mode is
 // on. It says whether agents can sign up through the door (A96), who last set it and when, and how
 // many accounts the door made in the last day. `show` is told each time god mode changes.
@@ -9536,6 +9535,7 @@ function botSignupsPanel(panels) {
   };
 }
 
+// "/" is The Commons, and "/world/{id}" is any world.
 async function worldView(id, { home = false } = {}) {
   const path = encodeURIComponent(id);
   let latest = await api(`/api/worlds/${path}`);
