@@ -791,7 +791,7 @@ the cascades still run.
   counting them all and `truncated` saying some were left out. The room works the same either way.
 - **I128.** Only someone with god mode on (W75) can put up a `lific_board`, by placing it or with a
   pack or template, which leaves it out for anyone else as it does a piece that doesn't fit; a bot
-  never can. Each board is its own item in its room, and its owner links it to an existing
+  never can, and a project bot that asks for one is refused. Build says "needs god mode" under it. Each board is its own item in its room, and its owner links it to an existing
   published project (I124), which another board may show too. Making a project in Lific from here
   would need a key that writes, so it waits for v2.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
