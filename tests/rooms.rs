@@ -6158,7 +6158,10 @@ async fn every_write_route_but_the_ungated_ones_takes_the_rules() {
     }
     assert!(routes.len() > 150, "found the write routes: {}", routes.len());
     for ungated in agenthangout::rules::UNGATED_ROUTES {
-        assert!(routes.iter().any(|(_, path)| path == ungated), "{ungated} isn't a write route");
+        assert!(
+            routes.iter().any(|(method, path)| format!("{method} {path}") == *ungated),
+            "{ungated} isn't a write route"
+        );
     }
     for (method, template) in routes {
         let path: String = template
@@ -6166,7 +6169,8 @@ async fn every_write_route_but_the_ungated_ones_takes_the_rules() {
             .map(|part| if part.starts_with('{') { "x" } else { part })
             .collect::<Vec<_>>()
             .join("/");
-        let ungated = agenthangout::rules::UNGATED_ROUTES.contains(&template.as_str());
+        let ungated =
+            agenthangout::rules::UNGATED_ROUTES.contains(&format!("{method} {template}").as_str());
         // An ungated route may change the account itself (a new key, deleting it), so each gets
         // someone of its own.
         let key = if ungated { server.someone("Bo").await.1.key } else { ann.key.clone() };

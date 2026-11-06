@@ -86,7 +86,8 @@ pub const UNGATED_TOOLS: &[&str] = &[
     "unclaim_research_work",
 ];
 
-/// A109: the `/api` write routes (POST, PUT, PATCH) that don't take the community rules accepted:
+/// A109: the `/api` write routes, each as its method and path, that don't take the community rules
+/// accepted:
 /// signing in, joining and leaving, accepting the rules, deleting the account, what only the caller
 /// or their own bots read (settings, notes, marks, blocks, Needs you), the bot's own signals, moving
 /// about, and saying yes or no to what was asked of the caller. Every other write route is gated by
@@ -94,94 +95,94 @@ pub const UNGATED_TOOLS: &[&str] = &[
 /// taking something down writes nothing new.
 pub const UNGATED_ROUTES: &[&str] = &[
     // Signing in, joining, the account itself, and accepting the rules.
-    "/api/people",
-    "/api/session",
-    "/api/sign-in/finish",
-    "/api/sign-in/new-account",
-    "/api/passkeys/login/start",
-    "/api/passkeys/login/finish",
-    "/api/passkeys/register/start",
-    "/api/passkeys/register/finish",
-    "/api/discord/finish",
-    "/api/accounts/agent",
-    "/api/public/join",
-    "/api/me/delete",
-    "/api/key/rotate",
-    "/api/feed/rotate",
-    "/api/rules/accept",
-    "/api/invites/{code}/join",
-    "/api/city-invites/{code}/join",
-    "/api/house-invites/{code}/join",
-    "/api/worlds/join/{code}",
-    "/api/players/claim",
+    "POST /api/people",
+    "POST /api/session",
+    "POST /api/sign-in/finish",
+    "POST /api/sign-in/new-account",
+    "POST /api/passkeys/login/start",
+    "POST /api/passkeys/login/finish",
+    "POST /api/passkeys/register/start",
+    "POST /api/passkeys/register/finish",
+    "POST /api/discord/finish",
+    "POST /api/accounts/agent",
+    "POST /api/public/join",
+    "POST /api/me/delete",
+    "POST /api/key/rotate",
+    "POST /api/feed/rotate",
+    "POST /api/rules/accept",
+    "POST /api/invites/{code}/join",
+    "POST /api/city-invites/{code}/join",
+    "POST /api/house-invites/{code}/join",
+    "POST /api/worlds/join/{code}",
+    "POST /api/players/claim",
     // What only the caller or their own bots read: settings, private notes, marks, blocks.
-    "/api/me/github-display",
-    "/api/clock",
-    "/api/sharing",
-    "/api/notify",
-    "/api/notify/test",
-    "/api/push/test",
-    "/api/owner-notes",
-    "/api/owner-notes/{id}",
-    "/api/marks/{agent_id}",
-    "/api/blocks",
-    "/api/mutes",
-    "/api/agents/{id}/bedtime",
-    "/api/agents/{id}/doorbell",
-    "/api/agents/{id}/notify",
-    "/api/agents/{id}/notify/test",
-    "/api/agents/{id}/routine",
-    "/api/agents/{id}/schedule",
-    "/api/agents/{id}/stay_limit",
-    "/api/agents/{id}/trust",
-    "/api/agents/{id}/trust/wake-check",
-    "/api/agents/{id}/workplace",
-    "/api/agents/{id}/rotate",
-    "/api/agents/{id}/delete",
-    "/api/agents/{id}/recycle",
-    "/api/agents/{id}/moods",
-    "/api/agents/{id}/keyless-mentions",
-    "/api/agents/{id}/role",
-    "/api/agents/{id}/home",
-    "/api/agents/{id}/bring-back",
-    "/api/agents/{id}/bridge",
-    "/api/doorbell",
-    "/api/god-mode",
-    "/api/god-mode/bot-signups",
+    "PUT /api/me/github-display",
+    "PUT /api/clock",
+    "PUT /api/sharing",
+    "PUT /api/notify",
+    "POST /api/notify/test",
+    "POST /api/push/test",
+    "POST /api/owner-notes",
+    "PUT /api/owner-notes/{id}",
+    "PUT /api/marks/{agent_id}",
+    "POST /api/blocks",
+    "POST /api/mutes",
+    "PUT /api/agents/{id}/bedtime",
+    "PUT /api/agents/{id}/doorbell",
+    "PUT /api/agents/{id}/notify",
+    "POST /api/agents/{id}/notify/test",
+    "PUT /api/agents/{id}/routine",
+    "PUT /api/agents/{id}/schedule",
+    "PUT /api/agents/{id}/stay_limit",
+    "PUT /api/agents/{id}/trust",
+    "POST /api/agents/{id}/trust/wake-check",
+    "PUT /api/agents/{id}/workplace",
+    "POST /api/agents/{id}/rotate",
+    "POST /api/agents/{id}/delete",
+    "POST /api/agents/{id}/recycle",
+    "PUT /api/agents/{id}/moods",
+    "PUT /api/agents/{id}/keyless-mentions",
+    "PUT /api/agents/{id}/role",
+    "PUT /api/agents/{id}/home",
+    "POST /api/agents/{id}/bring-back",
+    "POST /api/agents/{id}/bridge",
+    "POST /api/doorbell",
+    "PUT /api/god-mode",
+    "PUT /api/god-mode/bot-signups",
     // A bot asking its own owner, and the owner answering or clearing it.
-    "/api/hangouts/{id}/owner-questions",
-    "/api/owner-questions/{id}/answer",
-    "/api/owner-questions/{id}/dismiss",
-    "/api/needs-you/waiting/{agent_id}/answer",
+    "POST /api/hangouts/{id}/owner-questions",
+    "POST /api/owner-questions/{id}/answer",
+    "POST /api/owner-questions/{id}/dismiss",
+    "POST /api/needs-you/waiting/{agent_id}/answer",
     // The bot's own signs, typing, and the house bot's own queue.
-    "/api/activity",
-    "/api/thinking",
-    "/api/hangouts/{id}/typing",
-    "/api/house/queue/{id}/finish",
-    "/api/house/status",
+    "POST /api/activity",
+    "POST /api/thinking",
+    "POST /api/hangouts/{id}/typing",
+    "POST /api/house/queue/{id}/finish",
+    "POST /api/house/status",
     // Going places and leaving them.
-    "/api/items/{id}/use",
-    "/api/hangouts/{id}/away",
-    "/api/hangouts/{id}/leave",
-    "/api/houses/{id}/leave",
-    "/api/cities/{id}/leave",
-    "/api/floors/{id}/walk-in",
-    "/api/floors/{id}/walk-out",
-    "/api/trips/{id}/end",
+    "POST /api/items/{id}/use",
+    "POST /api/hangouts/{id}/away",
+    "POST /api/hangouts/{id}/leave",
+    "POST /api/houses/{id}/leave",
+    "POST /api/cities/{id}/leave",
+    "POST /api/floors/{id}/walk-in",
+    "POST /api/floors/{id}/walk-out",
+    "POST /api/trips/{id}/end",
     // Yes or no to what was asked of the caller.
-    "/api/check-ins/{id}/answer",
-    "/api/apprentices/{id}/approve",
-    "/api/apprentices/{id}/decline",
-    "/api/trips/{id}/answer",
-    "/api/place-requests/{id}/answer",
-    "/api/scene-requests/{id}/answer",
-    "/api/passes/{id}/accept",
-    "/api/plan-invites/{code}/answer",
-    "/api/friend-invites/{id}/decline",
-    "/api/trust/friendships/accept",
-    "/api/bot-setups/{id}/approve",
-    "/api/bot-setups/{id}/decline",
-    "/api/cities/{id}/gate/{person_id}/decline",
+    "POST /api/check-ins/{id}/answer",
+    "POST /api/apprentices/{id}/approve",
+    "POST /api/apprentices/{id}/decline",
+    "POST /api/trips/{id}/answer",
+    "POST /api/place-requests/{id}/answer",
+    "POST /api/scene-requests/{id}/answer",
+    "POST /api/passes/{id}/accept",
+    "POST /api/plan-invites/{code}/answer",
+    "POST /api/friend-invites/{id}/decline",
+    "POST /api/trust/friendships/accept",
+    "POST /api/bot-setups/{id}/approve",
+    "POST /api/bot-setups/{id}/decline",
+    "POST /api/cities/{id}/gate/{person_id}/decline",
 ];
 
 /// A109: refuses a POST, PUT or PATCH to an `/api` route not on `UNGATED_ROUTES` while the caller
@@ -194,11 +195,16 @@ pub async fn gate_writes(
 ) -> axum::response::Response {
     use axum::{http::Method, response::IntoResponse};
     let writes = matches!(*request.method(), Method::POST | Method::PUT | Method::PATCH);
+    let method = request.method().as_str();
     let path = request.uri().path();
     let gated = state.config.require_rules
         && writes
         && path.starts_with("/api/")
-        && !UNGATED_ROUTES.iter().any(|route| route_matches(route, path));
+        && !UNGATED_ROUTES.iter().any(|route| {
+            route.split_once(' ').is_some_and(|(want, template)| {
+                want == method && route_matches(template, path)
+            })
+        });
     if gated {
         if let Ok(caller) = crate::auth::identify(request.headers(), &state) {
             if let Err(error) = require(&state, &caller) {
@@ -253,10 +259,10 @@ pub fn since() -> i64 {
 /// A112: when the current version started here: the page's `rules-since`, or the first time this
 /// server ran with that version if that was later, so the grace window runs from the deploy even
 /// when the deploy comes long after the date on the page. If that first start was never noted
-/// (the write failed at startup, which is logged), this falls back to now on every call, so the
-/// grace stays open: it fails open, never shut.
+/// (the write failed at startup, which is logged), it's the page's date alone: the grace fails
+/// closed, never left open for good.
 pub fn started(state: &AppState) -> ApiResult<i64> {
-    let first_seen = state.db.rules_version_first_seen(version())?.unwrap_or_else(crate::now);
+    let first_seen = state.db.rules_version_first_seen(version())?.unwrap_or_else(since);
     Ok(since().max(first_seen))
 }
 
