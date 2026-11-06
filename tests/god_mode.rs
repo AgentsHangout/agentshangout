@@ -660,6 +660,48 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     server.delete(&cy.key, &off).await.refused(StatusCode::NOT_FOUND);
 }
 
+/// W113: the place removal log, as someone with god mode on reads it.
+async fn removals(server: &Server, god: &Who) -> Value {
+    server.get(&god.key, "/api/god-mode/place-removals").await.ok()["removals"].clone()
+}
+
+// W113 (morgkorg, after Soleceo's house went missing): every place that comes down is logged with
+// why, and only someone with god mode on reads it. A deleted account's rows keep no owner.
+#[tokio::test]
+async fn every_place_that_comes_down_is_logged_with_why() {
+    let (server, justin, _) = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+
+    // Ann takes her own house down: bulldoze, and it's hers.
+    let house = server.build(&ann, "house").await;
+    server.clear(&ann, house).await.ok();
+    // Justin, with god mode on, takes down Bo's: god_bulldoze.
+    let bos = server.build(&bo, "house").await;
+    server.switch(&justin, true).await;
+    server.clear(&justin, bos).await.ok();
+    let log = removals(&server, &justin).await;
+    assert_eq!(log[0]["reason"], "god_bulldoze", "{log}");
+    assert_eq!(log[0]["owner"], "Bo");
+    assert_eq!((log[0]["x"].as_i64(), log[0]["y"].as_i64()), (Some(bos.0), Some(bos.1)));
+    assert_eq!(log[1]["reason"], "bulldoze");
+    assert_eq!(log[1]["owner"], "Ann");
+    assert_eq!(log[1]["kind"], "house");
+
+    // An account deleted: its place comes down, logged with no owner, and its older rows lose theirs.
+    server.build(&bo, "house").await;
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    let log = removals(&server, &justin).await;
+    assert_eq!(log[0]["reason"], "account_deleted", "{log}");
+    assert!(log[0]["owner"].is_null());
+    assert!(log.as_array().unwrap().iter().all(|row| row["owner"] != "Bo"), "{log}");
+
+    // God mode off, or anyone else: no log.
+    server.switch(&justin, false).await;
+    server.get(&justin.key, "/api/god-mode/place-removals").await.refused(StatusCode::FORBIDDEN);
+    server.get(&ann.key, "/api/god-mode/place-removals").await.refused(StatusCode::NOT_FOUND);
+}
+
 // MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.
 #[tokio::test]
 async fn an_empty_week_names_nobody_and_a_tie_is_drawn() {

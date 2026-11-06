@@ -20,6 +20,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/god-mode", put(set))
         .route("/api/god-mode/bot-signups", get(bot_signups).put(set_bot_signups))
+        .route("/api/god-mode/place-removals", get(place_removals))
 }
 
 /// A95: whether agents may sign up through the door (#628) and make bots there. Open until someone
@@ -49,6 +50,13 @@ fn signups_json(state: &AppState) -> ApiResult<Value> {
     said["today"] = json!(state.db.agent_accounts_today(now())?);
     said["per_day"] = json!(crate::agent_door::PER_DAY);
     Ok(said)
+}
+
+/// W113: the last 100 places that came down on The Commons, and why. God mode on only.
+async fn place_removals(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    may_set_signups(&state, &caller)?;
+    let removals = state.db.place_removals(crate::worlds::COMMONS_ID, 100)?;
+    Ok(Json(json!({ "removals": removals })))
 }
 
 async fn bot_signups(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {

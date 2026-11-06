@@ -2215,6 +2215,23 @@ CREATE TABLE IF NOT EXISTS lific_card_adds (
 );
 CREATE INDEX IF NOT EXISTS lific_card_adds_by_person ON lific_card_adds (person_id, at);
 CREATE INDEX IF NOT EXISTS lific_card_adds_by_room ON lific_card_adds (hangout_id, pending, at);
+-- W113: every place that comes down on a map, and why, so "where did my house go?" has an answer.
+-- Kept apart from the player and the person, with no foreign key to either, so it outlasts them;
+-- an account deleted (A43) leaves its rows with no person.
+CREATE TABLE IF NOT EXISTS world_place_removals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    world_id    TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    x           INTEGER NOT NULL,
+    y           INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    player_id   INTEGER,
+    person_id   TEXT,
+    built_at    INTEGER NOT NULL,
+    removed_at  INTEGER NOT NULL,
+    reason      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS world_place_removals_by_time ON world_place_removals (world_id, id DESC);
+CREATE INDEX IF NOT EXISTS world_place_removals_by_person ON world_place_removals (person_id);
 "#;
 
 /// MY1: a week's mayor election.
@@ -13381,6 +13398,51 @@ fn q_tiles(conn: &Connection, world_id: &str, region: Option<[i64; 4]>) -> rusql
     Ok(tiles)
 }
 
+/// W113: logs the place standing on a tile, or the big place (W91) a tile belongs to, as coming down
+/// for `reason`, before it's taken off.
+fn q_log_place_removal(
+    conn: &Connection,
+    world_id: &str,
+    (x, y): (u16, u16),
+    now: i64,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let mut log = conn.prepare_cached(
+        "INSERT INTO world_place_removals
+            (world_id, x, y, kind, player_id, person_id, built_at, removed_at, reason)
+         SELECT p.world_id, p.x, p.y, p.kind, p.player_id, pl.person_id, p.built_at, ?4, ?5
+         FROM world_every_place p LEFT JOIN players pl ON pl.id = p.player_id
+         WHERE p.world_id = ?1 AND p.x = ?2 AND p.y = ?3 AND (?6 = 0 OR p.kind IN ('square', 'green'))",
+    )?;
+    log.execute(params![world_id, x, y, now, reason, 0])?;
+    for (dx, dy) in [(1u16, 0u16), (0, 1), (1, 1)] {
+        let (Some(ax), Some(ay)) = (x.checked_sub(dx), y.checked_sub(dy)) else { continue };
+        log.execute(params![world_id, ax, ay, now, reason, 1])?;
+    }
+    Ok(())
+}
+
+/// W113: logs every place a player has on a map as coming down for `reason`, before they go.
+fn q_log_player_removals(
+    conn: &Connection,
+    where_players: &str,
+    args: &[&dyn rusqlite::ToSql],
+    keep_person: bool,
+    now: i64,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let person = if keep_person { "pl.person_id" } else { "NULL" };
+    let sql = format!(
+        "INSERT INTO world_place_removals
+            (world_id, x, y, kind, player_id, person_id, built_at, removed_at, reason)
+         SELECT p.world_id, p.x, p.y, p.kind, p.player_id, {person}, p.built_at, {now}, '{reason}'
+         FROM world_every_place p JOIN players pl ON pl.id = p.player_id
+         WHERE {where_players}"
+    );
+    conn.execute(&sql, args)?;
+    Ok(())
+}
+
 fn q_write_changes(
     conn: &Connection,
     world_id: &str,
@@ -13490,6 +13552,7 @@ fn q_write_changes(
             }
             Change::Set((x, y), tile) => {
                 if tile.kind == Kind::Cleared {
+                    q_log_place_removal(conn, world_id, (*x, *y), now, reason)?;
                     remove_building.execute(params![world_id, x, y])?;
                     remove_square.execute(params![world_id, x, y])?;
                     remove_more.execute(params![world_id, x, y])?;
@@ -13506,6 +13569,7 @@ fn q_write_changes(
                 ])?;
             }
             Change::Remove((x, y)) => {
+                q_log_place_removal(conn, world_id, (*x, *y), now, reason)?;
                 remove.execute(params![world_id, x, y])?;
                 remove_building.execute(params![world_id, x, y])?;
                 remove_square.execute(params![world_id, x, y])?;
@@ -16126,6 +16190,15 @@ impl Db {
                AND EXISTS (SELECT 1 FROM players p WHERE p.id = t.player_id)",
             params![world_id, player_id, crate::now()],
         )?;
+        // W113
+        q_log_player_removals(
+            &tx,
+            "p.world_id = ?1 AND p.player_id = ?2",
+            params![world_id, player_id],
+            true,
+            crate::now(),
+            "player_removed",
+        )?;
         let down = tx.execute(
             "DELETE FROM world_tiles WHERE world_id = ? AND player_id = ?",
             params![world_id, player_id],
@@ -16186,8 +16259,35 @@ impl Db {
         )
     }
 
+    /// W113: the newest places that came down on a map, newest first, with whose they were.
+    pub fn place_removals(
+        &self,
+        world_id: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<serde_json::Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT r.x, r.y, r.kind, pe.name, r.built_at, r.removed_at, r.reason
+             FROM world_place_removals r LEFT JOIN people pe ON pe.id = r.person_id
+             WHERE r.world_id = ?1 ORDER BY r.id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![world_id, limit], |row| {
+            Ok(serde_json::json!({
+                "x": row.get::<_, i64>(0)?,
+                "y": row.get::<_, i64>(1)?,
+                "kind": row.get::<_, String>(2)?,
+                "owner": row.get::<_, Option<String>>(3)?,
+                "built_at": crate::ops::iso(row.get(4)?),
+                "removed_at": crate::ops::iso(row.get(5)?),
+                "reason": row.get::<_, String>(6)?,
+            }))
+        })?;
+        rows.collect()
+    }
+
     /// Deletes guests nobody has claimed that haven't been seen since `before`, so a swarm of them
-    /// can't fill the table for good. What they built stays, and reads as left behind.
+    /// can't fill the table for good. Their roads stay, with a builder nothing leads back from; a
+    /// place of theirs goes with them (its player_id cascades), and W113 logs it.
     pub fn prune_guests(&self, before: i64) -> rusqlite::Result<usize> {
         let conn = self.conn();
         // KA5: a keyless agent that wrote something keeps its row, so its name and marks stay with
@@ -16198,6 +16298,17 @@ impl Db {
                AND (id IN (SELECT player_id FROM keyless_messages)
                     OR id IN (SELECT player_id FROM keyless_cards))",
             [before],
+        )?;
+        q_log_player_removals(
+            &conn,
+            "pl.token_hash IS NOT NULL AND pl.person_id IS NULL AND pl.agent_id IS NULL
+               AND pl.seen_at < ?1
+               AND pl.id NOT IN (SELECT player_id FROM keyless_messages)
+               AND pl.id NOT IN (SELECT player_id FROM keyless_cards)",
+            params![before],
+            false,
+            crate::now(),
+            "guest_pruned",
         )?;
         let pruned = conn.execute(
             "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
@@ -16300,7 +16411,20 @@ impl Db {
             }
         }
 
-        // A43: places go with the player, and a road holds a number nothing leads back from.
+        // A43: places go with the player, and a road holds a number nothing leads back from. W113: logged
+        // as coming down, with no person, and the log forgets this person everywhere else too.
+        q_log_player_removals(
+            &tx,
+            "pl.person_id = ?1",
+            params![person_id],
+            false,
+            crate::now(),
+            "account_deleted",
+        )?;
+        tx.execute(
+            "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
+            [person_id],
+        )?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.
