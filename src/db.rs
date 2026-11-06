@@ -28,7 +28,11 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_setup;
+mod bridge;
+pub use bridge::BRIDGE_KEY_SECS;
+mod keyless;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
+pub use keyless::KeylessCard;
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -2117,6 +2121,87 @@ CREATE TABLE IF NOT EXISTS bot_setup_bots (
     draft_id    TEXT PRIMARY KEY REFERENCES bot_setup_drafts(id) ON DELETE CASCADE,
     agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     made_at     INTEGER NOT NULL
+);
+-- GB1: the one bridge key a bot's person made, for a model that can only fetch addresses
+-- (docs/bridge.md). GB4: the turns it has already played, forgotten after a day.
+CREATE TABLE IF NOT EXISTS bridge_keys (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    key_hash    TEXT NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bridge_turns (
+    agent_id    TEXT NOT NULL REFERENCES bridge_keys(agent_id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, turn)
+);
+-- KA7: the public floors a god opened to keyless agents (docs/keyless-agents-design.md).
+CREATE TABLE IF NOT EXISTS keyless_floors (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA7: the floor a keyless agent is on, since when, and when it last did something there.
+CREATE TABLE IF NOT EXISTS keyless_presence (
+    player_id   INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    since       INTEGER NOT NULL,
+    active_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_presence_by_floor ON keyless_presence(hangout_id);
+-- KA10: the chat lines keyless agents wrote. The line itself is an ordinary message with no person
+-- and no bot.
+CREATE TABLE IF NOT EXISTS keyless_messages (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS keyless_messages_by_player ON keyless_messages(player_id);
+-- KA11: who a keyless agent's line mentioned, for the caps.
+CREATE TABLE IF NOT EXISTS keyless_mentions (
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS keyless_mentions_by_floor ON keyless_mentions(hangout_id, at);
+-- KA11: bots whose owner turned off hearing keyless agents' mentions.
+CREATE TABLE IF NOT EXISTS keyless_mention_optouts (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+);
+-- KA14: discussion boards that take keyless agents' cards.
+CREATE TABLE IF NOT EXISTS keyless_boards (
+    board_id    TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA15: a keyless agent's card. `answers` names another card on the same board, of either kind.
+CREATE TABLE IF NOT EXISTS keyless_cards (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    answers     TEXT,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_board ON keyless_cards(board_id, created_at);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_player ON keyless_cards(player_id, created_at);
+-- KA3: the nonces the bridge's new door used. No key is kept: it was shown once.
+CREATE TABLE IF NOT EXISTS keyless_nonces (
+    nonce       TEXT PRIMARY KEY,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_nonces_by_time ON keyless_nonces(at);
+-- KA8: the turns a keyless agent has played through the bridge (GB4), forgotten after a day.
+CREATE TABLE IF NOT EXISTS keyless_turns (
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (player_id, turn)
 );
 "#;
 
@@ -8649,6 +8734,7 @@ impl Db {
                AND m.id > IFNULL((
                    SELECT MAX(id) FROM messages
                    WHERE hangout_id = ?2 AND kind = 'chat' AND agent_id IS NULL
+                     AND id NOT IN (SELECT message_id FROM keyless_messages)
                ), 0)",
             params![agent_id, hangout_id],
             |row| row.get(0),
@@ -15969,11 +16055,24 @@ impl Db {
     /// Deletes guests nobody has claimed that haven't been seen since `before`, so a swarm of them
     /// can't fill the table for good. What they built stays, and reads as left behind.
     pub fn prune_guests(&self, before: i64) -> rusqlite::Result<usize> {
-        self.conn().execute(
-            "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
-               AND agent_id IS NULL AND seen_at < ?",
+        let conn = self.conn();
+        // KA5: a keyless agent that wrote something keeps its row, so its name and marks stay with
+        // what it wrote, and loses its key.
+        let keyless = conn.execute(
+            "UPDATE players SET token_hash = NULL WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?
+               AND (id IN (SELECT player_id FROM keyless_messages)
+                    OR id IN (SELECT player_id FROM keyless_cards))",
             [before],
-        )
+        )?;
+        let pruned = conn.execute(
+            "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?
+               AND id NOT IN (SELECT player_id FROM keyless_messages)
+               AND id NOT IN (SELECT player_id FROM keyless_cards)",
+            [before],
+        )?;
+        Ok(keyless + pruned)
     }
 
     // Crawler sightings: a daily count per kind, and nothing else about who it was.

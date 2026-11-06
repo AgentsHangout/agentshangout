@@ -1689,6 +1689,92 @@ pub fn join(
     Ok(Joined { player, token, world, tip })
 }
 
+/// KA1: the keyless agent a key belongs to: an unclaimed guest that may be used right now (W10).
+/// Anything else, a bot's player or a claimed guest included, is none.
+pub fn keyless_agent(state: &AppState, key: &str, now: i64) -> ApiResult<Option<PlayerRow>> {
+    let Some(player) = state.db.player_by_token(&auth::hash_secret(key))? else { return Ok(None) };
+    if player.kind() != PlayerKind::Guest {
+        return Ok(None);
+    }
+    match usable(state, player, now) {
+        Ok(player) => Ok(Some(player)),
+        Err(error) if error.status == StatusCode::UNAUTHORIZED => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// KA2, KA3: a new keyless agent from the bridge's new door, standing at the middle of The Commons.
+pub fn new_keyless_agent(state: &AppState, token_hash: &str, now: i64) -> ApiResult<PlayerRow> {
+    let world = require_world(state, COMMONS_ID)?;
+    refuse_frozen(&world)?;
+    let player = state.db.create_anonymous_guest(token_hash, now)?;
+    let centre = state.worlds.land_for(world.seed, world.size).land.centre();
+    state.db.in_transaction(|tx| -> ApiResult<()> {
+        Ok(tx.enter_world(&world.id, player.id, centre, now)?)
+    })?;
+    state.worlds.mark_stale(&world.id);
+    state.worlds.cards_stale.store(true, Ordering::Release);
+    Ok(player)
+}
+
+/// KA6: where a keyless agent stands on The Commons, and the moves it has left today.
+pub fn keyless_standing(
+    state: &AppState,
+    player: &PlayerRow,
+    now: i64,
+) -> ApiResult<(Option<world::Pos>, u32)> {
+    let at = state.db.world_player(COMMONS_ID, player.id)?.map(|(pos, _)| pos);
+    Ok((at, moves_left(player, now)))
+}
+
+/// GB3: a bot's own player in The Commons, for the bridge, with where it stands. The first time, it
+/// joins as the bot with a token nobody is given, so a player_token the bot already has keeps
+/// working. With `enter` false a bot that never joined has none.
+pub fn bridge_player(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    enter: bool,
+    now: i64,
+) -> ApiResult<Option<(PlayerRow, Option<world::Pos>)>> {
+    let existing = match state.db.player_of_agent(agent_id)? {
+        Some(id) => state.db.player(id)?,
+        None => None,
+    };
+    let player = match existing {
+        Some(player) => usable(state, player, now)?,
+        None if !enter => return Ok(None),
+        None => {
+            check_bot_may_play(state, agent_id)?;
+            let hash = auth::hash_secret(&auth::new_guest_token());
+            match state.db.join_as_bot(agent_id, owner_id, &hash, COMMONS_ID, now)? {
+                BotJoined::Done(player) => player,
+                BotJoined::Removed => {
+                    return Err(ApiError::forbidden("this bot was removed from the public worlds"))
+                }
+                BotJoined::Barred => {
+                    return Err(ApiError::forbidden("you were removed from this world"))
+                }
+            }
+        }
+    };
+    let world = require_world(state, COMMONS_ID)?;
+    let mut at = state.db.world_player(&world.id, player.id)?.map(|(pos, _)| pos);
+    if at.is_none() && enter {
+        refuse_frozen(&world)?;
+        let centre = state.worlds.land_for(world.seed, world.size).land.centre();
+        state.db.in_transaction(|tx| -> ApiResult<()> {
+            if tx.member_state(&world.id, player.id)? == Some(true) {
+                return Err(ApiError::forbidden("you were removed from this world"));
+            }
+            Ok(tx.enter_world(&world.id, player.id, centre, now)?)
+        })?;
+        state.worlds.mark_stale(&world.id);
+        at = Some(centre);
+    }
+    Ok(Some((player, at)))
+}
+
 /// W27: a world's link opened one that was still open. Every world with a link is frozen now, so all
 /// it can say is that, to someone who holds the link.
 pub fn join_by_code(

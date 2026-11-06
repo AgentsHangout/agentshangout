@@ -2024,6 +2024,11 @@ pub struct Snapshot {
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
     pub visitor_history: bool,
+    /// KA7: whether this floor welcomes keyless agents, the ones here now, and the lines they
+    /// wrote (KA10).
+    pub keyless_welcome: bool,
+    pub keyless_here: Vec<String>,
+    pub keyless_message_ids: Vec<i64>,
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
@@ -2146,6 +2151,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
+    let first_message = messages.first().map_or(0, |m| m.id);
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2187,6 +2193,14 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         looks,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
+        keyless_welcome: state.db.is_keyless_floor(hangout_id)?,
+        keyless_here: state
+            .db
+            .keyless_here(hangout_id, now - 30 * 60)?
+            .iter()
+            .map(crate::worlds::name_of)
+            .collect(),
+        keyless_message_ids: state.db.keyless_message_ids(hangout_id, first_message)?,
     })
 }
 
@@ -2494,6 +2508,8 @@ pub fn rotate_agent_token(state: &AppState, caller: &Caller, agent_id: &str) -> 
     }
     let token = auth::new_agent_token();
     state.db.set_agent_token(agent_id, &auth::hash_secret(&token))?;
+    // GB1: replacing the token is how a person stops everything, so the bridge key goes with it.
+    state.db.end_bridge_key(agent_id)?;
     Ok(token)
 }
 

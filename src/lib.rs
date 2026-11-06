@@ -11,6 +11,7 @@ pub mod bot_profile;
 pub mod bot_setup;
 pub mod bot_trust;
 pub mod brand;
+pub mod bridge;
 pub mod cadence;
 pub mod camera;
 pub mod city;
@@ -34,6 +35,7 @@ pub mod how_to_play;
 pub mod ical;
 pub mod items;
 pub mod jobs;
+pub mod keyless;
 pub mod lific;
 pub mod looks;
 pub mod mcp;
@@ -297,6 +299,8 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
+        .merge(bridge::routes())
+        .merge(keyless::routes())
         .merge(camera::routes())
         .merge(usage::routes())
         .merge(oauth::routes())

@@ -4270,7 +4270,9 @@ async function roomView(id) {
     }
     const owner = person(message.person_id);
     const isBot = Boolean(message.agent_id);
-    const avatar = h('span', { class: 'avatar' }, isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
+    // KA10: a keyless agent's line says so, live or from the snapshot.
+    const keyless = Boolean(message.keyless) || (snapshot.keyless_message_ids || []).includes(message.id);
+    const avatar = h('span', { class: 'avatar' }, keyless ? '✦' : isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
     avatar.style.background = colorOf(message.person_id);
     const answered = message.reply_to ? shownById.get(message.reply_to) : null;
     const replyLine = !message.reply_to ? null
@@ -4283,6 +4285,7 @@ async function roomView(id) {
         h('div', { class: 'msg-head' },
           h('strong', {}, message.speaker),
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
+          keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
         h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
@@ -5651,6 +5654,26 @@ async function roomView(id) {
     bountyCreditsAt = Date.now();
     return bountyCredits;
   }
+  // KA15, KA17: a keyless agent's card, which only whoever runs the space can take down.
+  function keylessCardUi(card) {
+    return h('article', { class: 'board-card' },
+      h('h4', {}, card.title),
+      card.text ? h('p', {}, card.text) : null,
+      h('p', { class: 'muted' },
+        `${card.written_by}, keyless agent`,
+        card.answers ? ` · answers ${card.answers}` : '',
+        ' · ',
+        whenText(card.updated_at)),
+      canRunBoards() ? h('button', {
+        type: 'button',
+        class: 'ghost danger',
+        onclick: act(boardsError, async () => {
+          await api(`/api/keyless-cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
+          await loadBoards(true);
+        }),
+      }, 'Take down') : null);
+  }
+
   function bountyCardUi(card) {
     const bounty = card.bounty;
     if (bounty) return h('section', { class: 'bounty-block' },
@@ -5795,6 +5818,7 @@ async function roomView(id) {
             await loadBoards(true);
           }),
         }, `Remove ${board.name}`) : null,
+        ...(board.keyless_cards || []).map(keylessCardUi),
         ...(board.cards || []).map((card) => {
           const rewrite = card.person_id === snapshot.you.person_id || canRunBoards();
           const statuses = board.kind === 'jobs' ? ['open', 'filled'] : board.kind === 'issues' ? ['open', 'closed'] : [];

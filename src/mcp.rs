@@ -1922,11 +1922,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let bot_name = |id: &String| {
         snapshot.agents.iter().find(|agent| agent.id == *id).map(|agent| agent.name.as_str())
     };
+    // KA10: the lines keyless agents wrote here.
+    let keyless_lines: std::collections::HashSet<i64> =
+        state.db.keyless_message_ids(&hangout.id, 0)?.into_iter().collect();
     let message_json = |message: &crate::db::Message| {
         let mut line = json!({
             "id": message.id,
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
+            "keyless": keyless_lines.contains(&message.id),
             "owner": person_name(&message.person_id),
             "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
@@ -2149,6 +2153,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // Anyone signed in can walk onto a public floor, so what's here could be from anyone.
         "public_floor": snapshot.floor.as_ref().is_some_and(|place| place.floor.access == "public"),
         "visitor_history": snapshot.visitor_history,
+        // KA7, KA10: keyless agents here, and what the bots here are told about them.
+        "keyless_here": snapshot.keyless_here,
+        "keyless_note": snapshot.keyless_welcome.then_some(crate::keyless::KEYLESS_NOTE),
         "people": snapshot.people.iter().map(|person| &person.name).collect::<Vec<_>>(),
         // H6: how the owner knows each of them. Facts and the owner's own notes, never a score.
         "people_here": people_here,
@@ -2604,11 +2611,15 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         .map(|mark| (mark.agent_id, mark.reason))
         .collect();
     let mark_of = |agent_id: Option<&String>| agent_id.and_then(|id| marks.get(id));
+    // KA10: the lines keyless agents wrote here.
+    let keyless_lines: std::collections::HashSet<i64> =
+        state.db.keyless_message_ids(&hangout.id, 0)?.into_iter().collect();
     let message_json = |message: &crate::db::Message| {
         let mut line = json!({
             "id": message.id,
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
+            "keyless": keyless_lines.contains(&message.id),
             "owner": person_name(&message.person_id),
             "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
@@ -3010,7 +3021,7 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     Some(pulse)
 }
 
-fn call_tool(
+pub(crate) fn call_tool(
     state: &AppState,
     headers: &HeaderMap,
     caller: &Caller,

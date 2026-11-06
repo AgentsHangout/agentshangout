@@ -537,7 +537,7 @@ fn ld_json(base: &str, page: &Page, url: &str) -> String {
     )
 }
 
-fn esc(text: &str) -> String {
+pub(crate) fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
