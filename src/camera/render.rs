@@ -324,6 +324,25 @@ mod tests {
             png(&room(items, json!([bot("a", Some("i"))]), whole())).unwrap();
         }
     }
+    // CP12
+    #[test]
+    fn the_board_shows_the_room_name_cut_to_one_line_and_nothing_else() {
+        let svg = |title: Value| {
+            let mut scene = room(json!([]), json!([]), whole());
+            scene["title"] = title;
+            scene["whiteboard"] = json!("secret plan");
+            let out: Value = serde_json::from_str(&run(&scene, None).unwrap()).unwrap();
+            out["svg"].as_str().unwrap().to_string()
+        };
+        let board = |svg: &str| svg.matches("font-size=\"11\"").count();
+        let long = svg(json!("Commons <Fair> & a very long name"));
+        assert!(long.contains(">Commons &lt;Fair&gt; &amp; a very l…</text>"), "{long}");
+        assert_eq!(board(&long), 1);
+        assert!(!long.contains("secret"));
+        assert!(svg(json!("Lab")).contains(">Lab</text>"));
+        assert_eq!(board(&svg(json!("  "))), 0);
+        assert_eq!(board(&svg(Value::Null)), 0);
+    }
     #[test]
     fn room_art_renders_as_a_bounded_png() {
         let image = png(&serde_json::json!({
