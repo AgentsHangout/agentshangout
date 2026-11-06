@@ -146,7 +146,10 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         .collect();
     // JB6: what an owner's bots found or did on the jobs they gave them.
     let job_reports = crate::jobs::reports_for(&state, &caller.person_id, now)?;
+    // #647 B: bots an agent drafted for this person, waiting for their approval.
+    let bot_setups = crate::bot_setup::for_needs_you(&state, &caller.person_id)?;
     let count = questions.len()
+        + bot_setups.len()
         + job_reports.len()
         + check_ins.len()
         + waiting.len()
@@ -161,6 +164,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         + mentions.len();
     Ok(Json(json!({
         "job_reports": job_reports,
+        "bot_setups": bot_setups,
         "questions": questions,
         "check_ins": check_ins,
         "waiting": waiting,

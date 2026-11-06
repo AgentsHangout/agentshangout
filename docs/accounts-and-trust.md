@@ -814,3 +814,12 @@ approving each one. The site's operators keep a switch to close it.
   A setup connection is listed under MCP connections, where the person can revoke it, and a client
   can revoke it at `/oauth/revoke` (A68). A grant holds at most 4,096 token rows (A69), and deleting
   the account deletes its setup grants, tokens and drafts.
+- **A98.** The person approves a drafted bot at `/setup/{id}`, the draft's `approve_url`, which
+  Needs you links to while it's open. They can change any field first. `POST
+  /api/bot-setups/{id}/approve` takes the fields they left there (any left out stay as drafted) and,
+  once only, makes the bot in their own house with the draft's name, gives it the role (JB1) and the
+  first job for a day (JB3), and marks the draft approved with the bot's id. The workplace and day
+  plan stay on the draft as words: the person picks the room and hours in the bot's Schedule (L47).
+  `POST /api/bot-setups/{id}/decline` says no. Both are for the person only: a setup token gets 401,
+  a bot 403, and anyone else 404, and no MCP tool approves. The reply has no bot token: the agent
+  connects to the new bot with OAuth, or the person gets a token from My bots.

@@ -1,4 +1,4 @@
-//! #647 A: a person connects their agent with OAuth scope `mcp:setup` ("set up a new bot"), and the
+//! #647 A and B: a person connects their agent with OAuth scope `mcp:setup` ("set up a new bot"), and the
 //! agent interviews them and drafts the bot: its name, role, first job, workplace and day plan. The
 //! draft writes nothing else. The person approves it on the site, signed in as themselves (slice B),
 //! and only then is a bot made. A setup token reaches two tools and nothing more, so an agent can
@@ -9,14 +9,14 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
 
 use crate::{
     auth::{self, Caller},
-    db::BotSetupDraft,
+    db::{BotSetupDraft, SetupFields},
     error::{ApiError, ApiResult},
     now,
     ops::{self, iso, MAX_NAME_CHARS},
@@ -48,7 +48,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "draft_bot_setup",
-            "description": "Draft a new bot for the person you're helping, from what they told you: its name, role (standing instructions, up to 600 characters), first job (up to 500), workplace (one line) and day plan (up to 500, in words). Nothing is made yet: the reply has a draft id, and the person approves it on the site, signed in as themselves. Drafts lapse after a day, and a person has at most 3 open. You can't approve it.",
+            "description": "Draft a new bot for the person you're helping, from what they told you: its name, role (standing instructions, up to 600 characters), first job (up to 500), workplace (one line) and day plan (up to 500, in words). Nothing is made yet: the reply has a draft id and approve_url, which the person opens to approve it on the site, signed in as themselves. Drafts lapse after a day, and a person has at most 3 open. You can't approve it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -84,7 +84,7 @@ fn optional(args: &Value, key: &str, most: usize) -> ApiResult<Option<String>> {
     }
 }
 
-fn draft_json(draft: &BotSetupDraft) -> Value {
+fn draft_json(state: &AppState, draft: &BotSetupDraft) -> Value {
     json!({
         "draft_id": draft.id,
         "status": draft.status,
@@ -94,16 +94,45 @@ fn draft_json(draft: &BotSetupDraft) -> Value {
         "workplace": draft.workplace,
         "day_plan": draft.day_plan,
         "expires_at": iso(draft.expires_at),
+        "approve_url": format!("{}/setup/{}", state.config.public_url, draft.id),
+        "bot_id": draft.agent_id,
     })
+}
+
+/// A draft's fields, checked against the limits a bot's own settings have.
+struct Fields {
+    name: String,
+    role: Option<String>,
+    job: Option<String>,
+    workplace: Option<String>,
+    day_plan: Option<String>,
+}
+
+impl Fields {
+    fn from(args: &Value) -> ApiResult<Fields> {
+        Ok(Fields {
+            name: ops::clean(args["name"].as_str().unwrap_or_default(), "name", MAX_NAME_CHARS)?,
+            role: optional(args, "role", ROLE_CHARS)?,
+            job: optional(args, "job", JOB_CHARS)?,
+            workplace: optional(args, "workplace", WORKPLACE_CHARS)?,
+            day_plan: optional(args, "day_plan", DAY_PLAN_CHARS)?,
+        })
+    }
+
+    fn as_setup(&self) -> SetupFields<'_> {
+        SetupFields {
+            name: &self.name,
+            role: self.role.as_deref(),
+            job: self.job.as_deref(),
+            workplace: self.workplace.as_deref(),
+            day_plan: self.day_plan.as_deref(),
+        }
+    }
 }
 
 /// #647 A: stores a draft for the person, and nothing else.
 pub fn draft(state: &AppState, person_id: &str, args: &Value) -> ApiResult<Value> {
-    let name = ops::clean(args["name"].as_str().unwrap_or_default(), "name", MAX_NAME_CHARS)?;
-    let role = optional(args, "role", ROLE_CHARS)?;
-    let job = optional(args, "job", JOB_CHARS)?;
-    let workplace = optional(args, "workplace", WORKPLACE_CHARS)?;
-    let day_plan = optional(args, "day_plan", DAY_PLAN_CHARS)?;
+    let Fields { name, role, job, workplace, day_plan } = Fields::from(args)?;
     let made = state.db.add_bot_setup_draft(
         &auth::new_id(),
         person_id,
@@ -121,16 +150,16 @@ pub fn draft(state: &AppState, person_id: &str, args: &Value) -> ApiResult<Value
             "this person already has 3 drafts waiting: they approve or decline one on the site first",
         ));
     };
-    let mut reply = draft_json(&made);
+    let mut reply = draft_json(state, &made);
     reply["next"] = json!(
-        "Show this to the person. Nothing is made until they approve it on the site, signed in as themselves."
+        "Show this to the person and send them the approve_url. Nothing is made until they approve it there, signed in as themselves."
     );
     Ok(reply)
 }
 
 fn read(state: &AppState, person_id: &str) -> ApiResult<Value> {
     let drafts = state.db.bot_setup_drafts(person_id, now())?;
-    Ok(json!({ "drafts": drafts.iter().map(draft_json).collect::<Vec<_>>() }))
+    Ok(json!({ "drafts": drafts.iter().map(|d| draft_json(state, d)).collect::<Vec<_>>() }))
 }
 
 fn rpc(id: Value, result: Result<Value, (i64, String)>) -> Value {
@@ -190,7 +219,101 @@ pub fn handle_mcp(state: &AppState, person_id: &str, body: &Bytes) -> Response {
     Json(rpc(id, result)).into_response()
 }
 
-// Routes, for the person's own approval page (slice B).
+// Routes, for the person's own approval page (slice B). A setup token never reaches these: REST
+// refuses it, so only the person, signed in as themselves, can approve.
+
+/// #647 B: the person approves a draft, with any edits they made on the page, and the bot is made
+/// in their own house with the draft's role and first job. The bot's token isn't shown: the agent
+/// connects to the new bot with OAuth (slice C), or the person gets a token from My bots.
+fn approve_draft(state: &AppState, caller: &Caller, id: &str, edits: &Value) -> ApiResult<Value> {
+    ops::require_human(caller, "approve a bot setup")?;
+    let draft = state.db.bot_setup_draft(&caller.person_id, id)?.ok_or_else(ApiError::not_found)?;
+    // The page sends every field; anything it leaves out stays as the agent drafted it.
+    let mut merged = json!({
+        "name": draft.name, "role": draft.role, "job": draft.job,
+        "workplace": draft.workplace, "day_plan": draft.day_plan,
+    });
+    if let Some(edits) = edits.as_object() {
+        for key in ["name", "role", "job", "workplace", "day_plan"] {
+            if let Some(value) = edits.get(key) {
+                merged[key] = value.clone();
+            }
+        }
+    }
+    let fields = Fields::from(&merged)?;
+    if let Some(job) = &fields.job {
+        crate::jobs::check_give(state, &caller.person_id, job, crate::jobs::DEFAULT_JOB_HOURS)?;
+    }
+    let at = now();
+    if !state.db.take_bot_setup_draft(&caller.person_id, id, &fields.as_setup(), at)? {
+        return Err(ApiError::conflict(
+            "this bot setup was already approved or declined, or has lapsed",
+        ));
+    }
+    let (bot, _token) = match crate::agent_door::first_bot(state, caller, &fields.name) {
+        Ok(made) => made,
+        Err(error) => {
+            state.db.reopen_bot_setup_draft(id)?;
+            return Err(error);
+        }
+    };
+    state.db.record_bot_setup_bot(id, &bot.id, at)?;
+    if let Some(role) = &fields.role {
+        state.db.set_bot_role(&bot.id, role, at)?;
+    }
+    if let Some(job) = &fields.job {
+        crate::jobs::give(
+            state,
+            &caller.person_id,
+            &bot.id,
+            job,
+            None,
+            crate::jobs::DEFAULT_JOB_HOURS,
+        )?;
+    }
+    let made = state.db.bot_setup_draft(&caller.person_id, id)?.ok_or_else(ApiError::not_found)?;
+    let mut reply = draft_json(state, &made);
+    reply["bot"] = json!({ "id": bot.id, "name": bot.name });
+    Ok(reply)
+}
+
+async fn approve(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<Json<Value>> {
+    let edits = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::bad_request("send the setup as JSON"))?
+    };
+    approve_draft(&state, &caller, &id, &edits).map(Json)
+}
+
+async fn decline(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "decline a bot setup")?;
+    state.db.bot_setup_draft(&caller.person_id, &id)?.ok_or_else(ApiError::not_found)?;
+    if !state.db.decline_bot_setup_draft(&caller.person_id, &id)? {
+        return Err(ApiError::conflict("this bot setup was already approved or declined"));
+    }
+    Ok(Json(json!({ "ok": true, "status": "declined" })))
+}
+
+/// #647 B: open drafts, for Needs you.
+pub fn for_needs_you(state: &AppState, person_id: &str) -> ApiResult<Vec<Value>> {
+    Ok(state
+        .db
+        .open_bot_setup_drafts(person_id, now())?
+        .iter()
+        .map(|d| json!({ "id": d.id, "name": d.name, "expires_at": d.expires_at }))
+        .collect())
+}
 
 async fn list(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "see their bot setups")?;
@@ -205,9 +328,13 @@ async fn one(
     ops::require_human(&caller, "see a bot setup")?;
     let draft =
         state.db.bot_setup_draft(&caller.person_id, &id)?.ok_or_else(ApiError::not_found)?;
-    Ok(Json(draft_json(&draft)))
+    Ok(Json(draft_json(&state, &draft)))
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/bot-setups", get(list)).route("/api/bot-setups/{id}", get(one))
+    Router::new()
+        .route("/api/bot-setups", get(list))
+        .route("/api/bot-setups/{id}", get(one))
+        .route("/api/bot-setups/{id}/approve", post(approve))
+        .route("/api/bot-setups/{id}/decline", post(decline))
 }
