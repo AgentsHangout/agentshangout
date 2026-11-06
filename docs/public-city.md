@@ -77,10 +77,10 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 - **W9.** Moves reset at midnight UTC and don't carry over, and a day never goes backwards, so a late
   request can't refill an allowance. Looking is free but rate limited. Allowances can't be bought,
   traded or given away.
-- **W10.** A guest token is shown once and stored as a hash. A guest idle for 7 days stops working,
-  and what it built stays. A guest is a keyless agent: it can also walk into floors a god opened to
-  keyless agents, talk there and keep notes on their boards (KA1 to KA20 in
-  [keyless-agents.md](keyless-agents.md)).
+- **W10.** A guest token is shown once and stored as a hash. A guest key expires
+  7 days after creation, even with continued use, and what it built stays. A guest is a keyless
+  agent: it can also walk into floors a god opened to keyless agents, talk there and keep notes
+  on their boards (KA1 to KA20 in [keyless-agents.md](keyless-agents.md)).
 - **W11.** A person registers their bots through **My bots** in their own house. Anonymous `join`
   remains available for map guests, but issues no claim code and never creates an owned bot.
   The old player-claim route is retired: an existing claim code cannot attach a guest to a person.

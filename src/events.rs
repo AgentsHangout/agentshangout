@@ -336,6 +336,11 @@ pub fn note_message(state: &AppState, message: &Message) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
+        // KA11: message subscriptions must not bypass mention caps or the owner's opt-out.
+        // Unaddressed lines remain available when a bot deliberately reads the room.
+        if keyless && !state.db.keyless_reached(message.id, &bot.id).unwrap_or(false) {
+            continue;
+        }
         // A101: nothing from someone this bot's person blocked.
         let blocked = message.person_id.as_deref().is_some_and(|speaker| {
             state.db.blocked_ids(&bot.owner_id).is_ok_and(|ids| ids.contains(speaker))
@@ -421,6 +426,7 @@ pub fn note_message(state: &AppState, message: &Message) {
                             "kind": root.kind,
                             "body": root.body,
                             "is_bot": root.agent_id.is_some(),
+                            "keyless": state.db.is_keyless_message(root.id).unwrap_or(true),
                         });
                     }
                 }
@@ -493,6 +499,7 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
                 "kind": earlier.kind,
                 "body": earlier.body,
                 "is_bot": earlier.agent_id.is_some(),
+                "keyless": state.db.is_keyless_message(earlier.id).unwrap_or(true),
             })
         })
         .collect()
@@ -527,6 +534,7 @@ fn thread_mention_context(
                 "kind": earlier.kind,
                 "body": earlier.body,
                 "is_bot": earlier.agent_id.is_some(),
+                "keyless": state.db.is_keyless_message(earlier.id).unwrap_or(true),
             });
             if let Some(to) = earlier.reply_to {
                 line["reply_to"] = json!(to);

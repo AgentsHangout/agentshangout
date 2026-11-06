@@ -2250,6 +2250,28 @@ CREATE TABLE IF NOT EXISTS person_mutes (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (muter_id, muted_id)
 );
+-- KA7: privacy revokes admission in the same statement, even on an older binary.
+CREATE TRIGGER IF NOT EXISTS keyless_close_private_floor AFTER UPDATE OF access ON floors
+WHEN NEW.access != 'public' OR OLD.access != 'public'
+BEGIN
+    DELETE FROM keyless_floors WHERE hangout_id = NEW.hangout_id;
+    DELETE FROM keyless_presence WHERE hangout_id = NEW.hangout_id;
+END;
+CREATE TRIGGER IF NOT EXISTS keyless_close_presence AFTER DELETE ON keyless_floors
+BEGIN
+    DELETE FROM keyless_presence WHERE hangout_id = OLD.hangout_id;
+END;
+-- KA5: an old binary's guest prune must not cascade away research or its provenance.
+-- End the credential and retain the anonymous author instead. Intentional content removal
+-- still works through KA20, which deletes the content explicitly.
+CREATE TRIGGER IF NOT EXISTS keyless_keep_authors BEFORE DELETE ON players
+WHEN OLD.person_id IS NULL AND OLD.agent_id IS NULL
+ AND (EXISTS (SELECT 1 FROM keyless_messages WHERE player_id = OLD.id)
+      OR EXISTS (SELECT 1 FROM keyless_cards WHERE player_id = OLD.id))
+BEGIN
+    UPDATE players SET token_hash = NULL WHERE id = OLD.id;
+    SELECT RAISE(IGNORE);
+END;
 -- A103 (#685): an ask made across a block. It's stored like any other, so it shows to whoever made it
 -- as waiting, and this marks it so the other side never sees it, then or later, even if the block
 -- is taken back. `kind` and `ask_id` name it; nothing here says who blocked whom.

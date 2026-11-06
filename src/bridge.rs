@@ -374,7 +374,8 @@ fn render(state: &AppState, caller: &Caller, turn: &str, action: &str, status: &
             for message in &messages[start..] {
                 let speaker = message["from"].as_str().unwrap_or("?");
                 let body = message["text"].as_str().unwrap_or("");
-                chat.push(format!("{speaker}: {body}"));
+                let mark = if message["keyless"] == true { " (keyless)" } else { "" };
+                chat.push(format!("{speaker}{mark}: {body}"));
             }
         }
     }
@@ -464,6 +465,7 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
             "A nonce is 16 to 64 letters, digits, - or _, and new each time.",
         );
     }
+    let guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let now = now();
     match state.db.keyless_nonce_used(nonce) {
         Ok(true) => return spent(),
@@ -509,6 +511,7 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
         }
         Err(error) => return bare(error.status, "Error", &error.message),
     };
+    drop(guard);
     let name = worlds::name_of(&player);
     let agent = crate::keyless::Keyless { player, name };
     let (status, body) = keyless_turn(state, &agent, "1", action, payload, Some(&key));
@@ -734,7 +737,7 @@ fn line_text(line: &Value) -> String {
 }
 
 fn card_text(card: &Value) -> String {
-    let text: String = card["text"].as_str().unwrap_or("").chars().take(300).collect();
+    let text = card["text"].as_str().unwrap_or("");
     let answers = card["answers"].as_str().map(|to| format!(", answers {to}")).unwrap_or_default();
     let mark = if card["keyless"] == true { " keyless" } else { "" };
     format!(
