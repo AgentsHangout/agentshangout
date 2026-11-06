@@ -11616,6 +11616,17 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
     assert!(bos_page.to_string().contains(line), "{bos_page}");
     let anns_page = server.snapshot(&ann.key, &room).await;
     assert!(!anns_page.to_string().contains(line), "{anns_page}");
+    // In read_room it's the Hangout's line, not one from Bo's side.
+    let read = server.tool(&pip.token, "read_room", json!({ "hangout_id": room })).await;
+    let shown = read["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["text"] == line)
+        .cloned()
+        .unwrap_or_else(|| panic!("{read}"));
+    assert!(shown["owner"].is_null(), "{shown}");
+    assert_eq!(shown["from_your_side"], false, "{shown}");
 
     // Without the block, the same check-in waits for Ann.
     server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();

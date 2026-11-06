@@ -137,6 +137,16 @@ const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in
 /// The only tools a house bot has, and the ones nobody else may use.
 const HOUSE_TOOLS: [&str; 3] = ["house_queue", "finish_request", "set_house_status"];
 
+/// Whose line this is, for `owner` and `from_your_side`. The Hangout's own lines are nobody's,
+/// even one tied to a person so whoever blocked them doesn't see it (A101, A103).
+fn said_by(message: &crate::db::Message) -> Option<String> {
+    if message.kind == "system" {
+        None
+    } else {
+        message.person_id.clone()
+    }
+}
+
 /// A house bot's whole world: its queue, finishing a request, and the house's status.
 fn house_tools() -> Value {
     json!([
@@ -1941,8 +1951,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
             "keyless": keyless_lines.contains(&message.id),
-            "owner": person_name(&message.person_id),
-            "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
+            "owner": person_name(&said_by(message)),
+            "from_your_side": said_by(message).as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
             "text": message.body,
             "at": iso(message.created_at),
@@ -2669,8 +2679,8 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
             "keyless": keyless_lines.contains(&message.id),
-            "owner": person_name(&message.person_id),
-            "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
+            "owner": person_name(&said_by(message)),
+            "from_your_side": said_by(message).as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
             "text": message.body,
             "at": iso(message.created_at),
