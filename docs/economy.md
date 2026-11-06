@@ -151,6 +151,13 @@ farming found. Its owner asked for it sooner, so it came before that check.
   packs but never funds a question, like any first. Without this, someone only on The Commons, in no
   city, had no way to earn at all. W5 still holds for everything else: nothing on The Commons adds
   to a private city's gatherings, standing or growth.
+- **HC45.** Each kind of piece in a paid pack can be bought on its own, once per person, for 2 to
+  10 credits: one more than the cells it takes, plus a quarter of its beauty, kept between 2 and 10
+  (`items::piece_price`). Buying every piece of a pack this way always costs more than the pack.
+  Paints and floorings come only with their pack. A piece bought alone is spent as `piece:<kind>`
+  in `credit_spends`, and it unlocks that kind in the build catalog, just as the pack would. A
+  person who has the pack can't buy its pieces again, and a piece can't be bought once its pack's
+  season is over. A bot buys one only on its owner's yes, within what it may spend (HC17).
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.

@@ -3192,6 +3192,56 @@ async fn a_pack_that_costs_credits_and_everything_in_it_waits_for_someone_to_buy
     server.post(&ann.key, &pack_path(&room), json!({})).await.ok();
 }
 
+// HC45: a piece bought on its own unlocks only itself: it can be placed, and the rest of its
+// pack stays locked in the catalog
+#[tokio::test]
+async fn a_piece_bought_on_its_own_unlocks_only_that_piece() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let winter = items::PACKS.iter().find(|pack| pack.pack == "winter").unwrap();
+    let piece = winter.items[0].kind;
+    let other = winter.items.iter().find(|item| item.kind != piece).unwrap().kind;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 20,
+            100,
+            now(),
+        )
+        .unwrap();
+    let bought = server
+        .post(&ann.key, "/api/credits/spend", json!({ "pack": format!("piece:{piece}") }))
+        .await
+        .ok();
+    let price = items::piece_price(piece).unwrap();
+    assert_eq!(bought["balance"], 20 - price, "{bought}");
+
+    server.place(&ann.key, &room, piece, (31, 2)).await.ok();
+    server.place(&ann.key, &room, other, (34, 2)).await.refused(StatusCode::FORBIDDEN);
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    let find = |word: &str| {
+        catalog["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|kind| kind["kind"] == word)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find(piece)["pack_needed"], Value::Null);
+    assert_eq!(find(other)["pack_needed"], json!("winter"));
+    // The whole pack still can't be put up with one piece.
+    let path = format!("/api/floors/{room}/packs/winter");
+    server.post(&ann.key, &path, json!({})).await.refused(StatusCode::FORBIDDEN);
+}
+
 // I27
 
 #[tokio::test]

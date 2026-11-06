@@ -2008,6 +2008,8 @@ async fn the_account_panel_shows_your_own_credits() {
         calls,
         [
             "'/api/credits/spend'",
+            // HC45: the same endpoint, buying one piece on its own.
+            "'/api/credits/spend'",
             "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
             "'/api/credits'",
             "`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`",
