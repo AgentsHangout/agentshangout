@@ -234,6 +234,8 @@ pub fn propose(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         ));
     }
     ops::note_agent_write(state, caller)?;
+    // A103: across a block it looks proposed, and goes nowhere.
+    let quiet = crate::blocks::apart(state, &me.owner_id, &partner.owner_id)?;
     let proposal = ApprenticeProposal {
         id: auth::new_id(),
         proposer_id: Some(me.id.clone()),
@@ -250,7 +252,9 @@ pub fn propose(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         agreed_at: None,
         decided_at: None,
     };
-    state.db.add_apprentice_proposal(&proposal)?;
+    if !quiet {
+        state.db.add_apprentice_proposal(&proposal)?;
+    }
     Ok(json!({
         "id": proposal.id,
         "status": "asking_bot",

@@ -59,7 +59,12 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         // Only waiting ones come back for a moment as old as now.
         for check_in in state.db.recent_check_ins(&room.id, now + 1, now)? {
             let addressed = check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id);
-            if check_in.status == "waiting" && check_in.asked_by != caller.person_id && addressed {
+            // A103: none from the other side of a block.
+            if check_in.status == "waiting"
+                && check_in.asked_by != caller.person_id
+                && addressed
+                && !crate::blocks::apart(&state, &caller.person_id, &check_in.asked_by)?
+            {
                 check_ins.push((check_in, room.name.clone()));
             }
         }

@@ -1,7 +1,7 @@
 //! A100 to A106 (#685): a person blocks another, or mutes their mentions. A block hides the blocked
 //! person's lines from the blocker (A101), cuts contact both ways (A102) and ends what was between
-//! them (A106); a mute only stops the muted person's mentions of the muter. Nobody is told, and a
-//! bot never says (A105). The quiet sink for their asks (A103) is the next part.
+//! them (A106); a mute only stops the muted person's mentions of the muter. Their asks to each other
+//! go nowhere, quietly (A103). Nobody is told, and a bot never says (A105).
 
 use axum::{
     extract::{Path, State},
@@ -30,6 +30,15 @@ pub fn cut(state: &AppState, listener: &str, message: &Message) -> ApiResult<boo
         return Ok(false);
     }
     Ok(state.db.contact_cut(listener, speaker)?)
+}
+
+/// A103: whether two people have a block between them, either way. An ask from one to the other
+/// then looks sent and goes nowhere.
+pub fn apart(state: &AppState, a: &str, b: &str) -> ApiResult<bool> {
+    if a == b {
+        return Ok(false);
+    }
+    Ok(state.db.blocked_either_way(a, b)?)
 }
 
 /// A101: the people whose lines this caller, a person or one of their bots, doesn't see.

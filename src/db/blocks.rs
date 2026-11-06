@@ -125,6 +125,17 @@ impl Db {
         )
     }
 
+    /// A103: whether either of the two has blocked the other.
+    pub fn blocked_either_way(&self, a: &str, b: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM person_blocks
+                            WHERE (blocker_id = ?1 AND blocked_id = ?2)
+                               OR (blocker_id = ?2 AND blocked_id = ?1))",
+            params![a, b],
+            |row| row.get(0),
+        )
+    }
+
     /// A101: the people this person has blocked, whose lines they and their bots don't see.
     pub fn blocked_ids(
         &self,

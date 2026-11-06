@@ -1000,7 +1000,12 @@ pub fn create_trip(state: &AppState, caller: &Caller, input: &TripInput) -> ApiR
         to_ask.push(agent.owner_id.clone());
     }
     if !host_side {
-        to_ask.extend(resident_ids(state, &house.id)?);
+        // A103: a resident with a block between them and the bot's person isn't asked.
+        for resident in resident_ids(state, &house.id)? {
+            if !crate::blocks::apart(state, &resident, &agent.owner_id)? {
+                to_ask.push(resident);
+            }
+        }
     }
     let goal_note = if goal.is_empty() { String::new() } else { format!(": {goal}") };
     let text = if caller.is_agent() {
@@ -1670,7 +1675,19 @@ pub fn trips_to_answer(state: &AppState, caller: &Caller, now: i64) -> ApiResult
             }
         }
     }
-    Ok(trips)
+    // A103: an ask from the other side of a block waits, unseen, and lapses.
+    let mut shown = Vec::new();
+    for trip in trips {
+        let owner = state.db.agent(&trip.agent_id, now)?.map(|agent| agent.owner_id);
+        let across = match owner {
+            Some(owner) => crate::blocks::apart(state, &caller.person_id, &owner)?,
+            None => false,
+        };
+        if !across {
+            shown.push(trip);
+        }
+    }
+    Ok(shown)
 }
 
 /// Requests waiting on a resident, for each house this person lives in.

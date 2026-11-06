@@ -325,6 +325,11 @@ pub fn invite_people(
             }
             Invited::New => {}
         }
+        // A103: across a block it looks sent, and goes nowhere.
+        if crate::blocks::apart(state, &caller.person_id, &person.id)? {
+            added.push(person);
+            continue;
+        }
         if state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)? {
             // F58: told once, by name, with no room in it, so the link goes to their home page.
             // The title is the proposer's words, so it carries the trust note (F55).

@@ -1395,13 +1395,21 @@ pub fn create_check_in(
         &format!("{} is checking in with {audience}: {about}", caller.name),
     )?;
     let text = format!("{} is asking before acting: {about}", caller.name);
+    // A103: one asked of someone across a block reaches nobody: no ping, no event.
+    let across = match target {
+        Some(person) => crate::blocks::apart(state, &caller.person_id, &person.id)?,
+        None => false,
+    };
     match target {
+        Some(_) if across => {}
         Some(person) => notify_side(state, hangout_id, &person.id, "check_in.waiting", &text)?,
         None => notify_others(state, hangout_id, &caller.person_id, "check_in.waiting", &text)?,
     }
     refresh(state, hangout_id);
     let check_in = state.db.check_in(&id, now)?.ok_or_else(ApiError::not_found)?;
-    crate::events::note_check_in(state, &check_in, caller.agent_id.as_deref());
+    if !across {
+        crate::events::note_check_in(state, &check_in, caller.agent_id.as_deref());
+    }
     Ok(check_in)
 }
 

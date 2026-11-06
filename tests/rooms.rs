@@ -11480,3 +11480,51 @@ async fn a_block_ends_a_friendship_between_them() {
     assert_eq!(friends(ann.key.clone()).await, json!([]));
     assert_eq!(friends(bo.key.clone()).await, json!([]));
 }
+
+// A103 (#685): across a block, a friendship request looks sent and goes nowhere, and can't be
+// accepted; a check-in asked of the blocker reaches nobody and isn't in their Needs you.
+#[tokio::test]
+async fn asks_across_a_block_look_sent_and_go_nowhere() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let ask = json!({ "kind": "person", "from_id": bo.id, "to_id": ann.id });
+    let sent = server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert_eq!(sent["ok"], true, "it looks sent: {sent}");
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "{anns}");
+    server
+        .post(&ann.key, "/api/trust/friendships/accept", ask)
+        .await
+        .refused(StatusCode::NOT_FOUND);
+
+    let asked = server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the notes?", "to": "Ann" }),
+        )
+        .await;
+    assert_ne!(asked["isError"], true, "it looks asked: {asked}");
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["check_ins"], json!([]), "{needs}");
+
+    // Without the block, the same check-in waits for Ann.
+    server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();
+    server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the plan?", "to": "Ann" }),
+        )
+        .await;
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(
+        needs["check_ins"].as_array().unwrap().len(),
+        2,
+        "both show once unblocked: {needs}"
+    );
+}

@@ -155,6 +155,10 @@ fn send(
             "that's a lot of invites for one day: try again tomorrow",
         ));
     }
+    // A103: across a block it looks sent, and goes nowhere.
+    if crate::blocks::apart(state, &caller.person_id, &friend.id)? {
+        return Ok(Json(json!({ "ok": true })));
+    }
     let id = auth::new_id();
     let fresh = state.db.add_friend_invite(
         &id,

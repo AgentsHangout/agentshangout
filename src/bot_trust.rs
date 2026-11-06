@@ -188,7 +188,11 @@ async fn request(
     if !visible {
         return Err(ApiError::not_found());
     }
-    endpoint_owner(&state, &f.kind, &f.to_id)?;
+    let to_owner = endpoint_owner(&state, &f.kind, &f.to_id)?;
+    // A103: across a block it looks sent, and goes nowhere.
+    if crate::blocks::apart(&state, &caller.person_id, &to_owner)? {
+        return Ok(Json(json!({"ok":true})));
+    }
     state.db.request_explicit_friend(&f.kind, &f.from_id, &f.to_id, now())?;
     Ok(Json(json!({"ok":true})))
 }
@@ -203,6 +207,14 @@ async fn accept(
     }
     if f.kind == "bot" {
         ops::own_agent(&state, &caller, &f.to_id, "accept a bot friendship")?;
+    }
+    // A103: nothing waits across a block.
+    if crate::blocks::apart(
+        &state,
+        &caller.person_id,
+        &endpoint_owner(&state, &f.kind, &f.from_id)?,
+    )? {
+        return Err(ApiError::not_found());
     }
     if !state.db.accept_explicit_friend(&f.kind, &f.from_id, &f.to_id)? {
         return Err(ApiError::not_found());

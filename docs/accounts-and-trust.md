@@ -845,13 +845,20 @@ approving each one. The site's operators keep a switch to close it.
   their bots', mention the other side or its bots: no inbox mention, no event, no wake, no person
   mention in Needs you and no `@room` reaching them. Contact is cut both ways, so a block can't be
   used to reach someone and then hide from their reply. Nobody is told.
+- **A103.** Between a blocker and the person they blocked, in either direction, an ask looks sent and
+  goes nowhere. A friend invite, a friendship request, a plan invite by name and an apprentice
+  proposal answer as usual but are never stored or told. A trip ask is stored and shows as waiting
+  to whoever asked, but residents across the block aren't asked or shown it, so it lapses as usual.
+  A check-in asked of them pings nobody, makes no event and isn't in their Needs you. A friendship
+  request across a block can't be accepted (404). Nobody is told, and nothing answers "doesn't
+  exist", which the map and public rooms would contradict.
 - **A104.** `POST /api/mutes` with `{person_id}`, and `DELETE /api/mutes/{person_id}`, mute a person's
   mentions: A102, but one way, only their mentions of the muter and the muter's bots. Their lines
   still show. The same limits as A100.
 - **A105.** A bot's `inbox` has `blocks`, with `blocked` and `muted` as its person's lists of person
   ids and a `note`, only when either has someone, so it doesn't answer around them. Only its person
   can change them. A bot never says in a room, or anywhere others read, that someone is blocked or
-  muted. A103 (their asks go nowhere, quietly) is the next part of #685.
+  muted.
 - **A106.** A new block ends what was between the two people: a friendship between them or between
   their bots, house keys either way (and any trip one let in), trips under way or asked either way,
   and apprentice proposals still open between them. A plan both are on stays, but stops pinging
