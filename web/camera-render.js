@@ -77,13 +77,27 @@ function cameraFigures(scene,placed) {
   const who=[...scene.bots.map(b=>({...b,person:false,...placeBot(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null,at:null}))];
   const loose=who.filter(f=>!f.spot);
   const cols=Math.min(frame.width<480?3:4,Math.max(1,loose.length)),rows=Math.ceil(loose.length/cols);
+  // CP14: someone standing stands where the page would let them walk, never on the table or an
+  // item, and not on anyone else: the nearest free cell to their place in the grid.
+  fillGrid(look.hidden||[],placed,tableShift(look.table));
+  const stood=who.filter(f=>f.spot).map(f=>({x:f.spot.x,y:f.spot.y}));
+  const standClear=(x,y)=>{
+    const col=Math.floor(x/CELL),row=Math.floor(y/CELL);
+    for(let radius=0;radius<30;radius++)for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
+      // Their body too, not just their feet, so nobody's head is drawn on the tabletop.
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==radius||!free(col+dx,row+dy)||!free(col+dx,row+dy-2))continue;
+      const at={x:(col+dx)*CELL+CELL/2,y:(row+dy)*CELL+CELL/2};
+      if(inFrame(at)&&!stood.some(s=>Math.abs(s.x-at.x)<16&&Math.abs(s.y-at.y)<12)){stood.push(at);return at;}
+    }
+    return {x,y};
+  };
   return who.map(f=>{
     const worn=f.person?{look:personLook(f.look)}:{wears:botLook(f.look)};
     if(f.spot)return {...f,...worn,path:[],pose:f.spot.pose,facing:f.spot.facing||'front',phase:0,x:f.spot.x,y:f.spot.y};
     const i=loose.indexOf(f);
-    return {...f,...worn,path:[],pose:'stand',facing:'front',phase:0,
-      x:frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
-      y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)};
+    const at=standClear(frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
+      frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows));
+    return {...f,...worn,path:[],pose:'stand',facing:'front',phase:0,x:at.x,y:at.y};
   });
 }
 // CP10: where each name tag goes, so none covers another and each stays in the photo. Tags go top to
