@@ -115,6 +115,21 @@ export const YARD_SIZES = {
   snowman: [1, 1],
   christmas_tree: [2, 2],
   gift_pile: [1, 1],
+  gas_cylinders: [1, 1],
+  sample_cooler: [1, 1],
+  telescope: [1, 1],
+  test_plots: [3, 2],
+  solar_tracker: [2, 2],
+  recycling_bins: [3, 1],
+  bale_stack: [2, 2],
+  skip_bin: [2, 1],
+  compost_windrow: [3, 1],
+  sorting_conveyor: [3, 1],
+  market_stall: [2, 2],
+  notice_board: [1, 1],
+  flower_cart: [2, 1],
+  drinking_fountain: [1, 1],
+  clock_post: [1, 1],
 };
 
 // Where each kind's building stands with no `body`, in units, as the map has always drawn it.
@@ -128,6 +143,8 @@ const RECTS = {
   office: [7, 8, 25, 24],
   workshop: [5, 8, 27, 25],
   library: [6, 8, 26, 24],
+  research_lab: [6, 8, 26, 24],
+  plant: [4, 8, 28, 24],
 };
 // And in cells, whole cells that cover that, as the server has it.
 const BODIES = {
@@ -140,6 +157,8 @@ const BODIES = {
   office: { x: 3, y: 4, w: 10, d: 8, floors: 2 },
   workshop: { x: 2, y: 4, w: 12, d: 9, floors: 2 },
   library: { x: 3, y: 4, w: 10, d: 8, floors: 2 },
+  research_lab: { x: 3, y: 4, w: 10, d: 8, floors: 1 },
+  plant: { x: 2, y: 4, w: 12, d: 8, floors: 1 },
 };
 // E36: how many tiles a place takes each way. Everything on a big one is drawn this much bigger.
 export const spanOf = (kind) => (kind === 'square' || kind === 'green' ? 2 : 1);

@@ -107,6 +107,8 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
   let active = false;
   let tile = null;
   let kind = 'house';
+  // E41: the kind of the place itself, which a research lab's look stands on.
+  let building = 'house';
   let look = { door: 'L', variant: 0, pal: 0 };
   let catalog = null;
   let collectionId = '';
@@ -308,8 +310,31 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     say('That place is gone, so there is nothing to build on.');
   }
 
+  // E41, E42: what this kind of outside holds, and for a lab what its building had too, so a place that
+  // has stopped being a lab sheds a lab's look on its next save. A word the catalog doesn't know is left
+  // for the server to judge.
+  function keepListed(doc) {
+    if (!catalog) return doc;
+    const fits = (kinds) => kinds.includes(kind) || (kind === 'research_lab' && kinds.includes(building));
+    const out = { ...doc };
+    if (doc.parts && typeof doc.parts === 'object') {
+      out.parts = Object.fromEntries(Object.entries(doc.parts).filter(([word]) => {
+        const part = catalog.parts.find((each) => each.part === word);
+        return !part || fits(part.kinds);
+      }));
+    }
+    if (Array.isArray(doc.items)) {
+      out.items = doc.items.filter((item) => {
+        const only = yardKinds.get(item?.kind)?.only;
+        return !only?.length || fits(only);
+      });
+    }
+    return out;
+  }
+
   // One change at a time, in order. Resolves true once the server has taken it.
   function save(next, { remember = true } = {}) {
+    next = keepListed(next);
     clearTimeout(timer);
     timer = null;
     buildError.hidden = true;
@@ -1692,7 +1717,9 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     if (!collection && packs.length) sections.push(catalogGroup('Packs', tilesOf(packs.map(packTile), true)));
     for (const { group, label } of catalog.groups) {
       const mine = parts.filter((part) => part.group === group);
-      const yard = catalog.yard.filter((entry) => entry.group === group && collectionOffers(collection, 'items', entry.kind));
+      // E42: a thing only some kinds hold is offered only to them.
+      const yard = catalog.yard.filter((entry) => entry.group === group && collectionOffers(collection, 'items', entry.kind)
+        && (!entry.only?.length || entry.only.includes(kind)));
       const members = [];
       if (!collection && group === 'size' && !hasNoBuilding(kind)) members.push(h('div', { class: 'outside-part' }, h('h4', {}, 'How big'), sizeTiles()));
       members.push(...mine.map(partBlock));
@@ -1997,6 +2024,7 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     const era = ++session;
     tile = { x: place.x, y: place.y };
     kind = place.kind || 'house';
+    building = kind;
     look = world.placeLook(place.x, place.y);
     accepted = clone(current(place.x, place.y));
     shown = accepted;
