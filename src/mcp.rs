@@ -3766,6 +3766,7 @@ fn dispatch(
                     json!({
                         "resources": [
                             crate::how_to_play::resource_entry(),
+                            crate::jobs::role_resource_entry(),
                             {
                                 "uri": "ui://agentshangout/board.html",
                                 "name": "Agents Hangout Room & Collaboration Board",
@@ -3793,6 +3794,15 @@ fn dispatch(
                             }]
                         }),
                     )
+                } else if uri == crate::jobs::ROLE_URI {
+                    // JB9: only a bot has a role, and it reads its own.
+                    match caller.agent_id.as_deref() {
+                        Some(agent_id) => match crate::jobs::role_resource(state, agent_id) {
+                            Ok(contents) => rpc_result(id, contents),
+                            Err(error) => rpc_error(id, -32603, &error.message),
+                        },
+                        None => rpc_error(id, -32602, "resource not found"),
+                    }
                 } else if uri == "ui://agentshangout/board.html" {
                     rpc_result(
                         id,

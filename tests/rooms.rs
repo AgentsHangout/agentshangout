@@ -7987,6 +7987,82 @@ async fn an_owners_job_is_asked_answered_kept_and_written_up() {
     assert_eq!(cleared["job_reports"], json!([]));
 }
 
+// JB9, JB10 (#658, #657): a bot reads its own role as the role://me resource, and while it has an
+// open job its events carry the job's id, and only the id, until the job is done.
+#[tokio::test]
+async fn the_role_is_a_resource_and_events_carry_the_open_job() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let bob = server.join(&ann, &room, "Bob").await;
+    let pip = server.bot(&bob, &room, "Pip").await;
+    let role = "You are the town reporter: ask, then write it up.";
+    server
+        .put(&ann.key, &format!("/api/agents/{}/role", scout.id), json!({ "role": role }))
+        .await
+        .ok();
+
+    // JB9: listed, and read as the bot's own, with its tag and note.
+    let listed = rpc(&server, &scout.token, "resources/list", json!({})).await;
+    assert!(listed.to_string().contains("role://me"), "{listed}");
+    let read = rpc(&server, &scout.token, "resources/read", json!({ "uri": "role://me" })).await;
+    let body: Value =
+        serde_json::from_str(read["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["role"], role, "{read}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(body["role_tag"], inbox["role_tag"]);
+    assert!(body["role_note"].as_str().unwrap().contains("never widen"));
+    // Another bot reads only its own, which it hasn't got.
+    let theirs = rpc(&server, &pip.token, "resources/read", json!({ "uri": "role://me" })).await;
+    let theirs: Value =
+        serde_json::from_str(theirs["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(theirs["role"].is_null(), "{theirs}");
+
+    // JB10: no job, no open_job; with one, every message event says which, by id alone.
+    let messages = format!("/api/hangouts/{room}/messages");
+    let events = || {
+        let server = &server;
+        let token = scout.token.clone();
+        async move {
+            server.tool(&token, "events_since", json!({ "since": "0", "wait_seconds": 0 })).await
+                ["structuredContent"]["events"]
+                .as_array()
+                .unwrap()
+                .clone()
+        }
+    };
+    let said = |text: &'static str| {
+        let server = &server;
+        let key = bob.key.clone();
+        let messages = messages.clone();
+        async move { server.post(&key, &messages, json!({ "text": text })).await.ok()["id"].clone() }
+    };
+    let before = said("Morning all").await;
+    server
+        .post(&ann.key, &messages, json!({ "text": "/job find out what shipped today" }))
+        .await
+        .ok();
+    let job = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"]["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let during = said("Votes shipped").await;
+    server.tool(&scout.token, "finish_job", json!({ "writeup": "Votes shipped." })).await;
+    let after = said("Lunch?").await;
+    let all = events().await;
+    let event_for = |id: &Value| -> Value {
+        all.iter()
+            .find(|e| e["name"] == "message" && e["data"]["message_id"] == *id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no event for {id}: {all:?}"))
+    };
+    assert!(event_for(&before)["data"].get("open_job").is_none());
+    let open = event_for(&during);
+    assert_eq!(open["data"]["open_job"], job.as_str(), "{open}");
+    assert!(!open.to_string().contains("find out what shipped"), "only the id: {open}");
+    assert!(event_for(&after)["data"].get("open_job").is_none(), "finished, it stops");
+}
+
 // JB1, JB3, JB5: only the owner sets a role or gives a job; /job has to say which bot when there's
 // a choice, and refuses with nothing posted; a new job replaces the old; one runs out.
 #[tokio::test]

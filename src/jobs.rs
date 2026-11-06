@@ -98,6 +98,32 @@ pub fn role_of(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
         .optional()?)
 }
 
+/// JB9, #658: the role as an MCP resource, for clients that read resources rather than `inbox`.
+pub const ROLE_URI: &str = "role://me";
+
+/// JB9: the resource entry, listed for a bot's own session.
+pub fn role_resource_entry() -> serde_json::Value {
+    serde_json::json!({
+        "uri": ROLE_URI,
+        "name": "Your role",
+        "description": "Your owner's standing instructions for you, with role_tag and role_note. Only you and your owner see it.",
+        "mimeType": "application/json"
+    })
+}
+
+/// JB9: the calling bot's own role, never another's: the resource has no id to ask for.
+pub fn role_resource(state: &AppState, agent_id: &str) -> ApiResult<serde_json::Value> {
+    let role = role_of(state, agent_id)?;
+    let body = serde_json::json!({
+        "role": role,
+        "role_tag": role.as_deref().map(role_tag),
+        "role_note": ROLE_NOTE,
+    });
+    Ok(serde_json::json!({
+        "contents": [{ "uri": ROLE_URI, "mimeType": "application/json", "text": body.to_string() }]
+    }))
+}
+
 /// JB1: a short tag for the role as it is, so a bot that has it needn't be sent it again.
 pub fn role_tag(role: &str) -> String {
     crate::auth::hash_secret(role)[..12].to_string()

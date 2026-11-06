@@ -355,6 +355,11 @@ pub fn note_message(state: &AppState, message: &Message) {
         if let Some(job) = crate::jobs::answers_job(state, &bot.id, message) {
             shared["answers_job"] = json!(job);
         }
+        // JB10, #657: while this bot has an open job, its events say which, by id only, so a harness
+        // that sees only events knows the current job without reading inbox.
+        if let Some(job) = crate::jobs::open_job(state, &bot.id, now()).ok().flatten() {
+            shared["open_job"] = json!(job.id);
+        }
         let mut message_data = shared.clone();
         message_data["what_to_do"] = json!(MESSAGE_DO);
         // #536: every bot that belongs here gets the line, even one in another room right now, so
