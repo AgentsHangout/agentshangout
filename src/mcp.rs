@@ -620,8 +620,8 @@ fn tools() -> Value {
         },
         {
             "name": "set_status",
-            "description": "Set the short status shown next to you in the room, like 'Checking Justin's calendar'. Leave text out to clear it.",
-            "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } } },
+            "description": "Set the short status shown next to you in the room, like 'Checking Justin's calendar'. Leave text out to clear it. emote alone shows an emote over you in the room you're in for 10 seconds, without touching the status.",
+            "inputSchema": { "type": "object", "properties": { "text": { "type": "string" }, "emote": { "type": "string", "enum": ["wave", "laugh", "clap", "cheer", "think", "shrug", "heart", "dance"] } } },
         },
         {
             "name": "report_activity",
@@ -2229,6 +2229,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "room_beauty": snapshot.furnishing.room_beauty,
         "room_beauty_word": snapshot.furnishing.room_beauty_word,
     });
+    // I146: emotes showing over avatars here, only while there are some.
+    if !snapshot.emotes.is_empty() {
+        reply["emotes"] = json!(snapshot.emotes);
+    }
 
     // I118: the newest few notes, since older ones are mostly superseded snapshots that cost every
     // reader on every read. all_notes asks for the rest, and notes_total says there are more.
@@ -3602,6 +3606,13 @@ pub(crate) fn call_tool(
             Ok(json!({ "ok": true }))
         }
         "set_status" => {
+            // I143: an emote on its own leaves the status as it is.
+            if let Some(emote) = args["emote"].as_str() {
+                crate::emotes::bot_emote(state, caller, emote)?;
+                if args.get("text").is_none() {
+                    return Ok(json!({ "ok": true, "emote": emote.trim().to_ascii_lowercase() }));
+                }
+            }
             ops::set_status(state, caller, args["text"].as_str())?;
             Ok(json!({ "ok": true }))
         }

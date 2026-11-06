@@ -207,6 +207,20 @@ export function hash(text) {
   return value;
 }
 
+// I143: what each emote shows over the avatar.
+export const EMOTE_GLYPHS = {
+  wave: '\u{1F44B}', laugh: '\u{1F602}', clap: '\u{1F44F}', cheer: '\u{1F389}',
+  think: '\u{1F914}', shrug: '\u{1F937}', heart: '\u{2764}\u{FE0F}', dance: '\u{1F483}',
+};
+
+function emoteEl() {
+  const el = document.createElement('div');
+  el.className = 'emote-bubble';
+  el.setAttribute('role', 'img');
+  el.hidden = true;
+  return el;
+}
+
 // I64: hide a waiting or thinking sign once its until has passed, without waiting for a reload.
 function liveThinking(thought) {
   if (!thought || thought.until * 1000 <= Date.now()) return null;
@@ -5504,7 +5518,8 @@ export class Room {
     const dot = document.createElement('i');
     const label = document.createElement('span');
     chip.append(dot, label);
-    tag.append(chip);
+    const emote = emoteEl();
+    tag.append(emote, chip);
     this.overlay.append(tag);
     const person = {
       id: data.id,
@@ -5524,6 +5539,7 @@ export class Room {
       chip,
       dot,
       label,
+      emote,
     };
     this.people.set(data.id, person);
     return person;
@@ -5548,7 +5564,8 @@ export class Room {
     think.className = 'think-bubble';
     think.hidden = true;
     think.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
-    tag.append(think, bubble, chip);
+    const emote = emoteEl();
+    tag.append(emote, think, bubble, chip);
     this.overlay.append(tag);
     const bot = {
       id: data.id,
@@ -5575,6 +5592,7 @@ export class Room {
       doing,
       bubble,
       bubbleTimer: 0,
+      emote,
       think,
       thinkTimer: 0,
     };
@@ -5682,6 +5700,26 @@ export class Room {
     who.pose = goal.pose;
     who.facing = goal.facing || 'front';
     who.wait = who.seat ? 20 + Math.random() * 30 : 3 + Math.random() * 7;
+  }
+
+  // I144, I146: the emotes showing now, over whoever made them, each until its own until. A
+  // person or bot not in the list shows none.
+  setEmotes(list = []) {
+    const now = Date.now();
+    const showing = new Map(list.filter((e) => e.until * 1000 > now).map((e) => [e.id, e]));
+    for (const who of [...this.people.values(), ...this.bots.values()]) {
+      const shown = showing.get(who.id);
+      clearTimeout(who.emoteTimer);
+      if (!shown || !EMOTE_GLYPHS[shown.emote]) {
+        who.emote.hidden = true;
+        continue;
+      }
+      who.emote.textContent = EMOTE_GLYPHS[shown.emote];
+      who.emote.title = `${shown.name}: ${shown.emote}`;
+      who.emote.setAttribute('aria-label', `${shown.name} emotes: ${shown.emote}`);
+      who.emote.hidden = false;
+      who.emoteTimer = setTimeout(() => { who.emote.hidden = true; }, shown.until * 1000 - now);
+    }
   }
 
   say(agentId, text) {

@@ -1,4 +1,4 @@
-import { LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
+import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
@@ -4216,6 +4216,14 @@ async function roomView(id) {
       chatInput.focus();
     },
     extras: roomBotsMenu,
+    // I143: Emote on your own card, unless you're a guest on a Porch.
+    emote: snapshot.guest && snapshot.floor?.floor.access !== 'public' ? null : async (word) => {
+      try {
+        await api(`/api/hangouts/${encodeURIComponent(id)}/emote`, { method: 'POST', body: { emote: word } });
+      } catch (failure) {
+        say(failure.message);
+      }
+    },
   });
   // W109: a right click (or a press and hold) on the room's bare floor opens the room's own menu:
   // Room permissions for whoever runs the space, then My bots. Anything else under the pointer keeps
@@ -5179,6 +5187,7 @@ async function roomView(id) {
     renderBoard();
     renderPins();
     typingHints.fromSnapshot(snapshot.typing, typingVersion);
+    room.setEmotes(snapshot.emotes || []);
     renderLegend();
     renderStats();
     renderCalendar();
@@ -6090,6 +6099,8 @@ async function roomView(id) {
     reloadSoon();
   });
   stream.addEventListener('typing', (event) => typingHints.update(JSON.parse(event.data)));
+  // I146: an emote shows the moment it's made.
+  stream.addEventListener('emotes', (event) => room.setEmotes(JSON.parse(event.data)));
   stream.addEventListener('camera', (event) => room.cameraFlash(JSON.parse(event.data).bot_id));
   stream.addEventListener('refresh', reloadSoon);
   stream.addEventListener('confirmed', () => {
@@ -8762,6 +8773,15 @@ function myBotsMenu(bots, openPanel) {
   return { label: 'My bots', items: [...rows, ...(rows.length ? [null] : []), { label: 'Open My bots', run: openPanel }] };
 }
 
+// I143: the Emote submenu on your own card: each emote shows over you for everyone in the room.
+const EMOTE_WORDS = ['wave', 'laugh', 'clap', 'cheer', 'think', 'shrug', 'heart', 'dance'];
+function emoteMenu(emote) {
+  return {
+    label: 'Emote',
+    items: EMOTE_WORDS.map((word) => ({ label: `${EMOTE_GLYPHS[word]} ${wordName(word)}`, run: () => emote(word) })),
+  };
+}
+
 // W109: the Room permissions submenu, only for whoever runs the space. It says who can come in now
 // and leads to the space's settings, where that's changed. #552's levels go here once decided.
 function roomPermissionsMenu(open, settingsPath, say) {
@@ -8997,7 +9017,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -9043,6 +9063,7 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
       const link = githubProfileUrl(data?.login);
       const own = [
         you ? null : { label: 'Mention in chat', run: () => mention(who.name) },
+        you && emote ? emoteMenu(emote) : null,
         link ? { label: 'View on GitHub', href: link } : null,
       ].filter(Boolean);
       const more = extras();

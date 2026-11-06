@@ -481,6 +481,22 @@ input::placeholder { color: #8b7a5e; }
   z-index: 2;
 }
 .think-bubble[hidden] { display: none; }
+/* I144: an emote over the avatar, above any speech or thinking bubble. */
+.emote-bubble {
+  position: absolute;
+  bottom: 8.5cqw;
+  font-size: 2.2em;
+  line-height: 1;
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .3));
+  animation: emote-pop .35s ease-out;
+  z-index: 3;
+}
+.emote-bubble[hidden] { display: none; }
+@keyframes emote-pop {
+  from { transform: scale(.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .emote-bubble { animation: none; } }
 .think-bubble span {
   width: .34em;
   height: .34em;
