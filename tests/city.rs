@@ -4786,6 +4786,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "lific_links",
         "bot_signups",
         "agent_accounts",
+        "mayor_elections",
+        "mayor_candidates",
+        "mayor_ballots",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -5008,6 +5011,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "lific_links",
             "bot_signups",
             "agent_accounts",
+            "mayor_ballots",
+            "mayor_candidates",
+            "mayor_elections",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

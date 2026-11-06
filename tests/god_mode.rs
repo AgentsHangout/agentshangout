@@ -474,6 +474,104 @@ async fn a_door_account_whose_bot_fails_is_not_left_behind() {
     assert_eq!(server.state.db.agent_accounts_today(now()).unwrap(), 0, "nothing counted");
 }
 
+// MY1 to MY7 (#639): the Town Square gets its voting box; anyone stands, a person on a public floor
+// votes with a secret ballot, bots and door accounts don't, and Saturday's tally names the mayor.
+#[tokio::test]
+async fn the_week_elects_a_mayor_at_the_town_square() {
+    let (server, justin, _) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    let (own_room, ann) = server.someone("Ann").await;
+    server.go_in(&ann.key, spot).await.ok();
+    let (_, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+
+    // MY7: the box goes up on the square by itself, and nobody else can place one.
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let snapshot = server.get(&justin.key, &format!("/api/hangouts/{square}")).await.ok();
+    let boxes: Vec<&Value> = snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "mayor_ballot_box")
+        .collect();
+    assert_eq!(boxes.len(), 1, "{snapshot}");
+    assert_eq!(boxes[0]["opens"], "mayor");
+    let place = json!({ "kind": "mayor_ballot_box", "x": 5, "y": 5 });
+    server
+        .post(&ann.key, &format!("/api/floors/{own_room}/items"), place)
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    // MY2: a person and a bot stand.
+    let race = server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    assert_eq!(race["you_stand"], true, "{race}");
+    let race = server.tool(&eagle, "mayor_race", json!({ "action": "stand" })).await;
+    let eagle_id =
+        race["candidates"].as_array().unwrap().iter().find(|c| c["kind"] == "bot").unwrap()["id"]
+            .clone();
+    assert_eq!(race["candidates"].as_array().unwrap().len(), 2, "{race}");
+
+    // MY3: a person on the square votes; from a room that isn't public, or as a bot, or as a door
+    // account, it's refused.
+    let ballot = |room: &str| json!({ "kind": "bot", "id": eagle_id, "hangout_id": room });
+    server
+        .put(&ann.key, "/api/mayor/ballot", ballot(&own_room))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let voted = server.put(&ann.key, "/api/mayor/ballot", ballot(&square)).await.ok();
+    assert_eq!(voted["voted"], 1, "{voted}");
+    assert_eq!(voted["your_ballot"]["id"], eagle_id);
+    // MY4: no totals while the week is open.
+    assert!(!voted.to_string().contains("\"votes\":1"), "{voted}");
+    server.put(&eagle, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    let (_, door) = server.someone("Door").await;
+    server.go_in(&door.key, spot).await.ok();
+    server.state.db.mark_agent_account(&door.id, now()).unwrap();
+    server
+        .put(&door.key, "/api/mayor/ballot", ballot(&square))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let nobody = json!({ "kind": "person", "id": "no-such", "hangout_id": square });
+    server.put(&justin.key, "/api/mayor/ballot", nobody).await.refused(StatusCode::BAD_REQUEST);
+
+    // MY5, MY6: Saturday's tally names the mayor and opens the next week.
+    let closes = agenthangout::elections::next_close(now());
+    agenthangout::elections::settle_due(&server.state, closes + 1).unwrap();
+    let after = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_eq!(after["last_week"]["mayor"]["name"], "Eagle", "{after}");
+    assert_eq!(after["last_week"]["votes"], 1);
+    assert_eq!(after["last_week"]["tie_draw"], false);
+    assert_eq!(after["candidates"], json!([]), "a new week starts empty");
+}
+
+// MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.
+#[tokio::test]
+async fn an_empty_week_names_nobody_and_a_tie_is_drawn() {
+    let (server, justin, morg) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    server.go_in(&morg.key, spot).await.ok();
+    let first = agenthangout::elections::next_close(now());
+    agenthangout::elections::settle_due(&server.state, first + 1).unwrap();
+    let empty = server.get(&justin.key, "/api/mayor").await.ok();
+    assert!(empty["last_week"]["mayor"].is_null(), "{empty}");
+
+    server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
+    server.post(&morg.key, "/api/mayor/stand", json!({})).await.ok();
+    let vote = |for_id: &str| json!({ "kind": "person", "id": for_id, "hangout_id": square });
+    server.put(&justin.key, "/api/mayor/ballot", vote(&morg.id)).await.ok();
+    server.put(&morg.key, "/api/mayor/ballot", vote(&justin.id)).await.ok();
+    let second = agenthangout::elections::next_close(first + 1);
+    agenthangout::elections::settle_due(&server.state, second + 1).unwrap();
+    let tied = server.get(&justin.key, "/api/mayor").await.ok();
+    assert_eq!(tied["last_week"]["tie_draw"], true, "{tied}");
+    assert_eq!(tied["last_week"]["votes"], 1);
+}
+
 // A95
 #[tokio::test]
 async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
