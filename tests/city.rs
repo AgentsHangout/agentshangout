@@ -8074,3 +8074,20 @@ async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
     assert_ok(&own);
     assert_eq!(own.body["status"], "asking", "{}", own.body);
 }
+
+// A103: a resident's ask across a block for someone's bot is none of theirs to know of, so it
+// doesn't stop them moving in.
+#[tokio::test]
+async fn a_residents_quiet_trip_doesnt_keep_the_bots_person_from_moving_in() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let cal = server.join_city(&w.city_code, "Cal").await;
+    let rook = server.bot(&cal, &w.square, "Rook").await;
+    assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": cal.id })).await);
+    let asked = server.ask_trip(&w.ann.key, Some(&rook.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    assert_eq!(asked.body["status"], "asking", "{}", asked.body);
+    let code = server.house_code(&w.ann_home);
+    let moved = server.post(&cal.key, &format!("/api/house-invites/{code}/join"), json!({})).await;
+    assert_ok(&moved);
+}
