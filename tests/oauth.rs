@@ -674,6 +674,48 @@ async fn a_bot_reads_its_own_monitoring_without_secrets() {
     assert!(rooms.iter().any(|r| r["id"] == room && r["covered"] == true), "{plain}");
 }
 
+// E46 (#698): a lapsed lease on a connection that's still on shows in inbox until it's renewed.
+#[tokio::test]
+async fn inbox_warns_while_a_live_connection_has_a_lapsed_subscription() {
+    let s = Server::start().await;
+    let (session, bot, legacy, room) = s.setup().await;
+    let client = s.register().await;
+    let code = s.code(&session, &client, &bot).await;
+    let t: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let access = t["access_token"].as_str().unwrap();
+    let (_hook, url) = Webhook::start().await;
+    let inbox = |token: String| {
+        let s = &s;
+        async move {
+            let reply =
+                s.event_rpc(&token, "tools/call", json!({"name":"inbox","arguments":{}})).await;
+            reply["result"]["structuredContent"].clone()
+        }
+    };
+    let params = subscription(&room, &url);
+    let first = s.event_rpc(access, "events/subscribe", params.clone()).await;
+    let id = first["result"]["id"].clone();
+    assert!(inbox(access.to_string()).await.get("wake_warning").is_none());
+
+    // The host missed its renewal: the lease ran out while nobody spoke.
+    for table in ["oauth_event_subscriptions", "oauth_event_health"] {
+        s.state.db.conn().execute(&format!("UPDATE {table} SET expires_at=1"), []).unwrap();
+    }
+    let lapsed = inbox(access.to_string()).await;
+    let warning = &lapsed["wake_warning"];
+    assert_eq!(warning["subscriptions"][0]["subscription_id"], id, "{lapsed}");
+    assert_eq!(warning["subscriptions"][0]["status"], "expired", "{lapsed}");
+    assert_eq!(warning["subscriptions"][0]["uncovered_rooms"][0]["id"], room, "{lapsed}");
+    let text = warning.to_string();
+    assert!(!text.contains(&url) && !text.contains(WEBHOOK_SECRET), "{lapsed}");
+    // A plain bot token has no subscription of its own, so nothing to renew.
+    assert!(inbox(legacy).await.get("wake_warning").is_none());
+
+    let renewed = s.event_rpc(access, "events/subscribe", params).await;
+    assert_eq!(renewed["result"]["id"], id);
+    assert!(inbox(access.to_string()).await.get("wake_warning").is_none());
+}
+
 #[tokio::test]
 async fn oauth_webhooks_require_public_https_callbacks_in_production() {
     let s = Server::start_with(false).await;
