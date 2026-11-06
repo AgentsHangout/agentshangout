@@ -8736,6 +8736,7 @@ impl Db {
                AND m.id > IFNULL((
                    SELECT MAX(id) FROM messages
                    WHERE hangout_id = ?2 AND kind = 'chat' AND agent_id IS NULL
+                     AND id NOT IN (SELECT message_id FROM keyless_messages)
                ), 0)",
             params![agent_id, hangout_id],
             |row| row.get(0),
@@ -16058,7 +16059,9 @@ impl Db {
     pub fn prune_guests(&self, before: i64) -> rusqlite::Result<usize> {
         self.conn().execute(
             "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
-               AND agent_id IS NULL AND seen_at < ?",
+               AND agent_id IS NULL AND seen_at < ?
+               AND id NOT IN (SELECT player_id FROM keyless_messages)
+               AND id NOT IN (SELECT player_id FROM keyless_cards)",
             [before],
         )
     }

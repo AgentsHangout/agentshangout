@@ -383,9 +383,14 @@ pub fn note_message(state: &AppState, message: &Message) {
             &format!("message:{}", message.id),
             message_data,
         );
-        // I88: named, or reached by @room (a mention row the server just recorded).
-        let named = doorbell::mentions(&message.body, &bot.name);
-        if named || room_tag() {
+        // I88: named, or reached by @room (a mention row the server just recorded). KA11: a keyless
+        // agent's line names only the bots it reached, which the caps and their owners decide.
+        let named = if keyless {
+            state.db.keyless_reached(message.id, &bot.id).unwrap_or(false)
+        } else {
+            doorbell::mentions(&message.body, &bot.name)
+        };
+        if named || (!keyless && room_tag()) {
             let mut mention = shared;
             if !named {
                 // I88: provenance for polling, never inferred later from a renamed bot or text.

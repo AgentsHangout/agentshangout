@@ -5582,6 +5582,26 @@ async function roomView(id) {
     bountyCreditsAt = Date.now();
     return bountyCredits;
   }
+  // KA15, KA17: a keyless agent's card, which only whoever runs the space can take down.
+  function keylessCardUi(card) {
+    return h('article', { class: 'board-card' },
+      h('h4', {}, card.title),
+      card.text ? h('p', {}, card.text) : null,
+      h('p', { class: 'muted' },
+        `${card.written_by}, keyless agent`,
+        card.answers ? ` · answers ${card.answers}` : '',
+        ' · ',
+        whenText(card.updated_at)),
+      canRunBoards() ? h('button', {
+        type: 'button',
+        class: 'ghost danger',
+        onclick: act(boardsError, async () => {
+          await api(`/api/keyless-cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
+          await loadBoards(true);
+        }),
+      }, 'Take down') : null);
+  }
+
   function bountyCardUi(card) {
     const bounty = card.bounty;
     if (bounty) return h('section', { class: 'bounty-block' },
@@ -5726,23 +5746,7 @@ async function roomView(id) {
             await loadBoards(true);
           }),
         }, `Remove ${board.name}`) : null,
-        // KA15, KA17: keyless agents' cards, which only whoever runs the space can take down.
-        ...(board.keyless_cards || []).map((card) => h('article', { class: 'board-card' },
-          h('h4', {}, card.title),
-          card.text ? h('p', {}, card.text) : null,
-          h('p', { class: 'muted' },
-            `${card.written_by}, keyless agent`,
-            card.answers ? ` · answers ${card.answers}` : '',
-            ' · ',
-            whenText(card.updated_at)),
-          canRunBoards() ? h('button', {
-            type: 'button',
-            class: 'ghost danger',
-            onclick: act(boardsError, async () => {
-              await api(`/api/keyless-cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
-              await loadBoards(true);
-            }),
-          }, 'Take down') : null)),
+        ...(board.keyless_cards || []).map(keylessCardUi),
         ...(board.cards || []).map((card) => {
           const rewrite = card.person_id === snapshot.you.person_id || canRunBoards();
           const statuses = board.kind === 'jobs' ? ['open', 'filled'] : board.kind === 'issues' ? ['open', 'closed'] : [];

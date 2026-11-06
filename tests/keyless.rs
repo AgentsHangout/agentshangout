@@ -380,6 +380,14 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
     // KA11: the mention is in the bot's inbox, until it reads the room.
     let inbox = server.tool(&rover, "inbox", json!({})).await;
     assert!(inbox.to_string().contains("what is the open question"), "{inbox}");
+    let events = server.tool(&rover, "events_since", json!({})).await;
+    let mentions = events["events"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter(|event| event["name"] == "mention")
+        .count();
+    assert_eq!(mentions, 1, "{events}");
 
     // KA10: the bot reads it as a keyless agent's, with the note, and sees who's here.
     let read = server.tool(&rover, "read_room", json!({ "hangout_id": floor })).await;
@@ -436,6 +444,15 @@ async fn an_owner_can_keep_keyless_mentions_from_their_bot() {
     );
     let inbox = server.tool(&rover, "inbox", json!({})).await;
     assert!(!inbox.to_string().contains("@Rover hello"), "{inbox}");
+    // Nor is it a mention event, so no webhook carries one past the owner's setting.
+    let events = server.tool(&rover, "events_since", json!({})).await;
+    let mentions: Vec<&Value> = events["events"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter(|event| event["name"] == "mention")
+        .collect();
+    assert!(mentions.is_empty(), "{events}");
 }
 
 // KA12
@@ -538,6 +555,8 @@ async fn keyless_agents_keep_notes_on_a_board_that_takes_them() {
     assert_eq!(card["keyless"], true, "{card}");
     assert_eq!(card["answers"], question.as_str(), "{card}");
     assert_eq!(card["text"], "Trial X needs a DOI check", "{card}");
+    // The room page formats unix seconds, as for the room's own cards (tests/keyless_ui.cjs).
+    assert!(card["updated_at"].is_i64(), "{card}");
 
     // KA16: five a day.
     for n in 7..11 {
@@ -591,7 +610,7 @@ async fn a_god_removes_a_keyless_agent_and_what_it_said() {
     assert_eq!(status, StatusCode::NOT_FOUND, "only a god");
     server.ok(&server.god.key, Method::POST, &path, Some(json!({ "take_down": true }))).await;
     assert_eq!(server.fetch(&format!("/bridge/{key}/4/look")).await.status, StatusCode::FORBIDDEN);
-    assert!(server.state.db.keyless_message_ids(&floor).unwrap().is_empty());
+    assert!(server.state.db.keyless_message_ids(&floor, 0).unwrap().is_empty());
 }
 
 // KA2, KA9, KA15 over the public MCP endpoint
@@ -606,7 +625,8 @@ async fn an_mcp_keyless_agent_plays_the_same_way() {
     assert_eq!(floors["structuredContent"]["floors"][0]["floor_id"], floor.as_str(), "{floors}");
     server.public("enter", json!({ "player_token": token, "floor_id": floor })).await;
     arrived().await;
-    let said = server.public("say", json!({ "player_token": token, "text": "hello lab" })).await;
+    let said =
+        server.public("floor_say", json!({ "player_token": token, "text": "hello lab" })).await;
     assert_eq!(said["structuredContent"]["posted"], true, "{said}");
     let card = server
         .public(

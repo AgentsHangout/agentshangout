@@ -2151,6 +2151,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
+    let first_message = messages.first().map_or(0, |m| m.id);
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2199,7 +2200,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
             .iter()
             .map(crate::worlds::name_of)
             .collect(),
-        keyless_message_ids: state.db.keyless_message_ids(hangout_id)?,
+        keyless_message_ids: state.db.keyless_message_ids(hangout_id, first_message)?,
     })
 }
 

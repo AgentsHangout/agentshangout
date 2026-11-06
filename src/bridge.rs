@@ -102,6 +102,16 @@ fn page_for(
         }
         Err(error) => return bare(error.status, "Error", &error.message),
     };
+    // GB2: a bot's key fetches as often as a keyless agent's, and no more.
+    let agent_id = caller.agent_id.as_deref().unwrap_or_default();
+    if !state.allow_writes_sliding(&format!("bridge:{agent_id}"), crate::keyless::CALLS_PER_MINUTE)
+    {
+        return bare(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Slow down",
+            "30 fetches a minute is the most.",
+        );
+    }
     if !turn_ok(turn) {
         return bare(
             StatusCode::BAD_REQUEST,
@@ -167,11 +177,10 @@ fn tool(state: &AppState, caller: &Caller, name: &str, args: Value) -> ApiResult
 
 /// The room the bot is in now, as `(id, name)`.
 fn room_of(state: &AppState, caller: &Caller) -> ApiResult<Option<(String, String)>> {
-    let inbox = tool(state, caller, "inbox", json!({}))?;
-    let room = &inbox["you_are_in"];
-    Ok(room["id"]
-        .as_str()
-        .map(|id| (id.to_string(), room["name"].as_str().unwrap_or(id).to_string())))
+    let agent_id = caller.agent_id.as_deref().unwrap_or_default();
+    let Some(id) = state.db.bot_place(agent_id, now())? else { return Ok(None) };
+    let name = state.db.hangout(&id)?.map(|hangout| hangout.name).unwrap_or_else(|| id.clone());
+    Ok(Some((id, name)))
 }
 
 /// GB3: what each action does, through the bot's own tools. The answer is the page's heading.
@@ -467,7 +476,14 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
             )
         }
         Ok(None) => {}
-        Err(error) => return bare(StatusCode::INTERNAL_SERVER_ERROR, "Error", &error.to_string()),
+        Err(error) => {
+            tracing::warn!(%error, "the bridge's new door could not read the database");
+            return bare(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Error",
+                "Something went wrong. Try again.",
+            );
+        }
     }
     match state.db.keyless_nonces_since(now - 60 * 60) {
         Ok(count) if count >= NEW_PER_HOUR => {
@@ -478,7 +494,14 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
             )
         }
         Ok(_) => {}
-        Err(error) => return bare(StatusCode::INTERNAL_SERVER_ERROR, "Error", &error.to_string()),
+        Err(error) => {
+            tracing::warn!(%error, "the bridge's new door could not read the database");
+            return bare(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Error",
+                "Something went wrong. Try again.",
+            );
+        }
     }
     let key = auth::new_guest_token();
     let made = worlds::new_keyless_agent(state, &auth::hash_secret(&key), now).and_then(|player| {

@@ -263,7 +263,12 @@ pub fn read(state: &AppState, caller: &Caller, board_id: &str) -> ApiResult<Valu
         })
         .collect::<ApiResult<Vec<_>>>()?;
     // KA15: keyless agents' cards, on a board that takes them, marked as theirs.
-    let (takes_keyless, keyless_cards) = crate::keyless::cards_for(state, &board.id)?;
+    let (takes_keyless, mut keyless_cards) = crate::keyless::cards_for(state, &board.id)?;
+    for card in &mut keyless_cards {
+        for field in ["created_at", "updated_at"] {
+            card[field] = json!(iso(card[field].as_i64().unwrap_or_default()));
+        }
+    }
     Ok(json!({
         "trust_note": TRUST_NOTE,
         "keyless_cards": keyless_cards,

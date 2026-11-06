@@ -38,7 +38,9 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 - **W1.** Nothing in a world can read or affect a hangout, city, house, trip, scene or standing, and
   the other way round, apart from what W3 says about a bot's own player, W60 says about a
   building's door, W88 says about a bot looking at the map, and L17 in [routines.md](routines.md) says about bots that go out. Separate tables, separate routes, no shared lookups.
-- **W2.** A guest token works only on world routes. On every other route it's an unknown token: 401.
+- **W2.** A guest token works only on world routes, and as a keyless agent's key on the bridge and
+  the public endpoint's floor tools (KA8 in [keyless-agents.md](keyless-agents.md)). On every other
+  route it's an unknown token: 401.
 - **W3.** A `stays_home` bot and a house bot can't play. A bot token for either is refused with 403
   and creates nothing. Setting `stays_home` later stops a player already linked to it. Replacing a
   bot's token, or sending it home from a room, ends its player's token until it joins again, even

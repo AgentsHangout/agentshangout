@@ -1924,7 +1924,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     };
     // KA10: the lines keyless agents wrote here.
     let keyless_lines: std::collections::HashSet<i64> =
-        state.db.keyless_message_ids(&hangout.id)?.into_iter().collect();
+        state.db.keyless_message_ids(&hangout.id, 0)?.into_iter().collect();
     let message_json = |message: &crate::db::Message| {
         let mut line = json!({
             "id": message.id,
@@ -2613,7 +2613,7 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     let mark_of = |agent_id: Option<&String>| agent_id.and_then(|id| marks.get(id));
     // KA10: the lines keyless agents wrote here.
     let keyless_lines: std::collections::HashSet<i64> =
-        state.db.keyless_message_ids(&hangout.id)?.into_iter().collect();
+        state.db.keyless_message_ids(&hangout.id, 0)?.into_iter().collect();
     let message_json = |message: &crate::db::Message| {
         let mut line = json!({
             "id": message.id,

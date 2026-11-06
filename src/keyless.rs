@@ -14,9 +14,7 @@ use crate::{
     auth::{self, Caller},
     db::{KeylessCard, Message, NewMessage, PlayerRow},
     error::{ApiError, ApiResult},
-    god_mode, now,
-    ops::{self, iso},
-    spaces, worlds, AppState,
+    god_mode, now, ops, spaces, worlds, AppState,
 };
 
 /// KA9: the longest line a keyless agent can say.
@@ -51,12 +49,21 @@ pub struct Keyless {
     pub name: String,
 }
 
-/// KA1: the keyless agent a key belongs to, if it may play now.
+/// KA8: calls a minute from one keyless agent, over the bridge and MCP together.
+pub const CALLS_PER_MINUTE: u32 = 30;
+
+/// KA1: the keyless agent a key belongs to, if it may play now. KA8: past its calls for the minute
+/// it is told to slow down.
 pub fn from_key(state: &AppState, key: &str) -> ApiResult<Option<Keyless>> {
-    Ok(worlds::keyless_agent(state, key, now())?.map(|player| {
-        let name = worlds::name_of(&player);
-        Keyless { player, name }
-    }))
+    let Some(player) = worlds::keyless_agent(state, key, now())? else { return Ok(None) };
+    if !state.allow_writes_sliding(&format!("keyless:{}", player.id), CALLS_PER_MINUTE) {
+        return Err(ApiError::too_many_requests(format!(
+            "{CALLS_PER_MINUTE} calls a minute is the most: wait a minute"
+        ))
+        .retry_after(60));
+    }
+    let name = worlds::name_of(&player);
+    Ok(Some(Keyless { player, name }))
 }
 
 // KA7: floors
@@ -65,7 +72,7 @@ pub fn from_key(state: &AppState, key: &str) -> ApiResult<Option<Keyless>> {
 pub fn open_floors(state: &AppState) -> ApiResult<Vec<(String, String)>> {
     let mut open = Vec::new();
     for (id, name) in state.db.keyless_floors()? {
-        if public(state, &id)? {
+        if floor_open(state, &id)? {
             open.push((id, name));
         }
     }
@@ -81,7 +88,14 @@ fn public(state: &AppState, hangout_id: &str) -> ApiResult<bool> {
 }
 
 fn floor_open(state: &AppState, hangout_id: &str) -> ApiResult<bool> {
-    Ok(state.db.is_keyless_floor(hangout_id)? && public(state, hangout_id)?)
+    if !state.db.is_keyless_floor(hangout_id)? {
+        return Ok(false);
+    }
+    if !public(state, hangout_id)? {
+        state.db.set_keyless_floor(hangout_id, false, "", now())?;
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// Where a keyless agent is: the floor, its name, and when it arrived. A floor that closed to
@@ -133,11 +147,13 @@ fn floor_of(state: &AppState, agent: &Keyless) -> ApiResult<(String, i64)> {
 pub fn read(state: &AppState, agent: &Keyless, limit: i64) -> ApiResult<Option<Value>> {
     let Some((hangout_id, name, since)) = here(state, agent)? else { return Ok(None) };
     let now = now();
-    let keyless_ids: std::collections::HashSet<i64> =
-        state.db.keyless_message_ids(&hangout_id)?.into_iter().collect();
-    let lines: Vec<Value> = state
+    let messages = state.db.messages_since(&hangout_id, since, 0, limit.clamp(1, 50))?;
+    let keyless_ids: std::collections::HashSet<i64> = state
         .db
-        .messages_since(&hangout_id, since, 0, limit.clamp(1, 50))?
+        .keyless_message_ids(&hangout_id, messages.first().map_or(0, |m| m.id))?
+        .into_iter()
+        .collect();
+    let lines: Vec<Value> = messages
         .into_iter()
         .filter(|message| message.kind == "chat")
         .map(|message| {
@@ -228,8 +244,8 @@ pub fn keyless_card_json(card: &KeylessCard, by: &str) -> Value {
         "keyless": true,
         "answers": card.answers,
         "status": null,
-        "created_at": iso(card.created_at),
-        "updated_at": iso(card.updated_at),
+        "created_at": card.created_at,
+        "updated_at": card.updated_at,
     })
 }
 
@@ -311,7 +327,9 @@ fn mention(
     }
     let (mut reached, mut not_reached) = (Vec::new(), Vec::new());
     for bot in bots {
-        if !crate::doorbell::mentions(&message.body, &bot.name) {
+        if !crate::doorbell::mentions(&message.body, &bot.name)
+            || state.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house)
+        {
             continue;
         }
         let (mine, floor) =

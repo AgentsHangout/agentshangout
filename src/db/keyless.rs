@@ -136,14 +136,18 @@ impl Db {
         exists(&self.conn(), "SELECT 1 FROM keyless_messages WHERE message_id = ?", [message_id])
     }
 
-    /// The ids among `ids` that keyless agents wrote.
-    pub fn keyless_message_ids(&self, hangout_id: &str) -> rusqlite::Result<Vec<i64>> {
+    /// The lines keyless agents wrote in a room, from `from_id` on.
+    pub fn keyless_message_ids(
+        &self,
+        hangout_id: &str,
+        from_id: i64,
+    ) -> rusqlite::Result<Vec<i64>> {
         let conn = self.conn();
         let mut statement = conn.prepare(
             "SELECT k.message_id FROM keyless_messages k JOIN messages m ON m.id = k.message_id
-             WHERE m.hangout_id = ? ORDER BY k.message_id",
+             WHERE m.hangout_id = ? AND k.message_id >= ? ORDER BY k.message_id",
         )?;
-        let rows = statement.query_map([hangout_id], |row| row.get(0))?;
+        let rows = statement.query_map(params![hangout_id, from_id], |row| row.get(0))?;
         rows.collect()
     }
 
@@ -209,6 +213,24 @@ impl Db {
             |row| row.get(0),
         )?;
         Ok((mine, floor))
+    }
+
+    /// KA11: whether this keyless line reached this bot.
+    pub fn keyless_reached(&self, message_id: i64, agent_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM keyless_mentions WHERE message_id = ? AND agent_id = ?",
+            params![message_id, agent_id],
+        )
+    }
+
+    /// KA3: wipes the key and page of every nonce whose time is up.
+    pub fn wipe_keyless_nonces(&self, now: i64) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "UPDATE keyless_nonces SET key_plain = NULL, page = NULL
+             WHERE shown_until <= ? AND key_plain IS NOT NULL",
+            [now],
+        )
     }
 
     pub fn set_keyless_mentions_heard(&self, agent_id: &str, heard: bool) -> rusqlite::Result<()> {
@@ -365,7 +387,7 @@ impl Db {
         let tx = conn.transaction()?;
         let stopped = tx.execute(
             "UPDATE players SET removed = 1, token_hash = NULL
-             WHERE id = ? AND person_id IS NULL AND agent_id IS NULL AND claim_hash IS NULL",
+             WHERE id = ? AND person_id IS NULL AND agent_id IS NULL AND removed = 0",
             [player_id],
         )?;
         if stopped == 0 {

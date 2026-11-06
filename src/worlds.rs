@@ -2921,6 +2921,10 @@ pub fn housekeeping(state: &AppState, now: i64) {
     // L27, L29: bots go out in their hours, and are asked to meet the bots they find there.
     crate::routines::social_round(state, now);
     crate::ops::flush_held_mentions(state, now);
+    // KA3: a new door's key and page don't outlive their ten minutes.
+    if let Err(error) = state.db.wipe_keyless_nonces(now) {
+        tracing::warn!(%error, "keyless agents' new-door keys could not be wiped");
+    }
     let last = state.worlds.last_prune.load(Ordering::Relaxed);
     if now - last >= 3600
         && state
