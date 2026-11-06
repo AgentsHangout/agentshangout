@@ -10334,6 +10334,8 @@ impl Db {
                 &format!(
                     "SELECT {TRIP_COLS} FROM {TRIPS}
                      WHERE t.agent_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+                       AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                       WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)
                      ORDER BY t.created_at DESC LIMIT 1"
                 ),
                 params![agent_id, house_id, now],
@@ -10351,7 +10353,9 @@ impl Db {
     ) -> rusqlite::Result<i64> {
         self.conn().query_row(
             "SELECT COUNT(*) FROM trips t JOIN agents a ON a.id = t.agent_id
-             WHERE a.owner_id = ? AND t.house_id = ? AND t.status = 'asking' AND t.expires_at > ?",
+             WHERE a.owner_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)",
             params![owner_id, house_id, now],
             |row| row.get(0),
         )
@@ -16446,6 +16450,20 @@ impl Db {
             "INSERT OR IGNORE INTO people (id, name, color, key_hash, feed_token, created_at)
              VALUES (?, ?, '#8a8f98', lower(hex(randomblob(32))), lower(hex(randomblob(32))), 0)",
             params![SOMEONE_WHO_LEFT_ID, SOMEONE_WHO_LEFT],
+        )?;
+        // A103: marks on this person's asks, either side, go with them: those keyed by a row's id
+        // or one of their bots', looked up while the rows are still here. Pair keys are below.
+        tx.execute(
+            "DELETE FROM quiet_asks WHERE ask_id IN (
+                SELECT id FROM friend_invites WHERE from_person = ?1 OR to_person = ?1
+                UNION SELECT id FROM check_ins WHERE asked_by = ?1 OR to_person = ?1
+                UNION SELECT t.id FROM trips t JOIN agents a ON a.id = t.agent_id
+                      WHERE a.owner_id = ?1 OR t.asked_by = ?1
+                UNION SELECT id FROM apprentice_proposals
+                      WHERE proposer_owner = ?1 OR partner_owner = ?1)
+             OR EXISTS (SELECT 1 FROM agents a
+                        WHERE a.owner_id = ?1 AND quiet_asks.ask_id LIKE '%' || a.id || '%')",
+            [person_id],
         )?;
         pass_on_house_bots(&tx, person_id, &mut gone)?;
         // A house bot that goes with its house still has a name to take off the rest.

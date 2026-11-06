@@ -157,9 +157,20 @@ pub(crate) fn announce(state: &AppState, hangout_id: &str, body: &str) -> ApiRes
 
 /// `announce`, giving back the line it wrote.
 pub(crate) fn announced(state: &AppState, hangout_id: &str, body: &str) -> ApiResult<Message> {
+    announced_about(state, hangout_id, None, body)
+}
+
+/// `announced`, with the line tied to the person it's about, so whoever blocked them doesn't see it
+/// (A101). Said by the Hangout all the same.
+fn announced_about(
+    state: &AppState,
+    hangout_id: &str,
+    about: Option<&str>,
+    body: &str,
+) -> ApiResult<Message> {
     let message = state.db.insert_message(&NewMessage {
         hangout_id,
-        person_id: None,
+        person_id: about,
         agent_id: None,
         speaker: "Hangout",
         kind: "system",
@@ -1395,13 +1406,21 @@ pub fn create_check_in(
     };
     if across {
         state.db.quiet_ask("check_in", &id, now)?;
-    } else {
-        let audience = target.map_or("the room", |person| person.name.as_str());
-        announce_in_house_only(
-            state,
-            hangout_id,
-            &format!("{} is checking in with {audience}: {about}", caller.name),
-        )?;
+    }
+    let audience = target.map_or("the room", |person| person.name.as_str());
+    let line = format!("{} is checking in with {audience}: {about}", caller.name);
+    match target {
+        // A103: the room line still goes up, so the asker sees what any check-in shows. Tied to
+        // them, it's hidden from the person who blocked them (A101). An asker who did the
+        // blocking knows already, and the other side mustn't see an ask they can't answer.
+        Some(person) if across => {
+            if state.db.has_blocked(&person.id, &caller.person_id)?
+                && !has_guests(state, hangout_id)?
+            {
+                announced_about(state, hangout_id, Some(&caller.person_id), &line)?;
+            }
+        }
+        _ => announce_in_house_only(state, hangout_id, &line)?,
     }
     let text = format!("{} is asking before acting: {about}", caller.name);
     match target {

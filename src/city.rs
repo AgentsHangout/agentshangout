@@ -518,7 +518,13 @@ pub fn build_house(
 pub fn house_view(state: &AppState, caller: &Caller, house_id: &str) -> ApiResult<HouseView> {
     let house = resident_house(state, caller, house_id, "see a house's page")?;
     let now = now();
-    let trips = state.db.trips_for_house(&house.id, now - DAY_SECS, now)?;
+    // A103: a trip the bot's side asked across a block is never seen by the house.
+    let mut trips = Vec::new();
+    for trip in state.db.trips_for_house(&house.id, now - DAY_SECS, now)? {
+        if !crate::blocks::quiet(state, "trip", &trip.id)? {
+            trips.push(trip);
+        }
+    }
     let bots = state
         .db
         .bots_of_house(&house.id, now)?
@@ -595,10 +601,13 @@ pub fn join_house(
     let now = now();
     // Moving in while one of your bots is asking to visit, or visiting, would put both sides of
     // that trip in one person's hands.
-    let busy =
-        state.db.trips_for_owner(&person.id, now, now)?.into_iter().any(|trip| {
-            trip.house_id == house.id && matches!(trip.status.as_str(), "asking" | "here")
-        });
+    // A103: a resident's ask made across a block isn't theirs to know of, and never starts.
+    let mut busy = false;
+    for trip in state.db.trips_for_owner(&person.id, now, now)? {
+        busy |= trip.house_id == house.id
+            && matches!(trip.status.as_str(), "asking" | "here")
+            && !crate::blocks::quiet(state, "trip_from_house", &trip.id)?;
+    }
     if busy {
         return Err(ApiError::conflict(
             "one of your bots has a trip to this house: wait until it ends, then move in",
@@ -1099,7 +1108,10 @@ pub fn answer_trip(
             return Err(ApiError::conflict("that request was just answered"));
         }
         let mut others = resident_ids(state, &house.id)?;
-        others.push(trip.owner_id.clone());
+        // A103: the bot's side never heard of a resident's ask across a block, so isn't told.
+        if !crate::blocks::quiet(state, "trip_from_house", &trip.id)? {
+            others.push(trip.owner_id.clone());
+        }
         others.retain(|id| *id != caller.person_id);
         let text =
             format!("{} said no to {}'s trip to {}.", caller.name, trip.agent_name, house.name);

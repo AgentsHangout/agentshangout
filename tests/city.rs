@@ -8020,6 +8020,8 @@ async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
     let w = server.world().await;
     let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
     let pixel = server.bot(&w.bo, &w.bo_home.living, "Pixel").await;
+    let ann2 = server.move_in(&w.ann_home, "Ann2").await;
+    let bo_heard = server.notify_to(&w.bo).await;
     assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": w.bo.id })).await);
 
     let trip_ids = |body: &Value, key: &str| -> Vec<String> {
@@ -8037,6 +8039,10 @@ async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
     assert!(!trip_ids(&anns, "trips").contains(&id), "{anns}");
     assert_not_found(&server.get(&w.ann.key, &format!("/api/trips/{id}")).await);
     assert_not_found(&server.answer_trip(&w.ann.key, &id, "yes").await);
+    // Nor does the house's page list it, as asking or anywhere else.
+    let page = server.get(&w.ann.key, &format!("/api/houses/{}", w.ann_home.id)).await;
+    assert_ok(&page);
+    assert!(!has(&page.body, &id), "{}", page.body);
 
     // A resident asks for the bot: it waits for Ann, and Bo and Pixel never see it.
     let asked =
@@ -8050,4 +8056,17 @@ async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
     assert_not_found(&server.answer_trip(&w.bo.key, &id, "yes").await);
     let inbox = server.tool(&pixel.token, "inbox", json!({})).await["structuredContent"].clone();
     assert!(!inbox.to_string().contains(&id), "Pixel never hears of it: {inbox}");
+    // Another resident says no: Bo isn't told, and Pixel gets no event for it.
+    let no = server.answer_trip(&ann2.key, &id, "no").await;
+    assert_ok(&no);
+    assert!(notices_of(&bo_heard, "trip.ended").await.is_empty());
+    let heard = server.tool(&pixel.token, "events_since", json!({ "since": "0" })).await;
+    assert!(!has(&heard, &id), "{heard}");
+    // A resident asking again leaves Pixel's own asks free: it isn't "already open" for Pixel.
+    let again =
+        server.ask_trip(&w.ann.key, Some(&pixel.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&again);
+    let own = server.ask_trip(&pixel.token, None, &w.ann_home.id, "call", "", None).await;
+    assert_ok(&own);
+    assert_eq!(own.body["status"], "asking", "{}", own.body);
 }

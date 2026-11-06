@@ -326,6 +326,7 @@ pub fn invite_people(
                 if !crate::blocks::apart(state, &caller.person_id, &person.id)?
                     && crate::blocks::quiet(state, "plan_invite", &key)?
                 {
+                    state.db.retell_plan_invite(&event.id, &person.id, &caller.person_id, now)?;
                     state.db.unquiet_ask("plan_invite", &key)?;
                     tell_invited(state, caller, &event, &person);
                     added.push(person);

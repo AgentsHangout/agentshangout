@@ -156,6 +156,9 @@ fn send(
         ));
     }
     let across = crate::blocks::apart(state, &caller.person_id, &friend.id)?;
+    // A103: a real invite takes over one kept quiet from someone across a block, and is new.
+    let took = !across
+        && state.db.take_quiet_friend_invite(kind, place_id, &friend.id, &caller.person_id, now)?;
     let id = auth::new_id();
     let fresh = state.db.add_friend_invite(
         &id,
@@ -166,12 +169,16 @@ fn send(
         now,
         now - INVITE_SECS,
     )?;
-    // A103: across a block it's kept as sent, and goes nowhere. Sent again with no block between
-    // them, it's real, and an old mark comes off.
-    if fresh && across {
-        state.db.quiet_ask("friend_invite", &id, now)?;
-    } else if !across {
-        state.db.unquiet_friend_invite(kind, place_id, &caller.person_id, &friend.id)?;
+    // A103: the stored invite is reused by every send, so its mark follows whoever it's from now.
+    // From across a block it's kept as sent, and goes nowhere; from anyone else, it's real.
+    let mut fresh = fresh || took;
+    if let Some((row, from)) = state.db.friend_invite_row(kind, place_id, &friend.id)? {
+        if crate::blocks::apart(state, &from, &friend.id)? {
+            state.db.quiet_ask("friend_invite", &row, now)?;
+            fresh = false;
+        } else {
+            state.db.unquiet_ask("friend_invite", &row)?;
+        }
     }
     if fresh && !across {
         let text = format!("{} invited you to {place_name}.", caller.name);
