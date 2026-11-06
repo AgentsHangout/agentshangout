@@ -39,7 +39,7 @@ const api = async (path, options = {}) => {
   if (path.startsWith('/api/agents/') && path.endsWith('/usage')) return {days:[{day:'2026-11-03',calls:5,refused:1,errors:0,events_delivered:3,reply_chars:700,reported_cost_cents:null},{day:'2026-11-04',calls:2,refused:0,errors:0,events_delivered:9,reply_chars:41779,reported_cost_cents:1234}],refusals:{forbidden:1},last_activity_at:null,reported_cost_cents_30d:1234,cost_note:'Cost and tokens are reported by the bot itself.'};
   if (path.endsWith('/monitoring')) return new Promise((resolve,reject) => deferred.push({path,resolve,reject}));
   if (path.endsWith('/doorbell')) return {};
-  if (path.endsWith('/bonds')) return {bonds: crowd ? ['Mac','Chainy','Victor Sausage','Axiom','Ron','Morgkorg','A very long bot name indeed','Aionoro','Kyle’s Agent'].map((name,i)=>({agent:{id:`x${i}`,name},strength:i+1,built:0})) : []};
+  if (path.endsWith('/bonds')) return {bonds: crowd === 'long' ? Array.from({length:16},(_,i)=>({agent:{id:`l${i}`,name:`Wandering Correspondent ${i}`},strength:i+1,built:0})) : crowd ? ['Mac','Chainy','Victor Sausage','Axiom','Ron','Morgkorg','A very long bot name indeed','Aionoro','Kyle’s Agent'].map((name,i)=>({agent:{id:`x${i}`,name},strength:i+1,built:0})) : []};
   if (path.endsWith('/notify')) { if (options.method === 'PUT') return {}; if (path.includes('/two/')) throw Error('Notify temporarily unavailable'); return {only_me:false,url:null}; }
   if (path.endsWith('/routine')) return options.method === 'PUT' ? {} : {days:['mon'],starts:'09:00',ends:'24:00',public_places:true};
   throw Error(`Unexpected ${path}`);
@@ -175,6 +175,26 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   }
   // BT11: the graph opens fitted, with labelled zoom buttons; + then - returns to the same scale.
   const scaleOf = () => Number(all(body).find(n=>n.props.class==='trust-world').props['data-scale']);
+  // BT12: the size a browser computes for a name. An author rule's font-size beats the SVG font-size
+  // attribute, so this reads every trust.css rule that reaches a label (and the narrow-screen ones
+  // when the screen is narrow) before falling back to the attribute trust.js set.
+  let narrowScreen = false;
+  const sheet = fs.readFileSync('web/trust.css','utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+  const rules = [];
+  for (const m of sheet.matchAll(/@media([^{]*)\{((?:[^{}]*\{[^{}]*\})*)\s*\}|([^{}@]+)\{([^{}]*)\}/g)) {
+    if (m[3]) rules.push({media:null, selector:m[3], decls:m[4]});
+    else for (const r of m[2].matchAll(/([^{}]+)\{([^{}]*)\}/g)) rules.push({media:m[1], selector:r[1], decls:r[2]});
+  }
+  const computedSize = label => {
+    let size = Number(label.props['font-size']);
+    for (const r of rules) {
+      if (r.media && !(narrowScreen && /max-width:\s*600px/.test(r.media))) continue;
+      if (!r.selector.split(',').some(s => /^\.trust-node\b.*\s\.label$/.test(s.trim()))) continue;
+      const set = r.decls.match(/(?:^|;)\s*font-size:\s*([\d.]+)px/) || r.decls.match(/(?:^|;)\s*font:[^;]*?([\d.]+)px/);
+      if (set) size = Number(set[1]);
+    }
+    return size;
+  };
   const inside = () => {
     const world = all(body).find(n=>n.props.class==='trust-world');
     const [ox,oy] = world.props.transform.match(/translate\(([-\d.e]+) ([-\d.e]+)\)/).slice(1).map(Number), k = scaleOf();
@@ -182,9 +202,11 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
       const [x,y] = g.props.transform.match(/-?[\d.]+/g).map(Number);
       // The frame with its ring, and the name under it: the whole of what is drawn for this node.
       const half = (g.props.class.includes(' you')?22:g.props.class.includes(' person')?17:g.props.class.includes(' mine')?19:16)+5;
-      const label = all(g).find(n=>n.props.class==='label'); const w = [...text(label).replace(/\s+/g,' ').trim()].length*6.4+6;
+      // The name at the size it is really drawn, which is larger when zoomed out (BT12).
+      const label = all(g).find(n=>n.props.class==='label'), grow = computedSize(label)/11;
+      const w = [...text(label).replace(/\s+/g,' ').trim()].length*6.4*grow+6;
       const lx = x+Number(label.props.x), ly = y+Number(label.props.y);
-      const x0 = Math.min(x-half,lx-w/2), x1 = Math.max(x+half,lx+w/2), y0 = Math.min(y-half,ly-10), y1 = Math.max(y+half,ly+3);
+      const x0 = Math.min(x-half,lx-w/2), x1 = Math.max(x+half,lx+w/2), y0 = Math.min(y-half,ly-10*grow), y1 = Math.max(y+half,ly+3);
       return {name:g.props['aria-label'], x:ox+x*k, y:oy+y*k, x0:ox+x0*k, x1:ox+x1*k, y0:oy+y0*k, y1:oy+y1*k};
     });
   };
@@ -244,6 +266,30 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   assert.ok(scaleOf()<=1.5&&scaleOf()!==hand,`a different set of nodes is fitted again: ${scaleOf()}`);
   const refit = scaleOf(); findButton(body,'Fit').props.onclick(); assert.equal(scaleOf(),refit,'and that is the fit');
   wholeInView('the view fitted for the new set');
+  // BT12 (#627): a graph of long names fits zoomed out. Each name is drawn larger by trust.js, the
+  // stylesheet doesn't undo that, and every name is still whole inside the picture. The same holds on
+  // a narrow screen, where names start larger.
+  const readableAtFit = async (base, where) => {
+    const wide = build({figure}); await wide.open(); await tick(); await tick();
+    const k = scaleOf(); assert.ok(k<1,`${where}: a graph of long names fits zoomed out, at ${k}`);
+    const shown = all(body).filter(n=>n.tag==='text'&&n.props.class==='label');
+    assert.ok(shown.some(l=>text(l).includes('…')),`${where}: long names are among them`);
+    for (const l of shown) {
+      const size = computedSize(l);
+      assert.equal(size,Number(l.props['font-size']),`${where}: the stylesheet leaves ${text(l)} at the size trust.js chose`);
+      assert.ok(size>base,`${where}: zoomed out, ${text(l)} is drawn larger than ${base}, not ${size}`);
+      assert.ok(size*k>=Math.min(base,base*15/11*k)-1e-9,`${where}: ${text(l)} is ${size*k} on screen at scale ${k}`);
+    }
+    wholeInView(`${where} at Fit`);
+    findButton(body,'−').props.onclick(); const out = scaleOf();
+    for (const l of all(body).filter(n=>n.tag==='text'&&n.props.class==='label')) assert.ok(computedSize(l)*out>=Math.min(base,base*15/11*out)-1e-9,`${where}: zoomed out by hand, ${text(l)} stays readable`);
+    findButton(body,'Fit').props.onclick(); wholeInView(`${where} after Fit again`);
+  };
+  crowd = 'long';
+  await readableAtFit(11,'a wide screen');
+  narrowScreen = true; context.matchMedia = query => ({matches:/max-width:\s*600px/.test(query)});
+  await readableAtFit(13,'a narrow screen');
+  narrowScreen = false; delete context.matchMedia;
   crowd = false;
   // U22: a bot's owner sees the events handed to it each day beside its calls.
   const owned = build(); await owned.open(); await tick();

@@ -155,6 +155,27 @@ in the Trust panel's graph.
   feelings about but no other link added as nodes. Picking a node shows the bot's note on it, and
   picking the bot shows when it last slept, its notes and its newest 10 moments, each with a delete
   button.
+- **MM19.** Beside the graph's Fit button is **Expand** (#625). Expanded, the panel takes all the space
+  under the top bar, and the map fills it with the notes on what is picked (MM21) beside it on a wide
+  screen and under it on a narrow one; the key goes under the notes and the picked node's settings
+  wait until it is not expanded. The button then reads **Exit expanded**. Escape exits too, before
+  anything else on the page hears it, and either way focus goes back to the button. What is picked
+  stays picked both ways, and opening the panel again starts it not expanded.
+- **MM20.** Fit still fits the whole map in the picture it is in (BT11). Expanded, that picture is the
+  shape of the space it has, at one unit to a pixel, never smaller than the panel's 480 by 300 and at
+  most two and a half times it. The nodes spread out over it in proportion and names that would still
+  meet are moved apart, so a crowded map gets more room rather than only being drawn bigger. A
+  picture of a new shape, on expanding, exiting or resizing the window, is fitted again.
+- **MM21.** The notes on what is picked sit next to the graph, beside it when there's room and under it
+  when not, and always ahead of the picked node's permissions and friendships. Picking the bot shows
+  what MM16 says; picking anyone else shows the bot's note on them.
+- **MM22.** Those notes say which of three things is true: they are being read; there are none ("No
+  notes yet.", or that the bot has no note on whoever is picked); or reading them failed, with the
+  reason and a **Retry** button that reads them again. A failure never looks like having no notes.
+- **MM23.** Anything that arrives while the owner is in one of the panel's fields (a reply about the
+  bot's notes, health, bonds or settings) is kept and drawn once focus leaves the panel's buttons and
+  fields, or when something they do draws the panel anyway, so nothing they are typing is replaced. A
+  new name being typed for the bot, and unsaved permissions, outlast the panel being drawn again.
 
 ## Routes and tools
 

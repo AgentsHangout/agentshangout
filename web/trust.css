@@ -64,7 +64,8 @@
 .trust-node image.head { image-rendering: pixelated; pointer-events: none; }
 .trust-node .initial { font: 700 13px var(--ui); fill: var(--wd-ink, #2b1d10); pointer-events: none; }
 .trust-node.you .initial, .trust-node.mine .initial { fill: #fff3d2; }
-.trust-node .label { font: 600 11px var(--ui); fill: var(--wd-ink, #2b1d10); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
+/* BT12: no font-size here. trust.js sizes each name for the zoom, and a size set here would win over it. */
+.trust-node .label { font-family: var(--ui); font-weight: 600; fill: var(--wd-ink, #2b1d10); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
 .trust-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
 .trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2, #a94a26); }
 .trust-legend .swatch:first-child { margin-left: 0; }
@@ -95,6 +96,39 @@
 .trust-memory-text { overflow-wrap: anywhere; white-space: pre-wrap; }
 div.trust-memory { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid rgba(120, 90, 44, .35); }
 
+/* MM21: the notes on what is picked sit beside the map when there's room, under it when not, and
+   always ahead of the picked node's settings. */
+.trust-map { display: flex; flex-wrap: wrap; align-items: start; gap: var(--surface-gap); min-width: 0; }
+.trust-map > .trust-stage { flex: 3 1 420px; min-width: 0; }
+.trust-side { flex: 1 1 220px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.trust-notes { display: grid; gap: 6px; min-width: 0; padding: 10px; background: var(--wd-face-2); box-shadow: inset 1px 1px 0 var(--wd-hi), inset -1px -1px 0 var(--wd-lo); }
+.trust-notes :is(h4, h5, p, dl) { margin: 0; }
+.trust-notes h4 { font: 700 13px/1.3 var(--ui); }
+.trust-notes h5 { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.trust-notes .error { overflow-wrap: anywhere; }
+/* MM19: expanded, the panel takes all the space under the top bar and the map fills it, beside the
+   notes on a wide screen and over them on a narrow one. */
+.wd-game > .game-panel.trust-expanded-panel { position: relative; align-self: stretch; justify-self: stretch; width: auto; max-width: none; height: auto; max-height: none; }
+.trust-map.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 340px);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  background: #efe3c2;
+}
+.trust-expanded-panel .trust-map.expanded { position: absolute; inset: 3px; z-index: 5; }
+.trust-map.expanded > .trust-stage { max-width: none; height: 100%; min-height: 0; margin: 0; }
+.trust-map.expanded .trust-graph { height: 100%; }
+.trust-map.expanded > .trust-side { min-height: 0; overflow-y: auto; }
+@media (max-width: 759px) {
+  .trust-map.expanded { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 40%); gap: 6px; padding: 6px; }
+}
+
 /* Monitoring keeps its steps as a plain numbered list. */
 .trust-pipeline { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .trust-pipeline li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
@@ -107,7 +141,6 @@ div.trust-memory { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 
 .trust-settings form { display: grid; gap: 12px; }
 @media (max-width: 600px) {
   .wd-game > .game-panel-trust { width: calc(100% - 24px); }
-  .trust-node .label { font-size: 13px; }
 }
 .trust-usage { width: 100%; border-collapse: collapse; font-size: .85em; margin: 6px 0; }
 .trust-usage th, .trust-usage td { text-align: left; padding: 2px 6px; border-bottom: 1px solid rgba(120, 90, 44, .25); overflow-wrap: anywhere; }

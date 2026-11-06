@@ -1565,6 +1565,12 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .lific-card-actions select, .lific-card-actions button { min-height: 26px; padding: 0 6px; font-size: 11px; background: rgba(255, 255, 255, .55); border: 1px solid rgba(45, 36, 20, .35); }
 .lific-empty { margin: 0; padding: 8px; font-size: 12px; font-style: italic; color: #f2dcb0; }
 .lific-add input { width: 100%; padding: 8px; font-size: 13px; background: rgba(255, 252, 235, .7); border: 1px dashed rgba(60, 34, 16, .6); }
+.lific-credit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 10px 0 0; font-size: 12px; }
+.lific-star { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 8px; border: 1px solid currentColor; border-radius: 6px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.lific-star:hover, .lific-star:focus-visible { text-decoration: underline; }
+.lific-star span[aria-hidden] { color: #c98a00; }
+.lific-star-count { padding-left: 6px; border-left: 1px solid currentColor; font-variant-numeric: tabular-nums; }
+.lific-star-count[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .lific-card { transition: none; } }
 
 .game-panel:focus { outline: none; }
@@ -3007,26 +3013,16 @@ input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, 
 .person-card-foot .person-card-note { padding: 3px 6px; }
 .stage.over-person { cursor: pointer; }
 
-/* W112, #643 B: the follow links, upper right, out of the way of the page. */
+/* W112: normal flow inside More; shared game panels/buttons own the colours and bevels.
+   See web/brand/README.md before adding a control surface. */
 .social-strip {
-  position: fixed;
-  top: 8px;
-  right: 8px;
-  /* Under the map's menus and person cards (40, 41), so a click's menu always covers it. */
-  z-index: 30;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  max-width: calc(100vw - 16px);
-  padding: 6px 8px 6px 12px;
-  background: var(--panel);
-  border: 1px solid var(--panel-2);
-  border-radius: 8px;
-  font-size: 0.85rem;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: var(--surface-gap);
+  border-top: 1px solid var(--line);
 }
-.social-strip-link { white-space: nowrap; }
-.social-strip-hide { padding: 2px 6px; }
+.social-strip .social-strip-link { white-space: normal; overflow-wrap: anywhere; }
 
 /* MY1 to MY7, #639: the Mayor voting box's panel. */
 .mayor-choices { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
