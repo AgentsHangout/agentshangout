@@ -857,6 +857,8 @@ The panel's side of A114 is checked by `tests/bot_signups_ui.cjs`, run from `tes
   webhooks. A read says only `hidden`, how many it left out, never whose, and a thread whose root
   they wrote shows the root as `text_hidden: "hidden"`. It's one way: the blocked person still sees
   the blocker's lines, the room's record is the same for everyone else, and the map hides nobody.
+  Lines are hidden while the block stands; once it's taken back, their history returns, including
+  the room line of a check-in asked across it (A103), though never the check-in itself.
 - **A102.** Between a blocker and the person they blocked, in either direction, neither's lines, nor
   their bots', mention the other side or its bots: no inbox mention, no event, no wake, no person
   mention in Needs you and no `@room` reaching them. Contact is cut both ways, so a block can't be
