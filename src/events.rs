@@ -402,11 +402,21 @@ pub fn note_message(state: &AppState, message: &Message) {
                         });
                     }
                 }
-                mention["what_to_do"] = json!(
-                    "You were mentioned in a thread. Answer with say passing reply_to. For earlier messages in this thread, call read_thread."
-                );
+                // #609: context starts after the last mention event recorded for this bot in the
+                // thread. Recorded isn't delivered, so the event says where it starts.
+                let after =
+                    state.db.last_thread_mention(root_id, message.id, &bot.id).ok().flatten();
+                mention["what_to_do"] = json!(match after {
+                    Some(id) => format!(
+                        "You were mentioned in a thread. Answer with say passing reply_to. context starts after message {id}, which an earlier mention event in this thread carried; if you don't have it, call read_thread."
+                    ),
+                    None => "You were mentioned in a thread. Answer with say passing reply_to. For earlier messages in this thread, call read_thread.".to_string(),
+                });
+                if let Some(id) = after {
+                    mention["context_after"] = json!(id);
+                }
                 mention["context"] =
-                    json!(thread_mention_context(state, message, &bot.id, root_id));
+                    json!(thread_mention_context(state, message, &bot.id, root_id, after));
             } else {
                 mention["what_to_do"] = json!(MENTION_DO);
                 mention["context"] = json!(mention_context(state, message, &bot.id));
@@ -453,7 +463,8 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
         .collect()
 }
 
-/// I105: bounded slice of up to 10 earlier messages in a thread before a mention.
+/// I105: bounded slice of up to 10 earlier messages in a thread before a mention, leaving out the
+/// root and what this bot's last mention in the thread already carried (#609).
 const THREAD_MENTION_CONTEXT: i64 = 10;
 
 fn thread_mention_context(
@@ -461,6 +472,7 @@ fn thread_mention_context(
     message: &Message,
     agent_id: &str,
     root_id: i64,
+    after: Option<i64>,
 ) -> Vec<Value> {
     let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
         return Vec::new();
@@ -468,7 +480,7 @@ fn thread_mention_context(
     let since = visit.map(|visit| visit.since);
     state
         .db
-        .thread_messages_before(root_id, message.id, agent_id, since, THREAD_MENTION_CONTEXT)
+        .thread_messages_before(root_id, message.id, after, agent_id, since, THREAD_MENTION_CONTEXT)
         .unwrap_or_default()
         .into_iter()
         .map(|earlier| {

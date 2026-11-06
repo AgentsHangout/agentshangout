@@ -7769,6 +7769,7 @@ async fn conversation_threads_one_level_collapsed_in_room_and_read_in_thread() {
     let ctx_ids: Vec<i64> = ctx.iter().map(|m| m["message_id"].as_i64().unwrap()).collect();
     assert!(ctx_ids.contains(&c_id));
     assert!(!ctx_ids.contains(&b_id), "Rover's own line is excluded under E4");
+    assert!(!ctx_ids.contains(&a_id), "#609: the root is in `root`, not again in context");
     assert!(d_mention["data"]["what_to_do"].as_str().unwrap().contains("read_thread"));
 
     // I104: inbox has both mentions before reading thread
@@ -9277,6 +9278,166 @@ async fn clearing_answered_thread_mentions_uses_indexes() {
         .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::ANSWERED_THREAD_MENTIONS))
         .unwrap()
         .query_map(rusqlite::params![0, "bot", "room"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
+    assert!(scans.is_empty(), "a full scan: {plan:?}");
+}
+
+// I105, #609: a bot mentioned twice in one thread gets, the second time, only what came after its
+// last mention: the root, the first mention and the lines before it were in the first event.
+#[tokio::test]
+async fn a_second_mention_in_a_thread_carries_only_what_is_new() {
+    let w = waiting_world().await;
+    let say = |text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(to) = reply_to {
+            args["reply_to"] = json!(to);
+        }
+        let token = w.pip.token.clone();
+        let server = &w.server;
+        async move {
+            let said = server.tool(&token, "say", args).await;
+            said["structuredContent"]["message_id"].as_i64().expect("posted")
+        }
+    };
+    let root = say("A long first post about the plan", None).await;
+    let before = say("an early reply", Some(root)).await;
+    let first = say("@Scout what do you think?", Some(root)).await;
+    let after = say("a reply after the first mention", Some(root)).await;
+    let later = say("and another", Some(root)).await;
+    let second = say("@Scout and now?", Some(root)).await;
+
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap().clone();
+    let event_for = |events: &[Value], id: i64| -> Value {
+        let event = events
+            .iter()
+            .find(|e| e["name"] == "mention" && e["data"]["message_id"] == id)
+            .unwrap_or_else(|| panic!("a mention event for {id}"));
+        assert_eq!(event["data"]["root"]["message_id"], root, "the root is still sent as root");
+        event["data"].clone()
+    };
+    let ids = |data: &Value| -> Vec<i64> {
+        let lines = data["context"].as_array().unwrap();
+        lines.iter().map(|line| line["message_id"].as_i64().unwrap()).collect()
+    };
+    let first_event = event_for(&events, first);
+    assert_eq!(ids(&first_event), [before], "the root isn't repeated in context");
+    assert!(first_event.get("context_after").is_none(), "nothing came before: {first_event}");
+    let second_event = event_for(&events, second);
+    assert_eq!(ids(&second_event), [after, later], "nothing the first mention already carried");
+    // It says where its context starts, and what to do if the bot doesn't have the rest.
+    assert_eq!(second_event["context_after"], first, "{second_event}");
+    let what = second_event["what_to_do"].as_str().unwrap();
+    assert!(what.contains(&format!("after message {first}")) && what.contains("read_thread"));
+
+    // A mention the bot was never sent (at the recycling plant, RC2, or expired) doesn't count:
+    // the next one goes back to the last event it did get.
+    w.conn
+        .execute("DELETE FROM bot_events WHERE ref_key = ?", [format!("mention:{second}")])
+        .unwrap();
+    let extra = say("one more reply", Some(root)).await;
+    let third = say("@Scout still there?", Some(root)).await;
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap().clone();
+    let third_event = event_for(&events, third);
+    assert_eq!(ids(&third_event), [after, later, second, extra], "back to the first mention");
+    assert_eq!(third_event["context_after"], first);
+}
+
+// #609: a mention event can be recorded and never reach the bot (a stream opened without a cursor,
+// a session that doesn't persist, a failed webhook). The next mention's context is then cut short,
+// so it says where it starts and points at read_thread, which has everything.
+#[tokio::test]
+async fn a_recorded_mention_the_bot_never_got_still_leaves_the_way_back() {
+    let w = waiting_world().await;
+    let say = |text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(to) = reply_to {
+            args["reply_to"] = json!(to);
+        }
+        let token = w.pip.token.clone();
+        let server = &w.server;
+        async move {
+            let said = server.tool(&token, "say", args).await;
+            said["structuredContent"]["message_id"].as_i64().expect("posted")
+        }
+    };
+    let root = say("The plan", None).await;
+    let early = say("an early reply", Some(root)).await;
+    // Scout's event for this one is recorded, but Scout never reads it: it starts from the head.
+    let unseen = say("@Scout a first look?", Some(root)).await;
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let cursor = res["structuredContent"]["cursor"].clone();
+    let next = say("@Scout and now?", Some(root)).await;
+    let res = w.server.tool(&w.scout.token, "events_since", json!({ "since": cursor })).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap();
+    assert!(events.iter().all(|e| e["data"]["message_id"] != unseen), "only what's new");
+    let data = &events
+        .iter()
+        .find(|e| e["name"] == "mention" && e["data"]["message_id"] == next)
+        .expect("the mention")["data"];
+    assert_eq!(data["context"], json!([]), "cut at the recorded mention: {data}");
+    assert_eq!(data["context_after"], unseen);
+    assert!(data["what_to_do"].as_str().unwrap().contains("read_thread"));
+    // read_thread has what the context left out.
+    let thread = w
+        .server
+        .tool(&w.scout.token, "read_thread", json!({ "hangout_id": w.room, "root": root }))
+        .await;
+    let messages = thread["structuredContent"]["messages"].as_array().unwrap();
+    let got: Vec<i64> = messages.iter().map(|m| m["id"].as_i64().unwrap()).collect();
+    assert!(got.contains(&early) && got.contains(&unseen), "{thread}");
+}
+
+// #609: a watched workboard change (RW11) shares the `mention:` key but carries no context, so it
+// doesn't count as a mention that brought the thread.
+#[tokio::test]
+async fn a_watched_change_does_not_cut_a_threads_context() {
+    let w = waiting_world().await;
+    let root_text = json!({ "hangout_id": w.room, "text": "The plan" });
+    let root = w.server.tool(&w.pip.token, "say", root_text).await["structuredContent"]
+        ["message_id"]
+        .as_i64()
+        .unwrap();
+    let reply = json!({ "hangout_id": w.room, "text": "a reply", "reply_to": root });
+    let early = w.server.tool(&w.pip.token, "say", reply).await["structuredContent"]["message_id"]
+        .as_i64()
+        .unwrap();
+    // As note_watched_change records it: the same key, no thread_id.
+    w.conn
+        .execute(
+            "INSERT INTO bot_events (agent_id, name, hangout_id, ref_key, data, created_at)
+             VALUES (?, 'mention', ?, ?, '{\"context\":[]}', 0)",
+            rusqlite::params![w.scout.id, w.room, format!("mention:{early}")],
+        )
+        .unwrap();
+    let ask = json!({ "hangout_id": w.room, "text": "@Scout thoughts?", "reply_to": root });
+    let next = w.server.tool(&w.pip.token, "say", ask).await["structuredContent"]["message_id"]
+        .as_i64()
+        .unwrap();
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap();
+    let data = &events
+        .iter()
+        .find(|e| e["name"] == "mention" && e["data"]["message_id"] == next)
+        .expect("the mention")["data"];
+    assert_eq!(data["context"].as_array().unwrap().len(), 1, "{data}");
+    assert_eq!(data["context"][0]["message_id"], early);
+    assert!(data.get("context_after").is_none(), "{data}");
+}
+
+// #609: finding a bot's last mention in a thread uses indexes, so it doesn't scan every mention.
+#[tokio::test]
+async fn the_last_mention_in_a_thread_is_found_by_index() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::LAST_THREAD_MENTION))
+        .unwrap()
+        .query_map(rusqlite::params![1, 2, "bot"], |r| r.get::<_, String>(3))
         .unwrap()
         .map(Result::unwrap)
         .collect();
