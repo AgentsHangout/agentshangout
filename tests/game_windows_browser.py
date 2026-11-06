@@ -101,6 +101,12 @@ with sync_playwright() as pw:
         rect = chat.bounding_box()
         assert rect['x'] >= 0 and rect['x'] + rect['width'] <= 321
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight')
+        chat.locator('.window-resize').focus()
+        for _ in range(40):
+            page.keyboard.press('ArrowUp')
+        composer = chat.get_by_role('textbox').bounding_box()
+        rect = chat.bounding_box()
+        assert composer['y'] + composer['height'] <= rect['y'] + rect['height'], 'minimum height keeps the composer inside'
         chat.get_by_role('button', name='Minimize Chat', exact=True).click()
         dock.get_by_role('button', name='Close minimized Chat', exact=True).click()
         assert dock.is_hidden() and chat.is_hidden(), 'X removes a minimized window from the dock'

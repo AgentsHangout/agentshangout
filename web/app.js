@@ -8422,7 +8422,8 @@ function createPanels(root) {
 
   function fit(rect, area) {
     const w = clamp(rect.w, Math.min(280, area.w), area.w);
-    const h = clamp(rect.h, Math.min(160, area.h), area.h);
+    // Leave room for phone title controls, the dismiss handle and a chat composer.
+    const h = clamp(rect.h, Math.min(240, area.h), area.h);
     return { x: clamp(rect.x, area.x, area.x + area.w - w), y: clamp(rect.y, area.y, area.y + area.h - h), w, h };
   }
   function place(el, rect) {
