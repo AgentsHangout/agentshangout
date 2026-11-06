@@ -105,10 +105,13 @@ impl Server {
         Self::start_with(true).await
     }
     async fn start_with(allow_private_webhooks: bool) -> Self {
+        Self::start_db(Db::open(":memory:").unwrap(), allow_private_webhooks).await
+    }
+    async fn start_db(db: Db, allow_private_webhooks: bool) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let state = AppState::new(
-            Db::open(":memory:").unwrap(),
+            db,
             Config {
                 public_url: base.clone(),
                 create_code: None,
@@ -677,7 +680,17 @@ async fn a_bot_reads_its_own_monitoring_without_secrets() {
 // E46 (#698): a lapsed lease on a connection that's still on shows in inbox until it's renewed.
 #[tokio::test]
 async fn inbox_warns_while_a_live_connection_has_a_lapsed_subscription() {
-    let s = Server::start().await;
+    let path = support::db_path("wake-warning");
+    let s = Server::start_db(Db::open(path.to_str().unwrap()).unwrap(), true).await;
+    // The test edits leases through its own connection to the same file, as a missed renewal would
+    // leave them, without opening the server's database API.
+    let sql = rusqlite::Connection::open(&path).unwrap();
+    let lapse = |change: &str| {
+        sql.execute(&format!("UPDATE oauth_event_subscriptions SET {change}"), []).unwrap();
+        if change.starts_with("expires_at") {
+            sql.execute(&format!("UPDATE oauth_event_health SET {change}"), []).unwrap();
+        }
+    };
     let (session, bot, legacy, room) = s.setup().await;
     let client = s.register().await;
     let code = s.code(&session, &client, &bot).await;
@@ -697,23 +710,49 @@ async fn inbox_warns_while_a_live_connection_has_a_lapsed_subscription() {
     let id = first["result"]["id"].clone();
     assert!(inbox(access.to_string()).await.get("wake_warning").is_none());
 
-    // The host missed its renewal: the lease ran out while nobody spoke.
-    for table in ["oauth_event_subscriptions", "oauth_event_health"] {
-        s.state.db.conn().execute(&format!("UPDATE {table} SET expires_at=1"), []).unwrap();
-    }
+    // A second connection for the same bot, with its own subscription.
+    let other_client = s.register().await;
+    let other_code = s.code(&session, &other_client, &bot).await;
+    let other: Value = s.exchange(&other_client, &other_code, VERIFIER).await.json().await.unwrap();
+    let other_access = other["access_token"].as_str().unwrap();
+    let other_id =
+        s.event_rpc(other_access, "events/subscribe", params.clone()).await["result"]["id"].clone();
+    assert_ne!(other_id, id);
+
+    // Suspended: the callback failed and the host hasn't renewed.
+    lapse("active=0");
+    let suspended = inbox(access.to_string()).await;
+    let warning = &suspended["wake_warning"];
+    assert_eq!(warning["subscriptions"][0]["subscription_id"], id, "{suspended}");
+    assert_eq!(warning["subscriptions"][0]["status"], "suspended", "{suspended}");
+    assert!(s.event_rpc(access, "events/subscribe", params.clone()).await["result"].is_object());
+    assert!(
+        s.event_rpc(other_access, "events/subscribe", params.clone()).await["result"].is_object()
+    );
+    assert!(inbox(access.to_string()).await.get("wake_warning").is_none());
+
+    // Expired: the lease ran out while nobody spoke.
+    lapse("expires_at=1");
     let lapsed = inbox(access.to_string()).await;
     let warning = &lapsed["wake_warning"];
-    assert_eq!(warning["subscriptions"][0]["subscription_id"], id, "{lapsed}");
-    assert_eq!(warning["subscriptions"][0]["status"], "expired", "{lapsed}");
-    assert_eq!(warning["subscriptions"][0]["uncovered_rooms"][0]["id"], room, "{lapsed}");
+    let subs = warning["subscriptions"].as_array().unwrap();
+    // Only this connection's subscription: the other connection's stays out (E43).
+    assert_eq!(subs.len(), 1, "{lapsed}");
+    assert_eq!(subs[0]["subscription_id"], id, "{lapsed}");
+    assert_eq!(subs[0]["status"], "expired", "{lapsed}");
+    assert_eq!(subs[0]["uncovered_rooms"][0]["id"], room, "{lapsed}");
     let text = warning.to_string();
+    assert!(!text.contains(other_id.as_str().unwrap()), "{lapsed}");
     assert!(!text.contains(&url) && !text.contains(WEBHOOK_SECRET), "{lapsed}");
     // A plain bot token has no subscription of its own, so nothing to renew.
     assert!(inbox(legacy).await.get("wake_warning").is_none());
 
     let renewed = s.event_rpc(access, "events/subscribe", params).await;
     assert_eq!(renewed["result"]["id"], id);
+    // Renewing this connection's subscription covers the room again, so the warning ends.
     assert!(inbox(access.to_string()).await.get("wake_warning").is_none());
+    drop(sql);
+    let _ = std::fs::remove_file(path);
 }
 
 #[tokio::test]
