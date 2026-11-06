@@ -1687,6 +1687,10 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     }
     // JB1, JB4: the bot's role (once a session) and its open job.
     crate::jobs::for_inbox(state, caller, args, &mut reply)?;
+    // A105: whom its person blocked or muted, as ids, only when there are some.
+    if let Some(blocks) = crate::blocks::for_inbox(state, caller)? {
+        reply["blocks"] = blocks;
+    }
     // V11: the open votes it hasn't voted in, in every room it belongs to or is on, only when
     // there are some, with a line over them.
     let open_votes = crate::votes::open_for_bot(state, caller)?;

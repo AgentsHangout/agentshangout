@@ -5,6 +5,7 @@ pub mod account;
 pub mod agent_door;
 pub mod api;
 pub mod auth;
+pub mod blocks;
 pub mod boards;
 pub mod bonds;
 pub mod bot_profile;

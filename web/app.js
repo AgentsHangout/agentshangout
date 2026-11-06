@@ -7,6 +7,7 @@ import { planInviteView } from './plan-invite.js';
 import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
+import { createClientUpdates } from './client-updates.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -32,6 +33,21 @@ function h(tag, props = {}, ...children) {
   }
   el.append(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
   return el;
+}
+
+const clientUpdates = createClientUpdates();
+void clientUpdates.start();
+
+function clientUpdateControl() {
+  const element = h('div', { 'aria-live': 'polite' });
+  const render = ({ ready }) => {
+    element.replaceChildren(...[
+      ready ? h('p', { class: 'muted' }, 'An app update is ready.') : null,
+      h('button', { type: 'button', class: 'ghost', onclick: () => { void clientUpdates.activate(); } }, 'Refresh app'),
+    ].filter(Boolean));
+  };
+  const stop = clientUpdates.subscribe(render);
+  return { element, stop };
 }
 
 async function api(path, { method = 'GET', body } = {}, retried = false) {
@@ -662,6 +678,41 @@ function mayorPanel(roomId, botsHere = () => []) {
   return root;
 }
 
+// A100, A104 (#685): a person's blocks and mutes, for the Block and Mute items on someone's card.
+// Read once a page and again after each change. Nobody blocked or muted is ever told.
+function blockTies() {
+  let lists = null;
+  const load = async () => {
+    lists ??= await api('/api/blocks').catch(() => ({ blocks: [], mutes: [] }));
+    return lists;
+  };
+  const has = (kind, id) => (lists?.[kind] || []).some((row) => row.person_id === id);
+  const change = (run) => async () => {
+    try {
+      lists = await run();
+    } catch {
+      lists = null;
+    }
+  };
+  load();
+  return {
+    load,
+    items(personId, name) {
+      const id = encodeURIComponent(personId);
+      const blocked = has('blocks', personId);
+      const muted = has('mutes', personId);
+      return [
+        blocked
+          ? { label: `Unblock ${name}`, run: change(() => api(`/api/blocks/${id}`, { method: 'DELETE' })) }
+          : { label: `Block ${name}`, run: change(() => api('/api/blocks', { method: 'POST', body: { person_id: personId } })) },
+        blocked ? null : muted
+          ? { label: 'Unmute their mentions', run: change(() => api(`/api/mutes/${id}`, { method: 'DELETE' })) }
+          : { label: 'Mute their mentions', run: change(() => api('/api/mutes', { method: 'POST', body: { person_id: personId } })) },
+      ].filter(Boolean);
+    },
+  };
+}
+
 // MY6, #639: last week's mayor, when they're a person, for their card's badge. Asked once per page.
 let mayorAsked = null;
 function mayorPersonId() {
@@ -971,6 +1022,7 @@ async function homeParts(me) {
     signInOpen: open,
   });
 
+  const updateControl = clientUpdateControl();
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
     onlyOwnerKeyNudge(me, status),
@@ -978,6 +1030,7 @@ async function homeParts(me) {
     freeTimesField(me),
     housePlansField(me),
     photosField(),
+    updateControl?.element,
     ownerKeyControl(me),
     h('button', {
       type: 'button',
@@ -1085,11 +1138,11 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
-    stop: () => stop(),
+    stop: () => { stop(); updateControl.stop(); },
   };
 }
 
@@ -4264,6 +4317,7 @@ async function roomView(id) {
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
     mayor: mayorPersonId,
+    ties: blockTies(),
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
@@ -9071,7 +9125,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null, ties = null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -9115,10 +9169,13 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     const you = personId === view().you.person_id;
     const actions = (data) => {
       const link = githubProfileUrl(data?.login);
+      // A100, A104 (#685): block them, or mute their mentions. Nobody is told.
+      const tie = you || !ties ? [] : ties.items(personId, who.name);
       const own = [
         you ? null : { label: 'Mention in chat', run: () => mention(who.name) },
         you && emote ? emoteMenu(emote) : null,
         link ? { label: 'View on GitHub', href: link } : null,
+        ...tie,
       ].filter(Boolean);
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
@@ -10812,7 +10869,8 @@ async function route() {
     }
     app.replaceChildren(h('main', { class: 'home' }, h('div', { class: 'card' },
       h('h2', {}, 'That didn\'t load'),
-      h('p', { class: 'muted' }, error.message))));
+      h('p', { class: 'muted' }, error.message),
+      h('button', { type: 'button', class: 'primary', onclick: () => clientUpdates.reload() }, 'Reload app'))));
   }
 }
 

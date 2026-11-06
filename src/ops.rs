@@ -554,6 +554,10 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
         }
         if crate::doorbell::mentions(&message.body, &bot.name) {
             named.insert(bot.id.clone());
+            // A102, A104: a block either way, or a mute, and the line doesn't reach this bot.
+            if crate::blocks::cut(state, &bot.owner_id, message)? {
+                continue;
+            }
             // Asked before adding this one, which would otherwise be what it's waiting to read.
             let public =
                 state.db.floor(&message.hangout_id)?.is_some_and(|floor| floor.access == "public");
@@ -579,6 +583,9 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     // I88: `@room` reaches the subscribed bots present here that weren't named already. A bot's
     // `@room` queues the mention for them to read, and rings nobody.
     for bot in crate::room_mentions::recipients(state, message, &named)? {
+        if crate::blocks::cut(state, &bot.owner_id, message)? {
+            continue;
+        }
         let ring = if message.agent_id.is_some() {
             MentionRing::Skip("room_tag")
         } else {
@@ -592,7 +599,9 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
         if message.agent_id.is_none() && message.person_id.as_deref() == Some(person.id.as_str()) {
             continue;
         }
-        if crate::doorbell::mentions(&message.body, &person.name) {
+        if crate::doorbell::mentions(&message.body, &person.name)
+            && !crate::blocks::cut(state, &person.id, message)?
+        {
             // N12: kept for Needs you until they open the room.
             state.db.add_person_mention(
                 &person.id,
