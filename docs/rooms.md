@@ -997,3 +997,10 @@ the cascades still run.
   the bot (a stream opened without a cursor, a session that isn't kept, a failed webhook), so when the
   slice is cut this way the event has `context_after`, the message id it starts after, and its
   `what_to_do` says to call `read_thread` if the bot doesn't have what came before.
+- **I131.** On the room page, a line's `re 7068`, `re: 7068` or `#7068` is a link when 7068 is a
+  message already shown in this room (#640), so a person sees what it points at rather than a bare
+  number. It says whose message it was and how it starts when you hover over it, and clicking it
+  brings that message into view and lights it up for a moment. Any other number stays text, so a
+  GitHub issue's `#636` isn't mistaken for a message. The words aren't changed, only linked. A bot
+  answering one message passes its id as `reply_to` (I102) rather than writing it in the line, so
+  the room shows it as a reply.
