@@ -247,6 +247,44 @@ mod tests {
         assert_eq!(rows.len(), 2, "{three:?}");
     }
 
+    // CP14: nobody standing is drawn on the table, an item or another figure, even when their place
+    // in the grid falls there: they stand on the nearest cell the page would let them walk on.
+    #[test]
+    fn standing_figures_keep_off_the_table_items_and_each_other() {
+        let stands = |scene: &Value| -> Vec<(f64, f64, bool)> {
+            let script = "const s=JSON.parse(__camera_scene);const f=cameraFigures(s,cameraPlaced(s)).filter(f=>f.pose==='stand');JSON.stringify(f.map(f=>[f.x,f.y,clear(f.x,f.y)&&clear(f.x,f.y-12)]))";
+            serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
+        };
+        let piano = json!([{"id":"piano","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":2}]);
+        let person = |name: &str| json!({"name":name,"color":"#ff8866","look":{}});
+        // One person alone: the middle of the grid is the middle of the table.
+        let seated: Vec<_> =
+            ["a", "b", "c", "d"].iter().map(|n| bot_in(n, "active", false)).collect();
+        let mut one = room(piano.clone(), json!(seated), whole());
+        one["people"] = json!([person("Justin")]);
+        // A crowd, in the whole room and in the table frame.
+        let idle: Vec<_> = (0..8).map(|i| bot_in(&format!("idle{i}"), "idle", false)).collect();
+        let mut crowd = room(piano.clone(), json!(idle), whole());
+        crowd["people"] = json!([person("Ann"), person("Bo")]);
+        let mut close = crowd.clone();
+        close["frame"] = json!({"x":120,"y":60,"width":240,"height":126});
+        for scene in [&one, &crowd, &close] {
+            let placed = stands(scene);
+            assert!(!placed.is_empty());
+            for (i, a) in placed.iter().enumerate() {
+                assert!(a.2, "standing on furniture: {a:?} in {placed:?}");
+                for b in &placed[i + 1..] {
+                    assert!(
+                        (a.0 - b.0).abs() >= 16.0 || (a.1 - b.1).abs() >= 12.0,
+                        "{a:?} on {b:?}"
+                    );
+                }
+            }
+        }
+        let justin = stands(&one)[0];
+        assert!(justin.1 >= 182.0, "in front of the table, not on it: {justin:?}");
+    }
+
     // CP10: bots side by side at the table, with long names, get name tags that don't cover each
     // other, and every tag stays in the frame. So does a crowded grid in a small frame.
     #[test]

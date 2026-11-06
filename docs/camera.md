@@ -67,3 +67,7 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
 - **CP13.** A name tag is as wide as its name looks in the photo's font, with a little room each
   side, and never narrower than the name. So tags at a table stack less: three bots side by side
   need two rows of tags rather than a staircase of three, and each tag sits nearer its bot.
+- **CP14.** Someone standing in a photo stands where the room page would let them walk: never on
+  the table, an item or the furniture the room keeps, and never on another figure. When their
+  place in the grid falls on something, they stand on the nearest free spot inside the frame, so
+  a lone visitor is drawn in front of the table, head and all, rather than on top of it.
