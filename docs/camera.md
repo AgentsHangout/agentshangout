@@ -61,3 +61,6 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   cover each other there stack upward first, so the table, desk or sofa it sits at stays in view.
   A standing figure's tag stays under its feet. CP10 holds either way: no tag covers another, and
   every tag stays inside the frame.
+- **CP12.** The wall board in a photo shows the room's name, the one the caption already gives, on
+  one line and cut short with "…" if it's long. It never shows what's written on the room's board:
+  a photo can be shared beyond the room, so the board's words stay on the page (CP2).
