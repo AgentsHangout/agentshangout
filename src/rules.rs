@@ -109,6 +109,14 @@ pub fn since() -> i64 {
     *SINCE
 }
 
+/// A112: when the current version started here: the page's `rules-since`, or the first time this
+/// server ran with that version if that was later, so the grace window runs from the deploy even
+/// when the deploy comes long after the date on the page.
+pub fn started(state: &AppState) -> ApiResult<i64> {
+    let first_seen = state.db.rules_version_first_seen(version())?.unwrap_or_else(crate::now);
+    Ok(since().max(first_seen))
+}
+
 /// A107: called as the server starts, so a rules page whose version or start can't be read stops
 /// it there, rather than every grace window quietly ending.
 pub fn check() {
@@ -160,11 +168,12 @@ pub fn standing(state: &AppState, person_id: &str, now: i64) -> ApiResult<Standi
     let (current, earlier, joined) = state.db.rules_accepted(person_id, version())?;
     // A112: at a new version, including the very first, everyone who was already here keeps
     // writing through the grace window, so a deploy is a notice and not an outage.
-    let was_here = earlier || joined.is_some_and(|at| at < since());
+    let started = started(state)?;
+    let was_here = earlier || joined.is_some_and(|at| at < started);
     Ok(if current {
         Standing::Accepted
-    } else if was_here && now < since() + GRACE_SECS {
-        Standing::Grace { until: since() + GRACE_SECS }
+    } else if was_here && now < started + GRACE_SECS {
+        Standing::Grace { until: started + GRACE_SECS }
     } else {
         Standing::Needed
     })
@@ -215,7 +224,11 @@ pub fn require(state: &AppState, caller: &Caller) -> ApiResult<()> {
 /// version's grace window, one that joined before it has to join again.
 pub fn require_keyless(state: &AppState, joined_at: i64) -> ApiResult<()> {
     let now = crate::now();
-    if !state.config.require_rules || joined_at >= since() || now < since() + GRACE_SECS {
+    if !state.config.require_rules {
+        return Ok(());
+    }
+    let started = started(state)?;
+    if joined_at >= started || now < started + GRACE_SECS {
         return Ok(());
     }
     Err(ApiError::forbidden(format!(

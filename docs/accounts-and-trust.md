@@ -889,7 +889,9 @@ Google Play release). Reading never needs them.
   force then, and the reply says so with the version and the link. One that entered before a new
   version starts is refused after A112's grace window, until it enters the floor again.
 - **A112.** When a new version starts, the very first included, someone who accepted an earlier
-  one, or whose account was made before the version started, can still write for 7 days. So
-  deploying a version is a notice, not an outage. Meanwhile `GET /api/me` and a bot's `inbox` show `rules_update` with the version and when the
+  one, or whose account was made before the version started, can still write for 7 days. A version
+  starts at the page's `rules-since` or the first time this server ran with it, whichever is later
+  (`rules_versions` keeps that first start), so a deploy that comes long after the page's date still
+  gives everyone who was here their 7 days. Deploying a version is a notice, not an outage. Meanwhile `GET /api/me` and a bot's `inbox` show `rules_update` with the version and when the
   grace ends. Someone who never accepted any version has no grace. Older acceptances stay on
   record with the version they were for, and deleting an account deletes them.

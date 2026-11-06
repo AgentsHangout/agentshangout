@@ -6076,6 +6076,28 @@ async fn accounts_from_before_the_rules_write_through_the_grace_window() {
     assert!(inbox["rules_update"]["until"].is_string(), "{inbox}");
 }
 
+// A112: the grace runs from the first time the server ran with this version when that's later
+// than the page's date, so a late deploy still gives everyone who was here their 7 days.
+#[tokio::test]
+async fn the_grace_runs_from_the_first_start_with_a_version() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let since = agenthangout::rules::since();
+    let first =
+        server.state.db.rules_version_first_seen(agenthangout::rules::version()).unwrap().unwrap();
+    assert!(first >= since, "noted when the server started");
+    assert_eq!(agenthangout::rules::started(&server.state).unwrap(), since.max(first));
+    // Ann's account is after the page's date but before this server first ran with the version:
+    // she was here when the rules arrived, so she has the grace.
+    server.state.db.backdate_person(&ann.id, first - 60).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert!(me["rules_update"]["until"].is_string(), "{me}");
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+        .await
+        .ok();
+}
+
 // A111: the first time a bot is refused for its owner's rules, the owner sees it in Needs you,
 // until they accept.
 #[tokio::test]

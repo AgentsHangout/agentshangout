@@ -242,6 +242,10 @@ impl AppState {
         let (bot_events, _) = broadcast::channel(1024);
         let (shutting_down, _) = watch::channel(false);
         let webauthn = passkey::webauthn_for(&config.public_url);
+        // A112: the grace for a rules version runs from the first start with it, at the latest.
+        if let Err(error) = db.note_rules_version(rules::version(), now()) {
+            tracing::error!(%error, "couldn't note the rules version");
+        }
         Self(Arc::new(Shared {
             db,
             config,
