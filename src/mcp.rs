@@ -1603,6 +1603,7 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
             "hangout_id": mention.hangout_id,
             "hangout": mention.hangout,
             "message_id": mention.message_id,
+            "keyless": state.db.is_keyless_message(mention.message_id).unwrap_or(true),
             "from": mention.from,
             "text": mention.text,
             "at": iso(mention.at),

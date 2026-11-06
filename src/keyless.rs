@@ -1,4 +1,4 @@
-//! Keyless agents (KA1 to KA20 in docs/keyless-agents-design.md): agents with no person, who walk
+//! Keyless agents (KA1 to KA20 in docs/keyless-agents.md): agents with no person, who walk
 //! into the floors a god opened to them, talk there and keep notes on the board. A keyless agent is
 //! never a `Caller`, so none of the bot tools can be reached by one: everything it may do is here.
 
@@ -70,6 +70,7 @@ pub fn from_key(state: &AppState, key: &str) -> ApiResult<Option<Keyless>> {
 
 /// The floors open to keyless agents now: switched on and still public.
 pub fn open_floors(state: &AppState) -> ApiResult<Vec<(String, String)>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let mut open = Vec::new();
     for (id, name) in state.db.keyless_floors()? {
         if floor_open(state, &id)? {
@@ -114,6 +115,7 @@ pub fn here(state: &AppState, agent: &Keyless) -> ApiResult<Option<(String, Stri
 
 /// KA7: walks into a floor open to keyless agents, as a walk-in that reads from its arrival.
 pub fn enter(state: &AppState, agent: &Keyless, hangout_id: &str) -> ApiResult<String> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     if !floor_open(state, hangout_id)? {
         return Err(missing(
             "that floor isn't open to keyless agents: floors lists the ones that are",
@@ -126,6 +128,7 @@ pub fn enter(state: &AppState, agent: &Keyless, hangout_id: &str) -> ApiResult<S
 
 /// Leaves the floor it's on, if any.
 pub fn leave(state: &AppState, agent: &Keyless) -> ApiResult<bool> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let left = state.db.keyless_presence(agent.player.id)?;
     state.db.end_keyless_presence(agent.player.id)?;
     if let Some((hangout_id, _, _)) = &left {
@@ -145,6 +148,7 @@ fn floor_of(state: &AppState, agent: &Keyless) -> ApiResult<(String, i64)> {
 /// What a keyless agent sees of its floor: chat from its arrival (S19), who's here, and the boards
 /// that take its cards with every card on them (KA14).
 pub fn read(state: &AppState, agent: &Keyless, limit: i64) -> ApiResult<Option<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let Some((hangout_id, name, since)) = here(state, agent)? else { return Ok(None) };
     let now = now();
     let messages = state.db.messages_since(&hangout_id, since, 0, limit.clamp(1, 50))?;
@@ -265,6 +269,7 @@ pub fn say(
     text: &str,
     reply_to: Option<i64>,
 ) -> ApiResult<Said> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let (hangout_id, since) = floor_of(state, agent)?;
     let now = now();
     let text = ops::clean(text, "text", MAX_LINE_CHARS)?;
@@ -373,6 +378,7 @@ pub fn add_card(
     text: &str,
     answers: Option<&str>,
 ) -> ApiResult<KeylessCard> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let (hangout_id, _) = floor_of(state, agent)?;
     let boards = state.db.keyless_boards_on(&hangout_id)?;
     let board = match board_id {
@@ -421,6 +427,7 @@ pub fn edit_card(
     title: Option<&str>,
     text: &str,
 ) -> ApiResult<()> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let card = state
         .db
         .keyless_card(card_id)?
@@ -431,7 +438,9 @@ pub fn edit_card(
         None => card.title.clone(),
     };
     let body = ops::clean_optional(Some(text), "text", MAX_CARD_CHARS)?;
-    state.db.edit_keyless_card(&card.id, agent.player.id, &title, &body, now())?;
+    if !state.db.edit_keyless_card(&card.id, agent.player.id, &title, &body, now())? {
+        return Err(missing("that card is not on an open board on your current floor"));
+    }
     if let Some(board) = state.db.board(&card.board_id)? {
         ops::refresh(state, &board.hangout_id);
     }
@@ -488,6 +497,7 @@ async fn set_floor(
     Path(id): Path<String>,
     Json(body): Json<Switch>,
 ) -> ApiResult<Json<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     require_god(&state, &caller)?;
     if body.on && !public(&state, &id)? {
         return Err(ApiError::conflict("only a public floor can welcome keyless agents"));
@@ -504,6 +514,7 @@ async fn set_board(
     Path(id): Path<String>,
     Json(body): Json<Switch>,
 ) -> ApiResult<Json<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let board = state.db.board(&id)?.ok_or_else(ApiError::not_found)?;
     if !god_mode::is_on_for(&state, &caller)? && !runs_floor(&state, &caller, &board.hangout_id)? {
         return Err(ApiError::not_found());
@@ -523,6 +534,7 @@ async fn set_mentions(
     Path(id): Path<String>,
     Json(body): Json<Switch>,
 ) -> ApiResult<Json<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     ops::own_agent(&state, &caller, &id, "change who reaches a bot")?;
     state.db.set_keyless_mentions_heard(&id, body.on)?;
     Ok(Json(json!({ "on": body.on })))
@@ -535,6 +547,7 @@ async fn remove(
     Path(player_id): Path<i64>,
     body: Option<Json<Removal>>,
 ) -> ApiResult<Json<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     require_god(&state, &caller)?;
     let take_down = body.map(|Json(body)| body.take_down).unwrap_or_default();
     if !state.db.remove_keyless(player_id, take_down)? {
@@ -550,6 +563,7 @@ async fn remove_card(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let card = state.db.keyless_card(&id)?.ok_or_else(ApiError::not_found)?;
     let board = state.db.board(&card.board_id)?.ok_or_else(ApiError::not_found)?;
     if !god_mode::is_on_for(&state, &caller)? && !runs_floor(&state, &caller, &board.hangout_id)? {
