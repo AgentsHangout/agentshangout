@@ -797,8 +797,9 @@ the cascades still run.
   (I129).
 - **I129.** When the server has both `AGENTHANGOUT_LIFIC_LOCAL` and `AGENTHANGOUT_LIFIC_KEY`, a
   `lific_board` with no link gets its room's own project the first time anyone reads it (#629). The
-  server makes a project on that instance named after the room, with a short id like `RK4Q7`
-  (trying another if that one's taken), publishes it, and links the board to it (I124), saying
+  server makes a project on that instance with a short id like `RK4Q7` (trying another if that
+  one's taken), named only by it ("Agents Hangout room RK4Q7"), never by the room's own name, which
+  may be a private room's. It publishes it and links the board to it (I124), saying
   whoever placed the board linked it. Every board in that room after that shows the same project,
   so a room has one, and nobody has to know Lific is there or pick a project. It's made the moment
   it's needed, so placing a board never waits on Lific: if Lific is down, slow or turns the key

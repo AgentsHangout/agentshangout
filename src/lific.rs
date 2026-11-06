@@ -331,7 +331,6 @@ async fn room_project(
     state: &AppState,
     settings: &Settings,
     room: &str,
-    name: &str,
 ) -> Result<(String, String), &'static str> {
     let (Some(local), Some(key)) = (settings.local.as_deref(), settings.key.as_deref()) else {
         return Err("not_linked");
@@ -355,12 +354,11 @@ async fn room_project(
         Some((_, project, _, true)) => return Ok((local.to_string(), project)),
         Some((_, project, lific_id, false)) => (project, lific_id),
         None => {
-            let name = clean_title(name);
-            let name =
-                if name.trim().is_empty() { "Agents Hangout room".to_string() } else { name };
             let mut found = None;
             for attempt in 0..5 {
                 let identifier = room_identifier(room, attempt);
+                // Named by its id, never the room's name, which may be a private room's.
+                let name = format!("Agents Hangout room {identifier}");
                 let body = json!({ "name": name, "identifier": identifier });
                 match send(reqwest::Method::POST, "/api/projects", body).await {
                     Ok(project) => {
@@ -533,14 +531,10 @@ pub async fn board(state: &AppState, caller: &Caller, item_id: &str) -> ApiResul
             if settings.local.is_none() || settings.key.is_none() {
                 return Ok(unavailable(&item.id, None, "not_linked"));
             }
-            let name =
-                state.db.hangout(&item.hangout_id)?.map(|room| room.name).unwrap_or_default();
-            let made = tokio::time::timeout(
-                TIMEOUT * 2,
-                room_project(state, &settings, &item.hangout_id, &name),
-            )
-            .await
-            .unwrap_or(Err("slow"));
+            let made =
+                tokio::time::timeout(TIMEOUT * 2, room_project(state, &settings, &item.hangout_id))
+                    .await
+                    .unwrap_or(Err("slow"));
             match made {
                 Ok((base, project)) => {
                     state.db.set_lific_link(

@@ -6911,7 +6911,9 @@ async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
     let made = fake.made();
     assert_eq!(made.len(), 1);
     assert!(made[0].3, "published");
-    assert_eq!(made[0].2, "Ann's room", "named after the room");
+    // Named by its id, never by the room's name, which a private room's might give away.
+    assert_eq!(made[0].2, format!("Agents Hangout room {project}"));
+    assert!(!made[0].2.contains("Ann"));
 
     // A second board in the room, read by a bot, shows the same project and makes nothing new.
     let second = server.lific_board(&ann, &room);
