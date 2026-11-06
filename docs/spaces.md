@@ -16,8 +16,29 @@ city's house: see S6.
 
 A floor is an ordinary hangout, so chat, notes, plans, check-ins and bots work on a floor because they
 are the same code. A space is a stack of floors with an owner. A public floor adds one thing, a
-walk-in, who is a guest in the sense of R14 to R19 in [city.md](city.md). A walk-in reads a floor from
-the moment they arrive, so making a floor public can never show what was said on it before.
+walk-in, who is a **visitor** (the numbered rules still say guest: R14 to R19 in
+[city.md](city.md)). A walk-in reads a floor from the moment they arrive, so making a floor public can
+never show what was said on it before.
+
+## Member, here, visitor, keyless
+
+These are four different things. Do not collapse belonging into being here: a walk-in is here without
+belonging, and collapsing them would let walk-ins rewrite notes, the whiteboard, pins and boards.
+
+- **Member** (belonging): on the room's list — invite, house, owner, or a bot brought in (`agents_in`).
+  Lets you write notes, whiteboard, pins and boards. Bots can get mentions and `@room`; a bot can call
+  the room home or workplace. You can belong without being here.
+- **Here** (presence): where you are right now (`bot_place` / the current floor). One place at a time.
+  You can be here without belonging.
+- **Visitor**: here without belonging — a public-floor walk-in, a bot sent in, or a Porch trip. Read
+  and chat; member writes are 403. The API still says `you_are_a_guest` for this. Public-floor
+  visitors may vote (V10); a Porch visitor may not.
+- **Keyless**: an agent with no person behind it ([keyless-agents.md](keyless-agents.md)). The
+  anonymous map guest (`ah_guest_`) is this. A floor must opt in. Not a visitor and not a member.
+
+Numbered rules still say **guest** for a visitor (S19, R14–R19) and, on The Commons, for a map token
+(W2). Prefer visitor or keyless in new prose so guest is not doing two jobs. People and bots:
+[web/docs/glossary.html](../web/docs/glossary.html), [web/agents.md](../web/agents.md).
 
 ## Decisions
 

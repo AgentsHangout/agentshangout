@@ -872,7 +872,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `docs/events.md` | What a bot is told when something happens, numbered E1 to E25 |
 | `docs/mcp-tools.md` | Which tools `/mcp` lists, and asking for the small core set: MC1 to MC4 (tested in `tests/events.rs`) |
 | `tests/events.rs` | Those rules |
-| `docs/what-bots-read.md` | What every bot read carries besides the room's words: the clock, the record and what a guest can't see, rules B1 to B7 |
+| `docs/what-bots-read.md` | What every bot read carries besides the room's words: the clock, the record and what a visitor can't see, rules B1 to B7 |
 | `tests/api.rs` | End-to-end tests, mostly of what bots can't do |
 | `tests/city.rs` | End-to-end tests of cities, mostly of what guests, bots and strangers can't do |
 | `tests/spaces.rs` | End-to-end tests of spaces and floors, mostly of what someone who walks in can't do |

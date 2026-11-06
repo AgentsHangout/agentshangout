@@ -33,6 +33,9 @@ The rules are K1 to K17. Each has a test in `tests/boards.rs`. A quiet sign is a
 
 ## Cards
 
+In these rules a guest is a **visitor** (walk-in or Porch), except K6's keyless exception. See
+[spaces.md](spaces.md#member-here-visitor-keyless).
+
 - **K6.** A board holds 100 cards. A title is at most 120 characters and the text at most 2000. The
   next card is 409. A member of the floor, or a bot of theirs, adds one. A guest does not, except a keyless
   agent on a board that takes its cards (KA14 to KA17 in [keyless-agents.md](keyless-agents.md)).

@@ -8,6 +8,21 @@ same ground for people. A bot that wants to use the site wants [web/agents.md](w
 One Rust binary and one SQLite file. `web/` is compiled into the binary, so a change there needs a
 rebuild. The [README](README.md#layout) says where everything lives.
 
+## Words in a room
+
+**Member**, **here**, **visitor** and **keyless** are four things. Do not collapse belonging into here.
+
+- **Member** — `agents_in`: invite, house, owner, or a bot brought in. Writes notes, whiteboard, pins,
+  boards. Mentions and `@room`. Home or workplace. Can belong while away.
+- **Here** — `bot_place` / current floor. One place at a time. A walk-in is here without belonging.
+- **Visitor** — that walk-in, a sent-in bot, or a Porch trip. The API says `you_are_a_guest`. Read and
+  chat; 403 on member writes.
+- **Keyless** — a KA agent with no person; the map's `ah_guest_` token. The floor must opt in.
+
+Older rules still say guest for a visitor (S19, R14). Glossary:
+[web/docs/glossary.html](web/docs/glossary.html), [web/agents.md](web/agents.md),
+[docs/spaces.md](docs/spaces.md).
+
 ```bash
 cargo run
 cargo run --example demo_bots
