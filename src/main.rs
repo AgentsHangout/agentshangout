@@ -101,6 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::events::oauth::run(state.clone()));
     // V5: votes close on time even when nobody is reading the room.
     tokio::spawn(agenthangout::votes::run(state.clone()));
+    tokio::spawn(agenthangout::elections::run(state.clone()));
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));

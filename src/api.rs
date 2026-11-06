@@ -143,6 +143,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::lific::routes())
         .merge(crate::agent_door::routes())
         .merge(crate::brand::routes())
+        .merge(crate::elections::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
