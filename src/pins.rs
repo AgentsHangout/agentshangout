@@ -72,7 +72,7 @@ fn public_floor(state: &AppState, hangout_id: &str) -> ApiResult<bool> {
     Ok(state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public"))
 }
 
-fn may_pin(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+pub(crate) fn may_pin(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     ops::no_house_bot(caller)?;
     ops::no_guests(state, caller, hangout_id, "pin on the board")?;
     items::no_quiet(state, caller, hangout_id)?;
@@ -95,7 +95,7 @@ fn may_unpin(state: &AppState, caller: &Caller, pin: &RoomPin) -> ApiResult<bool
     owns_room(state, caller, &pin.hangout_id)
 }
 
-fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+pub(crate) fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     ops::note_agent_write(state, caller)?;
     spaces::go_to(state, caller, hangout_id)?;
     Ok(())
@@ -370,7 +370,7 @@ fn query_has_secret(text: &str) -> bool {
     })
 }
 
-fn no_secret(parts: &[&str]) -> ApiResult<()> {
+pub(crate) fn no_secret(parts: &[&str]) -> ApiResult<()> {
     if parts.iter().copied().any(looks_like_secret) {
         return Err(ApiError::bad_request("that looks like a token or API key"));
     }

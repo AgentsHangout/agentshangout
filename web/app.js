@@ -2992,7 +2992,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   let lificOf = null;
   const lificError = formError();
   const lificInfo = h('p', { class: 'muted', role: 'status' });
-  const lificColumns = h('div', { class: 'stack lific-columns' });
+  const lificColumns = h('div', { class: 'lific-kanban' });
   const lificForm = h('form', {
     class: 'stack',
     hidden: true,
@@ -3016,9 +3016,73 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         await loadLific();
       }),
     }, 'Unlink')));
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificForm);
+  // I132: the owner's link form stays folded away, so the board itself comes first.
+  const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
 
+  // I132: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
+
+  // I139: Lific not taking a change comes back as a reply, said like an unavailable board.
+  async function lificSend(path, options) {
+    const reply = await api(`/api/items/${encodeURIComponent(lificOf)}/lific/cards${path}`, options);
+    if (reply.ok === false) throw new Error(reply.unavailable || 'Lific didn\'t take that change.');
+    await loadLific();
+  }
+  const lificMove = (card, status) => lificSend(`/${encodeURIComponent(card)}`, { method: 'PUT', body: { status } });
+
+  // I140: anyone who may change the board adds at the top of a column, drags cards between
+  // columns or uses Move to, and Remove shows only to whoever may take a card down.
+  function lificKanban(columns, canChange = false) {
+    return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) => {
+      const name = LIFIC_STATUS[column.status] || column.status;
+      const adder = canChange && column.status !== 'cancelled' ? h('form', {
+        class: 'lific-add',
+        onsubmit: submitter(lificError, async (data) => {
+          await lificSend('', { method: 'POST', body: { title: data.title, status: column.status } });
+        }),
+      }, h('input', { type: 'text', name: 'title', placeholder: 'Add a card', 'aria-label': `Add a card to ${name}`, maxlength: 120, required: true })) : null;
+      const cards = column.issues.map((issue) => h('div', {
+        class: 'lific-card',
+        'data-priority': issue.priority || 'none',
+        draggable: canChange && Boolean(issue.id),
+        ondragstart: (event) => { event.dataTransfer.setData('text/plain', issue.id); },
+      },
+      issue.id ? h('small', { class: 'lific-id' }, issue.id) : null,
+      h('p', {}, issue.title),
+      h('small', { class: 'muted' }, [
+        issue.priority && issue.priority !== 'none' ? issue.priority : '',
+        issue.module || '',
+        issue.added_by ? `added by ${issue.added_by.name}${issue.added_by.is_bot ? ' (bot)' : ''}` : '',
+      ].filter(Boolean).join(' · ')),
+      canChange && issue.id ? h('div', { class: 'lific-card-actions' },
+        h('select', {
+          'aria-label': `Move ${issue.id} to`,
+          onchange: act(lificError, async (event) => { await lificMove(issue.id, event.target.value); }),
+        }, h('option', { value: '', selected: true, disabled: true }, 'Move to…'),
+        ...Object.entries(LIFIC_STATUS).filter(([status]) => status !== column.status).map(([status, label]) => h('option', { value: status }, label))),
+        issue.can_remove ? h('button', {
+          type: 'button',
+          onclick: act(lificError, async () => {
+            if (!confirm(`Remove ${issue.id} from the board? It goes to Lific's trash.`)) return;
+            await lificSend(`/${encodeURIComponent(issue.id)}`, { method: 'DELETE' });
+          }),
+        }, 'Remove') : null) : null));
+      return h('section', {
+        class: 'lific-column',
+        'aria-label': name,
+        ondragover: canChange ? (event) => event.preventDefault() : null,
+        ondrop: canChange ? act(lificError, async (event) => {
+          event.preventDefault();
+          const card = event.dataTransfer.getData('text/plain');
+          if (card && !column.issues.some((issue) => issue.id === card)) await lificMove(card, column.status);
+        }) : null,
+      },
+      h('h3', {}, name, ' ', h('small', {}, String(column.issues.length))),
+      adder,
+      ...(cards.length ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]));
+    });
+  }
 
   async function loadLific() {
     const asked = lificOf;
@@ -3027,16 +3091,12 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     try {
       const board = await api(`/api/items/${encodeURIComponent(asked)}/lific`);
       if (asked !== lificOf) return;
-      lificForm.hidden = !board.you_can_link;
+      lificLink.hidden = !board.you_can_link;
+      lificForm.hidden = false;
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
-      lificColumns.replaceChildren(...(board.columns || []).filter((column) => column.issues.length).map((column) =>
-        h('section', { class: 'stack' },
-          h('h3', {}, `${LIFIC_STATUS[column.status] || column.status} (${column.issues.length})`),
-          ...column.issues.map((issue) => h('div', { class: 'note' },
-            h('p', {}, `${issue.id || ''} ${issue.title}`.trim()),
-            h('small', { class: 'muted' }, [issue.priority && issue.priority !== 'none' ? issue.priority : '', issue.module || ''].filter(Boolean).join(' · ')))))));
+      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change) : []));
     } catch (error) {
       if (asked !== lificOf) return;
       lificColumns.replaceChildren();
@@ -3050,7 +3110,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     lificOf = item.id;
     lificInfo.textContent = 'Asking Lific…';
     lificColumns.replaceChildren();
-    lificForm.hidden = true;
+    lificLink.hidden = true;
+    lificLink.open = false;
     panels.open('lific');
     loadLific();
   }

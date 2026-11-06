@@ -5024,6 +5024,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "mcp_setup_tokens",
             "mcp_setup_codes",
             "mcp_setup_grants",
+            "lific_cards",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

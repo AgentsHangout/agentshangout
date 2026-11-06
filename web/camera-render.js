@@ -17,7 +17,8 @@ class CameraCanvas {
   ellipse(x,y,rx,ry,rotation,start,end) { if(Math.abs(end-start-Math.PI*2)>0.001||rotation!==0)throw Error('unsupported camera path');this.path.push(`<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" ${this.style()}/>`); }
   fill() { for(const part of this.path)this.add(part); }
   createLinearGradient(x1,y1,x2,y2) { const id=`camera-gradient-${this.defs.length}`;const stops=[];this.defs.push({id,x1,y1,x2,y2,stops});return {id,addColorStop(at,color){stops.push({at,color})}}; }
-  label(name,x,y,maxChars) {
+  // A name tag's lines and size, wrapped at maxChars, before it's put anywhere.
+  labelLines(name,maxChars) {
     const lines=[];let line='';
     for(const word of String(name).split(/\s+/u)) {
       const chars=[...word];
@@ -27,8 +28,10 @@ class CameraCanvas {
       line+=(line?' ':'')+rest;
     }
     if(line||!lines.length)lines.push(line);
-    const width=Math.max(...lines.map(l=>[...l].length),1)*5.5+8;
-    this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${lines.length*7+3}" rx="2" fill="#182033" opacity="0.94"/>`);
+    return {lines,width:Math.max(...lines.map(l=>[...l].length),1)*5.5+8,height:lines.length*7+3};
+  }
+  label(x,y,{lines,width,height}) {
+    this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${height}" rx="2" fill="#182033" opacity="0.94"/>`);
     lines.forEach((line,i)=>this.add(`<text x="${x}" y="${y+i*7}" font-family="DejaVu Sans" font-size="5.5" text-anchor="middle" fill="#ffffff">${cameraEscape(line)}</text>`));
   }
   svg(frame) {
@@ -73,6 +76,37 @@ function cameraFigures(scene,placed) {
       y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)};
   });
 }
+// CP10: where each name tag goes, so none covers another and each stays in the photo. Tags go top to
+// bottom, left to right, each under its figure; one that would cover a tag already put moves down a
+// tag at a time until it's clear, or else up. If no spot is free, a one-line tag cut short with "…"
+// tries the same, and if that won't fit either the tag is left out: the caption still names everyone.
+// A full table reads as a short list rather than one dark bar. Each comes back with its box, for the
+// test that checks they're apart.
+function placeLabels(g,figures,frame,maxChars) {
+  const boxes=[];
+  const order=[...figures].sort((a,b)=>a.y-b.y||a.x-b.x);
+  const clear=(x,y,t)=>!boxes.some(b=>Math.abs(b.x-x)*2<b.width+t.width+2&&y-6<b.y-6+b.height+1&&b.y-6<y-6+t.height+1);
+  const fits=(y,t)=>y-6>=frame.y&&y-6+t.height<=frame.y+frame.height;
+  const short=name=>{
+    const chars=[...String(name)];
+    const text=chars.length>maxChars?chars.slice(0,maxChars-1).join('')+'…':chars.join('');
+    return {lines:[text],width:Math.max([...text].length,1)*5.5+8,height:10};
+  };
+  const spot=(x,y0,t)=>{
+    for(const step of [t.height+1,-(t.height+1)]){
+      for(let n=0,y=y0;n<24;n++,y+=step){if(fits(y,t)&&clear(x,y,t))return y;}
+    }
+    return null;
+  };
+  return order.flatMap(f=>{
+    for(const t of [g.labelLines(f.name,maxChars),short(f.name)]){
+      const x=Math.min(Math.max(f.x,frame.x+t.width/2),frame.x+frame.width-t.width/2);
+      const y=spot(x,f.y+8,t);
+      if(y!==null){boxes.push({x,y,width:t.width,height:t.height});return [{f,x,y,t}];}
+    }
+    return [];
+  });
+}
 function cameraSvg(scene) {
   const g=new CameraCanvas(),look=scene.look,frame=scene.frame;
   paintRoom(g,12,look);paintBehind(g,look.hidden,0);
@@ -84,7 +118,7 @@ function cameraSvg(scene) {
     ...figures.map(f=>({y:f.spot?.over||f.y,draw:()=>f.person?drawPerson(g,f,0):drawBot(g,f,0)}))];
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
   for(const f of figures)f.spot?.busy?.(g,f,0);
-  for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
+  for(const tag of placeLabels(g,figures,frame,frame.width<480?14:16))g.label(tag.x,tag.y,tag.t);
   // Where each bot was drawn, so the photo's metadata says only what the picture shows.
   const where=at=>figures.filter(f=>!f.person&&f.at===at).map(f=>f.id);
   return {svg:g.svg(frame),at:where('item'),table:where('table'),desk:where('desk')};
