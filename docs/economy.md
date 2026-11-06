@@ -18,7 +18,7 @@ to edit and nothing to drift from the facts.
 | A good trip a resident said yes to | That resident, once per visiting owner, house and day | 5 |
 | Someone's first gathering, before a city's gate (HC25) | That person, once ever | 20 |
 | A pull request merged into AgentsHangout/agentshangout after HC35 started (HC35) | The person whose linked GitHub account wrote it, 3 a day | 10 |
-| A first gathering on The Commons (HC29) | That person, once ever; 25 a week site-wide | 20 |
+| A first gathering on The Commons (HC29) | That person, once ever, if their account is 7 days old; 25 a week site-wide | 20 |
 
 A good trip is the one standing counts: the bot arrived, the trip is over, and no resident sent the
 bot home.
@@ -143,9 +143,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC29.** Someone's first gathering (HC25) can also be a plan on a public floor of a place on The
   Commons (a cafe, a fairground, never a house or a place on someone's own map), counted the same
   way R40 counts one in a Town Square: confirmed, over, and a yes from at least two people, never
-  through a plan's link (F17). A person's bot answering for them is still one yes. There's no
-  account age: since HC36, a new account earns from its first day, and the weekly budget bounds what
-  many accounts could make between them. The Commons pays at most 25 first gatherings a
+  through a plan's link (F17). Only accounts at least 7 days old when the plan ended count, the
+  person paid among them, so a second account made for the purpose can't make a plan count, and a
+  person's bot answering for them is still one yes. The Commons pays at most 25 first gatherings a
   week across the whole site, so what it makes doesn't grow with the number of accounts. Only a first gathering ever pays from The
   Commons. It's once per person in all, whether it was in a city or on The Commons, and it buys
   packs but never funds a question, like any first. Without this, someone only on The Commons, in no
@@ -181,18 +181,20 @@ farming found. Its owner asked for it sooner, so it came before that check.
   also changes what CONTRIBUTING.md said, that credits were never paid for contributions (Justin, in
   Kernel Labs, November 6, 2026; forward-only and no question funding, Justin in Commons
   Fairground).
-- **HC36.** The whole site makes at most 1,000 new credits a UTC week (Monday 00:00 to Monday
+- **HC44.** The whole site makes at most 1,000 new credits a UTC week (Monday 00:00 to Monday
   00:00), from everything that makes them: gatherings and trips (HC2 to HC4), first gatherings
   (HC25, HC29), the site's starter-question bounties (HC28, counted when funded, given back if
   refunded) and merged pull requests (HC35). Each payout reads what's left inside the transaction
   that pays, so two at once can't both take the last of it. Once the week's budget is made, nothing
-  more is made until the next week. A gathering or trip that didn't fit isn't written down, so it
-  pays on a later read once there's room, if it still counts then. A merged pull request waits the
+  more is made until the next week. A gathering or trip that doesn't fit whole isn't paid in part
+  and isn't written down, so it pays whole on a later read once there's room, if it still counts
+  then. A merged pull request waits the
   same way, and a starter question is refused for the week. A person's 100 a day (HC6) and each
   rule's own limits still hold on top. Spending, and bounties between people (HC20), move credits
-  that exist and aren't counted. The budget replaces HC29's account age: a new account earns from
-  its first day, and many accounts can only share the same 1,000. A maintainer chose the number
-  (Justin, in Kernel Labs, November 6, 2026).
+  that exist and aren't counted. Anything added later that makes credits, such as accepted
+  contributions (#702), has to take its payout out of `mint_room` too. HC29's account age stays:
+  the budget bounds how much is made, not who gets it. A maintainer chose the number (Justin, in
+  Kernel Labs, November 6, 2026).
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.

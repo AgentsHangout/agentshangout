@@ -3502,14 +3502,14 @@ fn answer_refusal(
     Ok(Ok(bounty))
 }
 
-/// HC36: when this UTC week began, Monday 00:00. The Unix epoch was a Thursday.
+/// HC44: when this UTC week began, Monday 00:00. The Unix epoch was a Thursday.
 pub fn week_start(now: i64) -> i64 {
     let week = 7 * crate::ops::DAY_SECS;
     let shift = 3 * crate::ops::DAY_SECS;
     (now + shift).div_euclid(week) * week - shift
 }
 
-/// HC36: how many new credits the site can still make this UTC week, out of `SITE_MINT_A_WEEK`:
+/// HC44: how many new credits the site can still make this UTC week, out of `SITE_MINT_A_WEEK`:
 /// less everything that paid this week from gatherings, trips and merged pull requests, and every
 /// starter question funded this week that hasn't been refunded. Read inside the transaction that
 /// pays, so two payouts at once can't both take the last of it.
@@ -3554,6 +3554,9 @@ fn starter_refusal(
     Ok(None)
 }
 
+/// HC29: how old an account must be, when a plan on The Commons ends, for its yes to count there
+/// or for it to be paid, so a second account made for the purpose can't make a plan count.
+pub const COMMONS_ACCOUNT_DAYS: i64 = 7;
 /// HC29: how many first gatherings The Commons pays a week across the whole site, so what it mints
 /// doesn't grow with the number of accounts.
 pub const COMMONS_FIRSTS_A_WEEK: i64 = 25;
@@ -12333,8 +12336,9 @@ impl Db {
 
     /// HC29: plans on a public floor of a place on The Commons (not a house) that count as a
     /// gathering for `person_id`, as R40 counts one in a Town Square: confirmed, over, and a yes from
-    /// at least two people, never through a plan's link (F17). Only a first gathering is ever paid
-    /// from these (HC25), and HC36's weekly budget bounds what they all make.
+    /// at least two people, never through a plan's link (F17). Only accounts at least
+    /// `COMMONS_ACCOUNT_DAYS` old when it ended count, the person paid among them. Only a first
+    /// gathering is ever paid from these (HC25), and HC44's weekly budget bounds what they all make.
     pub fn commons_gatherings(
         &self,
         person_id: &str,
@@ -12349,21 +12353,30 @@ impl Db {
                JOIN worlds w ON w.id = d.world_id AND w.kind = 'public'
               WHERE e.status = 'confirmed' AND e.ends_at < ?2
                 AND (SELECT COUNT(*) FROM rsvps r
+                       JOIN people p ON p.id = r.person_id AND p.created_at <= e.ends_at - ?3
                       WHERE r.event_id = e.id AND r.response = 'yes'
                         AND NOT EXISTS (SELECT 1 FROM plan_invitees i
                                         WHERE i.event_id = e.id AND i.person_id = r.person_id)) >= 2
-                AND EXISTS (SELECT 1 FROM rsvps y
-                            WHERE y.event_id = e.id AND y.person_id = ?1 AND y.response = 'yes')
+                AND EXISTS (SELECT 1 FROM rsvps y JOIN people me ON me.id = y.person_id
+                            WHERE y.event_id = e.id AND y.person_id = ?1 AND y.response = 'yes'
+                              AND me.created_at <= e.ends_at - ?3)
                 AND NOT EXISTS (SELECT 1 FROM plan_invitees i
                                 WHERE i.event_id = e.id AND i.person_id = ?1)
               ORDER BY e.ends_at, e.id",
         )?;
-        let rows = stmt.query_map(params![person_id, now], |row| {
-            Ok((
-                row.get(0)?,
-                CreditSource { kind: CreditKind::Gathering, source: row.get(1)?, at: row.get(2)? },
-            ))
-        })?;
+        let rows = stmt.query_map(
+            params![person_id, now, COMMONS_ACCOUNT_DAYS * crate::ops::DAY_SECS],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    CreditSource {
+                        kind: CreditKind::Gathering,
+                        source: row.get(1)?,
+                        at: row.get(2)?,
+                    },
+                ))
+            },
+        )?;
         rows.collect()
     }
 
@@ -12643,10 +12656,11 @@ impl Db {
                 }
                 let day = source.at.div_euclid(crate::ops::DAY_SECS);
                 let so_far = day_paid.entry(day).or_insert(0);
-                // HC36: never more than the site can still make this week. What doesn't fit
-                // isn't written, so it's paid on a later read, once a new week has room.
-                let amount = worth(source.kind).min(cap - *so_far).min(room);
-                if amount <= 0 {
+                let amount = worth(source.kind).min(cap - *so_far);
+                // HC44: never more than the site can still make this week. What doesn't fit
+                // isn't written down at all, so it's paid whole on a later read, once a new week
+                // has room.
+                if amount <= 0 || amount > room {
                     continue;
                 }
                 insert.execute(params![
@@ -12885,7 +12899,7 @@ impl Db {
         if let Some(reason) = starter_refusal(&tx, sponsor, now)? {
             return Ok(Some(reason));
         }
-        // HC36: the site's bounty is new credits, so it comes out of this week's budget.
+        // HC44: the site's bounty is new credits, so it comes out of this week's budget.
         if mint_room(&tx, now)? < STARTER_QUESTION_HC {
             return Ok(Some("the site has made all its credits for this week"));
         }
@@ -18478,8 +18492,8 @@ mod tests {
         public_floor_in(db, hangout_id, owner, "third", "public");
     }
 
-    /// Far enough into the test's time that its plans end after its accounts were made.
-    const OLD_ENOUGH: i64 = 7 * CREDIT_DAY;
+    /// The test's accounts, made long enough before `at` that their yes counts on The Commons.
+    const OLD_ENOUGH: i64 = COMMONS_ACCOUNT_DAYS * CREDIT_DAY;
 
     // HC29: someone only on The Commons, in no city, has a first gathering there pay, once
     #[test]
@@ -18523,35 +18537,33 @@ mod tests {
         assert!(db.commons_gatherings("p2", at + CREDIT_DAY).unwrap().is_empty());
     }
 
-    // HC29: someone's own bot answering for them is still one yes, so it doesn't make a plan count.
-    // Since HC36 there's no account age: a new account earns from its first day, and HC36's weekly
-    // budget bounds what many accounts could make between them.
+    // HC29: a second account made for the purpose, or someone's own bot, doesn't make a plan count
     #[test]
-    fn your_own_bot_is_not_a_second_yes_on_the_commons_and_new_accounts_count() {
+    fn a_new_second_account_or_your_own_bot_is_not_a_second_yes_on_the_commons() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
         db.remove_city_member("c1", "p2", "p2", 0).unwrap();
         public_floor(&db, "hz-lr", "p1");
         let at = OLD_ENOUGH + 2 * CREDIT_DAY;
+        // Bo and an account made the day before.
+        db.create_person("alt", "Alt", "key-alt", "feed-alt", at - CREDIT_DAY).unwrap();
+        plan(&db, "with-alt", "hz-lr", at, "confirmed");
+        db.upsert_rsvp("with-alt", "p1", "no", None, "", 0).unwrap();
+        db.upsert_rsvp("with-alt", "alt", "yes", None, "", 0).unwrap();
         // Bo, and Bo again through his bot.
         plan(&db, "with-bot", "hz-lr", at, "confirmed");
         db.upsert_rsvp("with-bot", "p1", "no", None, "", 0).unwrap();
         db.upsert_rsvp("with-bot", "p2", "yes", Some("b2"), "", 0).unwrap();
         assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 0);
-        // Bo and someone who joined the day before.
-        db.create_person("new", "New", "key-new", "feed-new", at - CREDIT_DAY).unwrap();
-        plan(&db, "with-new", "hz-lr", at + 60, "confirmed");
-        db.upsert_rsvp("with-new", "p1", "no", None, "", 0).unwrap();
-        db.upsert_rsvp("with-new", "new", "yes", None, "", 0).unwrap();
-        assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 20);
-        assert_eq!(credits_of(&db, "new", at + CREDIT_DAY).balance, 20);
+        assert_eq!(credits_of(&db, "alt", at + CREDIT_DAY).balance, 0);
     }
 
-    // HC36: a UTC week starts Monday 00:00, and the room left is the budget less what was made
+    // HC44: a UTC week starts Monday 00:00, and the room left is the budget less what was made
     // that week, however it was made
     #[test]
     fn the_weekly_budget_counts_everything_made_since_monday() {
         use crate::economy::SITE_MINT_A_WEEK;
+        assert_eq!(SITE_MINT_A_WEEK, 1000, "the number a maintainer chose");
         // 2026-11-02 was a Monday.
         let monday = 1_793_577_600;
         assert_eq!(week_start(monday), monday);
@@ -18573,7 +18585,7 @@ mod tests {
         assert_eq!(room(monday + 7 * CREDIT_DAY), SITE_MINT_A_WEEK);
     }
 
-    // HC36: once the week's budget is made, nothing more pays: not a gathering, a merged pull
+    // HC44: once the week's budget is made, nothing more pays: not a gathering, a merged pull
     // request or a starter question. A gathering that didn't fit pays on a read in a later week.
     #[test]
     fn nothing_mints_past_the_weekly_budget() {
@@ -18583,13 +18595,18 @@ mod tests {
         link_github(&db, "p1", "gh-ann");
         prs_pay_from(&db, 0);
         let monday = 1_793_577_600;
-        // Everyone else made all but 10 of this week's credits.
+        // Everyone else made all but 10 of this week's credits, less than a gathering's 20.
         db.conn().execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p2','gathering','others','c1',?1,0,?2)", params![SITE_MINT_A_WEEK - 10, monday]).unwrap();
         plan(&db, "first", "sq", monday + 100, "confirmed");
-        // Ann's first gathering gets the last 10, and her pull requests get nothing.
-        assert_eq!(credits_of(&db, "p1", monday + CREDIT_DAY).balance, 10);
+        // Ann's first gathering doesn't fit, so it isn't paid in part, and her pull requests (10
+        // each) take what's left.
+        assert_eq!(credits_of(&db, "p1", monday + CREDIT_DAY).balance, 0);
         assert_eq!(
             db.pay_merged_prs("p1", "gh-ann", &merged(1..3), monday + CREDIT_DAY).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(2..4), monday + CREDIT_DAY).unwrap(),
             0
         );
         db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
@@ -18598,9 +18615,10 @@ mod tests {
             db.fund_starter_question("s1", "q1", "p1", monday + CREDIT_DAY).unwrap(),
             Some("the site has made all its credits for this week")
         );
-        // Next week there's room again, and the pull requests pay.
+        // Next week there's room again: the gathering pays whole, and so do the pull requests.
         let next = monday + 7 * CREDIT_DAY;
-        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..3), next).unwrap(), 2);
+        assert_eq!(credits_of(&db, "p1", next).balance, 30);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(2..4), next).unwrap(), 2);
     }
 
     // HC29: when the weekly cap turns away a Commons first gathering, someone's first gathering in
