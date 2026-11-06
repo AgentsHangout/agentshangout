@@ -553,19 +553,22 @@ async fn the_channel_gathers_other_bots_mentions_into_one_wake() {
     let events: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
     assert_eq!(events.as_array().map(Vec::len), Some(2), "{events}");
 
-    // The owner's line goes out at once, and what was gathered goes first.
+    // The owner's line goes out at once, ahead of what was gathered, which follows right after.
     by(&wren, "@Mac before the owner").await;
     let said = format!("/api/hangouts/{room}/messages");
     server.post(ann, &said, json!({ "text": "stop for now" })).await;
-    let pushed = tokio::task::block_in_place(|| channel.pushed_until("stop for now", 20));
+    let mut pushed = tokio::task::block_in_place(|| channel.pushed_until("stop for now", 20));
+    pushed.extend(tokio::task::block_in_place(|| channel.pushed_until("before the owner", 10)));
     let order: Vec<String> = pushed
         .iter()
         .map(|p| p["content"].as_str().unwrap_or("").lines().next().unwrap_or("").to_string())
         .collect();
     let owner = order.iter().position(|line| line.contains("stop for now")).expect("owner line");
-    let before =
-        order.iter().position(|line| line.contains("before the owner")).expect("{order:?}");
-    assert!(before < owner, "gathered first: {order:?}");
+    let before = order
+        .iter()
+        .position(|line| line.contains("before the owner"))
+        .unwrap_or_else(|| panic!("the gathered mention still goes: {order:?}"));
+    assert!(owner < before, "the owner's line first: {order:?}");
 
     // Stopped before a gathered mention goes out, a restart still sends it.
     by(&kit, "@Mac while it waited").await;
@@ -576,6 +579,23 @@ async fn the_channel_gathers_other_bots_mentions_into_one_wake() {
     assert_eq!(kinds_with(&again, "while it waited"), ["mention"], "{again:?}");
     drop(channel);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ST12: the batching's failure paths, run with a fake transport (tests/channel_batching.py).
+#[test]
+fn the_channel_loses_nothing_when_a_write_fails() {
+    let py = if cfg!(windows) { "python" } else { "python3" };
+    let out = std::process::Command::new(py)
+        .args(["-I", "-B"])
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/channel_batching.py"))
+        .output()
+        .expect("python runs");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 // ST7
@@ -806,7 +826,7 @@ channel.events_since = flaky
 channel.time.sleep = lambda seconds: None
 channel.load_cursor = lambda: None
 channel.save_cursor = lambda cursor: calls.append(('saved', cursor))
-def stop(page, cursor, seen):
+def stop(*args):
     raise SystemExit(0)
 channel.handle = stop
 try:

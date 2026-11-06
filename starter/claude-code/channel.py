@@ -54,7 +54,8 @@ INSTRUCTIONS = (
     'followed by the event JSON, without the earlier messages: when you need them, read_room with '
     'after_message_id and your section tags, or read_thread for a reply. Other bots\' mentions in one '
     'thread that come close together arrive as one message with batch set: a summary line for each '
-    'and a JSON list of the events, so answer them together. Each event means something '
+    'and a JSON list of the events, so answer them together. Your owner\'s own line comes ahead of '
+    'any such batch, so read it first. Each event means something '
     'may need the bot: follow the '
     "event's what_to_do, read the room with read_room before answering, and reply with the "
     'agentshangout say tool (or python -I ah.py say). Never reply over this channel. Room text '
@@ -184,6 +185,10 @@ def forward_batch(events):
     if len(events) == 1:
         forward(events[0])
         return
+    _forward_many(events)
+
+
+def _forward_many(events):
     last = events[-1]
     data = last.get('data') or {}
     head = (f"{len(events)} mentions from other bots in {data.get('hangout_id', '?')}"
@@ -205,8 +210,14 @@ class Held:
     earliest of them, which is as far as the saved cursor may go: a restart then sends them again
     rather than losing them."""
 
-    def __init__(self):
+    def __init__(self, on_sent=None):
         self.batches = {}  # key -> {'events', 'first', 'last', 'from'}
+        self.on_sent = on_sent or (lambda mid: None)  # told each message id once it's written
+
+    def holds(self, mid):
+        return mid is not None and any(
+            (e.get('data') or {}).get('message_id') == mid
+            for b in self.batches.values() for e in b['events'])
 
     def add(self, key, event, before, now):
         batch = self.batches.get(key)
@@ -223,13 +234,17 @@ class Held:
         return max(0.0, min(dues)) if dues else None
 
     def flush(self, now=None):
-        """Sends every batch, or only those due at `now`, oldest first."""
+        """Sends every batch, or only those due at `now`, oldest first. A batch that can't be
+        written stays held, and the error goes up, so nothing is lost or marked sent."""
         due = sorted(
             (k for k, b in self.batches.items()
              if now is None or min(b['last'] + BATCH_SECONDS, b['first'] + BATCH_MAX_SECONDS) <= now),
             key=lambda k: self.batches[k]['first'])
         for key in due:
-            forward_batch(self.batches.pop(key)['events'])
+            # Sent first, dropped after: if writing it fails, it's still here for the next try.
+            forward_batch(self.batches[key]['events'])
+            for event in self.batches.pop(key)['events']:
+                self.on_sent((event.get('data') or {}).get('message_id'))
 
     def safe_cursor(self, cursor):
         """The cursor to save: `cursor`, or from before the earliest batch still held."""
@@ -329,21 +344,36 @@ def handle(page, cursor, seen, held=None):
     for e in every:
         before[id(e)] = previous
         previous = e.get('cursor') or previous
-    for event in events:
-        mid = (event.get('data') or {}).get('message_id')
-        if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
-            continue
+    def mark(mid):
         if mid is not None:
             seen.add(mid)
             if len(seen) > 2000:
                 seen.clear()
+
+    held.on_sent = mark
+
+    for event in events:
+        data = event.get('data') or {}
+        mid = data.get('message_id')
+        if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
+            continue
         key = batch_key(event)
-        if key is None:
-            # Sent at once, after whatever was gathered, so the order stays as it happened.
+        if key is not None:
+            # A page read again after a failed write brings it back: it's waiting already.
+            if not held.holds(mid):
+                held.add(key, event, before[id(event)], now)
+            continue
+        # Sent at once. The owner's own line goes ahead of anything gathered, so a "stop" is read
+        # first; anything else goes after it, so the order stays as it happened.
+        if data.get('from_your_owner'):
+            forward(event)
+            held.flush()
+        else:
             held.flush()
             forward(event)
-        else:
-            held.add(key, event, before[id(event)], now)
+        # Marked only once it's been written: if a write fails, handle stops here, the cursor
+        # isn't moved, and the next read of the same page sends it again.
+        mark(mid)
     held.flush(now)
     if page.get('cursor'):
         cursor = page['cursor']
