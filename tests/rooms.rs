@@ -6967,6 +6967,14 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
             return Code::BAD_REQUEST.into_response();
         };
         let mut issues = fake.issues.lock().unwrap();
+        // Lific's idx_issues_source: a source is unique among issues not in the trash.
+        let taken = !body["source"].is_null()
+            && issues
+                .iter()
+                .any(|issue| issue["source"] == body["source"] && issue["deleted"] != true);
+        if taken {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
         let number =
             issues.iter().filter(|issue| issue["project_id"] == body["project_id"]).count() + 2;
         let mut issue = body.clone();
@@ -7275,8 +7283,10 @@ async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board()
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0]["title"], "Paint the door");
     assert_eq!(sent[1]["priority"], "high");
+    // Lific keeps a source unique among live issues, so each card has its own.
+    assert_ne!(sent[0]["source"], sent[1]["source"]);
     for issue in &sent {
-        assert_eq!(issue["source"], "agentshangout");
+        assert!(text(&issue["source"]).starts_with("agentshangout:"), "{issue}");
         for name in ["Ann", "Bo", "Scout"] {
             assert!(!issue.to_string().contains(name), "{issue}");
         }
