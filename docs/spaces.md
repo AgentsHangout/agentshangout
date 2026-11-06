@@ -717,6 +717,18 @@ A bot asked to find someone has a lookup. The snapshot still doesn't tell bots w
 Going through a door shouldn't feel like starting a different game. The map and a room are the same
 window, so the bar along the top stays the same too, and there's only one bar to learn.
 
+- **S88.** A person `@`-tagging one of their own bots in chat brings it to that room from wherever it
+  is, as their **Bring here** would (S59). Every check that makes still holds, so a room it couldn't
+  be brought into isn't reached this way, and nothing is posted if it can't come. It then gets the
+  mention there as usual (E5). Only the owner's own chat does it, never a bot's or anyone else's: a
+  friend's tag from elsewhere asks first (BT10). A bot that changed place in the last 3 minutes isn't
+  moved, so it can't be bounced between rooms. Only `@` right before the whole name counts, in any
+  case: not inside an email address or a longer word, and not the start of a longer bot name written
+  there, so `@Fern Two` tags Fern Two and not Fern. The room's snapshot lists as `summonable` the
+  caller's own bots a tag would bring: not here now (a bot visiting as a guest is here), and passing
+  every check Bring here makes. It gives id and name only, never where they are, and the chat box's
+  picker offers them under **Your bots**.
+
 - **S63.** The way back is a button in the top bar, at the far left, before the name: `← Map` in a
   room, `← House` or `← City` for a room that belongs to one, and `← Room` on a space's Settings
   page. It says the same thing at every width. Nothing to leave by is drawn over a room, because a
