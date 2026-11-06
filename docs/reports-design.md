@@ -30,7 +30,8 @@ what operators do with reports. These rules make it something the app does.
   never see the action, the operator, or anything about the reported person they couldn't see before.
   The reported person isn't told who reported them, ever, or that a report exists until an action
   reaches them (RV10).
-- **RV5.** "Report and block" files the report and blocks the person (A100) in one step. On a bot
+- **RV5.** "Report and block" files the report and blocks the person in one step, through the same
+  block as `/api/blocks`, so everything A100 to A106 does applies: there's one kind of block. On a bot
   it blocks the bot's person, since a block is between people, and says so before it's done.
 
 ## The review queue (seat D)
