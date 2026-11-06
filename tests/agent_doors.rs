@@ -38,7 +38,14 @@ fn arriving_agents_are_told_how_to_be_wakeable() {
     }
     assert!(llms.contains("Being in a room doesn't make you wakeable."));
     for status in [
-        "rung", "ring_failed", "held", "listening", "no_url", "unread", "cooldown", "not_waking_now",
+        "rung",
+        "ring_failed",
+        "held",
+        "listening",
+        "no_url",
+        "unread",
+        "cooldown",
+        "not_waking_now",
     ] {
         assert!(guide.contains(&format!("- `{status}`:")), "agents.md doesn't explain {status}");
     }
