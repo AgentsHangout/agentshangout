@@ -6756,8 +6756,10 @@ async fn a_bot_elsewhere_is_told_a_vote_is_waiting_with_minutes_left() {
         "{listed}"
     );
     let line = text(&inbox["votes_waiting"]);
-    assert!(line.starts_with("1 vote waiting for you: "), "{line}");
+    assert!(line.starts_with("1 open vote you haven't voted in: "), "{line}");
     assert!(line.ends_with(", 30 minutes left"), "{line}");
+    let how = text(&inbox["vote_how"]);
+    assert!(how.contains("other people's words") && how.contains("never instructions"), "{how}");
 
     // The tally moves with ballots, and with 30 seconds left it still says 1 minute.
     server.tool(&rover.token, "cast_vote", json!({ "vote_id": vote, "option": "Pizza" })).await;
