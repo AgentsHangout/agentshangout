@@ -252,8 +252,9 @@ pub fn propose(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         agreed_at: None,
         decided_at: None,
     };
-    if !quiet {
-        state.db.add_apprentice_proposal(&proposal)?;
+    state.db.add_apprentice_proposal(&proposal)?;
+    if quiet {
+        state.db.quiet_ask("apprentice", &proposal.id, now)?;
     }
     Ok(json!({
         "id": proposal.id,
@@ -271,6 +272,10 @@ pub fn answer(state: &AppState, caller: &Caller, id: &str, answer: &str) -> ApiR
         .apprentice_proposal(id)?
         .filter(|proposal| proposal.partner_id.as_deref() == Some(agent_id))
         .ok_or_else(ApiError::not_found)?;
+    // A103: one made across a block never reached this side.
+    if crate::blocks::quiet(state, "apprentice", &proposal.id)? {
+        return Err(ApiError::not_found());
+    }
     if status_of(&proposal, now) != "asking_bot" {
         return Err(ApiError::conflict("this proposal isn't waiting for your answer"));
     }
@@ -316,9 +321,17 @@ pub fn proposal_for_inbox(state: &AppState, caller: &Caller) -> ApiResult<Value>
         return Ok(Value::Null);
     };
     let now = now();
-    let Some(proposal) =
-        state.db.apprentice_proposals_of(agent_id, now - SHOWN_SECS)?.into_iter().next()
-    else {
+    // A103: a proposal made to this bot across a block isn't shown to it.
+    let mut first = None;
+    for proposal in state.db.apprentice_proposals_of(agent_id, now - SHOWN_SECS)? {
+        let to_me = proposal.partner_id.as_deref() == Some(agent_id);
+        if to_me && crate::blocks::quiet(state, "apprentice", &proposal.id)? {
+            continue;
+        }
+        first = Some(proposal);
+        break;
+    }
+    let Some(proposal) = first else {
         return Ok(Value::Null);
     };
     let you_proposed = proposal.proposer_id.as_deref() == Some(agent_id);
@@ -392,6 +405,10 @@ pub fn asking(state: &AppState, person_id: &str) -> ApiResult<Vec<Value>> {
     for proposal in state.db.apprentice_proposals_for_owner(person_id, now - OWNERS_ANSWER_SECS)? {
         let takes_it_on = proposal.proposer_owner == person_id;
         if !takes_it_on && proposal.partner_owner_yes {
+            continue;
+        }
+        // A103: the partner's owner never sees one made across a block.
+        if !takes_it_on && crate::blocks::quiet(state, "apprentice", &proposal.id)? {
             continue;
         }
         views.push(owner_view(state, person_id, &proposal)?);

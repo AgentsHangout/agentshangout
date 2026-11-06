@@ -125,6 +125,24 @@ impl Db {
         )
     }
 
+    /// A103: marks an ask as made across a block.
+    pub fn quiet_ask(&self, kind: &str, ask_id: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO quiet_asks (kind, ask_id, created_at) VALUES (?1, ?2, ?3)",
+            params![kind, ask_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// A103: whether an ask was made across a block, so the other side never sees it.
+    pub fn is_quiet(&self, kind: &str, ask_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM quiet_asks WHERE kind = ?1 AND ask_id = ?2)",
+            params![kind, ask_id],
+            |row| row.get(0),
+        )
+    }
+
     /// A103: whether either of the two has blocked the other.
     pub fn blocked_either_way(&self, a: &str, b: &str) -> rusqlite::Result<bool> {
         self.conn().query_row(

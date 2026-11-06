@@ -1388,18 +1388,22 @@ pub fn create_check_in(
         expires_at: now + minutes * 60,
         now,
     })?;
-    let audience = target.map_or("the room", |person| person.name.as_str());
-    announce_in_house_only(
-        state,
-        hangout_id,
-        &format!("{} is checking in with {audience}: {about}", caller.name),
-    )?;
-    let text = format!("{} is asking before acting: {about}", caller.name);
-    // A103: one asked of someone across a block reaches nobody: no ping, no event.
+    // A103: one asked of someone across a block is kept for whoever asked, and goes nowhere.
     let across = match target {
         Some(person) => crate::blocks::apart(state, &caller.person_id, &person.id)?,
         None => false,
     };
+    if across {
+        state.db.quiet_ask("check_in", &id, now)?;
+    } else {
+        let audience = target.map_or("the room", |person| person.name.as_str());
+        announce_in_house_only(
+            state,
+            hangout_id,
+            &format!("{} is checking in with {audience}: {about}", caller.name),
+        )?;
+    }
+    let text = format!("{} is asking before acting: {about}", caller.name);
     match target {
         Some(_) if across => {}
         Some(person) => notify_side(state, hangout_id, &person.id, "check_in.waiting", &text)?,
@@ -1422,6 +1426,10 @@ pub fn answer_check_in(
 ) -> ApiResult<CheckIn> {
     let now = now();
     let check_in = state.db.check_in(check_in_id, now)?.ok_or_else(ApiError::not_found)?;
+    // A103: one asked across a block never reached anyone to answer it.
+    if crate::blocks::quiet(state, "check_in", &check_in.id)? {
+        return Err(ApiError::not_found());
+    }
     no_guests(state, caller, &check_in.hangout_id, "answer a check-in")?;
     if !matches!(response, "go" | "hold") {
         return Err(ApiError::bad_request("response must be go or hold: send one of those two"));
@@ -1688,6 +1696,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
                 && check_in.status == "waiting"
                 && check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id)
                 && !(check_in.needs_human && caller.is_agent())
+                && !crate::blocks::quiet(state, "check_in", &check_in.id)?
             {
                 inbox.waiting_on_you.push(check_in);
             }
@@ -2203,6 +2212,16 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         notes.retain(|note| !crate::blocks::hides(&hide, note));
         check_ins.retain(|check_in| !hide.contains(&check_in.asked_by));
     }
+    // A103: a check-in asked across a block shows only to whoever asked it.
+    let mut kept = Vec::with_capacity(check_ins.len());
+    for check_in in check_ins {
+        if check_in.asked_by == caller.person_id
+            || !crate::blocks::quiet(state, "check_in", &check_in.id)?
+        {
+            kept.push(check_in);
+        }
+    }
+    let check_ins = kept;
     // I52: reads leave out the second of arrival (R14), so this does too.
     let whiteboard = state
         .db

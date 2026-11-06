@@ -325,12 +325,17 @@ pub fn invite_people(
             }
             Invited::New => {}
         }
-        // A103: across a block it looks sent, and goes nowhere.
-        if crate::blocks::apart(state, &caller.person_id, &person.id)? {
-            added.push(person);
-            continue;
+        // A103: across a block it's kept as sent, and goes nowhere.
+        let across = crate::blocks::apart(state, &caller.person_id, &person.id)?;
+        let fresh = state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)?;
+        if across {
+            state.db.quiet_ask(
+                "plan_invite",
+                &crate::blocks::ask_key(&[&event.id, &person.id]),
+                now,
+            )?;
         }
-        if state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)? {
+        if fresh && !across {
             // F58: told once, by name, with no room in it, so the link goes to their home page.
             // The title is the proposer's words, so it carries the trust note (F55).
             let notice = crate::notify::Notice {

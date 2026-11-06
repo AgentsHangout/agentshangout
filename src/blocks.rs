@@ -41,6 +41,16 @@ pub fn apart(state: &AppState, a: &str, b: &str) -> ApiResult<bool> {
     Ok(state.db.blocked_either_way(a, b)?)
 }
 
+/// A103: an ask's id for `quiet_asks`, for one keyed by more than one thing.
+pub fn ask_key(parts: &[&str]) -> String {
+    parts.join("|")
+}
+
+/// A103: whether the other side should never see this ask.
+pub fn quiet(state: &AppState, kind: &str, ask_id: &str) -> ApiResult<bool> {
+    Ok(state.db.is_quiet(kind, ask_id)?)
+}
+
 /// A101: the people whose lines this caller, a person or one of their bots, doesn't see.
 pub fn hidden_speakers(
     state: &AppState,

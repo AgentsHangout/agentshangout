@@ -63,7 +63,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
             if check_in.status == "waiting"
                 && check_in.asked_by != caller.person_id
                 && addressed
-                && !crate::blocks::apart(&state, &caller.person_id, &check_in.asked_by)?
+                && !crate::blocks::quiet(&state, "check_in", &check_in.id)?
             {
                 check_ins.push((check_in, room.name.clone()));
             }

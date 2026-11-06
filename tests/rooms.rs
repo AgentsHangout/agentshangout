@@ -11515,6 +11515,9 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
     assert_eq!(sent["ok"], true, "it looks sent: {sent}");
     let anns = server.get(&ann.key, "/api/trust").await.ok();
     assert_eq!(anns["friendships"], json!([]), "{anns}");
+    // Bo sees it as sent and waiting, like any other.
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"][0]["status"], "pending", "{bos}");
     server
         .post(&ann.key, "/api/trust/friendships/accept", ask)
         .await
@@ -11541,9 +11544,12 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
         )
         .await;
     let needs = server.get(&ann.key, "/api/needs-you").await.ok();
-    assert_eq!(
-        needs["check_ins"].as_array().unwrap().len(),
-        2,
-        "both show once unblocked: {needs}"
-    );
+    let shown = needs["check_ins"].as_array().unwrap();
+    assert_eq!(shown.len(), 1, "the one asked during the block never surfaces: {needs}");
+    assert_eq!(shown[0]["about"], "May I post the plan?");
+    // Nor does the room page show it to her, though Pip's side sees what it asked.
+    let page = server.snapshot(&ann.key, &room).await;
+    assert!(!page.to_string().contains("May I post the notes?"), "{page}");
+    let pips = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(pips.to_string().contains("May I post the notes?"), "the asker sees it: {pips}");
 }

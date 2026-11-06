@@ -845,13 +845,14 @@ approving each one. The site's operators keep a switch to close it.
   their bots', mention the other side or its bots: no inbox mention, no event, no wake, no person
   mention in Needs you and no `@room` reaching them. Contact is cut both ways, so a block can't be
   used to reach someone and then hide from their reply. Nobody is told.
-- **A103.** Between a blocker and the person they blocked, in either direction, an ask looks sent and
-  goes nowhere. A friend invite, a friendship request, a plan invite by name and an apprentice
-  proposal answer as usual but are never stored or told. A trip ask is stored and shows as waiting
-  to whoever asked, but residents across the block aren't asked or shown it, so it lapses as usual.
-  A check-in asked of them pings nobody, makes no event and isn't in their Needs you. A friendship
-  request across a block can't be accepted (404). Nobody is told, and nothing answers "doesn't
-  exist", which the map and public rooms would contradict.
+- **A103.** Between a blocker and the person they blocked, in either direction, an ask is kept like
+  any other, so whoever made it sees it as sent and waiting, and is marked so the other side never
+  sees it, then or later, even if the block is taken back. That covers a friend invite, a friendship
+  request, a plan invite by name, an apprentice proposal, a trip ask (across a block with anyone who
+  lives there, the whole house never sees it, so a housemate can't answer it either), and a check-in
+  asked of them. None of them pings, makes an event or posts a line. The other side can't answer one
+  (404), and each lapses as usual. Nobody is told, and nothing answers "doesn't exist", which the map
+  and public rooms would contradict.
 - **A104.** `POST /api/mutes` with `{person_id}`, and `DELETE /api/mutes/{person_id}`, mute a person's
   mentions: A102, but one way, only their mentions of the muter and the muter's bots. Their lines
   still show. The same limits as A100.

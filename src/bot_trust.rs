@@ -116,7 +116,7 @@ async fn overview(State(state): State<AppState>, caller: Caller) -> ApiResult<Js
     let bots: Vec<_> =
         bots.iter().map(|a| json!({"id":a.id,"name":a.name,"owner_id":a.owner_id})).collect();
     Ok(Json(
-        json!({"owner_id":caller.person_id,"people":people,"bots":bots,"looks":looks,"friendships":state.db.explicit_friendships(&caller.person_id)?,"agents":agents}),
+        json!({"owner_id":caller.person_id,"people":people,"bots":bots,"looks":looks,"friendships":visible_friendships(&state, &caller.person_id)?,"agents":agents}),
     ))
 }
 
@@ -160,6 +160,26 @@ async fn write(
     Ok(Json(json!({"trust":trust})))
 }
 
+/// A103: this person's friendships, without requests made to them across a block, which only the
+/// sender sees, as pending.
+fn visible_friendships(state: &AppState, person_id: &str) -> ApiResult<Vec<Friendship>> {
+    let mut shown = Vec::new();
+    for f in state.db.explicit_friendships(person_id)? {
+        let to_me = f.status == "pending" && endpoint_owner(state, &f.kind, &f.to_id)? == person_id;
+        if to_me
+            && crate::blocks::quiet(
+                state,
+                "friendship",
+                &crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]),
+            )?
+        {
+            continue;
+        }
+        shown.push(f);
+    }
+    Ok(shown)
+}
+
 async fn request(
     State(state): State<AppState>,
     caller: Caller,
@@ -189,11 +209,12 @@ async fn request(
         return Err(ApiError::not_found());
     }
     let to_owner = endpoint_owner(&state, &f.kind, &f.to_id)?;
-    // A103: across a block it looks sent, and goes nowhere.
-    if crate::blocks::apart(&state, &caller.person_id, &to_owner)? {
-        return Ok(Json(json!({"ok":true})));
-    }
     state.db.request_explicit_friend(&f.kind, &f.from_id, &f.to_id, now())?;
+    // A103: across a block it's kept as pending for the sender, and goes nowhere.
+    if crate::blocks::apart(&state, &caller.person_id, &to_owner)? {
+        let key = crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]);
+        state.db.quiet_ask("friendship", &key, now())?;
+    }
     Ok(Json(json!({"ok":true})))
 }
 async fn accept(
@@ -208,11 +229,11 @@ async fn accept(
     if f.kind == "bot" {
         ops::own_agent(&state, &caller, &f.to_id, "accept a bot friendship")?;
     }
-    // A103: nothing waits across a block.
-    if crate::blocks::apart(
+    // A103: one made across a block never reached this side.
+    if crate::blocks::quiet(
         &state,
-        &caller.person_id,
-        &endpoint_owner(&state, &f.kind, &f.from_id)?,
+        "friendship",
+        &crate::blocks::ask_key(&[&f.kind, &f.from_id, &f.to_id]),
     )? {
         return Err(ApiError::not_found());
     }

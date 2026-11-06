@@ -155,10 +155,7 @@ fn send(
             "that's a lot of invites for one day: try again tomorrow",
         ));
     }
-    // A103: across a block it looks sent, and goes nowhere.
-    if crate::blocks::apart(state, &caller.person_id, &friend.id)? {
-        return Ok(Json(json!({ "ok": true })));
-    }
+    let across = crate::blocks::apart(state, &caller.person_id, &friend.id)?;
     let id = auth::new_id();
     let fresh = state.db.add_friend_invite(
         &id,
@@ -169,7 +166,11 @@ fn send(
         now,
         now - INVITE_SECS,
     )?;
-    if fresh {
+    // A103: across a block it's kept as sent, and goes nowhere.
+    if fresh && across {
+        state.db.quiet_ask("friend_invite", &id, now)?;
+    }
+    if fresh && !across {
         let text = format!("{} invited you to {place_name}.", caller.name);
         city::ping(state, vec![friend.id.clone()], "friend.invite", ping_room, &text);
     }

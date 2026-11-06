@@ -835,11 +835,10 @@ fn standing(state: &AppState, caller: &Caller, trip: &Trip) -> ApiResult<Standin
     if let Some(agent_id) = &caller.agent_id {
         return Ok(Standing { bot: *agent_id == trip.agent_id, owner: false, resident: false });
     }
-    Ok(Standing {
-        bot: false,
-        owner: trip.owner_id == caller.person_id,
-        resident: state.db.is_resident(&trip.house_id, &caller.person_id)?,
-    })
+    // A103: a trip asked across a block is the bot's side's only; the house never sees it.
+    let resident = state.db.is_resident(&trip.house_id, &caller.person_id)?
+        && !crate::blocks::quiet(state, "trip", &trip.id)?;
+    Ok(Standing { bot: false, owner: trip.owner_id == caller.person_id, resident })
 }
 
 /// A trip, for the bot it's for, that bot's owner and the house's residents. Anyone else gets 404.
@@ -999,13 +998,17 @@ pub fn create_trip(state: &AppState, caller: &Caller, input: &TripInput) -> ApiR
     if !owner_side {
         to_ask.push(agent.owner_id.clone());
     }
-    if !host_side {
-        // A103: a resident with a block between them and the bot's person isn't asked.
-        for resident in resident_ids(state, &house.id)? {
-            if !crate::blocks::apart(state, &resident, &agent.owner_id)? {
-                to_ask.push(resident);
-            }
-        }
+    // A103: across a block with anyone who lives here, the ask is kept as waiting for the bot's side,
+    // and the house never sees it or is asked, so it lapses as usual.
+    let mut across = false;
+    for resident in resident_ids(state, &house.id)? {
+        across |= crate::blocks::apart(state, &resident, &agent.owner_id)?;
+    }
+    if across {
+        state.db.quiet_ask("trip", &id, now)?;
+    }
+    if !host_side && !across {
+        to_ask.extend(resident_ids(state, &house.id)?);
     }
     let goal_note = if goal.is_empty() { String::new() } else { format!(": {goal}") };
     let text = if caller.is_agent() {
@@ -1675,15 +1678,11 @@ pub fn trips_to_answer(state: &AppState, caller: &Caller, now: i64) -> ApiResult
             }
         }
     }
-    // A103: an ask from the other side of a block waits, unseen, and lapses.
+    // A103: an ask made across a block waits, unseen by the house, and lapses.
     let mut shown = Vec::new();
     for trip in trips {
-        let owner = state.db.agent(&trip.agent_id, now)?.map(|agent| agent.owner_id);
-        let across = match owner {
-            Some(owner) => crate::blocks::apart(state, &caller.person_id, &owner)?,
-            None => false,
-        };
-        if !across {
+        let mine = trip.owner_id == caller.person_id;
+        if mine || !crate::blocks::quiet(state, "trip", &trip.id)? {
             shown.push(trip);
         }
     }

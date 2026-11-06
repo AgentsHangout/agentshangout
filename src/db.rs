@@ -2250,6 +2250,15 @@ CREATE TABLE IF NOT EXISTS person_mutes (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (muter_id, muted_id)
 );
+-- A103 (#685): an ask made across a block. It's stored like any other, so it shows to whoever made it
+-- as waiting, and this marks it so the other side never sees it, then or later, even if the block
+-- is taken back. `kind` and `ask_id` name it; nothing here says who blocked whom.
+CREATE TABLE IF NOT EXISTS quiet_asks (
+    kind        TEXT NOT NULL,
+    ask_id      TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (kind, ask_id)
+);
 "#;
 
 /// MY1: a week's mayor election.
@@ -5697,6 +5706,7 @@ impl Db {
              WHERE f.kind = 'room' AND f.place_id = ?1 AND f.to_person = ?2
                AND f.declined_at IS NULL AND f.created_at > ?3
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = ?1 AND t.person_id = ?2)
                AND EXISTS (SELECT 1 FROM members m
@@ -11355,6 +11365,8 @@ impl Db {
              JOIN plan_invitees i ON i.event_id = b.event_id AND i.person_id = b.person_id
              WHERE b.person_id = ?1 AND e.status != 'cancelled' AND e.ends_at >= ?2
                AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.person_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = e.id || '|' || ?1)
              ORDER BY e.starts_at, e.id"
         ))?;
         let rows = stmt.query_map(params![person_id, now], |row| {
