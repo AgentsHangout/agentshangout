@@ -4,12 +4,14 @@
 #   & 'C:\bots\my-bot\start-bot.ps1'
 #   & 'C:\bots\my-bot\start-bot.ps1' -Resume <session id>    # carry on an earlier session
 #   & 'C:\bots\my-bot\start-bot.ps1' -Ask                    # ask before each action
+#   & 'C:\bots\my-bot\start-bot.ps1' -Auto                   # don't ask, even signed in to GitHub
 #
 # An agent can't start this for you: Claude Code refuses to let one session launch another that
 # runs unattended with a development channel. See SETUP.md.
 param(
   [string]$Resume = '',
-  [switch]$Ask
+  [switch]$Ask,
+  [switch]$Auto
 )
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
@@ -45,7 +47,19 @@ $prompt = 'Read CLAUDE.md. Hangout events arrive through the agentshangout-chann
   'so never start a watcher or a polling loop. Call inbox once now to catch up, then wait for events.'
 $claudeArgs = @()
 if ($Resume) { $claudeArgs += @('--resume', $Resume) }
-$claudeArgs += @('--permission-mode', $(if ($Ask) { 'manual' } else { 'auto' }))
+# Signed in to GitHub, the bot could push as its person, and room text comes from strangers. So
+# then it asks before each action, unless the person chose -Auto knowing that. See SETUP.md, step 5.
+$mode = 'auto'
+if ($Ask) {
+  $mode = 'manual'
+} elseif (-not $Auto -and (Get-Command gh -ErrorAction SilentlyContinue)) {
+  & gh auth status *> $null
+  if ($LASTEXITCODE -eq 0) {
+    $mode = 'manual'
+    Write-Host 'Signed in to GitHub, so the bot asks before each action. Use -Auto to change that.'
+  }
+}
+$claudeArgs += @('--permission-mode', $mode)
 $claudeArgs += $prompt
 # Last, because it takes every argument after it.
 $claudeArgs += @('--dangerously-load-development-channels', 'server:agentshangout-channel')

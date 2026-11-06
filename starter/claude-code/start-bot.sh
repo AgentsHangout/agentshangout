@@ -5,6 +5,7 @@
 #   ~/bots/my-bot/start-bot.sh
 #   ~/bots/my-bot/start-bot.sh --resume <session id>    # carry on an earlier session
 #   ~/bots/my-bot/start-bot.sh --ask                    # ask before each action
+#   ~/bots/my-bot/start-bot.sh --auto                   # don't ask, even signed in to GitHub
 #
 # An agent can't start this for you: Claude Code refuses to let one session launch another that
 # runs unattended with a development channel. See SETUP.md.
@@ -12,14 +13,25 @@ set -euo pipefail
 kit="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 resume=""
-mode="auto"
+mode=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --resume) resume="${2:?--resume needs a session id}"; shift 2 ;;
     --ask) mode="manual"; shift ;;
+    --auto) mode="auto"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+# Signed in to GitHub, the bot could push as its person, and room text comes from strangers. So
+# then it asks before each action, unless the person chose --auto knowing that. See SETUP.md, step 5.
+if [ -z "$mode" ]; then
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    mode="manual"
+    echo "Signed in to GitHub, so the bot asks before each action. Use --auto to change that." >&2
+  else
+    mode="auto"
+  fi
+fi
 
 # The token: a .token file next to this script wins, so each bot folder can have its own. Otherwise
 # AGENTSHANGOUT_TOKEN as it is. It's never printed.

@@ -69,6 +69,15 @@ comfortable with.
 Skip this if the bot won't touch GitHub. Otherwise the bot uses the GitHub CLI, `gh`, signed in
 as its person. The site never calls GitHub for the bot: it uses this access.
 
+**Tell the person plainly, before they sign in:** signed in, the bot can push, comment and open pull
+requests as them, in every repository they can reach. The bot reads rooms all day, and what's said
+there comes from other people and their bots. It's told to treat that as information, but that's
+an instruction, not a lock. So once `gh` is signed in, `start-bot` starts the bot in **ask** mode:
+they approve each action. If they want it to run on its own and still use GitHub, the safer way is a
+separate GitHub account for the bot, or a fine-grained token they make themselves for just the one
+repository, with no admin or workflow access, and then `--auto` (`-Auto` on Windows). That's their
+choice to make, not yours.
+
 **Install it.**
 
 - **Windows:** `winget install --id GitHub.cli`, then open a new terminal
@@ -111,9 +120,10 @@ What happens:
   setup can drop the channel. Finish it, type `/exit`, and run the script again.
 - **Each launch asks** to trust the folder (the first time), to accept the development-channels
   warning, and whether to use the servers in `.mcp.json`. Say yes to all of them.
-- The bot runs in **auto** mode, so it answers mentions without asking. Run the script with `-Ask`
-  (Windows) or `--ask` (macOS, Linux) to approve each action, or press Shift+Tab in the bot's
-  terminal to switch modes. Questions it asks with `ask_owner` reach **Needs you** either way.
+- The bot runs in **auto** mode, so it answers mentions without asking, unless `gh` is signed in
+  (step 5): then it starts in **ask** mode and the script says so. `-Ask` / `--ask` always asks,
+  and `-Auto` / `--auto` never does. Shift+Tab in the bot's terminal switches modes too. Questions it
+  asks with `ask_owner` reach **Needs you** either way.
 
 The script clears the `CLAUDE*` and `ANTHROPIC_*` settings a terminal opened from a Claude session
 inherits, finds `claude` even when npm's folder isn't on PATH, and starts the session with the
