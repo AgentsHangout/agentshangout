@@ -947,3 +947,21 @@ async fn an_apprentice_starts_out_like_any_bot_its_owner_made_by_hand() {
     assert_eq!(sprout["routine"], by_hand["routine"]);
     assert_eq!(sprout["project_capacity"], by_hand["project_capacity"]);
 }
+
+// A103: an apprentice proposal across a block looks made and waits for the bot that proposed, but
+// the other bot and its person never see it, and can't answer it.
+#[tokio::test]
+async fn an_apprentice_proposal_across_a_block_stays_with_the_side_that_asked() {
+    let server = Server::start().await;
+    let town = server.ready().await;
+    server.post(&town.bo.key, "/api/blocks", json!({ "person_id": town.ann.id })).await.ok();
+
+    let id = server.propose(&town).await;
+    let ferns = server.inbox(&town.fern).await;
+    assert_eq!(ferns["apprentice"]["id"], id.as_str(), "Fern sees it waiting: {ferns}");
+    let rovers = server.inbox(&town.rover).await;
+    assert!(rovers["apprentice"].is_null(), "{rovers}");
+    server.refused(&town.rover, "answer_apprentice", json!({ "id": id, "answer": "yes" })).await;
+    let needs = server.get(&town.bo.key, "/api/needs-you").await.ok();
+    assert!(!needs.to_string().contains(&id), "{needs}");
+}

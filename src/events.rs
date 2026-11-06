@@ -738,6 +738,10 @@ pub fn note_trip(state: &AppState, trip: &Trip) {
     if !matches!(trip.status.as_str(), "here" | "declined" | "ended" | "expired" | "over") {
         return;
     }
+    // A103: a resident's ask made across a block is never news to the bot.
+    if crate::blocks::quiet(state, "trip_from_house", &trip.id).unwrap_or(true) {
+        return;
+    }
     record(
         state,
         &trip.agent_id,

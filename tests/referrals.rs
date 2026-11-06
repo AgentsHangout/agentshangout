@@ -1159,3 +1159,70 @@ async fn a_call_that_would_overfill_a_plan_invites_nobody() {
     let last = server.post(&ann.key, &path, send(&friends[29..30])).await.ok();
     assert_eq!(last["invited"].as_array().map(Vec::len), Some(1), "{last}");
 }
+
+// A103: a plan invite by name across a block looks sent and reaches nobody. Sent again once the
+// block is gone, it's real, and is said back as invited.
+#[tokio::test]
+async fn a_plan_invite_across_a_block_looks_sent_and_counts_once_the_block_is_gone() {
+    let server = Server::start().await;
+    let here = server.room("Ann").await;
+    let ann = here.ann.clone();
+    let plan = server.plan(&ann, &here.id, 2).await;
+    let bos = server.room("Bo").await;
+    let bo = bos.ann.clone();
+    server.post(&ann.key, &format!("/api/invites/{}/join", bos.invite), json!({})).await.ok();
+    server.post(&bo.key, "/api/blocks", json!({ "person_id": ann.id })).await.ok();
+    let path = format!("/api/events/{plan}/invitees");
+    let body = json!({ "person_ids": [bo.id] });
+
+    let sent = server.post(&ann.key, &path, body.clone()).await.ok();
+    assert_eq!(sent["invited"], json!([{ "id": bo.id, "name": "Bo" }]), "it looks sent: {sent}");
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+    let rsvp = format!("/api/events/{plan}/rsvp");
+    assert!(server
+        .post(&bo.key, &rsvp, json!({ "response": "yes" }))
+        .await
+        .status
+        .is_client_error());
+    // Asked again during the block, it still looks sent and still goes nowhere.
+    server.post(&ann.key, &path, body.clone()).await.ok();
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+
+    let address = server.fresh_address();
+    let off = server
+        .send_from(&address, &bo.key, Method::DELETE, &format!("/api/blocks/{}", ann.id), None)
+        .await;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.show());
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+    let again = server.post(&ann.key, &path, body).await.ok();
+    assert_eq!(again["invited"], json!([{ "id": bo.id, "name": "Bo" }]), "{again}");
+    let needs = server.get(&bo.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["invited_plans"][0]["invited_by"], "Ann", "{needs}");
+    server.post(&bo.key, &rsvp, json!({ "response": "yes" })).await.ok();
+}
+
+// A103: a plan invite kept quiet, then made by someone with no block, is theirs: Needs you never
+// names the person across the block.
+#[tokio::test]
+async fn a_quiet_plan_invite_made_real_by_someone_else_names_them() {
+    let server = Server::start().await;
+    let here = server.room("Ann").await;
+    let ann = here.ann.clone();
+    let dee = server.join(&here.invite, "Dee").await;
+    let plan = server.plan(&ann, &here.id, 2).await;
+    let bos = server.room("Bo").await;
+    let bo = bos.ann.clone();
+    for who in [&ann, &dee] {
+        server.post(&who.key, &format!("/api/invites/{}/join", bos.invite), json!({})).await.ok();
+    }
+    server.post(&bo.key, "/api/blocks", json!({ "person_id": ann.id })).await.ok();
+    let path = format!("/api/events/{plan}/invitees");
+    let body = json!({ "person_ids": [bo.id] });
+
+    server.post(&ann.key, &path, body.clone()).await.ok();
+    assert_eq!(server.get(&bo.key, "/api/needs-you").await.ok()["invited_plans"], json!([]));
+    let sent = server.post(&dee.key, &path, body).await.ok();
+    assert_eq!(sent["invited"], json!([{ "id": bo.id, "name": "Bo" }]), "{sent}");
+    let needs = server.get(&bo.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["invited_plans"][0]["invited_by"], "Dee", "{needs}");
+}

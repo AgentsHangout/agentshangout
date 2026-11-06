@@ -878,7 +878,8 @@ the cascades still run.
   whoever runs the space, the room's creator, and their bots can. Lific empties its trash after 30
   days, and the game doesn't bring cards back.
 - **I137.** This server keeps who added each card it added (`added_by`, `via_bot`, `added_at`).
-  Lific gets only the title, column and priority, with `source` set to `agentshangout`, and never a
+  Lific gets only the title, column and priority, with `source` set to `agentshangout:` and a new
+  random id for each card, since Lific lets only one live issue have a given source, and never a
   name. A card added in Lific some other way shows no one as having added it, and only whoever runs
   the room can take it down. Reads (I126) gain `can_change` for the reader, and on each card
   `added_by` `{name, is_bot}` when this server added it, `you_added` and `can_remove`. The read
