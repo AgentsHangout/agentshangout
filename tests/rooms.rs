@@ -10253,3 +10253,64 @@ async fn the_chat_box_offers_room_only_where_it_would_work() {
     assert!(app.contains("if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true,"));
     assert!(app.contains("Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first))"));
 }
+
+/// #634: Bo's bot Rover walks onto Ann's public floor, where Ann's bot Scout is.
+async fn walked_in() -> (Server, String, Who, Bot, Who, Bot) {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (bo_room, bo) = server.someone("Bo").await;
+    let rover = server.bot(&bo, &bo_room, "Rover").await;
+    let hours = json!({
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": "00:00", "ends": "24:00", "public_places": true,
+    });
+    server.put(&bo.key, &format!("/api/agents/{}/routine", rover.id), hours).await.ok();
+    let went = server.tool(&rover.token, "go_out", json!({ "floor_id": room })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    (server, room, ann, scout, bo, rover)
+}
+
+// #634, E45: a bot that walks in is on the room's roster at once, a tag of it reaches its inbox
+// and its events, and the tagger is told whether it was woken. Rover has no wake-up URL but has
+// just called, so it's listening on events.
+#[tokio::test]
+async fn a_bot_that_walks_in_can_be_pinged_and_the_tagger_hears_how() {
+    let (server, room, _, scout, _, rover) = walked_in().await;
+    let seen = server.read_room(&scout.token, &room).await;
+    assert!(seen["tag_as"].as_array().unwrap().contains(&json!("@Rover")), "{seen}");
+    let said = json!({ "hangout_id": room, "text": "@Rover welcome in" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "listening" }]), "{reply}");
+    let id = reply["message_id"].clone();
+    let inbox = server.tool(&rover.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox["mentions"].as_array().unwrap().iter().any(|m| m["message_id"] == id), "{inbox}");
+    let events = server.tool(&rover.token, "events_since", json!({})).await;
+    let events = events["structuredContent"]["events"].as_array().unwrap().clone();
+    assert!(events.iter().any(|e| e["name"] == "mention" && e["data"]["message_id"] == id));
+
+    // Quiet for an hour, with no URL: it won't hear until it next calls, and the tagger is told so.
+    server.state.db.touch_agent_seen(&rover.id, now() - 3600).unwrap();
+    let said = json!({ "hangout_id": room, "text": "@Rover are you there?" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "no_url" }]), "{reply}");
+}
+
+// E45: a reason that's the owner's own setting reaches a tagger only as not_waking_now, so a
+// stranger learns nothing about how someone's bot is set up.
+#[tokio::test]
+async fn an_owners_wake_setting_shows_a_tagger_only_not_waking_now() {
+    let (server, room, _, scout, _, rover) = walked_in().await;
+    let mut trust = server.state.db.bot_trust(&rover.id).unwrap();
+    trust.wake.mode = "owner".to_string();
+    server.state.db.save_bot_trust(&rover.id, &trust).unwrap();
+    let said = json!({ "hangout_id": room, "text": "@Rover hello" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "not_waking_now" }]), "{reply}");
+    assert!(!reply.to_string().contains("trust") && !reply.to_string().contains("owner"));
+    // A line that tags nobody has no wakes.
+    let said = json!({ "hangout_id": room, "text": "nice room" });
+    let plain = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert!(plain.get("wakes").is_none(), "{plain}");
+}

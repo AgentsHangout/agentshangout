@@ -8732,6 +8732,23 @@ impl Db {
         Ok(())
     }
 
+    /// E45: the latest wake decision for this bot about one message, and its reason, if any was
+    /// stored yet: a ring that went out is stored only once it's answered.
+    pub fn wake_decision_for(
+        &self,
+        agent_id: &str,
+        message_id: i64,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT decision, reason FROM wake_decisions
+                 WHERE agent_id = ? AND message_id = ? ORDER BY id DESC LIMIT 1",
+                params![agent_id, message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
     pub fn wake_decisions(&self, agent_id: &str) -> rusqlite::Result<Vec<WakeDecision>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
