@@ -1442,6 +1442,8 @@ fn the_day(
     readable: &Rooms,
 ) -> ApiResult<Value> {
     let place = state.db.bot_place(bot, now)?;
+    // A101: the lines of someone its person blocked aren't part of its day.
+    let hide = state.db.blocked_ids(owner)?;
     let conn = state.db.conn();
     let since = day_start(&conn, bot, now)?;
     let last_slept = slept_at(&conn, bot)?;
@@ -1520,6 +1522,10 @@ fn the_day(
                 continue;
             }
             older = 0;
+            let person: Option<String> = row.get(2)?;
+            if person.as_ref().is_some_and(|by| hide.contains(by)) {
+                continue;
+            }
             here.push(RoomLine {
                 id: row.get(0)?,
                 agent: row.get(1)?,

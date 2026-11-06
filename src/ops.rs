@@ -2041,6 +2041,9 @@ pub struct Snapshot {
     pub people: Vec<Person>,
     pub agents: Vec<Agent>,
     pub messages: Vec<Message>,
+    /// A101: how many lines were left out because the caller blocked who wrote them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hidden: usize,
     pub notes: Vec<Message>,
     /// What's on the wall (I48), or null if it's blank or a guest arrived after it was written.
     pub whiteboard: Option<Whiteboard>,
@@ -2178,6 +2181,20 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
             day_ago,
         ),
     };
+    // A101: the lines of people this caller blocked aren't shown, and only how many is said.
+    let hide = crate::blocks::hidden_speakers(state, caller)?;
+    let mut messages = messages;
+    let before = messages.len();
+    if !hide.is_empty() {
+        messages.retain(|message| !crate::blocks::hides(&hide, message));
+    }
+    let hidden = before - messages.len();
+    let mut notes = notes;
+    let mut check_ins = check_ins;
+    if !hide.is_empty() {
+        notes.retain(|note| !crate::blocks::hides(&hide, note));
+        check_ins.retain(|check_in| !hide.contains(&check_in.asked_by));
+    }
     // I52: reads leave out the second of arrival (R14), so this does too.
     let whiteboard = state
         .db
@@ -2247,6 +2264,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         people,
         agents,
         messages,
+        hidden,
         notes,
         whiteboard,
         boards,
@@ -2335,10 +2353,14 @@ pub fn read_messages(
     limit: i64,
 ) -> ApiResult<Vec<Message>> {
     require_room(state, caller, hangout_id)?;
-    Ok(match state.guest_visit(caller, hangout_id)? {
+    let mut messages = match state.guest_visit(caller, hangout_id)? {
         Some(visit) => guest_messages(state, hangout_id, &visit, after, limit, now())?,
         None => state.db.messages(hangout_id, after, limit)?,
-    })
+    };
+    // A101: not the lines of someone this caller blocked.
+    let hide = crate::blocks::hidden_speakers(state, caller)?;
+    messages.retain(|message| !crate::blocks::hides(&hide, message));
+    Ok(messages)
 }
 
 /// A plan as a calendar file. Guests have no plans to fetch.
@@ -2635,4 +2657,9 @@ pub fn rotate_feed(state: &AppState, caller: &Caller) -> ApiResult<String> {
     let token = auth::new_feed_token();
     state.db.set_feed_token(&caller.person_id, &token)?;
     Ok(token)
+}
+
+/// For `skip_serializing_if`: a count of nothing isn't sent.
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }

@@ -11110,6 +11110,33 @@ impl Db {
     }
 
     /// I103: reply count and latest reply timestamp for root messages.
+    /// A101: `thread_summaries`, not counting replies by `without`.
+    pub fn thread_summaries_without(
+        &self,
+        root_ids: &[i64],
+        without: &std::collections::HashSet<String>,
+    ) -> rusqlite::Result<std::collections::HashMap<i64, (i64, i64)>> {
+        if without.is_empty() || root_ids.is_empty() {
+            return self.thread_summaries(root_ids);
+        }
+        let conn = self.conn();
+        let in_clause = root_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let marks = vec!["?"; without.len()].join(",");
+        let sql = format!(
+            "SELECT t.root_id, COUNT(*), MAX(m.created_at)
+             FROM message_threads t
+             JOIN messages m ON m.id = t.message_id
+             WHERE t.root_id IN ({in_clause}) AND t.message_id != t.root_id
+               AND (m.person_id IS NULL OR m.person_id NOT IN ({marks}))
+             GROUP BY t.root_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(without.iter()), |row| {
+            Ok((row.get::<_, i64>(0)?, (row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)))
+        })?;
+        rows.collect()
+    }
+
     pub fn thread_summaries(
         &self,
         root_ids: &[i64],
