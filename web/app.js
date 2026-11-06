@@ -2270,8 +2270,10 @@ const where = (bot) => {
   return bot.room.out ? `Visiting ${text}` : `In ${text}`;
 };
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
-// Delete. `focusOn`, on the map only, centers the map on it.
-function yourBotRow(bot, { focusOn = null, reload }) {
+// Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
+// has no spot on the map (S89), so there's nothing to center on.
+const offMapText = (bot) => `${bot.room?.name || 'Its room'} isn't on the map, so there's nowhere to center on it`;
+function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
   return h('div', { class: 'row' },
     // L44: its picture, in its own look, as the map and the wardrobe draw it.
     h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
@@ -2279,6 +2281,7 @@ function yourBotRow(bot, { focusOn = null, reload }) {
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
       h('small', {}, where(bot)),
+      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot)) : null,
       h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
       h('small', { class: 'muted' }, bot.next
         ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
@@ -9996,7 +9999,9 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
+        // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
+        const offMap = !tile && Boolean(bot.room);
+        return yourBotRow(bot, { focusOn, offMap, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
