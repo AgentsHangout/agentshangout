@@ -399,6 +399,18 @@ impl Db {
         Ok(())
     }
 
+    /// #647 C: the bots this person made by approving a setup since `since`, newest first, so the
+    /// consent page can point them out.
+    pub fn recent_setup_bots(&self, owner_id: &str, since: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT m.agent_id FROM bot_setup_bots m JOIN bot_setup_drafts d ON d.id = m.draft_id
+             WHERE d.owner_id = ?1 AND m.made_at > ?2 ORDER BY m.made_at DESC",
+        )?;
+        let rows = stmt.query_map(params![owner_id, since], |r| r.get(0))?;
+        rows.collect()
+    }
+
     /// #647 B: the person says no to an open draft. False if it wasn't theirs and open.
     pub fn decline_bot_setup_draft(&self, owner_id: &str, id: &str) -> rusqlite::Result<bool> {
         let changed = self.conn().execute(
@@ -473,6 +485,14 @@ mod tests {
         }
         assert!(db.setup_refresh("r-1", "client", "res", &pair("2"), AT + 2).unwrap().is_none());
         assert!(db.setup_access("a-1", "res", AT + 3).unwrap().is_none(), "the grant ended");
+    }
+
+    // #647 C: the starter role fits a bot's role (JB1).
+    #[test]
+    fn the_starter_role_fits_a_role() {
+        let chars = crate::bot_setup::STARTER_ROLE.chars().count();
+        assert!(chars <= crate::jobs::MAX_ROLE_CHARS, "{chars}");
+        assert!(!crate::bot_setup::STARTER_ROLE.contains("  "));
     }
 
     // Deleting the person deletes their setup grants, codes, tokens and drafts.
