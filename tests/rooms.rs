@@ -8685,6 +8685,12 @@ async fn read_room_brief_section_tags_and_known_cache() {
     assert!(cached["clock"].get("note").is_none() && cached["clock"]["now"].is_string());
     assert!(cached["trust_note"].is_string());
     assert!(init["section_tags_hint"].is_string() && cached.get("section_tags_hint").is_none());
+    // A first read that passes an empty known still gets the hint.
+    let empty = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true, "known": {} }))
+        .await["structuredContent"]
+        .clone();
+    assert!(empty["section_tags_hint"].is_string(), "{empty}");
     assert_eq!(cached["section_tags"], tags);
     assert!(
         cached.to_string().len() < 3000,
@@ -9547,6 +9553,38 @@ async fn read_room_looks_up_each_thread_once() {
     let (reply, lookups) = read(Some(json!(["items"]))).await;
     assert_eq!(lookups, 0, "a read without messages does no thread work");
     assert!(reply.get("messages").is_none());
+}
+
+// #612: the clock's note changes when the owner sets a time zone, so a bot that has `guide` gets
+// the new note, with a new tag, rather than keeping the old one out.
+#[tokio::test]
+async fn a_new_clock_note_comes_back_despite_a_known_guide() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let read = |known: Value| {
+        let args = json!({ "hangout_id": room, "brief": true, "known": known });
+        let token = scout.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    let first = read(json!({})).await;
+    let before = first["clock"]["note"].clone();
+    assert!(before.is_string(), "{first}");
+    let known = first["section_tags"].clone();
+    assert!(read(known.clone()).await["clock"].get("note").is_none(), "unchanged, left out");
+    server
+        .put(
+            &ann.key,
+            "/api/clock",
+            json!({ "time_zone": "America/Chicago", "utc_offset_minutes": -360 }),
+        )
+        .await
+        .ok();
+    let after = read(known.clone()).await;
+    assert!(after["clock"]["note"].is_string(), "the new note comes: {after}");
+    assert_ne!(after["clock"]["note"], before);
+    assert_ne!(after["section_tags"]["guide"], known["guide"]);
 }
 
 // I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
