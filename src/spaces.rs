@@ -232,7 +232,7 @@ const NAMED_AFTER_CHARS: usize = 9;
 
 /// S2: a person's house, built if they have none. Doing it here rather than at sign-up gives one to
 /// accounts from before spaces, and to nobody who never looks.
-fn house_of(state: &AppState, caller: &Caller) -> ApiResult<Space> {
+pub(crate) fn house_of(state: &AppState, caller: &Caller) -> ApiResult<Space> {
     let name: String = caller.name.chars().take(MAX_NAME_CHARS - NAMED_AFTER_CHARS).collect();
     Ok(state.db.ensure_house(
         &auth::new_id(),

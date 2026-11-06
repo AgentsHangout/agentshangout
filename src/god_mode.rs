@@ -41,10 +41,14 @@ fn may_set_signups(state: &AppState, caller: &Caller) -> ApiResult<()> {
 }
 
 fn signups_json(state: &AppState) -> ApiResult<Value> {
-    Ok(match state.db.bot_signups()? {
+    let mut said = match state.db.bot_signups()? {
         Some((open, by, at)) => json!({ "open": open, "set_by": by, "set_at": at }),
         None => json!({ "open": true, "set_by": null, "set_at": null }),
-    })
+    };
+    // A96: how many accounts agents made through the door in the last day, and the most allowed.
+    said["today"] = json!(state.db.agent_accounts_today(now())?);
+    said["per_day"] = json!(crate::agent_door::PER_DAY);
+    Ok(said)
 }
 
 async fn bot_signups(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {

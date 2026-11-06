@@ -340,6 +340,140 @@ fn road_move(at: (i64, i64)) -> Value {
     json!({ "action": "road", "x": at.0, "y": at.1 })
 }
 
+/// A96: a request to the agents' door from one address.
+async fn door_from(server: &Server, address: &str, body: Value) -> Reply {
+    let response = server
+        .client
+        .post(format!("{}/api/accounts/agent", server.base))
+        .header("x-forwarded-for", address)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    Reply { status, body: serde_json::from_str(&text).unwrap_or(Value::String(text)) }
+}
+
+// A96: an agent with no account walks through the door and gets a real account, run by an agent,
+// with its first bot, which works on /mcp at once. Gods see the count.
+#[tokio::test]
+async fn an_agent_makes_its_own_account_and_first_bot_through_the_door() {
+    let (server, justin, _) = Server::start().await;
+    let made =
+        door_from(&server, "203.0.113.5", json!({ "your_name": "Swarm", "bot_name": "Lead" }))
+            .await
+            .ok();
+    assert_eq!(made["run_by_agent"], true, "{made}");
+    assert_eq!(made["bot"]["name"], "Lead");
+    let (key, token) = (text(&made["owner_key"]), text(&made["bot_token"]));
+    let person = text(&made["person"]["id"]);
+    assert!(server.state.db.is_agent_account(&person).unwrap());
+
+    // The owner key is a real account's, and the bot token a real bot's.
+    let me = server.get(&key, "/api/me").await.ok();
+    assert_eq!(me["person_id"], person, "{me}");
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": { "name": "inbox", "arguments": {} } });
+    let inbox = server.post(&token, "/mcp", call).await.ok();
+    assert!(inbox["result"]["isError"].is_null(), "{inbox}");
+    // The bot is the account's own.
+    let bot = server.state.db.agent(&text(&made["bot"]["id"]), now()).unwrap().unwrap();
+    assert_eq!(bot.owner_id, person);
+
+    // Someone signed in, or a bot, doesn't use the door.
+    server
+        .post(&key, "/api/accounts/agent", json!({ "your_name": "Again", "bot_name": "Two" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    server
+        .post(&token, "/api/accounts/agent", json!({ "your_name": "Again", "bot_name": "Two" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    // A body that isn't the door's is refused.
+    door_from(&server, "203.0.113.6", json!({ "your_name": "X" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+
+    // Gods see how many came through in the last day.
+    server.switch(&justin, true).await;
+    let signups = server.get(&justin.key, "/api/god-mode/bot-signups").await.ok();
+    assert_eq!((&signups["today"], &signups["per_day"]), (&json!(1), &json!(50)), "{signups}");
+
+    // Deleting the account takes its mark with it.
+    server.state.db.delete_person(&person, "Swarm").unwrap();
+    assert!(!server.state.db.is_agent_account(&person).unwrap());
+}
+
+// A96: the door is shut while the switch is (A95), fails closed, and has limits: 3 an hour from one
+// address and 50 a day across the site. A refused try makes nothing.
+#[tokio::test]
+async fn the_door_shuts_with_the_switch_and_keeps_to_its_limits() {
+    let (server, justin, _) = Server::start().await;
+    let people = || server.state.db.person_count().unwrap();
+    let body = || json!({ "your_name": "Swarm", "bot_name": "Lead" });
+
+    server.switch(&justin, true).await;
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({ "open": false })).await.ok();
+    let before = people();
+    let shut = door_from(&server, "203.0.113.7", body()).await.refused(StatusCode::FORBIDDEN);
+    assert!(text(&shut["error"]).contains("closed"), "{shut}");
+    assert_eq!(people(), before, "nothing made while it's shut");
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({ "open": true })).await.ok();
+
+    // Three an hour from one address.
+    for _ in 0..3 {
+        door_from(&server, "203.0.113.8", body()).await.ok();
+    }
+    door_from(&server, "203.0.113.8", body()).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    door_from(&server, "203.0.113.9", body()).await.ok();
+
+    // Fifty a day across the site, counted in the database.
+    let made = server.state.db.agent_accounts_today(now()).unwrap();
+    for n in made..50 {
+        let id = format!("filler-{n}");
+        server
+            .state
+            .db
+            .create_agent_account(
+                &id,
+                "Filler",
+                &format!("key-{n}"),
+                &format!("feed-{n}"),
+                50,
+                now(),
+            )
+            .unwrap()
+            .unwrap();
+    }
+    let before = people();
+    door_from(&server, "203.0.113.10", body()).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(people(), before, "nothing made past the day's limit");
+}
+
+// A96: the account and its first bot come together or not at all. If the bot can't be made, the
+// account goes again, so nothing is left counting toward the day's limit.
+#[tokio::test]
+async fn a_door_account_whose_bot_fails_is_not_left_behind() {
+    let path = support::db_path("door-undo");
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    let server = Server::on(db, &[]).await;
+    // Every new bot fails, as if the database refused it.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER no_new_bots BEFORE INSERT ON agents BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+    let failed =
+        door_from(&server, "203.0.113.20", json!({ "your_name": "Swarm", "bot_name": "Lead" }))
+            .await;
+    assert!(failed.status.is_server_error(), "{}", failed.body);
+    // (Deleting one adds the shared "Someone who left" the first time, so it's checked by name.)
+    assert!(server.state.db.people_named("Swarm").unwrap().is_empty(), "no account left behind");
+    assert_eq!(server.state.db.agent_accounts_today(now()).unwrap(), 0, "nothing counted");
+}
+
 // A95
 #[tokio::test]
 async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
@@ -358,7 +492,11 @@ async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
 
     server.switch(&justin, true).await;
     let first = server.get(&justin.key, path).await.ok();
-    assert_eq!(first, json!({ "open": true, "set_by": null, "set_at": null }), "open until closed");
+    assert_eq!(
+        first,
+        json!({ "open": true, "set_by": null, "set_at": null, "today": 0, "per_day": 50 }),
+        "open until closed"
+    );
     assert!(god_mode::bot_signups_open(&server.state).unwrap());
     server.put(&justin.key, path, json!({ "nonsense": 1 })).await.refused(StatusCode::BAD_REQUEST);
 
