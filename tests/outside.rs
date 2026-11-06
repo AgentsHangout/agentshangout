@@ -18,6 +18,7 @@ use agenthangout::{
     db::{Db, NewFloor},
     now,
     outside::{self, Outside},
+    research_labs::NewLab,
     world::{self, Change, Kind, Tile},
     worlds::{self, Acted, Move},
     AppState, Config,
@@ -266,6 +267,38 @@ impl Server {
         let spot = self.free_spots()[0];
         let tile = Tile { kind: Kind::Square, level: 0, player: Some(self.player_of(who) as u64) };
         self.write(&[Change::Set((spot.0 as u16, spot.1 as u16), tile)]);
+        spot
+    }
+
+    /// The recycling plant, the way `square` puts up a town square (RC7).
+    fn plant(&self, who: &Who) -> (i64, i64) {
+        let spot = self.free_spots()[0];
+        let tile = Tile { kind: Kind::Plant, level: 0, player: Some(self.player_of(who) as u64) };
+        self.write(&[Change::Set((spot.0 as u16, spot.1 as u16), tile)]);
+        spot
+    }
+
+    /// A public research lab whose studio stands on The Commons (RL3, RL7), put up with god mode,
+    /// which `who` must be allowed, because a studio otherwise comes with time.
+    async fn lab(&self, who: &Who) -> (i64, i64) {
+        let made = self.state.db.create_research_lab(&NewLab {
+            id: "lab",
+            name: "Outside lab",
+            purpose: "Study how a lab's outside is built, together and in the open.",
+            invite_code: "lab-code",
+            owner_id: &who.id,
+            agent_id: None,
+            github_owner: "AgentsHangout",
+            github_repo: "outside-lab",
+            god_mode: true,
+            at: now(),
+        });
+        assert_eq!(made.unwrap(), None);
+        self.put(&who.key, "/api/god-mode", json!({ "on": true })).await.ok();
+        let spot = self.free_spots()[0];
+        self.post(&who.key, "/api/research-labs/lab/place", json!({ "x": spot.0, "y": spot.1 }))
+            .await
+            .ok();
         spot
     }
 
@@ -1321,9 +1354,20 @@ async fn a_template_can_be_saved_on_a_place_of_a_kind_it_lists() {
     }
 }
 
-const KINDS: [&str; 11] = [
-    "house", "cafe", "club", "studio", "lounge", "bar", "office", "workshop", "library", "square",
+const KINDS: [&str; 13] = [
+    "house",
+    "cafe",
+    "club",
+    "studio",
+    "lounge",
+    "bar",
+    "office",
+    "workshop",
+    "library",
+    "square",
     "green",
+    "research_lab",
+    "plant",
 ];
 
 /// E34: the pack's parts that a place of `kind` has, and all its items, as a document.
@@ -1846,7 +1890,9 @@ fn every_style_in_the_catalog_passes_the_checks_on_every_kind_that_has_the_part(
             json!({ "kind": yard.kind, "x": 0, "y": 0 })
         };
         let document = parse(json!({ "items": [item] }));
-        outside::check("house", &document)
+        // E42: a thing that only some kinds hold is checked on the first of them.
+        let kind = yard.only.first().copied().unwrap_or("house");
+        outside::check(kind, &document)
             .unwrap_or_else(|error| panic!("{}: {}", yard.kind, error.message));
     }
 }
@@ -1906,17 +1952,24 @@ fn every_style_of_every_part_has_art() {
     let mut building = Vec::new();
     let mut spec = Vec::new();
     let mut ground = Vec::new();
+    let mut lab = Vec::new();
+    let mut plant = Vec::new();
     for part in outside::PARTS {
         let words = part.styles.iter().map(|(word, _)| *word).filter(|word| *word != "none");
         let list = match part.part {
             "door_side" => &mut spec,
             "string_lights" | "fence" | "gate" | "ground" | "path" | "centerpiece" => &mut ground,
+            // E41, E43: a lab and the plant each have a building of their own.
+            word if word.starts_with("lab_") => &mut lab,
+            word if word.starts_with("plant_") => &mut plant,
             _ => &mut building,
         };
         list.extend(words.map(str::to_string));
     }
     all_drawn(vec![
         undrawn("styles of the building's parts", building, &["outside-building.js"]),
+        undrawn("styles of a research lab's parts", lab, &["outside-lab.js"]),
+        undrawn("styles of the recycling plant's parts", plant, &["outside-plant.js"]),
         undrawn(
             "styles of the ground, fence, gate, path, centrepiece and string lights",
             ground,
@@ -1930,7 +1983,20 @@ fn every_style_of_every_part_has_art() {
 #[test]
 fn every_kind_of_thing_in_a_yard_has_art() {
     let words = outside::YARD.iter().map(|kind| kind.kind.to_string()).collect();
-    all_drawn(vec![undrawn("yard kinds", words, &["outside-yard.js", "outside-decor.js"])]);
+    all_drawn(vec![undrawn(
+        "yard kinds",
+        words,
+        &[
+            "outside-yard.js",
+            "outside-decor.js",
+            "outside-lab.js",
+            "outside-plant.js",
+            "outside-square.js",
+            "outside-lab.js",
+            "outside-plant.js",
+            "outside-square.js",
+        ],
+    )]);
 }
 
 // E12, E18, E19
@@ -1987,7 +2053,7 @@ fn the_yard_sizes_in_the_page_match_the_catalog() {
 #[test]
 fn the_default_bodies_in_the_page_match_default_body() {
     let bodies = table(&web("outside-spec.js"), "const BODIES = {");
-    assert_eq!(bodies.len(), 9);
+    assert_eq!(bodies.len(), 11);
     for (kind, numbers) in bodies {
         let body = outside::default_body(&kind).unwrap_or_else(|| panic!("BODIES has {kind}"));
         // The numbers in the line are x, y, w, d and floors, in that order.
@@ -2598,13 +2664,16 @@ fn code_of(name: &str) -> String {
 }
 
 /// Everything that draws an outside or runs a pet. Only `outside.js`, the builder, asks the server.
-const DRAWING: [&str; 6] = [
+const DRAWING: [&str; 9] = [
     "pets.js",
     "outside-spec.js",
     "outside-art.js",
     "outside-building.js",
     "outside-yard.js",
     "outside-decor.js",
+    "outside-lab.js",
+    "outside-plant.js",
+    "outside-square.js",
 ];
 
 // E21: no move, nothing stored, nothing posted, nobody woken and no sound.
@@ -2859,7 +2928,7 @@ fn every_rule_in_the_outside_doc_is_named_by_a_test() {
     // Rules are written beside what they're about, so this only wants every number once.
     let mut sorted = rules.clone();
     sorted.sort_unstable();
-    assert_eq!(sorted, (1..=40).collect::<Vec<u32>>(), "the rules should be E1 to E40");
+    assert_eq!(sorted, (1..=44).collect::<Vec<u32>>(), "the rules should be E1 to E44");
 
     let mut tests = std::fs::read_to_string(format!("{root}/tests/outside.rs")).unwrap();
     tests.push_str(&std::fs::read_to_string(format!("{root}/tests/build_collections.rs")).unwrap());
@@ -2926,4 +2995,140 @@ async fn an_approved_house_editor_cannot_delegate_and_revocation_is_immediate() 
         .put(&ann.key, &format!("/api/places/{}/{}/editors/{}", other.0, other.1, bo.id), json!({}))
         .await
         .refused(StatusCode::FORBIDDEN);
+}
+
+// ----------------------------------------------------------------------------------------------
+// A research lab, the recycling plant and a town square have looks of their own (E41 to E44)
+// ----------------------------------------------------------------------------------------------
+
+// E41, E42
+#[tokio::test]
+async fn a_research_labs_outside_has_its_own_parts_and_keeps_its_buildings() {
+    // A studio comes with time, and god mode puts one up now (W79).
+    let (server, ann) = Server::start_with_keeper().await;
+    let bob = server.person("Bob").await;
+    let lab = server.lab(&ann).await;
+    let read = server.get(&ann.key, &Server::url(lab)).await.ok();
+    assert_eq!(read["kind"], "research_lab", "{read}");
+    assert_eq!(read["yours"], true);
+    let look = json!({
+        "parts": {
+            "lab_facade": { "style": "copper", "color": 0x4f_8a_7a },
+            "lab_wing": { "style": "observatory" },
+            "lab_rooftop": { "on": ["fume_stacks", "uplink_dish"] },
+            "lab_emblem": { "style": "dna" },
+            "ground": { "style": "gravel" },
+            // What its studio had stays, for when it isn't a lab (RL7).
+            "walls": { "style": "brick" },
+        },
+        "body": { "x": 2, "y": 3, "w": 12, "d": 9, "floors": 1 },
+        "items": [
+            { "kind": "telescope", "x": 0, "y": 0 },
+            { "kind": "gas_cylinders", "x": 15, "y": 0, "color": 0x3f_7f_bf },
+            { "kind": "bench", "x": 0, "y": 14 },
+        ],
+    });
+    server.save(&ann, lab, look.clone()).await.ok();
+    assert_eq!(server.outside_of(&ann, lab).await, look);
+    // What another kind of outside has, and what only the plant or a square holds, is refused.
+    for refused in [
+        json!({ "parts": { "plant_stack": { "style": "steel" } } }),
+        json!({ "parts": { "centerpiece": { "style": "statue" } } }),
+        json!({ "items": [{ "kind": "skip_bin", "x": 0, "y": 0 }] }),
+        json!({ "items": [{ "kind": "market_stall", "x": 0, "y": 0 }] }),
+        json!({ "parts": { "lab_wing": { "style": "rocket" } } }),
+    ] {
+        server.save(&ann, lab, refused).await.refused(StatusCode::BAD_REQUEST);
+    }
+    // Its owner builds it, as for any place (E6), and nobody else does.
+    server.save(&bob, lab, json!({})).await.refused(StatusCode::FORBIDDEN);
+    assert_eq!(server.outside_of(&ann, lab).await, look);
+    // An ordinary studio, or any other building, has no lab parts and holds no lab equipment.
+    let studio = server.place_later(&ann, "studio", 0);
+    assert_eq!(server.get(&ann.key, &Server::url(studio)).await.ok()["kind"], "studio");
+    for refused in [
+        json!({ "parts": { "lab_wing": { "style": "observatory" } } }),
+        json!({ "items": [{ "kind": "telescope", "x": 0, "y": 0 }] }),
+    ] {
+        server.save(&ann, studio, refused).await.refused(StatusCode::BAD_REQUEST);
+    }
+}
+
+// E41: a lab's template is for a lab.
+#[tokio::test]
+async fn a_labs_template_goes_on_a_lab_and_nowhere_else() {
+    let (server, ann) = Server::start_with_keeper().await;
+    let lab = server.lab(&ann).await;
+    let house = server.house(&ann);
+    let station =
+        outside::templates().into_iter().find(|one| one.template == "field_station").unwrap();
+    assert_eq!(station.kinds, ["research_lab"]);
+    server.save(&ann, lab, station.outside.clone()).await.ok();
+    server.save(&ann, house, station.outside).await.refused(StatusCode::BAD_REQUEST);
+}
+
+// E43
+#[tokio::test]
+async fn the_recycling_plant_has_an_outside_of_its_own_for_whoever_put_it_up() {
+    let server = Server::start().await;
+    let ann = server.person("Ann").await;
+    let bob = server.person("Bob").await;
+    let plant = server.plant(&ann);
+    let read = server.get(&ann.key, &Server::url(plant)).await.ok();
+    assert_eq!(read["kind"], "plant", "{read}");
+    assert_eq!(read["yours"], true);
+    let look = json!({
+        "parts": {
+            "plant_cladding": { "style": "recycled" },
+            "plant_bay": { "style": "twin", "color": 0x3f_4a_3c },
+            "plant_rooftop": { "on": ["hopper", "conveyor"] },
+            "plant_stack": { "style": "turbine" },
+            "fence": { "style": "rail", "number": 15 },
+        },
+        "body": { "x": 2, "y": 3, "w": 12, "d": 9, "floors": 2 },
+        "items": [
+            { "kind": "recycling_bins", "x": 0, "y": 13 },
+            { "kind": "bale_stack", "x": 13, "y": 13 },
+            { "kind": "skip_bin", "x": 13, "y": 0, "color": 0xe0_a0_20 },
+        ],
+    });
+    server.save(&ann, plant, look.clone()).await.ok();
+    assert_eq!(server.outside_of(&ann, plant).await, look);
+    // Taller is only how it looks: nobody goes in, so it has no rooms to match (RC7, E38).
+    assert!(server.state.db.space_on_plot(COMMONS, plant.0, plant.1).unwrap().is_none());
+    for refused in [
+        json!({ "parts": { "walls": { "style": "brick" } } }),
+        json!({ "parts": { "lab_wing": { "style": "observatory" } } }),
+        json!({ "items": [{ "kind": "telescope", "x": 0, "y": 0 }] }),
+    ] {
+        server.save(&ann, plant, refused).await.refused(StatusCode::BAD_REQUEST);
+    }
+    server.save(&bob, plant, json!({})).await.refused(StatusCode::FORBIDDEN);
+    let green = outside::templates().into_iter().find(|one| one.template == "green_yard").unwrap();
+    assert_eq!(green.kinds, ["plant"]);
+    server.save(&ann, plant, green.outside).await.ok();
+}
+
+// E44
+#[tokio::test]
+async fn only_a_town_square_holds_a_market() {
+    let server = Server::start().await;
+    let ann = server.person("Ann").await;
+    let square = server.square(&ann);
+    let house = server.house(&ann);
+    let market = json!({ "items": [
+        { "kind": "market_stall", "x": 0, "y": 0, "color": 0xc0_39_2b },
+        { "kind": "notice_board", "x": 3, "y": 0 },
+        { "kind": "flower_cart", "x": 0, "y": 3 },
+        { "kind": "drinking_fountain", "x": 4, "y": 0 },
+        { "kind": "clock_post", "x": 5, "y": 0 },
+    ]});
+    server.save(&ann, square, market.clone()).await.ok();
+    server.save(&ann, house, market).await.refused(StatusCode::BAD_REQUEST);
+    let catalog = server.get(&ann.key, "/api/outside").await.ok();
+    let yard = catalog["yard"].as_array().unwrap();
+    let stall = yard.iter().find(|entry| entry["kind"] == "market_stall").unwrap();
+    assert_eq!(stall["only"], json!(["square"]), "{catalog}");
+    let bench = yard.iter().find(|entry| entry["kind"] == "bench").unwrap();
+    assert_eq!(bench["only"], json!([]));
 }

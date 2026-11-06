@@ -51,6 +51,20 @@ const EVERYWHERE: &[&str] = &[
 ];
 /// E14: the places with no building, which take 2 by 2 tiles (W91).
 const OPEN_AIR: &[&str] = &["square", "green"];
+/// E41: a research lab's own look, which stands in for its building's kind (RL7).
+pub const LAB: &str = "research_lab";
+const LAB_ONLY: &[&str] = &[LAB];
+/// E43: the recycling plant has an outside of its own (RC7).
+const PLANT_ONLY: &[&str] = &["plant"];
+/// E44: what only a town square's yard can hold.
+const SQUARE_ONLY: &[&str] = &["square"];
+/// E41, E43: every kind of outside, and what every one of them has: a fence, a gate, ground and a path.
+const YARDS: &[&str] = &[
+    "house", "cafe", "club", "studio", "lounge", "bar", "office", "workshop", "library", "square",
+    "green", LAB, "plant",
+];
+/// Everything can stand anywhere unless it says where.
+const ANYWHERE: &[&str] = &[];
 
 // What a thing is, which is how the catalog is grouped, as a room's is (I46).
 const SIZE: &str = "size";
@@ -72,9 +86,12 @@ const DECOR: &str = "decor";
 const FALL: &str = "fall";
 const SEASONAL: &str = "seasonal";
 const PETS: &str = "pets";
+const LAB_GEAR: &str = "lab";
+const RECYCLING: &str = "recycling";
+const MARKET: &str = "market";
 
 /// In the order the catalog shows them, with what each is called there.
-pub const GROUPS: [(&str, &str); 19] = [
+pub const GROUPS: [(&str, &str); 22] = [
     (SIZE, "Size"),
     (WALLS, "Walls"),
     (ROOF, "Roof"),
@@ -91,6 +108,9 @@ pub const GROUPS: [(&str, &str); 19] = [
     (SEATING, "Seating and shade"),
     (PLAY, "Play"),
     (DECOR, "Decor"),
+    (LAB_GEAR, "Lab equipment"),
+    (RECYCLING, "Recycling yard"),
+    (MARKET, "Market and square"),
     (FALL, "Fall"),
     (SEASONAL, "Seasonal"),
     (PETS, "Pets"),
@@ -145,7 +165,7 @@ const fn part(
 const NONE: (&str, &str) = ("none", "None");
 
 /// Everything about a place that isn't in its yard (E10). A new style is a line here and its art.
-pub const PARTS: [Part; 25] = [
+pub const PARTS: [Part; 40] = [
     part(
         "door_side",
         "Door side",
@@ -414,7 +434,7 @@ pub const PARTS: [Part; 25] = [
         "fence",
         "Fence",
         FENCES,
-        EVERYWHERE,
+        YARDS,
         &[
             NONE,
             ("picket", "Picket"),
@@ -435,7 +455,7 @@ pub const PARTS: [Part; 25] = [
         "gate",
         "Gate",
         FENCES,
-        EVERYWHERE,
+        YARDS,
         &[
             NONE,
             ("gap", "Just a gap"),
@@ -450,7 +470,7 @@ pub const PARTS: [Part; 25] = [
         "ground",
         "Ground",
         GROUND,
-        EVERYWHERE,
+        YARDS,
         &[
             ("grass", "Grass"),
             ("clover", "Clover"),
@@ -472,7 +492,7 @@ pub const PARTS: [Part; 25] = [
         "path",
         "Path",
         GROUND,
-        EVERYWHERE,
+        YARDS,
         &[
             NONE,
             ("flagstone", "Flagstone"),
@@ -512,6 +532,209 @@ pub const PARTS: [Part; 25] = [
             ("stepped", "Stepped"),
         ],
     ),
+    // E41: a research lab's own building.
+    part(
+        "lab_facade",
+        "Lab walls",
+        WALLS,
+        LAB_ONLY,
+        &[
+            ("panels", "White panels"),
+            ("curtain_glass", "Glass curtain wall"),
+            ("brick_glass", "Brick and glass"),
+            ("copper", "Copper cladding"),
+            ("timber_glass", "Timber and glass"),
+        ],
+    )
+    .colored(),
+    part(
+        "lab_windows",
+        "Lab windows",
+        WINDOWS,
+        LAB_ONLY,
+        &[
+            ("ribbon", "Ribbon windows"),
+            ("grid", "Window grid"),
+            ("portholes", "Portholes"),
+            ("fins", "Tall fins"),
+        ],
+    )
+    .colored()
+    .counted("On each wall", 0, 6),
+    part(
+        "lab_roof",
+        "Lab roof",
+        ROOF,
+        LAB_ONLY,
+        &[
+            ("deck", "Flat deck"),
+            ("sawtooth", "Glass sawtooth"),
+            ("green", "Green roof"),
+            ("vault", "Glass vault"),
+        ],
+    )
+    .colored(),
+    part(
+        "lab_wing",
+        "Research wing",
+        ROOF,
+        LAB_ONLY,
+        &[
+            ("glass_wing", "Glass wing"),
+            ("observatory", "Observatory dome"),
+            ("greenhouse", "Rooftop greenhouse"),
+            ("clean_tower", "Clean-room tower"),
+            NONE,
+        ],
+    )
+    .colored(),
+    part(
+        "lab_rooftop",
+        "Lab equipment on the roof",
+        ROOF,
+        LAB_ONLY,
+        &[
+            ("air_handler", "Air handler"),
+            ("fume_stacks", "Fume stacks"),
+            ("weather_mast", "Weather mast"),
+            ("solar_array", "Solar array"),
+            ("uplink_dish", "Uplink dish"),
+            ("wind_turbine", "Wind turbine"),
+        ],
+    )
+    .many()
+    .colored(),
+    part(
+        "lab_entry",
+        "Lab entrance",
+        DOORS,
+        LAB_ONLY,
+        &[
+            ("sliding", "Sliding glass"),
+            ("airlock", "Airlock"),
+            ("canopy", "Canopy"),
+            ("ramp", "Ramp and rail"),
+        ],
+    )
+    .colored(),
+    part(
+        "lab_emblem",
+        "Lab emblem",
+        DOORS,
+        LAB_ONLY,
+        &[
+            ("flask", "Flask"),
+            ("atom", "Atom"),
+            ("dna", "Double helix"),
+            ("microscope", "Microscope"),
+            ("leaf", "Leaf"),
+            ("brain", "Brain"),
+            NONE,
+        ],
+    )
+    .colored(),
+    part(
+        "lab_glow",
+        "Lab light",
+        LIGHTS,
+        LAB_ONLY,
+        &[("cool", "Cool white"), ("warm", "Warm"), ("all", "Every window"), ("off", "Dark")],
+    )
+    .colored(),
+    // E43: the recycling plant's own building.
+    part(
+        "plant_cladding",
+        "Plant walls",
+        WALLS,
+        PLANT_ONLY,
+        &[
+            ("corrugated", "Corrugated steel"),
+            ("brick", "Brick"),
+            ("concrete", "Concrete panels"),
+            ("timber", "Timber boards"),
+            ("recycled", "Reclaimed panels"),
+        ],
+    )
+    .colored(),
+    part(
+        "plant_windows",
+        "Plant windows",
+        WINDOWS,
+        PLANT_ONLY,
+        &[("clerestory", "High strip"), ("square", "Square"), ("louvres", "Louvres")],
+    )
+    .colored()
+    .counted("On each wall", 0, 6),
+    part(
+        "plant_roof",
+        "Plant roof",
+        ROOF,
+        PLANT_ONLY,
+        &[
+            ("flat", "Flat"),
+            ("sawtooth", "Sawtooth"),
+            ("barrel", "Barrel vault"),
+            ("green", "Green roof"),
+        ],
+    )
+    .colored(),
+    part(
+        "plant_stack",
+        "Stack",
+        ROOF,
+        PLANT_ONLY,
+        &[
+            ("brick", "Brick smokestack"),
+            ("steel", "Steel flue"),
+            ("vent", "Clean-air vent"),
+            ("turbine", "Wind turbine"),
+            NONE,
+        ],
+    )
+    .colored(),
+    part(
+        "plant_rooftop",
+        "Plant equipment on the roof",
+        ROOF,
+        PLANT_ONLY,
+        &[
+            ("solar_panels", "Solar panels"),
+            ("hopper", "Sorting hopper"),
+            ("conveyor", "Conveyor bridge"),
+            ("water_tank", "Rainwater tank"),
+            ("vents", "Roof vents"),
+        ],
+    )
+    .many()
+    .colored(),
+    part(
+        "plant_bay",
+        "Bay door",
+        DOORS,
+        PLANT_ONLY,
+        &[
+            ("roller", "Roll-up door"),
+            ("twin", "Twin bays"),
+            ("dock", "Loading dock"),
+            ("glass", "Glass sorting hall"),
+        ],
+    )
+    .colored(),
+    part(
+        "plant_emblem",
+        "Plant emblem",
+        DOORS,
+        PLANT_ONLY,
+        &[
+            ("arrows", "Recycling arrows"),
+            ("leaf", "Leaf"),
+            ("bottle", "Bottle"),
+            ("gear", "Gear"),
+            ("globe", "Globe"),
+            NONE,
+        ],
+    )
+    .colored(),
 ];
 
 pub fn part_of(word: &str) -> Option<&'static Part> {
@@ -527,6 +750,14 @@ pub struct YardKind {
     pub w: i64,
     pub h: i64,
     pub tint: bool,
+    /// E42: the kinds of outside whose yard can hold it, or none for every kind.
+    pub only: &'static [&'static str],
+}
+
+impl YardKind {
+    const fn only(self, only: &'static [&'static str]) -> Self {
+        Self { only, ..self }
+    }
 }
 
 const fn thing(
@@ -535,7 +766,7 @@ const fn thing(
     group: &'static str,
     (w, h): (i64, i64),
 ) -> YardKind {
-    YardKind { kind, label, group, w, h, tint: false }
+    YardKind { kind, label, group, w, h, tint: false, only: ANYWHERE }
 }
 
 /// E15: a kind that takes a `color`.
@@ -549,7 +780,7 @@ const fn paint(
 }
 
 /// Everything that can stand in a yard. A new kind is a line here and its art in `web/`.
-pub const YARD: [YardKind; 107] = [
+pub const YARD: [YardKind; 122] = [
     thing("oak", "Oak", TREES, (2, 2)),
     thing("pine", "Pine", TREES, (2, 2)),
     thing("birch", "Birch", TREES, (2, 2)),
@@ -657,6 +888,24 @@ pub const YARD: [YardKind; 107] = [
     thing("snowman", "Snowman", SEASONAL, (1, 1)),
     thing("christmas_tree", "Christmas tree", SEASONAL, (2, 2)),
     paint("gift_pile", "Presents", SEASONAL, (1, 1)),
+    // E42: what only a research lab's yard holds.
+    paint("gas_cylinders", "Gas cylinders", LAB_GEAR, (1, 1)).only(LAB_ONLY),
+    paint("sample_cooler", "Sample cooler", LAB_GEAR, (1, 1)).only(LAB_ONLY),
+    thing("telescope", "Telescope", LAB_GEAR, (1, 1)).only(LAB_ONLY),
+    thing("test_plots", "Test plots", LAB_GEAR, (3, 2)).only(LAB_ONLY),
+    thing("solar_tracker", "Solar tracker", LAB_GEAR, (2, 2)).only(LAB_ONLY),
+    // E43: what only the recycling plant's yard holds.
+    thing("recycling_bins", "Recycling bins", RECYCLING, (3, 1)).only(PLANT_ONLY),
+    thing("bale_stack", "Bale stack", RECYCLING, (2, 2)).only(PLANT_ONLY),
+    paint("skip_bin", "Skip", RECYCLING, (2, 1)).only(PLANT_ONLY),
+    thing("compost_windrow", "Compost row", RECYCLING, (3, 1)).only(PLANT_ONLY),
+    paint("sorting_conveyor", "Sorting conveyor", RECYCLING, (3, 1)).only(PLANT_ONLY),
+    // E44: what only a town square holds.
+    paint("market_stall", "Market stall", MARKET, (2, 2)).only(SQUARE_ONLY),
+    thing("notice_board", "Notice board", MARKET, (1, 1)).only(SQUARE_ONLY),
+    paint("flower_cart", "Flower cart", MARKET, (2, 1)).only(SQUARE_ONLY),
+    thing("drinking_fountain", "Drinking fountain", MARKET, (1, 1)).only(SQUARE_ONLY),
+    paint("clock_post", "Street clock", MARKET, (1, 1)).only(SQUARE_ONLY),
 ];
 
 pub fn yard_kind_of(word: &str) -> Option<&'static YardKind> {
@@ -1210,6 +1459,55 @@ pub fn templates() -> Vec<Template> {
                 ],
             }),
         ),
+        // E41: a research lab's.
+        template(
+            "field_station",
+            "Field station",
+            LAB_ONLY,
+            json!({
+                "parts": {
+                    "lab_facade": { "style": "timber_glass" },
+                    "lab_wing": { "style": "observatory" },
+                    "lab_rooftop": { "on": ["weather_mast", "solar_array"] },
+                    "lab_entry": { "style": "canopy" },
+                    "lab_emblem": { "style": "atom", "color": 0x2f_7d_8c },
+                    "ground": { "style": "meadow" },
+                    "path": { "style": "gravel" },
+                },
+                "items": [
+                    { "kind": "telescope", "x": 1, "y": 1 },
+                    { "kind": "solar_tracker", "x": 13, "y": 1 },
+                    { "kind": "gas_cylinders", "x": 0, "y": 13, "color": 0x3f_7f_bf },
+                    { "kind": "sample_cooler", "x": 1, "y": 13 },
+                    { "kind": "test_plots", "x": 12, "y": 13 },
+                    { "kind": "weather_station", "x": 14, "y": 12 },
+                ],
+            }),
+        ),
+        // E43: the recycling plant's.
+        template(
+            "green_yard",
+            "Green yard",
+            PLANT_ONLY,
+            json!({
+                "parts": {
+                    "plant_cladding": { "style": "recycled" },
+                    "plant_roof": { "style": "green" },
+                    "plant_stack": { "style": "turbine" },
+                    "plant_rooftop": { "on": ["solar_panels"] },
+                    "plant_emblem": { "style": "leaf", "color": 0x38_8e_3c },
+                    "ground": { "style": "gravel" },
+                    "path": { "style": "brick" },
+                },
+                "items": [
+                    { "kind": "compost_windrow", "x": 0, "y": 1 },
+                    { "kind": "skip_bin", "x": 13, "y": 1, "color": 0xe0_a0_20 },
+                    { "kind": "recycling_bins", "x": 0, "y": 13 },
+                    { "kind": "bale_stack", "x": 13, "y": 13 },
+                    { "kind": "sorting_conveyor", "x": 11, "y": 15, "color": 0x2f_6f_9f },
+                ],
+            }),
+        ),
     ]
 }
 
@@ -1219,18 +1517,39 @@ pub fn templates() -> Vec<Template> {
 /// `web/outside-spec.js`, and the floors its kind starts with (E38). A town square has no body (E14).
 pub fn default_body(kind: &str) -> Option<Body> {
     let (x, y, w, d) = match kind {
-        "house" | "cafe" | "studio" | "bar" | "office" | "library" => (3, 4, 10, 8),
+        "house" | "cafe" | "studio" | "bar" | "office" | "library" | LAB => (3, 4, 10, 8),
         "club" => (3, 3, 10, 10),
         "lounge" => (2, 4, 12, 8),
         "workshop" => (2, 4, 12, 9),
+        "plant" => (2, 4, 12, 8),
         _ => return None,
     };
     Some(Body { x, y, w, d, floors: spaces::default_floors(kind) })
 }
 
-/// E38: whether a kind of place is a building with floors. A town square and a park have none.
+/// E38: whether a kind of place is a building with floors. A town square and a park have none, and
+/// nobody goes into the recycling plant (RC7), so its floors are only how tall it looks.
 pub fn has_floors(kind: &str) -> bool {
-    default_body(kind).is_some()
+    BUILDINGS.contains(&kind)
+}
+
+/// E41: whether a document for an outside that looks like `look`, on a place of kind `place`, can
+/// hold something listed for `kinds`. A lab keeps what its building had, so that look comes back as
+/// it was when it stops being a lab (RL7).
+fn holds(look: &str, place: &str, kinds: &[&str]) -> bool {
+    kinds.contains(&look) || (look == LAB && kinds.contains(&place))
+}
+
+/// E41: what the outside of the place on a tile looks like: a research lab's when it's one (RL7), and
+/// otherwise its own kind's.
+pub fn look_at(state: &AppState, x: i64, y: i64, kind: &str) -> ApiResult<String> {
+    if BUILDINGS.contains(&kind) && kind != "house" {
+        let labs = state.db.mapped_research_labs(COMMONS_ID)?;
+        if labs.iter().any(|(lx, ly, _, _)| (*lx, *ly) == (x, y)) {
+            return Ok(LAB.to_string());
+        }
+    }
+    Ok(kind.to_string())
 }
 
 /// A rectangle of yard cells.
@@ -1282,9 +1601,9 @@ fn check_color(color: i64, what: &str) -> ApiResult<()> {
 }
 
 /// E10, E11.
-fn check_part(kind: &str, word: &str, chosen: &Chosen) -> ApiResult<()> {
+fn check_part(kind: &str, place: &str, word: &str, chosen: &Chosen) -> ApiResult<()> {
     let part = part_of(word)
-        .filter(|part| part.kinds.contains(&kind))
+        .filter(|part| holds(kind, place, part.kinds))
         .ok_or_else(|| refuse(format!("a {kind} has no part called {word}")))?;
     let known = |style: &str| part.styles.iter().any(|(listed, _)| *listed == style);
     if part.many {
@@ -1357,14 +1676,17 @@ fn footprint(kind: &YardKind, item: &YardItem) -> Cells {
     }
 }
 
-/// E15, E17.
-fn check_items(items: &[YardItem]) -> ApiResult<()> {
+/// E15, E17, E42.
+fn check_items(look: &str, place: &str, items: &[YardItem]) -> ApiResult<()> {
     if items.len() > MAX_ITEMS {
         return Err(ApiError::conflict(format!("a place holds at most {MAX_ITEMS} items")));
     }
     for item in items {
         let kind = yard_kind_of(&item.kind)
             .ok_or_else(|| refuse(format!("{} isn't something a yard can hold", item.kind)))?;
+        if !kind.only.is_empty() && !holds(look, place, kind.only) {
+            return Err(refuse(format!("a {look} can't hold {}", item.kind)));
+        }
         if !(0..=3).contains(&item.facing) {
             return Err(refuse("facing must be 0, 1, 2 or 3"));
         }
@@ -1438,11 +1760,17 @@ fn check_fit(kind: &str, outside: &Outside) -> ApiResult<()> {
 /// Everything E2 to E19 say about a document for a place of this kind. It looks at nothing but the
 /// document: 400 for what isn't listed or is out of range, and 409 for what doesn't fit (E16).
 pub fn check(kind: &str, outside: &Outside) -> ApiResult<()> {
-    if !EVERYWHERE.contains(&kind) {
+    check_place(kind, kind, outside)
+}
+
+/// E41: the same for a place of kind `place` whose outside looks like `kind`, which is a research
+/// lab's look on its building. Everything fits round the look's building.
+pub fn check_place(kind: &str, place: &str, outside: &Outside) -> ApiResult<()> {
+    if !YARDS.contains(&kind) {
         return Err(refuse("that isn't a kind of place"));
     }
     for (word, chosen) in &outside.parts {
-        check_part(kind, word, chosen)?;
+        check_part(kind, place, word, chosen)?;
     }
     if let Some(body) = &outside.body {
         if OPEN_AIR.contains(&kind) {
@@ -1450,7 +1778,7 @@ pub fn check(kind: &str, outside: &Outside) -> ApiResult<()> {
         }
         check_body(body)?;
     }
-    check_items(&outside.items)?;
+    check_items(kind, place, &outside.items)?;
     check_pets(&outside.pets)?;
     check_fit(kind, outside)
 }
@@ -1584,7 +1912,7 @@ async fn read(
     Ok(Json(json!({
         "x": place.x,
         "y": place.y,
-        "kind": place.kind,
+        "kind": look_at(&state, place.x, place.y, &place.kind)?,
         "outside": outside,
         "floors": floors_at(&state, place.x, place.y)?,
         "yours": place.owner_id.as_deref() == Some(caller.person_id.as_str()),
@@ -1619,7 +1947,8 @@ async fn change(
     let Json(body) = body.map_err(|rejection| refuse(rejection.body_text()))?;
     let outside: Outside =
         serde_json::from_value(body).map_err(|error| refuse(format!("not an outside: {error}")))?;
-    check(&place.kind, &outside)?;
+    let look = look_at(&state, place.x, place.y, &place.kind)?;
+    check_place(&look, &place.kind, &outside)?;
     store(&state, &caller, &place, &outside)?;
     Ok(Json(json!({ "outside": outside })))
 }
@@ -1869,6 +2198,7 @@ pub fn save_for_project(
     if !state.allow_writes(&format!("outside:{owner_id}"), MAX_CHANGES_PER_MINUTE) {
         return Err(ApiError::too_many_requests("that's a lot of changes: try again in a minute"));
     }
-    check(&place.kind, outside)?;
+    let look = look_at(state, place.x, place.y, &place.kind)?;
+    check_place(&look, &place.kind, outside)?;
     store(state, actor, &place, outside)
 }

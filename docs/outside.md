@@ -21,7 +21,8 @@ what the map already shows.
 | Question | Decision |
 | --- | --- |
 | What can change | Everything on the tile: size, walls, roof, windows, doors, porch, rooftop, lights, fence, ground, paths, the yard and pets |
-| Which places | Every one: house, café, club, studio, lounge, bar, office, workshop, library, town square and park |
+| Which places | Every one: house, café, club, studio, lounge, bar, office, workshop, library, town square, park, research lab and the recycling plant |
+| Special buildings | A research lab and the recycling plant have parts of their own, and a lab, the plant and a town square have yard things only they hold (E41 to E44) |
 | Who changes it | The place's owner, as a person. A bot doesn't |
 | What it costs | Nothing. No moves, no waiting and nothing to unlock |
 | Colours | Any colour, as a number |
@@ -110,7 +111,8 @@ what the map already shows.
   | `centerpiece` | The middle of a town square | see the catalog | colour |
 
   A town square and a park have `fence`, `gate`, `ground`, `path`, `string_lights` and `centerpiece`.
-  Every other place has all of them but `centerpiece`.
+  A research lab and the recycling plant have `fence`, `gate`, `ground`, `path` and their own parts
+  (E41, E43). Every other place has all of these but `centerpiece`.
 - **E11.** `fence`'s `number` says which sides have it: 1 is the north-east edge, 2 the south-east, 4 the
   south-west and 8 the north-west, and a place with no number has all four.
 - **E12.** The catalog is meant to keep growing, towards what people put outside in games like The Sims
@@ -237,6 +239,32 @@ dressed for fall inside and out.
   (1 by 1), and field sample table (2 by 1). They are ordinary catalog objects in the existing game
   style, tintable and turnable in all four orientations, with normal outside ownership and fit
   checks. Their sensors, samples and signage are decorative and perform no research or data collection.
+
+### Buildings with a look of their own
+
+A research lab, the recycling plant and a town square aren't ordinary places, so their outsides aren't
+built from a house's parts: each has things that only it has.
+
+- **E41.** A research lab (RL7) has the look `research_lab`: while its building is a lab, `GET` on its
+  outside says `research_lab` as its `kind`, the builder draws the lab, and a save is checked as a lab's.
+  A lab has its own parts, `lab_facade`, `lab_windows`, `lab_roof`, `lab_wing`, `lab_rooftop` (an `on`
+  list), `lab_entry`, `lab_emblem` (a picture, never words) and `lab_glow`, with `fence`, `gate`,
+  `ground`, `path`, a `body` and a yard, and it has a template, `field_station`. Its document can also keep
+  the parts and items of its building's own kind, which aren't drawn while it's a lab, so that look
+  comes back as it was when it stops being one. No other kind of place has a lab's parts, and giving one
+  one is refused with 400 as for any part a kind lacks (E10). Its owner changes it as E6 says, and a bot
+  of the lab's project as L35 says.
+- **E42.** A thing in the catalog's yard can list the only kinds of outside whose yard holds it, as `only`,
+  and an empty list means every kind. Putting it anywhere else is refused with 400. A lab's yard holds its
+  equipment: `gas_cylinders`, `sample_cooler`, `telescope`, `test_plots` and `solar_tracker`.
+- **E43.** The recycling plant (RC7) has an outside, for whoever put it up (W71), as E6 says. Its parts
+  are `plant_cladding`, `plant_windows`, `plant_roof`, `plant_stack`, `plant_rooftop` (an `on` list),
+  `plant_bay` and `plant_emblem` (a picture, never words), with `fence`, `gate`, `ground`, `path`, a
+  `body` and a yard, and it has a template, `green_yard`. Its `floors` are only how tall it looks:
+  nobody goes in, so it has no rooms to match (E38). Only its yard holds `recycling_bins`, `bale_stack`,
+  `skip_bin`, `compost_windrow` and `sorting_conveyor`.
+- **E44.** Only a town square's yard holds its market: `market_stall`, `notice_board` (pictures, never
+  words), `flower_cart`, `drinking_fountain` and `clock_post` (hands and ticks, never numbers).
 - **E40.** Outside Build-menu collections provide Discovery & evidence, Welcome & recharge and
   Work together filters over existing yard items and building parts. All restores every existing
   catalog group, template, pack and pet. They are discovery shortcuts, not packs: choosing one
