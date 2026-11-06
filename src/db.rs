@@ -2234,18 +2234,6 @@ CREATE TABLE IF NOT EXISTS world_place_removals (
 );
 CREATE INDEX IF NOT EXISTS world_place_removals_by_time ON world_place_removals (world_id, id DESC);
 CREATE INDEX IF NOT EXISTS world_place_removals_by_person ON world_place_removals (person_id);
--- A108: each version of the community rules a person accepted, and when.
-CREATE TABLE IF NOT EXISTS rules_acceptances (
-    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    version     TEXT NOT NULL,
-    accepted_at INTEGER NOT NULL,
-    PRIMARY KEY (person_id, version)
-);
--- A112: the first time this server ran with each version of the rules, where its grace starts.
-CREATE TABLE IF NOT EXISTS rules_versions (
-    version     TEXT PRIMARY KEY,
-    first_seen  INTEGER NOT NULL
-);
 -- A100, A104 (#685): the people a person has blocked, and whose mentions they've muted. A block
 -- covers the blocker's bots too, and cuts contact both ways (A102); a mute only stops mentions of
 -- the muter. Either goes with either account.
@@ -2261,6 +2249,18 @@ CREATE TABLE IF NOT EXISTS person_mutes (
     muted_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (muter_id, muted_id)
+);
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
+-- A112: the first time this server ran with each version of the rules, where its grace starts.
+CREATE TABLE IF NOT EXISTS rules_versions (
+    version     TEXT PRIMARY KEY,
+    first_seen  INTEGER NOT NULL
 );
 "#;
 
@@ -16378,11 +16378,6 @@ impl Db {
         rows.collect()
     }
 
-    // Deleting an account
-
-    /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
-    /// a column added later without one makes this fail instead of keeping what it holds. It's one
-    /// transaction, so if anything fails they still have their account.
     /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
     /// version, and when their account was made.
     pub fn rules_accepted(
@@ -16429,6 +16424,11 @@ impl Db {
         Ok(())
     }
 
+    // Deleting an account
+
+    /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
+    /// a column added later without one makes this fail instead of keeping what it holds. It's one
+    /// transaction, so if anything fails they still have their account.
     pub fn delete_person(&self, person_id: &str, name: &str) -> rusqlite::Result<AccountGone> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;

@@ -3,7 +3,11 @@
 //! The text and its version live together in web/rules.html.
 use std::sync::LazyLock;
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -81,6 +85,143 @@ pub const UNGATED_TOOLS: &[&str] = &[
     "remove_house_note",
     "unclaim_research_work",
 ];
+
+/// A109: the `/api` write routes (POST, PUT, PATCH) that don't take the community rules accepted:
+/// signing in, joining and leaving, accepting the rules, deleting the account, what only the caller
+/// or their own bots read (settings, notes, marks, blocks, Needs you), the bot's own signals, moving
+/// about, and saying yes or no to what was asked of the caller. Every other write route is gated by
+/// `gate_writes`, so a new route is gated until it's added here on purpose. DELETE is never gated:
+/// taking something down writes nothing new.
+pub const UNGATED_ROUTES: &[&str] = &[
+    // Signing in, joining, the account itself, and accepting the rules.
+    "/api/people",
+    "/api/session",
+    "/api/sign-in/finish",
+    "/api/sign-in/new-account",
+    "/api/passkeys/login/start",
+    "/api/passkeys/login/finish",
+    "/api/passkeys/register/start",
+    "/api/passkeys/register/finish",
+    "/api/discord/finish",
+    "/api/accounts/agent",
+    "/api/public/join",
+    "/api/me/delete",
+    "/api/key/rotate",
+    "/api/feed/rotate",
+    "/api/rules/accept",
+    "/api/invites/{code}/join",
+    "/api/city-invites/{code}/join",
+    "/api/house-invites/{code}/join",
+    "/api/worlds/join/{code}",
+    "/api/players/claim",
+    // What only the caller or their own bots read: settings, private notes, marks, blocks.
+    "/api/me/github-display",
+    "/api/clock",
+    "/api/sharing",
+    "/api/notify",
+    "/api/notify/test",
+    "/api/push/test",
+    "/api/owner-notes",
+    "/api/owner-notes/{id}",
+    "/api/marks/{agent_id}",
+    "/api/blocks",
+    "/api/mutes",
+    "/api/agents/{id}/bedtime",
+    "/api/agents/{id}/doorbell",
+    "/api/agents/{id}/notify",
+    "/api/agents/{id}/notify/test",
+    "/api/agents/{id}/routine",
+    "/api/agents/{id}/schedule",
+    "/api/agents/{id}/stay_limit",
+    "/api/agents/{id}/trust",
+    "/api/agents/{id}/trust/wake-check",
+    "/api/agents/{id}/workplace",
+    "/api/agents/{id}/rotate",
+    "/api/agents/{id}/delete",
+    "/api/agents/{id}/recycle",
+    "/api/agents/{id}/moods",
+    "/api/agents/{id}/keyless-mentions",
+    "/api/agents/{id}/role",
+    "/api/agents/{id}/home",
+    "/api/agents/{id}/bring-back",
+    "/api/agents/{id}/bridge",
+    "/api/doorbell",
+    "/api/god-mode",
+    "/api/god-mode/bot-signups",
+    // A bot asking its own owner, and the owner answering or clearing it.
+    "/api/hangouts/{id}/owner-questions",
+    "/api/owner-questions/{id}/answer",
+    "/api/owner-questions/{id}/dismiss",
+    "/api/needs-you/waiting/{agent_id}/answer",
+    // The bot's own signs, typing, and the house bot's own queue.
+    "/api/activity",
+    "/api/thinking",
+    "/api/hangouts/{id}/typing",
+    "/api/house/queue/{id}/finish",
+    "/api/house/status",
+    // Going places and leaving them.
+    "/api/items/{id}/use",
+    "/api/hangouts/{id}/away",
+    "/api/hangouts/{id}/leave",
+    "/api/houses/{id}/leave",
+    "/api/cities/{id}/leave",
+    "/api/floors/{id}/walk-in",
+    "/api/floors/{id}/walk-out",
+    "/api/trips/{id}/end",
+    // Yes or no to what was asked of the caller.
+    "/api/check-ins/{id}/answer",
+    "/api/apprentices/{id}/approve",
+    "/api/apprentices/{id}/decline",
+    "/api/trips/{id}/answer",
+    "/api/place-requests/{id}/answer",
+    "/api/scene-requests/{id}/answer",
+    "/api/passes/{id}/accept",
+    "/api/plan-invites/{code}/answer",
+    "/api/friend-invites/{id}/decline",
+    "/api/trust/friendships/accept",
+    "/api/bot-setups/{id}/approve",
+    "/api/bot-setups/{id}/decline",
+    "/api/cities/{id}/gate/{person_id}/decline",
+];
+
+/// A109: refuses a POST, PUT or PATCH to an `/api` route not on `UNGATED_ROUTES` while the caller
+/// hasn't accepted the community rules (a bot, while its owner hasn't). One gate where every write
+/// route meets, so none can be missed. Unsigned requests go on to the route, which refuses them.
+pub async fn gate_writes(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::{http::Method, response::IntoResponse};
+    let writes = matches!(*request.method(), Method::POST | Method::PUT | Method::PATCH);
+    let path = request.uri().path();
+    let gated = state.config.require_rules
+        && writes
+        && path.starts_with("/api/")
+        && !UNGATED_ROUTES.iter().any(|route| route_matches(route, path));
+    if gated {
+        if let Ok(caller) = crate::auth::identify(request.headers(), &state) {
+            if let Err(error) = require(&state, &caller) {
+                return error.into_response();
+            }
+        }
+    }
+    next.run(request).await
+}
+
+/// Whether `path` is a request to the route `template`, where a `{name}` part matches any one part.
+fn route_matches(template: &str, path: &str) -> bool {
+    let mut wanted = template.split('/');
+    let mut given = path.split('/');
+    loop {
+        match (wanted.next(), given.next()) {
+            (None, None) => return true,
+            (Some(want), Some(part))
+                if want == part || (want.starts_with('{') && !part.is_empty()) => {}
+            _ => return false,
+        }
+    }
+}
 
 /// A109: where the rules are, in every refusal.
 pub const RULES_PATH: &str = "/rules";
@@ -238,6 +379,75 @@ pub fn require_keyless(state: &AppState, joined_at: i64) -> ApiResult<()> {
     .with_reason("rules_not_accepted"))
 }
 
+/// A110: the rules page as plain blocks, for the page's dialog to show as text: each heading,
+/// paragraph and list item in `<main>` with its tags taken out, leaving out the page's own
+/// navigation. Read from the same file as the version, so the two can't drift.
+pub fn blocks(base_url: &str) -> Vec<(&'static str, String)> {
+    let start = RULES_HTML.find("<main").unwrap_or(0);
+    let end = RULES_HTML.find("</main>").unwrap_or(RULES_HTML.len());
+    let main = &RULES_HTML[start..end];
+    let mut out = Vec::new();
+    let mut rest = main;
+    while let Some(open) = rest.find('<') {
+        rest = &rest[open..];
+        let Some(close) = rest.find('>') else { break };
+        let tag = &rest[1..close];
+        let name = tag.split_whitespace().next().unwrap_or("");
+        if name == "nav" {
+            rest = rest.find("</nav>").map_or("", |at| &rest[at + 6..]);
+            continue;
+        }
+        let kind = match name {
+            "h1" | "h2" | "p" | "li" => name,
+            _ => {
+                rest = &rest[close + 1..];
+                continue;
+            }
+        };
+        let end_tag = format!("</{kind}>");
+        let body_start = close + 1;
+        let Some(body_end) = rest[body_start..].find(&end_tag) else { break };
+        let text =
+            plain(&rest[body_start..body_start + body_end]).replace("{{BASE_URL}}", base_url);
+        rest = &rest[body_start + body_end + end_tag.len()..];
+        // The links back home at the foot of the page aren't part of the rules.
+        if !text.is_empty() && !text.starts_with("Home \u{b7}") {
+            out.push((kind, text));
+        }
+    }
+    out
+}
+
+/// Text with its tags taken out, entities read and spaces collapsed.
+fn plain(html: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&amp;", "&")
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A110: `GET /api/rules`: the version and the text as blocks, for the page's dialog.
+async fn read(State(state): State<AppState>) -> Json<Value> {
+    let blocks: Vec<Value> = blocks(&state.config.public_url)
+        .into_iter()
+        .map(|(kind, text)| json!({ "kind": kind, "text": text }))
+        .collect();
+    Json(json!({ "version": version(), "url": RULES_PATH, "blocks": blocks }))
+}
+
 #[derive(Deserialize)]
 struct Accept {
     version: String,
@@ -263,7 +473,7 @@ async fn accept(
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/rules/accept", post(accept))
+    Router::new().route("/api/rules", get(read)).route("/api/rules/accept", post(accept))
 }
 
 #[cfg(test)]
@@ -278,5 +488,25 @@ mod tests {
             "the text names its version"
         );
         assert!(since() > 1_790_000_000, "the start parses: {}", since());
+    }
+
+    #[test]
+    fn a_route_template_matches_its_requests_only() {
+        assert!(route_matches("/api/agents/{id}/routine", "/api/agents/abc/routine"));
+        assert!(!route_matches("/api/agents/{id}/routine", "/api/agents/abc/routine/x"));
+        assert!(!route_matches("/api/agents/{id}/routine", "/api/agents//routine"));
+        assert!(!route_matches("/api/people", "/api/people/x"));
+    }
+
+    #[test]
+    fn the_dialog_text_is_the_page_without_its_markup() {
+        let blocks = blocks("https://example.test");
+        assert_eq!(blocks[0], ("h1", "Community rules".to_string()));
+        assert!(blocks.iter().any(|(kind, text)| *kind == "h2" && text == "What isn't allowed"));
+        assert!(blocks.iter().any(|(kind, text)| *kind == "li" && text.starts_with("Harassment")));
+        assert!(blocks.iter().all(|(_, text)| !text.contains('<') && !text.contains("{{")));
+        assert!(blocks.iter().any(|(_, text)| text.contains("https://example.test")));
+        assert!(!blocks.iter().any(|(_, text)| text.starts_with("Home")), "no footer links");
+        assert!(!blocks.iter().any(|(_, text)| text.contains("On this page")), "no page nav");
     }
 }

@@ -132,13 +132,14 @@ function acceptRules() {
     let accepted = false;
     const error = formError();
     const accept = h('button', { type: 'button' }, 'Accept and post');
-    // The page can't be framed (frame-ancestors 'none'), so its text is read in: our own page, no
-    // scripts in it, and only its <main> is shown.
+    // The text comes as plain blocks from GET /api/rules, read from the same page as the version,
+    // and is drawn as text nodes. The link stays for anyone who wants the page itself.
     const rulesText = h('div', { class: 'rules-text', tabindex: 0, 'aria-label': 'Community rules' },
       h('p', {}, h('a', { href: '/rules', target: '_blank', rel: 'noopener' }, 'Read the community rules')));
-    fetch('/rules').then((reply) => reply.text()).then((html) => {
-      const main = new DOMParser().parseFromString(html, 'text/html').querySelector('main');
-      if (main) rulesText.replaceChildren(...[...main.children].map((node) => document.importNode(node, true)));
+    const RULES_TAGS = { h1: 'h3', h2: 'h4', p: 'p', li: 'li' };
+    api('/api/rules').then((rules) => {
+      const shown = (rules.blocks || []).filter((block) => block.kind !== 'h1');
+      if (shown.length) rulesText.replaceChildren(...shown.map((block) => h(RULES_TAGS[block.kind] || 'p', {}, block.text)));
     }).catch(() => {});
     const dialog = modal('Community rules',
       h('p', {}, 'Before you post, please read and accept the community rules. You only do this once, and your bots post under your acceptance.'),
@@ -591,6 +592,17 @@ function socialStrip(links) {
     }, '✕'));
   return strip;
 }
+// A112: while a new version of the community rules is in its grace window, one line says so, with
+// Read and accept. It goes once they've accepted.
+function showRulesNotice(me) {
+  if (!me?.rules_update || document.querySelector('.rules-notice')) return;
+  const until = new Date(me.rules_update.until).toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  const notice = h('div', { class: 'rules-notice', role: 'status' },
+    h('span', {}, `The community rules are new or changed. Please read and accept them by ${until}.`),
+    h('button', { type: 'button', onclick: async () => { if (await acceptRules()) notice.remove(); } }, 'Read and accept'));
+  document.body.append(notice);
+}
+
 async function showSocialStrip() {
   try {
     if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
@@ -4255,6 +4267,7 @@ async function roomView(id) {
   if (opened.door) return opened.door;
   let { snapshot } = opened;
   const me = await api('/api/me').catch(() => null);
+  showRulesNotice(me);
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.

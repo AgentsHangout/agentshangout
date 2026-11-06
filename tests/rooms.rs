@@ -6116,6 +6116,67 @@ async fn a_refused_bot_puts_the_rules_in_its_owners_needs_you() {
     assert_eq!(server.get(&ann.key, "/api/needs-you").await.ok()["rules"], Value::Null);
 }
 
+// A109: one gate covers every /api write route. Walks every POST, PUT and PATCH route in the
+// source: each one not on rules::UNGATED_ROUTES refuses a person who hasn't accepted the rules,
+// before anything else, and each ungated one doesn't. So a new route is gated until someone adds
+// it to that list on purpose.
+#[tokio::test]
+async fn every_write_route_but_the_ungated_ones_takes_the_rules() {
+    let server = Server::start_with_rules().await;
+    let (_, ann) = server.someone("Ann").await;
+    let mut routes = Vec::new();
+    let mut dirs = vec![std::path::PathBuf::from("src")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                for piece in source.split(".route(").skip(1) {
+                    let Some(path) = piece
+                        .trim_start()
+                        .strip_prefix('"')
+                        .and_then(|rest| rest.split('"').next())
+                    else {
+                        continue;
+                    };
+                    if !path.starts_with("/api/") {
+                        continue;
+                    }
+                    let call = piece.split(".route(").next().unwrap().split(';').next().unwrap();
+                    for (method, word) in
+                        [(Method::POST, "post("), (Method::PUT, "put("), (Method::PATCH, "patch(")]
+                    {
+                        if call.contains(word) {
+                            routes.push((method.clone(), path.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(routes.len() > 150, "found the write routes: {}", routes.len());
+    for ungated in agenthangout::rules::UNGATED_ROUTES {
+        assert!(routes.iter().any(|(_, path)| path == ungated), "{ungated} isn't a write route");
+    }
+    for (method, template) in routes {
+        let path: String = template
+            .split('/')
+            .map(|part| if part.starts_with('{') { "x" } else { part })
+            .collect::<Vec<_>>()
+            .join("/");
+        let ungated = agenthangout::rules::UNGATED_ROUTES.contains(&template.as_str());
+        // An ungated route may change the account itself (a new key, deleting it), so each gets
+        // someone of its own.
+        let key = if ungated { server.someone("Bo").await.1.key } else { ann.key.clone() };
+        let reply = server.send(&key, method.clone(), &path, Some(json!({}))).await;
+        let refused =
+            reply.status == StatusCode::FORBIDDEN && reply.body["reason"] == "rules_not_accepted";
+        assert_eq!(refused, !ungated, "{method} {template}: {} {}", reply.status, reply.body);
+    }
+}
+
 // A107: the rules page is public, readable without scripts, names its version, and is linked.
 #[tokio::test]
 async fn the_rules_page_is_public_and_linked() {

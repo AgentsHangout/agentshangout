@@ -324,7 +324,9 @@ pub fn app(state: AppState) -> Router {
         .route("/mcp", post(mcp::handle))
         .route("/public/mcp", post(public_mcp::handle))
         .fallback(web::not_found)
-        // Innermost, so it sees what the handler answered and the route it matched (U1).
+        // A109: every /api write route takes the community rules accepted, but the ungated ones.
+        .layer(middleware::from_fn_with_state(state.clone(), rules::gate_writes))
+        // Inside everything but the rules gate, so it sees what was answered and the route (U1).
         .layer(middleware::from_fn_with_state(state.clone(), usage::observe))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), web::security_headers))
