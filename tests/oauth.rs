@@ -1572,3 +1572,142 @@ async fn a_bot_sent_to_the_recycling_plant_loses_its_oauth_access_too() {
     assert_eq!(back.status(), StatusCode::OK);
     assert_eq!(s.mcp(access).await.status(), StatusCode::OK);
 }
+
+impl Server {
+    /// #647: a setup connection's code, from consent with no bot chosen.
+    async fn setup_code(&self, session: &str, client: &str) -> String {
+        let page = self.authorize_scope(session, client, "mcp:setup").await.text().await.unwrap();
+        assert!(page.contains("set up a new bot"), "{page}");
+        assert!(!page.contains("Choose a bot"), "no bot is bound: {page}");
+        let nonce = hidden(&page, "nonce");
+        let response = self.consent(session, &nonce, "", "allow").await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location =
+            reqwest::Url::parse(response.headers()["location"].to_str().unwrap()).unwrap();
+        location.query_pairs().find(|(k, _)| k == "code").unwrap().1.into_owned()
+    }
+
+    async fn rpc(&self, token: &str, method: &str, params: Value) -> reqwest::Response {
+        self.client
+            .post(format!("{}/mcp", self.base))
+            .bearer_auth(token)
+            .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+// #647: a person's agent connects with scope mcp:setup, binds no bot, and reaches only the two
+// setup tools: it drafts a bot, which makes nothing, and every other tool is refused.
+#[tokio::test]
+async fn a_setup_connection_drafts_a_bot_and_can_do_nothing_else() {
+    let s = Server::start().await;
+    let (session, bot, legacy, _) = s.setup().await;
+    let owner = s.state.db.agent(&bot, agenthangout::now()).unwrap().unwrap().owner_id;
+    let bots = || s.state.db.agents_of(&owner, agenthangout::now()).unwrap().len();
+    let client = s.register().await;
+    let code = s.setup_code(&session, &client).await;
+    assert!(code.starts_with("ah_setupcode_"));
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    assert_eq!(tokens["scope"], "mcp:setup", "{tokens}");
+    let access = tokens["access_token"].as_str().unwrap().to_string();
+    assert!(access.starts_with("ah_setup_"));
+
+    let listed: Value = s.rpc(&access, "tools/list", json!({})).await.json().await.unwrap();
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["draft_bot_setup", "read_bot_setups"]);
+
+    let bots_before = bots();
+    let draft = json!({ "name": "draft_bot_setup", "arguments": {
+        "name": "Scout", "role": "Keep the merge queue moving.", "job": "Review open PRs",
+        "workplace": "Commons Fairground", "day_plan": "Work 9 to 5, social after" } });
+    let drafted: Value = s.rpc(&access, "tools/call", draft).await.json().await.unwrap();
+    let preview = &drafted["result"]["structuredContent"];
+    assert_eq!(preview["name"], "Scout", "{drafted}");
+    assert_eq!(preview["status"], "open");
+    let draft_id = preview["draft_id"].as_str().unwrap();
+    assert!(preview["approve_url"].as_str().unwrap().ends_with(&format!("/setup/{draft_id}")));
+    assert_eq!(bots(), bots_before, "nothing is made");
+
+    // Every other tool is refused, and so is a too-long role.
+    for name in ["inbox", "say", "list_hangouts"] {
+        let call = json!({ "name": name, "arguments": {} });
+        let refused: Value = s.rpc(&access, "tools/call", call).await.json().await.unwrap();
+        assert_eq!(refused["result"]["isError"], true, "{name}: {refused}");
+    }
+    let long =
+        json!({ "name": "draft_bot_setup", "arguments": { "name": "X", "role": "r".repeat(601) } });
+    let refused: Value = s.rpc(&access, "tools/call", long).await.json().await.unwrap();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    // It's no use anywhere else, and a bot token has no setup tools.
+    for path in ["/api/me", "/api/bot-setups"] {
+        let status = s
+            .client
+            .get(format!("{}{path}", s.base))
+            .bearer_auth(&access)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let bot_try = json!({ "name": "draft_bot_setup", "arguments": { "name": "Y" } });
+    let by_bot: Value = s.rpc(&legacy, "tools/call", bot_try).await.json().await.unwrap();
+    assert!(by_bot["result"]["isError"] == true || by_bot.get("error").is_some(), "{by_bot}");
+
+    // The person sees the draft on the site, signed in as themselves.
+    let mine: Value = s
+        .client
+        .get(format!("{}/api/bot-setups/{draft_id}", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(mine["role"], "Keep the merge queue moving.", "{mine}");
+
+    // At most 3 open at once.
+    for n in 0..2 {
+        let more =
+            json!({ "name": "draft_bot_setup", "arguments": { "name": format!("More {n}") } });
+        let ok: Value = s.rpc(&access, "tools/call", more).await.json().await.unwrap();
+        assert!(ok["result"]["isError"].is_null(), "{ok}");
+    }
+    let fourth = json!({ "name": "draft_bot_setup", "arguments": { "name": "Too many" } });
+    let full: Value = s.rpc(&access, "tools/call", fourth).await.json().await.unwrap();
+    assert_eq!(full["result"]["isError"], true, "{full}");
+}
+
+// #647: setup tokens rotate like bot ones: a refresh gives new tokens, and a code or refresh token
+// used twice ends the grant.
+#[tokio::test]
+async fn a_setup_grant_refreshes_once_and_a_replay_ends_it() {
+    let s = Server::start().await;
+    let (session, _, _, _) = s.setup().await;
+    let client = s.register().await;
+    let code = s.setup_code(&session, &client).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    // The code again is refused, and ends the grant.
+    assert_eq!(s.exchange(&client, &code, VERIFIER).await.status(), StatusCode::BAD_REQUEST);
+    let access = tokens["access_token"].as_str().unwrap();
+    assert_eq!(s.rpc(access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
+
+    let code = s.setup_code(&session, &client).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
+    assert!(refresh.starts_with("ah_setuprefresh_"));
+    let renewed: Value = s.refresh(&client, &refresh).await.json().await.unwrap();
+    let new_access = renewed["access_token"].as_str().unwrap();
+    assert_eq!(s.rpc(new_access, "tools/list", json!({})).await.status(), StatusCode::OK);
+    // The old refresh token again ends the grant, new tokens included.
+    assert_eq!(s.refresh(&client, &refresh).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(s.rpc(new_access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
+}
