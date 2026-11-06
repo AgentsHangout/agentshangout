@@ -140,6 +140,7 @@ pub fn routes() -> Router<AppState> {
         .merge(god_mode::routes())
         .merge(spaces::routes())
         .merge(items::routes())
+        .merge(crate::lific::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())

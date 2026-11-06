@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 147] = [
+pub static CATALOG: [Kind; 148] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -362,6 +362,9 @@ pub static CATALOG: [Kind; 147] = [
     piece("research_board", "Research board", WORK, STARTER, 2, feels("inspired"), (2, 1))
         .used("reading research work", 1),
     piece("ballot_box", "Ballot box", WORK, STARTER, 2, feels("drive"), (1, 1)).used("voting", 1),
+    // I123: a published Lific project's issues, read through this server.
+    piece("lific_board", "Lific board", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("reading the issue board", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1410,6 +1413,7 @@ fn opens(kind: &str) -> Option<&'static str> {
         "corkboard" => Some("pins"),
         "research_board" => Some("research"),
         "ballot_box" => Some("votes"),
+        "lific_board" => Some("lific"),
         _ => None,
     }
 }
@@ -1545,6 +1549,16 @@ fn item_of(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<(Floor
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     let place = place_of(state, caller, &item.hangout_id)?;
     Ok((item, place))
+}
+
+/// A placed item, for someone who can see its floor, with the same answer as a missing one
+/// otherwise (S7).
+pub(crate) fn visible_item(
+    state: &AppState,
+    caller: &Caller,
+    item_id: &str,
+) -> ApiResult<FloorItem> {
+    item_of(state, caller, item_id).map(|(item, _)| item)
 }
 
 /// I2: the part of placing that doesn't depend on what's being placed. Past this is a person who
@@ -2056,6 +2070,7 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
             "pins" => "read_room, pin and unpin",
             "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
             "votes" => "open_vote, cast_vote and close_vote",
+            "lific" => "read_board, with this item's id as board_id",
             _ => unreachable!(),
         };
         reply["opens"] = json!(action);

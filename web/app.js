@@ -2357,6 +2357,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'votes': panels.open('votes'); break;
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
+      case 'lific': openLific(item); break;
       default: break;
     }
   }
@@ -2962,6 +2963,74 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       }),
     }, 'Clear it')));
   panels.add('closing', 'Closing clock', {}, closingInfo, closingError, closingForm);
+
+  // I123 to I127: a Lific board shows a published project's issues, read through this server.
+  // Lific's words are other people's, so they go in as text only.
+  let lificOf = null;
+  const lificError = formError();
+  const lificInfo = h('p', { class: 'muted', role: 'status' });
+  const lificColumns = h('div', { class: 'stack lific-columns' });
+  const lificForm = h('form', {
+    class: 'stack',
+    hidden: true,
+    onsubmit: submitter(lificError, async (data) => {
+      await api(`/api/items/${encodeURIComponent(lificOf)}/lific`, {
+        method: 'PUT',
+        body: { base: data.base, project: data.project },
+      });
+      await loadLific();
+    }),
+  },
+  field('Lific address', h('input', { type: 'url', name: 'base', placeholder: 'https://lific.example', required: true })),
+  field('Project', h('input', { type: 'text', name: 'project', placeholder: 'APP', required: true, maxlength: 16 })),
+  h('small', { class: 'muted' }, 'Only a published project shows, and publishing makes the whole project public.'),
+  h('div', { class: 'event-actions' },
+    h('button', { type: 'submit', class: 'primary' }, 'Link it'),
+    h('button', {
+      type: 'button',
+      onclick: act(lificError, async () => {
+        await api(`/api/items/${encodeURIComponent(lificOf)}/lific`, { method: 'PUT', body: { base: null } });
+        await loadLific();
+      }),
+    }, 'Unlink')));
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificForm);
+
+  const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
+
+  async function loadLific() {
+    const asked = lificOf;
+    if (!asked) return;
+    lificError.hidden = true;
+    try {
+      const board = await api(`/api/items/${encodeURIComponent(asked)}/lific`);
+      if (asked !== lificOf) return;
+      lificForm.hidden = !board.you_can_link;
+      lificInfo.textContent = board.available
+        ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
+        : board.unavailable;
+      lificColumns.replaceChildren(...(board.columns || []).filter((column) => column.issues.length).map((column) =>
+        h('section', { class: 'stack' },
+          h('h3', {}, `${LIFIC_STATUS[column.status] || column.status} (${column.issues.length})`),
+          ...column.issues.map((issue) => h('div', { class: 'note' },
+            h('p', {}, `${issue.id || ''} ${issue.title}`.trim()),
+            h('small', { class: 'muted' }, [issue.priority && issue.priority !== 'none' ? issue.priority : '', issue.module || ''].filter(Boolean).join(' · ')))))));
+    } catch (error) {
+      if (asked !== lificOf) return;
+      lificColumns.replaceChildren();
+      lificInfo.textContent = '';
+      lificError.textContent = error.message;
+      lificError.hidden = false;
+    }
+  }
+
+  function openLific(item) {
+    lificOf = item.id;
+    lificInfo.textContent = 'Asking Lific…';
+    lificColumns.replaceChildren();
+    lificForm.hidden = true;
+    panels.open('lific');
+    loadLific();
+  }
 
   function countdownText(unix) {
     const left = Math.max(0, unix - Math.floor(Date.now() / 1000));

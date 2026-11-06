@@ -4025,7 +4025,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 22);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 23);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -6328,6 +6328,7 @@ async fn functional_stations_open_the_existing_room_features() {
         ("corkboard", "pins"),
         ("research_board", "research"),
         ("ballot_box", "votes"),
+        ("lific_board", "lific"),
     ]
     .iter()
     .enumerate()
@@ -6404,6 +6405,247 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
         .ok();
     let guest = server.read_room(&pip.token, &room).await;
     assert_eq!(stations(&guest)[0]["notes"], 0, "{guest}");
+}
+
+/// I123 to I127: a stand-in Lific instance. `mode` picks what every request gets back.
+#[derive(Clone)]
+struct FakeLific {
+    mode: Arc<std::sync::Mutex<&'static str>>,
+}
+
+impl FakeLific {
+    fn set(&self, mode: &'static str) {
+        *self.mode.lock().unwrap() = mode;
+    }
+}
+
+async fn fake_lific() -> (FakeLific, String) {
+    use axum::{
+        extract::{Path, State},
+        http::{header, StatusCode as Code},
+        response::{IntoResponse, Response},
+        routing::get,
+        Router,
+    };
+    async fn answer(
+        State(fake): State<FakeLific>,
+        Path((project, tail)): Path<(String, String)>,
+    ) -> Response {
+        let mode = *fake.mode.lock().unwrap();
+        if project != "DEMO" || mode == "unpublished" {
+            return Code::NOT_FOUND.into_response();
+        }
+        match mode {
+            "slow" => {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Code::OK.into_response()
+            }
+            "busy" => Code::TOO_MANY_REQUESTS.into_response(),
+            "redirect" => {
+                (Code::FOUND, [(header::LOCATION, "http://10.0.0.1/public/api/projects/DEMO/index")])
+                    .into_response()
+            }
+            "huge" => {
+                let pad = "x".repeat(300 * 1024);
+                axum::Json(json!({ "issues": [], "pad": pad })).into_response()
+            }
+            _ if tail == "modules" => {
+                axum::Json(json!([{ "id": 1, "name": "Board" }])).into_response()
+            }
+            "many" => {
+                let issues: Vec<Value> = (1..=60)
+                    .map(|n| {
+                        json!({ "identifier": format!("DEMO-{n}"), "title": format!("Issue {n}"),
+                                "status": "todo", "priority": "low", "module_id": null,
+                                "sort_order": n as f64, "deleted": false })
+                    })
+                    .collect();
+                axum::Json(json!({ "cursor": 1, "issues": issues, "pages": [] })).into_response()
+            }
+            _ => axum::Json(json!({
+                "cursor": 9,
+                "issues": [
+                    { "identifier": "DEMO-2", "title": "Ship it", "status": "active",
+                      "priority": "high", "module_id": 1, "sort_order": 1.0, "deleted": false,
+                      "assignees": [{ "name": "never shown" }] },
+                    { "identifier": "DEMO-1", "title": "Plan\u{0}\nit <b>now</b>", "status": "backlog",
+                      "priority": "none", "module_id": null, "sort_order": 2.0, "deleted": false },
+                ],
+                "pages": [],
+            }))
+            .into_response(),
+        }
+    }
+    let fake = FakeLific { mode: Arc::new(std::sync::Mutex::new("ok")) };
+    let router = Router::new()
+        .route("/public/api/projects/{project}/{tail}", get(answer))
+        .with_state(fake.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (fake, origin)
+}
+
+fn allow_lific(server: &Server, origins: &str, local: &str) {
+    *server.state.lific.write().unwrap() =
+        agenthangout::lific::Settings::from_settings(Some(origins), Some(local));
+}
+
+// I123 to I126: the room's owner links a Lific board to an allowed instance; anyone in the room,
+// bots too, reads its published project as columns, with no address and no assignees.
+#[tokio::test]
+async fn a_lific_board_shows_a_published_project_by_status() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (_fake, origin) = fake_lific().await;
+    allow_lific(&server, "https://lific.example", &origin);
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    let unlinked = server.get(&ann.key, &path).await.ok();
+    assert_eq!(unlinked["linked"], false, "{unlinked}");
+    assert_eq!(unlinked["available"], false);
+
+    // Bo, who doesn't run the room, can't link it.
+    server
+        .put(&bo.key, &path, json!({ "base": origin, "project": "DEMO" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+
+    let board = server.get(&bo.key, &path).await.ok();
+    assert_eq!(board["available"], true, "{board}");
+    assert_eq!(board["you_can_link"], false);
+    assert_eq!(board["from_lific"], true);
+    assert!(board["trust_note"].as_str().is_some());
+    assert_eq!((board["shown"].clone(), board["total"].clone()), (json!(2), json!(2)));
+    let statuses: Vec<&str> = board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["backlog", "todo", "active", "done", "cancelled"]);
+    let backlog = &board["columns"][0]["issues"][0];
+    assert_eq!(backlog["id"], "DEMO-1");
+    assert_eq!(backlog["title"], "Plan it <b>now</b>", "control characters out, kept as text");
+    let active = &board["columns"][2]["issues"][0];
+    assert_eq!((active["id"].as_str(), active["module"].as_str()), (Some("DEMO-2"), Some("Board")));
+    let text = board.to_string();
+    assert!(!text.contains(&origin) && !text.contains("never shown"), "{text}");
+
+    // A bot reads the same with read_board, and the station names it.
+    let used = server.tool(&scout.token, "use_item", json!({ "item_id": id })).await;
+    assert!(used["structuredContent"]["tools"].as_str().unwrap().contains("read_board"), "{used}");
+    let read = server.tool(&scout.token, "read_board", json!({ "board_id": id })).await;
+    assert_eq!(read["structuredContent"]["columns"], board["columns"], "{read}");
+    assert!(!read.to_string().contains(&origin));
+}
+
+// I124: only an allowed origin can be linked: an https one on the list, or exactly the local one.
+#[tokio::test]
+async fn a_lific_board_links_only_to_an_allowed_address() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_fake, origin) = fake_lific().await;
+    allow_lific(&server, "https://lific.example", &origin);
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    let other_port = origin.replace("127.0.0.1:", "127.0.0.1:1");
+    for base in [
+        "https://evil.example",
+        "http://lific.example",
+        "https://lific.example/path",
+        "http://10.0.0.1",
+        "http://localhost",
+        other_port.as_str(),
+    ] {
+        server
+            .put(&ann.key, &path, json!({ "base": base, "project": "DEMO" }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
+    server
+        .put(&ann.key, &path, json!({ "base": origin, "project": "../x" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    // Taken off the list later, it isn't asked again.
+    allow_lific(&server, "https://lific.example", "");
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(
+        (board["available"].clone(), board["reason"].clone()),
+        (json!(false), json!("not_allowed"))
+    );
+}
+
+// I126, I127: anything wrong shows as unavailable with no issues, never old ones, and at most 50
+// issues show.
+#[tokio::test]
+async fn a_lific_board_fails_soft_and_keeps_nothing() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (fake, origin) = fake_lific().await;
+    allow_lific(&server, "", &origin);
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    assert_eq!(server.get(&ann.key, &path).await.ok()["available"], true);
+
+    for (mode, reason) in [
+        ("unpublished", "not_published"),
+        ("busy", "busy"),
+        ("redirect", "redirected"),
+        ("huge", "too_big"),
+        ("slow", "slow"),
+    ] {
+        fake.set(mode);
+        let started = std::time::Instant::now();
+        let board = server.get(&ann.key, &path).await.ok();
+        assert_eq!(board["available"], false, "{mode}: {board}");
+        assert_eq!(board["reason"], reason, "{mode}");
+        assert_eq!(board["total"], 0, "{mode}: nothing kept from the good read");
+        assert!(board["unavailable"].as_str().is_some_and(|words| !words.is_empty()));
+        assert!(started.elapsed() < Duration::from_secs(5), "{mode} took {:?}", started.elapsed());
+    }
+
+    fake.set("many");
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!((board["shown"].clone(), board["total"].clone()), (json!(50), json!(60)));
+    assert_eq!(board["truncated"], true);
+
+    // With nothing listening, it's unavailable too.
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    allow_lific(&server, "", &closed);
+    server.put(&ann.key, &path, json!({ "base": closed, "project": "DEMO" })).await.ok();
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(
+        (board["available"].clone(), board["reason"].clone()),
+        (json!(false), json!("down"))
+    );
+}
+
+// I124: an https address on the list whose name doesn't resolve to a public address is never asked.
+#[tokio::test]
+async fn a_lific_board_never_asks_a_private_address() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    allow_lific(&server, "https://localhost", "");
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    server
+        .put(&ann.key, &path, json!({ "base": "https://localhost", "project": "DEMO" }))
+        .await
+        .ok();
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(
+        (board["available"].clone(), board["reason"].clone()),
+        (json!(false), json!("refused"))
+    );
 }
 
 // I111: ballot_box counts open votes the caller can see, and names open_vote, cast_vote and close_vote.

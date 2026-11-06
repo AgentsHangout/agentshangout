@@ -1995,6 +1995,15 @@ CREATE TABLE IF NOT EXISTS vote_reminders (
     vote_id     TEXT PRIMARY KEY REFERENCES votes(id) ON DELETE CASCADE,
     sent_at     INTEGER NOT NULL
 );
+-- I124: the Lific project a lific_board shows: an allow-listed origin and a project id, and no
+-- key. Its issues are never stored (I126). It goes with the board.
+CREATE TABLE IF NOT EXISTS lific_links (
+    item_id     TEXT PRIMARY KEY REFERENCES floor_items(id) ON DELETE CASCADE,
+    base        TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    set_by      TEXT NOT NULL REFERENCES people(id),
+    set_at      INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -14300,6 +14309,41 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    /// I124: links a Lific board to a project, in place of any link it had.
+    pub fn set_lific_link(
+        &self,
+        item_id: &str,
+        base: &str,
+        project: &str,
+        set_by: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO lific_links (item_id, base, project, set_by, set_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (item_id) DO UPDATE SET base = excluded.base, project = excluded.project,
+                 set_by = excluded.set_by, set_at = excluded.set_at",
+            params![item_id, base, project, set_by, at],
+        )?;
+        Ok(())
+    }
+
+    /// I124: unlinks a Lific board.
+    pub fn clear_lific_link(&self, item_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM lific_links WHERE item_id = ?", [item_id])?;
+        Ok(())
+    }
+
+    /// I124: a Lific board's origin and project.
+    pub fn lific_link(&self, item_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT base, project FROM lific_links WHERE item_id = ?",
+                [item_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
     }
 
     /// I106: takes the time off a closing clock.
