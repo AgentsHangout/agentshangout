@@ -329,26 +329,45 @@ input::placeholder { color: #8b7a5e; }
 .board-text.cut { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.6em), transparent); mask-image: linear-gradient(#000 calc(100% - 1.6em), transparent); }
 .board-read { max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* I81: a simple strip under the whiteboard. Classes on the cards are hooks for richer styling. */
-.pin-strip {
+/* I81: one pin on the wall, right of the whiteboard, drawn in the room's own pixels. Like the
+   board it is part of the wall, not a layer over the room, and it opens the Pins panel. */
+.pin-button {
   position: absolute;
-  left: 31.9%;
-  top: 21.4%;
-  width: 36.2%;
-  height: 8%;
+  left: 94.2%;
+  top: 5%;
+  width: 4%;
+  aspect-ratio: 1;
   min-height: 0;
   display: flex;
-  align-items: stretch;
-  gap: .35em;
+  align-items: flex-end;
+  justify-content: flex-end;
   padding: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  color: #20283e;
   background: none;
   border: 0;
-  z-index: 2;
-  pointer-events: auto;
+  border-radius: 0;
+  box-shadow: none;
+  text-shadow: none;
+  font: inherit;
 }
-.pin-strip:empty { display: none; }
+.pin-button:hover:enabled { filter: none; box-shadow: inset 0 0 0 1px rgba(32, 40, 62, .35); }
+.pin-button:active { filter: none; transform: none; }
+.pin-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The pin stays small on the wall, but a finger gets 44px to press, as docs/mobile.md asks. */
+.pin-button::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+.pin-glyph {
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'><path fill='%2320283e' d='M4 0h4v1H4zM3 1h1v3H3zM8 1h1v3H8zM2 4h8v1H2zM2 5h1v1H2zM9 5h1v1H9zM2 6h8v1H2z'/><path fill='%23c8402f' d='M4 1h4v3H4z'/><path fill='%23ef8a6a' d='M4 1h1v1H4z'/><path fill='%238e2a1f' d='M3 5h6v1H3z'/><path fill='%235a6176' d='M5 7h2v3H5zM5 10h1v2H5z'/></svg>") center / contain no-repeat;
+  image-rendering: pixelated;
+}
+.pin-count {
+  position: relative;
+  font: 700 clamp(7px, .9cqw, 11px) ui-monospace, Consolas, monospace;
+  color: #9a5b16;
+}
+.pin-list .pin-card { width: auto; max-width: none; }
+.pin-thought { margin: 0; }
 .pin-card {
   flex: 0 0 auto;
   width: 7.2em;
@@ -392,26 +411,6 @@ input::placeholder { color: #8b7a5e; }
   color: #5a6176;
   font-size: .85em;
 }
-/* The strip sits on the room's wall, so its controls take the card's paper look. Scoped to the strip
-   so it beats button.ghost (transparent, only showing on hover) and the page-wide select rule (full
-   width on the dark page color, which left one black box across the strip). */
-.pin-strip .pin-add, .pin-strip .pin-clear, .pin-strip .pin-policy {
-  flex: 0 0 auto;
-  align-self: center;
-  width: auto;
-  min-height: 0;
-  padding: .2em .45em;
-  font: inherit;
-  font-size: clamp(8px, 1cqw, 12px);
-  color: #20283e;
-  background: #f4ead2;
-  border: 1px solid rgba(32, 40, 62, .28);
-  border-radius: 3px;
-  box-shadow: none;
-  text-shadow: none;
-}
-.pin-strip .pin-add:hover, .pin-strip .pin-clear:hover, .pin-strip .pin-policy:hover { background: #fbf4e2; filter: none; }
-
 .bot-tag {
   position: absolute;
   width: 0;

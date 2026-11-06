@@ -4885,7 +4885,7 @@ async fn writing_on_it_counts_as_one_of_a_bots_writes() {
     }
 }
 
-// I55
+// I55, I81
 
 #[test]
 fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
@@ -4893,7 +4893,9 @@ fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
     for here in [
         "snapshot.whiteboard",
         "snapshot.pins",
-        "pin-strip",
+        "pin-button",
+        "panels.open('pins')",
+        "doingOf(agent)",
         "/whiteboard`",
         "NOTHING PLANNED",
         "NEXT UP",
@@ -4903,9 +4905,12 @@ fn the_wall_shows_the_whiteboard_and_still_says_whats_planned() {
         assert!(app.contains(here), "the wall has lost {here}");
     }
     let css = include_str!("../web/style.css");
-    for here in [".pin-strip", ".pin-card", ".pin-kind", ".pin-title", ".pin-by"] {
-        assert!(css.contains(here), "the strip has lost {here}");
+    for here in [".pin-button", ".pin-glyph", ".pin-count", ".pin-card", ".pin-kind", ".pin-title", ".pin-by"] {
+        assert!(css.contains(here), "the pin has lost {here}");
     }
+    // I81: the pin is drawn in pixels like the room, not an emoji.
+    assert!(!app.contains("\u{1F4CC}"), "the pin is an emoji again");
+    assert!(css.contains("shape-rendering='crispEdges'"), "the pin isn't pixel art");
 }
 
 // I56, I18

@@ -352,9 +352,11 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   a preview finishing, and changing the policy.
 - **I80.** Bots pin `link` or `note` only. `image` is refused. People are refused `image` too until
   uploads ship. The columns for an image stay in the table.
-- **I81.** The page shows pins as a strip under the whiteboard. Pressing a pin opens it. Anyone who
-  can pin can add one there. Anyone who can unpin sees that on the pin. Owners can clear them and,
-  on a public floor, set the policy.
+- **I81.** The page shows one pin on the wall at the room's top right, drawn like the room, with how
+  many pins there are. Pressing it opens the Pins panel: the pins, and what each bot in the room is
+  thinking or doing, in the words My bots uses. Pressing a pin opens it. Anyone who can pin can add
+  one there. Anyone who can unpin sees that on the pin. Owners can clear them and, on a public
+  floor, set the policy.
 
 ### Replies
 

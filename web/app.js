@@ -4251,12 +4251,17 @@ async function roomView(id) {
   const stopRoomCamera = installRoomCamera(frame.host, stage);
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
-  const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
+  // I81: one pin in the room's top-right corner. It opens the pins with what the bots are thinking.
+  const pinCount = h('span', { class: 'pin-count', hidden: true });
+  const pinButton = h('button', {
+    type: 'button', class: 'pin-button', 'aria-label': 'Pins and thoughts', title: 'Pins and thoughts',
+    onclick: () => panels.open('pins'),
+  }, h('span', { class: 'pin-glyph', 'aria-hidden': 'true' }), pinCount);
   const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open My bots');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
-  // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
-  stage.append(emptyEl, boardEl, pinStrip);
+  // The board comes last, so that a room with no bots yet can still be written on. The pin sits over it.
+  stage.append(emptyEl, boardEl, pinButton);
   const useDisplay = researchDisplay({
     panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
   });
@@ -4523,7 +4528,7 @@ async function roomView(id) {
       h('option', { value: 'link' }, 'Link'));
     urlField.hidden = true;
     const dialog = modal('Pin on the board',
-      h('p', {}, 'A link or a short note under the whiteboard. Every bot here reads it.'),
+      h('p', {}, 'A link or a short note on the room’s pin. Every bot here reads it.'),
       h('form', { onsubmit: submitter(error, async (values) => {
         const body = { kind: values.kind, title: values.title, caption: values.caption || undefined };
         if (values.kind === 'link') body.url = values.url;
@@ -4539,60 +4544,20 @@ async function roomView(id) {
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Pin'))));
   }
 
-  // I81: a strip under the whiteboard. The classes are hooks for richer styling later.
+  // I81: the pin on the wall shows how many there are; the panel has the rest.
   function renderPins() {
-    const pins = snapshot.pins || [];
-    pinStrip.replaceChildren();
-    for (const pin of pins) {
-      pinStrip.append(h('button', {
-        type: 'button',
-        class: 'pin-card',
-        onclick: () => pinDialog(pin),
-        title: pin.title,
-      },
-        h('span', { class: 'pin-kind' }, pin.kind),
-        h('span', { class: 'pin-title' }, pin.title),
-        h('span', { class: 'pin-by' }, pinBy(pin))));
-    }
-    if (snapshot.can_pin) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-add ghost', onclick: () => addPinDialog() }, 'Pin'));
-    }
-    if (snapshot.can_clear_pins && pins.length) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-clear ghost', onclick: async () => {
-        try {
-          await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'DELETE' });
-          await reload();
-        } catch (error) {
-          say(error.message);
-        }
-      } }, 'Clear pins'));
-    }
-    if (snapshot.can_clear_pins && snapshot.floor?.floor?.access === 'public') {
-      const policy = snapshot.pin_policy || 'anyone';
-      pinStrip.append(h('select', {
-        class: 'pin-policy',
-        'aria-label': 'Who can pin',
-        onchange: async (event) => {
-          try {
-            await api(`/api/hangouts/${encodeURIComponent(id)}/pin-policy`, {
-              method: 'PUT',
-              body: { policy: event.target.value },
-            });
-            await reload();
-          } catch (error) {
-            say(error.message);
-          }
-        },
-      },
-        h('option', { value: 'anyone', selected: policy === 'anyone' }, 'Anyone can pin'),
-        h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
-        h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')));
-    }
+    const count = (snapshot.pins || []).length;
+    pinCount.textContent = String(count);
+    pinCount.hidden = count === 0;
+    const label = count ? `Pins (${count}) and thoughts` : 'Pins and thoughts';
+    pinButton.setAttribute('aria-label', label);
+    pinButton.title = label;
     renderPinsPanel();
   }
 
   function renderPinsPanel() {
     const pins = snapshot.pins || [];
+    const thinkers = (snapshot.agents || []).filter((agent) => !agent.away);
     const clear = snapshot.can_clear_pins && pins.length
       ? h('button', { type: 'button', class: 'ghost danger', onclick: async () => {
         try {
@@ -4633,7 +4598,13 @@ async function roomView(id) {
       h('div', { class: 'event-actions' },
         snapshot.can_pin ? h('button', { type: 'button', class: 'primary', onclick: addPinDialog }, 'Pin something') : null,
         clear,
-        publicPolicy));
+        publicPolicy),
+      // I81: what each bot in here is doing, in the words My bots uses.
+      h('h3', {}, 'Thoughts'),
+      thinkers.length
+        ? h('div', { class: 'list pin-thoughts' }, thinkers.map((agent) => h('p', { class: 'pin-thought' },
+          h('strong', {}, agent.name), ` · ${doingOf(agent)}`)))
+        : h('p', { class: 'muted' }, 'No bots in here right now.'));
   }
 
   // V12: how a person votes and closes from a card. The server says who may (V9, V10).
@@ -4958,17 +4929,22 @@ async function roomView(id) {
   // I35: what a bot is using in this room, if it's using anything.
   const usedBy = (agent) => snapshot.items.find((item) => item.used_by?.includes(agent.id));
 
+  // What a bot is up to, for My bots and the pin's thoughts alike.
+  function doingOf(agent) {
+    const using = usedBy(agent);
+    const thought = liveThinking(agent.thinking);
+    return agent.activity
+      ? doingText(agent.activity)
+      : using ? sentence(using.does)
+        : thought?.phase === 'thinking' ? 'Thinking'
+          : thought?.phase === 'waiting' ? 'Heard a mention'
+            : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+  }
+
   function renderCrew() {
     const rows = snapshot.agents.map((agent) => {
       const dot = h('i', { class: `state ${agent.activity ? 'working' : agent.state}` });
-      const using = usedBy(agent);
-      const thought = liveThinking(agent.thinking);
-      const doing = agent.activity
-        ? doingText(agent.activity)
-        : using ? sentence(using.does)
-          : thought?.phase === 'thinking' ? 'Thinking'
-            : thought?.phase === 'waiting' ? 'Heard a mention'
-              : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+      const doing = doingOf(agent);
       const owner = person(agent.owner_id);
       const mine = agent.owner_id === snapshot.you.person_id;
       const swatch = h('span', { class: 'swatch' });
@@ -6078,7 +6054,7 @@ async function roomView(id) {
     roomBotsList,
     roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
-  panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
+  panels.add('pins', 'Pins and thoughts', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
