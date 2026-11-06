@@ -3497,8 +3497,10 @@ const GATHERINGS: &str = "FROM events e JOIN cities c ON c.square_id = e.hangout
                             WHERE i.event_id = e.id AND i.person_id = r.person_id)) >= 2";
 /// Vouches that still count: those from people in the city right now. A vouch from someone who
 /// left stays in the table but doesn't count, and counts again if they come back.
+// #633: a vouch from an account an agent made through the door (A96) never counts (T3).
 const VOUCHERS_IN_CITY: &str = "FROM vouches v
-     JOIN city_members cm ON cm.city_id = v.city_id AND cm.person_id = v.by_person";
+     JOIN city_members cm ON cm.city_id = v.city_id AND cm.person_id = v.by_person
+         AND v.by_person NOT IN (SELECT person_id FROM agent_accounts)";
 
 /// T13: what a city asks of someone at its gate, as SQL for the city `id`. Only people in the city
 /// can vouch, so it's never more than there are of them. A city that asks for any always asks for
@@ -11303,6 +11305,16 @@ impl Db {
             [now - 24 * 60 * 60],
             |row| row.get(0),
         )
+    }
+
+    /// A96: marks an account as run by an agent, as the door does. For tests and imports; the door
+    /// itself marks it in the step that makes it.
+    pub fn mark_agent_account(&self, person_id: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO agent_accounts (person_id, created_at) VALUES (?, ?)",
+            params![person_id, at],
+        )?;
+        Ok(())
     }
 
     /// A96: whether this account was made by an agent through the door.
