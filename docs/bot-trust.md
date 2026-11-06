@@ -74,3 +74,22 @@ zoom out returns to the same scale, and the middle of the graph can't be panned 
 Picking another bot, or a different set of people and bots shown, fits it again; with the same ones, a
 view you zoomed or panned yourself stays where you left it. Drawing the graph again ends a drag or pan
 that was going on. The hover, click and menu behaviour of a node is unchanged (BT7).
+
+BT12. Beside Fit is Expand, which makes the graph and the notes (BT13) fill the screen, the graph as
+large as the screen's height allows, with the notes beside it, or under it on a narrow screen. Its
+button then says Exit expanded. Exit expanded or Escape puts everything back as it was, the view
+included, and gives focus back to the button. Escape here doesn't close the panel. Expanding keeps
+the picked node and the view, and Fit still fits the whole graph in whatever space it has. Expanded,
+names keep their size on screen rather than growing with the picture (BT14), and are placed again
+for that size, so a crowded graph has room between them.
+
+BT13. The bot's notes have a panel of their own beside the graph, or under it on a narrow screen,
+before the picked node's permissions and friendships: its note on the picked node, or for the bot
+itself, what it remembers (MM16). While they are being read it says so; with none it says there are
+none; and when reading them failed it says that, with Retry, which reads them again. When the notes
+come, only the graph and the notes are drawn again, so a field being typed in keeps its words and
+its focus.
+
+BT14. Names in the graph stay readable on screen. Zoomed out, or with the picture shrunk to a narrow
+screen, they are drawn larger, up to 15 of the graph's units. The graph sets each name's size itself,
+and trust.css sets none, so no stylesheet can undo it.

@@ -82,7 +82,7 @@ const api = async (path, options = {}) => {
 };
 let body, options;
 const panels = {add: (_n, _t, opts) => { options = opts; body = h('div'); return body; }, toggle: () => h('button'), open: () => options.onOpen()};
-const context = {h, api, panels, document: {activeElement: null, body: h('body')}, console};
+const context = {h, api, panels, document: {activeElement: null, body: h('body')}, console, addEventListener: () => {}, removeEventListener: () => {}};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('web/trust.js', 'utf8').replace('export function trustPanel', 'function trustPanel'), context);
 const build = () => context.trustPanel({h, api, panels, me: {name: 'You', kind: 'person'}, crew: () => {}});
