@@ -486,6 +486,17 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     let (own_room, ann) = server.someone("Ann").await;
     server.go_in(&ann.key, spot).await.ok();
     let (_, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    // MY3: old enough, and on the square now (opening it is being there).
+    let ready = |who: &Who| {
+        server.state.db.backdate_person(&who.id, now() - 8 * 86_400).unwrap();
+        let path = format!("/api/hangouts/{square}");
+        let walk_in = format!("/api/floors/{square}/walk-in");
+        let (server, key) = (&server, who.key.clone());
+        async move {
+            server.post(&key, &walk_in, json!({})).await;
+            server.get(&key, &path).await.ok()
+        }
+    };
 
     // MY7: the box goes up on the square by itself, and nobody else can place one.
     agenthangout::elections::settle_due(&server.state, now()).unwrap();
@@ -504,7 +515,9 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
         .await
         .refused(StatusCode::FORBIDDEN);
 
-    // MY2: a person and a bot stand.
+    // MY2: a person and a bot stand. A new account has to wait 7 days to.
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    ready(&ann).await;
     let race = server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
     assert_eq!(race["you_stand"], true, "{race}");
     let race = server.tool(&eagle, "mayor_race", json!({ "action": "stand" })).await;
@@ -526,14 +539,25 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     // MY4: no totals while the week is open.
     assert!(!voted.to_string().contains("\"votes\":1"), "{voted}");
     server.put(&eagle, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
-    let (_, door) = server.someone("Door").await;
+    let (door_room, door) = server.someone("Door").await;
     server.go_in(&door.key, spot).await.ok();
+    ready(&door).await;
     server.state.db.mark_agent_account(&door.id, now()).unwrap();
     server
         .put(&door.key, "/api/mayor/ballot", ballot(&square))
         .await
         .refused(StatusCode::FORBIDDEN);
+    // Neither a door account nor its bot stands, so door sign-ups can't fill the seats.
+    server.post(&door.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    let (_, door_bot) = server.bot(&door, &door_room, "Doorbot").await;
+    let refused = server.call(&door_bot, "mayor_race", json!({ "action": "stand" })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    // Someone old enough who hasn't the square open is voting from home, and that's refused.
+    let (_, cy) = server.someone("Cy").await;
+    server.state.db.backdate_person(&cy.id, now() - 8 * 86_400).unwrap();
+    server.put(&cy.key, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
     let nobody = json!({ "kind": "person", "id": "no-such", "hangout_id": square });
+    ready(&justin).await;
     server.put(&justin.key, "/api/mayor/ballot", nobody).await.refused(StatusCode::BAD_REQUEST);
 
     // MY5, MY6: Saturday's tally names the mayor and opens the next week.
@@ -544,6 +568,14 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     assert_eq!(after["last_week"]["votes"], 1);
     assert_eq!(after["last_week"]["tie_draw"], false);
     assert_eq!(after["candidates"], json!([]), "a new week starts empty");
+
+    // MY2, MY6: deleting the account behind the winner says Someone who left, and a deleted
+    // person's candidacy goes.
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    server.state.db.delete_person(&ann.id, "Ann").unwrap();
+    let gone = server.get(&justin.key, "/api/mayor").await.ok();
+    assert_eq!(gone["last_week"]["mayor"]["name"], "Someone who left", "{gone}");
+    assert_eq!(gone["candidates"], json!([]), "{gone}");
 }
 
 // MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.
@@ -560,6 +592,11 @@ async fn an_empty_week_names_nobody_and_a_tie_is_drawn() {
     let empty = server.get(&justin.key, "/api/mayor").await.ok();
     assert!(empty["last_week"]["mayor"].is_null(), "{empty}");
 
+    for who in [&justin, &morg] {
+        server.state.db.backdate_person(&who.id, now() - 8 * 86_400).unwrap();
+        server.post(&who.key, &format!("/api/floors/{square}/walk-in"), json!({})).await;
+        server.get(&who.key, &format!("/api/hangouts/{square}")).await.ok();
+    }
     server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
     server.post(&morg.key, "/api/mayor/stand", json!({})).await.ok();
     let vote = |for_id: &str| json!({ "kind": "person", "id": for_id, "hangout_id": square });

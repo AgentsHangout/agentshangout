@@ -28,6 +28,8 @@ const ZONE: &str = "America/Chicago";
 const CLOSE_HOUR: i8 = 13;
 /// MY2: the most who can stand in one week.
 pub const MOST_CANDIDATES: i64 = 20;
+/// MY2, MY3 (#642): how old a person's account must be to vote, or to stand as themselves.
+pub const MIN_ACCOUNT_SECS: i64 = 7 * 86_400;
 
 /// MY1: the first Saturday 1:00 PM in Chicago after `now`, as a Unix time. The zone's own rules
 /// give the offset for that day, so it stays 1:00 PM there through daylight saving.
@@ -60,6 +62,31 @@ pub fn current(state: &AppState) -> ApiResult<MayorElection> {
     Ok(state.db.open_mayor_election(next_close(now), now)?)
 }
 
+/// MY1 (#642): this week's election, for a change to it: refused once it's past its close, even if
+/// the ticker hasn't counted it yet, so nothing lands after the close.
+fn open_for_changes(state: &AppState) -> ApiResult<MayorElection> {
+    let election = current(state)?;
+    if election.closes_at <= now() {
+        return Err(ApiError::conflict(
+            "this week's election has just closed: the count is coming, and next week's opens with it",
+        ));
+    }
+    Ok(election)
+}
+
+/// MY2, MY3 (#642): a person old enough to vote, or to stand as themselves, and not an account an
+/// agent made through the door (A96).
+fn may_take_part(state: &AppState, person_id: &str, doing: &str) -> ApiResult<()> {
+    if state.db.is_agent_account(person_id)? {
+        return Err(ApiError::forbidden(format!("an account run by an agent can't {doing}")));
+    }
+    let made = state.db.person_created_at(person_id)?.unwrap_or(now());
+    if now() - made < MIN_ACCOUNT_SECS {
+        return Err(ApiError::forbidden(format!("an account has to be 7 days old to {doing}")));
+    }
+    Ok(())
+}
+
 /// MY5: closes every election that's due, writes its winner, and opens the next. A tie is drawn
 /// at random among the tied, and the draw is recorded.
 pub fn settle_due(state: &AppState, now: i64) -> ApiResult<()> {
@@ -68,21 +95,7 @@ pub fn settle_due(state: &AppState, now: i64) -> ApiResult<()> {
         if open.closes_at > now {
             break;
         }
-        let totals = state.db.mayor_totals(open.id)?;
-        let top = totals.first().map(|(_, votes)| *votes).unwrap_or(0);
-        let tied: Vec<&(MayorCandidate, i64)> =
-            totals.iter().filter(|(_, votes)| top > 0 && *votes == top).collect();
-        let winner = match tied.len() {
-            0 => None,
-            1 => Some(tied[0]),
-            n => Some(tied[rand::random_range(0..n)]),
-        };
-        state.db.close_mayor_election(
-            open.id,
-            winner.map(|(candidate, votes)| (candidate, *votes)),
-            tied.len() > 1,
-            now,
-        )?;
+        state.db.tally_and_close_mayor_election(open.id, |n| rand::random_range(0..n))?;
     }
     // MY7: the Town Square always has its voting box.
     for (floor, owner) in state.db.town_squares_without_mayor_box()? {
@@ -148,7 +161,18 @@ fn me(caller: &Caller) -> (&'static str, String) {
 /// MY2: the caller stands, as themselves or, for a bot, as itself.
 pub fn stand(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     ops::no_house_bot(caller)?;
-    let election = current(state)?;
+    match caller.agent_id {
+        // A bot stands as itself, unless its owner is an account an agent made through the door.
+        Some(_) => {
+            if state.db.is_agent_account(&caller.person_id)? {
+                return Err(ApiError::forbidden(
+                    "a bot of an account run by an agent can't stand for mayor",
+                ));
+            }
+        }
+        None => may_take_part(state, &caller.person_id, "stand for mayor")?,
+    }
+    let election = open_for_changes(state)?;
     let (kind, id) = me(caller);
     let candidate = MayorCandidate { kind: kind.to_string(), id, name: caller.name.clone() };
     if !state.db.stand_for_mayor(election.id, &candidate, MOST_CANDIDATES, now())? {
@@ -159,7 +183,7 @@ pub fn stand(state: &AppState, caller: &Caller) -> ApiResult<Value> {
 
 /// MY2: the caller takes their candidacy back.
 pub fn withdraw(state: &AppState, caller: &Caller) -> ApiResult<Value> {
-    let election = current(state)?;
+    let election = open_for_changes(state)?;
     let (kind, id) = me(caller);
     state.db.withdraw_from_mayor(election.id, kind, &id)?;
     race(state, caller)
@@ -180,15 +204,18 @@ pub fn cast(state: &AppState, caller: &Caller, ballot: &Ballot) -> ApiResult<Val
     if caller.is_agent() {
         return Err(ApiError::forbidden("bots don't vote for mayor: only people do"));
     }
-    if state.db.is_agent_account(&caller.person_id)? {
-        return Err(ApiError::forbidden("an account run by an agent doesn't vote for mayor"));
-    }
-    // A public floor is open to anyone signed in, so being able to stand on it is what counts.
+    may_take_part(state, &caller.person_id, "vote for mayor")?;
     let public = state.db.floor(&ballot.hangout_id)?.is_some_and(|floor| floor.access == "public");
     if !public {
         return Err(ApiError::forbidden("vote from a public floor, like the Town Square"));
     }
-    let election = current(state)?;
+    // MY3 (#642): they have to be there, with that floor open now, not naming it from home.
+    if !state.presence.has_seen(&ballot.hangout_id, &caller.person_id, now()) {
+        return Err(ApiError::forbidden(
+            "go to that public floor to vote: you have to be there, like the Town Square's box",
+        ));
+    }
+    let election = open_for_changes(state)?;
     if !state.db.cast_mayor_ballot(
         election.id,
         &caller.person_id,
@@ -209,7 +236,7 @@ fn remove(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<
     if !crate::god_mode::is_on(state, &caller.person_id)? {
         return Err(ApiError::forbidden("turn god mode on first"));
     }
-    let election = current(state)?;
+    let election = open_for_changes(state)?;
     if !state.db.withdraw_from_mayor(election.id, kind, id)? {
         return Err(ApiError::not_found());
     }
@@ -269,5 +296,13 @@ mod tests {
         // In July (CDT, UTC-5) it's still 1:00 PM there: Saturday July 11, 2026, 18:00 UTC.
         let july_wednesday = 1_783_522_800; // Wed July 8, 2026, 15:00 UTC
         assert_eq!(next_close(july_wednesday), 1_783_792_800);
+        // A week across the fall change (Sun Nov 1, 2026): from Sat Oct 31, 2:00 PM CDT (19:00 UTC)
+        // to Sat Nov 7, 1:00 PM CST (19:00 UTC), 7 days and an hour later.
+        let after_october_close = 1_793_473_200;
+        assert_eq!(next_close(after_october_close), 1_794_078_000);
+        // A week across the spring change (Sun Mar 14, 2027): from Sat Mar 13, 2:00 PM CST
+        // (20:00 UTC) to Sat Mar 20, 1:00 PM CDT (18:00 UTC), 7 days less an hour later.
+        let after_march_close = 1_804_968_000;
+        assert_eq!(next_close(after_march_close), 1_805_565_600);
     }
 }

@@ -3778,6 +3778,9 @@ fn bot_places_sql(city: &str, from: &str) -> String {
 /// `Db::delete_agent`, inside a transaction its caller holds (RC5 checks first).
 fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     end_bot_player_token(tx, agent_id)?;
+    // MY2 (#642): a bot that goes stops standing, and the ballots for it go too.
+    tx.execute("DELETE FROM mayor_ballots WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
+    tx.execute("DELETE FROM mayor_candidates WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
     // These hold a bot's address with no foreign key to it.
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
@@ -4477,6 +4480,18 @@ fn settle_their_plans(conn: &Connection, person_id: &str) -> rusqlite::Result<()
 /// Everything that stays and still points at them, so that `people` lets their row go.
 fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusqlite::Result<()> {
     let left = SOMEONE_WHO_LEFT_ID;
+    // MY2, MY6 (#642): their candidacies, and their bots', go with the ballots for them; a week
+    // they or one of their bots won says Someone who left.
+    let theirs = "(kind = 'person' AND candidate_id = ?1)
+         OR (kind = 'bot' AND candidate_id IN (SELECT id FROM agents WHERE owner_id = ?1))";
+    conn.execute(&format!("DELETE FROM mayor_ballots WHERE {theirs}"), [person_id])?;
+    conn.execute(&format!("DELETE FROM mayor_candidates WHERE {theirs}"), [person_id])?;
+    conn.execute(
+        "UPDATE mayor_elections SET winner_kind = 'person', winner_id = ?2, winner_name = ?3
+         WHERE (winner_kind = 'person' AND winner_id = ?1)
+            OR (winner_kind = 'bot' AND winner_id IN (SELECT id FROM agents WHERE owner_id = ?1))",
+        params![person_id, left, SOMEONE_WHO_LEFT],
+    )?;
     // F40: what they claimed is let go, as when anyone stops going.
     conn.execute(
         "UPDATE plan_items SET claimed_by = NULL, claimed_via = NULL, done = 0 WHERE claimed_by = ?",
@@ -11550,29 +11565,60 @@ impl Db {
         rows.collect()
     }
 
-    /// MY5: closes an election with its winner, once. False if it was closed already.
-    pub fn close_mayor_election(
+    /// MY5: counts an election and closes it with its winner, in one step, so no ballot lands
+    /// between the count and the close. `draw` picks among `n` tied. It's dated its own
+    /// `closes_at`, however late the ticker gets to it. False if it was closed already.
+    pub fn tally_and_close_mayor_election(
         &self,
         election_id: i64,
-        winner: Option<(&MayorCandidate, i64)>,
-        tie_draw: bool,
-        now: i64,
+        draw: impl FnOnce(usize) -> usize,
     ) -> rusqlite::Result<bool> {
-        let changed = self.conn().execute(
-            "UPDATE mayor_elections SET closed_at = ?2, winner_kind = ?3, winner_id = ?4,
-                 winner_name = ?5, winner_votes = ?6, tie_draw = ?7
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let totals: Vec<(String, String, String, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT c.kind, c.candidate_id, c.name,
+                        (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                           AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
+                 FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+            )?;
+            let rows = stmt.query_map([election_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let top = totals.first().map(|row| row.3).unwrap_or(0);
+        let tied: Vec<&(String, String, String, i64)> =
+            totals.iter().filter(|row| top > 0 && row.3 == top).collect();
+        let winner = match tied.len() {
+            0 => None,
+            1 => Some(tied[0]),
+            n => Some(tied[draw(n).min(n - 1)]),
+        };
+        let changed = tx.execute(
+            "UPDATE mayor_elections SET closed_at = closes_at, winner_kind = ?2, winner_id = ?3,
+                 winner_name = ?4, winner_votes = ?5, tie_draw = ?6
              WHERE id = ?1 AND closed_at IS NULL",
             params![
                 election_id,
-                now,
-                winner.map(|(c, _)| c.kind.clone()),
-                winner.map(|(c, _)| c.id.clone()),
-                winner.map(|(c, _)| c.name.clone()),
-                winner.map(|(_, votes)| votes),
-                tie_draw as i64,
+                winner.map(|w| w.0.clone()),
+                winner.map(|w| w.1.clone()),
+                winner.map(|w| w.2.clone()),
+                winner.map(|w| w.3),
+                (tied.len() > 1) as i64,
             ],
         )?;
+        tx.commit()?;
         Ok(changed == 1)
+    }
+
+    /// Moves when an account was made, for tests of rules that wait on an account's age (MY3).
+    pub fn backdate_person(&self, person_id: &str, created_at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE people SET created_at = ? WHERE id = ?",
+            params![created_at, person_id],
+        )?;
+        Ok(())
     }
 
     /// MY7: the Town Square rooms' floors with no mayor's voting box yet, and their space's owner.
