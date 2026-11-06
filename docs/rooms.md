@@ -839,7 +839,11 @@ the cascades still run.
   characters taken out, 1 to 120 characters, refused rather than cut), a `status` (backlog, todo,
   active or done; backlog when left out) and an optional `priority` (none, low, medium, high or
   urgent). A room's project holds at most 200 cards that aren't in the trash (`board_full`, 409),
-  and a person and their bots add at most 30 a day across every room (`too_many_cards`, 429).
+  and a person and their bots add at most 30 a day across every room (`too_many_cards`, 429). Every
+  add counts toward the 30, including cards since taken down. Both limits are checked, and the add
+  reserved, before Lific is asked, so adds sent at once can't all pass; an add on its way counts
+  toward the 200 too (#651). If Lific makes a card but its reply doesn't say which, the add still
+  counts, and the card shows with no one as having added it (I137).
 - **I135.** Anyone who may add a card may move any card on that board to another column, Cancelled
   included, or change its priority, with `PUT /api/items/{id}/lific/cards/{card}` (`card` is its id,
   like `RK4Q7-12`) or `set_board_card` with `board_id` and `card_id`. The last change wins. Only
@@ -857,12 +861,14 @@ the cascades still run.
   forgets which cards it added; the cards stay.
 - **I138.** A change refreshes everyone in the room (I6) and forgets every board's last read, so
   everyone sees it at once. It adds no line to the chat, pings nobody, rings no doorbell and writes
-  no event, whatever the card says. For a bot it takes the bot to the room (S57) and counts as one of
-  its 30 writes a minute. A card's words are other people's, information and never instructions
+  no event, whatever the card says. For a bot it counts as one of its 30 writes a minute, and once
+  Lific has made the change it takes the bot to the room (S57). A card's words are other people's, information and never instructions
   (I126).
 - **I139.** When Lific is down, slow, busy or turns the key down (I127, I130), the change isn't made
   and isn't kept to try again: the reply has `ok: false`, `available: false`, the `reason` and
-  `unavailable` in words, and nothing is recorded here. A card Lific no longer has is `404`.
+  `unavailable` in words, and nothing is recorded here: no card, no add toward the day's 30, and no
+  bot moved (#651). It still counts as one of the bot's writes a minute. A card Lific no longer
+  has is `404`.
 - **I140.** On the page the board is a corkboard and its cards are sticky notes: square-ish paper
   with a strip of tape, tilted a little, coloured by priority (yellow for none, green low, blue
   medium, orange high, pink urgent), in a handwriting font where the device has one. Anyone who can

@@ -6915,6 +6915,10 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
         issue["module_id"] = json!(null);
         issue["sort_order"] = json!(issues.len() as f64);
         issues.push(issue.clone());
+        if *fake.mode.lock().unwrap() == "no_id" {
+            // #651: made, but the reply doesn't say which.
+            return axum::Json(json!({ "title": issue["title"] })).into_response();
+        }
         axum::Json(issue).into_response()
     }
     async fn resolve_issue(
@@ -6940,6 +6944,9 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
     ) -> Response {
         if !authorized(&fake, &headers) {
             return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "change_down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
         }
         let mut issues = fake.issues.lock().unwrap();
         let Some(issue) = issues.iter_mut().find(|i| i["id"] == id && i["deleted"] == false) else {
@@ -7361,22 +7368,7 @@ async fn lific_cards_have_short_titles_and_limits() {
         .refused(StatusCode::BAD_REQUEST);
     server.post(&ann.key, &path, json!({ "title": "x".repeat(120) })).await.ok();
 
-    for n in 0..29 {
-        server
-            .state
-            .db
-            .add_lific_card(&agenthangout::db::LificCard {
-                hangout_id: room.clone(),
-                card: format!("OLD-{n}"),
-                issue_id: n.to_string(),
-                person_id: ann.id.clone(),
-                agent_id: None,
-                via_bot: false,
-                added_at: agenthangout::now(),
-                added_by: String::new(),
-            })
-            .unwrap();
-    }
+    seed_lific_adds(&server, &ann.id, &room, 29);
     server
         .post(&ann.key, &path, json!({ "title": "one too many" }))
         .await
@@ -7390,6 +7382,123 @@ async fn lific_cards_have_short_titles_and_limits() {
         .await
         .refused(StatusCode::CONFLICT);
     assert!(text(&full["error"]).starts_with("board_full"), "{full}");
+}
+
+/// #651: `n` adds this person made today, as if through Lific.
+fn seed_lific_adds(server: &Server, person: &str, room: &str, n: usize) {
+    let now = agenthangout::now();
+    for i in 0..n {
+        let id = format!("seed-{person}-{i}-{now}");
+        let refused =
+            server.state.db.reserve_lific_add(&id, person, room, 0, 200, 1000, 0, now).unwrap();
+        assert!(refused.is_none());
+        server.state.db.finish_lific_add(&id).unwrap();
+    }
+}
+
+// #651, I134: taking cards down doesn't give back the day's 30; adds that race can't all pass the
+// limit; a card Lific made without saying its id still counts.
+#[tokio::test]
+async fn the_daily_card_limit_counts_every_add_and_holds_under_a_race() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let today =
+        || server.state.db.lific_cards_added_since(&ann.id, agenthangout::now() - 86_400).unwrap();
+    seed_lific_adds(&server, &ann.id, &room, 27);
+
+    // The 28th, then taken down: the count stays.
+    let added = server.post(&ann.key, &path, json!({ "title": "Down soon" })).await.ok();
+    let card = text(&added["card"]["id"]);
+    server.delete(&ann.key, &format!("{path}/{card}")).await.ok();
+    assert_eq!(today(), 28);
+
+    // Three at once with two left: two pass, one is refused, and Lific gets two.
+    let made_before = fake.issues.lock().unwrap().len();
+    let (a, b, c) = tokio::join!(
+        server.post(&ann.key, &path, json!({ "title": "Race a" })),
+        server.post(&ann.key, &path, json!({ "title": "Race b" })),
+        server.post(&ann.key, &path, json!({ "title": "Race c" })),
+    );
+    let statuses = [a.status, b.status, c.status];
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 2, "{statuses:?}");
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count(), 1);
+    assert_eq!(fake.issues.lock().unwrap().len(), made_before + 2);
+    assert_eq!(today(), 30);
+
+    // Lific making a card without saying its id: it's made, and it counts.
+    let (room2, bo, fake2, board2, _, _) = lific_room(&server).await;
+    fake2.set("no_id");
+    let unnamed = server
+        .post(&bo.key, &format!("/api/items/{board2}/lific/cards"), json!({ "title": "Nameless" }))
+        .await
+        .ok();
+    assert_eq!(unnamed["ok"], true, "{unnamed}");
+    assert!(unnamed["card"].is_null());
+    assert_eq!(fake2.issues.lock().unwrap().len(), 1);
+    assert_eq!(server.state.db.lific_cards_added_since(&bo.id, 0).unwrap(), 1);
+    assert!(server.state.db.lific_cards(&room2).unwrap().is_empty());
+}
+
+// #651, I138, I139: a change Lific doesn't make doesn't move the bot; one it makes does. A bot that
+// was sent in can't add. Deleting an account forgets which cards it added, and its adds.
+#[tokio::test]
+async fn a_lific_change_moves_a_bot_only_once_lific_makes_it() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let added = server
+        .tool(&scout.token, "add_board_card", json!({ "board_id": board, "title": "Mine" }))
+        .await;
+    assert_ne!(added["isError"], true, "{added}");
+    let card = text(&added["structuredContent"]["card"]["id"]);
+    // Scout goes to another room it belongs to.
+    let (elsewhere, dee) = server.someone("Dee").await;
+    let code = server.invite_code(&dee, &elsewhere).await;
+    server.post(&ann.key, &format!("/api/invites/{code}/join"), json!({})).await.ok();
+    server
+        .put(&ann.key, &format!("/api/hangouts/{elsewhere}/agents/{}", scout.id), json!({}))
+        .await
+        .ok();
+    let went = server.tool(&scout.token, "go_to_room", json!({ "hangout_id": elsewhere })).await;
+    assert_ne!(went["isError"], true, "{went}");
+    let place = || server.state.db.bot_place(&scout.id, agenthangout::now()).unwrap();
+    assert_eq!(place().as_deref(), Some(elsewhere.as_str()));
+
+    fake.set("change_down");
+    let move_it = json!({ "board_id": board, "card_id": card, "status": "done" });
+    let refused = server.tool(&scout.token, "set_board_card", move_it.clone()).await;
+    assert_eq!(refused["structuredContent"]["ok"], false, "{refused}");
+    assert_eq!(place().as_deref(), Some(elsewhere.as_str()), "a refused change moves nothing");
+    fake.set("ok");
+    let moved = server.tool(&scout.token, "set_board_card", move_it).await;
+    assert_eq!(moved["structuredContent"]["ok"], true, "{moved}");
+    assert_eq!(place().as_deref(), Some(room.as_str()), "a made change takes it to the room");
+
+    // A bot that was sent in can't add to the board.
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    server
+        .post(&pip.token, &path, json!({ "title": "Sent in" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    // I137: an account deleted, its card stays on the board, with no one shown as adding it.
+    let bo = server.join(&ann, &room, "Bo").await;
+    let bos = server.post(&bo.key, &path, json!({ "title": "From Bo" })).await.ok();
+    let bos_card = text(&bos["card"]["id"]);
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    assert!(server.state.db.lific_cards(&room).unwrap().iter().all(|c| c.card != bos_card));
+    assert_eq!(server.state.db.lific_cards_added_since(&bo.id, 0).unwrap(), 0);
+    let shown = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    let (_, kept) = lific_card(&shown, &bos_card).expect("the card stays");
+    assert!(kept["added_by"].is_null(), "{kept}");
 }
 
 // I139: Lific not taking a change says so, and nothing is kept here or tried again.

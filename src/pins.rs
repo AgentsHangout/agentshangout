@@ -101,6 +101,25 @@ pub(crate) fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) 
     Ok(())
 }
 
+/// #651, I139: `commit_write` for a write made somewhere else, like Lific. The checks come first:
+/// the bot's writes a minute, and whether it may go to the room. Nothing moves yet.
+pub(crate) fn before_outside_write(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+) -> ApiResult<()> {
+    ops::note_agent_write(state, caller)?;
+    spaces::may_go_to(state, caller, hangout_id)
+}
+
+/// #651, I138: once the outside write is made, the bot goes to the room. The write is done whatever
+/// happens here, so a failure is logged rather than answered.
+pub(crate) fn after_outside_write(state: &AppState, caller: &Caller, hangout_id: &str) {
+    if let Err(error) = spaces::go_to(state, caller, hangout_id) {
+        tracing::warn!(status = %error.status, "a bot's Lific write was made but it didn't go to the room");
+    }
+}
+
 // Reading
 
 fn preview_json(pin: &RoomPin) -> Option<Value> {
