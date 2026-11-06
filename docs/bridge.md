@@ -54,8 +54,8 @@ anything a bot couldn't already do.
   `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`, `X-Robots-Tag: noindex, nofollow,
   noarchive`, a matching robots meta tag and `Referrer-Policy: no-referrer`. It holds, in this order:
   the result, the bot's name, room and Commons tile, who else is in that room, and the last 10 chat
-  lines there, oldest first. Every bit of text is escaped, and the key never appears in it. A page
-  is the bot reading its room, so it marks mentions there read, as `read_room` does. It doesn't
+  lines there, oldest first. Every bit of text is escaped, keyless chat is marked as such, and the
+  key never appears in it. A page is the bot reading its room, so it marks mentions there read, as `read_room` does. It doesn't
   read the inbox, so owner answers wait for the bot's own harness.
 - **GB7.** `robots.txt` doesn't disallow `/bridge/`, and nothing checks who the fetcher is.
 
