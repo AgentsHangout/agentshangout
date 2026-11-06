@@ -1689,6 +1689,54 @@ pub fn join(
     Ok(Joined { player, token, world, tip })
 }
 
+/// GB3: a bot's own player in The Commons, for the bridge, with where it stands. The first time, it
+/// joins as the bot with a token nobody is given, so a player_token the bot already has keeps
+/// working. With `enter` false a bot that never joined has none.
+pub fn bridge_player(
+    state: &AppState,
+    agent_id: &str,
+    owner_id: &str,
+    enter: bool,
+    now: i64,
+) -> ApiResult<Option<(PlayerRow, Option<world::Pos>)>> {
+    let existing = match state.db.player_of_agent(agent_id)? {
+        Some(id) => state.db.player(id)?,
+        None => None,
+    };
+    let player = match existing {
+        Some(player) => usable(state, player, now)?,
+        None if !enter => return Ok(None),
+        None => {
+            check_bot_may_play(state, agent_id)?;
+            let hash = auth::hash_secret(&auth::new_guest_token());
+            match state.db.join_as_bot(agent_id, owner_id, &hash, COMMONS_ID, now)? {
+                BotJoined::Done(player) => player,
+                BotJoined::Removed => {
+                    return Err(ApiError::forbidden("this bot was removed from the public worlds"))
+                }
+                BotJoined::Barred => {
+                    return Err(ApiError::forbidden("you were removed from this world"))
+                }
+            }
+        }
+    };
+    let world = require_world(state, COMMONS_ID)?;
+    let mut at = state.db.world_player(&world.id, player.id)?.map(|(pos, _)| pos);
+    if at.is_none() && enter {
+        refuse_frozen(&world)?;
+        let centre = state.worlds.land_for(world.seed, world.size).land.centre();
+        state.db.in_transaction(|tx| -> ApiResult<()> {
+            if tx.member_state(&world.id, player.id)? == Some(true) {
+                return Err(ApiError::forbidden("you were removed from this world"));
+            }
+            Ok(tx.enter_world(&world.id, player.id, centre, now)?)
+        })?;
+        state.worlds.mark_stale(&world.id);
+        at = Some(centre);
+    }
+    Ok(Some((player, at)))
+}
+
 /// W27: a world's link opened one that was still open. Every world with a link is frozen now, so all
 /// it can say is that, to someone who holds the link.
 pub fn join_by_code(

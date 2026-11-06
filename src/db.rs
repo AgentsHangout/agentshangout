@@ -28,6 +28,7 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_setup;
+mod bridge;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
@@ -2117,6 +2118,19 @@ CREATE TABLE IF NOT EXISTS bot_setup_bots (
     draft_id    TEXT PRIMARY KEY REFERENCES bot_setup_drafts(id) ON DELETE CASCADE,
     agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     made_at     INTEGER NOT NULL
+);
+-- GB1: the one bridge key a bot's person made, for a model that can only fetch addresses
+-- (docs/bridge.md). GB4: the turns it has already played, forgotten after a day.
+CREATE TABLE IF NOT EXISTS bridge_keys (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    key_hash    TEXT NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bridge_turns (
+    agent_id    TEXT NOT NULL REFERENCES bridge_keys(agent_id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, turn)
 );
 "#;
 

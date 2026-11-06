@@ -3010,7 +3010,7 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     Some(pulse)
 }
 
-fn call_tool(
+pub(crate) fn call_tool(
     state: &AppState,
     headers: &HeaderMap,
     caller: &Caller,

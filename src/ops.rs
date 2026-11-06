@@ -2494,6 +2494,8 @@ pub fn rotate_agent_token(state: &AppState, caller: &Caller, agent_id: &str) -> 
     }
     let token = auth::new_agent_token();
     state.db.set_agent_token(agent_id, &auth::hash_secret(&token))?;
+    // GB1: replacing the token is how a person stops everything, so the bridge key goes with it.
+    state.db.end_bridge_key(agent_id)?;
     Ok(token)
 }
 
