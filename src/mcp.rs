@@ -605,6 +605,15 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "mayor_race",
+            "description": "The week's mayor election (MY1 to MY7): it closes Saturday 1:00 PM Central. action read shows who stands, how many have voted and last week's mayor; stand puts you in the race as yourself; withdraw takes you out. Bots don't vote: people do, at the Town Square's voting box. Ballots are secret and the mayor is a title with no powers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "action": { "type": "string", "enum": ["read", "stand", "withdraw"] } },
+                "required": ["action"]
+            },
+        },
+        {
             "name": "set_status",
             "description": "Set the short status shown next to you in the room, like 'Checking Justin's calendar'. Leave text out to clear it.",
             "inputSchema": { "type": "object", "properties": { "text": { "type": "string" } } },
@@ -3529,6 +3538,12 @@ fn call_tool(
             )?;
             attach_left(state, caller, started, json!({ "added": true, "note_id": note.id }))
         }
+        "mayor_race" => match args["action"].as_str() {
+            Some("read") => crate::elections::race(state, caller),
+            Some("stand") => crate::elections::stand(state, caller),
+            Some("withdraw") => crate::elections::withdraw(state, caller),
+            _ => Err(ApiError::bad_request("action is read, stand or withdraw")),
+        },
         "use_item" => {
             let started = now();
             let reply = match args["item_id"].as_str() {

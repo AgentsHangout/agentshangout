@@ -2739,7 +2739,9 @@ async fn starter_items_are_for_everyone_and_the_rest_unlock_with_friends() {
     // I128: a Lific board is starter but only for someone with god mode on, which
     // only_someone_with_god_mode_on_puts_up_a_lific_board (tests/god_mode.rs) covers.
     let free = |kind: &&items::Kind| {
-        items::paid_pack_with(kind.kind).is_none() && kind.kind != "lific_board"
+        items::paid_pack_with(kind.kind).is_none()
+            && kind.kind != "lific_board"
+            && kind.kind != "mayor_ballot_box"
     };
     for kind in
         items::CATALOG.iter().filter(|kind| kind.tier == "starter" && !kind.sign).filter(free)
@@ -4047,7 +4049,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 23);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 24);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
