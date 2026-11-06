@@ -25,11 +25,13 @@ function load(state) {
     if (state.refuse) { const e = new Error(state.refuse); e.status = 403; throw e; }
     if (path === '/api/mayor/ballot') state.your_ballot = { kind: options.body.kind, id: options.body.id };
     if (path === '/api/mayor/stand') state.you_stand = options.method === 'POST';
+    if (path === '/api/mayor/candidates') state.candidates.push({ kind: 'bot', id: options.body.id, name: 'Scout' });
     return { ok: true };
   };
   const context = { h, api, formError };
   vm.createContext(context);
-  const start = app.indexOf('function mayorPanel(roomId) {');
+  context.botsHere = () => [{ id: 'b1', name: 'Eagle1' }, { id: 'b2', name: 'Scout' }];
+  const start = app.indexOf('function mayorPanel(roomId');
   const end = app.indexOf('\n}\n', app.indexOf('function mayorPersonId() {')) + 3;
   vm.runInContext(app.slice(start, end) + '\nthis.mayorPanel = mayorPanel; this.mayorPersonId = mayorPersonId;', context);
   return { context, calls };
@@ -84,6 +86,21 @@ const button = (root, label) => all(root).find((n) => n.tag === 'button' && text
   assert.match(text(quiet), /No mayor this week\./);
   assert.match(text(quiet), /Nobody is standing yet\./);
   assert.match(text(quiet), /0 people have voted/);
+
+  // MY9: someone with god mode on gets a picker of this room's bots not already standing.
+  const god = load({ ...state, refuse: null, can_nominate: true, candidates: [{ kind: 'bot', id: 'b1', name: 'Eagle1' }] });
+  const godPanel = god.context.mayorPanel('room-1', god.context.botsHere);
+  await tick();
+  const select = all(godPanel).find((n) => n.tag === 'select');
+  assert.deepEqual(select.children.map((o) => o.value), ['b2'], 'Eagle1 already stands');
+  select.value = 'b2';
+  await button(godPanel, 'Nominate a bot').onclick({ currentTarget: {} });
+  await tick();
+  const nominated = god.calls.find((c) => c.path === '/api/mayor/candidates');
+  assert.equal(JSON.stringify(nominated.body), JSON.stringify({ kind: 'bot', id: 'b2' }));
+  assert.match(text(godPanel), /Scout \(bot\)/);
+  // Without can_nominate, no picker.
+  assert.equal(all(root).some((n) => n.tag === 'select'), false);
 
   // The badge: a person mayor's id, asked once; a bot mayor badges no person.
   const gets = () => calls.filter((c) => c.path === '/api/mayor' && c.method === 'GET').length;

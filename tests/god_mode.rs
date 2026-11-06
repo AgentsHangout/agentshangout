@@ -578,6 +578,55 @@ async fn the_week_elects_a_mayor_at_the_town_square() {
     assert_eq!(gone["candidates"], json!([]), "{gone}");
 }
 
+// MY9 (morgkorg): with god mode on, someone stands whenever they like, with no 7-day wait, and
+// puts anyone's bot on the ballot. Nobody else can nominate, and with god mode off neither can they.
+#[tokio::test]
+async fn god_mode_stands_any_time_and_nominates_bots() {
+    let (server, justin, _) = Server::start().await;
+    let (own_room, ann) = server.someone("Ann").await;
+    let (eagle_id, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let nominate = json!({ "kind": "bot", "id": eagle_id });
+
+    // God mode off: Justin is new, so he can't stand, and can't nominate.
+    server.post(&justin.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    server
+        .post(&justin.key, "/api/mayor/candidates", nominate.clone())
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert_eq!(server.get(&justin.key, "/api/mayor").await.ok()["can_nominate"], false);
+
+    // God mode on: he stands, new as he is, and puts Ann's bot on the ballot.
+    server.switch(&justin, true).await;
+    assert_eq!(server.get(&justin.key, "/api/mayor").await.ok()["can_nominate"], true);
+    let stood = server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
+    assert_eq!(stood["you_stand"], true, "{stood}");
+    let race = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    let names: Vec<&str> =
+        race["candidates"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(names.len(), 2, "{race}");
+    assert!(names.contains(&"Eagle"), "{race}");
+    // Twice is still once, and only bots that exist, as bots.
+    let again = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    assert_eq!(again["candidates"].as_array().unwrap().len(), 2, "{again}");
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": "no-such" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "person", "id": ann.id }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    // The bot can still take itself off.
+    let withdrawn = server.tool(&eagle, "mayor_race", json!({ "action": "withdraw" })).await;
+    assert_eq!(withdrawn["candidates"].as_array().unwrap().len(), 1, "{withdrawn}");
+
+    // Anyone else, and any bot, gets W75's 404, and never sees can_nominate as true.
+    server.post(&ann.key, "/api/mayor/candidates", nominate.clone()).await.refused(StatusCode::NOT_FOUND);
+    server.post(&eagle, "/api/mayor/candidates", nominate).await.refused(StatusCode::NOT_FOUND);
+    assert_eq!(server.get(&ann.key, "/api/mayor").await.ok()["can_nominate"], false);
+}
+
 // MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.
 #[tokio::test]
 async fn an_empty_week_names_nobody_and_a_tie_is_drawn() {
