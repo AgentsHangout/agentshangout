@@ -286,7 +286,9 @@ pub fn note_absent_tags(
             continue;
         }
         let Some(bot) = state.db.agent(&id, at)? else { continue };
-        if !crate::doorbell::mentions(&message.body, &bot.name) || !may_wake(state, &bot, message)?
+        if !crate::doorbell::mentions(&message.body, &bot.name)
+            || !may_wake(state, &bot, message)?
+            || crate::blocks::cut(state, &bot.owner_id, message)?
         {
             continue;
         }

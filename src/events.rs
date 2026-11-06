@@ -388,7 +388,9 @@ pub fn note_message(state: &AppState, message: &Message) {
         let named = if keyless {
             state.db.keyless_reached(message.id, &bot.id).unwrap_or(false)
         } else {
+            // A102, A104: no mention event across a block or a mute.
             doorbell::mentions(&message.body, &bot.name)
+                && !crate::blocks::cut(state, &bot.owner_id, message).unwrap_or(false)
         };
         if named || (!keyless && room_tag()) {
             let mut mention = shared;

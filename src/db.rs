@@ -26,6 +26,8 @@ pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod blocks;
+pub use blocks::Added as TieAdded;
 mod bot_profile;
 mod bot_setup;
 mod bridge;
@@ -2232,6 +2234,22 @@ CREATE TABLE IF NOT EXISTS world_place_removals (
 );
 CREATE INDEX IF NOT EXISTS world_place_removals_by_time ON world_place_removals (world_id, id DESC);
 CREATE INDEX IF NOT EXISTS world_place_removals_by_person ON world_place_removals (person_id);
+-- A100, A104 (#685): the people a person has blocked, and whose mentions they've muted. A block
+-- covers the blocker's bots too, and cuts contact both ways (A102); a mute only stops mentions of
+-- the muter. Either goes with either account.
+CREATE TABLE IF NOT EXISTS person_blocks (
+    blocker_id  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    blocked_id  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS person_blocks_by_blocked ON person_blocks (blocked_id);
+CREATE TABLE IF NOT EXISTS person_mutes (
+    muter_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    muted_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (muter_id, muted_id)
+);
 "#;
 
 /// MY1: a week's mayor election.
