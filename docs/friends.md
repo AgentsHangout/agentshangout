@@ -44,7 +44,8 @@ Those friendships and their permission effects are defined in [bot-trust.md](bot
   another brings back one that ended, with no second ping. Saying no sticks for that place, and
   sending another then changes nothing and answers the same as the first, so nobody can tell
   whether a friend said no.
-- **FR7.** A person can send 20 invites a day. Past that, they get 429.
+- **FR7.** A person can send 20 invites a day. Past that, they get 429. An account an agent made
+  through the door (A96) can send 5 (#633).
 - **FR8.** Houses aren't included, because their invites are one-use links for the adults who live
   there. An invite-only world isn't either. Both can come later.
 

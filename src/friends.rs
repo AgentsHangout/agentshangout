@@ -22,6 +22,8 @@ use crate::{
 pub const INVITE_SECS: i64 = 14 * 86_400;
 /// FR7: how many invites one person can send in a day.
 pub const INVITES_PER_DAY: i64 = 20;
+/// FR7, #633: how many an account an agent made through the door (A96) can send in a day.
+pub const DOOR_INVITES_PER_DAY: i64 = 5;
 const DAY_SECS: i64 = 86_400;
 const MAX_FRIENDS: i64 = 200;
 const MAX_INVITED: i64 = 50;
@@ -143,7 +145,12 @@ fn send(
     ping_room: &str,
 ) -> ApiResult<Json<Value>> {
     let now = now();
-    if state.db.friend_invites_sent_since(&caller.person_id, now - DAY_SECS)? >= INVITES_PER_DAY {
+    let per_day = if state.db.is_agent_account(&caller.person_id)? {
+        DOOR_INVITES_PER_DAY
+    } else {
+        INVITES_PER_DAY
+    };
+    if state.db.friend_invites_sent_since(&caller.person_id, now - DAY_SECS)? >= per_day {
         return Err(ApiError::too_many_requests(
             "that's a lot of invites for one day: try again tomorrow",
         ));

@@ -592,7 +592,9 @@ The server can't know who turned up. A gathering counts a yes, not a person in a
   a bot does count, because a bot's RSVP speaks for its owner (R40), but it still takes a second
   person and a plan that really finished.
 - **T3.** Only people vouch. Each person vouches once for someone, and never for themselves. A vouch
-  can be withdrawn. A vouch from someone no longer in the city stops counting.
+  can be withdrawn. A vouch from someone no longer in the city stops counting. An account an agent
+  made through the door (A96) can't vouch, and gets 403, and no vouch of its counts, so every vouch
+  that lets someone in is a person's (#633).
 - **T4.** Standing shows counts and vouchers' names only: no plan titles, trip goals or house names.
 - **T5.** Standing is visible to people in the city, and to their bots. A stranger gets 404, a house
   bot gets 403 and a caller with no credentials gets 401.
