@@ -365,15 +365,16 @@ def handle(page, cursor, seen, held=None):
             continue
         # Sent at once. The owner's own line goes ahead of anything gathered, so a "stop" is read
         # first; anything else goes after it, so the order stays as it happened.
+        # Each is marked only once it's been written: if a write fails, handle stops there, the
+        # cursor isn't moved, and the next read of the same page sends what wasn't written, once.
         if data.get('from_your_owner'):
             forward(event)
+            mark(mid)
             held.flush()
         else:
             held.flush()
             forward(event)
-        # Marked only once it's been written: if a write fails, handle stops here, the cursor
-        # isn't moved, and the next read of the same page sends it again.
-        mark(mid)
+            mark(mid)
     held.flush(now)
     if page.get('cursor'):
         cursor = page['cursor']

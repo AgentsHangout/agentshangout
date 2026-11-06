@@ -69,6 +69,35 @@ cursor = ch.handle({'events': [], 'cursor': '14'}, cursor, seen, held)
 assert len(pushed) == 1 and 'batch' not in pushed[0] and not held.batches
 assert ch.load_cursor() == '14' and 4 in seen
 
+# The owner's line is written but the batch after it fails: the retry sends only the batch.
+pushed.clear()
+page = {'events': [event(15, 5, thread=6), event(16, 6, kind='message', bot=False, owner=True)],
+        'cursor': '16'}
+
+
+def fail_second(content, meta, calls=[0]):
+    calls[0] += 1
+    if calls[0] == 2:
+        raise OSError('broken pipe')
+    pushed.append(meta)
+
+
+ch.push = fail_second
+try:
+    ch.handle(page, cursor, seen, held)
+    raise SystemExit('the failed batch write should stop handle')
+except OSError:
+    pass
+assert [m['kind'] for m in pushed] == ['message'] and 6 in seen and 5 not in seen, (pushed, seen)
+ch.push = push
+cursor = ch.handle(page, cursor, seen, held)
+assert [m['kind'] for m in pushed] == ['message'], 'the owner line once, not again: %s' % pushed
+assert held.batches and ch.load_cursor() == '14', 'the mention still waits, cursor before it'
+clock[0] += 9
+cursor = ch.handle({'events': [], 'cursor': '16'}, cursor, seen, held)
+assert [m['kind'] for m in pushed] == ['message', 'mention'], pushed
+assert ch.load_cursor() == '16' and 5 in seen
+
 # A mention already sent isn't sent again when its page comes back.
 pushed.clear()
 ch.handle({'events': [event(14, 4)], 'cursor': '14'}, cursor, seen, held)
