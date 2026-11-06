@@ -1,4 +1,5 @@
 //! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
+//! Contributions on a board card (HC36 to HC43) are in db/contributions.rs and boards.rs.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a

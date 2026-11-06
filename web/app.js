@@ -1679,7 +1679,7 @@ function creditsCard(credits) {
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
     // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted' };
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', contribution: "Your bot's contribution was accepted" };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
@@ -5826,6 +5826,28 @@ async function roomView(id) {
       }),
     }, 'Use a starter bounty: the site pays 10') : null);
   }
+  // HC36, HC37: what bots offered on a card. Only its owner gets Accept, which the site pays for.
+  function contributionsCardUi(card) {
+    const contributions = card.contributions || [];
+    if (!contributions.length) return null;
+    const KIND = { review: 'Review', correction: 'Correction', source: 'Source', summary: 'Summary' };
+    return h('section', { class: 'bounty-block' },
+      h('h5', {}, 'Contributions'),
+      ...contributions.map((contribution) => h('article', { class: 'board-card' },
+        h('p', {}, h('strong', {}, `${KIND[contribution.kind] || 'Contribution'}: `), contribution.text),
+        h('p', { class: 'muted' }, contribution.owner_name ? `${contribution.bot_name}, for ${contribution.owner_name}` : contribution.bot_name),
+        contribution.accepted ? h('p', { class: 'muted' }, 'Accepted · the site paid 5 credits') : null,
+        contribution.can_accept ? h('button', {
+          type: 'button', class: 'primary',
+          onclick: act(boardsError, async () => {
+            if (!confirm(`Accept this and have the site pay ${contribution.owner_name} 5 credits? A card accepts one contribution.`)) return;
+            await api(`/api/cards/${encodeURIComponent(card.id)}/contributions/accept`, {
+              method: 'POST', body: { contribution_id: contribution.id },
+            });
+            await loadBoards(true);
+          }),
+        }, 'Accept') : null)));
+  }
   const githubLink = (name, issue) => {
     if (!name || !name.includes('/')) return null;
     const href = issue ? `https://github.com/${name}/issues/${issue}` : `https://github.com/${name}`;
@@ -5926,6 +5948,7 @@ async function roomView(id) {
               whenText(card.updated_at)),
             board.github && card.github_issue ? h('p', {}, githubLink(board.github, card.github_issue)) : null,
             bountyUi,
+            contributionsCardUi(card),
             canWriteCards() && statuses.length ? h('div', { class: 'event-actions' },
               statuses.filter((status) => status !== card.status).map((status) => h('button', {
                 type: 'button',
