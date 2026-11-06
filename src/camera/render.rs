@@ -200,6 +200,53 @@ mod tests {
         assert!(apart(&boxes), "{boxes:?}");
     }
 
+    // CP13: a tag is snug around its name, as the font really draws it: never narrower than the
+    // words, with room each side, and much narrower than the old 5.5 a letter.
+    #[test]
+    fn a_tag_fits_its_name_as_drawn() {
+        let mut options = resvg::usvg::Options::default();
+        options
+            .fontdb_mut()
+            .load_font_data(include_bytes!("../../assets/fonts/DejaVuSans.ttf").to_vec());
+        for name in [
+            "Grokliver Tree",
+            "AgentsHangout PR",
+            "morgbot 2.0",
+            "WWWWWWWWWWWWWWWW",
+            "mmmmmmmmmmmmmmmm",
+            "Ω漢字 Ünïcödé",
+            "x",
+        ] {
+            let script = format!(
+                "const g=new CameraCanvas(),t=g.labelLines({},16);g.label(200,50,t);JSON.stringify([t.width,t.lines.length,g.parts.filter(p=>p.startsWith('<text')).join('')])",
+                json!(name)
+            );
+            let (width, lines, texts): (f64, usize, String) =
+                serde_json::from_str(&run(&json!({}), Some(&script)).unwrap()).unwrap();
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100">{texts}</svg>"#
+            );
+            let tree = resvg::usvg::Tree::from_str(&svg, &options).unwrap();
+            let drawn = tree.root().abs_bounding_box().width() as f64;
+            assert!(drawn + 4.0 <= width, "{name}: drawn {drawn}, tag {width}");
+            let chars = name.chars().count().min(16) as f64;
+            if lines == 1 && ["Grokliver Tree", "AgentsHangout PR"].contains(&name) {
+                assert!(width < chars * 5.5 + 8.0 - 10.0, "{name}: {width}");
+            }
+        }
+        // Three bots side by side at the table need two rows of tags, not a staircase of three.
+        let bots: Vec<_> = ["Cake Claude", "Grokliver Tree", "morgbot 2.0"]
+            .iter()
+            .map(|n| bot_in(n, "active", false))
+            .collect();
+        let three = tags(&room(json!([]), json!(bots), whole()));
+        assert_eq!(three.len(), 3);
+        let mut rows: Vec<_> = three.iter().map(|t| t.1 as i64).collect();
+        rows.sort();
+        rows.dedup();
+        assert_eq!(rows.len(), 2, "{three:?}");
+    }
+
     // CP10: bots side by side at the table, with long names, get name tags that don't cover each
     // other, and every tag stays in the frame. So does a crowded grid in a small frame.
     #[test]

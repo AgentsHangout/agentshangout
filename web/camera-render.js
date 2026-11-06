@@ -1,6 +1,11 @@
 // Trusted, bounded Canvas-to-SVG adapter for the server camera. No DOM, network, or user code.
 // The drawing functions above come unchanged from room.js; this adds labels to the still.
 const cameraEscape = (text) => String(text).replace(/[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '\uFFFD').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+// CP13: how wide a tag's words are at its 5.5 size, from DejaVu Sans. Lowercase letters, digits and
+// space are at most 3.5 wide; m, w, capitals and anything else get a full 5.5, so a tag is never too
+// narrow for its name, only snug.
+const tagTextWidth=line=>[...line].reduce((sum,c)=>sum+(/[a-ln-vx-z0-9 .,'!:;|()-]/.test(c)?3.5:5.5),0);
+const tagWidth=lines=>Math.max(...lines.map(tagTextWidth),5.5)+8;
 class CameraCanvas {
   constructor() { this.parts=[];this.defs=[];this.fillStyle='#000';this.globalAlpha=1;this.matrix=[1,0,0,1,0,0];this.stack=[];this.path=[]; }
   add(text) { if(this.parts.length>=40000)throw Error('camera drawing limit');this.parts.push(text); }
@@ -28,7 +33,7 @@ class CameraCanvas {
       line+=(line?' ':'')+rest;
     }
     if(line||!lines.length)lines.push(line);
-    return {lines,width:Math.max(...lines.map(l=>[...l].length),1)*5.5+8,height:lines.length*7+3};
+    return {lines,width:tagWidth(lines),height:lines.length*7+3};
   }
   label(x,y,{lines,width,height}) {
     this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${height}" rx="2" fill="#182033" opacity="0.94"/>`);
@@ -98,7 +103,7 @@ function placeLabels(g,figures,frame,maxChars) {
   const short=name=>{
     const chars=[...String(name)];
     const text=chars.length>maxChars?chars.slice(0,maxChars-1).join('')+'…':chars.join('');
-    return {lines:[text],width:Math.max([...text].length,1)*5.5+8,height:10};
+    return {lines:[text],width:tagWidth([text]),height:10};
   };
   const spot=(x,y0,t,up)=>{
     const steps=up?[-(t.height+1),t.height+1]:[t.height+1,-(t.height+1)];
