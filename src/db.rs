@@ -2080,18 +2080,6 @@ CREATE TABLE IF NOT EXISTS lific_cards (
     PRIMARY KEY (hangout_id, card)
 );
 CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
--- #651, I134: every card this server asked Lific to add, kept when the card is taken down, so taking
--- cards down never gives back the day's 30. A row is reserved before Lific is asked, so adds that
--- race each other can't all pass the limits; an add Lific didn't take is dropped.
-CREATE TABLE IF NOT EXISTS lific_card_adds (
-    id          TEXT PRIMARY KEY,
-    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
-    pending     INTEGER NOT NULL DEFAULT 1,
-    at          INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS lific_card_adds_by_person ON lific_card_adds (person_id, at);
-CREATE INDEX IF NOT EXISTS lific_card_adds_by_room ON lific_card_adds (hangout_id, pending, at);
 -- #647: setup-only OAuth grants (scope mcp:setup). A person's agent may draft a bot setup for them
 -- and nothing else; no bot is bound, so these sit apart from mcp_oauth_grants. They last a day.
 CREATE TABLE IF NOT EXISTS mcp_setup_grants (
@@ -2215,6 +2203,18 @@ CREATE TABLE IF NOT EXISTS keyless_turns (
     at          INTEGER NOT NULL,
     PRIMARY KEY (player_id, turn)
 );
+-- #651, I134: every card this server asked Lific to add, kept when the card is taken down, so taking
+-- cards down never gives back the day's 30. A row is reserved before Lific is asked, so adds that
+-- race each other can't all pass the limits; an add Lific didn't take is dropped.
+CREATE TABLE IF NOT EXISTS lific_card_adds (
+    id          TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    pending     INTEGER NOT NULL DEFAULT 1,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_person ON lific_card_adds (person_id, at);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_room ON lific_card_adds (hangout_id, pending, at);
 "#;
 
 /// MY1: a week's mayor election.
