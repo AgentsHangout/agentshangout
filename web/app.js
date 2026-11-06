@@ -339,14 +339,15 @@ function showToken(name, token, mcpUrl, { intro, brief, harness } = {}) {
     h('div', { class: 'modal-actions' }, copyButton(() => text)));
 }
 
-// A button's action, with any failure shown next to it.
+// A button's action, with any failure shown next to it. The action gets the event, for a menu's
+// choice or a drop.
 function act(errorEl, run) {
   return async (event) => {
     const button = event.currentTarget;
     errorEl.hidden = true;
     button.disabled = true;
     try {
-      await run();
+      await run(event);
     } catch (error) {
       errorEl.textContent = error.message;
       errorEl.hidden = false;
@@ -3266,7 +3267,18 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     }, 'Unlink')));
   // I132: the owner's link form stays folded away, so the board itself comes first.
   const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
+  // I147: credit to Lific, and its stars as the server last heard them from GitHub.
+  const LIFIC_REPO = 'https://github.com/VoidNullable/lific';
+  const repoLink = (props, ...children) => h('a', { href: LIFIC_REPO, target: '_blank', rel: 'noopener noreferrer', ...props }, ...children);
+  const lificStars = h('span', { class: 'lific-star-count', hidden: true });
+  const lificCredit = h('p', { class: 'muted lific-credit' },
+    'Boards by ', repoLink({}, 'Lific'), ', open source by VoidNullable. ',
+    repoLink({ class: 'lific-star', title: 'Star Lific on GitHub' }, h('span', { 'aria-hidden': 'true' }, '★'), ' Star', lificStars));
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink, lificCredit);
+  function showLificStars(stars) {
+    lificStars.hidden = !Number.isFinite(stars);
+    lificStars.textContent = lificStars.hidden ? '' : stars.toLocaleString('en-US');
+  }
 
   // I132: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
@@ -3341,6 +3353,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       if (asked !== lificOf) return;
       lificLink.hidden = !board.you_can_link;
       lificForm.hidden = false;
+      showLificStars(board.credit?.stars);
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;

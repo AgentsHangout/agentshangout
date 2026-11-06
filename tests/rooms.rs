@@ -7348,6 +7348,8 @@ async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
     let first = server.lific_board(&ann, &room);
     let board = server.get(&ann.key, &format!("/api/items/{first}/lific")).await.ok();
     assert_eq!(board["available"], true, "{board}");
+    // I132: the room's own project asks nobody to link anything, the room's owner included.
+    assert_eq!(board["you_can_link"], false, "{board}");
     let project = board["project"].as_str().unwrap().to_string();
     assert!(project.starts_with('R') && project.len() == 5, "{project}");
     assert_eq!(board["columns"][1]["issues"][0]["id"], format!("{project}-1"), "{board}");
@@ -7377,6 +7379,61 @@ async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
     let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
     assert_ne!(theirs["project"], project);
     assert_eq!(fake.made().len(), 2);
+}
+
+// I147: the board credits Lific with a link to its repository and its star count, which the server
+// asks GitHub for in the background, at most once an hour. Bots reading the board don't get it.
+#[tokio::test]
+async fn a_lific_board_credits_lific_with_its_stars() {
+    use axum::{extract::State, routing::get, Json, Router};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (_fake, origin) = fake_lific().await;
+    allow_lific(&server, "https://lific.example", &origin);
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+
+    // Not set to ask GitHub: the credit is there, with no count.
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(board["credit"]["url"], "https://github.com/VoidNullable/lific", "{board}");
+    assert_eq!(board["credit"]["stars"], Value::Null);
+
+    let asked = Arc::new(AtomicUsize::new(0));
+    let router = Router::new()
+        .route(
+            "/repos/VoidNullable/lific",
+            get(|State(asked): State<Arc<AtomicUsize>>| async move {
+                asked.fetch_add(1, Ordering::SeqCst);
+                Json(json!({ "full_name": "VoidNullable/lific", "stargazers_count": 86 }))
+            }),
+        )
+        .with_state(asked.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let github = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    server.state.lific.count_stars_from(Some(&github));
+
+    // The first read doesn't wait on GitHub; a later one has the count.
+    let mut stars = Value::Null;
+    for _ in 0..50 {
+        stars = server.get(&ann.key, &path).await.ok()["credit"]["stars"].clone();
+        if stars != Value::Null {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stars, json!(86));
+    for _ in 0..5 {
+        server.get(&ann.key, &path).await.ok();
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "asked once in the hour");
+
+    let read = server
+        .tool(&scout.token, "read_board", json!({ "hangout_id": room, "board_id": id }))
+        .await;
+    assert!(read["structuredContent"]["credit"].is_null(), "{read}");
 }
 
 // I129: Lific down or the key turned down makes nothing and is tried again; a taken id tries the

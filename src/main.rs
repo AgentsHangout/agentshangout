@@ -84,6 +84,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_key(env::var("AGENTHANGOUT_LIFIC_KEY").ok().as_deref()),
     );
+    // I147: Lific's stars, from the same GitHub API sign-in uses.
+    state.lific.count_stars_from(Some(
+        state.github.as_ref().map(|g| g.api_url.as_str()).unwrap_or("https://api.github.com"),
+    ));
     // W100: who may read the public Commons bots list from another site.
     state.worlds.set_viewer_origins(worlds::parse_viewer_origins(
         env::var("AGENTHANGOUT_COMMONS_VIEWER_ORIGINS").ok().as_deref(),

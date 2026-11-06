@@ -39,6 +39,9 @@ const LABEL_HIGH = 13;
 // graph leaves round it, and how large a small graph may be fitted (so two nodes aren't blown up).
 const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25, FIT_PAD = 14, FIT_MAX = 1.5;
 const clampZoom = k => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k)) * 1e4) / 1e4;
+// BT12: how much larger than 11 a name is drawn at zoom `k`: larger on a narrow screen, and larger
+// again zoomed out (up to 15 / 11 more) so it stays as readable on screen. trust.css sets no size.
+const labelGrow = k => (globalThis.matchMedia?.('(max-width: 600px)').matches ? 13 / 11 : 1) * (k < 1 ? Math.min(15 / 11, 1 / k) : 1);
 
 // #531: with `host`, it draws inside that element of the My bots view (opened as `hostPanel`) and has
 // no panel or top-bar button of its own; the view calls `load` when it opens.
@@ -453,19 +456,27 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         return g;
       }));
     // BT11: the zoom, from the node bounds. Everything that can be seen: each frame with its ring and each name.
-    const bounds = () => {
+    const bounds = (grow = 1) => {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const n of nodes) {
-        const half = HALF[n.kind] + 5, label = names.get(n.id), w = [...label.text].length * 6.4 + 6;
+        const half = HALF[n.kind] + 5, label = names.get(n.id), w = [...label.text].length * 6.4 * grow + 6;
         x0 = Math.min(x0, n.x - half, n.x + label.x - w / 2); x1 = Math.max(x1, n.x + half, n.x + label.x + w / 2);
-        y0 = Math.min(y0, n.y - half, n.y + label.y - LABEL_HIGH + 3); y1 = Math.max(y1, n.y + half, n.y + label.y + 3);
+        y0 = Math.min(y0, n.y - half, n.y + label.y - (LABEL_HIGH - 3) * grow); y1 = Math.max(y1, n.y + half, n.y + label.y + 3);
       }
       return { x0, y0, x1, y1 };
     };
     const key = nodes.map(n => n.id).sort().join('|');
+    // Names are drawn larger zoomed out (BT12), so the fit is worked out again at the size they'll be
+    // drawn until it settles; failing that, at the largest they can be, so no name is cut off.
+    const scaleFor = grow => {
+      const { x0, y0, x1, y1 } = bounds(grow);
+      return { k: clampZoom(Math.min((W - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (H - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX)), x0, y0, x1, y1 };
+    };
     const fitted = () => {
-      const { x0, y0, x1, y1 } = bounds();
-      const k = clampZoom(Math.min((W - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (H - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX));
+      let grow = labelGrow(FIT_MAX), at = scaleFor(grow);
+      for (let i = 0; i < 12 && labelGrow(at.k) > grow + 1e-6; i++) at = scaleFor(grow = labelGrow(at.k));
+      if (labelGrow(at.k) > grow + 1e-6) at = scaleFor(labelGrow(ZOOM_MIN));
+      const { k, x0, y0, x1, y1 } = at;
       return { k, x: W / 2 - (x0 + x1) / 2 * k, y: H / 2 - (y0 + y1) / 2 * k, auto: true, key };
     };
     if (!view || view.key !== key) view = fitted();
@@ -473,7 +484,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       world.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
       world.setAttribute('data-scale', String(view.k));
       // Zoomed out, names are drawn larger so they stay as readable on screen.
-      for (const t of labelEls) t.setAttribute('font-size', view.k < 1 ? Math.min(15, 11 / view.k) : 11);
+      for (const t of labelEls) t.setAttribute('font-size', 11 * labelGrow(view.k));
     };
     // The middle of the graph can't leave the picture, so panning never loses it.
     const look = (k, x, y) => {
