@@ -7,6 +7,7 @@ import { planInviteView } from './plan-invite.js';
 import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
+import { createClientUpdates } from './client-updates.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -32,6 +33,21 @@ function h(tag, props = {}, ...children) {
   }
   el.append(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
   return el;
+}
+
+const clientUpdates = createClientUpdates();
+void clientUpdates.start();
+
+function clientUpdateControl() {
+  const element = h('div', { 'aria-live': 'polite' });
+  const render = ({ ready }) => {
+    element.replaceChildren(...[
+      ready ? h('p', { class: 'muted' }, 'An app update is ready.') : null,
+      h('button', { type: 'button', class: 'ghost', onclick: () => { void clientUpdates.activate(); } }, 'Refresh app'),
+    ].filter(Boolean));
+  };
+  const stop = clientUpdates.subscribe(render);
+  return { element, stop };
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -917,6 +933,7 @@ async function homeParts(me) {
     signInOpen: open,
   });
 
+  const updateControl = clientUpdateControl();
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
     onlyOwnerKeyNudge(me, status),
@@ -924,6 +941,7 @@ async function homeParts(me) {
     freeTimesField(me),
     housePlansField(me),
     photosField(),
+    updateControl?.element,
     ownerKeyControl(me),
     h('button', {
       type: 'button',
@@ -1031,11 +1049,11 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
-    stop: () => stop(),
+    stop: () => { stop(); updateControl.stop(); },
   };
 }
 
@@ -10758,7 +10776,8 @@ async function route() {
     }
     app.replaceChildren(h('main', { class: 'home' }, h('div', { class: 'card' },
       h('h2', {}, 'That didn\'t load'),
-      h('p', { class: 'muted' }, error.message))));
+      h('p', { class: 'muted' }, error.message),
+      h('button', { type: 'button', class: 'primary', onclick: () => clientUpdates.reload() }, 'Reload app'))));
   }
 }
 

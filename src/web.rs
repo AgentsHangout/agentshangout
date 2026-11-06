@@ -1,4 +1,5 @@
 //! The page and the bot guide, compiled into the binary so a deployment is one file.
+mod client;
 
 use std::{
     sync::{Arc, Mutex, PoisonError},
@@ -146,12 +147,12 @@ async fn discovery_preflight() -> Response {
 }
 
 async fn index(State(state): State<AppState>) -> Response {
-    addressed(&state, "text/html; charset=utf-8", INDEX)
+    client::page(&state, INDEX)
 }
 
 /// The home page is meant to be found. Rooms and invites are not.
 async fn home(State(state): State<AppState>) -> Response {
-    let mut response = addressed(&state, "text/html; charset=utf-8", HOME);
+    let mut response = client::page(&state, HOME);
     response.headers_mut().insert(header::LINK, HeaderValue::from_static(HOME_LINKS));
     response
 }
@@ -250,6 +251,7 @@ pub async fn not_found(method: Method, uri: Uri) -> Response {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .merge(client::routes())
         .route("/", get(home))
         .route("/h/{id}", get(index))
         .route("/join/{code}", get(index))

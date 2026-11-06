@@ -28,11 +28,11 @@ dependencies {{
 sourceSets {{
     main {{ kotlin {{
         srcDir({source("main")})
-        include("**/ClientUpdatePolicy.kt", "**/ClientBundleStore.kt")
+        include("**/ClientUpdatePolicy.kt", "**/ClientBundleStore.kt", "**/OfflinePolicy.kt")
     }} }}
     test {{ kotlin {{
         srcDir({source("test")})
-        include("**/ClientUpdatePolicyTest.kt", "**/ClientBundleStoreTest.kt")
+        include("**/ClientUpdatePolicyTest.kt", "**/ClientBundleStoreTest.kt", "**/OfflinePolicyTest.kt")
     }} }}
 }}
 ''', encoding="utf-8")
