@@ -753,7 +753,14 @@ async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
     let first = server.get(&justin.key, path).await.ok();
     assert_eq!(
         first,
-        json!({ "open": true, "set_by": null, "set_at": null, "today": 0, "per_day": 50 }),
+        json!({
+            "open": true,
+            "set_by": null,
+            "set_by_name": null,
+            "set_at": null,
+            "today": 0,
+            "per_day": 50
+        }),
         "open until closed"
     );
     assert!(god_mode::bot_signups_open(&server.state).unwrap());
@@ -773,6 +780,31 @@ async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
     assert_eq!(after["set_by"], agenthangout::db::SOMEONE_WHO_LEFT_ID);
     let opened = server.put(&morg.key, path, json!({ "open": true })).await.ok();
     assert_eq!((&opened["open"], &opened["set_by"]), (&json!(true), &json!(MORG)));
+}
+
+// A113
+#[tokio::test]
+async fn the_bot_sign_up_switch_names_whoever_last_set_it() {
+    let (server, justin, morg) = Server::start().await;
+    let path = "/api/god-mode/bot-signups";
+    server.switch(&justin, true).await;
+    server.switch(&morg, true).await;
+
+    let closed = server.put(&justin.key, path, json!({ "open": false })).await.ok();
+    assert_eq!((&closed["set_by"], &closed["set_by_name"]), (&json!(JUSTIN), &json!("Justin")));
+    // Another god reads the same name.
+    let read = server.get(&morg.key, path).await.ok();
+    assert_eq!(read["set_by_name"], "Justin", "{read}");
+
+    // Whoever set it last is the one named.
+    let opened = server.put(&morg.key, path, json!({ "open": true })).await.ok();
+    assert_eq!(opened["set_by_name"], "Morg");
+
+    // If they leave, it names Someone who left, never their old name.
+    server.state.db.delete_person(MORG, "Morg").unwrap();
+    let after = server.get(&justin.key, path).await.ok();
+    assert_eq!(after["set_by_name"], agenthangout::db::SOMEONE_WHO_LEFT, "{after}");
+    assert_eq!(after["open"], true);
 }
 
 // W75

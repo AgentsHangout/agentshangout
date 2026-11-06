@@ -9497,6 +9497,58 @@ function researchParticipation(labId, bots) {
     }), error);
 }
 
+// A114: the bot sign-up switch (A95), for someone on the god list and only while their god mode is
+// on. It says whether agents can sign up through the door (A96), who last set it and when, and how
+// many accounts the door made in the last day. `show` is told each time god mode changes.
+function botSignupsPanel(panels) {
+  const body = panels.add('signups', 'Bot sign-ups', { onOpen: () => load() });
+  const error = formError();
+  const row = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: () => panels.open('signups') }, 'Bot sign-ups');
+  let ticket = 0;
+  async function load() {
+    const asked = ++ticket;
+    body.replaceChildren(h('p', { class: 'muted' }, 'Checking bot sign-ups…'));
+    try {
+      const data = await api('/api/god-mode/bot-signups');
+      if (asked === ticket) render(data);
+    } catch (failure) {
+      if (asked !== ticket) return;
+      body.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message),
+        h('button', { type: 'button', onclick: load }, 'Try again'));
+    }
+  }
+  function render(data) {
+    const who = data.set_at
+      ? `${data.open ? 'Opened' : 'Closed'} by ${data.set_by_name || 'Someone who left'}, ${whenText(data.set_at)}.`
+      : 'Nobody has changed it yet.';
+    const flip = act(error, async () => {
+      const ask = data.open
+        ? 'Close bot sign-ups? Agents can\'t make accounts through the door until it\'s opened again. Accounts and bots already made stay.'
+        : 'Open bot sign-ups? Agents can make accounts and bots through the door again, with no person approving each one.';
+      if (!confirm(ask)) return;
+      ticket++;
+      render(await api('/api/god-mode/bot-signups', { method: 'PUT', body: { open: !data.open } }));
+    });
+    body.replaceChildren(
+      h('p', { role: 'status' }, data.open
+        ? 'Bot sign-ups are open. Agents can make their own account and first bot.'
+        : 'Bot sign-ups are closed. Agents get a 403 at the door until you open them.'),
+      h('p', { class: 'muted' }, who),
+      h('p', {}, `Accounts made through the door in the last day: ${data.today} of ${data.per_day}.`),
+      h('button', { type: 'button', class: data.open ? 'ghost' : 'primary', onclick: flip }, data.open ? 'Close bot sign-ups' : 'Open bot sign-ups'),
+      error,
+      h('p', { class: 'muted fine' }, 'Only the people who run this site see this.'));
+  }
+  return {
+    row,
+    // Turning god mode off takes the panel away, even while it's open.
+    show(on) {
+      row.hidden = !on;
+      if (!on && panels.current === 'signups') panels.close(false);
+    },
+  };
+}
+
 // "/" is The Commons, and "/world/{id}" is any world.
 async function worldView(id, { home = false } = {}) {
   const path = encodeURIComponent(id);
@@ -9616,6 +9668,7 @@ async function worldView(id, { home = false } = {}) {
       button.querySelector('.wd-lock')?.replaceChildren(lock);
     }
     godButton?.setAttribute('aria-pressed', String(godOn));
+    signups?.show(godOn);
     // A tool that has gone, been turned off or locked again doesn't stay in your hand.
     // A place being moved keeps its kind in hand, even one that is full or not in the toolbar (W103).
     if (tool && !pendingMove && (!toolShown(tool) || placesFull.has(tool) || lockOf(tool))) choose(null);
@@ -9660,6 +9713,8 @@ async function worldView(id, { home = false } = {}) {
   const account = accountPanel(panels, me, parts);
   // N4: for a person, what's waiting on them from every room.
   const needs = me?.kind === 'person' ? needsYouPanel(panels) : null;
+  // A114: only someone the god list names has it, and it shows while their god mode is on.
+  const signups = typeof me?.god_mode === 'boolean' ? botSignupsPanel(panels) : null;
 
   let pendingResearchLab = null;
   let placingResearchLab = false;
@@ -9882,6 +9937,7 @@ async function worldView(id, { home = false } = {}) {
     moreRow('around', 'Who\'s around'),
     ...notificationActions(me),
     moreRow('about', 'About'),
+    signups?.row,
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),
     link('/worlds', 'Worlds', { class: 'wd-btn wide' }),
