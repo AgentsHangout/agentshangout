@@ -22,6 +22,7 @@ fn state(god: bool) -> AppState {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: if god { vec!["owner".into()] } else { vec![] },
+            require_rules: false,
         },
     )
 }
@@ -59,6 +60,7 @@ fn eligibility_requires_both_age_and_friends() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     state.db.start_third_space("meeting", "Meeting", "invite", "owner", at, 3).unwrap().unwrap();
@@ -265,6 +267,7 @@ async fn http_creation_checks_public_repo_and_human_owner_can_place() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec!["owner".into()],
+            require_rules: false,
         },
         Apps {
             discord: None,

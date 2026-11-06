@@ -16,6 +16,7 @@ fn collections_use_real_items_and_parts_without_changing_unlocks_or_categories()
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     let indoor = items::catalog_for_owner(&state, "owner").unwrap();

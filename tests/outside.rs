@@ -92,6 +92,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id,
                 god_ids: god_ids.iter().map(|id| id.to_string()).collect(),
+                require_rules: false,
             },
         );
         let served = state.clone();

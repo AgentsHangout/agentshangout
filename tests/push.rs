@@ -12,6 +12,7 @@ async fn pn1_push_status_is_explicit_and_requires_a_session() {
             allow_private_webhooks: false,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     state.db.create_person("person", "Person", &hash_secret("owner"), "feed", now()).unwrap();
@@ -67,6 +68,7 @@ fn state() -> AppState {
             allow_private_webhooks: false,
             keeper_id: Some("one".into()),
             god_ids: vec![],
+            require_rules: false,
         },
     )
 }

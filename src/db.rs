@@ -2312,6 +2312,18 @@ CREATE TABLE IF NOT EXISTS quiet_asks (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (kind, ask_id)
 );
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
+-- A112: the first time this server ran with each version of the rules, where its grace starts.
+CREATE TABLE IF NOT EXISTS rules_versions (
+    version     TEXT PRIMARY KEY,
+    first_seen  INTEGER NOT NULL
+);
 "#;
 
 /// MY1: a week's mayor election.
@@ -16490,6 +16502,52 @@ impl Db {
         )?;
         let rows = stmt.query_map([day], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
         rows.collect()
+    }
+
+    /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
+    /// version, and when their account was made.
+    pub fn rules_accepted(
+        &self,
+        person_id: &str,
+        version: &str,
+    ) -> rusqlite::Result<(bool, bool, Option<i64>)> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2),
+                    (SELECT created_at FROM people WHERE id = ?1)",
+            params![person_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
+    /// A112: notes that this server is running with rules `version`, the first time only.
+    pub fn note_rules_version(&self, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_versions (version, first_seen) VALUES (?, ?)",
+            params![version, now],
+        )?;
+        Ok(())
+    }
+
+    /// A112: when this server first ran with rules `version`.
+    pub fn rules_version_first_seen(&self, version: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT first_seen FROM rules_versions WHERE version = ?",
+                [version],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// A108: records that `person_id` accepted `version`. Accepting it again keeps the first time.
+    pub fn accept_rules(&self, person_id: &str, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_acceptances (person_id, version, accepted_at)
+             VALUES (?, ?, ?)",
+            params![person_id, version, now],
+        )?;
+        Ok(())
     }
 
     // Deleting an account
