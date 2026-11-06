@@ -35,6 +35,7 @@ pub mod how_to_play;
 pub mod ical;
 pub mod items;
 pub mod jobs;
+pub mod keyless;
 pub mod lific;
 pub mod looks;
 pub mod mcp;
@@ -299,6 +300,7 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
         .merge(bridge::routes())
+        .merge(keyless::routes())
         .merge(camera::routes())
         .merge(usage::routes())
         .merge(oauth::routes())

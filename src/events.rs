@@ -330,6 +330,8 @@ pub fn note_message(state: &AppState, message: &Message) {
     }
     let thread_root =
         message.thread_root.or_else(|| state.db.thread_root_for(message.id).ok().flatten());
+    // KA10: a keyless agent's line says so.
+    let keyless = state.db.is_keyless_message(message.id).unwrap_or(false);
     for bot in everyone(state, &message.hangout_id) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
@@ -344,6 +346,7 @@ pub fn note_message(state: &AppState, message: &Message) {
             "body": message.body,
             "from_your_owner": from_owner,
             "is_bot": message.agent_id.is_some(),
+            "keyless": keyless,
             "trust": ROOM_TRUST,
         });
         if let Some(root_id) = thread_root {

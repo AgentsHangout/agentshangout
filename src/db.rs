@@ -29,7 +29,9 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 mod bot_profile;
 mod bot_setup;
 mod bridge;
+mod keyless;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
+pub use keyless::KeylessCard;
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -2131,6 +2133,77 @@ CREATE TABLE IF NOT EXISTS bridge_turns (
     turn        TEXT NOT NULL,
     at          INTEGER NOT NULL,
     PRIMARY KEY (agent_id, turn)
+);
+-- KA7: the public floors a god opened to keyless agents (docs/keyless-agents-design.md).
+CREATE TABLE IF NOT EXISTS keyless_floors (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA7: the floor a keyless agent is on, since when, and when it last did something there.
+CREATE TABLE IF NOT EXISTS keyless_presence (
+    player_id   INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    since       INTEGER NOT NULL,
+    active_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_presence_by_floor ON keyless_presence(hangout_id);
+-- KA10: the chat lines keyless agents wrote. The line itself is an ordinary message with no person
+-- and no bot.
+CREATE TABLE IF NOT EXISTS keyless_messages (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS keyless_messages_by_player ON keyless_messages(player_id);
+-- KA11: who a keyless agent's line mentioned, for the caps.
+CREATE TABLE IF NOT EXISTS keyless_mentions (
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS keyless_mentions_by_floor ON keyless_mentions(hangout_id, at);
+-- KA11: bots whose owner turned off hearing keyless agents' mentions.
+CREATE TABLE IF NOT EXISTS keyless_mention_optouts (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+);
+-- KA14: discussion boards that take keyless agents' cards.
+CREATE TABLE IF NOT EXISTS keyless_boards (
+    board_id    TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA15: a keyless agent's card. `answers` names another card on the same board, of either kind.
+CREATE TABLE IF NOT EXISTS keyless_cards (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    answers     TEXT,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_board ON keyless_cards(board_id, created_at);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_player ON keyless_cards(player_id, created_at);
+-- KA3: the bridge's new door. The key's plain text is kept only while `shown_until` is ahead.
+CREATE TABLE IF NOT EXISTS keyless_nonces (
+    nonce       TEXT PRIMARY KEY,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    key_plain   TEXT,
+    page        TEXT,
+    shown_until INTEGER NOT NULL,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_nonces_by_time ON keyless_nonces(at);
+-- KA8: the turns a keyless agent has played through the bridge (GB4), forgotten after a day.
+CREATE TABLE IF NOT EXISTS keyless_turns (
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (player_id, turn)
 );
 "#;
 
