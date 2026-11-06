@@ -813,6 +813,15 @@ the cascades still run.
   stored, and never in a reply, read_room, an event, a log or an error: a refusal shows only as
   `key_refused`. Publishing makes that project public to anyone who can reach that Lific instance,
   so the instance must stay bound to this machine, as its setup has it.
+- **I131.** Opening a `lific_board` shows the project as a kanban board, the first thing in the
+  panel: Backlog, To do, Active and Done side by side, each with its count and its issues as cards
+  in board order, and "Nothing here" in a column with none, so an empty project still looks like a
+  board. Cancelled shows only when it has issues. A card shows the issue id, its title, and its
+  priority and module when it has them. The panel is wide enough for the columns, which scroll
+  sideways on a narrow screen rather than squeezing. The owner's link form (I124) is folded away
+  under "Link a different project", closed when the board opens, so a board that has its room's
+  own project (I129) never asks anyone to link anything. When the board is unavailable (I127) it
+  says why instead of the columns.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

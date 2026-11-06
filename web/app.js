@@ -2975,7 +2975,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   let lificOf = null;
   const lificError = formError();
   const lificInfo = h('p', { class: 'muted', role: 'status' });
-  const lificColumns = h('div', { class: 'stack lific-columns' });
+  const lificColumns = h('div', { class: 'lific-kanban' });
   const lificForm = h('form', {
     class: 'stack',
     hidden: true,
@@ -2999,9 +2999,22 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         await loadLific();
       }),
     }, 'Unlink')));
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificForm);
+  // I131: the owner's link form stays folded away, so the board itself comes first.
+  const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
 
+  // I131: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
+  function lificKanban(columns) {
+    return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) =>
+      h('section', { class: 'lific-column', 'aria-label': LIFIC_STATUS[column.status] || column.status },
+        h('h3', {}, LIFIC_STATUS[column.status] || column.status, ' ', h('small', {}, String(column.issues.length))),
+        ...(column.issues.length ? column.issues.map((issue) => h('div', { class: 'lific-card' },
+          issue.id ? h('small', { class: 'lific-id' }, issue.id) : null,
+          h('p', {}, issue.title),
+          h('small', { class: 'muted' }, [issue.priority && issue.priority !== 'none' ? issue.priority : '', issue.module || ''].filter(Boolean).join(' · '))))
+          : [h('p', { class: 'muted lific-empty' }, 'Nothing here')])));
+  }
 
   async function loadLific() {
     const asked = lificOf;
@@ -3010,16 +3023,12 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     try {
       const board = await api(`/api/items/${encodeURIComponent(asked)}/lific`);
       if (asked !== lificOf) return;
-      lificForm.hidden = !board.you_can_link;
+      lificLink.hidden = !board.you_can_link;
+      lificForm.hidden = false;
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
-      lificColumns.replaceChildren(...(board.columns || []).filter((column) => column.issues.length).map((column) =>
-        h('section', { class: 'stack' },
-          h('h3', {}, `${LIFIC_STATUS[column.status] || column.status} (${column.issues.length})`),
-          ...column.issues.map((issue) => h('div', { class: 'note' },
-            h('p', {}, `${issue.id || ''} ${issue.title}`.trim()),
-            h('small', { class: 'muted' }, [issue.priority && issue.priority !== 'none' ? issue.priority : '', issue.module || ''].filter(Boolean).join(' · ')))))));
+      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns) : []));
     } catch (error) {
       if (asked !== lificOf) return;
       lificColumns.replaceChildren();
@@ -3033,7 +3042,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     lificOf = item.id;
     lificInfo.textContent = 'Asking Lific…';
     lificColumns.replaceChildren();
-    lificForm.hidden = true;
+    lificLink.hidden = true;
+    lificLink.open = false;
     panels.open('lific');
     loadLific();
   }

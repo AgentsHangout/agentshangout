@@ -1511,6 +1511,18 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .tutorial-tick { flex: 0 0 18px; display: inline-grid; place-items: center; height: 18px; border: 1px solid var(--line); background: var(--bg); color: var(--good); font-size: 13px; line-height: 1; }
 .tutorial-step.done summary { color: var(--muted); font-weight: 400; }
 .tutorial-docs { margin-top: 12px; }
+/* I131: the Lific board is a kanban, wide enough for its columns, scrolling sideways when it isn't. */
+.wd-game > .game-panel-lific { width: min(880px, calc(100% - 24px)); }
+.lific-kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 8px; overflow-x: auto; padding-bottom: 4px; align-items: start; }
+.lific-kanban:empty { display: none; }
+.lific-column { display: grid; gap: 6px; align-content: start; min-width: 0; padding: 6px; background: #e2d2a8; box-shadow: inset 1px 1px 0 #a98d5c, inset -1px -1px 0 #fff7dc; }
+.lific-column h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin: 0; color: #6e2a14; font: 700 14px/1.25 var(--serif); }
+.lific-column h3 small { font: 400 12px/1.2 var(--ui); color: var(--muted); }
+.lific-card { display: grid; gap: 2px; padding: 6px 8px; background: #fff8e4; border: 1px solid #a98d5c; box-shadow: 0 1px 0 rgba(77, 54, 32, .35); }
+.lific-card p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.lific-id { font: 700 11px/1.2 var(--ui); color: #8e2f18; }
+.lific-empty { margin: 0; font-size: 12px; font-style: italic; }
+
 .game-panel:focus { outline: none; }
 .game-panel:focus-visible { outline: 2px solid #8e2f18; outline-offset: -2px; }
 .modal-head button, .game-panel-head .wd-tbtn {
