@@ -133,14 +133,19 @@ async fn write(
     State(state): State<AppState>,
     caller: Caller,
     Path(id): Path<String>,
-    Json(trust): Json<Trust>,
+    Json(mut trust): Json<Trust>,
 ) -> ApiResult<Json<Value>> {
     ops::own_agent(&state, &caller, &id, "change bot permissions")?;
     let people = candidate_people(&state, &caller.person_id)?;
     let known_bots = state.db.trust_known_bots(&caller.person_id, now())?;
-    for p in [&trust.wake, &trust.invite_public, &trust.invite_private] {
+    for p in [&mut trust.wake, &mut trust.invite_public, &mut trust.invite_private] {
         if !matches!(p.mode.as_str(), "participants" | "owner" | "friends" | "selected") {
             return Err(ApiError::bad_request("unknown permission mode"));
+        }
+        if p.mode != "selected" {
+            p.people.clear();
+            p.bots.clear();
+            continue;
         }
         if p.people.len() + p.bots.len() > 200 {
             return Err(ApiError::bad_request("select at most 200 people and bots"));
@@ -286,8 +291,7 @@ pub fn note_absent_tags(
             continue;
         }
         let Some(bot) = state.db.agent(&id, at)? else { continue };
-        if !crate::doorbell::mentions(&message.body, &bot.name) || !may_wake(state, &bot, message)?
-        {
+        if !ops::tags_name(&message.body, &bot.name, &[]) || !may_wake(state, &bot, message)? {
             continue;
         }
         if !only_me_allows(state, &bot, message)? {
@@ -382,6 +386,10 @@ async fn wake_check(
     let only_me = state.db.wakes_only_for_owner(&id)?;
     let mut allowed = Vec::new();
     for mid in body.message_ids {
+        // KA11: polling must not reconstruct a mention withheld by the caps or owner's opt-out.
+        if state.db.is_keyless_message(mid)? && !state.db.keyless_reached(mid, &id)? {
+            continue;
+        }
         if let Some(m) = state.db.trust_message(mid)? {
             let owner =
                 m.agent_id.is_none() && m.person_id.as_deref() == Some(bot.owner_id.as_str());

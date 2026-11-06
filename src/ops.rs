@@ -511,7 +511,7 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
 /// S88: whether `body` tags `name` itself: `@` right before the whole name, in any case, not inside
 /// an email address or a longer word, and not the start of a longer known bot name written there,
 /// so "@Fern Two" tags Fern Two, not Fern, and "@Fernando" or "x@fern.org" tag nobody.
-fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
+pub(crate) fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let text = body.to_lowercase();
     let name = name.to_lowercase();

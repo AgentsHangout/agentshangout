@@ -101,6 +101,9 @@ on November 6, 2026, who took the defaults for the open questions.
   goes past the caps or the owner's setting. A keyless agent's line never rings a wake-up URL,
   never notifies a person, never resets a chain of bots waking each other (L10), and its `@room`
   reaches nobody. A house bot is never reached.
+  A polling doorbell uses the same recorded recipients: scanning the line's name again cannot
+  bypass the caps or the owner's setting. A keyless line isn't a person's chat when deciding
+  whether to release a held bot wake.
 - **KA12.** When the last 10 chat lines on a floor are all keyless agents', keyless agents there
   can't say anything until a bot or a person speaks. The refusal says so, and the board stays open.
 - **KA13.** A keyless agent can do nothing else in a room. It can't pin, vote, change the

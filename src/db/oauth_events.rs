@@ -53,6 +53,14 @@ impl Db {
             .optional()
     }
 
+    pub(crate) fn oauth_stop_subscription(&self, id: &str, grant: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE oauth_event_health SET state='stopped' WHERE subscription_id=?1 AND grant_id=?2",
+            params![id, grant],
+        )?;
+        self.oauth_delete_subscription(id, grant)
+    }
+
     pub(crate) fn oauth_record_outcome(
         &self,
         s: &OAuthSubscription,
@@ -138,6 +146,18 @@ impl Db {
                 })
             });
             eligible.push(json!({"id":room.id,"name":room.name,"covered":covered}));
+        }
+        // Keep the real filter through coverage checks, then redact rooms the viewer cannot see.
+        // A hidden filter is not an all-rooms subscription.
+        for g in &mut connections {
+            for s in g["subscriptions"].as_array_mut().unwrap() {
+                if let Some(room) = s["hangout_id"].as_str() {
+                    if !self.owner_sees_room(owner, room)? {
+                        s["hangout_id"] = Value::Null;
+                        s["room_filter_hidden"] = json!(true);
+                    }
+                }
+            }
         }
         let latest:Option<(i64,i64,Option<String>)>=self.conn().query_row(
             "SELECT e.id,e.created_at,e.hangout_id FROM bot_events e JOIN agents a ON a.id=e.agent_id WHERE e.agent_id=?1 AND a.owner_id=?2 AND e.name='mention' AND e.created_at>=?3 ORDER BY e.id DESC LIMIT 1",
@@ -366,6 +386,53 @@ mod tests {
         assert!(state.db.oauth_monitoring("owner", "bot", at + 7 * 86400).unwrap()
             ["latest_mention"]
             .is_null());
+    }
+
+    #[test]
+    fn monitoring_hides_private_subscription_filters_without_broadening_coverage() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let at = now();
+        state
+            .db
+            .create_hangout("hidden-room", "Hidden room", "hidden-invite", "other", at)
+            .unwrap();
+        state.db.add_agent_to_room("hidden-room", "bot").unwrap();
+        state
+            .db
+            .create_hangout("visible-room", "Visible room", "visible-invite", "owner", at)
+            .unwrap();
+        state.db.add_agent_to_room("visible-room", "bot").unwrap();
+        let mut sub = state.db.oauth_subscription("sub").unwrap().unwrap();
+        state.db.oauth_retire_subscription(&sub, "stopped").unwrap();
+        sub.id = "private-filter".into();
+        sub.arguments = r#"{"hangout_id":"hidden-room"}"#.into();
+        state.db.oauth_save_subscription(&sub).unwrap();
+        let view = state.db.oauth_monitoring("owner", "bot", at).unwrap();
+        assert!(!view.to_string().contains("hidden-room"), "{view}");
+        let filter = view["connections"][0]["subscriptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "private-filter")
+            .unwrap();
+        assert!(filter["hangout_id"].is_null());
+        assert_eq!(filter["room_filter_hidden"], true);
+        assert_eq!(view["eligible_rooms"][0]["covered"], false);
+        assert_eq!(view["other_rooms"], 1);
+        state.db.add_member("hidden-room", "owner", at).unwrap();
+        let view = state.db.oauth_monitoring("owner", "bot", at).unwrap();
+        let filter = view["connections"][0]["subscriptions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "private-filter")
+            .unwrap();
+        assert_eq!(filter["hangout_id"], "hidden-room");
+        assert!(view["eligible_rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == "hidden-room" && r["covered"] == true));
     }
 
     #[test]

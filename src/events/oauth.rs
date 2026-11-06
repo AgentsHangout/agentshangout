@@ -252,12 +252,10 @@ pub(crate) async fn unsubscribe(
     params: &Value,
 ) -> Result<Value, Fail> {
     count_write(state, caller)?;
-    let (_g, id, _, _) = identity(state, caller, params)?;
+    let (g, id, _, _) = identity(state, caller, params)?;
     let _guard = state.oauth_events.subscription(&id).await;
     live(state, caller)?;
-    if let Some(sub) = state.db.oauth_subscription(&id).map_err(internal)? {
-        state.db.oauth_retire_subscription(&sub, "stopped").map_err(internal)?;
-    }
+    state.db.oauth_stop_subscription(&id, &g.id).map_err(internal)?;
     Ok(json!({}))
 }
 
@@ -569,6 +567,44 @@ mod tests {
             state.db.save_bot_trust("bot", &trust).unwrap();
             assert!(!wake_permitted(&state, "bot", &row), "{mode}");
         }
+    }
+
+    #[tokio::test]
+    async fn stopping_an_expired_subscription_discards_its_resume_cursor() {
+        use axum::{routing::post, Json, Router};
+        let (state, caller, _) = queued_subscription();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let callback = Router::new().route(
+                "/",
+                post(|Json(body): Json<Value>| async move {
+                    Json(json!({"challenge":body["challenge"]}))
+                }),
+            );
+            axum::serve(listener, callback).await.unwrap();
+        });
+        let params = json!({"name":"mention","arguments":{"hangout_id":"room"},"delivery":{"mode":"webhook","url":url,"secret":format!("whsec_{}",b64_encode(&[b'a';32]))}});
+        let initial = subscribe(&state, &caller, &params).await.unwrap();
+        let id = initial["id"].as_str().unwrap();
+        state.db.conn().execute("UPDATE oauth_event_subscriptions SET expires_at=0", []).unwrap();
+        deliver(&state).await.unwrap();
+        assert!(state.db.oauth_subscription(id).unwrap().is_none());
+        assert!(state.db.oauth_health_cursor(id).unwrap().is_some());
+        state
+            .db
+            .insert_bot_event("bot", "mention", Some("room"), "while-off", "{}", now(), 0)
+            .unwrap();
+        unsubscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(
+            state.db.oauth_health_cursor(id).unwrap(),
+            None,
+            "an explicit stop must clear an expired identity's resume cursor"
+        );
+        let restarted = subscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(restarted["id"], initial["id"]);
+        assert_eq!(restarted["cursor"], state.db.bot_event_head("bot").unwrap().to_string());
+        assert_ne!(restarted["cursor"], initial["cursor"]);
     }
 
     #[tokio::test]

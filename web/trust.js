@@ -137,11 +137,15 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     try { await run(); } catch (failure) { notice = failure.message; }
     finally { busy = false; render(); }
   }
-  async function refreshHealthAfterSettings() {
+  async function refreshHealthAfterSettings(agentId = selected) {
     // Saving settings and reading their resulting health are separate outcomes.
-    ++healthGeneration;
-    try { monitoring = await api(`${path()}/monitoring`); }
-    catch (_) { monitoring = { error: 'Settings saved. Monitoring health could not be refreshed; check again to see the latest state.' }; }
+    const request = ++healthGeneration;
+    try {
+      const value = await api(`/api/agents/${encodeURIComponent(agentId)}/monitoring`);
+      if (selected === agentId && request === healthGeneration) monitoring = value;
+    } catch (_) {
+      if (selected === agentId && request === healthGeneration) monitoring = { error: 'Settings saved. Monitoring health could not be refreshed; check again to see the latest state.' };
+    }
   }
   async function load() {
     body.replaceChildren(text('Loading your bots and relationships…'));
@@ -663,7 +667,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       text('These only narrow existing room access. They never let anyone into a private room, and plans, check-ins and owner-scheduled routines keep their own rules.', 'muted fine'),
       ...permissionRows(),
       h('div', { class: 'row-actions trust-savebar' },
-        button('Save permissions', () => action(async () => { await api(`${path()}/trust`, { method: 'PUT', body: draft }); saved = clone(draft); b.trust = clone(saved); dirty = false; }), { class: 'primary trust-save', disabled: !dirty }),
+        button('Save permissions', () => action(async () => { const response = await api(`${path()}/trust`, { method: 'PUT', body: draft }); saved = clone(response.trust); draft = clone(saved); b.trust = clone(saved); dirty = false; }), { class: 'primary trust-save', disabled: !dirty }),
         button('Reset', () => { draft = clone(saved); dirty = false; render(); }),
         h('small', { class: 'trust-unsaved muted', role: 'status' }, dirty ? 'Unsaved changes' : 'All changes saved')),
       text('“Friends” means your accepted people friends, their bots, and this bot’s accepted bot friends. Requests and bonds don’t count.', 'muted fine'),
@@ -742,7 +746,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         monitoring.wake_only_owner ? text('Only-owner mention mode is on. Other room participants cannot wake this bot by mention.') : null),
       section('Connected clients', ...monitoring.connections.map(c => h('div', { class: 'trust-connection' }, h('strong', {}, c.client_name), state(c.status), text(`Granted scopes: ${c.scope}`),
         ...c.subscriptions.map(s => h('div', { class: 'trust-subscription' }, text(`Subscription: ${s.status}`),
-          text(`Room filter: ${s.hangout_id ? rooms.find(r => r.id === s.hangout_id)?.name || `Inaccessible room (${s.hangout_id})` : 'All eligible rooms this bot belongs to'}`),
+          text(`Room filter: ${s.room_filter_hidden ? 'Private room (details hidden)' : s.hangout_id ? rooms.find(r => r.id === s.hangout_id)?.name || `Inaccessible room (${s.hangout_id})` : 'All eligible rooms this bot belongs to'}`),
           text(`Cursor: ${s.cursor ?? 'Not recorded'}`), text(`Expires: ${s.expires_at || 'Not recorded'}`), text(`Refresh before: ${s.refreshBefore || 'Not recorded'}`), text(`Last renewed: ${s.last_renewed_at || 'Not recorded'}`),
           text(s.last_delivery ? `Last delivery: ${outcome(s.last_delivery.reason)} · ${s.last_delivery.at} · HTTP ${s.last_delivery.http_status ?? 'not recorded'}` : 'No delivery recorded.'))))),
         !monitoring.connections.length ? text('No OAuth clients connected to this bot.') : null,
@@ -757,8 +761,11 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       button('Refresh health', () => action(async () => { monitoring = await api(`${path()}/monitoring`); }))];
   }
   async function wakeDialog() {
+    const agentId = selected, agentName = bot().name;
+    const agentPath = `/api/agents/${encodeURIComponent(agentId)}`;
     try {
-      const notify = await api(`${path()}/notify`);
+      const notify = await api(`${agentPath}/notify`);
+      if (selected !== agentId) return;
       const url = h('input', { type: 'url', value: notify.url || '', placeholder: 'https://', autocomplete: 'off' });
       const auth = h('input', { type: 'password', placeholder: notify.auth ? 'Saved · leave blank to keep' : 'Optional', autocomplete: 'new-password' });
       const conversations = h('input', { type: 'checkbox', checked: !notify.only_me });
@@ -769,17 +776,19 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         h('fieldset', {}, h('legend', {}, 'Home wake grants'), text('Selected bots you own may ring this bot while both are in your own house. Pause and Only me still apply.'), ...(notify.available_bots || []).map(b => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: grants.has(b.id), onchange: e => e.target.checked ? grants.add(b.id) : grants.delete(b.id) }), b.name)))], async () => {
           const payload = { url: url.value || null, only_me: !conversations.checked, trusted_bots: [...grants] };
           if (auth.value === '-') payload.auth = null; else if (auth.value) payload.auth = auth.value; else if (!notify.auth) payload.auth = null;
-          await api(`${path()}/notify`, { method: 'PUT', body: payload });
+          await api(`${agentPath}/notify`, { method: 'PUT', body: payload });
+          if (selected !== agentId) return;
           config = { ...notify, url: payload.url, only_me: payload.only_me, trusted_bots: payload.trusted_bots };
-          await refreshHealthAfterSettings(); render();
-        });
-    } catch (failure) { error(failure); }
+          await refreshHealthAfterSettings(agentId);
+          if (selected === agentId) render();
+        }, agentName);
+    } catch (failure) { if (selected === agentId) error(failure); }
   }
-  function settingsDialog(title, children, save) {
+  function settingsDialog(title, children, save, agentName = bot().name) {
     const failure = h('p', { class: 'error', role: 'alert', hidden: true });
     const submit = h('button', { type: 'submit', class: 'primary' }, 'Save');
     const dialog = h('dialog', { class: 'modal trust-settings', onclose: () => dialog.remove() },
-      h('div', { class: 'modal-head' }, h('h2', {}, `${bot().name} · ${title}`), button('✕', () => dialog.close(), { 'aria-label': 'Close settings' })),
+      h('div', { class: 'modal-head' }, h('h2', {}, `${agentName} · ${title}`), button('✕', () => dialog.close(), { 'aria-label': 'Close settings' })),
       h('form', { onsubmit: async e => { e.preventDefault(); submit.disabled = true; failure.hidden = true; try { await save(); dialog.close(); } catch (err) { failure.textContent = err.message; failure.hidden = false; } finally { submit.disabled = false; } } }, ...children, failure, h('div', { class: 'modal-actions' }, button('Cancel', () => dialog.close()), submit)));
     document.body.append(dialog); dialog.showModal(); dialog.querySelector('input')?.focus();
   }
