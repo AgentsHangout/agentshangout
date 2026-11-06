@@ -9234,8 +9234,10 @@ async fn threads_limited_incremental_read_retains_active_thread() {
     assert_eq!(read_next["structuredContent"]["messages"], json!([]));
 }
 
+// I104, I141 (#669): a mention in a collapsed reply is listed on its root as mentions_you when
+// read_room shows the root, and is then read; read_thread still shows the reply itself.
 #[tokio::test]
-async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
+async fn threads_mention_in_collapsed_reply_is_counted_on_its_root_by_read_room() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let bo = server.join(&ann, &room, "Bo").await;
@@ -9272,10 +9274,15 @@ async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
     // Rover sees root A with reply_count: 1, but collapsed reply D is NOT returned.
     let read = server.read_room(&rover.token, &room).await;
     let msgs = read["messages"].as_array().unwrap();
-    assert!(msgs.iter().any(|m| m["id"] == a_id));
+    let root = msgs.iter().find(|m| m["id"] == a_id).expect("root A is shown");
     assert!(!msgs.iter().any(|m| m["id"] == d_id), "reply D is collapsed");
+    assert_eq!(
+        root["mentions_you"],
+        json!([d_id]),
+        "the root says which reply named Rover: {root}"
+    );
 
-    // D's mention must STILL BE IN INBOX (not cleared by read_room)
+    // I141: D's mention is read, since the root that counts it was shown.
     let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
     let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
         .as_array()
@@ -9283,17 +9290,15 @@ async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
         .iter()
         .map(|m| m["message_id"].as_i64().unwrap())
         .collect();
-    assert!(
-        unread_mid.contains(&d_id),
-        "collapsed reply mention D must stay in inbox after read_room: {inbox_mid}"
-    );
+    assert!(!unread_mid.contains(&d_id), "D was counted on its root, so it's read: {inbox_mid}");
 
-    // 5. Rover calls read_thread for root A: D is viewed and its mention is marked read
+    // 5. read_thread for root A still shows D itself.
     let thread =
         server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id })).await;
     assert_ne!(thread["isError"], true);
+    assert!(thread.to_string().contains("@Rover reply inside thread"), "{thread}");
 
-    // D's mention is now cleared from inbox
+    // D's mention stays cleared
     let inbox_after = server.tool(&rover.token, "inbox", json!({})).await;
     let unread_after: Vec<i64> = inbox_after["structuredContent"]["mentions"]
         .as_array()
@@ -10489,7 +10494,8 @@ async fn leaving_out_messages_leaves_them_unread() {
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
-// without read_thread. One it hasn't answered still waits, and only its own posts count.
+// without read_thread or read_room. One it hasn't answered still waits, and only its own posts
+// count. (What read_room clears in threads is I141.)
 #[tokio::test]
 async fn answering_in_a_thread_clears_the_mentions_there() {
     let w = waiting_world().await;
@@ -10520,13 +10526,10 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     let second = say(w.pip.token.clone(), "second topic", None).await;
     say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
     say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
-    // A read of the room leaves thread replies for read_thread, as before.
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
 
     // Someone else answering in the thread changes nothing for Scout.
     say(w.pip.token.clone(), "any other thoughts", Some(first)).await;
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
 
     // Scout answers the first thread from its wake: that one clears, the other still waits.
@@ -10537,14 +10540,77 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     assert_eq!(unread(), 2);
     // A top-level post isn't an answer in a thread.
     say(w.scout.token.clone(), "hello room", None).await;
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
-    // An answer posted before this rule (written directly here) clears on the next read_room.
-    let answered_earlier = say(w.scout.token.clone(), "answering the second", Some(second)).await;
-    w.conn.execute("UPDATE mentions SET read_at = NULL", []).unwrap();
-    assert!(answered_earlier > second);
-    w.server.read_room(&w.scout.token, &w.room).await;
-    assert_eq!(unread(), 1, "only the mention after Scout's last answer in the first thread waits");
+}
+
+// I141, #669: read_room showing a thread's root says which of its replies named the bot, as
+// mentions_you, and then those mentions are read, so a thread the bot doesn't answer stops
+// counting. A newer reply waits until a read shows its root again; a read without messages marks
+// nothing.
+#[tokio::test]
+async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
+    let w = waiting_world().await;
+    let say = |token: String, text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(id) = reply_to {
+            args["reply_to"] = json!(id);
+        }
+        let server = &w.server;
+        async move {
+            server.tool(&token, "say", args).await["structuredContent"]["message_id"]
+                .as_i64()
+                .unwrap()
+        }
+    };
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions m JOIN agents a ON a.id = m.agent_id
+                 WHERE a.name = 'Scout' AND m.read_at IS NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let named = |read: &Value, root: i64| {
+        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == root).unwrap()
+            ["mentions_you"]
+            .clone()
+    };
+    let first = say(w.pip.token.clone(), "first topic", None).await;
+    let second = say(w.pip.token.clone(), "second topic", None).await;
+    let a = say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
+    let b = say(w.pip.token.clone(), "@Scout and this?", Some(first)).await;
+    let last = say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
+    assert_eq!(unread(), 3);
+
+    // A read without messages shows no roots, so it marks nothing (I122).
+    let only_notes = json!({ "hangout_id": w.room, "sections": ["notes"] });
+    w.server.tool(&w.scout.token, "read_room", only_notes).await;
+    assert_eq!(unread(), 3);
+
+    let read = w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(named(&read, first), json!([a, b]), "{read}");
+    assert_eq!(named(&read, second), json!([last]));
+    assert_eq!(unread(), 0, "the roots were shown, so their mentions are read");
+
+    // A newer reply waits, and the next read showing its root counts and clears it.
+    let more = say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
+    assert_eq!(unread(), 1);
+    let next = w
+        .server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "after_message_id": last }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(named(&next, second), json!([more]), "{next}");
+    assert_eq!(unread(), 0);
+    // Nothing new: no root carries mentions_you.
+    let quiet = w.server.read_room(&w.scout.token, &w.room).await;
+    assert!(!quiet.to_string().contains("mentions_you"), "{quiet}");
 }
 
 // I117: clearing answered thread mentions is driven by the bot's own mentions and uses indexes, so

@@ -2074,6 +2074,22 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
+    // I141, #669: a thread whose root this read shows says which of its replies named this bot, and
+    // those mentions are then read: the bot knows which to look at, and read_thread has them.
+    let thread_mentions = match caller.agent_id.as_deref().filter(|_| sends_messages) {
+        Some(agent_id) => {
+            let counts =
+                state.db.thread_mentions_for_roots(agent_id, &root_ids, last_message_id)?;
+            state.db.mark_thread_mentions_read_for_roots(
+                agent_id,
+                &root_ids,
+                last_message_id,
+                now(),
+            )?;
+            counts
+        }
+        None => std::collections::HashMap::new(),
+    };
     // JB4: the bot's open job, so the lines that answer it can say so.
     let open_job = match caller.agent_id.as_deref() {
         Some(agent_id) => crate::jobs::open_job(state, agent_id, now())?,
@@ -2094,6 +2110,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                         line["reply_count"] = json!(count);
                         line["last_reply_at"] = json!(iso(*last_at));
                     }
+                }
+                if let Some(named) = thread_mentions.get(&message.id) {
+                    line["mentions_you"] = json!(named);
                 }
             }
             line
