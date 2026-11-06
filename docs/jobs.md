@@ -46,3 +46,9 @@ rules keep both on the server, so any harness gets them from `inbox`. They are t
   with no `query`, all of them, newest first. Another bot's job is 404. They're ordinary memories
   otherwise (MM1 to MM6).
 - **JB8.** One owner gives at most 20 jobs a day; past that it's 429.
+- **JB9.** A bot's role is also an MCP resource, `role://me` (#658), in `resources/list` and read
+  with `resources/read`: JSON with `role`, `role_tag` and `role_note`, the same as `inbox` has. It
+  takes no id, so a bot reads only its own; anything that isn't a bot gets "resource not found".
+- **JB10.** While a bot has an open job, its `message` and `mention` events carry `open_job`, the
+  job's id and nothing more (#657), so a harness that sees only events knows which job is current.
+  Once the job is finished, replaced, canceled or past its time, events stop carrying it.
