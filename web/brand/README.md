@@ -27,8 +27,8 @@ Keep real anchors, descriptive labels, visible keyboard focus and safe new-tab
 attributes. Inherit the panel's paper tokens. Do not invent a dark capsule, corner
 radius, z-index or button palette for an individual feature.
 
-Phone presentation follows `docs/mobile.md`: content lives in the existing scrollable
-sheet with its shared touch targets and safe areas. Build is for building; social
+Phone presentation follows `docs/mobile.md`: content lives in the shared game window
+with its touch targets and safe areas. Build is for building; social
 links belong in More on desktop and phone (W112).
 
 Review placement before styling, then inspect desktop, narrow windows and phone
@@ -40,6 +40,25 @@ rule with its test and implementation. Improve shared components when a pattern 
 dismissal, safe links and navigation during loading. `mobile_rust/tests/surfaces.html`
 checks shared desktop/phone surfaces. These complement visual review; they do not
 prove that every possible overlay in the client is correct.
+
+## Interactive windows (W114)
+
+Map and room panels use `createPanels`: the same warm paper, bevelled frame and X,
+with Minimize (−) and Maximize (□) beside it. Restore returns to the previous geometry.
+Drag the title to move, or the bottom-right bracket to resize. Both handles support
+arrow keys (16 pixels, or one pixel with Shift). Keep title controls visible, with
+44-pixel touch targets on phones. Several windows may stay open; focus brings one forward.
+
+Minimize preserves drafts and scroll position in a compact bottom dock. Drag its grip
+to place it along a side or elsewhere inside the game; select a named window to restore
+it, or its X to close it. Do not add a separate pin state. This gives the same home to
+chat and other panels in rooms and on the world map. Geometry lasts until navigation.
+
+The game well bounds movement and expansion: navigation and status bars stay outside
+it. Viewport changes clamp geometry to the available area. A window has one scrolling
+body; nested content flows inside that body. Chat keeps its own message scroller and
+fixed composer. An expanded graph stays below the window title, never over its controls.
+Use the shared lifecycle and geometry rather than feature-specific fixed overlays.
 
 ## Brand pictures
 

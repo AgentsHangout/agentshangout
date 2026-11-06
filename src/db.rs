@@ -2303,6 +2303,15 @@ CREATE TABLE IF NOT EXISTS contribution_payouts (
 );
 CREATE INDEX IF NOT EXISTS contribution_payouts_by_recipient ON contribution_payouts (recipient_id, day);
 CREATE INDEX IF NOT EXISTS contribution_payouts_at ON contribution_payouts (created_at);
+-- A103 (#685): an ask made across a block. It's stored like any other, so it shows to whoever made it
+-- as waiting, and this marks it so the other side never sees it, then or later, even if the block
+-- is taken back. `kind` and `ask_id` name it; nothing here says who blocked whom.
+CREATE TABLE IF NOT EXISTS quiet_asks (
+    kind        TEXT NOT NULL,
+    ask_id      TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (kind, ask_id)
+);
 -- A108: each version of the community rules a person accepted, and when.
 CREATE TABLE IF NOT EXISTS rules_acceptances (
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
@@ -4176,7 +4185,9 @@ fn floors_seen_by(
             OR EXISTS (SELECT 1 FROM messages l
                        WHERE l.hangout_id = f.hangout_id AND l.kind = 'system' AND l.body = ?3)
             OR EXISTS (SELECT 1 FROM friend_invites i
-                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2))",
+                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2
+                         AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                         WHERE q.kind = 'friend_invite' AND q.ask_id = i.id)))",
         params![space_id, person_id, left],
     )
 }
@@ -5763,6 +5774,7 @@ impl Db {
              WHERE f.kind = 'room' AND f.place_id = ?1 AND f.to_person = ?2
                AND f.declined_at IS NULL AND f.created_at > ?3
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = ?1 AND t.person_id = ?2)
                AND EXISTS (SELECT 1 FROM members m
@@ -10366,6 +10378,8 @@ impl Db {
                 &format!(
                     "SELECT {TRIP_COLS} FROM {TRIPS}
                      WHERE t.agent_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+                       AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                       WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)
                      ORDER BY t.created_at DESC LIMIT 1"
                 ),
                 params![agent_id, house_id, now],
@@ -10383,7 +10397,9 @@ impl Db {
     ) -> rusqlite::Result<i64> {
         self.conn().query_row(
             "SELECT COUNT(*) FROM trips t JOIN agents a ON a.id = t.agent_id
-             WHERE a.owner_id = ? AND t.house_id = ? AND t.status = 'asking' AND t.expires_at > ?",
+             WHERE a.owner_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)",
             params![owner_id, house_id, now],
             |row| row.get(0),
         )
@@ -11401,7 +11417,9 @@ impl Db {
     pub fn is_plan_invitee(&self, event_id: &str, person_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
-            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2",
+            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = ?1 || '|' || ?2)",
             params![event_id, person_id],
         )
     }
@@ -11421,6 +11439,8 @@ impl Db {
              JOIN plan_invitees i ON i.event_id = b.event_id AND i.person_id = b.person_id
              WHERE b.person_id = ?1 AND e.status != 'cancelled' AND e.ends_at >= ?2
                AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.person_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = e.id || '|' || ?1)
              ORDER BY e.starts_at, e.id"
         ))?;
         let rows = stmt.query_map(params![person_id, now], |row| {
@@ -15628,6 +15648,7 @@ impl Db {
              LEFT JOIN cities c ON f.kind = 'city' AND c.id = f.place_id
              WHERE f.to_person = ?1 AND f.declined_at IS NULL AND f.created_at > ?2
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = f.place_id AND t.person_id = ?1)
                AND (h.id IS NOT NULL OR c.id IS NOT NULL)
@@ -16544,6 +16565,20 @@ impl Db {
              VALUES (?, ?, '#8a8f98', lower(hex(randomblob(32))), lower(hex(randomblob(32))), 0)",
             params![SOMEONE_WHO_LEFT_ID, SOMEONE_WHO_LEFT],
         )?;
+        // A103: marks on this person's asks, either side, go with them: those keyed by a row's id
+        // or one of their bots', looked up while the rows are still here. Pair keys are below.
+        tx.execute(
+            "DELETE FROM quiet_asks WHERE ask_id IN (
+                SELECT id FROM friend_invites WHERE from_person = ?1 OR to_person = ?1
+                UNION SELECT id FROM check_ins WHERE asked_by = ?1 OR to_person = ?1
+                UNION SELECT t.id FROM trips t JOIN agents a ON a.id = t.agent_id
+                      WHERE a.owner_id = ?1 OR t.asked_by = ?1
+                UNION SELECT id FROM apprentice_proposals
+                      WHERE proposer_owner = ?1 OR partner_owner = ?1)
+             OR EXISTS (SELECT 1 FROM agents a
+                        WHERE a.owner_id = ?1 AND quiet_asks.ask_id LIKE '%' || a.id || '%')",
+            [person_id],
+        )?;
         pass_on_house_bots(&tx, person_id, &mut gone)?;
         // A house bot that goes with its house still has a name to take off the rest.
         let mut who = strings(&tx, "SELECT name FROM agents WHERE owner_id = ?", [person_id])?;
@@ -16606,6 +16641,8 @@ impl Db {
             "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
             [person_id],
         )?;
+        // A103: marks on asks keyed by this person's id go with them.
+        tx.execute("DELETE FROM quiet_asks WHERE ask_id LIKE '%' || ?1 || '%'", [person_id])?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.

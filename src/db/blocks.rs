@@ -125,6 +125,126 @@ impl Db {
         )
     }
 
+    /// A103: marks an ask as made across a block.
+    pub fn quiet_ask(&self, kind: &str, ask_id: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO quiet_asks (kind, ask_id, created_at) VALUES (?1, ?2, ?3)",
+            params![kind, ask_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// A103: takes a mark off, when the ask it was on ends or is made again with no block between.
+    pub fn unquiet_ask(&self, kind: &str, ask_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM quiet_asks WHERE kind = ?1 AND ask_id = ?2",
+            params![kind, ask_id],
+        )?;
+        Ok(())
+    }
+
+    /// A103: the one stored invite of this person to this place, whoever sent it: its id and sender.
+    /// Sending again reuses it, so its mark has to follow it, not the id a send made up.
+    pub fn friend_invite_row(
+        &self,
+        kind: &str,
+        place_id: &str,
+        to_person: &str,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT id, from_person FROM friend_invites
+                 WHERE kind = ?1 AND place_id = ?2 AND to_person = ?3",
+                params![kind, place_id, to_person],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// A103: a real invite takes over one that was kept quiet, as if that one had never been sent:
+    /// it's the new sender's, from now, with its mark off. False if there was no quiet one.
+    pub fn take_quiet_friend_invite(
+        &self,
+        kind: &str,
+        place_id: &str,
+        to_person: &str,
+        from_person: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let id: Option<String> = tx
+            .query_row(
+                "SELECT f.id FROM friend_invites f
+                 WHERE f.kind = ?1 AND f.place_id = ?2 AND f.to_person = ?3
+                   AND EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)",
+                params![kind, place_id, to_person],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(id) = id else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE friend_invites SET from_person = ?2, created_at = ?3, declined_at = NULL
+             WHERE id = ?1",
+            params![id, from_person, now],
+        )?;
+        tx.execute("DELETE FROM friend_invite_ends WHERE invite_id = ?1", [&id])?;
+        tx.execute("DELETE FROM quiet_asks WHERE kind = 'friend_invite' AND ask_id = ?1", [&id])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// A103: a plan invite kept quiet, made real by someone else: it's from them now, so Needs you
+    /// never names whoever was across the block.
+    pub fn retell_plan_invite(
+        &self,
+        event_id: &str,
+        person_id: &str,
+        by: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO plan_invited_by (event_id, person_id, invited_by, invited_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (event_id, person_id) DO UPDATE
+               SET invited_by = excluded.invited_by, invited_at = excluded.invited_at",
+            params![event_id, person_id, by, now],
+        )?;
+        Ok(())
+    }
+
+    /// A103: whether an ask was made across a block, so the other side never sees it.
+    pub fn is_quiet(&self, kind: &str, ask_id: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM quiet_asks WHERE kind = ?1 AND ask_id = ?2)",
+            params![kind, ask_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// A101: whether this person has blocked that one.
+    pub fn has_blocked(&self, blocker: &str, blocked: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM person_blocks WHERE blocker_id = ?1 AND blocked_id = ?2)",
+            params![blocker, blocked],
+            |row| row.get(0),
+        )
+    }
+
+    /// A103: whether either of the two has blocked the other.
+    pub fn blocked_either_way(&self, a: &str, b: &str) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM person_blocks
+                            WHERE (blocker_id = ?1 AND blocked_id = ?2)
+                               OR (blocker_id = ?2 AND blocked_id = ?1))",
+            params![a, b],
+            |row| row.get(0),
+        )
+    }
+
     /// A101: the people this person has blocked, whose lines they and their bots don't see.
     pub fn blocked_ids(
         &self,

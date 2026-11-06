@@ -757,3 +757,58 @@ async fn a_stranger_cant_reach_you_through_your_bot() {
     server.state.db.accept_explicit_friend("bot", &dee_bot.id, &eve_bot.id).unwrap();
     server.post(&dee.key, "/api/trust/friendships", ask_eve).await.ok();
 }
+
+// A103: a friend invite across a block looks sent and counts toward the sender's day, but never
+// reaches the other side. Sent again once the block is gone, it does.
+#[tokio::test]
+async fn a_friend_invite_across_a_block_looks_sent_and_reaches_nobody() {
+    let server = Server::start().await;
+    let (room, _ann, bo, cy) = server.three().await;
+    server.post(&cy.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let sent = server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    assert_eq!(sent["ok"], true, "it looks sent: {sent}");
+    assert!(server.invited(&cy).await.is_empty(), "Cy's /api/me shows nothing");
+    // It counts toward Bo's invites for the day, like any other.
+    let since = agenthangout::now() - 60;
+    assert_eq!(server.state.db.friend_invites_sent_since(&bo.id, since).unwrap(), 1);
+
+    // The block coming off doesn't bring the old one out.
+    let off = server.send(&cy.key, Method::DELETE, &format!("/api/blocks/{}", bo.id), None).await;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.body);
+    assert!(server.invited(&cy).await.is_empty());
+    // Sent again with no block between them, it's real.
+    server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    let invited = server.invited(&cy).await;
+    assert_eq!(invited.len(), 1, "{invited:?}");
+}
+
+// A103: an invite that ended at a block stays quiet when it's sent again across the block, and a
+// real invite from someone else takes over one kept quiet, named as theirs.
+#[tokio::test]
+async fn a_resent_invite_across_a_block_stays_quiet_and_a_real_one_takes_over() {
+    let server = Server::start().await;
+    let (room, code, ann) = server.room("Ann").await;
+    let bo = server.join(&code, "Bo").await;
+    let (_, dee_code, _dee) = server.room("Dee").await;
+    let cy = server.join(&dee_code, "Cy").await;
+    for who in [&ann, &bo] {
+        let joined =
+            server.post(&who.key, &format!("/api/invites/{dee_code}/join"), json!({})).await;
+        assert_eq!(joined.status, StatusCode::OK, "{}", joined.body);
+    }
+
+    // Bo invites Cy for real, Cy blocks Bo, and Bo sends it again: it never comes back.
+    server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    assert_eq!(server.invited(&cy).await.len(), 1);
+    server.post(&cy.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    assert!(server.invited(&cy).await.is_empty());
+    server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    assert!(server.invited(&cy).await.is_empty(), "the re-send stays quiet");
+
+    // Ann, with no block, invites Cy to the same room: it's hers, and it arrives.
+    server.invite_to_room(&ann, &room, &cy.id).await.ok();
+    let invited = server.invited(&cy).await;
+    assert_eq!(invited.len(), 1, "{invited:?}");
+    assert_eq!(invited[0]["from"], "Ann", "{invited:?}");
+}

@@ -7256,6 +7256,14 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
             return Code::BAD_REQUEST.into_response();
         };
         let mut issues = fake.issues.lock().unwrap();
+        // Lific's idx_issues_source: a source is unique among issues not in the trash.
+        let taken = !body["source"].is_null()
+            && issues
+                .iter()
+                .any(|issue| issue["source"] == body["source"] && issue["deleted"] != true);
+        if taken {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
         let number =
             issues.iter().filter(|issue| issue["project_id"] == body["project_id"]).count() + 2;
         let mut issue = body.clone();
@@ -7564,8 +7572,10 @@ async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board()
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0]["title"], "Paint the door");
     assert_eq!(sent[1]["priority"], "high");
+    // Lific keeps a source unique among live issues, so each card has its own.
+    assert_ne!(sent[0]["source"], sent[1]["source"]);
     for issue in &sent {
-        assert_eq!(issue["source"], "agentshangout");
+        assert!(text(&issue["source"]).starts_with("agentshangout:"), "{issue}");
         for name in ["Ann", "Bo", "Scout"] {
             assert!(!issue.to_string().contains(name), "{issue}");
         }
@@ -11844,4 +11854,83 @@ async fn a_block_ends_a_friendship_between_them() {
     server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
     assert_eq!(friends(ann.key.clone()).await, json!([]));
     assert_eq!(friends(bo.key.clone()).await, json!([]));
+}
+
+// A103 (#685): across a block, a friendship request looks sent and goes nowhere, and can't be
+// accepted; a check-in asked of the blocker reaches nobody and isn't in their Needs you.
+#[tokio::test]
+async fn asks_across_a_block_look_sent_and_go_nowhere() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let ask = json!({ "kind": "person", "from_id": bo.id, "to_id": ann.id });
+    let sent = server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert_eq!(sent["ok"], true, "it looks sent: {sent}");
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "{anns}");
+    // Bo sees it as sent and waiting, like any other.
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"][0]["status"], "pending", "{bos}");
+    server
+        .post(&ann.key, "/api/trust/friendships/accept", ask.clone())
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    // Bo takes it back: it's gone, and so is its mark.
+    let key = format!("person|{}|{}", bo.id, ann.id);
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
+    server.send(&bo.key, Method::DELETE, "/api/trust/friendships", Some(ask.clone())).await.ok();
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"], json!([]), "{bos}");
+    assert!(!server.state.db.is_quiet("friendship", &key).unwrap());
+    // Asked again during the block, it's quiet again.
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
+
+    let asked = server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the notes?", "to": "Ann" }),
+        )
+        .await;
+    assert_ne!(asked["isError"], true, "it looks asked: {asked}");
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["check_ins"], json!([]), "{needs}");
+    // The room line any check-in posts is there for Bo's side, and hidden from Ann.
+    let line = "Pip is checking in with Ann: May I post the notes?";
+    let bos_page = server.snapshot(&bo.key, &room).await;
+    assert!(bos_page.to_string().contains(line), "{bos_page}");
+    let anns_page = server.snapshot(&ann.key, &room).await;
+    assert!(!anns_page.to_string().contains(line), "{anns_page}");
+
+    // Without the block, the same check-in waits for Ann.
+    server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();
+    server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the plan?", "to": "Ann" }),
+        )
+        .await;
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    let shown = needs["check_ins"].as_array().unwrap();
+    assert_eq!(shown.len(), 1, "the one asked during the block never surfaces: {needs}");
+    assert_eq!(shown[0]["about"], "May I post the plan?");
+    // Nor does the room page list it for her to answer, though Pip's side sees what it asked.
+    // (Its room line is tied to Bo, so like his other lines it shows again once she unblocks.)
+    let page = server.snapshot(&ann.key, &room).await;
+    assert!(!page["check_ins"].to_string().contains("May I post the notes?"), "{page}");
+    let pips = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(pips.to_string().contains("May I post the notes?"), "the asker sees it: {pips}");
+
+    // With the block gone, Bo's friendship ask made again reaches Ann, and she can say yes.
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "the old one stays quiet: {anns}");
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"][0]["status"], "pending", "{anns}");
+    server.post(&ann.key, "/api/trust/friendships/accept", ask).await.ok();
 }
