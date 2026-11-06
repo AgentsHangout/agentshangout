@@ -87,6 +87,19 @@ impl Server {
         db: Db,
         clock: impl Fn() -> i64 + Send + Sync + 'static,
     ) -> Self {
+        Self::boot(db, clock, false).await
+    }
+
+    /// A107-A112: a server that asks for the community rules, as a deployed one does.
+    async fn start_with_rules() -> Self {
+        Self::boot(Db::open(":memory:").unwrap(), now, true).await
+    }
+
+    async fn boot(
+        db: Db,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+        require_rules: bool,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
@@ -98,6 +111,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules,
             },
             clock,
         );
@@ -5916,6 +5930,281 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
+// A107-A112 (#686): writing what others read takes the community rules accepted. Reading never
+// does, a bot writes under its owner's acceptance and can always ask its owner, and accepting lets
+// every write through.
+#[tokio::test]
+async fn writes_others_read_take_the_community_rules_accepted() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let version = text(&server.get(&ann.key, "/api/me").await.ok()["rules_version"]);
+    assert_eq!(server.get(&ann.key, "/api/me").await.ok()["rules_accepted"], false);
+    let before = server.snapshot(&ann.key, &room).await["messages"].clone();
+
+    // A person: each write others read is refused, with the reason, and nothing is written.
+    let refused = |reply: Reply, what: &str| {
+        let body = reply.refused(StatusCode::FORBIDDEN);
+        assert_eq!(body["reason"], "rules_not_accepted", "{what}: {body}");
+        assert!(body["error"].as_str().unwrap().contains("/rules"), "{what}: {body}");
+    };
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+            .await,
+        "chat",
+    );
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/notes"), json!({"text":"a note"}))
+            .await,
+        "note",
+    );
+    refused(
+        server
+            .put(&ann.key, &format!("/api/hangouts/{room}/whiteboard"), json!({"text":"plan"}))
+            .await,
+        "whiteboard",
+    );
+    refused(
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/pins"),
+                json!({"kind":"note","caption":"hello"}),
+            )
+            .await,
+        "pin",
+    );
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/emote"), json!({"emote":"wave"}))
+            .await,
+        "emote",
+    );
+    refused(
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/votes"),
+                json!({"question":"Lunch?","options":["Yes","No"],"minutes":10}),
+            )
+            .await,
+        "vote",
+    );
+    // Reading is never gated.
+    assert_eq!(server.snapshot(&ann.key, &room).await["messages"], before, "nothing was posted");
+
+    // A bot: refused for its owner, saying so, but it can always ask its owner.
+    for (tool, args) in [
+        ("say", json!({"hangout_id": room, "text": "hello"})),
+        ("share_note", json!({"hangout_id": room, "text": "a fact"})),
+        ("set_whiteboard", json!({"hangout_id": room, "text": "plan"})),
+        ("pin", json!({"hangout_id": room, "kind": "note", "caption": "hi"})),
+        (
+            "open_vote",
+            json!({"hangout_id": room, "question": "Lunch?", "options": ["Yes", "No"], "minutes": 10}),
+        ),
+        ("set_status", json!({"emote": "wave"})),
+    ] {
+        let result = server.tool(&scout.token, tool, args).await;
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+        assert!(
+            result.to_string().contains("your owner hasn't accepted the community rules"),
+            "{tool} names the reason: {result}"
+        );
+    }
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["owner_rules_accepted"], false, "{inbox}");
+    assert_eq!(inbox["rules_url"], "/rules");
+    let asked = server.tool(&scout.token, "ask_owner", json!({"hangout_id": room, "question": "Could you accept the community rules at /rules?"})).await;
+    assert_ne!(asked["isError"], true, "ask_owner is never gated: {asked}");
+
+    // Only the current version can be accepted, by a person.
+    server
+        .post(&ann.key, "/api/rules/accept", json!({"version":"1999-01"}))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&scout.token, "/api/rules/accept", json!({"version": version}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let accepted =
+        server.post(&ann.key, "/api/rules/accept", json!({"version": version})).await.ok();
+    assert_eq!(accepted["rules_accepted"], true, "{accepted}");
+
+    // Now everything goes through, for Ann and for her bot.
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+        .await
+        .ok();
+    let said = server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello"})).await;
+    assert_ne!(said["isError"], true, "{said}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox.get("owner_rules_accepted").is_none(), "nothing to say once accepted: {inbox}");
+}
+
+// A112: someone who accepted an earlier version keeps writing through the grace window, and is
+// told a new version is out.
+#[tokio::test]
+async fn an_earlier_acceptance_writes_through_the_grace_window() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.state.db.accept_rules(&ann.id, "2000-01", agenthangout::now() - 86_400).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["rules_accepted"], false);
+    assert_eq!(me["rules_update"]["version"], me["rules_version"], "{me}");
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"still here"}))
+        .await
+        .ok();
+}
+
+// A112: on deploy day nobody has accepted yet, so everyone who already had an account keeps
+// writing through the grace window, told the rules are new. A new account has no grace.
+#[tokio::test]
+async fn accounts_from_before_the_rules_write_through_the_grace_window() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let path = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &path, json!({"text":"new here"})).await.refused(StatusCode::FORBIDDEN);
+    server.state.db.backdate_person(&ann.id, agenthangout::rules::since() - 86_400).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["rules_accepted"], false);
+    assert!(me["rules_update"]["until"].is_string(), "{me}");
+    server.post(&ann.key, &path, json!({"text":"still here"})).await.ok();
+    let said =
+        server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "me too"})).await;
+    assert_ne!(said["isError"], true, "her bot too: {said}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox["rules_update"]["until"].is_string(), "{inbox}");
+}
+
+// A112: the grace runs from the first time the server ran with this version when that's later
+// than the page's date, so a late deploy still gives everyone who was here their 7 days.
+#[tokio::test]
+async fn the_grace_runs_from_the_first_start_with_a_version() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let since = agenthangout::rules::since();
+    let first =
+        server.state.db.rules_version_first_seen(agenthangout::rules::version()).unwrap().unwrap();
+    assert!(first >= since, "noted when the server started");
+    assert_eq!(agenthangout::rules::started(&server.state).unwrap(), since.max(first));
+    // Ann's account is after the page's date but before this server first ran with the version:
+    // she was here when the rules arrived, so she has the grace.
+    server.state.db.backdate_person(&ann.id, first - 60).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert!(me["rules_update"]["until"].is_string(), "{me}");
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+        .await
+        .ok();
+}
+
+// A111: the first time a bot is refused for its owner's rules, the owner sees it in Needs you,
+// until they accept.
+#[tokio::test]
+async fn a_refused_bot_puts_the_rules_in_its_owners_needs_you() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    assert_eq!(server.get(&ann.key, "/api/needs-you").await.ok()["rules"], Value::Null);
+    server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello"})).await;
+    server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello again"})).await;
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["rules"]["bots"], json!(["Scout"]), "named once: {needs}");
+    assert_eq!(needs["rules"]["url"], "/rules");
+    let version = text(&needs["rules"]["version"]);
+    server.post(&ann.key, "/api/rules/accept", json!({"version": version})).await.ok();
+    assert_eq!(server.get(&ann.key, "/api/needs-you").await.ok()["rules"], Value::Null);
+}
+
+// A109: one gate covers every /api write route. Walks every POST, PUT and PATCH route in the
+// source: each one not on rules::UNGATED_ROUTES refuses a person who hasn't accepted the rules,
+// before anything else, and each ungated one doesn't. So a new route is gated until someone adds
+// it to that list on purpose.
+#[tokio::test]
+async fn every_write_route_but_the_ungated_ones_takes_the_rules() {
+    let server = Server::start_with_rules().await;
+    let (_, ann) = server.someone("Ann").await;
+    let mut routes = Vec::new();
+    let mut dirs = vec![std::path::PathBuf::from("src")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                for piece in source.split(".route(").skip(1) {
+                    let Some(path) = piece
+                        .trim_start()
+                        .strip_prefix('"')
+                        .and_then(|rest| rest.split('"').next())
+                    else {
+                        continue;
+                    };
+                    if !path.starts_with("/api/") {
+                        continue;
+                    }
+                    let call = piece.split(".route(").next().unwrap().split(';').next().unwrap();
+                    for (method, word) in
+                        [(Method::POST, "post("), (Method::PUT, "put("), (Method::PATCH, "patch(")]
+                    {
+                        if call.contains(word) {
+                            routes.push((method.clone(), path.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(routes.len() > 150, "found the write routes: {}", routes.len());
+    for ungated in agenthangout::rules::UNGATED_ROUTES {
+        assert!(
+            routes.iter().any(|(method, path)| format!("{method} {path}") == *ungated),
+            "{ungated} isn't a write route"
+        );
+    }
+    for (method, template) in routes {
+        let path: String = template
+            .split('/')
+            .map(|part| if part.starts_with('{') { "x" } else { part })
+            .collect::<Vec<_>>()
+            .join("/");
+        let ungated =
+            agenthangout::rules::UNGATED_ROUTES.contains(&format!("{method} {template}").as_str());
+        // An ungated route may change the account itself (a new key, deleting it), so each gets
+        // someone of its own.
+        let key = if ungated { server.someone("Bo").await.1.key } else { ann.key.clone() };
+        let reply = server.send(&key, method.clone(), &path, Some(json!({}))).await;
+        let refused =
+            reply.status == StatusCode::FORBIDDEN && reply.body["reason"] == "rules_not_accepted";
+        assert_eq!(refused, !ungated, "{method} {template}: {} {}", reply.status, reply.body);
+    }
+}
+
+// A107: the rules page is public, readable without scripts, names its version, and is linked.
+#[tokio::test]
+async fn the_rules_page_is_public_and_linked() {
+    let server = Server::start_with_rules().await;
+    let page = server.client.get(format!("{}/rules", server.base)).send().await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = page.text().await.unwrap();
+    assert!(body.contains("<h1>Community rules</h1>"));
+    assert!(body.contains(&format!("Version {}", agenthangout::rules::version())));
+    assert!(!body.contains("<script"), "readable without scripts");
+    assert!(!body.contains("{{"), "addresses filled in");
+    for path in ["/", "/privacy", "/child-safety", "/docs"] {
+        let page = server.client.get(format!("{}{path}", server.base)).send().await.unwrap();
+        assert!(page.text().await.unwrap().contains("href=\"/rules\""), "{path} links the rules");
+    }
+    let sitemap = server.client.get(format!("{}/sitemap.xml", server.base)).send().await.unwrap();
+    assert!(sitemap.text().await.unwrap().contains("/rules</loc>"));
+}
+
 // I143-I146 (#638): an emote shows over the avatar for everyone in the room, people and bots,
 // from a fixed set, with no chat line, and one every five seconds.
 #[tokio::test]
@@ -6972,6 +7261,14 @@ async fn fake_lific_maker() -> (FakeMaker, String) {
             return Code::BAD_REQUEST.into_response();
         };
         let mut issues = fake.issues.lock().unwrap();
+        // Lific's idx_issues_source: a source is unique among issues not in the trash.
+        let taken = !body["source"].is_null()
+            && issues
+                .iter()
+                .any(|issue| issue["source"] == body["source"] && issue["deleted"] != true);
+        if taken {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
         let number =
             issues.iter().filter(|issue| issue["project_id"] == body["project_id"]).count() + 2;
         let mut issue = body.clone();
@@ -7280,8 +7577,10 @@ async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board()
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0]["title"], "Paint the door");
     assert_eq!(sent[1]["priority"], "high");
+    // Lific keeps a source unique among live issues, so each card has its own.
+    assert_ne!(sent[0]["source"], sent[1]["source"]);
     for issue in &sent {
-        assert_eq!(issue["source"], "agentshangout");
+        assert!(text(&issue["source"]).starts_with("agentshangout:"), "{issue}");
         for name in ["Ann", "Bo", "Scout"] {
             assert!(!issue.to_string().contains(name), "{issue}");
         }
@@ -11560,4 +11859,94 @@ async fn a_block_ends_a_friendship_between_them() {
     server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
     assert_eq!(friends(ann.key.clone()).await, json!([]));
     assert_eq!(friends(bo.key.clone()).await, json!([]));
+}
+
+// A103 (#685): across a block, a friendship request looks sent and goes nowhere, and can't be
+// accepted; a check-in asked of the blocker reaches nobody and isn't in their Needs you.
+#[tokio::test]
+async fn asks_across_a_block_look_sent_and_go_nowhere() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let ask = json!({ "kind": "person", "from_id": bo.id, "to_id": ann.id });
+    let sent = server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert_eq!(sent["ok"], true, "it looks sent: {sent}");
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "{anns}");
+    // Bo sees it as sent and waiting, like any other.
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"][0]["status"], "pending", "{bos}");
+    server
+        .post(&ann.key, "/api/trust/friendships/accept", ask.clone())
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    // Bo takes it back: it's gone, and so is its mark.
+    let key = format!("person|{}|{}", bo.id, ann.id);
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
+    server.send(&bo.key, Method::DELETE, "/api/trust/friendships", Some(ask.clone())).await.ok();
+    let bos = server.get(&bo.key, "/api/trust").await.ok();
+    assert_eq!(bos["friendships"], json!([]), "{bos}");
+    assert!(!server.state.db.is_quiet("friendship", &key).unwrap());
+    // Asked again during the block, it's quiet again.
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    assert!(server.state.db.is_quiet("friendship", &key).unwrap());
+
+    let asked = server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the notes?", "to": "Ann" }),
+        )
+        .await;
+    assert_ne!(asked["isError"], true, "it looks asked: {asked}");
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["check_ins"], json!([]), "{needs}");
+    // The room line any check-in posts is there for Bo's side, and hidden from Ann.
+    let line = "Pip is checking in with Ann: May I post the notes?";
+    let bos_page = server.snapshot(&bo.key, &room).await;
+    assert!(bos_page.to_string().contains(line), "{bos_page}");
+    let anns_page = server.snapshot(&ann.key, &room).await;
+    assert!(!anns_page.to_string().contains(line), "{anns_page}");
+    // In read_room it's the Hangout's line, not one from Bo's side.
+    let read = server.tool(&pip.token, "read_room", json!({ "hangout_id": room })).await;
+    let shown = read["structuredContent"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["text"] == line)
+        .cloned()
+        .unwrap_or_else(|| panic!("{read}"));
+    assert!(shown["owner"].is_null(), "{shown}");
+    assert_eq!(shown["from_your_side"], false, "{shown}");
+
+    // Without the block, the same check-in waits for Ann.
+    server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();
+    server
+        .tool(
+            &pip.token,
+            "check_in",
+            json!({ "hangout_id": room, "about": "May I post the plan?", "to": "Ann" }),
+        )
+        .await;
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    let shown = needs["check_ins"].as_array().unwrap();
+    assert_eq!(shown.len(), 1, "the one asked during the block never surfaces: {needs}");
+    assert_eq!(shown[0]["about"], "May I post the plan?");
+    // Nor does the room page list it for her to answer, though Pip's side sees what it asked.
+    // (Its room line is tied to Bo, so like his other lines it shows again once she unblocks.)
+    let page = server.snapshot(&ann.key, &room).await;
+    assert!(!page["check_ins"].to_string().contains("May I post the notes?"), "{page}");
+    let pips = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(pips.to_string().contains("May I post the notes?"), "the asker sees it: {pips}");
+
+    // With the block gone, Bo's friendship ask made again reaches Ann, and she can say yes.
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"], json!([]), "the old one stays quiet: {anns}");
+    server.post(&bo.key, "/api/trust/friendships", ask.clone()).await.ok();
+    let anns = server.get(&ann.key, "/api/trust").await.ok();
+    assert_eq!(anns["friendships"][0]["status"], "pending", "{anns}");
+    server.post(&ann.key, "/api/trust/friendships/accept", ask).await.ok();
 }

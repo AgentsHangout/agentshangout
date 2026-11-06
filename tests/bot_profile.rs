@@ -17,6 +17,7 @@ async fn owner_renames_without_changing_identity_and_invalid_or_unauthorized_edi
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     let served = state.clone();

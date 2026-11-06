@@ -42,6 +42,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cards/{id}/bounty", post(fund_bounty))
         .route("/api/cards/{id}/bounty/cancel", post(cancel_bounty))
         .route("/api/cards/{id}/bounty/accept", post(accept_bounty))
+        .route("/api/cards/{id}/contributions/accept", post(accept_card_contribution))
 }
 
 // Who may
@@ -191,6 +192,46 @@ fn bounty_json(
         }
     }
     read["bounty"] = json!(bounty);
+    contributions_json(state, caller, card, guest, read)
+}
+
+/// HC36, HC43: the contributions on a card, whether this bot may offer one, and, for the card's
+/// owner, which they may accept. A walk-in guest sees what was offered and by which bot, never
+/// whose bot it is or whether it paid.
+fn contributions_json(
+    state: &AppState,
+    caller: &Caller,
+    card: &BoardCard,
+    guest: bool,
+    read: &mut Value,
+) -> ApiResult<()> {
+    let paid = state.db.contribution_paid_on(&card.id)?;
+    let mut contributions = state.db.card_contributions(&card.id)?;
+    read["can_contribute"] = json!(
+        caller.is_agent()
+            && !caller.is_house
+            && !guest
+            && !paid
+            && card.person_id != caller.person_id
+    );
+    let owner = !caller.is_agent() && !guest && card.person_id == caller.person_id;
+    for contribution in &mut contributions {
+        if guest {
+            *contribution = json!({
+                "id": contribution["id"],
+                "kind": contribution["kind"],
+                "text": contribution["text"],
+                "bot_name": contribution["bot_name"],
+            });
+            continue;
+        }
+        contribution["can_accept"] =
+            json!(owner && !paid && contribution["owner_id"] != caller.person_id);
+        if let Some(fields) = contribution.as_object_mut() {
+            fields.remove("owner_id");
+        }
+    }
+    read["contributions"] = json!(contributions);
     Ok(())
 }
 
@@ -497,6 +538,8 @@ pub fn add_card(
     text: &str,
     github_issue: Option<&Value>,
 ) -> ApiResult<BoardCard> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let board = board_in_room(state, caller, board_id)?;
     ops::no_guests(state, caller, &board.hangout_id, "add to a board")?;
     items::no_quiet(state, caller, &board.hangout_id)?;
@@ -546,6 +589,8 @@ pub fn set_card(
     card_id: &str,
     body: &Value,
 ) -> ApiResult<BoardCard> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let card = card_in_room(state, caller, card_id)?;
     ops::no_guests(state, caller, &card.hangout_id, "change a card")?;
     items::no_quiet(state, caller, &card.hangout_id)?;
@@ -664,6 +709,8 @@ pub fn answer_question(
     card_id: &str,
     text: &str,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let card = question_access(state, caller, card_id)?;
     let bot = caller
         .agent_id
@@ -702,6 +749,65 @@ pub fn resolve_question(
     Ok(json!({"ok":true}))
 }
 
+/// HC36: a bot offers a review, correction, source or summary on a card someone else's person
+/// wrote. Offering pays nothing (HC42).
+pub fn offer_contribution(
+    state: &AppState,
+    caller: &Caller,
+    card_id: &str,
+    kind: &str,
+    text: &str,
+) -> ApiResult<Value> {
+    let card = card_in_room(state, caller, card_id)?;
+    ops::no_guests(state, caller, &card.hangout_id, "offer a contribution")?;
+    items::no_quiet(state, caller, &card.hangout_id)?;
+    let bot = caller
+        .agent_id
+        .as_deref()
+        .ok_or_else(|| ApiError::forbidden("only a bot offers a contribution"))?;
+    if !crate::db::CONTRIBUTION_KINDS.contains(&kind) {
+        return Err(ApiError::bad_request("kind is review, correction, source or summary"));
+    }
+    let text = ops::clean(text, "contribution", MAX_TEXT)?;
+    // K14: a refused contribution isn't counted and doesn't move the bot.
+    if let Some(reason) = state.db.contribution_refusal(card_id, bot, &caller.person_id)? {
+        return Err(ApiError::conflict(reason));
+    }
+    commit_write(state, caller, &card.hangout_id)?;
+    let id = auth::new_id();
+    if let Some(reason) =
+        state.db.offer_contribution(&id, card_id, bot, &caller.person_id, kind, &text, now())?
+    {
+        return Err(ApiError::conflict(reason));
+    }
+    ops::refresh(state, &card.hangout_id);
+    Ok(json!({"id":id}))
+}
+
+/// HC37: the card's owner, as a person, accepts one contribution, and the site pays its bot's owner.
+pub fn accept_contribution(
+    state: &AppState,
+    caller: &Caller,
+    card_id: &str,
+    contribution_id: &str,
+) -> ApiResult<Value> {
+    ops::require_human(caller, "accept a contribution")?;
+    let card = card_in_room(state, caller, card_id)?;
+    ops::no_guests(state, caller, &card.hangout_id, "accept a contribution")?;
+    let at = now();
+    // HC6: what the paid person is already owed that day counts first, so it's worked out first.
+    if let Some(owner) = state.db.contribution_owner(card_id, contribution_id)? {
+        crate::economy::credits(&state.db, &owner, at)?;
+    }
+    if let Some(reason) =
+        state.db.accept_contribution(card_id, &caller.person_id, contribution_id, at)?
+    {
+        return Err(ApiError::conflict(reason));
+    }
+    ops::refresh(state, &card.hangout_id);
+    Ok(json!({"ok":true,"amount":crate::db::CONTRIBUTION_HC}))
+}
+
 #[derive(Deserialize)]
 struct Funding {
     #[serde(default)]
@@ -712,6 +818,18 @@ struct Funding {
 #[derive(Deserialize)]
 struct Acceptance {
     submission_id: String,
+}
+#[derive(Deserialize)]
+struct ContributionAcceptance {
+    contribution_id: String,
+}
+async fn accept_card_contribution(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<ContributionAcceptance>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(accept_contribution(&state, &caller, &id, &body.contribution_id)?))
 }
 async fn fund_bounty(
     State(state): State<AppState>,

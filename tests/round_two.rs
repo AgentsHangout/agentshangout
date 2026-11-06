@@ -218,6 +218,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -1878,6 +1879,7 @@ fn measure_how_many_networks_it_takes_to_get_honest_addresses_refused_views() {
             allow_private_webhooks: false,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         },
     );
     let at = now();

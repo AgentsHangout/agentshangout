@@ -30,6 +30,11 @@ mod blocks;
 pub use blocks::Added as TieAdded;
 mod bot_profile;
 mod bot_setup;
+mod contributions;
+pub use contributions::{
+    CONTRIBUTIONS_A_DAY, CONTRIBUTION_BUDGET_A_WEEK, CONTRIBUTION_HC, CONTRIBUTION_KINDS,
+    PAIR_CONTRIBUTIONS_A_WEEK,
+};
 mod bridge;
 pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
@@ -2272,6 +2277,53 @@ BEGIN
     UPDATE players SET token_hash = NULL WHERE id = OLD.id;
     SELECT RAISE(IGNORE);
 END;
+-- HC36: a review, correction, source or summary a bot offers on a board card. It goes with the
+-- card, the bot or its owner.
+CREATE TABLE IF NOT EXISTS card_contributions (
+    id          TEXT PRIMARY KEY,
+    card_id     TEXT NOT NULL REFERENCES board_cards(id) ON DELETE CASCADE,
+    bot_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK (kind IN ('review', 'correction', 'source', 'summary')),
+    text        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (card_id, bot_id)
+);
+-- HC37 to HC41: what the site paid for an accepted contribution, once per card and once per
+-- contribution. It stays when the card, the contribution or either account goes, so nothing pays
+-- twice; a deleted account only clears its id. The paid person's balance counts it (HC1).
+CREATE TABLE IF NOT EXISTS contribution_payouts (
+    card_id         TEXT PRIMARY KEY,
+    contribution_id TEXT NOT NULL UNIQUE,
+    acceptor_id     TEXT REFERENCES people(id) ON DELETE SET NULL,
+    recipient_id    TEXT REFERENCES people(id) ON DELETE SET NULL,
+    amount          INTEGER NOT NULL CHECK (amount > 0),
+    day             INTEGER NOT NULL,
+    created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS contribution_payouts_by_recipient ON contribution_payouts (recipient_id, day);
+CREATE INDEX IF NOT EXISTS contribution_payouts_at ON contribution_payouts (created_at);
+-- A103 (#685): an ask made across a block. It's stored like any other, so it shows to whoever made it
+-- as waiting, and this marks it so the other side never sees it, then or later, even if the block
+-- is taken back. `kind` and `ask_id` name it; nothing here says who blocked whom.
+CREATE TABLE IF NOT EXISTS quiet_asks (
+    kind        TEXT NOT NULL,
+    ask_id      TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (kind, ask_id)
+);
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
+-- A112: the first time this server ran with each version of the rules, where its grace starts.
+CREATE TABLE IF NOT EXISTS rules_versions (
+    version     TEXT PRIMARY KEY,
+    first_seen  INTEGER NOT NULL
+);
 "#;
 
 /// MY1: a week's mayor election.
@@ -3536,7 +3588,8 @@ pub const FIRST_GATHERING: &str = "first:";
 pub struct CreditLine {
     /// `gathering`, `good_trip` or `hosted_trip` for what paid (HC11), `spend` for a pack bought,
     /// `question` for credits reserved on a funded question, and `question_refund` or
-    /// `question_award` for one that came back or was paid to you (HC20).
+    /// `question_award` for one that came back or was paid to you (HC20). `contribution` is what
+    /// the site paid for an accepted contribution (HC37).
     pub kind: String,
     /// What it added, or what a spend took away as less than 0.
     pub amount: i64,
@@ -4132,7 +4185,9 @@ fn floors_seen_by(
             OR EXISTS (SELECT 1 FROM messages l
                        WHERE l.hangout_id = f.hangout_id AND l.kind = 'system' AND l.body = ?3)
             OR EXISTS (SELECT 1 FROM friend_invites i
-                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2))",
+                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2
+                         AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                         WHERE q.kind = 'friend_invite' AND q.ask_id = i.id)))",
         params![space_id, person_id, left],
     )
 }
@@ -5719,6 +5774,7 @@ impl Db {
              WHERE f.kind = 'room' AND f.place_id = ?1 AND f.to_person = ?2
                AND f.declined_at IS NULL AND f.created_at > ?3
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = ?1 AND t.person_id = ?2)
                AND EXISTS (SELECT 1 FROM members m
@@ -10322,6 +10378,8 @@ impl Db {
                 &format!(
                     "SELECT {TRIP_COLS} FROM {TRIPS}
                      WHERE t.agent_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+                       AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                       WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)
                      ORDER BY t.created_at DESC LIMIT 1"
                 ),
                 params![agent_id, house_id, now],
@@ -10339,7 +10397,9 @@ impl Db {
     ) -> rusqlite::Result<i64> {
         self.conn().query_row(
             "SELECT COUNT(*) FROM trips t JOIN agents a ON a.id = t.agent_id
-             WHERE a.owner_id = ? AND t.house_id = ? AND t.status = 'asking' AND t.expires_at > ?",
+             WHERE a.owner_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)",
             params![owner_id, house_id, now],
             |row| row.get(0),
         )
@@ -11357,7 +11417,9 @@ impl Db {
     pub fn is_plan_invitee(&self, event_id: &str, person_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
-            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2",
+            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = ?1 || '|' || ?2)",
             params![event_id, person_id],
         )
     }
@@ -11377,6 +11439,8 @@ impl Db {
              JOIN plan_invitees i ON i.event_id = b.event_id AND i.person_id = b.person_id
              WHERE b.person_id = ?1 AND e.status != 'cancelled' AND e.ends_at >= ?2
                AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.person_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = e.id || '|' || ?1)
              ORDER BY e.starts_at, e.id"
         ))?;
         let rows = stmt.query_map(params![person_id, now], |row| {
@@ -12442,8 +12506,13 @@ impl Db {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut day_paid: HashMap<i64, i64> = HashMap::new();
         {
+            // HC39: what accepted contributions paid counts toward the same day's cap.
             let mut stmt = tx.prepare(
-                "SELECT day, SUM(amount) FROM credit_paid WHERE person_id = ? GROUP BY day",
+                "SELECT day, SUM(amount) FROM (
+                     SELECT day, amount FROM credit_paid WHERE person_id = ?1
+                     UNION ALL
+                     SELECT day, amount FROM contribution_payouts WHERE recipient_id = ?1)
+                  GROUP BY day",
             )?;
             let rows = stmt.query_map([person_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
             for row in rows {
@@ -12541,6 +12610,15 @@ impl Db {
             "SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')",
             [person_id], |row| row.get::<_, i64>(0),
         )?;
+        // HC37: what the site paid for accepted contributions.
+        let (contributed, contributed_today): (i64, i64) = conn.query_row(
+            "SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(CASE WHEN day = ?2 THEN amount END), 0)
+               FROM contribution_payouts WHERE recipient_id = ?1",
+            params![person_id, today],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        totals.paid += contributed;
+        totals.paid_today += contributed_today;
         totals.spent = conn.query_row(
             "SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?",
             [person_id],
@@ -12569,6 +12647,10 @@ impl Db {
               WHERE (q.sponsor_id = ?1 AND q.status = 'refunded'
                      AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id = q.id))
                  OR (q.recipient_id = ?1 AND q.status = 'paid')
+             UNION ALL
+             SELECT 'contribution', x.amount, x.created_at, x.created_at, NULL, NULL, NULL
+               FROM contribution_payouts x
+              WHERE x.recipient_id = ?1
              ORDER BY 3 DESC, 4 DESC, 1, 2
              LIMIT ?3",
         )?;
@@ -12625,27 +12707,32 @@ impl Db {
         if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
             return Ok(Some("already funded"));
         }
-        let balance: i64 = tx.query_row("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid'))", [sponsor], |r| r.get(0))?;
+        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + {}", contributions::CONTRIBUTIONS_PAID), [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
-        // HC25 and HC28: a first gathering's credits, and a starter question's award, never fund a
-        // question, or throwaway accounts could each collect one and pass it all to one person.
-        // Packs are paid for from them first, so only what packs haven't used is held back.
+        // HC25, HC28 and HC42: a first gathering's credits, a starter question's award and what
+        // accepted contributions paid never fund a question, or throwaway accounts could each
+        // collect some and pass it all to one person. Packs are paid for from them first, so only
+        // what packs haven't used is held back.
         let held: i64 = tx.query_row(
-            "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
-                            WHERE person_id=?1 AND source_id LIKE ?2)
-                         + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
-                            JOIN starter_questions s ON s.bounty_id=q.id
-                            WHERE q.recipient_id=?1 AND q.status='paid')
-                         - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
-                            WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
+            &format!(
+                "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
+                                WHERE person_id=?1 AND source_id LIKE ?2)
+                             + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
+                                JOIN starter_questions s ON s.bounty_id=q.id
+                                WHERE q.recipient_id=?1 AND q.status='paid')
+                             + {}
+                             - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
+                                WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
+                contributions::CONTRIBUTIONS_PAID
+            ),
             params![sponsor, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
         if balance - held < amount {
             return Ok(Some(
-                "credits from your first gathering or a starter question buy packs but can't fund a question",
+                "credits from your first gathering, a starter question or a contribution buy packs but can't fund a question",
             ));
         }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
@@ -12809,9 +12896,10 @@ impl Db {
             return Ok(Spend::AlreadyHave);
         }
         let balance: i64 = tx.query_row(
-            "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
+            &format!("SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
                   - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))",
+                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))
+                  + {}", contributions::CONTRIBUTIONS_PAID),
             [person_id],
             |row| row.get(0),
         )?;
@@ -15560,6 +15648,7 @@ impl Db {
              LEFT JOIN cities c ON f.kind = 'city' AND c.id = f.place_id
              WHERE f.to_person = ?1 AND f.declined_at IS NULL AND f.created_at > ?2
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = f.place_id AND t.person_id = ?1)
                AND (h.id IS NOT NULL OR c.id IS NOT NULL)
@@ -16415,6 +16504,52 @@ impl Db {
         rows.collect()
     }
 
+    /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
+    /// version, and when their account was made.
+    pub fn rules_accepted(
+        &self,
+        person_id: &str,
+        version: &str,
+    ) -> rusqlite::Result<(bool, bool, Option<i64>)> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2),
+                    (SELECT created_at FROM people WHERE id = ?1)",
+            params![person_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
+    /// A112: notes that this server is running with rules `version`, the first time only.
+    pub fn note_rules_version(&self, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_versions (version, first_seen) VALUES (?, ?)",
+            params![version, now],
+        )?;
+        Ok(())
+    }
+
+    /// A112: when this server first ran with rules `version`.
+    pub fn rules_version_first_seen(&self, version: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT first_seen FROM rules_versions WHERE version = ?",
+                [version],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// A108: records that `person_id` accepted `version`. Accepting it again keeps the first time.
+    pub fn accept_rules(&self, person_id: &str, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_acceptances (person_id, version, accepted_at)
+             VALUES (?, ?, ?)",
+            params![person_id, version, now],
+        )?;
+        Ok(())
+    }
+
     // Deleting an account
 
     /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
@@ -16429,6 +16564,20 @@ impl Db {
             "INSERT OR IGNORE INTO people (id, name, color, key_hash, feed_token, created_at)
              VALUES (?, ?, '#8a8f98', lower(hex(randomblob(32))), lower(hex(randomblob(32))), 0)",
             params![SOMEONE_WHO_LEFT_ID, SOMEONE_WHO_LEFT],
+        )?;
+        // A103: marks on this person's asks, either side, go with them: those keyed by a row's id
+        // or one of their bots', looked up while the rows are still here. Pair keys are below.
+        tx.execute(
+            "DELETE FROM quiet_asks WHERE ask_id IN (
+                SELECT id FROM friend_invites WHERE from_person = ?1 OR to_person = ?1
+                UNION SELECT id FROM check_ins WHERE asked_by = ?1 OR to_person = ?1
+                UNION SELECT t.id FROM trips t JOIN agents a ON a.id = t.agent_id
+                      WHERE a.owner_id = ?1 OR t.asked_by = ?1
+                UNION SELECT id FROM apprentice_proposals
+                      WHERE proposer_owner = ?1 OR partner_owner = ?1)
+             OR EXISTS (SELECT 1 FROM agents a
+                        WHERE a.owner_id = ?1 AND quiet_asks.ask_id LIKE '%' || a.id || '%')",
+            [person_id],
         )?;
         pass_on_house_bots(&tx, person_id, &mut gone)?;
         // A house bot that goes with its house still has a name to take off the rest.
@@ -16492,6 +16641,8 @@ impl Db {
             "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
             [person_id],
         )?;
+        // A103: marks on asks keyed by this person's id go with them.
+        tx.execute("DELETE FROM quiet_asks WHERE ask_id LIKE '%' || ?1 || '%'", [person_id])?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.
@@ -18220,7 +18371,7 @@ mod tests {
         assert_eq!(paid.balance, 20);
         assert_eq!(
             db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
+            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
         );
         assert!(db.open_questions("p1").unwrap().is_empty());
 
@@ -18229,7 +18380,7 @@ mod tests {
         assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
         assert_eq!(
             db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
+            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
         );
         assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
 
@@ -19865,7 +20016,7 @@ mod tests {
         // Bo can't pass the award on through a question of his own.
         assert_eq!(
             db.fund_question("b4", "q4", "p2", 5, 3).unwrap(),
-            Some("credits from your first gathering or a starter question buy packs but can't fund a question")
+            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
         );
     }
 

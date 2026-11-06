@@ -5032,6 +5032,20 @@ function botLook(worn = {}) {
   };
 }
 
+// MY10: the mayor's sash, gold with a darker edge, from the left shoulder down to the right hip of
+// a body `wide` across and `deep` tall whose top left is (left, top). Seen from behind it runs the
+// other way. Nothing else draws it.
+const SASH = '#e8b923';
+const SASH_EDGE = '#a8780f';
+export function drawSash(g, left, top, wide, deep, back = false) {
+  for (let i = 0; i < deep; i++) {
+    const along = Math.round((i * (wide - 2)) / Math.max(1, deep - 1));
+    const at = back ? left + wide - 2 - along : left + along;
+    r(g, SASH, at, top + i, 2, 1);
+    r(g, SASH_EDGE, back ? at + 2 : at - 1, top + i, 1, 1);
+  }
+}
+
 function drawBot(g, bot, t) {
   const x = Math.round(bot.x);
   const y = Math.round(bot.y);
@@ -5077,6 +5091,7 @@ function drawBot(g, bot, t) {
   r(g, color, x - 4, base - 6, 8, 6);
   r(g, dark, x - 4, base - 1, 8, 1);
   if (bot.facing !== 'back') chest(g, x, base - 5);
+  if (bot.mayor) drawSash(g, x - 4, base - 6, 8, 5, bot.facing === 'back');
   // Nobody types on a sofa, so at an item its hands move only if that keeps them busy.
   const at = !walking && bot.spot;
   const typing = (at ? at.hands : sitting) && Math.floor(t / 170 + bot.phase * 5) % 2;
@@ -5188,6 +5203,7 @@ function drawPerson(g, person, t) {
   const torso = base - 7;
   r(g, color, x - 4, torso, 8, 7);
   r(g, dark, x - 4, base - 1, 8, 1);
+  if (person.mayor) drawSash(g, x - 4, torso, 8, 6, facing === 'back');
   const swing = walking ? (step ? 1 : -1) : 0;
   r(g, dark, x - 5, torso + swing + 1, 1, 4);
   r(g, skin, x - 5, torso + swing + 5, 1, 1);
@@ -5446,6 +5462,8 @@ export class Room {
         person.chip.title = `${data.name}: click for options`;
       }
       person.look = personLook(data.look);
+      person.mayor = Boolean(data.mayor);
+      person.chip.title = person.mayor ? `${data.name}, the mayor: click for options` : `${data.name}: click for options`;
       if (person.color !== data.color) {
         person.color = data.color;
         person.dot.style.background = data.color;
@@ -5478,7 +5496,9 @@ export class Room {
       bot.name = data.name;
       bot.does = data.does;
       bot.wears = botLook(data.look);
-      bot.chip.title = data.status ? `${data.name}: ${data.status}` : data.name;
+      bot.mayor = Boolean(data.mayor);
+      const named = bot.mayor ? `${data.name}, the mayor` : data.name;
+      bot.chip.title = data.status ? `${named}: ${data.status}` : named;
       bot.thinking = liveThinking(data.thinking);
       this.syncThink(bot);
       // A bot on a sofa says what it's doing by being there, and side by side the words would collide.

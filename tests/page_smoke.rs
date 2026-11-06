@@ -1,10 +1,11 @@
 //! #575: the pages start without throwing. A real test server runs, and tests/page_smoke.mjs loads
 //! the shipped web/*.js in Node for the map, a room and the home page, signed in as a person. A
 //! runtime error while a page builds itself, like #558's `const done` used before it was declared,
-//! fails here instead of on the live site.
+//! fails here instead of on the live site. The map is loaded once more by someone with god mode on,
+//! so what only they get (W75, A114) is built too.
 mod support;
 
-use agenthangout::{app, db::Db, AppState, Config};
+use agenthangout::{app, auth, db::Db, now, AppState, Config};
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -12,14 +13,21 @@ use serde_json::{json, Value};
 async fn pages_start_without_errors() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let db = Db::open(":memory:").unwrap();
+    let god = "godsmoke00000001";
+    let god_key = auth::new_owner_key();
+    db.create_person(god, "God", &auth::hash_secret(&god_key), &auth::new_feed_token(), now())
+        .unwrap();
+    db.set_god_mode(god, true, now()).unwrap();
     let state = AppState::new(
-        Db::open(":memory:").unwrap(),
+        db,
         Config {
             public_url: base.clone(),
             create_code: Some("test".into()),
             allow_private_webhooks: true,
             keeper_id: None,
-            god_ids: vec![],
+            god_ids: vec![god.into()],
+            require_rules: false,
         },
     );
     let served = state.clone();
@@ -57,6 +65,7 @@ async fn pages_start_without_errors() {
         (key.clone(), "/world/commons".to_string()),
         (key.clone(), format!("/h/{room}")),
         (friend_key, "/".to_string()),
+        (god_key, "/world/commons".to_string()),
     ] {
         let base = base.clone();
         let output = tokio::task::spawn_blocking(move || {

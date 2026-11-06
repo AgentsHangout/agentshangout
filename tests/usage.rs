@@ -32,6 +32,7 @@ impl Fixture {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: vec!["alice".into()],
+                require_rules: false,
             },
         );
         for name in ["alice", "bob", "eve"] {

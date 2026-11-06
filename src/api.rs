@@ -151,6 +151,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
         .merge(crate::votes::routes())
+        .merge(crate::rules::routes())
         .merge(crate::jobs::routes())
         .merge(outside::routes())
         .merge(looks::routes())
@@ -651,6 +652,12 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     // W75: someone with the God mode switch is told where it's set. Nobody else hears it exists.
     if god_mode::may_use(&state, &caller.person_id) {
         me["god_mode"] = json!(state.db.god_mode_on(&caller.person_id)?);
+    }
+    // A108, A112: where they stand with the community rules.
+    if let (Some(map), Value::Object(rules)) =
+        (me.as_object_mut(), crate::rules::view(&state, &caller.person_id, now())?)
+    {
+        map.extend(rules);
     }
     Ok(Json(me))
 }
@@ -2705,6 +2712,7 @@ mod tests {
                     allow_private_webhooks: true,
                     keeper_id: None,
                     god_ids: Vec::new(),
+                    require_rules: false,
                 },
             );
             tokio::spawn(async move { axum::serve(listener, app(state)).await });

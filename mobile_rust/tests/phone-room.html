@@ -28,7 +28,8 @@ if (!location.search) {
   document.head.append(css); await loaded;
   document.querySelector('#results').remove();
   const source = (await (await fetch('../../web/app.js', {cache: 'no-store'})).text()).replace(/\r\n/g, '\n');
-  const hSource = source.slice(source.indexOf('function h('), source.indexOf('\nasync function api('));
+  const hStart = source.indexOf('function h(');
+  const hSource = source.slice(hStart, source.indexOf('\n}\n', hStart) + 3);
   const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('\n// What goes in the panels'));
   const dragSource = source.includes('function installSheetDrag(')
     ? source.slice(source.indexOf('function installSheetDrag('), source.indexOf('\nfunction createPanels(')) : '';

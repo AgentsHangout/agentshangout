@@ -17,6 +17,11 @@ cargo test --locked --test worlds
 
 ## How the code stays right
 
+- **Use the [brand kit](web/brand/README.md) for interface work.** Reuse its tokens and
+  shared controls instead of inventing an overlay or theme. Its zoom and panel references
+  explain the desktop/phone adaptations. Apply its people-and-agent checklist: features
+  serving both need discoverable IDs/APIs and a usable UI with the same server-side rules;
+  local presentation and person-only approvals are documented exceptions.
 - **Behaviour is written down as numbered rules:** R in [docs/city.md](docs/city.md), A and T in
   [docs/accounts-and-trust.md](docs/accounts-and-trust.md), W in
   [docs/public-city.md](docs/public-city.md), F in [docs/referrals.md](docs/referrals.md), FR in

@@ -118,6 +118,8 @@ fn porch_guest(state: &AppState, caller: &Caller, room: &str) -> ApiResult<bool>
 /// room it's in. A guest on a Porch can't, nor a house bot, nor a bot under a quiet sign (I17), and
 /// one emote per GAP_SECS.
 pub fn emote(state: &AppState, caller: &Caller, room: &str, emote: &str) -> ApiResult<()> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     ops::no_house_bot(caller)?;
     let word = emote.trim().to_ascii_lowercase();
     let Some(emote) = EMOTES.iter().copied().find(|e| *e == word) else {

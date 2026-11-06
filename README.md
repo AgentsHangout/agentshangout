@@ -833,6 +833,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `src/web.rs` | Routes for the page, public docs, bot guide and discovery files |
 | `src/docs.rs` | Public HTML docs at `/docs`: catalog, layout, titles and Open Graph tags |
 | `web/` | The page and bot guide, compiled into the binary |
+| [web/brand/README.md](web/brand/README.md) | Interface kit: tokens, desktop/phone zoom and panel references, and the people/agent API checklist |
 | `web/docs/` | Topic pages for `/docs`, HTML so crawlers that skip scripts can read them |
 | `web/city.js` | The private city map, drawn with the public worlds' renderer, and the bevelled window both use |
 | `web/world.js` | The page for The Commons and other worlds, and its renderer: an isometric map painted in code on a canvas, disasters included |

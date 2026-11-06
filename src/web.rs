@@ -195,6 +195,11 @@ async fn child_safety(State(state): State<AppState>) -> Response {
     addressed(&state, "text/html; charset=utf-8", CHILD_SAFETY)
 }
 
+/// A107: the community rules, public and readable without scripts.
+async fn rules(State(state): State<AppState>) -> Response {
+    addressed(&state, "text/html; charset=utf-8", crate::rules::RULES_HTML)
+}
+
 fn docs_html(state: &AppState, page: &crate::docs::Page) -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
@@ -270,6 +275,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sign-in/back", get(index))
         .route("/privacy", get(privacy))
         .route("/child-safety", get(child_safety))
+        .route("/rules", get(rules))
         .route("/docs", get(docs_index))
         .route("/docs/", get(docs_index))
         .route("/docs/{slug}", get(docs_page))

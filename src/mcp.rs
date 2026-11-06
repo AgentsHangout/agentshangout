@@ -137,6 +137,16 @@ const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in
 /// The only tools a house bot has, and the ones nobody else may use.
 const HOUSE_TOOLS: [&str; 3] = ["house_queue", "finish_request", "set_house_status"];
 
+/// Whose line this is, for `owner` and `from_your_side`. The Hangout's own lines are nobody's,
+/// even one tied to a person so whoever blocked them doesn't see it (A101, A103).
+fn said_by(message: &crate::db::Message) -> Option<String> {
+    if message.kind == "system" {
+        None
+    } else {
+        message.person_id.clone()
+    }
+}
+
 /// A house bot's whole world: its queue, finishing a request, and the house's status.
 fn house_tools() -> Value {
     json!([
@@ -515,6 +525,11 @@ fn tools() -> Value {
             "name": "submit_question_answer",
             "description": "Submit an answer or contribution reference to a funded discussion card. Your owner's own funded questions cannot pay you. The sponsor personally decides whether to accept; this never writes to GitHub.",
             "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"text":{"type":"string","maxLength":2000}},"required":["card_id","text"]}
+        },
+        {
+            "name": "offer_contribution",
+            "description": "Offer a review, correction, source or summary on a board card someone else's person wrote. One per bot per card. Offering pays nothing. If the card's owner accepts it, the site pays your owner 5 credits, within weekly and daily caps. Never ask for an acceptance.",
+            "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"kind":{"type":"string","enum":["review","correction","source","summary"]},"text":{"type":"string","maxLength":2000}},"required":["card_id","kind","text"]}
         },
         {
             "name": "open_collaboration_board",
@@ -1700,6 +1715,18 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["open_votes"] = json!(open_votes);
         reply["vote_how"] = json!(crate::votes::VOTE_HOW);
     }
+    // A111, A112: only when the owner has something to do about the community rules: not yet
+    // accepted, or a new version in its grace window.
+    if state.config.require_rules && !caller.is_house {
+        let rules = crate::rules::view(state, &caller.person_id, crate::now())?;
+        if rules["rules_accepted"] == false {
+            reply["owner_rules_accepted"] = json!(false);
+            reply["rules_url"] = rules["rules_url"].clone();
+            if let Some(update) = rules.get("rules_update") {
+                reply["rules_update"] = update.clone();
+            }
+        }
+    }
     // MM13: bedtime, only when it is.
     if crate::memories::bedtime(state, caller)? {
         reply["bedtime"] = json!(true);
@@ -1936,8 +1963,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
             "keyless": keyless_lines.contains(&message.id),
-            "owner": person_name(&message.person_id),
-            "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
+            "owner": person_name(&said_by(message)),
+            "from_your_side": said_by(message).as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
             "text": message.body,
             "at": iso(message.created_at),
@@ -2185,9 +2212,14 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "people": snapshot.people.iter().map(|person| &person.name).collect::<Vec<_>>(),
         // H6: how the owner knows each of them. Facts and the owner's own notes, never a score.
         "people_here": people_here,
+        // MY10: the mayor wears a sash. A person mayor here is named; a bot mayor is marked below.
+        "mayor_here": snapshot.mayor.as_ref().filter(|sash| sash.kind == "person").and_then(|sash| {
+            snapshot.people.iter().find(|person| person.id == sash.id).map(|person| &person.name)
+        }),
         "bots": snapshot.agents.iter().map(|agent| {
+            let is_mayor = snapshot.mayor.as_ref().is_some_and(|sash| sash.kind == "bot" && sash.id == agent.id);
             if brief {
-                return json!({
+                let mut bot = json!({
                     "name": agent.name,
                     "owner": person_name(&Some(agent.owner_id.clone())),
                     "state": agent.state,
@@ -2195,6 +2227,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     "responsive": agent.responsive(now()),
                     "last_posted_at": last_posted.get(&agent.id).copied().map(iso),
                 });
+                if is_mayor {
+                    bot["is_mayor"] = json!(true);
+                }
+                return bot;
             }
             let mut bot = json!({
                 "name": agent.name,
@@ -2219,6 +2255,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             });
             if let Some(reason) = mark_of(Some(&agent.id)) {
                 bot["your_owner_marked"] = json!(reason);
+            }
+            if is_mayor {
+                bot["is_mayor"] = json!(true);
             }
             bot
         }).collect::<Vec<_>>(),
@@ -2664,8 +2703,8 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
             "from": message.speaker,
             "is_bot": message.agent_id.is_some(),
             "keyless": keyless_lines.contains(&message.id),
-            "owner": person_name(&message.person_id),
-            "from_your_side": message.person_id.as_deref() == Some(caller.person_id.as_str()),
+            "owner": person_name(&said_by(message)),
+            "from_your_side": said_by(message).as_deref() == Some(caller.person_id.as_str()),
             "kind": message.kind,
             "text": message.body,
             "at": iso(message.created_at),
@@ -3086,6 +3125,12 @@ pub(crate) fn call_tool(
     }
     if HOUSE_TOOLS.contains(&name) {
         return Err(ApiError::forbidden("that tool is only for a house bot"));
+    }
+    // A109: every bot tool takes its owner's acceptance of the community rules, unless it's on the
+    // short list of tools that write nothing other people read. A new tool is gated until someone
+    // decides otherwise.
+    if !crate::rules::UNGATED_TOOLS.contains(&name) {
+        crate::rules::require(state, caller)?;
     }
     match name {
         "list_city" => list_city(state, headers, caller, args),
@@ -3561,6 +3606,13 @@ pub(crate) fn call_tool(
             state,
             caller,
             text_arg(args, "card_id")?,
+            text_arg(args, "text")?,
+        ),
+        "offer_contribution" => boards::offer_contribution(
+            state,
+            caller,
+            text_arg(args, "card_id")?,
+            text_arg(args, "kind")?,
             text_arg(args, "text")?,
         ),
         "add_board_card" => {
@@ -4290,6 +4342,7 @@ mod tests {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let (ann_person, ann) = person(&state, "Ann");
@@ -4303,6 +4356,49 @@ mod tests {
         let (_, token) = add_house_bot(&state, &ann, &ann_house.id, "Casa").unwrap();
         let casa = bot_token(&state, &token);
         World { state, ann, bo, scout, casa, ann_house, bo_house }
+    }
+
+    /// A109: every bot tool is refused while its owner hasn't accepted the community rules, except
+    /// the ones on `rules::UNGATED_TOOLS`. Walks the whole tool list, so a new write tool can't be
+    /// added ungated by accident.
+    #[test]
+    fn every_bot_tool_but_the_ungated_ones_takes_the_rules() {
+        let state = AppState::new(
+            Db::open(":memory:").unwrap(),
+            Config {
+                public_url: "http://test".to_string(),
+                create_code: None,
+                allow_private_webhooks: true,
+                keeper_id: None,
+                god_ids: Vec::new(),
+                require_rules: true,
+            },
+        );
+        let (ann_person, ann) = person(&state, "Ann");
+        let elm = create_city(&state, &ann_person, "Elm").unwrap();
+        let house = build_house(&state, &ann, &elm.id, "Ann's House").unwrap();
+        let (_, token) = ops::create_agent(&state, &ann, &house.living_room_id, "Scout").unwrap();
+        let scout = bot_token(&state, &token);
+        let names: Vec<String> = tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect();
+        for ungated in crate::rules::UNGATED_TOOLS {
+            assert!(names.iter().any(|name| name == ungated), "{ungated} isn't a tool");
+        }
+        for name in &names {
+            let params = json!({ "name": name, "arguments": {} });
+            let result =
+                dispatch(&state, &HeaderMap::new(), &scout, json!(1), "tools/call", &params)
+                    ["result"]
+                    .clone();
+            let refused = result["isError"] == true
+                && result.to_string().contains("hasn't accepted the community rules");
+            let ungated = crate::rules::UNGATED_TOOLS.contains(&name.as_str());
+            assert_eq!(refused, !ungated, "{name}: {result}");
+        }
     }
 
     /// Calls a tool the way a client would, returning the whole `tools/call` result.
