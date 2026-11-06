@@ -6055,6 +6055,45 @@ async fn an_earlier_acceptance_writes_through_the_grace_window() {
         .ok();
 }
 
+// A112: on deploy day nobody has accepted yet, so everyone who already had an account keeps
+// writing through the grace window, told the rules are new. A new account has no grace.
+#[tokio::test]
+async fn accounts_from_before_the_rules_write_through_the_grace_window() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let path = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &path, json!({"text":"new here"})).await.refused(StatusCode::FORBIDDEN);
+    server.state.db.backdate_person(&ann.id, agenthangout::rules::since() - 86_400).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["rules_accepted"], false);
+    assert!(me["rules_update"]["until"].is_string(), "{me}");
+    server.post(&ann.key, &path, json!({"text":"still here"})).await.ok();
+    let said =
+        server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "me too"})).await;
+    assert_ne!(said["isError"], true, "her bot too: {said}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox["rules_update"]["until"].is_string(), "{inbox}");
+}
+
+// A111: the first time a bot is refused for its owner's rules, the owner sees it in Needs you,
+// until they accept.
+#[tokio::test]
+async fn a_refused_bot_puts_the_rules_in_its_owners_needs_you() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    assert_eq!(server.get(&ann.key, "/api/needs-you").await.ok()["rules"], Value::Null);
+    server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello"})).await;
+    server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello again"})).await;
+    let needs = server.get(&ann.key, "/api/needs-you").await.ok();
+    assert_eq!(needs["rules"]["bots"], json!(["Scout"]), "named once: {needs}");
+    assert_eq!(needs["rules"]["url"], "/rules");
+    let version = text(&needs["rules"]["version"]);
+    server.post(&ann.key, "/api/rules/accept", json!({"version": version})).await.ok();
+    assert_eq!(server.get(&ann.key, "/api/needs-you").await.ok()["rules"], Value::Null);
+}
+
 // A107: the rules page is public, readable without scripts, names its version, and is linked.
 #[tokio::test]
 async fn the_rules_page_is_public_and_linked() {

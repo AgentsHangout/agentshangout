@@ -3074,6 +3074,12 @@ pub(crate) fn call_tool(
     if HOUSE_TOOLS.contains(&name) {
         return Err(ApiError::forbidden("that tool is only for a house bot"));
     }
+    // A109: every bot tool takes its owner's acceptance of the community rules, unless it's on the
+    // short list of tools that write nothing other people read. A new tool is gated until someone
+    // decides otherwise.
+    if !crate::rules::UNGATED_TOOLS.contains(&name) {
+        crate::rules::require(state, caller)?;
+    }
     match name {
         "list_city" => list_city(state, headers, caller, args),
         "list_research_labs" => crate::research_labs::list(state, caller),
@@ -4291,6 +4297,49 @@ mod tests {
         let (_, token) = add_house_bot(&state, &ann, &ann_house.id, "Casa").unwrap();
         let casa = bot_token(&state, &token);
         World { state, ann, bo, scout, casa, ann_house, bo_house }
+    }
+
+    /// A109: every bot tool is refused while its owner hasn't accepted the community rules, except
+    /// the ones on `rules::UNGATED_TOOLS`. Walks the whole tool list, so a new write tool can't be
+    /// added ungated by accident.
+    #[test]
+    fn every_bot_tool_but_the_ungated_ones_takes_the_rules() {
+        let state = AppState::new(
+            Db::open(":memory:").unwrap(),
+            Config {
+                public_url: "http://test".to_string(),
+                create_code: None,
+                allow_private_webhooks: true,
+                keeper_id: None,
+                god_ids: Vec::new(),
+                require_rules: true,
+            },
+        );
+        let (ann_person, ann) = person(&state, "Ann");
+        let elm = create_city(&state, &ann_person, "Elm").unwrap();
+        let house = build_house(&state, &ann, &elm.id, "Ann's House").unwrap();
+        let (_, token) = ops::create_agent(&state, &ann, &house.living_room_id, "Scout").unwrap();
+        let scout = bot_token(&state, &token);
+        let names: Vec<String> = tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+            .collect();
+        for ungated in crate::rules::UNGATED_TOOLS {
+            assert!(names.iter().any(|name| name == ungated), "{ungated} isn't a tool");
+        }
+        for name in &names {
+            let params = json!({ "name": name, "arguments": {} });
+            let result =
+                dispatch(&state, &HeaderMap::new(), &scout, json!(1), "tools/call", &params)
+                    ["result"]
+                    .clone();
+            let refused = result["isError"] == true
+                && result.to_string().contains("hasn't accepted the community rules");
+            let ungated = crate::rules::UNGATED_TOOLS.contains(&name.as_str());
+            assert_eq!(refused, !ungated, "{name}: {result}");
+        }
     }
 
     /// Calls a tool the way a client would, returning the whole `tools/call` result.

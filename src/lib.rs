@@ -156,6 +156,8 @@ pub struct Shared {
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
     pub emotes: emotes::Runtime,
+    /// A111: bots refused for their owner's community rules, for Needs you.
+    pub rules_refused: rules::Refused,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
@@ -258,6 +260,7 @@ impl AppState {
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
             emotes: emotes::Runtime::default(),
+            rules_refused: rules::Refused::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),

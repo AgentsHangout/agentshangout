@@ -16378,13 +16378,19 @@ impl Db {
     /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
     /// a column added later without one makes this fail instead of keeping what it holds. It's one
     /// transaction, so if anything fails they still have their account.
-    /// A108: whether `person_id` accepted `version`, and whether they accepted any other version.
-    pub fn rules_accepted(&self, person_id: &str, version: &str) -> rusqlite::Result<(bool, bool)> {
+    /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
+    /// version, and when their account was made.
+    pub fn rules_accepted(
+        &self,
+        person_id: &str,
+        version: &str,
+    ) -> rusqlite::Result<(bool, bool, Option<i64>)> {
         self.conn().query_row(
             "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
-                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2)",
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2),
+                    (SELECT created_at FROM people WHERE id = ?1)",
             params![person_id, version],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
     }
 

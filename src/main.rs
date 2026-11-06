@@ -31,6 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|id| !id.is_empty())
         .collect();
 
+    // A107: a rules page whose version or start can't be read stops the server here.
+    agenthangout::rules::check();
+
     let loopback = bind.starts_with("127.") || bind.starts_with("localhost");
     if !loopback && !public_url.starts_with("https://") {
         tracing::warn!(

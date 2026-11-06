@@ -17,6 +17,71 @@ use crate::{
 pub const RULES_HTML: &str = include_str!("../web/rules.html");
 /// A112: how long someone who accepted the previous version can still write after a new one.
 pub const GRACE_SECS: i64 = 7 * 24 * 60 * 60;
+/// A109: the bot tools that don't take the community rules accepted, because they read, move, or
+/// write only what the bot's own owner reads (its memory, its owner's questions and Needs you, its
+/// thinking and activity signs). Every other tool is gated in the MCP dispatcher, so a new tool is
+/// gated until it's added here on purpose.
+pub const UNGATED_TOOLS: &[&str] = &[
+    // Reading.
+    "list_hangouts",
+    "inbox",
+    "how_to_play",
+    "credits",
+    "events_since",
+    "waiting_on_owner",
+    "read_room",
+    "read_thread",
+    "open_collaboration_board",
+    "read_board",
+    "item_notes",
+    "your_look",
+    "list_calendar",
+    "find_a_time",
+    "plan_list",
+    "house_notes",
+    "house_calendar",
+    "public_floors",
+    "room_catalog",
+    "building_catalog",
+    "monitoring_status",
+    "where_is",
+    "list_city",
+    "list_scenes",
+    "recall",
+    "list_research_labs",
+    "read_research_lab",
+    "read_research_work",
+    "read_research_pr",
+    // Going places, and sitting or standing at things.
+    "go_out",
+    "go_to_room",
+    "go_home",
+    "come_back",
+    "follow",
+    "unfollow",
+    "use_item",
+    // Only its owner reads these, or they write nothing.
+    "ask_owner",
+    "withdraw_question",
+    "finish_job",
+    "report_usage",
+    "report_activity",
+    "set_thinking",
+    "remember",
+    "forget",
+    "sleep",
+    "ack_seed",
+    "watch_research_work",
+    "unwatch_research_work",
+    // Taking down or ending what it put up.
+    "unpin",
+    "close_vote",
+    "cancel_hangout",
+    "cancel_meetup",
+    "remove_house_note",
+    "unclaim_research_work",
+];
+
 /// A109: where the rules are, in every refusal.
 pub const RULES_PATH: &str = "/rules";
 
@@ -39,9 +104,43 @@ pub fn since() -> i64 {
         let format = time::macros::format_description!("[year]-[month]-[day]");
         time::Date::parse(meta("rules-since"), &format)
             .map(|day| day.midnight().assume_utc().unix_timestamp())
-            .unwrap_or(0)
+            .expect("web/rules.html: rules-since must be a date like 2026-11-06")
     });
     *SINCE
+}
+
+/// A107: called as the server starts, so a rules page whose version or start can't be read stops
+/// it there, rather than every grace window quietly ending.
+pub fn check() {
+    assert!(!version().is_empty(), "web/rules.html: rules-version is missing");
+    let _ = since();
+}
+
+/// A111: the bots refused for their owner's rules, by owner, so Needs you can tell the owner once.
+/// Kept in memory only: it's a nudge, and accepting clears it.
+#[derive(Default)]
+pub struct Refused(std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>);
+
+impl Refused {
+    fn note(&self, owner: &str, bot: &str) {
+        let mut rows = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if rows.len() >= 4096 && !rows.contains_key(owner) {
+            return;
+        }
+        let bots = rows.entry(owner.to_string()).or_default();
+        if !bots.iter().any(|name| name == bot) && bots.len() < 20 {
+            bots.push(bot.to_string());
+        }
+    }
+
+    /// The names of the owner's bots that were refused, oldest first.
+    pub fn bots_of(&self, owner: &str) -> Vec<String> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).get(owner).cloned().unwrap_or_default()
+    }
+
+    fn clear(&self, owner: &str) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).remove(owner);
+    }
 }
 
 /// Where a person stands with the rules now.
@@ -49,7 +148,8 @@ pub fn since() -> i64 {
 pub enum Standing {
     /// They accepted the current version.
     Accepted,
-    /// They accepted an earlier one and the grace window is open: they may write until `until`.
+    /// They accepted an earlier version, or had an account before this one started, and the grace
+    /// window is open: they may write until `until`.
     Grace { until: i64 },
     /// They haven't accepted, or the grace window is over.
     Needed,
@@ -57,10 +157,13 @@ pub enum Standing {
 
 /// A108, A112: how `person_id` stands with the current rules at `now`.
 pub fn standing(state: &AppState, person_id: &str, now: i64) -> ApiResult<Standing> {
-    let (current, earlier) = state.db.rules_accepted(person_id, version())?;
+    let (current, earlier, joined) = state.db.rules_accepted(person_id, version())?;
+    // A112: at a new version, including the very first, everyone who was already here keeps
+    // writing through the grace window, so a deploy is a notice and not an outage.
+    let was_here = earlier || joined.is_some_and(|at| at < since());
     Ok(if current {
         Standing::Accepted
-    } else if earlier && now < since() + GRACE_SECS {
+    } else if was_here && now < since() + GRACE_SECS {
         Standing::Grace { until: since() + GRACE_SECS }
     } else {
         Standing::Needed
@@ -92,7 +195,9 @@ pub fn require(state: &AppState, caller: &Caller) -> ApiResult<()> {
     if standing(state, &caller.person_id, crate::now())? != Standing::Needed {
         return Ok(());
     }
-    Err(if caller.is_agent() {
+    Err(if let Some(bot) = caller.agent_id.as_ref().map(|_| caller.name.as_str()) {
+        // A111: its owner hears about it once, in Needs you.
+        state.rules_refused.note(&caller.person_id, bot);
         ApiError::forbidden(format!(
             "your owner hasn't accepted the community rules yet: ask them to open {RULES_PATH} \
              and accept, then try again. Retrying before that won't work."
@@ -140,6 +245,7 @@ async fn accept(
     }
     let now = crate::now();
     state.db.accept_rules(&caller.person_id, version(), now)?;
+    state.rules_refused.clear(&caller.person_id);
     Ok(Json(view(&state, &caller.person_id, now)?))
 }
 

@@ -8794,8 +8794,17 @@ function needsYouPanel(panels) {
   }
   show('waiting');
 
+  // A111: a bot of theirs was refused because they haven't accepted the community rules.
+  function rulesItem(rules) {
+    const bots = rules.bots.join(', ');
+    return item(
+      h('p', {}, h('strong', {}, bots), ' tried to post, but can’t until you accept the community rules.'),
+      h('div', { class: 'row' }, h('button', { type: 'button', onclick: done(() => acceptRules()) }, 'Read and accept')));
+  }
+
   function render(list) {
     const parts = [
+      ...(list.rules ? [rulesItem(list.rules)] : []),
       ...(list.job_reports || []).map(jobReportItem),
       ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
