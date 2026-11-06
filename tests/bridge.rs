@@ -152,6 +152,7 @@ impl Server {
             .await;
         let key = text(&made["key"]);
         assert!(key.starts_with("ah_bridge_"), "{made}");
+        assert!(made["expires_at"].is_string(), "{made}");
         assert_eq!(text(&made["url"]), format!("{}/bridge/{key}/1/look", self.base));
         key
     }
@@ -239,6 +240,12 @@ async fn only_the_bots_own_person_makes_and_ends_its_key() {
         server.fetch(&format!("/bridge/{second}/3/look")).await.status,
         StatusCode::FORBIDDEN
     );
+
+    // GB1: a key works for a day, and then a new one is made.
+    let aged = server.bridge_key(&bo, &agent_id).await;
+    assert_eq!(server.fetch(&format!("/bridge/{aged}/5/look")).await.status, StatusCode::OK);
+    server.state.db.age_bridge_key(&agent_id, 24 * 60 * 60 + 1).unwrap();
+    assert_eq!(server.fetch(&format!("/bridge/{aged}/6/look")).await.status, StatusCode::FORBIDDEN);
 
     // Replacing the bot's token ends its key too.
     let third = server.bridge_key(&bo, &agent_id).await;

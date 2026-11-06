@@ -29,6 +29,7 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 mod bot_profile;
 mod bot_setup;
 mod bridge;
+pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
 pub use keyless::KeylessCard;
@@ -2188,13 +2189,10 @@ CREATE TABLE IF NOT EXISTS keyless_cards (
 );
 CREATE INDEX IF NOT EXISTS keyless_cards_by_board ON keyless_cards(board_id, created_at);
 CREATE INDEX IF NOT EXISTS keyless_cards_by_player ON keyless_cards(player_id, created_at);
--- KA3: the bridge's new door. The key's plain text is kept only while `shown_until` is ahead.
+-- KA3: the nonces the bridge's new door used. No key is kept: it was shown once.
 CREATE TABLE IF NOT EXISTS keyless_nonces (
     nonce       TEXT PRIMARY KEY,
     player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-    key_plain   TEXT,
-    page        TEXT,
-    shown_until INTEGER NOT NULL,
     at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS keyless_nonces_by_time ON keyless_nonces(at);
@@ -16057,13 +16055,24 @@ impl Db {
     /// Deletes guests nobody has claimed that haven't been seen since `before`, so a swarm of them
     /// can't fill the table for good. What they built stays, and reads as left behind.
     pub fn prune_guests(&self, before: i64) -> rusqlite::Result<usize> {
-        self.conn().execute(
+        let conn = self.conn();
+        // KA5: a keyless agent that wrote something keeps its row, so its name and marks stay with
+        // what it wrote, and loses its key.
+        let keyless = conn.execute(
+            "UPDATE players SET token_hash = NULL WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?
+               AND (id IN (SELECT player_id FROM keyless_messages)
+                    OR id IN (SELECT player_id FROM keyless_cards))",
+            [before],
+        )?;
+        let pruned = conn.execute(
             "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
                AND agent_id IS NULL AND seen_at < ?
                AND id NOT IN (SELECT player_id FROM keyless_messages)
                AND id NOT IN (SELECT player_id FROM keyless_cards)",
             [before],
-        )
+        )?;
+        Ok(keyless + pruned)
     }
 
     // Crawler sightings: a daily count per kind, and nothing else about who it was.

@@ -1,8 +1,10 @@
 //! GB1 and GB4: bridge keys and the turns they have played (docs/bridge.md).
 use super::*;
 
-/// GB4: how long a played turn is remembered.
-pub const BRIDGE_TURN_SECS: i64 = 24 * 60 * 60;
+/// GB1: how long an owned bot's bridge key works. It sits in addresses, so it doesn't last.
+pub const BRIDGE_KEY_SECS: i64 = 24 * 60 * 60;
+/// GB4: how long a played turn is remembered: as long as the key works.
+pub const BRIDGE_TURN_SECS: i64 = BRIDGE_KEY_SECS;
 
 impl Db {
     /// GB1: a bot's new bridge key, which ends the one before it and the turns that one played.
@@ -22,13 +24,24 @@ impl Db {
         Ok(self.conn().execute("DELETE FROM bridge_keys WHERE agent_id = ?", [agent_id])? > 0)
     }
 
-    /// GB2: the bot a bridge key belongs to, if anyone holds it.
-    pub fn bridge_agent(&self, key_hash: &str) -> rusqlite::Result<Option<String>> {
+    /// GB1, GB2: the bot a bridge key belongs to, while it hasn't run out.
+    pub fn bridge_agent(&self, key_hash: &str, now: i64) -> rusqlite::Result<Option<String>> {
         self.conn()
-            .query_row("SELECT agent_id FROM bridge_keys WHERE key_hash = ?", [key_hash], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT agent_id FROM bridge_keys WHERE key_hash = ? AND created_at > ?",
+                params![key_hash, now - BRIDGE_KEY_SECS],
+                |row| row.get(0),
+            )
             .optional()
+    }
+
+    /// Moves a bridge key back in time, for tests of it running out (GB1).
+    pub fn age_bridge_key(&self, agent_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bridge_keys SET created_at = created_at - ?2 WHERE agent_id = ?1",
+            params![agent_id, by],
+        )?;
+        Ok(())
     }
 
     /// GB4: counts a turn as played. False when this key already played it within a day.

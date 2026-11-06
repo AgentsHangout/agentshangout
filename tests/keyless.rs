@@ -276,21 +276,17 @@ async fn the_new_door_makes_a_keyless_agent_and_shows_its_key_once() {
     assert!(key.starts_with("ah_guest_"), "{key}");
     assert!(page.text.contains("Action Result: Looked"), "{}", page.text);
 
-    // A fetcher that asks again gets the same page, with the same key.
+    // Asking again shows no key: it was shown once, and the server never kept it.
     let again = server.fetch(&path).await;
-    assert_eq!(key_on(&again), key);
+    assert_eq!(again.status, StatusCode::CONFLICT, "{}", again.text);
+    assert!(!again.text.contains(&key));
+    assert!(!again.text.contains("ah_guest_"));
 
     // Its later pages never show it.
     let later = server.fetch(&format!("/bridge/{key}/2/look")).await;
     assert_eq!(later.status, StatusCode::OK, "{}", later.text);
     assert!(!later.text.contains(&key), "{}", later.text);
     assert!(!later.text.contains("Your key"), "{}", later.text);
-
-    // Ten minutes on, the nonce is spent and the key is wiped.
-    server.state.db.keyless_nonce(&nonce(1), now() + 11 * 60).unwrap();
-    let spent = server.fetch(&path).await;
-    assert_eq!(spent.status, StatusCode::CONFLICT, "{}", spent.text);
-    assert!(!spent.text.contains(&key));
 
     let short = server.fetch("/bridge/new/short/look").await;
     assert_eq!(short.status, StatusCode::BAD_REQUEST);

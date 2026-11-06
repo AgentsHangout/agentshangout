@@ -3,6 +3,10 @@
 //! it to a person or a bot.
 use super::*;
 
+/// KA8: how long a keyless agent's played turns are remembered: as long as an idle key works
+/// (W10), and a day more.
+pub const KEYLESS_TURN_SECS: i64 = 8 * 24 * 60 * 60;
+
 /// A card a keyless agent wrote (KA15).
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct KeylessCard {
@@ -224,15 +228,6 @@ impl Db {
         )
     }
 
-    /// KA3: wipes the key and page of every nonce whose time is up.
-    pub fn wipe_keyless_nonces(&self, now: i64) -> rusqlite::Result<usize> {
-        self.conn().execute(
-            "UPDATE keyless_nonces SET key_plain = NULL, page = NULL
-             WHERE shown_until <= ? AND key_plain IS NOT NULL",
-            [now],
-        )
-    }
-
     pub fn set_keyless_mentions_heard(&self, agent_id: &str, heard: bool) -> rusqlite::Result<()> {
         let conn = self.conn();
         if heard {
@@ -407,40 +402,21 @@ impl Db {
 
     // KA3: the new door, and KA8: turns
 
+    /// KA3: records the nonce that made this keyless agent. False when it was already used.
     pub fn insert_keyless_nonce(
         &self,
         nonce: &str,
         player_id: i64,
-        key: &str,
-        shown_until: i64,
         now: i64,
     ) -> rusqlite::Result<bool> {
         Ok(self.conn().execute(
-            "INSERT OR IGNORE INTO keyless_nonces (nonce, player_id, key_plain, shown_until, at)
-             VALUES (?, ?, ?, ?, ?)",
-            params![nonce, player_id, key, shown_until, now],
+            "INSERT OR IGNORE INTO keyless_nonces (nonce, player_id, at) VALUES (?, ?, ?)",
+            params![nonce, player_id, now],
         )? == 1)
     }
 
-    pub fn set_keyless_nonce_page(&self, nonce: &str, page: &str) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "UPDATE keyless_nonces SET page = ? WHERE nonce = ? AND key_plain IS NOT NULL",
-            params![page, nonce],
-        )?;
-        Ok(())
-    }
-
-    /// The page a nonce made, while it may still be shown. Wipes the key and page of every nonce
-    /// whose time is up, first.
-    pub fn keyless_nonce(&self, nonce: &str, now: i64) -> rusqlite::Result<Option<Option<String>>> {
-        let conn = self.conn();
-        conn.execute(
-            "UPDATE keyless_nonces SET key_plain = NULL, page = NULL
-             WHERE shown_until <= ? AND key_plain IS NOT NULL",
-            [now],
-        )?;
-        conn.query_row("SELECT page FROM keyless_nonces WHERE nonce = ?", [nonce], |row| row.get(0))
-            .optional()
+    pub fn keyless_nonce_used(&self, nonce: &str) -> rusqlite::Result<bool> {
+        exists(&self.conn(), "SELECT 1 FROM keyless_nonces WHERE nonce = ?", [nonce])
     }
 
     /// KA4: new keyless agents made by the bridge's new door since `since`.
@@ -450,7 +426,7 @@ impl Db {
         })
     }
 
-    /// GB4 for a keyless agent: counts a turn as played. False when it already played it today.
+    /// KA8: counts a turn as played. False when it already played it within KEYLESS_TURN_SECS.
     pub fn take_keyless_turn(
         &self,
         player_id: i64,
@@ -460,7 +436,7 @@ impl Db {
         let conn = self.conn();
         conn.execute(
             "DELETE FROM keyless_turns WHERE player_id = ? AND at < ?",
-            params![player_id, now - super::bridge::BRIDGE_TURN_SECS],
+            params![player_id, now - KEYLESS_TURN_SECS],
         )?;
         Ok(conn.execute(
             "INSERT OR IGNORE INTO keyless_turns (player_id, turn, at) VALUES (?, ?, ?)",

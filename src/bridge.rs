@@ -51,7 +51,8 @@ async fn make_key(
     let key = auth::new_bridge_key();
     state.db.set_bridge_key(&id, &auth::hash_secret(&key), now())?;
     let url = format!("{}/bridge/{key}/1/look", state.config.public_url);
-    Ok(Json(json!({ "key": key, "url": url })))
+    let expires_at = ops::iso(now() + crate::db::BRIDGE_KEY_SECS);
+    Ok(Json(json!({ "key": key, "url": url, "expires_at": expires_at })))
 }
 
 /// GB1: ends it.
@@ -155,7 +156,7 @@ fn is_action(action: &str) -> bool {
 /// or a house bot plays nowhere.
 fn bot_for(state: &AppState, key: &str) -> ApiResult<Option<Caller>> {
     let hash = auth::hash_secret(key);
-    let Some(agent_id) = state.db.bridge_agent(&hash)? else { return Ok(None) };
+    let Some(agent_id) = state.db.bridge_agent(&hash, now())? else { return Ok(None) };
     let Some(agent) = state.db.agent(&agent_id, now())? else { return Ok(None) };
     if state.db.recycled_at(&agent.id)?.is_some()
         || state.db.bot_home(&agent.id)?.is_some_and(|home| home.is_house)
@@ -431,8 +432,6 @@ fn html(status: StatusCode, body: String) -> Response {
 
 // Keyless agents (KA3, KA8 in docs/keyless-agents-design.md)
 
-/// KA3: how long the new door's page, with its key, can be fetched again.
-pub const NEW_PAGE_SECS: i64 = 10 * 60;
 /// KA4: new keyless agents an hour through the new door, across the server.
 pub const NEW_PER_HOUR: i64 = 30;
 
@@ -466,16 +465,9 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
         );
     }
     let now = now();
-    match state.db.keyless_nonce(nonce, now) {
-        Ok(Some(Some(page))) => return html(StatusCode::OK, page),
-        Ok(Some(None)) => {
-            return bare(
-                StatusCode::CONFLICT,
-                "Nonce used",
-                "That nonce already made a keyless agent. Use its key, or a new nonce.",
-            )
-        }
-        Ok(None) => {}
+    match state.db.keyless_nonce_used(nonce) {
+        Ok(true) => return spent(),
+        Ok(false) => {}
         Err(error) => {
             tracing::warn!(%error, "the bridge's new door could not read the database");
             return bare(
@@ -505,32 +497,31 @@ fn new_page(state: &AppState, nonce: &str, action: &str, payload: Option<&str>) 
     }
     let key = auth::new_guest_token();
     let made = worlds::new_keyless_agent(state, &auth::hash_secret(&key), now).and_then(|player| {
-        let fresh =
-            state.db.insert_keyless_nonce(nonce, player.id, &key, now + NEW_PAGE_SECS, now)?;
+        let fresh = state.db.insert_keyless_nonce(nonce, player.id, now)?;
         Ok((player, fresh))
     });
     let player = match made {
         Ok((player, true)) => player,
-        // Another fetch with this nonce got there first: this one stops, and shows that page.
+        // Another fetch with this nonce got there first: this one's agent goes, and it says so.
         Ok((player, false)) => {
             let _ = state.db.remove_keyless(player.id, true);
-            return match state.db.keyless_nonce(nonce, now) {
-                Ok(Some(Some(page))) => html(StatusCode::OK, page),
-                _ => bare(StatusCode::CONFLICT, "Nonce used", "Try again with a new nonce."),
-            };
+            return spent();
         }
         Err(error) => return bare(error.status, "Error", &error.message),
     };
     let name = worlds::name_of(&player);
     let agent = crate::keyless::Keyless { player, name };
     let (status, body) = keyless_turn(state, &agent, "1", action, payload, Some(&key));
-    if status == StatusCode::OK {
-        // KA3: the same nonce shows this page again for ten minutes.
-        if let Err(error) = state.db.set_keyless_nonce_page(nonce, &body) {
-            tracing::warn!(%error, "the new door's page could not be kept for a retry");
-        }
-    }
     html(status, body)
+}
+
+/// KA3: a nonce that was used. Its key was shown once and isn't kept, so it can't be shown again.
+fn spent() -> Response {
+    bare(
+        StatusCode::CONFLICT,
+        "Nonce used",
+        "That nonce already made a keyless agent, and its key was shown once. Use that key, or start again with a new nonce.",
+    )
 }
 
 /// KA8: one turn of a keyless agent.
@@ -820,7 +811,7 @@ fn keyless_render(
     }
     let key_part = match key {
         Some(key) => format!(
-            "<h2>Your key</h2>\n<p>{key}</p>\n<p>Keep it: it is how you play, and this is the only page that shows it. Your next address is /bridge/{key}/2/look, and each turn after that is one more.</p>\n",
+            "<h2>Your key</h2>\n<p>{key}</p>\n<p>Keep it: it is how you play, and this is the only time it is shown, even if you fetch this address again. Your next address is /bridge/{key}/2/look, and each turn after that is one more.</p>\n",
             key = esc(key)
         ),
         None => String::new(),
