@@ -11298,3 +11298,115 @@ async fn an_owners_wake_setting_shows_a_tagger_only_not_waking_now() {
     let plain = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
     assert!(plain.get("wakes").is_none(), "{plain}");
 }
+
+// A100, A102, A105 (#685): a block cuts mentions both ways, the blocker's bots and the blocked
+// person's bots included, and nobody is told. The bot sees whom by id. Taking it back restores it.
+#[tokio::test]
+async fn a_block_cuts_mentions_both_ways_and_a_bot_sees_whom() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let mentions = |token: String| {
+        let server = &server;
+        async move {
+            server.tool(&token, "inbox", json!({})).await["structuredContent"]["mentions"]
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    let person_mentions = |key: String| {
+        let server = &server;
+        async move {
+            server.get(&key, "/api/needs-you").await.ok()["mentions"].as_array().unwrap().len()
+        }
+    };
+    let bot_says = |token: String, text: &'static str| {
+        let (server, room) = (&server, room.clone());
+        async move { server.tool(&token, "say", json!({ "hangout_id": room, "text": text })).await }
+    };
+
+    server.post(&bo.key, &messages, json!({ "text": "@Scout before" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 1);
+
+    let blocked = server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    assert_eq!(blocked["blocks"][0]["person_id"], bo.id.as_str(), "{blocked}");
+    // Bo and Bo's bot reach neither Ann's bot nor Ann.
+    server.post(&bo.key, &messages, json!({ "text": "@Scout and @Ann after" })).await.ok();
+    bot_says(pip.token.clone(), "@Scout from Pip").await;
+    assert_eq!(mentions(scout.token.clone()).await, 1, "nothing new across the block");
+    assert_eq!(person_mentions(ann.key.clone()).await, 0);
+    // And the other way: Ann's bot and Ann reach neither Bo's bot nor Bo.
+    bot_says(scout.token.clone(), "@Pip from Scout").await;
+    server.post(&ann.key, &messages, json!({ "text": "@Bo and @Pip from Ann" })).await.ok();
+    assert_eq!(mentions(pip.token.clone()).await, 0);
+    assert_eq!(person_mentions(bo.key.clone()).await, 0);
+
+    // A105: Scout sees whom its person blocked, by id; Pip sees nothing about it.
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["blocks"]["blocked"], json!([bo.id]), "{inbox}");
+    assert!(inbox["blocks"]["note"].as_str().unwrap().contains("Never say"));
+    let theirs = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(theirs.get("blocks").is_none(), "{theirs}");
+
+    // Taken back, mentions reach again.
+    server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();
+    server.post(&bo.key, &messages, json!({ "text": "@Scout again" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 2);
+}
+
+// A104 (#685): a mute stops only the muted person's mentions of the muter, one way.
+#[tokio::test]
+async fn a_mute_stops_their_mentions_one_way() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let mentions = |token: String| {
+        let server = &server;
+        async move {
+            server.tool(&token, "inbox", json!({})).await["structuredContent"]["mentions"]
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    server.post(&ann.key, "/api/mutes", json!({ "person_id": bo.id })).await.ok();
+    server.post(&bo.key, &messages, json!({ "text": "@Scout hello" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 0, "muted");
+    server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "@Pip hi" })).await;
+    assert_eq!(mentions(pip.token.clone()).await, 1, "a mute is one way");
+    let listed = server.get(&ann.key, "/api/blocks").await.ok();
+    assert_eq!(listed["mutes"][0]["name"], "Bo", "{listed}");
+    assert_eq!(listed["blocks"], json!([]));
+}
+
+// A100 (#685): only a person blocks, never themselves, and only someone who exists.
+#[tokio::test]
+async fn only_a_person_blocks_and_never_themselves() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let body = json!({ "person_id": bo.id });
+    server.post(&scout.token, "/api/blocks", body.clone()).await.refused(StatusCode::FORBIDDEN);
+    server
+        .post(&ann.key, "/api/blocks", json!({ "person_id": ann.id }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, "/api/blocks", json!({ "person_id": "nobody" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    // Twice is once; deleting either account deletes the block.
+    server.post(&ann.key, "/api/blocks", body.clone()).await.ok();
+    let again = server.post(&ann.key, "/api/blocks", body).await.ok();
+    assert_eq!(again["blocks"].as_array().unwrap().len(), 1);
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    assert_eq!(server.get(&ann.key, "/api/blocks").await.ok()["blocks"], json!([]));
+}
