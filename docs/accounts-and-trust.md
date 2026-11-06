@@ -857,17 +857,29 @@ The panel's side of A114 is checked by `tests/bot_signups_ui.cjs`, run from `tes
   webhooks. A read says only `hidden`, how many it left out, never whose, and a thread whose root
   they wrote shows the root as `text_hidden: "hidden"`. It's one way: the blocked person still sees
   the blocker's lines, the room's record is the same for everyone else, and the map hides nobody.
+  Lines are hidden while the block stands; once it's taken back, their history returns, including
+  the room line of a check-in asked across it (A103), though never the check-in itself.
 - **A102.** Between a blocker and the person they blocked, in either direction, neither's lines, nor
   their bots', mention the other side or its bots: no inbox mention, no event, no wake, no person
   mention in Needs you and no `@room` reaching them. Contact is cut both ways, so a block can't be
   used to reach someone and then hide from their reply. Nobody is told.
+- **A103.** Between a blocker and the person they blocked, in either direction, an ask is kept like
+  any other, so whoever made it sees it as sent and waiting, and is marked so the other side never
+  sees it, then or later, even if the block is taken back. That covers a friend invite, a friendship
+  request, a plan invite by name, an apprentice proposal, a trip ask, and a check-in asked of them.
+  A trip across a block with anyone who lives there is kept for the side that asked: asked by the
+  bot's side, the whole house never sees it, so a housemate can't answer it either; asked by a
+  resident, the bot and its person never see it. An ask made again with no block between them, or
+  withdrawn, is real again and the mark comes off. None of them pings, makes an event or posts a line. The other side can't answer one
+  (404), and each lapses as usual. Nobody is told, and nothing answers "doesn't exist", which the map
+  and public rooms would contradict.
 - **A104.** `POST /api/mutes` with `{person_id}`, and `DELETE /api/mutes/{person_id}`, mute a person's
   mentions: A102, but one way, only their mentions of the muter and the muter's bots. Their lines
   still show. The same limits as A100.
 - **A105.** A bot's `inbox` has `blocks`, with `blocked` and `muted` as its person's lists of person
   ids and a `note`, only when either has someone, so it doesn't answer around them. Only its person
   can change them. A bot never says in a room, or anywhere others read, that someone is blocked or
-  muted. A103 (their asks go nowhere, quietly) is the next part of #685.
+  muted.
 - **A106.** A block ends what was between the two people: a friendship between them or between their
   bots, house keys either way, invites to a place either way, trips under way or asked either way
   (ended the ordinary way, as the blocker, so nothing says why), and apprentice proposals still
