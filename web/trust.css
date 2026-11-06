@@ -64,7 +64,8 @@
 .trust-node image.head { image-rendering: pixelated; pointer-events: none; }
 .trust-node .initial { font: 700 13px var(--ui); fill: var(--wd-ink, #2b1d10); pointer-events: none; }
 .trust-node.you .initial, .trust-node.mine .initial { fill: #fff3d2; }
-.trust-node .label { font: 600 11px var(--ui); fill: var(--wd-ink, #2b1d10); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
+/* BT12: no font-size here. trust.js sizes each name for the zoom, and a size set here would win over it. */
+.trust-node .label { font-family: var(--ui); font-weight: 600; fill: var(--wd-ink, #2b1d10); paint-order: stroke; stroke: #e6d6ae; stroke-width: 3px; pointer-events: none; }
 .trust-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; color: var(--muted); }
 .trust-legend .swatch { display: inline-block; width: 22px; height: 0; margin-left: 6px; border-top: 2.5px solid var(--wd-brick-2, #a94a26); }
 .trust-legend .swatch:first-child { margin-left: 0; }
@@ -107,7 +108,6 @@ div.trust-memory { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 
 .trust-settings form { display: grid; gap: 12px; }
 @media (max-width: 600px) {
   .wd-game > .game-panel-trust { width: calc(100% - 24px); }
-  .trust-node .label { font-size: 13px; }
 }
 .trust-usage { width: 100%; border-collapse: collapse; font-size: .85em; margin: 6px 0; }
 .trust-usage th, .trust-usage td { text-align: left; padding: 2px 6px; border-bottom: 1px solid rgba(120, 90, 44, .25); overflow-wrap: anywhere; }
