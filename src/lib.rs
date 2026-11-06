@@ -21,6 +21,7 @@ pub mod discord;
 pub mod docs;
 pub mod doorbell;
 pub mod economy;
+pub mod elections;
 pub mod error;
 pub mod events;
 pub mod friends;

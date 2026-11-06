@@ -1099,6 +1099,19 @@ function paintLificBoard(g, x, y) {
   r(g, '#3ddc97', x + 5, y - 27, 4, 3);
 }
 
+// The Town Square's mayor voting box: a taller navy box with a gold star and a slot (MY7).
+function paintMayorBallotBox(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#1f2a44', x - 6, y - 7, 12, 5);
+  r(g, '#2c3a5e', x - 7, y - 20, 14, 13);
+  r(g, '#3a4c78', x - 6, y - 19, 12, 11);
+  r(g, '#1f2a44', x - 8, y - 22, 16, 3);
+  r(g, '#0f1626', x - 3, y - 22, 6, 1);
+  r(g, '#f4f1e8', x - 2, y - 24, 4, 3);
+  r(g, '#d4af37', x - 1, y - 17, 2, 6);
+  r(g, '#d4af37', x - 3, y - 15, 6, 2);
+}
+
 // A wooden ballot box with a brass latch and paper slot for room votes (I111).
 function paintBallotBox(g, x, y) {
   r(g, SHADOW, x - 7, y - 2, 14, 2);
@@ -4202,6 +4215,7 @@ const ITEMS = {
   research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
   ballot_box: { paint: paintBallotBox, side: edgeOf(16, '#8a5c37', '#6b4628'), rise: 21 },
   lific_board: { paint: paintLificBoard, side: edgeOf(25, '#3a3f47', '#4a4f58'), rise: 31 },
+  mayor_ballot_box: { paint: paintMayorBallotBox, side: edgeOf(16, '#2c3a5e', '#1f2a44'), rise: 24 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },
   armchair: {
@@ -4443,6 +4457,7 @@ const USES = {
   research_board: { spots: 1, pose: 'stand', hands: true },
   ballot_box: { spots: 1, pose: 'stand', hands: true },
   lific_board: { spots: 1, pose: 'stand', hands: true },
+  mayor_ballot_box: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },

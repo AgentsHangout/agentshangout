@@ -2020,6 +2020,37 @@ CREATE TABLE IF NOT EXISTS agent_accounts (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_accounts_by_age ON agent_accounts (created_at);
+-- MY1 (#639): one mayor election a week, site-wide. It closes at closes_at (a Saturday, 1:00 PM in
+-- Chicago), when the winner is written and the next week's opens.
+CREATE TABLE IF NOT EXISTS mayor_elections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    closes_at   INTEGER NOT NULL UNIQUE,
+    opened_at   INTEGER NOT NULL,
+    closed_at   INTEGER,
+    winner_kind TEXT,
+    winner_id   TEXT,
+    winner_name TEXT,
+    winner_votes INTEGER,
+    tie_draw    INTEGER NOT NULL DEFAULT 0
+);
+-- MY2: who stands in a week's election, a person or a bot, with the name they stood under.
+CREATE TABLE IF NOT EXISTS mayor_candidates (
+    election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+    candidate_id TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    stood_at     INTEGER NOT NULL,
+    PRIMARY KEY (election_id, kind, candidate_id)
+);
+-- MY3, MY4: each person's one secret ballot in a week's election; the last one cast counts.
+CREATE TABLE IF NOT EXISTS mayor_ballots (
+    election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    voter        TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    cast_at      INTEGER NOT NULL,
+    PRIMARY KEY (election_id, voter)
+);
 -- I129 (#629): the Lific project this server made for a room on its own instance, the one every
 -- lific_board in the room shows. `published` is 0 until Lific has made it public.
 CREATE TABLE IF NOT EXISTS lific_room_projects (
@@ -2044,6 +2075,47 @@ CREATE TABLE IF NOT EXISTS lific_cards (
 );
 CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
 "#;
+
+/// MY1: a week's mayor election.
+#[derive(Debug, Clone)]
+pub struct MayorElection {
+    pub id: i64,
+    pub closes_at: i64,
+    pub opened_at: i64,
+    pub closed_at: Option<i64>,
+    pub winner: Option<MayorCandidate>,
+    pub winner_votes: Option<i64>,
+    pub tie_draw: bool,
+}
+
+/// MY2: someone standing for mayor: a person or a bot, by id, with the name they stood under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MayorCandidate {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+}
+
+const MAYOR_COLS: &str =
+    "id, closes_at, opened_at, closed_at, winner_kind, winner_id, winner_name, winner_votes, tie_draw";
+
+fn mayor_election_from_row(row: &Row) -> rusqlite::Result<MayorElection> {
+    let kind: Option<String> = row.get(4)?;
+    let id: Option<String> = row.get(5)?;
+    let name: Option<String> = row.get(6)?;
+    Ok(MayorElection {
+        id: row.get(0)?,
+        closes_at: row.get(1)?,
+        opened_at: row.get(2)?,
+        closed_at: row.get(3)?,
+        winner: match (kind, id, name) {
+            (Some(kind), Some(id), Some(name)) => Some(MayorCandidate { kind, id, name }),
+            _ => None,
+        },
+        winner_votes: row.get(7)?,
+        tie_draw: row.get::<_, i64>(8)? != 0,
+    })
+}
 
 /// I106: a closing clock's saved time and who it sends out.
 #[derive(Debug, Clone)]
@@ -3733,6 +3805,9 @@ fn bot_places_sql(city: &str, from: &str) -> String {
 /// `Db::delete_agent`, inside a transaction its caller holds (RC5 checks first).
 fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     end_bot_player_token(tx, agent_id)?;
+    // MY2 (#642): a bot that goes stops standing, and the ballots for it go too.
+    tx.execute("DELETE FROM mayor_ballots WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
+    tx.execute("DELETE FROM mayor_candidates WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
     // These hold a bot's address with no foreign key to it.
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
@@ -4432,6 +4507,18 @@ fn settle_their_plans(conn: &Connection, person_id: &str) -> rusqlite::Result<()
 /// Everything that stays and still points at them, so that `people` lets their row go.
 fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusqlite::Result<()> {
     let left = SOMEONE_WHO_LEFT_ID;
+    // MY2, MY6 (#642): their candidacies, and their bots', go with the ballots for them; a week
+    // they or one of their bots won says Someone who left.
+    let theirs = "(kind = 'person' AND candidate_id = ?1)
+         OR (kind = 'bot' AND candidate_id IN (SELECT id FROM agents WHERE owner_id = ?1))";
+    conn.execute(&format!("DELETE FROM mayor_ballots WHERE {theirs}"), [person_id])?;
+    conn.execute(&format!("DELETE FROM mayor_candidates WHERE {theirs}"), [person_id])?;
+    conn.execute(
+        "UPDATE mayor_elections SET winner_kind = 'person', winner_id = ?2, winner_name = ?3
+         WHERE (winner_kind = 'person' AND winner_id = ?1)
+            OR (winner_kind = 'bot' AND winner_id IN (SELECT id FROM agents WHERE owner_id = ?1))",
+        params![person_id, left, SOMEONE_WHO_LEFT],
+    )?;
     // F40: what they claimed is let go, as when anyone stops going.
     conn.execute(
         "UPDATE plan_items SET claimed_by = NULL, claimed_via = NULL, done = 0 WHERE claimed_by = ?",
@@ -11350,6 +11437,246 @@ impl Db {
         )?;
         tx.commit()?;
         Ok(Ok(person))
+    }
+
+    /// MY1: the open election, made with `closes_at` if there's none. Two callers at once make one.
+    pub fn open_mayor_election(&self, closes_at: i64, now: i64) -> rusqlite::Result<MayorElection> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO mayor_elections (closes_at, opened_at)
+             SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM mayor_elections WHERE closed_at IS NULL)
+             ON CONFLICT (closes_at) DO NOTHING",
+            params![closes_at, now],
+        )?;
+        conn.query_row(
+            &format!(
+                "SELECT {MAYOR_COLS} FROM mayor_elections WHERE closed_at IS NULL
+                      ORDER BY closes_at LIMIT 1"
+            ),
+            [],
+            mayor_election_from_row,
+        )
+    }
+
+    /// MY6: the last election that closed, for this week's mayor.
+    pub fn last_mayor_election(&self) -> rusqlite::Result<Option<MayorElection>> {
+        self.conn()
+            .query_row(
+                &format!(
+                    "SELECT {MAYOR_COLS} FROM mayor_elections WHERE closed_at IS NOT NULL
+                          ORDER BY closes_at DESC LIMIT 1"
+                ),
+                [],
+                mayor_election_from_row,
+            )
+            .optional()
+    }
+
+    /// MY2: who stands in this election, earliest first.
+    pub fn mayor_candidates(&self, election_id: i64) -> rusqlite::Result<Vec<MayorCandidate>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT kind, candidate_id, name FROM mayor_candidates WHERE election_id = ?
+             ORDER BY stood_at, name",
+        )?;
+        let rows = stmt.query_map([election_id], |row| {
+            Ok(MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? })
+        })?;
+        rows.collect()
+    }
+
+    /// MY2: stands someone, if there are fewer than `most`. False if it's full; standing again
+    /// changes nothing.
+    pub fn stand_for_mayor(
+        &self,
+        election_id: i64,
+        candidate: &MayorCandidate,
+        most: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let changed = conn.execute(
+            "INSERT INTO mayor_candidates (election_id, kind, candidate_id, name, stood_at)
+             SELECT ?1, ?2, ?3, ?4, ?5
+             WHERE (SELECT COUNT(*) FROM mayor_candidates WHERE election_id = ?1) < ?6
+             ON CONFLICT DO NOTHING",
+            params![election_id, candidate.kind, candidate.id, candidate.name, now, most],
+        )?;
+        Ok(changed == 1
+            || exists(
+                &conn,
+                "SELECT 1 FROM mayor_candidates WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+                params![election_id, candidate.kind, candidate.id],
+            )?)
+    }
+
+    /// MY2: takes a candidacy back, with the ballots cast for it.
+    pub fn withdraw_from_mayor(
+        &self,
+        election_id: i64,
+        kind: &str,
+        candidate_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let gone = tx.execute(
+            "DELETE FROM mayor_candidates WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )?;
+        tx.execute(
+            "DELETE FROM mayor_ballots WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )?;
+        tx.commit()?;
+        Ok(gone == 1)
+    }
+
+    /// MY3: casts or changes a person's ballot, for a candidate who stands.
+    pub fn cast_mayor_ballot(
+        &self,
+        election_id: i64,
+        voter: &str,
+        kind: &str,
+        candidate_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "INSERT INTO mayor_ballots (election_id, voter, kind, candidate_id, cast_at)
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (
+                 SELECT 1 FROM mayor_candidates WHERE election_id = ?1 AND kind = ?3
+                     AND candidate_id = ?4)
+             ON CONFLICT (election_id, voter) DO UPDATE SET kind = excluded.kind,
+                 candidate_id = excluded.candidate_id, cast_at = excluded.cast_at",
+            params![election_id, voter, kind, candidate_id, now],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// MY4: how many have voted, and this person's own ballot.
+    pub fn mayor_ballots_for(
+        &self,
+        election_id: i64,
+        voter: &str,
+    ) -> rusqlite::Result<(i64, Option<(String, String)>)> {
+        let conn = self.conn();
+        let voted = conn.query_row(
+            "SELECT COUNT(*) FROM mayor_ballots WHERE election_id = ?",
+            [election_id],
+            |row| row.get(0),
+        )?;
+        let mine = conn
+            .query_row(
+                "SELECT kind, candidate_id FROM mayor_ballots WHERE election_id = ? AND voter = ?",
+                params![election_id, voter],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok((voted, mine))
+    }
+
+    /// MY4, MY5: the totals for each candidate, most first.
+    pub fn mayor_totals(&self, election_id: i64) -> rusqlite::Result<Vec<(MayorCandidate, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.kind, c.candidate_id, c.name,
+                    (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
+             FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+        )?;
+        let rows = stmt.query_map([election_id], |row| {
+            Ok((
+                MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? },
+                row.get(3)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// MY5: counts an election and closes it with its winner, in one step, so no ballot lands
+    /// between the count and the close. `draw` picks among `n` tied. It's dated its own
+    /// `closes_at`, however late the ticker gets to it. False if it was closed already.
+    pub fn tally_and_close_mayor_election(
+        &self,
+        election_id: i64,
+        draw: impl FnOnce(usize) -> usize,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let totals: Vec<(String, String, String, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT c.kind, c.candidate_id, c.name,
+                        (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                           AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
+                 FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+            )?;
+            let rows = stmt.query_map([election_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let top = totals.first().map(|row| row.3).unwrap_or(0);
+        let tied: Vec<&(String, String, String, i64)> =
+            totals.iter().filter(|row| top > 0 && row.3 == top).collect();
+        let winner = match tied.len() {
+            0 => None,
+            1 => Some(tied[0]),
+            n => Some(tied[draw(n).min(n - 1)]),
+        };
+        let changed = tx.execute(
+            "UPDATE mayor_elections SET closed_at = closes_at, winner_kind = ?2, winner_id = ?3,
+                 winner_name = ?4, winner_votes = ?5, tie_draw = ?6
+             WHERE id = ?1 AND closed_at IS NULL",
+            params![
+                election_id,
+                winner.map(|w| w.0.clone()),
+                winner.map(|w| w.1.clone()),
+                winner.map(|w| w.2.clone()),
+                winner.map(|w| w.3),
+                (tied.len() > 1) as i64,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Moves when an account was made, for tests of rules that wait on an account's age (MY3).
+    pub fn backdate_person(&self, person_id: &str, created_at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE people SET created_at = ? WHERE id = ?",
+            params![created_at, person_id],
+        )?;
+        Ok(())
+    }
+
+    /// MY7: the Town Square rooms' floors with no mayor's voting box yet, and their space's owner.
+    pub fn town_squares_without_mayor_box(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT f.hangout_id, s.owner_id FROM town_square_rooms t
+             JOIN spaces s ON s.id = t.space_id
+             JOIN floors f ON f.space_id = s.id AND f.level = 0
+             WHERE NOT EXISTS (SELECT 1 FROM floor_items i
+                               WHERE i.hangout_id = f.hangout_id AND i.kind = 'mayor_ballot_box')",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// MY7: puts the mayor's voting box in a Town Square room.
+    pub fn put_mayor_box(
+        &self,
+        hangout_id: &str,
+        owner_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+             SELECT lower(hex(randomblob(8))), ?1, 'mayor_ballot_box', 1, 1, 0, ?2, ?3
+             WHERE NOT EXISTS (SELECT 1 FROM floor_items
+                               WHERE hangout_id = ?1 AND kind = 'mayor_ballot_box')",
+            params![hangout_id, owner_id, now],
+        )?;
+        Ok(())
     }
 
     /// A96: how many accounts agents made through the door in the last day.
