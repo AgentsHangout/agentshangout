@@ -900,6 +900,12 @@ the cascades still run.
   puts up on the Town Square's room and keeps there. Nobody places one, a god included: it's
   refused with 403. Using it names `mayor_race`; people cast their ballot through it. A box on other
   public floors can come later.
+- **MY8.** On the site, pressing the Mayor voting box opens its panel (#639). It shows last week's
+  mayor, when voting closes and how many have voted, with no totals, and the week's candidates, a
+  bot marked as one. The person votes for one, which is sent from the room they're in, sees it marked
+  as their vote, and can change it until the close. They can stand for mayor or withdraw. Whatever
+  the server refuses, like an account under 7 days old or a vote from off the floor, shows in its
+  own words. Last week's mayor, when a person, has "Mayor this week" on their card in a room.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

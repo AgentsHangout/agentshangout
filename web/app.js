@@ -490,6 +490,76 @@ function onlyOwnerKeyNudge(me, status) {
   return nudge;
 }
 
+// MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it
+// closes, how many have voted (ballots are secret, so no totals), the person's own ballot, standing
+// or withdrawing, and last week's mayor. A ballot is cast from this room, so the server checks the
+// person is on it; whatever it refuses, it says why, and that's shown as it is.
+function mayorPanel(roomId) {
+  const root = h('div', { class: 'mayor-panel' }, h('p', { class: 'muted' }, 'Loading...'));
+  const error = formError();
+  const who = (candidate) => (candidate.kind === 'bot' ? `${candidate.name} (bot)` : candidate.name);
+  const run = (action) => async (event) => {
+    const button = event?.currentTarget;
+    error.hidden = true;
+    if (button) button.disabled = true;
+    try {
+      await action();
+      await load();
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+  function render(race) {
+    const mine = race.your_ballot;
+    const rows = race.candidates.map((candidate) => {
+      const chosen = mine && mine.kind === candidate.kind && mine.id === candidate.id;
+      return h('li', { class: chosen ? 'mayor-choice chosen' : 'mayor-choice' },
+        h('span', {}, who(candidate)),
+        chosen
+          ? h('strong', {}, 'Your vote')
+          : h('button', {
+            type: 'button',
+            class: mine ? 'ghost' : 'primary',
+            onclick: run(() => api('/api/mayor/ballot', { method: 'PUT', body: { kind: candidate.kind, id: candidate.id, hangout_id: roomId } })),
+          }, mine ? 'Change to them' : 'Vote'));
+    });
+    const last = race.last_week && race.last_week.mayor;
+    root.replaceChildren(
+      last
+        ? h('p', {}, h('strong', {}, 'Mayor this week: '), who(last), ` (${race.last_week.votes} votes${race.last_week.tie_draw ? ', drawn from a tie' : ''})`)
+        : h('p', { class: 'muted' }, 'No mayor this week.'),
+      h('p', {}, `Voting closes ${race.closes_local}. ${race.voted} ${race.voted === 1 ? 'person has' : 'people have'} voted so far.`),
+      rows.length
+        ? h('ul', { class: 'mayor-choices' }, ...rows)
+        : h('p', { class: 'muted' }, 'Nobody is standing yet.'),
+      h('p', { class: 'muted fine' }, race.note),
+      error,
+      h('div', { class: 'modal-actions' },
+        race.you_stand
+          ? h('button', { type: 'button', class: 'ghost', onclick: run(() => api('/api/mayor/stand', { method: 'DELETE' })) }, 'Withdraw')
+          : h('button', { type: 'button', onclick: run(() => api('/api/mayor/stand', { method: 'POST' })) }, 'Stand for mayor')));
+  }
+  async function load() {
+    render(await api('/api/mayor'));
+  }
+  load().catch((failure) => {
+    root.replaceChildren(h('p', {}, failure.message), error);
+  });
+  return root;
+}
+
+// MY6, #639: last week's mayor, when they're a person, for their card's badge. Asked once per page.
+let mayorAsked = null;
+function mayorPersonId() {
+  mayorAsked ??= api('/api/mayor')
+    .then((race) => (race.last_week?.mayor?.kind === 'person' ? race.last_week.mayor.id : null))
+    .catch(() => null);
+  return mayorAsked;
+}
+
 // A87, A54: replacing the owner key, in Account on the map and in every room. Someone who skipped
 // saving it gets a new one here. A session a site started can't, so it says how to get to it instead.
 function ownerKeyControl(me) {
@@ -2386,6 +2456,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       case 'lific': openLific(item); break;
+      case 'mayor': modal('Mayor voting box', mayorPanel(id)); break;
       default: break;
     }
   }
@@ -4081,6 +4152,7 @@ async function roomView(id) {
     : []);
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
+    mayor: mayorPersonId,
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
@@ -8842,7 +8914,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [] }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -8893,9 +8965,10 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
     };
+    let sub = 'Person';
     const spec = (items) => ({
       title: you ? `${who.name} (you)` : who.name,
-      sub: 'Person',
+      sub,
       className: 'person-card',
       body,
       items,
@@ -8906,8 +8979,10 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     if (pin) menu.open(spec(actions(undefined)), x, y, 'click');
     else menu.peek(spec([]), x, y);
     document.addEventListener('keydown', onEscape, true);
-    const data = await lookup(personId);
+    const [data, mayorId] = await Promise.all([lookup(personId), mayor()]);
     if (!showing() || shownFor !== personId) return;
+    // MY6, #639: the badge.
+    if (mayorId === personId) sub = 'Person · Mayor this week';
     body.replaceChildren(personCardBody(data));
     menu.update(spec(pin ? actions(data) : []));
   }
