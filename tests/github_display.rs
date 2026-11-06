@@ -42,6 +42,8 @@ struct FakeState {
     repos_status: u16,
     /// A non-200 status `/search/issues` answers with, or 0 for 200.
     search_status: u16,
+    /// What `/search/issues` answers with as its items (HC35's merged pull requests).
+    merged_items: Value,
 }
 
 type Fake = Arc<Mutex<FakeState>>;
@@ -134,7 +136,8 @@ async fn search(
         return response;
     }
     let total = state.search_total;
-    etag_response(AxumStatus::OK, json!({ "total_count": total }), "search-etag")
+    let items = if state.merged_items.is_null() { json!([]) } else { state.merged_items.clone() };
+    etag_response(AxumStatus::OK, json!({ "total_count": total, "items": items }), "search-etag")
 }
 
 async fn start_fake() -> (String, Fake) {
@@ -349,6 +352,38 @@ fn fresh_cache(now: i64) -> CachedDisplay {
         search_etag: None,
         last_attempt_at: 0,
     }
+}
+
+// HC35: opening your credits looks up what you've had merged in the project's repo, and pays it,
+// with nothing to show on your profile and no more than once an hour
+#[tokio::test]
+async fn opening_your_credits_pays_your_merged_pull_requests() {
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    server.fake.lock().unwrap().merged_items = json!([
+        { "number": 12, "pull_request": { "merged_at": "2026-11-01T10:00:00Z" } },
+        { "number": 15, "pull_request": { "merged_at": "2026-11-02T10:00:00Z" } },
+        { "number": 16, "pull_request": { "merged_at": null } },
+    ]);
+    let before = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(before["balance"], 0, "nothing is looked up before GitHub is linked");
+    assert!(server.fake.lock().unwrap().hits.is_empty());
+
+    server.link_github(&ann.id, "1001", "ann-codes");
+    let paid = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!((&paid["balance"], &paid["merged_prs"]), (&json!(20), &json!(2)), "{paid}");
+    assert!(paid["history"].as_array().unwrap().iter().any(|line| line["kind"] == "merged_pr"));
+    let hits = server.fake.lock().unwrap().hits.clone();
+    assert_eq!(
+        hits,
+        ["search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout"],
+        "only the project's repo, and only what's merged"
+    );
+
+    // Within the hour it isn't looked up again, and nothing pays twice.
+    let again = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(again["balance"], 20);
+    assert_eq!(server.fake.lock().unwrap().hits.len(), 1);
 }
 
 // A70

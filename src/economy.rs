@@ -43,6 +43,8 @@ pub struct Credits {
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
+    /// HC35: how many merged pull requests have paid.
+    pub merged_prs: i64,
     /// Cities they're in that don't pay them anything new yet (HC5, HC13), by id.
     pub cities_not_earning: Vec<String>,
     /// HC14: every pack that costs credits, and whether they have it.
@@ -169,6 +171,7 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     out.gatherings = totals.gatherings;
     out.good_trips = totals.good_trips;
     out.hosted_trips = totals.hosted_trips;
+    out.merged_prs = totals.merged_prs;
     let bought = db.bought_packs(person_id)?;
     out.packs = PACKS
         .iter()

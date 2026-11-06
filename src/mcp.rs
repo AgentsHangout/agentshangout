@@ -3274,7 +3274,14 @@ fn call_tool(
         "read_thread" => read_thread(state, caller, args),
         "how_to_play" => crate::how_to_play::tool(args),
         "inbox" => inbox_json(state, caller, args["full"].as_bool().unwrap_or(false), args),
-        "credits" => Ok(json!(crate::economy::credits_of(&state.db, caller, now())?)),
+        "credits" => {
+            // HC35: what's newly merged is looked up in the background, and shows next time.
+            if !caller.is_house {
+                let (state, person) = (state.clone(), caller.person_id.clone());
+                tokio::spawn(async move { crate::pr_credits::check(&state, &person).await });
+            }
+            Ok(json!(crate::economy::credits_of(&state.db, caller, now())?))
+        }
         "spend_credits" => {
             let pack = args["pack"]
                 .as_str()
