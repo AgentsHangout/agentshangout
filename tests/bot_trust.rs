@@ -186,9 +186,14 @@ async fn keyless_chat_does_not_release_the_polling_bot_chain_hold() {
 #[tokio::test]
 async fn inactive_selections_are_discarded_when_the_owner_changes_mode() {
     let f = Fixture::new().await;
-    let mut trust = Trust::default();
-    trust.wake =
-        Permission { mode: "selected".into(), people: vec!["bob".into()], bots: vec!["b".into()] };
+    let mut trust = Trust {
+        wake: Permission {
+            mode: "selected".into(),
+            people: vec!["bob".into()],
+            bots: vec!["b".into()],
+        },
+        ..Trust::default()
+    };
     assert_eq!(
         f.call("alice", Method::PUT, "/api/agents/a/trust", serde_json::to_value(&trust).unwrap())
             .await
