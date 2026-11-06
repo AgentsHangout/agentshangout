@@ -15,7 +15,7 @@ use std::{
 use agenthangout::{
     app, auth,
     db::Db,
-    now, routines,
+    god_mode, now, routines,
     world::{self, Ground, Kind},
     worlds::{self, Move},
     AppState, Config,
@@ -338,6 +338,44 @@ impl Server {
 
 fn road_move(at: (i64, i64)) -> Value {
     json!({ "action": "road", "x": at.0, "y": at.1 })
+}
+
+// A95
+#[tokio::test]
+async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
+    let (server, justin, morg) = Server::start().await;
+    let path = "/api/god-mode/bot-signups";
+    let (room, stranger) = server.someone("Stranger").await;
+    let (_, bot) = server.bot(&stranger, &room, "Scout").await;
+
+    // Off the list, or a bot: the 404 of a route that isn't there, whatever is asked.
+    for token in [stranger.key.as_str(), bot.as_str()] {
+        server.get(token, path).await.refused(StatusCode::NOT_FOUND);
+        server.put(token, path, json!({ "open": false })).await.refused(StatusCode::NOT_FOUND);
+    }
+    // On the list with god mode off: told to turn it on first.
+    server.get(&justin.key, path).await.refused(StatusCode::FORBIDDEN);
+
+    server.switch(&justin, true).await;
+    let first = server.get(&justin.key, path).await.ok();
+    assert_eq!(first, json!({ "open": true, "set_by": null, "set_at": null }), "open until closed");
+    assert!(god_mode::bot_signups_open(&server.state).unwrap());
+    server.put(&justin.key, path, json!({ "nonsense": 1 })).await.refused(StatusCode::BAD_REQUEST);
+
+    let closed = server.put(&justin.key, path, json!({ "open": false })).await.ok();
+    assert_eq!((&closed["open"], &closed["set_by"]), (&json!(false), &json!(JUSTIN)));
+    assert!(closed["set_at"].is_i64());
+    assert!(!god_mode::bot_signups_open(&server.state).unwrap());
+    server.switch(&morg, true).await;
+    assert_eq!(server.get(&morg.key, path).await.ok()["open"], false, "one switch for the site");
+
+    // If whoever closed it leaves, it stays closed and names Someone who left.
+    server.state.db.delete_person(&justin.id, "Justin").unwrap();
+    assert!(!god_mode::bot_signups_open(&server.state).unwrap());
+    let after = server.get(&morg.key, path).await.ok();
+    assert_eq!(after["set_by"], agenthangout::db::SOMEONE_WHO_LEFT_ID);
+    let opened = server.put(&morg.key, path, json!({ "open": true })).await.ok();
+    assert_eq!((&opened["open"], &opened["set_by"]), (&json!(true), &json!(MORG)));
 }
 
 // W75
