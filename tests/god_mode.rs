@@ -130,6 +130,10 @@ impl Server {
         self.send(token, Method::PUT, path, Some(body)).await
     }
 
+    async fn delete(&self, token: &str, path: &str) -> Reply {
+        self.send(token, Method::DELETE, path, None).await
+    }
+
     /// Someone nobody listed, and their first room.
     async fn someone(&self, name: &str) -> (String, Who) {
         let body =
@@ -585,6 +589,14 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     let (server, justin, _) = Server::start().await;
     let (own_room, ann) = server.someone("Ann").await;
     let (eagle_id, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    // Eagle is out on the square.
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    server.go_in(&ann.key, spot).await.ok();
+    let walk_in = json!({ "agent_id": eagle_id });
+    server.post(&ann.key, &format!("/api/floors/{square}/walk-in"), walk_in).await.ok();
     agenthangout::elections::settle_due(&server.state, now()).unwrap();
     let nominate = json!({ "kind": "bot", "id": eagle_id });
 
@@ -602,10 +614,20 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     let stood = server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
     assert_eq!(stood["you_stand"], true, "{stood}");
     let race = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
-    let names: Vec<&str> =
-        race["candidates"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = race["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names.len(), 2, "{race}");
     assert!(names.contains(&"Eagle"), "{race}");
+    // A bot that isn't out on a public floor is "not found", so its name never reaches the ballot.
+    let (hidden_bot, _) = server.bot(&ann, &own_room, "Private").await;
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": hidden_bot }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
     // Twice is still once, and only bots that exist, as bots.
     let again = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
     assert_eq!(again["candidates"].as_array().unwrap().len(), 2, "{again}");
@@ -617,14 +639,25 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
         .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "person", "id": ann.id }))
         .await
         .refused(StatusCode::BAD_REQUEST);
-    // The bot can still take itself off.
+    // The bot can still take itself off, and its person can take it off too.
     let withdrawn = server.tool(&eagle, "mayor_race", json!({ "action": "withdraw" })).await;
     assert_eq!(withdrawn["candidates"].as_array().unwrap().len(), 1, "{withdrawn}");
+    server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    let off = format!("/api/mayor/candidates/bot/{eagle_id}");
+    let by_owner = server.delete(&ann.key, &off).await.ok();
+    assert_eq!(by_owner["candidates"].as_array().unwrap().len(), 1, "{by_owner}");
+    server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
 
     // Anyone else, and any bot, gets W75's 404, and never sees can_nominate as true.
-    server.post(&ann.key, "/api/mayor/candidates", nominate.clone()).await.refused(StatusCode::NOT_FOUND);
+    server
+        .post(&ann.key, "/api/mayor/candidates", nominate.clone())
+        .await
+        .refused(StatusCode::NOT_FOUND);
     server.post(&eagle, "/api/mayor/candidates", nominate).await.refused(StatusCode::NOT_FOUND);
     assert_eq!(server.get(&ann.key, "/api/mayor").await.ok()["can_nominate"], false);
+    // Someone else can't take Ann's bot off; only she and a god can.
+    let (_, cy) = server.someone("Cy").await;
+    server.delete(&cy.key, &off).await.refused(StatusCode::NOT_FOUND);
 }
 
 // MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.

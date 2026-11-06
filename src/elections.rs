@@ -251,7 +251,17 @@ fn nominate(state: &AppState, caller: &Caller, nomination: &Nomination) -> ApiRe
     if nomination.kind != "bot" {
         return Err(ApiError::bad_request("nominate a bot: kind is \"bot\""));
     }
-    let bot = state.db.agent(&nomination.id, now())?.ok_or_else(ApiError::not_found)?;
+    let at = now();
+    let bot = state.db.agent(&nomination.id, at)?.ok_or_else(ApiError::not_found)?;
+    // The ballot is public, so only a bot out on a public floor now can be put on it: a bot that
+    // stays in private rooms is "not found", and its name never reaches the ballot.
+    let public = match state.db.bot_place(&bot.id, at)? {
+        Some(place) => state.db.floor(&place)?.is_some_and(|floor| floor.access == "public"),
+        None => false,
+    };
+    if !public {
+        return Err(ApiError::not_found());
+    }
     if state.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house) {
         return Err(ApiError::bad_request("a house's own bot doesn't stand for mayor"));
     }
@@ -263,13 +273,19 @@ fn nominate(state: &AppState, caller: &Caller, nomination: &Nomination) -> ApiRe
     race(state, caller)
 }
 
-/// MY2: someone with god mode on takes a candidate out of this week's race.
+/// MY2: someone with god mode on takes a candidate out of this week's race. MY9: so does a bot's
+/// own person, for their bot, whoever put it there.
 fn remove(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Value> {
-    if caller.is_agent() || !crate::god_mode::may_use(state, &caller.person_id) {
-        return Err(ApiError::not_found());
-    }
-    if !crate::god_mode::is_on(state, &caller.person_id)? {
-        return Err(ApiError::forbidden("turn god mode on first"));
+    let owns_it = !caller.is_agent()
+        && kind == "bot"
+        && state.db.agent(id, now())?.is_some_and(|bot| bot.owner_id == caller.person_id);
+    if !owns_it {
+        if caller.is_agent() || !crate::god_mode::may_use(state, &caller.person_id) {
+            return Err(ApiError::not_found());
+        }
+        if !crate::god_mode::is_on(state, &caller.person_id)? {
+            return Err(ApiError::forbidden("turn god mode on first"));
+        }
     }
     let election = open_for_changes(state)?;
     if !state.db.withdraw_from_mayor(election.id, kind, id)? {
