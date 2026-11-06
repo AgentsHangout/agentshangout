@@ -2197,6 +2197,12 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         messages.retain(|message| !crate::blocks::hides(&hide, message));
     }
     let hidden = before - messages.len();
+    let mut notes = notes;
+    let mut check_ins = check_ins;
+    if !hide.is_empty() {
+        notes.retain(|note| !crate::blocks::hides(&hide, note));
+        check_ins.retain(|check_in| !hide.contains(&check_in.asked_by));
+    }
     // I52: reads leave out the second of arrival (R14), so this does too.
     let whiteboard = state
         .db
@@ -2355,10 +2361,14 @@ pub fn read_messages(
     limit: i64,
 ) -> ApiResult<Vec<Message>> {
     require_room(state, caller, hangout_id)?;
-    Ok(match state.guest_visit(caller, hangout_id)? {
+    let mut messages = match state.guest_visit(caller, hangout_id)? {
         Some(visit) => guest_messages(state, hangout_id, &visit, after, limit, now())?,
         None => state.db.messages(hangout_id, after, limit)?,
-    })
+    };
+    // A101: not the lines of someone this caller blocked.
+    let hide = crate::blocks::hidden_speakers(state, caller)?;
+    messages.retain(|message| !crate::blocks::hides(&hide, message));
+    Ok(messages)
 }
 
 /// A plan as a calendar file. Guests have no plans to fetch.

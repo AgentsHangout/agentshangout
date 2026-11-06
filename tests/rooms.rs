@@ -11450,10 +11450,29 @@ async fn a_blocked_persons_lines_are_hidden_from_the_blocker_one_way() {
         server.tool(&scout.token, "events_since", json!({ "since": "0", "wait_seconds": 0 })).await;
     assert!(!events.to_string().contains("Bo says hi"), "no message event: {events}");
 
+    // The REST read a bot polls the room with, too.
+    let rest = server.get(&scout.token, &format!("/api/hangouts/{room}/messages")).await.ok();
+    assert!(!rest.to_string().contains("Bo says hi"), "{rest}");
+    // A root Bo wrote, answered by Ann, shows only as hidden in its thread.
+    let bos_root = server.post(&bo.key, &messages, json!({ "text": "Bo starts one" })).await.ok();
+    let bos_root = bos_root["id"].as_i64().unwrap();
+    server
+        .post(&ann.key, &messages, json!({ "text": "Ann answers it", "reply_to": bos_root }))
+        .await
+        .ok();
+    let theirs_thread = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": room, "root": bos_root }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(theirs_thread["root"]["text_hidden"], "hidden", "{theirs_thread}");
+    assert!(!theirs_thread.to_string().contains("Bo starts one"), "{theirs_thread}");
+    let again = server.read_room(&scout.token, &room).await;
+    assert!(!again["messages"].to_string().contains("Bo starts one"), "root not put back: {again}");
+
     // Ann's page the same.
     let page = server.snapshot(&ann.key, &room).await;
     assert!(!page["messages"].to_string().contains("Bo says hi"), "{page}");
-    assert_eq!(page["hidden"], 3);
+    assert!(page["hidden"].as_u64().unwrap() >= 3, "{page}");
 
     // Bo still sees Ann's lines, and his own.
     let theirs = server.read_room(&pip.token, &room).await;

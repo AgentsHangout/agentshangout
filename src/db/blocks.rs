@@ -147,13 +147,29 @@ impl Db {
         rows.collect()
     }
 
-    /// A106: when `a` blocks `b`, what was between them ends: friendships (theirs and their bots'),
-    /// house keys either way and the trips they let in, other trips under way or asked either way,
-    /// and apprentice proposals still open between them. Taking the block back restores none.
+    /// A106: the trips between `a` and `b`, either way, asked or under way, so each can be ended the
+    /// ordinary way (`city::end_trip`), which leaves no sign of why.
+    pub fn trips_between(&self, a: &str, b: &str, now: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT t.id FROM trips t JOIN agents g ON g.id = t.agent_id
+             WHERE t.status IN ('asking', 'here') AND (t.ends_at IS NULL OR t.ends_at > ?3)
+               AND ((g.owner_id = ?2 AND EXISTS (SELECT 1 FROM residents r
+                                                 WHERE r.house_id = t.house_id AND r.person_id = ?1))
+                 OR (g.owner_id = ?1 AND EXISTS (SELECT 1 FROM residents r
+                                                 WHERE r.house_id = t.house_id AND r.person_id = ?2)))",
+        )?;
+        let rows = stmt.query_map(params![a, b, now], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// A106: when `a` blocks `b`, what was between them ends, in one transaction: friendships (theirs
+    /// and their bots'), house keys either way, invites to a place either way, and apprentice
+    /// proposals still open between them, declined as an owner would. Trips are ended first, the
+    /// ordinary way (`trips_between`). Safe to run again: a block made twice ends them again.
     pub fn end_ties(&self, a: &str, b: &str, now: i64) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        // Friendships: the two people, and any between their bots.
         tx.execute(
             "DELETE FROM explicit_friendships WHERE kind = 'person'
                AND ((from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1))",
@@ -167,34 +183,22 @@ impl Db {
                      AND to_id IN (SELECT id FROM agents WHERE owner_id = ?1)))",
             params![a, b],
         )?;
-        // Keys either way: a pass from a house one of them lives in to a bot of the other's.
-        let either_way = "(EXISTS (SELECT 1 FROM residents r WHERE r.house_id = {house} AND r.person_id = ?1)
-                           AND {agent} IN (SELECT id FROM agents WHERE owner_id = ?2))
-                       OR (EXISTS (SELECT 1 FROM residents r WHERE r.house_id = {house} AND r.person_id = ?2)
-                           AND {agent} IN (SELECT id FROM agents WHERE owner_id = ?1))";
-        let passes = either_way.replace("{house}", "p.house_id").replace("{agent}", "p.agent_id");
         tx.execute(
-            &format!(
-                "UPDATE trips SET status = 'ended', ended_by = 'block'
-                 WHERE status = 'here' AND pass_id IN (SELECT p.id FROM passes p WHERE {passes})"
-            ),
+            "DELETE FROM passes WHERE
+                (EXISTS (SELECT 1 FROM residents r WHERE r.house_id = passes.house_id AND r.person_id = ?1)
+                 AND agent_id IN (SELECT id FROM agents WHERE owner_id = ?2))
+             OR (EXISTS (SELECT 1 FROM residents r WHERE r.house_id = passes.house_id AND r.person_id = ?2)
+                 AND agent_id IN (SELECT id FROM agents WHERE owner_id = ?1))",
             params![a, b],
         )?;
-        tx.execute(&format!("DELETE FROM passes AS p WHERE {passes}"), params![a, b])?;
-        // Other trips, under way or asked, either way.
-        let trips =
-            either_way.replace("{house}", "trips.house_id").replace("{agent}", "trips.agent_id");
         tx.execute(
-            &format!(
-                "UPDATE trips SET status = CASE status WHEN 'asking' THEN 'declined' ELSE 'ended' END,
-                     ended_by = 'block'
-                 WHERE status IN ('asking', 'here') AND ({trips})"
-            ),
+            "INSERT OR IGNORE INTO friend_invite_ends (invite_id)
+             SELECT id FROM friend_invites
+             WHERE (from_person = ?1 AND to_person = ?2) OR (from_person = ?2 AND to_person = ?1)",
             params![a, b],
         )?;
-        // Apprentice proposals still open between them.
         tx.execute(
-            "UPDATE apprentice_proposals SET status = 'declined', declined_by = 'block', decided_at = ?3
+            "UPDATE apprentice_proposals SET status = 'declined', declined_by = 'owner', decided_at = ?3
              WHERE status IN ('asking_bot', 'asking_owners')
                AND ((proposer_owner = ?1 AND partner_owner = ?2)
                  OR (proposer_owner = ?2 AND partner_owner = ?1))",

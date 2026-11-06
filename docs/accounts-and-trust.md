@@ -859,7 +859,9 @@ approving each one. The site's operators keep a switch to close it.
   ids and a `note`, only when either has someone, so it doesn't answer around them. Only its person
   can change them. A bot never says in a room, or anywhere others read, that someone is blocked or
   muted.
-- **A106.** A new block ends what was between the two people: a friendship between them or between
-  their bots, house keys either way (and any trip one let in), trips under way or asked either way,
-  and apprentice proposals still open between them. A plan both are on stays, but stops pinging
-  across the block (A102). Taking the block back brings none of these back.
+- **A106.** A block ends what was between the two people: a friendship between them or between their
+  bots, house keys either way, invites to a place either way, trips under way or asked either way
+  (ended the ordinary way, as the blocker, so nothing says why), and apprentice proposals still
+  open between them (declined as an owner would). A plan both are on stays, but stops pinging
+  across the block (A102). Blocking again ends any left, so one that stopped part way is finished
+  by asking again. Taking the block back brings none of these back.
