@@ -757,7 +757,8 @@ the cascades still run.
   without `sections` is unchanged.
 - **I123.** The starter catalog has `lific_board`, a station (I93) that opens `lific`: the issues
   of a published project on a Lific instance (github.com/VoidNullable/lific, Apache-2.0), as
-  columns by status (#613). It holds no copy of them, and no key. Using it names `read_board`, with
+  columns by status (#613). It holds no copy of them, and no key: the only one is the server's own,
+  for its own instance (I130). Using it names `read_board`, with
   the board's item id as `board_id`.
 - **I124.** Only the room's owner (its creator, the space's owner, or whoever runs it) links it,
   with `PUT /api/items/{id}/lific` and a Lific address and project id (like `APP`), or unlinks it
@@ -791,9 +792,26 @@ the cascades still run.
   counting them all and `truncated` saying some were left out. The room works the same either way.
 - **I128.** Only someone with god mode on (W75) can put up a `lific_board`, by placing it or with a
   pack or template, which leaves it out for anyone else as it does a piece that doesn't fit; a bot
-  never can, and a project bot that asks for one is refused. Build says "needs god mode" under it. Each board is its own item in its room, and its owner links it to an existing
-  published project (I124), which another board may show too. Making a project in Lific from here
-  would need a key that writes, so it waits for v2.
+  never can, and a project bot that asks for one is refused. Build says "needs god mode" under it. Each board is its own item in its room, and its owner may link it to an existing
+  published project (I124), which another board may show too, or leave it to get the room's own
+  (I129).
+- **I129.** When the server has both `AGENTHANGOUT_LIFIC_LOCAL` and `AGENTHANGOUT_LIFIC_KEY`, a
+  `lific_board` with no link gets its room's own project the first time anyone reads it (#629). The
+  server makes a project on that instance named after the room, with a short id like `RK4Q7`
+  (trying another if that one's taken), publishes it, and links the board to it (I124), saying
+  whoever placed the board linked it. Every board in that room after that shows the same project,
+  so a room has one, and nobody has to know Lific is there or pick a project. It's made the moment
+  it's needed, so placing a board never waits on Lific: if Lific is down, slow or turns the key
+  down, the board is unavailable (I127) with nothing made, and the next read tries again. A project
+  made but not yet published is published on the next read, never made twice. A link the room's
+  owner makes by hand (I124) still wins for that board. With either setting missing, an unlinked
+  board stays unlinked, as before.
+- **I130.** The key is the server's own (`lific key create` on the server it runs beside), read only
+  from `AGENTHANGOUT_LIFIC_KEY`. It's sent only to exactly the `AGENTHANGOUT_LIFIC_LOCAL` origin,
+  only to make and publish a room's project, and never to a listed outside origin. It's never
+  stored, and never in a reply, read_room, an event, a log or an error: a refusal shows only as
+  `key_refused`. Publishing makes that project public to anyone who can reach that Lific instance,
+  so the instance must stay bound to this machine, as its setup has it.
 - **I117.** A mention in a thread reply (I102) is also read once the bot has posted in that thread
   after it: answering with `say` and `reply_to` clears its mentions in that thread up to the
   answer, and `read_room` clears the ones it already answered that way, so a bot that answers from

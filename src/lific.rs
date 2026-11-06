@@ -50,14 +50,29 @@ const SLOTS: usize = 4;
 /// I124: where a Lific board may point. `origins` are `https` origins from
 /// `AGENTHANGOUT_LIFIC_ORIGINS`; `local` is the one instance beside this server, from
 /// `AGENTHANGOUT_LIFIC_LOCAL`, the only address that may be private.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Settings {
     pub origins: Vec<String>,
     pub local: Option<String>,
+    /// I130: the API key that makes and publishes a room's project on `local`, from
+    /// `AGENTHANGOUT_LIFIC_KEY`. It's only ever sent there, and never stored or shown.
+    pub key: Option<String>,
     /// For tests only, with no environment setting: the address every listed origin's name goes
     /// to, in place of looking it up, so the pinned path can reach a stand-in on this machine.
     #[doc(hidden)]
     pub test_pin: Option<IpAddr>,
+}
+
+/// I130: says whether there's a key, never what it is, so a logged setting can't give it away.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("origins", &self.origins)
+            .field("local", &self.local)
+            .field("key", &self.key.as_ref().map(|_| "set"))
+            .field("test_pin", &self.test_pin)
+            .finish()
+    }
 }
 
 /// One board's last read: when, for which link, and what it showed.
@@ -68,6 +83,8 @@ pub struct Shared {
     settings: RwLock<Settings>,
     slots: Semaphore,
     recent: Mutex<Recent>,
+    /// I129: one room's project made at a time, so two first reads at once make only one.
+    making: tokio::sync::Mutex<()>,
 }
 
 impl Default for Shared {
@@ -76,6 +93,7 @@ impl Default for Shared {
             settings: RwLock::new(Settings::default()),
             slots: Semaphore::new(SLOTS),
             recent: Mutex::new(HashMap::new()),
+            making: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -123,7 +141,13 @@ impl Settings {
             .filter(|origin| origin.starts_with("https://"))
             .collect();
         let local = local.map(str::trim).and_then(bare_origin);
-        Settings { origins, local, test_pin: None }
+        Settings { origins, local, key: None, test_pin: None }
+    }
+
+    /// I130: adds the key from `AGENTHANGOUT_LIFIC_KEY`. A blank one counts as none.
+    pub fn with_key(mut self, key: Option<&str>) -> Settings {
+        self.key = key.map(str::trim).filter(|key| !key.is_empty()).map(str::to_string);
+        self
     }
 }
 
@@ -222,6 +246,7 @@ fn in_words(reason: &str) -> &'static str {
         "not_published" => "This project isn't published on Lific, or it doesn't exist.",
         "redirected" => "Lific sent this board somewhere else, so it wasn't followed.",
         "too_big" => "This project is too big to show here.",
+        "key_refused" => "Lific turned down this server's key, so the room's board wasn't made.",
         _ => "Lific didn't answer.",
     }
 }
@@ -231,7 +256,7 @@ fn unavailable(item_id: &str, project: Option<&str>, reason: &str) -> Value {
         "item_id": item_id,
         "kind": "lific",
         "project": project,
-        "linked": reason != "not_linked",
+        "linked": project.is_some(),
         "available": false,
         "reason": reason,
         "unavailable": in_words(reason),
@@ -277,14 +302,100 @@ async fn client_for(settings: &Settings, base: &Url) -> Result<Client, &'static 
 
 /// One public route's JSON, read up to `MAX_BYTES`.
 async fn get_json(client: &Client, url: Url) -> Result<Value, &'static str> {
-    let mut response =
-        client.get(url).header("Accept", "application/json").send().await.map_err(|error| {
-            if error.is_timeout() {
-                "slow"
-            } else {
-                "down"
+    // A public read sends no key, so a refusal or a conflict there is just Lific not answering.
+    answer_json(client.get(url).header("Accept", "application/json").send().await)
+        .await
+        .map_err(|reason| if matches!(reason, "key_refused" | "taken") { "down" } else { reason })
+}
+
+/// I129: a short project id for a room, like `RK4Q7`: an uppercase letter, then four uppercase
+/// letters or digits, as Lific wants, from the room's id and how many tries came before.
+fn room_identifier(room: &str, attempt: u32) -> String {
+    const DIGITS: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in room.bytes().chain(attempt.to_le_bytes()) {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    let mut id = String::from("R");
+    for _ in 0..4 {
+        id.push(DIGITS[(hash % 36) as usize] as char);
+        hash /= 36;
+    }
+    id
+}
+
+/// I129, I130: the room's own project on the local instance: made with the server's key and
+/// published the first time a board there is read with no link, and the same one after that. Only
+/// ever asks `local`, and only with a key.
+async fn room_project(
+    state: &AppState,
+    settings: &Settings,
+    room: &str,
+    name: &str,
+) -> Result<(String, String), &'static str> {
+    let (Some(local), Some(key)) = (settings.local.as_deref(), settings.key.as_deref()) else {
+        return Err("not_linked");
+    };
+    let _one = state.lific.making.lock().await;
+    let base = Url::parse(local).map_err(|_| "down")?;
+    let client = client_for(settings, &base).await?;
+    let send = |method: reqwest::Method, path: &str, body: Value| {
+        let url = base.join(path);
+        let request = url.map(|url| {
+            client
+                .request(method, url)
+                .bearer_auth(key)
+                .header("Accept", "application/json")
+                .json(&body)
+        });
+        async move { answer_json(request.map_err(|_| "down")?.send().await).await }
+    };
+    let made = state.db.lific_room_project(room).map_err(|_| "down")?;
+    let (project, lific_id) = match made {
+        Some((_, project, _, true)) => return Ok((local.to_string(), project)),
+        Some((_, project, lific_id, false)) => (project, lific_id),
+        None => {
+            let name = clean_title(name);
+            let name =
+                if name.trim().is_empty() { "Agents Hangout room".to_string() } else { name };
+            let mut found = None;
+            for attempt in 0..5 {
+                let identifier = room_identifier(room, attempt);
+                let body = json!({ "name": name, "identifier": identifier });
+                match send(reqwest::Method::POST, "/api/projects", body).await {
+                    Ok(project) => {
+                        let lific_id = match &project["id"] {
+                            Value::Number(n) => n.to_string(),
+                            Value::String(s) => s.clone(),
+                            _ => return Err("down"),
+                        };
+                        // Kept at once, so a failed publish is retried rather than made again.
+                        state
+                            .db
+                            .set_lific_room_project(room, local, &identifier, &lific_id, now())
+                            .map_err(|_| "down")?;
+                        found = Some((identifier, lific_id));
+                        break;
+                    }
+                    Err("taken") => continue,
+                    Err(reason) => return Err(reason),
+                }
             }
-        })?;
+            found.ok_or("down")?
+        }
+    };
+    send(reqwest::Method::PUT, &format!("/api/projects/{lific_id}"), json!({ "is_public": true }))
+        .await?;
+    state.db.lific_room_project_published(room).map_err(|_| "down")?;
+    Ok((local.to_string(), project))
+}
+
+/// I127, I129: an answer's JSON, read up to `MAX_BYTES`, or why not. Nothing Lific says goes into
+/// the reason, so an error can't carry a key or anything else back.
+async fn answer_json(
+    sent: Result<reqwest::Response, reqwest::Error>,
+) -> Result<Value, &'static str> {
+    let mut response = sent.map_err(|error| if error.is_timeout() { "slow" } else { "down" })?;
     let status = response.status();
     if status.is_redirection() {
         return Err("redirected");
@@ -294,6 +405,12 @@ async fn get_json(client: &Client, url: Url) -> Result<Value, &'static str> {
     }
     if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
         return Err("busy");
+    }
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err("key_refused");
+    }
+    if status == StatusCode::CONFLICT {
+        return Err("taken");
     }
     if !status.is_success() {
         return Err("down");
@@ -408,8 +525,38 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
 /// who can see the room.
 pub async fn board(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value> {
     let item = board_item(state, caller, item_id)?;
-    let Some((base, project)) = state.db.lific_link(&item.id, &item.hangout_id)? else {
-        return Ok(unavailable(&item.id, None, "not_linked"));
+    let (base, project) = match state.db.lific_link(&item.id, &item.hangout_id)? {
+        Some(link) => link,
+        // I129: with the server's own instance and key, an unlinked board gets its room's project.
+        None => {
+            let settings = settings(state);
+            if settings.local.is_none() || settings.key.is_none() {
+                return Ok(unavailable(&item.id, None, "not_linked"));
+            }
+            let name =
+                state.db.hangout(&item.hangout_id)?.map(|room| room.name).unwrap_or_default();
+            let made = tokio::time::timeout(
+                TIMEOUT * 2,
+                room_project(state, &settings, &item.hangout_id, &name),
+            )
+            .await
+            .unwrap_or(Err("slow"));
+            match made {
+                Ok((base, project)) => {
+                    state.db.set_lific_link(
+                        &item.id,
+                        &item.hangout_id,
+                        &base,
+                        &project,
+                        &item.placed_by,
+                        now(),
+                    )?;
+                    ops::refresh(state, &item.hangout_id);
+                    (base, project)
+                }
+                Err(reason) => return Ok(unavailable(&item.id, None, reason)),
+            }
+        }
     };
     let link = format!("{base} {project}");
     if let Some(board) = state.lific.reused(&item.id, &link) {
