@@ -579,6 +579,8 @@ input::placeholder { color: #8b7a5e; }
 /* I131: an earlier message named in a line, as a link that shows it. */
 .msg-ref { all: unset; color: var(--accent, #4f8cff); text-decoration: underline; cursor: pointer; }
 .msg-ref:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+/* I148: `code` in a line. */
+.msg-body p code { padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: .92em; }
 .msg-flash { background: color-mix(in srgb, var(--accent, #4f8cff) 18%, transparent); transition: background 0.4s; }
 
 .event { display: flex; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
