@@ -30,6 +30,10 @@ const CLOSE_HOUR: i8 = 13;
 pub const MOST_CANDIDATES: i64 = 20;
 /// MY2, MY3 (#642): how old a person's account must be to vote, or to stand as themselves.
 pub const MIN_ACCOUNT_SECS: i64 = 7 * 86_400;
+/// MY2, MY3: accounts made before this (2026-11-06 23:00 UTC) can take part without the wait, so
+/// everyone already here when the first election opened can vote in it. The wait still holds for
+/// accounts made after, so a burst of fresh sign-ups can't fill the box.
+pub const FOUNDED_BEFORE: i64 = 1_794_006_000;
 
 /// MY1: the first Saturday 1:00 PM in Chicago after `now`, as a Unix time. The zone's own rules
 /// give the offset for that day, so it stays 1:00 PM there through daylight saving.
@@ -81,7 +85,7 @@ fn may_take_part(state: &AppState, person_id: &str, doing: &str) -> ApiResult<()
         return Err(ApiError::forbidden(format!("an account run by an agent can't {doing}")));
     }
     let made = state.db.person_created_at(person_id)?.unwrap_or(now());
-    if now() - made < MIN_ACCOUNT_SECS {
+    if made >= FOUNDED_BEFORE && now() - made < MIN_ACCOUNT_SECS {
         return Err(ApiError::forbidden(format!("an account has to be 7 days old to {doing}")));
     }
     Ok(())
