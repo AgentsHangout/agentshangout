@@ -173,6 +173,33 @@ mod tests {
         })
     }
 
+    // CP11: seated bots' tags go above their heads, clear of the table they sit at; a standing
+    // figure's tag stays under its feet. Still none covers another (CP10).
+    #[test]
+    fn seated_tags_go_above_heads_and_leave_the_table_in_view() {
+        let out = |scene: &Value| -> Vec<(f64, f64, f64, f64, f64, String)> {
+            let script = "const s=JSON.parse(__camera_scene),g=new CameraCanvas();const p=cameraPlaced(s);JSON.stringify(placeLabels(g,cameraFigures(s,p),s.frame,s.frame.width<480?14:16).map(t=>[t.x-t.t.width/2,t.y-6,t.t.width,t.t.height,t.f.y,t.f.pose]))";
+            serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
+        };
+        let mut bots = Vec::new();
+        for name in ["Grokliver Tree", "AgentsHangout PR", "morgbot 2.0", "Town Square Hermes"] {
+            bots.push(bot_in(name, "active", false));
+        }
+        bots.push(bot_in("Standing Sam", "idle", false));
+        let placed = out(&room(json!([]), json!(bots), whole()));
+        assert_eq!(placed.len(), 5, "{placed:?}");
+        let (seated, standing): (Vec<_>, Vec<_>) = placed.iter().partition(|t| t.5 == "sit");
+        assert_eq!(seated.len(), 4, "{placed:?}");
+        for t in &seated {
+            assert!(t.1 + t.3 <= t.4 - 20.0, "above its head, off the table: {t:?}");
+        }
+        for t in &standing {
+            assert!(t.1 >= t.4, "under its feet: {t:?}");
+        }
+        let boxes: Vec<_> = placed.iter().map(|t| (t.0, t.1, t.2, t.3)).collect();
+        assert!(apart(&boxes), "{boxes:?}");
+    }
+
     // CP10: bots side by side at the table, with long names, get name tags that don't cover each
     // other, and every tag stays in the frame. So does a crowded grid in a small frame.
     #[test]

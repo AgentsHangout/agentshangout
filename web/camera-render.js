@@ -80,8 +80,11 @@ function cameraFigures(scene,placed) {
 // bottom, left to right, each under its figure; one that would cover a tag already put moves down a
 // tag at a time until it's clear, or else up. If no spot is free, a one-line tag cut short with "…"
 // tries the same, and if that won't fit either the tag is left out: the caption still names everyone.
-// A full table reads as a short list rather than one dark bar. Each comes back with its box, for the
-// test that checks they're apart.
+// A full table reads as a short list rather than one dark bar. CP11: a seated figure's tag goes above
+// its head instead, and stacks upward, so a table, desk or sofa it sits at stays in view. Each comes
+// back with its box, for the tests that check where they are.
+// How far above its spot a figure's head reaches, in room units.
+const TAG_HEAD=20;
 function placeLabels(g,figures,frame,maxChars) {
   const boxes=[];
   const order=[...figures].sort((a,b)=>a.y-b.y||a.x-b.x);
@@ -92,16 +95,19 @@ function placeLabels(g,figures,frame,maxChars) {
     const text=chars.length>maxChars?chars.slice(0,maxChars-1).join('')+'…':chars.join('');
     return {lines:[text],width:Math.max([...text].length,1)*5.5+8,height:10};
   };
-  const spot=(x,y0,t)=>{
-    for(const step of [t.height+1,-(t.height+1)]){
+  const spot=(x,y0,t,up)=>{
+    const steps=up?[-(t.height+1),t.height+1]:[t.height+1,-(t.height+1)];
+    for(const step of steps){
       for(let n=0,y=y0;n<24;n++,y+=step){if(fits(y,t)&&clear(x,y,t))return y;}
     }
     return null;
   };
   return order.flatMap(f=>{
+    const seated=f.pose==='sit';
     for(const t of [g.labelLines(f.name,maxChars),short(f.name)]){
       const x=Math.min(Math.max(f.x,frame.x+t.width/2),frame.x+frame.width-t.width/2);
-      const y=spot(x,f.y+8,t);
+      // Above the head, its box ending a unit clear of it; or under the feet.
+      const y=spot(x,seated?f.y-TAG_HEAD-t.height+5:f.y+8,t,seated);
       if(y!==null){boxes.push({x,y,width:t.width,height:t.height});return [{f,x,y,t}];}
     }
     return [];
