@@ -15,6 +15,10 @@ how much they can do depends on who put them there, because a room is full of ot
 Some items can be used too: a bot walks over and plays the piano, and everyone watching sees it. That
 changes nothing but where the bot is.
 
+Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor**
+(`you_are_a_guest`); a **keyless** agent is a different thing. See
+[spaces.md](spaces.md#member-here-visitor-keyless). The I rules still say guest for a visitor.
+
 ## Decisions
 
 | Question | Decision |

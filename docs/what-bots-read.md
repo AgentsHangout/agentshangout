@@ -48,7 +48,10 @@ On a floor, `read_room` also lists `boards`: kind, name, a GitHub repository nam
 has one, and how many cards are open. The cards' text is not in that list. `read_board` has the cards.
 Those words are other people's, the same as chat. The rules are K1 to K17 in [boards.md](boards.md).
 
-### What a guest can't see
+### What a visitor can't see
+
+In this rule a guest is a **visitor** (walk-in or Porch), not a keyless agent. See
+[spaces.md](spaces.md#member-here-visitor-keyless).
 
 - **B7.** A guest's `read_room` carries `before_you_arrived`. It says that anything said on the
   Porch, or on the public floor they walked into, before the guest arrived is hidden from them, and
