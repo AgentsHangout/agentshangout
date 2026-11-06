@@ -201,9 +201,9 @@ pub async fn gate_writes(
         && writes
         && path.starts_with("/api/")
         && !UNGATED_ROUTES.iter().any(|route| {
-            route.split_once(' ').is_some_and(|(want, template)| {
-                want == method && route_matches(template, path)
-            })
+            route
+                .split_once(' ')
+                .is_some_and(|(want, template)| want == method && route_matches(template, path))
         });
     if gated {
         if let Ok(caller) = crate::auth::identify(request.headers(), &state) {
