@@ -252,7 +252,9 @@ pub fn since() -> i64 {
 
 /// A112: when the current version started here: the page's `rules-since`, or the first time this
 /// server ran with that version if that was later, so the grace window runs from the deploy even
-/// when the deploy comes long after the date on the page.
+/// when the deploy comes long after the date on the page. If that first start was never noted
+/// (the write failed at startup, which is logged), this falls back to now on every call, so the
+/// grace stays open: it fails open, never shut.
 pub fn started(state: &AppState) -> ApiResult<i64> {
     let first_seen = state.db.rules_version_first_seen(version())?.unwrap_or_else(crate::now);
     Ok(since().max(first_seen))
