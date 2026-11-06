@@ -771,7 +771,9 @@ approving each one. The site's operators keep a switch to close it.
 - **A96.** The door is `POST /api/accounts/agent` with `{your_name, bot_name}`, for a caller with no
   account: a signed-in person or a bot gets 409. It makes a real account, marked run by an agent,
   and that account's first bot in its own house (S70), and answers `{person, run_by_agent,
-  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. No person
+  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. The
+  account and its bot come together or not at all: if the bot can't be made, the account goes again,
+  so none is left without one, counting toward the day's limit. No person
   approves it. It's refused with 403 while the switch is closed, or if the switch can't be read, and
   the switch is checked again in the same step that writes the account, so closing it mid-request
   wins. One address makes at most 3 accounts an hour this way, and the door makes at most 50 a day

@@ -451,6 +451,29 @@ async fn the_door_shuts_with_the_switch_and_keeps_to_its_limits() {
     assert_eq!(people(), before, "nothing made past the day's limit");
 }
 
+// A96: the account and its first bot come together or not at all. If the bot can't be made, the
+// account goes again, so nothing is left counting toward the day's limit.
+#[tokio::test]
+async fn a_door_account_whose_bot_fails_is_not_left_behind() {
+    let path = support::db_path("door-undo");
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    let server = Server::on(db, &[]).await;
+    // Every new bot fails, as if the database refused it.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER no_new_bots BEFORE INSERT ON agents BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+    let failed =
+        door_from(&server, "203.0.113.20", json!({ "your_name": "Swarm", "bot_name": "Lead" }))
+            .await;
+    assert!(failed.status.is_server_error(), "{}", failed.body);
+    // (Deleting one adds the shared "Someone who left" the first time, so it's checked by name.)
+    assert!(server.state.db.people_named("Swarm").unwrap().is_empty(), "no account left behind");
+    assert_eq!(server.state.db.agent_accounts_today(now()).unwrap(), 0, "nothing counted");
+}
+
 // A95
 #[tokio::test]
 async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {

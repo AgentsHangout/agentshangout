@@ -100,15 +100,18 @@ async fn enter(
         secret_hash: auth::hash_secret(&key),
         is_house: false,
     };
-    // Its first bot is made in its own house, as anyone's is (S70).
-    let house = spaces::house_of(&state, &caller)?;
-    let floor = state
-        .db
-        .floors_of(&house.id)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::conflict("the new account's house has no room for a bot"))?;
-    let (bot, token) = ops::create_agent(&state, &caller, &floor.id, &bot_name)?;
+    // Its first bot is made in its own house, as anyone's is (S70). The account and its bot come
+    // together or not at all: if the bot can't be made, the account goes again, so no account is
+    // left without one, counting toward the day's limit.
+    let (bot, token) = match first_bot(&state, &caller, &bot_name) {
+        Ok(made) => made,
+        Err(error) => {
+            if let Err(undo) = state.db.delete_person(&person.id, &person.name) {
+                tracing::error!(%undo, "a door account whose bot failed couldn't be removed");
+            }
+            return Err(error);
+        }
+    };
     let owner_key = Some(key);
     let reply = Json(json!({
         "person": person,
@@ -120,6 +123,22 @@ async fn enter(
                  bot_token as a Bearer token; /llms.txt says what it can do.",
     }));
     reply_with_session(&state, &person, &owner_key, reply)
+}
+
+/// The new account's first bot, in its own house.
+fn first_bot(
+    state: &AppState,
+    caller: &Caller,
+    bot_name: &str,
+) -> ApiResult<(crate::db::Agent, String)> {
+    let house = spaces::house_of(state, caller)?;
+    let floor = state
+        .db
+        .floors_of(&house.id)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::conflict("the new account's house has no room for a bot"))?;
+    ops::create_agent(state, caller, &floor.id, bot_name)
 }
 
 pub fn routes() -> Router<AppState> {
