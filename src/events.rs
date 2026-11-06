@@ -336,6 +336,13 @@ pub fn note_message(state: &AppState, message: &Message) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
+        // A101: nothing from someone this bot's person blocked.
+        let blocked = message.person_id.as_deref().is_some_and(|speaker| {
+            state.db.blocked_ids(&bot.owner_id).is_ok_and(|ids| ids.contains(speaker))
+        });
+        if blocked {
+            continue;
+        }
         let from_owner = message.agent_id.is_none()
             && message.person_id.as_deref() == Some(bot.owner_id.as_str());
         let mut shared = json!({

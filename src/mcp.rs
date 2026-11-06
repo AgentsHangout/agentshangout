@@ -2448,6 +2448,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if kept > 0 {
         reply["earlier_messages"] = json!(kept);
     }
+    // A101: only how many, never whose.
+    if snapshot.hidden > 0 {
+        reply["hidden"] = json!(snapshot.hidden);
+    }
     if snapshot.guest.is_some() {
         reply["before_you_arrived"] = json!(if snapshot.visitor_history {
             BEFORE_YOU_ARRIVED_WITH_HISTORY
@@ -2610,6 +2614,12 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
     let limit = optional_limit(args, 100)?.unwrap_or(50).clamp(1, 100) as i64;
     let mut replies =
         state.db.thread_replies(root.id, after, guest.as_ref().map(|v| v.since), limit + 1)?;
+    // A101: replies by people this caller blocked aren't shown, and a root by one is hidden.
+    let hide = crate::blocks::hidden_speakers(state, caller)?;
+    let hidden_replies = replies.len();
+    replies.retain(|reply| !crate::blocks::hides(&hide, reply));
+    let hidden_replies = hidden_replies - replies.len();
+    let root_blocked = crate::blocks::hides(&hide, &root);
     if !root_visible && replies.is_empty() {
         return Err(ApiError::not_found());
     }
@@ -2666,9 +2676,10 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
         None => None,
     };
     let mut root_val = message_json(&root);
-    if !root_visible {
+    if !root_visible || root_blocked {
         root_val["text"] = json!(null);
-        root_val["text_hidden"] = json!("posted before you arrived");
+        root_val["text_hidden"] =
+            json!(if root_blocked { "hidden" } else { "posted before you arrived" });
         root_val["from"] = json!(null);
         root_val["owner"] = json!(null);
         root_val["at"] = json!(null);
@@ -2693,6 +2704,8 @@ fn read_thread(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Val
             line
         }).collect::<Vec<_>>(),
         "has_more": has_more,
+        // A101: only how many, never whose.
+        "hidden": (hidden_replies > 0).then_some(hidden_replies),
     }))
 }
 

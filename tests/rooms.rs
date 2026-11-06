@@ -11410,3 +11410,73 @@ async fn only_a_person_blocks_and_never_themselves() {
     server.state.db.delete_person(&bo.id, "Bo").unwrap();
     assert_eq!(server.get(&ann.key, "/api/blocks").await.ok()["blocks"], json!([]));
 }
+
+// A101 (#685): someone a person blocked, and their bots, aren't seen by the blocker or the
+// blocker's bots: not in read_room, read_thread, the page or events, with only a count said. The
+// blocked person still sees the blocker's lines: it's one way.
+#[tokio::test]
+async fn a_blocked_persons_lines_are_hidden_from_the_blocker_one_way() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let root = server.post(&ann.key, &messages, json!({ "text": "Ann asks a thing" })).await.ok();
+    let root_id = root["id"].as_i64().unwrap();
+    server.post(&bo.key, &messages, json!({ "text": "Bo says hi" })).await.ok();
+    server.tool(&pip.token, "say", json!({ "hangout_id": room, "text": "Pip says hi" })).await;
+    server
+        .post(&bo.key, &messages, json!({ "text": "Bo replies", "reply_to": root_id }))
+        .await
+        .ok();
+
+    // Scout, Ann's bot: none of Bo's or Pip's lines, only a count.
+    let read = server.read_room(&scout.token, &room).await;
+    let said = read["messages"].to_string();
+    assert!(said.contains("Ann asks a thing"), "{read}");
+    assert!(!said.contains("Bo says hi") && !said.contains("Pip says hi"), "{read}");
+    // Bo's line, Pip's line, and Bo's reply in the thread (the room reads every line it held).
+    assert_eq!(read["hidden"], 3, "{read}");
+    let thread = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": room, "root": root_id }))
+        .await["structuredContent"]
+        .clone();
+    assert!(!thread.to_string().contains("Bo replies"), "{thread}");
+    assert_eq!(thread["hidden"], 1);
+    let events =
+        server.tool(&scout.token, "events_since", json!({ "since": "0", "wait_seconds": 0 })).await;
+    assert!(!events.to_string().contains("Bo says hi"), "no message event: {events}");
+
+    // Ann's page the same.
+    let page = server.snapshot(&ann.key, &room).await;
+    assert!(!page["messages"].to_string().contains("Bo says hi"), "{page}");
+    assert_eq!(page["hidden"], 3);
+
+    // Bo still sees Ann's lines, and his own.
+    let theirs = server.read_room(&pip.token, &room).await;
+    let seen = theirs["messages"].to_string();
+    assert!(seen.contains("Ann asks a thing") && seen.contains("Bo says hi"), "{theirs}");
+    assert!(theirs.get("hidden").is_none(), "{theirs}");
+}
+
+// A106 (#685): a new block ends a friendship between the two people.
+#[tokio::test]
+async fn a_block_ends_a_friendship_between_them() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let ask = json!({ "kind": "person", "from_id": ann.id, "to_id": bo.id });
+    server.post(&ann.key, "/api/trust/friendships", ask.clone()).await.ok();
+    server.post(&bo.key, "/api/trust/friendships/accept", ask).await.ok();
+    let friends = |key: String| {
+        let server = &server;
+        async move { server.get(&key, "/api/trust").await.ok()["friendships"].clone() }
+    };
+    assert_eq!(friends(ann.key.clone()).await.as_array().unwrap().len(), 1);
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    assert_eq!(friends(ann.key.clone()).await, json!([]));
+    assert_eq!(friends(bo.key.clone()).await, json!([]));
+}
