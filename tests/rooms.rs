@@ -8678,7 +8678,13 @@ async fn read_room_brief_section_tags_and_known_cache() {
     assert!(cached.get("items").is_none());
     assert!(cached.get("boards").is_none());
     assert!(cached.get("calendar").is_none());
-    assert!(cached.get("tag_as").is_some(), "tag_as stays");
+    // #612: who to tag and the clock's fixed note stay out too, until they change; the trust
+    // note and the clock's times still come.
+    assert!(cached.get("tag_as").is_none(), "{cached}");
+    assert!(cached["unchanged"].as_array().unwrap().contains(&json!("tag_as")));
+    assert!(cached["clock"].get("note").is_none() && cached["clock"]["now"].is_string());
+    assert!(cached["trust_note"].is_string());
+    assert!(init["section_tags_hint"].is_string() && cached.get("section_tags_hint").is_none());
     assert_eq!(cached["section_tags"], tags);
     assert!(
         cached.to_string().len() < 3000,

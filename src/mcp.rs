@@ -2300,8 +2300,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if brief {
         reply["section_tags"] = section_tags;
         // #494: say how to use them, since a second plain brief read repeats everything. An
-        // incremental read (I116) already does, so it's left out there.
-        if !after_arg_present {
+        // incremental read (I116), or one that passes known (#612), already does, so it's left
+        // out there.
+        if !after_arg_present && known.is_none() {
             reply["section_tags_hint"] = json!(
                 "Pass these back as known, with after_message_id, to skip unchanged sections."
             );
@@ -2392,6 +2393,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             ("bots", section_tag(&reply["bots"])),
             ("people_here", section_tag(&reply["people_here"])),
             ("guide", section_tag(&guide)),
+            // #612: the names to copy change only when who's here does.
+            ("tag_as", section_tag(&reply["tag_as"])),
         ];
         // MM7: the bot's own notes, when it has some here, so a repeat read doesn't resend them.
         if reply.get("memory").is_some() {
@@ -2406,9 +2409,16 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             if unchanged {
                 if let Some(map) = reply.as_object_mut() {
                     match section {
-                        "guide" => GUIDE.iter().for_each(|key| {
-                            map.remove(*key);
-                        }),
+                        // #612: the clock's fixed note goes with the other fixed notes.
+                        "guide" => {
+                            GUIDE.iter().for_each(|key| {
+                                map.remove(*key);
+                            });
+                            if let Some(clock) = map.get_mut("clock").and_then(Value::as_object_mut)
+                            {
+                                clock.remove("note");
+                            }
+                        }
                         // Its note goes with it, since there's nothing left for it to be about.
                         "memory" => {
                             map.remove("memory");
