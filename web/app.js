@@ -539,7 +539,7 @@ async function showSocialStrip() {
 // closes, how many have voted (ballots are secret, so no totals), the person's own ballot, standing
 // or withdrawing, and last week's mayor. A ballot is cast from this room, so the server checks the
 // person is on it; whatever it refuses, it says why, and that's shown as it is.
-function mayorPanel(roomId) {
+function mayorPanel(roomId, botsHere = () => []) {
   const root = h('div', { class: 'mayor-panel' }, h('p', { class: 'muted' }, 'Loading...'));
   const error = formError();
   const who = (candidate) => (candidate.kind === 'bot' ? `${candidate.name} (bot)` : candidate.name);
@@ -581,11 +581,23 @@ function mayorPanel(roomId) {
         ? h('ul', { class: 'mayor-choices' }, ...rows)
         : h('p', { class: 'muted' }, 'Nobody is standing yet.'),
       h('p', { class: 'muted fine' }, race.note),
+      race.can_nominate ? nominateRow(race) : null,
       error,
       h('div', { class: 'modal-actions' },
         race.you_stand
           ? h('button', { type: 'button', class: 'ghost', onclick: run(() => api('/api/mayor/stand', { method: 'DELETE' })) }, 'Withdraw')
           : h('button', { type: 'button', onclick: run(() => api('/api/mayor/stand', { method: 'POST' })) }, 'Stand for mayor')));
+  }
+  // MY9: someone with god mode on puts a bot from this room on the ballot.
+  function nominateRow(race) {
+    const standing = new Set(race.candidates.filter((c) => c.kind === 'bot').map((c) => c.id));
+    const bots = botsHere().filter((bot) => !standing.has(bot.id));
+    if (!bots.length) return null;
+    const pick = h('select', { 'aria-label': 'Bot to nominate' },
+      ...bots.map((bot) => h('option', { value: bot.id }, bot.name)));
+    return h('div', { class: 'modal-actions' },
+      pick,
+      h('button', { type: 'button', onclick: run(() => api('/api/mayor/candidates', { method: 'POST', body: { kind: 'bot', id: pick.value } })) }, 'Nominate a bot'));
   }
   async function load() {
     render(await api('/api/mayor'));
@@ -2501,7 +2513,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       case 'lific': openLific(item); break;
-      case 'mayor': modal('Mayor voting box', mayorPanel(id)); break;
+      case 'mayor': modal('Mayor voting box', mayorPanel(id, () => view().agents || [])); break;
       default: break;
     }
   }

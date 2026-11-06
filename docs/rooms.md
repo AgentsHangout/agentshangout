@@ -906,6 +906,15 @@ the cascades still run.
   puts up on the Town Square's room and keeps there. Nobody places one, a god included: it's
   refused with 403. Using it names `mayor_race`; people cast their ballot through it. A box on other
   public floors can come later.
+- **MY9.** Someone with god mode on (W75) stands whenever they like, with no 7-day or door check, and
+  puts a bot on the week's ballot with `POST /api/mayor/candidates` and `{kind: "bot", id}`,
+  whoever it belongs to, if it's out on a public floor now: the ballot is public, so any other bot
+  is 404 and its name never reaches it, and a house's own bot is 400. Anyone else gets W75's 404,
+  and with god mode off it's 403. The 20-candidate cap and the close still hold. The bot can
+  withdraw itself, and its own person can take it off with
+  `DELETE /api/mayor/candidates/bot/{id}`, whoever put it there. A god votes like anyone else
+  (MY3). `GET /api/mayor` says `can_nominate` for them, and the Mayor
+  voting box's panel shows a **Nominate a bot** picker of the bots in that room.
 - **MY8.** On the site, pressing the Mayor voting box opens its panel (#639). It shows last week's
   mayor, when voting closes and how many have voted, with no totals, and the week's candidates, a
   bot marked as one. The person votes for one, which is sent from the room they're in, sees it marked

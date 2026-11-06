@@ -145,6 +145,8 @@ pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "voted": voted,
         "your_ballot": mine.map(|(kind, id)| json!({ "kind": kind, "id": id })),
         "you_stand": candidates.iter().any(|c| c.kind == me_kind && c.id == me_id),
+        // MY9: only someone with god mode on sees this, and only they can nominate.
+        "can_nominate": !caller.is_agent() && crate::god_mode::is_on(state, &caller.person_id)?,
         "last_week": mayor,
         "note": "Ballots are secret: totals show once the week closes. The mayor is a title for the week, with no powers.",
     }))
@@ -170,6 +172,8 @@ pub fn stand(state: &AppState, caller: &Caller) -> ApiResult<Value> {
                 ));
             }
         }
+        // MY9: someone with god mode on stands whenever they like.
+        None if crate::god_mode::is_on(state, &caller.person_id)? => {}
         None => may_take_part(state, &caller.person_id, "stand for mayor")?,
     }
     let election = open_for_changes(state)?;
@@ -228,13 +232,60 @@ pub fn cast(state: &AppState, caller: &Caller, ballot: &Ballot) -> ApiResult<Val
     race(state, caller)
 }
 
-/// MY2: someone with god mode on takes a candidate out of this week's race.
-fn remove(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Value> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Nomination {
+    pub kind: String,
+    pub id: String,
+}
+
+/// MY9: someone with god mode on puts a bot on this week's ballot, whoever it belongs to. Anyone
+/// else gets W75's 404. The cap and the close still hold.
+fn nominate(state: &AppState, caller: &Caller, nomination: &Nomination) -> ApiResult<Value> {
     if caller.is_agent() || !crate::god_mode::may_use(state, &caller.person_id) {
         return Err(ApiError::not_found());
     }
     if !crate::god_mode::is_on(state, &caller.person_id)? {
         return Err(ApiError::forbidden("turn god mode on first"));
+    }
+    if nomination.kind != "bot" {
+        return Err(ApiError::bad_request("nominate a bot: kind is \"bot\""));
+    }
+    let at = now();
+    let bot = state.db.agent(&nomination.id, at)?.ok_or_else(ApiError::not_found)?;
+    // The ballot is public, so only a bot out on a public floor now can be put on it: a bot that
+    // stays in private rooms is "not found", and its name never reaches the ballot.
+    let public = match state.db.bot_place(&bot.id, at)? {
+        Some(place) => state.db.floor(&place)?.is_some_and(|floor| floor.access == "public"),
+        None => false,
+    };
+    if !public {
+        return Err(ApiError::not_found());
+    }
+    if state.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house) {
+        return Err(ApiError::bad_request("a house's own bot doesn't stand for mayor"));
+    }
+    let election = open_for_changes(state)?;
+    let candidate = MayorCandidate { kind: "bot".to_string(), id: bot.id, name: bot.name };
+    if !state.db.stand_for_mayor(election.id, &candidate, MOST_CANDIDATES, now())? {
+        return Err(ApiError::conflict("this week's race has all the candidates it takes"));
+    }
+    race(state, caller)
+}
+
+/// MY2: someone with god mode on takes a candidate out of this week's race. MY9: so does a bot's
+/// own person, for their bot, whoever put it there.
+fn remove(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Value> {
+    let owns_it = !caller.is_agent()
+        && kind == "bot"
+        && state.db.agent(id, now())?.is_some_and(|bot| bot.owner_id == caller.person_id);
+    if !owns_it {
+        if caller.is_agent() || !crate::god_mode::may_use(state, &caller.person_id) {
+            return Err(ApiError::not_found());
+        }
+        if !crate::god_mode::is_on(state, &caller.person_id)? {
+            return Err(ApiError::forbidden("turn god mode on first"));
+        }
     }
     let election = open_for_changes(state)?;
     if !state.db.withdraw_from_mayor(election.id, kind, id)? {
@@ -266,6 +317,15 @@ async fn vote(
     cast(&state, &caller, &body).map(Json)
 }
 
+async fn put_forward(
+    State(state): State<AppState>,
+    caller: Caller,
+    body: Result<Json<Nomination>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let Json(body) = body.map_err(|rejection| ApiError::bad_request(rejection.body_text()))?;
+    nominate(&state, &caller, &body).map(Json)
+}
+
 async fn take_out(
     State(state): State<AppState>,
     caller: Caller,
@@ -278,6 +338,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/mayor", get(read))
         .route("/api/mayor/stand", post(stand_up).delete(stand_down))
+        .route("/api/mayor/candidates", post(put_forward))
         .route("/api/mayor/ballot", put(vote))
         .route("/api/mayor/candidates/{kind}/{id}", delete(take_out))
 }
