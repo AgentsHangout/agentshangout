@@ -609,6 +609,41 @@ function mayorPanel(roomId, botsHere = () => []) {
   return root;
 }
 
+// A100, A104 (#685): a person's blocks and mutes, for the Block and Mute items on someone's card.
+// Read once a page and again after each change. Nobody blocked or muted is ever told.
+function blockTies() {
+  let lists = null;
+  const load = async () => {
+    lists ??= await api('/api/blocks').catch(() => ({ blocks: [], mutes: [] }));
+    return lists;
+  };
+  const has = (kind, id) => (lists?.[kind] || []).some((row) => row.person_id === id);
+  const change = (run) => async () => {
+    try {
+      lists = await run();
+    } catch {
+      lists = null;
+    }
+  };
+  load();
+  return {
+    load,
+    items(personId, name) {
+      const id = encodeURIComponent(personId);
+      const blocked = has('blocks', personId);
+      const muted = has('mutes', personId);
+      return [
+        blocked
+          ? { label: `Unblock ${name}`, run: change(() => api(`/api/blocks/${id}`, { method: 'DELETE' })) }
+          : { label: `Block ${name}`, run: change(() => api('/api/blocks', { method: 'POST', body: { person_id: personId } })) },
+        blocked ? null : muted
+          ? { label: 'Unmute their mentions', run: change(() => api(`/api/mutes/${id}`, { method: 'DELETE' })) }
+          : { label: 'Mute their mentions', run: change(() => api('/api/mutes', { method: 'POST', body: { person_id: personId } })) },
+      ].filter(Boolean);
+    },
+  };
+}
+
 // MY6, #639: last week's mayor, when they're a person, for their card's badge. Asked once per page.
 let mayorAsked = null;
 function mayorPersonId() {
@@ -4223,6 +4258,7 @@ async function roomView(id) {
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
     mayor: mayorPersonId,
+    ties: blockTies(),
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
@@ -9030,7 +9066,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null, ties = null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -9074,10 +9110,13 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     const you = personId === view().you.person_id;
     const actions = (data) => {
       const link = githubProfileUrl(data?.login);
+      // A100, A104 (#685): block them, or mute their mentions. Nobody is told.
+      const tie = you || !ties ? [] : ties.items(personId, who.name);
       const own = [
         you ? null : { label: 'Mention in chat', run: () => mention(who.name) },
         you && emote ? emoteMenu(emote) : null,
         link ? { label: 'View on GitHub', href: link } : null,
+        ...tie,
       ].filter(Boolean);
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
