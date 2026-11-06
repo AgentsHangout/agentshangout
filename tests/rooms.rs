@@ -9498,6 +9498,51 @@ async fn a_read_can_ask_for_only_some_sections() {
     }
 }
 
+// #610: read_room looks a thread's root up once per read, not once per reply, and not at all when
+// the read leaves out messages. What it shows is the same.
+#[tokio::test]
+async fn read_room_looks_up_each_thread_once() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let line = |body: &'static str| agenthangout::db::NewMessage {
+        hangout_id: &room,
+        person_id: Some(&ann.id),
+        agent_id: None,
+        speaker: "Ann",
+        kind: "chat",
+        body,
+        now: now(),
+    };
+    let root = server.state.db.insert_message(&line("a long thread")).unwrap().id;
+    for _ in 0..80 {
+        server.state.db.insert_reply(&line("another reply"), root, None).unwrap().unwrap();
+    }
+    let read = |sections: Option<Value>| {
+        let mut args = json!({ "hangout_id": room });
+        if let Some(sections) = sections {
+            args["sections"] = sections;
+        }
+        let token = scout.token.clone();
+        let server = &server;
+        async move {
+            let before = server.state.db.root_lookups();
+            let reply = server.tool(&token, "read_room", args).await["structuredContent"].clone();
+            (reply, server.state.db.root_lookups() - before)
+        }
+    };
+    let (reply, lookups) = read(None).await;
+    assert!(lookups <= 1, "{lookups} root lookups for one thread");
+    let messages = reply["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1, "the replies collapse into their root: {reply}");
+    assert_eq!(messages[0]["id"], root);
+    assert_eq!(messages[0]["reply_count"], 80);
+
+    let (reply, lookups) = read(Some(json!(["items"]))).await;
+    assert_eq!(lookups, 0, "a read without messages does no thread work");
+    assert!(reply.get("messages").is_none());
+}
+
 // I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
 // move on to; a later read with them still has them, mentions included.
 #[tokio::test]

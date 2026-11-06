@@ -1902,21 +1902,26 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let guest_since = snapshot.guest.as_ref().map(|v| v.since);
     let mut all_roots: Vec<crate::db::Message> = Vec::new();
     let mut missing_root_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    // #610: each thread's root is looked up, and checked for a guest, once per read rather than
+    // once per reply. Nothing is kept past this read.
+    let mut canonical_of: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut visible_of: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
+    // I122: a read that leaves out messages needs none of this.
+    let lines: &[crate::db::Message] = if sends_messages { &snapshot.messages } else { &[] };
 
-    for msg in &snapshot.messages {
+    for msg in lines {
         if let Some(r_cand) = msg.reply_to {
-            let mut root_id = msg.thread_root.unwrap_or(r_cand);
-            if let Ok(Some(canonical)) = state.db.thread_root_for(root_id) {
-                root_id = canonical;
-            }
-            let root_visible = if let Some(since) = guest_since {
-                if let Ok(Some(root)) = state.db.message(root_id) {
-                    root.hangout_id == hangout.id && root.created_at > since
-                } else {
-                    false
-                }
-            } else {
-                true
+            let start = msg.thread_root.unwrap_or(r_cand);
+            let root_id = *canonical_of
+                .entry(start)
+                .or_insert_with(|| state.db.thread_root_for(start).ok().flatten().unwrap_or(start));
+            let root_visible = match guest_since {
+                Some(since) => *visible_of.entry(root_id).or_insert_with(|| {
+                    state.db.message(root_id).ok().flatten().is_some_and(|root| {
+                        root.hangout_id == hangout.id && root.created_at > since
+                    })
+                }),
+                None => true,
             };
             if root_visible {
                 if !snapshot.messages.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {

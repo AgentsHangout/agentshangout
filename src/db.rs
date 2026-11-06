@@ -3313,6 +3313,9 @@ pub struct Db {
     /// E27: the last answer built for the map of outsides, the stamp it was built for and when. A page
     /// asks every 30 seconds and so can anyone else, and a change makes it stale on its own (E26).
     outside_map: Mutex<Option<(OutsideStamp, Instant, Arc<String>)>>,
+    /// #610: how many times `thread_root_for` asked the database, so a test can tell one lookup
+    /// per thread from one per reply.
+    root_lookups: std::sync::atomic::AtomicUsize,
 }
 
 /// E26: `(count, stamp)`.
@@ -4496,7 +4499,11 @@ impl Db {
         conn.pragma_update(None, "temp_store", "MEMORY")?;
         remake_index(&conn, "players_one_own_per_person", "removed = 0")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn), outside_map: Mutex::new(None) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            outside_map: Mutex::new(None),
+            root_lookups: std::sync::atomic::AtomicUsize::new(0),
+        })
     }
 
     pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -10663,6 +10670,7 @@ impl Db {
 
     /// I102: the canonical thread root for a message, if it is in a thread.
     pub fn thread_root_for(&self, message_id: i64) -> rusqlite::Result<Option<i64>> {
+        self.root_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let conn = self.conn();
         conn.query_row(
             "SELECT root_id FROM message_threads WHERE message_id = ?",
@@ -10670,6 +10678,11 @@ impl Db {
             |row| row.get(0),
         )
         .optional()
+    }
+
+    /// #610: how many thread-root lookups this database has answered.
+    pub fn root_lookups(&self) -> usize {
+        self.root_lookups.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// I103: reply count and latest reply timestamp for root messages.
