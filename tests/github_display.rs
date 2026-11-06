@@ -361,9 +361,11 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     let server = Server::start().await;
     let (_, ann) = server.someone("Ann").await;
     server.fake.lock().unwrap().merged_items = json!([
-        { "number": 12, "pull_request": { "merged_at": "2026-11-01T10:00:00Z" } },
-        { "number": 15, "pull_request": { "merged_at": "2026-11-02T10:00:00Z" } },
-        { "number": 16, "pull_request": { "merged_at": null } },
+        { "number": 12, "user": { "id": 1001 }, "pull_request": { "merged_at": "2026-11-01T10:00:00Z" } },
+        { "number": 15, "user": { "id": 1001 }, "pull_request": { "merged_at": "2026-11-02T10:00:00Z" } },
+        { "number": 16, "user": { "id": 1001 }, "pull_request": { "merged_at": null } },
+        // Someone else's pull request under a login that was once Ann's: not hers.
+        { "number": 17, "user": { "id": 2002 }, "pull_request": { "merged_at": "2026-11-03T10:00:00Z" } },
     ]);
     let before = server.get(&ann.key, "/api/credits").await.ok();
     assert_eq!(before["balance"], 0, "nothing is looked up before GitHub is linked");
@@ -384,6 +386,15 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     let again = server.get(&ann.key, "/api/credits").await.ok();
     assert_eq!(again["balance"], 20);
     assert_eq!(server.fake.lock().unwrap().hits.len(), 1);
+
+    // An hour on, the look starts from the day of the last merge that paid.
+    let retry = agenthangout::pr_credits::RETRY_AFTER_SECS;
+    server.state.db.retry_pr_check_soon(&ann.id, now() - retry).unwrap();
+    server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(
+        server.fake.lock().unwrap().hits.last().unwrap(),
+        "search:type:pr is:merged author:ann-codes repo:AgentsHangout/agentshangout merged:>=2026-11-02"
+    );
 }
 
 // A70
