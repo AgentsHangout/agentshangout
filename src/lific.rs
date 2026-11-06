@@ -749,12 +749,33 @@ pub async fn add_card(
     if shown["available"] != true {
         return Ok(not_changed(shown["reason"].as_str().unwrap_or("down")));
     }
-    if shown["total"].as_u64().unwrap_or(0) >= MAX_CARDS {
-        return Err(ApiError::conflict(format!(
-            "board_full: a room's board holds {MAX_CARDS} cards"
-        )));
+    pins::before_outside_write(state, caller, &item.hangout_id)?;
+    // #651: checked and reserved together, before Lific is asked, so adds that race can't all pass.
+    let add = crate::auth::new_id();
+    let on_board = i64::try_from(shown["total"].as_u64().unwrap_or(0)).unwrap_or(i64::MAX);
+    let at = now();
+    match state.db.reserve_lific_add(
+        &add,
+        &caller.person_id,
+        &item.hangout_id,
+        on_board,
+        MAX_CARDS as i64,
+        MAX_CARDS_A_DAY,
+        at - DAY,
+        at,
+    )? {
+        None => {}
+        Some(crate::db::LificLimit::Day) => {
+            return Err(ApiError::too_many_requests(format!(
+                "too_many_cards: you can add {MAX_CARDS_A_DAY} cards a day, with your bots"
+            )))
+        }
+        Some(crate::db::LificLimit::Board) => {
+            return Err(ApiError::conflict(format!(
+                "board_full: a room's board holds {MAX_CARDS} cards"
+            )))
+        }
     }
-    pins::commit_write(state, caller, &item.hangout_id)?;
     let body = json!({
         "project_id": lific_number(&lific_id),
         "title": title,
@@ -764,12 +785,26 @@ pub async fn add_card(
     });
     let made = match keyed(&settings, reqwest::Method::POST, "/api/issues", Some(body)).await {
         Ok(made) => made,
-        Err(reason) => return Ok(not_changed(reason)),
+        Err(reason) => {
+            state.db.drop_lific_add(&add)?;
+            return Ok(not_changed(reason));
+        }
     };
+    // #651: Lific made it, so it counts, whatever its reply says.
+    state.db.finish_lific_add(&add)?;
+    pins::after_outside_write(state, caller, &item.hangout_id);
     let (Some(card), Some(issue_id)) =
         (made["identifier"].as_str().map(clean_title), id_text(&made["id"]))
     else {
-        return Ok(not_changed("down"));
+        // #651: made in Lific without saying its id. It counts toward the day, it's on the board
+        // with no one shown as having added it, and whoever runs the room can take it down (I137).
+        changed(state, &item.hangout_id);
+        return Ok(json!({
+            "ok": true,
+            "card": null,
+            "note": "Lific made the card but didn't say its id, so it shows with no one as having added it. It counts toward today's cards.",
+            "trust_note": TRUST_NOTE,
+        }));
     };
     state.db.add_lific_card(&crate::db::LificCard {
         hangout_id: item.hangout_id.clone(),
@@ -833,7 +868,7 @@ pub async fn change_card(
     let Some(issue_id) = id_text(&issue["id"]) else {
         return Ok(not_changed("down"));
     };
-    pins::commit_write(state, caller, &item.hangout_id)?;
+    pins::before_outside_write(state, caller, &item.hangout_id)?;
     let path = format!("/api/issues/{issue_id}");
     let sent = if remove {
         keyed(&settings, reqwest::Method::DELETE, &path, None).await
@@ -855,6 +890,8 @@ pub async fn change_card(
         Err("not_published") => return Err(ApiError::not_found()),
         Err(reason) => return Ok(not_changed(reason)),
     }
+    // I139, #651: only a change Lific made moves the bot.
+    pins::after_outside_write(state, caller, &item.hangout_id);
     if remove {
         state.db.remove_lific_card(&item.hangout_id, &card)?;
     }

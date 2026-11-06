@@ -2080,6 +2080,18 @@ CREATE TABLE IF NOT EXISTS lific_cards (
     PRIMARY KEY (hangout_id, card)
 );
 CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
+-- #651, I134: every card this server asked Lific to add, kept when the card is taken down, so taking
+-- cards down never gives back the day's 30. A row is reserved before Lific is asked, so adds that
+-- race each other can't all pass the limits; an add Lific didn't take is dropped.
+CREATE TABLE IF NOT EXISTS lific_card_adds (
+    id          TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    pending     INTEGER NOT NULL DEFAULT 1,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_person ON lific_card_adds (person_id, at);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_room ON lific_card_adds (hangout_id, pending, at);
 -- #647: setup-only OAuth grants (scope mcp:setup). A person's agent may draft a bot setup for them
 -- and nothing else; no bot is bound, so these sit apart from mcp_oauth_grants. They last a day.
 CREATE TABLE IF NOT EXISTS mcp_setup_grants (
@@ -2485,6 +2497,15 @@ pub struct FloorChange<'a> {
     pub keep_bots_of: &'a str,
     /// Kinds of item that keep this floor from opening to the public (I11).
     pub private_only: &'a [&'a str],
+}
+
+/// I134, #651: which limit an add met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LificLimit {
+    /// A person and their bots add 30 a day.
+    Day,
+    /// A room's project holds 200.
+    Board,
 }
 
 /// I137: a card this server added to a room's Lific project, and who added it.
@@ -15046,13 +15067,70 @@ impl Db {
         rows.collect()
     }
 
-    /// I134: how many cards a person, and their bots, added since then, in every room.
+    /// I134, #651: how many cards a person, and their bots, asked to add since then, in every room,
+    /// counting ones since taken down and ones still on their way.
     pub fn lific_cards_added_since(&self, person_id: &str, since: i64) -> rusqlite::Result<i64> {
         self.conn().query_row(
-            "SELECT COUNT(*) FROM lific_cards WHERE person_id = ? AND added_at > ?",
+            "SELECT COUNT(*) FROM lific_card_adds WHERE person_id = ? AND at > ?",
             params![person_id, since],
             |row| row.get(0),
         )
+    }
+
+    /// I134, #651: reserves one add before Lific is asked, if it's within the day's `most_a_day` for
+    /// this person and the room's `most_cards`, counting `on_board` (what the board last showed)
+    /// and adds in this room still on their way. Checked and reserved together, so adds that race
+    /// can't all pass. None when reserved; otherwise which limit it met.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_lific_add(
+        &self,
+        id: &str,
+        person_id: &str,
+        hangout_id: &str,
+        on_board: i64,
+        most_cards: i64,
+        most_a_day: i64,
+        day_start: i64,
+        now: i64,
+    ) -> rusqlite::Result<Option<LificLimit>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let today: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM lific_card_adds WHERE person_id = ? AND at > ?",
+            params![person_id, day_start],
+            |row| row.get(0),
+        )?;
+        if today >= most_a_day {
+            return Ok(Some(LificLimit::Day));
+        }
+        // An add that never came back from Lific stops counting toward the room after 10 minutes.
+        let on_the_way: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM lific_card_adds WHERE hangout_id = ? AND pending = 1 AND at > ?",
+            params![hangout_id, now - 600],
+            |row| row.get(0),
+        )?;
+        if on_board + on_the_way >= most_cards {
+            return Ok(Some(LificLimit::Board));
+        }
+        tx.execute(
+            "INSERT INTO lific_card_adds (id, person_id, hangout_id, pending, at)
+             VALUES (?, ?, ?, 1, ?)",
+            params![id, person_id, hangout_id, now],
+        )?;
+        tx.commit()?;
+        Ok(None)
+    }
+
+    /// #651: Lific made the card, so the add is no longer on its way; it still counts for the day.
+    pub fn finish_lific_add(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("UPDATE lific_card_adds SET pending = 0 WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    /// I139, #651: Lific didn't take it, so nothing is kept and it doesn't count.
+    pub fn drop_lific_add(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM lific_card_adds WHERE id = ?", [id])?;
+        Ok(())
     }
 
     /// I136: a card in Lific's trash is no one's here.

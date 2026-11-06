@@ -1950,6 +1950,21 @@ pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<(
     go_to_with(state, caller, hangout_id).map(|_| ())
 }
 
+/// #651, I139: what `go_to` checks, with nothing moved, for a write sent somewhere else first.
+pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(());
+    };
+    require_public_conversations(state, agent_id, hangout_id)?;
+    let now = now();
+    if state.db.bot_place(agent_id, now)?.as_deref() != Some(hangout_id)
+        && state.db.on_trip_away_from(hangout_id, agent_id, now)?
+    {
+        return Err(ApiError::conflict("you're on a trip: go home first"));
+    }
+    Ok(())
+}
+
 /// `go_to`, saying what became of the bots following this one (S74).
 fn go_to_with(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Vec<Value>> {
     let Some(agent_id) = caller.agent_id.as_deref() else {

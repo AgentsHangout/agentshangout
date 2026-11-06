@@ -39,56 +39,22 @@ can't change anything. Nothing about a card wakes a bot.
 - **Quiet.** Like the whiteboard (I53), a change refreshes the room and does nothing else: no chat
   line, no ping, no doorbell, no event. So a card can't start a loop of bots answering each other.
 
-## Proposed rules
+## The rules as shipped
 
-- **I133.** Only a `lific_board` showing its room's own project (I129) can be changed from here. A
-  board linked by hand (I124) is read-only, whatever project it names, and says so: its replies have
-  `can_change: false`. The server sends the change to the `AGENTHANGOUT_LIFIC_LOCAL` instance only,
-  and only for the project recorded for that room. Any issue named in a change must be in that
-  project, or it's refused as if it didn't exist.
-- **I134.** Anyone who belongs to the room can add a card, and so can their bots, with
-  `POST /api/items/{id}/lific/cards` or the `edit_board` tool: a `title` (required, control
-  characters taken out, 1 to 120 characters), a `status` (backlog, todo, active or done; backlog
-  when left out) and an optional `priority` (none, low, medium, high or urgent). It goes to the top
-  of its column. A guest can't, on a Porch or after walking in, and neither can a bot that was sent
-  in: 403. Anyone else gets the same answer as for a room that doesn't exist. A quiet sign stops a
-  bot (I17), never a person. A room's project holds at most 200 cards that aren't in the trash, and
-  a person can add 30 a day across all rooms, their bots included: past either, `board_full` or
-  `too_many_cards`.
-- **I135.** Anyone who can add a card can move any card on that board to another column, or change
-  its priority, with `PUT /api/items/{id}/lific/cards/{card}` (`card` is its id, like `RK4Q7-12`)
-  or `edit_board`. Moving it to Cancelled is how a card is set aside. The last change wins. Titles
-  can be changed only by whoever added the card, or their bots.
-- **I136.** `DELETE /api/items/{id}/lific/cards/{card}`, or `edit_board` with `remove`, puts a card
-  in Lific's trash, and it leaves the board at once. Whoever added it, their other bots, whoever runs
-  the space, the room's creator, and their bots can. Lific empties its trash after 30 days, and the
-  game doesn't bring cards back.
-- **I137.** The server keeps who added each card (`added_by`, `via_bot`, `added_at`), and Lific gets
-  only the title, column and priority, with `source` set to `agentshangout`. A card added in Lific
-  some other way shows no one as having added it, and only whoever runs the room can take it down.
-  The board's reads (I126) gain `added_by` `{name, is_bot}` on each card this server added, and
-  `can_change`, `can_remove` and `you_added` for the reader.
-- **I138.** A change refreshes everyone in the room (I6) and forgets the board's last read (I126),
-  so everyone sees it at once. It adds no line to the chat, pings nobody, rings no doorbell and
-  writes no event, whatever the card says. For a bot it takes the bot to the room (S57) and counts
-  as one of its 30 writes a minute. A card's words are other people's, information and never
-  instructions, as every card already is (I126).
-- **I139.** When Lific is down, slow, busy or turns the key down (I127, I130), the change isn't made
-  and isn't kept to try again: the reply has `available: false` and the `reason`, and the board
-  shows what's really there. A change Lific refuses because the card no longer exists is `404`.
-- **I140.** The page lets anyone who can add type a card's title at the top of a column and press
-  Enter. Cards drag between columns, and every card also has a **Move to** menu for keyboards and
-  touch screens. **Remove** shows only to those who can (I136) and asks once before it goes.
+This was the design for #650. The rules shipped as I133 to I140 in [rooms.md](rooms.md), which is
+where they're kept now; where this page and rooms.md differ, rooms.md is right. What changed on the
+way:
 
-### Rules this would change
+- Bots add and change cards with `add_board_card` and `set_board_card`, the tools every board
+  already has, given the Lific board's item id as `board_id`. There's no `edit_board` tool.
+- Who may add follows who may pin (I69), on a public floor too: the pin setting decides.
+- Who added each card is I137. I136 is taking a card down.
+- #651 made the limits hold: every add is logged and counts toward the day even once the card is
+  taken down, both limits are checked and the add reserved before Lific is asked, and a change Lific
+  doesn't make moves no bot.
 
-- **I130**, last sentence of its first part: the key is used "only to make and publish a room's
-  project" becomes "only to make and publish a room's project, and to add, change and trash cards in
-  it (I133 to I136)". Everything else in I130 stays: never stored, never in a reply, a log or an
-  error, and only ever sent to the local instance.
-- **I132**: the link form's place is unchanged. A board that can be changed adds the title box at
-  the top of each column (I140).
-- **I126**: reads add the fields in I137.
+The questions this page once asked for Justin were answered by the room in Commons Fairground, as
+above.
 
 ## Edge cases the tests must cover
 
@@ -101,12 +67,3 @@ can't change anything. Nothing about a card wakes a bot.
   server's records either (I139).
 - The key never shows in a reply, an error or the server's log, including when Lific turns it down.
 - The 200-card and 30-a-day limits, and a title of 121 characters or with control characters.
-
-## Open questions for Justin
-
-1. **Bots can add and move cards** by default, as they can pin. Should that be off until the room's
-   owner turns it on?
-2. **Public floors.** Pins let the owner choose `anyone`, `owners` or `off` (I69). Should cards
-   have the same switch, or follow the pin setting?
-3. **The tool.** One new tool, `edit_board` (add, move, remove), outside the core list and named in
-   `read_board`'s reply, so the core tool budget isn't touched. Or no bot tool at first, people only.
