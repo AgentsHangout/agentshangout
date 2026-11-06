@@ -8063,7 +8063,8 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
   const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': 'Dismiss building tools', onclick: () => closeBuildSheet() });
   const sheetHead = h('div', { class: 'apple-build-sheet-head' },
     h('h3', {}, 'Build on The Commons'),
-    h('span', { class: 'apple-moves-pill' }, `Moves: ${movesCount() ?? '-'}`)
+    h('span', { class: 'apple-moves-pill' }, `Moves: ${movesCount() ?? '-'}`),
+    h('button', { type: 'button', class: 'sheet-close', 'aria-label': 'Close building tools', onclick: () => closeBuildSheet() }, '✕')
   );
   const toolsGrid = h('div', { class: 'apple-tools-grid' });
   buildSheet.append(grabber, sheetHead, toolsGrid);
