@@ -490,6 +490,51 @@ function onlyOwnerKeyNudge(me, status) {
   return nudge;
 }
 
+// W112, #643 B: a small strip in the upper right for someone signed in: star the repo, join the
+// Discord, and X or LinkedIn when the site lists them. The links come from GET /api/links, the same
+// list bots read. It never stands in the way of signing in, and the cross hides it in this browser;
+// without storage it just shows again next time.
+const SOCIAL_STRIP_HIDDEN = 'social-strip-hidden';
+const SOCIAL_STRIP_PROFILES = [['Discord', 'Join Discord'], ['X', 'X'], ['LinkedIn', 'LinkedIn']];
+function socialStrip(links) {
+  const safe = (url) => typeof url === 'string' && url.startsWith('https://');
+  const buttons = [
+    safe(links.star) ? ['Star on GitHub', links.star] : null,
+    ...SOCIAL_STRIP_PROFILES.map(([name, label]) => {
+      const found = (links.profiles || []).find((profile) => profile.name === name);
+      return found && safe(found.url) ? [label, found.url] : null;
+    }),
+  ].filter(Boolean);
+  if (!buttons.length) return null;
+  const strip = h('aside', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
+    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'social-strip-link' }, label)),
+    h('button', {
+      type: 'button',
+      class: 'ghost social-strip-hide',
+      'aria-label': 'Hide these links',
+      onclick: () => {
+        try {
+          localStorage.setItem(SOCIAL_STRIP_HIDDEN, '1');
+        } catch { /* it comes back next time */ }
+        strip.remove();
+      },
+    }, '✕'));
+  return strip;
+}
+async function showSocialStrip() {
+  try {
+    if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
+  } catch { /* no storage, so it shows */ }
+  if (document.querySelector('.social-strip')) return;
+  const at = location.pathname;
+  const me = await api('/api/me').catch(() => null);
+  if (!me) return;
+  const links = await api('/api/links').catch(() => null);
+  const strip = links && socialStrip(links);
+  // Only on the page it was asked for: someone may have gone into a room meanwhile.
+  if (strip && location.pathname === at && !document.querySelector('.social-strip')) document.body.append(strip);
+}
+
 // A87, A54: replacing the owner key, in Account on the map and in every room. Someone who skipped
 // saving it gets a new one here. A session a site started can't, so it says how to get to it instead.
 function ownerKeyControl(me) {
@@ -10560,6 +10605,10 @@ async function route() {
     else view = await homeView();
     app.replaceChildren(view);
     if (view instanceof Node) document.documentElement.dataset.clientReady = 'true';
+    // W112: on the map, a city or a house, never over a room or a link someone was sent.
+    const stripHere = !roomMatch && !joinMatch && !joinCityMatch && !joinHouseMatch && !planMatch && !setupMatch && !COMING_BACK[path];
+    if (stripHere) showSocialStrip();
+    else document.querySelector('.social-strip')?.remove();
     // These pages need someone signed in, so only they save the clock.
     if (roomMatch || cityMatch || houseMatch) saveClock();
   } catch (error) {
