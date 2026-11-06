@@ -64,3 +64,6 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
 - **CP12.** The wall board in a photo shows the room's name, the one the caption already gives, on
   one line and cut short with "…" if it's long. It never shows what's written on the room's board:
   a photo can be shared beyond the room, so the board's words stay on the page (CP2).
+- **CP13.** A name tag is as wide as its name looks in the photo's font, with a little room each
+  side, and never narrower than the name. So tags at a table stack less: three bots side by side
+  need two rows of tags rather than a staircase of three, and each tag sits nearer its bot.
