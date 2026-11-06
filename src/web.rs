@@ -47,6 +47,7 @@ const OUTSIDE_DECOR_JS: &str = include_str!("../web/outside-decor.js");
 const PETS_JS: &str = include_str!("../web/pets.js");
 const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
+const BOT_SETUP_JS: &str = include_str!("../web/bot-setup.js");
 const TUTORIAL_JS: &str = include_str!("../web/tutorial.js");
 const FAVICON: &str = include_str!("../web/favicon.svg");
 const FAVICON_ICO: &[u8] = include_bytes!("../web/favicon.ico");
@@ -260,6 +261,8 @@ pub fn routes() -> Router<AppState> {
         .route("/join-city/{code}", get(index))
         .route("/join-house/{code}", get(index))
         .route("/p/{code}", get(index))
+        // #647 B: where a person approves the bot their agent drafted.
+        .route("/setup/{id}", get(index))
         // Where Discord sends people back to. The page finishes the step, not this (A17).
         .route("/discord/linked", get(index))
         .route("/sign-in/back", get(index))
@@ -301,6 +304,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/plan-invite.js",
             get(|| async { asset("text/javascript; charset=utf-8", PLAN_INVITE_JS) }),
+        )
+        .route(
+            "/bot-setup.js",
+            get(|| async { asset("text/javascript; charset=utf-8", BOT_SETUP_JS) }),
         )
         .route(
             "/tutorial.js",

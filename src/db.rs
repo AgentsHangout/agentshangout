@@ -28,7 +28,7 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod bot_profile;
 mod bot_setup;
-pub use bot_setup::{BotSetupDraft, SetupGrant};
+pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -2112,6 +2112,12 @@ CREATE TABLE IF NOT EXISTS bot_setup_drafts (
     expires_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bot_setup_drafts_owner ON bot_setup_drafts(owner_id, status);
+-- #647 B: the bot a person made by approving a draft on the site.
+CREATE TABLE IF NOT EXISTS bot_setup_bots (
+    draft_id    TEXT PRIMARY KEY REFERENCES bot_setup_drafts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    made_at     INTEGER NOT NULL
+);
 "#;
 
 /// MY1: a week's mayor election.

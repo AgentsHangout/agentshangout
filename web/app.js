@@ -4,6 +4,7 @@ import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
+import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
 
@@ -8302,6 +8303,15 @@ function needsYouPanel(panels) {
       error);
   }
 
+  // #647 B: a bot the person's agent drafted, waiting for them to approve it on its own page.
+  function botSetupItem(setup) {
+    return item(
+      h('p', {}, 'Your agent drafted a bot for you: ', h('strong', {}, setup.name)),
+      h('small', { class: 'muted' }, `Waiting until ${timeFormat.format(fromUnix(setup.expires_at))}`),
+      h('div', { class: 'event-actions' },
+        link(`/setup/${encodeURIComponent(setup.id)}`, 'Read it and approve', { class: 'link' })));
+  }
+
   function checkInItem(checkIn) {
     const error = formError();
     const answer = (response) => act(error, done(() =>
@@ -8513,6 +8523,7 @@ function needsYouPanel(panels) {
   function render(list) {
     const parts = [
       ...(list.job_reports || []).map(jobReportItem),
+      ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),
@@ -10524,6 +10535,7 @@ async function route() {
   const joinHouseMatch = path.match(/^\/join-house\/([^/]+)$/);
   const worldMatch = path.match(/^\/world\/([^/]+)$/);
   const planMatch = path.match(/^\/p\/([^/]+)$/);
+  const setupMatch = path.match(/^\/setup\/([^/]+)$/);
   try {
     let view;
     if (roomMatch) view = await roomView(decodeURIComponent(roomMatch[1]));
@@ -10539,6 +10551,7 @@ async function route() {
         h, api, field, formError, secretRow, spanText, googleCalendarUrl, startCity: startCityDialog,
       });
     }
+    else if (setupMatch) view = await botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
     else if (path === '/worlds') view = await worldsView();
     else if (COMING_BACK[path]) {
       view = await backFromElsewhere(COMING_BACK[path]);

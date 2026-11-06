@@ -27,6 +27,8 @@ pub struct BotSetupDraft {
     pub status: String,
     pub created_at: i64,
     pub expires_at: i64,
+    /// The bot approving it made (#647 B).
+    pub agent_id: Option<String>,
 }
 
 const LIVE_SETUP_GRANT: &str = "SELECT id, owner_id, client_id, resource, expires_at
@@ -54,11 +56,22 @@ fn draft(row: &Row<'_>) -> rusqlite::Result<BotSetupDraft> {
         status: row.get(7)?,
         created_at: row.get(8)?,
         expires_at: row.get(9)?,
+        agent_id: row.get(10)?,
     })
 }
 
-const DRAFT_COLS: &str =
-    "id, owner_id, name, role, job, workplace, day_plan, status, created_at, expires_at";
+const DRAFT_SELECT: &str = "SELECT d.id, d.owner_id, d.name, d.role, d.job, d.workplace,
+     d.day_plan, d.status, d.created_at, d.expires_at, m.agent_id
+     FROM bot_setup_drafts d LEFT JOIN bot_setup_bots m ON m.draft_id = d.id";
+
+/// What a person approves: the draft as they left it on the page.
+pub struct SetupFields<'a> {
+    pub name: &'a str,
+    pub role: Option<&'a str>,
+    pub job: Option<&'a str>,
+    pub workplace: Option<&'a str>,
+    pub day_plan: Option<&'a str>,
+}
 
 fn insert_setup_tokens(
     conn: &Connection,
@@ -294,12 +307,7 @@ impl Db {
         if changed == 0 {
             return Ok(None);
         }
-        conn.query_row(
-            &format!("SELECT {DRAFT_COLS} FROM bot_setup_drafts WHERE id = ?"),
-            [id],
-            draft,
-        )
-        .optional()
+        conn.query_row(&format!("{DRAFT_SELECT} WHERE d.id = ?"), [id], draft).optional()
     }
 
     /// #647: this person's drafts that haven't lapsed, newest first.
@@ -310,9 +318,8 @@ impl Db {
     ) -> rusqlite::Result<Vec<BotSetupDraft>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "SELECT {DRAFT_COLS} FROM bot_setup_drafts
-             WHERE owner_id = ? AND (status <> 'open' OR expires_at > ?)
-             ORDER BY created_at DESC LIMIT 20"
+            "{DRAFT_SELECT} WHERE d.owner_id = ? AND (d.status <> 'open' OR d.expires_at > ?)
+             ORDER BY d.created_at DESC LIMIT 20"
         ))?;
         let rows = stmt.query_map(params![owner_id, at], draft)?;
         rows.collect()
@@ -326,11 +333,90 @@ impl Db {
     ) -> rusqlite::Result<Option<BotSetupDraft>> {
         self.conn()
             .query_row(
-                &format!("SELECT {DRAFT_COLS} FROM bot_setup_drafts WHERE id = ? AND owner_id = ?"),
+                &format!("{DRAFT_SELECT} WHERE d.id = ? AND d.owner_id = ?"),
                 [id, owner_id],
                 draft,
             )
             .optional()
+    }
+
+    /// #647 B: this person's open drafts that haven't lapsed, for Needs you.
+    pub fn open_bot_setup_drafts(
+        &self,
+        owner_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<Vec<BotSetupDraft>> {
+        Ok(self
+            .bot_setup_drafts(owner_id, at)?
+            .into_iter()
+            .filter(|d| d.status == "open")
+            .collect())
+    }
+
+    /// #647 B: takes an open draft for approving, with the person's edits, once. None if it's not
+    /// theirs, or was already approved or declined, or has lapsed.
+    pub fn take_bot_setup_draft(
+        &self,
+        owner_id: &str,
+        id: &str,
+        fields: &SetupFields<'_>,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE bot_setup_drafts SET name = ?3, role = ?4, job = ?5, workplace = ?6,
+                 day_plan = ?7, status = 'approved'
+             WHERE id = ?1 AND owner_id = ?2 AND status = 'open' AND expires_at > ?8",
+            params![
+                id,
+                owner_id,
+                fields.name,
+                fields.role,
+                fields.job,
+                fields.workplace,
+                fields.day_plan,
+                at
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// #647 B: puts a taken draft back, when making its bot failed.
+    pub fn reopen_bot_setup_draft(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE bot_setup_drafts SET status = 'open' WHERE id = ? AND status = 'approved'
+             AND NOT EXISTS (SELECT 1 FROM bot_setup_bots WHERE draft_id = bot_setup_drafts.id)",
+            [id],
+        )?;
+        Ok(())
+    }
+
+    /// #647 B: the bot an approved draft made.
+    pub fn record_bot_setup_bot(&self, id: &str, agent_id: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_setup_bots (draft_id, agent_id, made_at) VALUES (?1, ?2, ?3)",
+            params![id, agent_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// #647 B: the person says no to an open draft. False if it wasn't theirs and open.
+    pub fn decline_bot_setup_draft(&self, owner_id: &str, id: &str) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE bot_setup_drafts SET status = 'declined'
+             WHERE id = ?1 AND owner_id = ?2 AND status = 'open'",
+            params![id, owner_id],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// #647 B: sets a new bot's role (JB1), as `PUT /api/agents/{id}/role` does.
+    pub fn set_bot_role(&self, agent_id: &str, role: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_roles (agent_id, body, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (agent_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+            params![agent_id, role, at],
+        )?;
+        Ok(())
     }
 }
 

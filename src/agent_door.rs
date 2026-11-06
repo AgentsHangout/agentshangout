@@ -126,8 +126,8 @@ async fn enter(
     reply_with_session(&state, &person, &owner_key, reply)
 }
 
-/// The new account's first bot, in its own house.
-fn first_bot(
+/// The new account's first bot, in its own house. #647 B makes an approved draft's bot the same way.
+pub(crate) fn first_bot(
     state: &AppState,
     caller: &Caller,
     bot_name: &str,

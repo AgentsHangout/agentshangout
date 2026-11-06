@@ -1632,7 +1632,7 @@ async fn a_setup_connection_drafts_a_bot_and_can_do_nothing_else() {
     assert_eq!(preview["name"], "Scout", "{drafted}");
     assert_eq!(preview["status"], "open");
     let draft_id = preview["draft_id"].as_str().unwrap();
-    assert!(preview.get("approve_url").is_none(), "no approve page until slice B: {preview}");
+    assert!(preview["approve_url"].as_str().unwrap().ends_with(&format!("/setup/{draft_id}")));
     assert_eq!(bots(), bots_before, "nothing is made");
 
     // Every other tool is refused, and so is a too-long role.
@@ -1783,4 +1783,124 @@ async fn deleting_an_account_ends_its_setup_connection() {
     assert_eq!(s.rpc(access, "tools/list", json!({})).await.status(), StatusCode::UNAUTHORIZED);
     let refresh = tokens["refresh_token"].as_str().unwrap();
     assert_eq!(s.refresh(&client, refresh).await.status(), StatusCode::BAD_REQUEST);
+}
+
+impl Server {
+    /// #647 B: a person's own request to a bot setup route, signed in with their session cookie.
+    async fn as_person(&self, session: &str, path: &str, body: Option<Value>) -> reqwest::Response {
+        let request = match &body {
+            Some(_) => self.client.post(format!("{}{path}", self.base)),
+            None => self.client.get(format!("{}{path}", self.base)),
+        };
+        let request =
+            request.header("cookie", format!("ah_session={session}")).header("origin", &self.base);
+        match body {
+            Some(body) => request.json(&body),
+            None => request,
+        }
+        .send()
+        .await
+        .unwrap()
+    }
+
+    /// A drafted bot setup and the setup token that drafted it.
+    async fn drafted(&self, session: &str, name: &str) -> (String, String) {
+        let client = self.register().await;
+        let code = self.setup_code(session, &client).await;
+        let tokens: Value = self.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+        let access = tokens["access_token"].as_str().unwrap().to_string();
+        let call = json!({ "name": "draft_bot_setup", "arguments": {
+            "name": name, "role": "Keep the merge queue moving.", "job": "Review open PRs",
+            "workplace": "Commons Fairground", "day_plan": "Work 9 to 5" } });
+        let drafted: Value = self.rpc(&access, "tools/call", call).await.json().await.unwrap();
+        let id = drafted["result"]["structuredContent"]["draft_id"].as_str().unwrap().to_string();
+        (id, access)
+    }
+}
+
+// #647 B: the person approves the draft on the site, with an edit, and only then is the bot made,
+// in their own house, with the draft's role and first job. It's in Needs you until then.
+#[tokio::test]
+async fn approving_a_bot_setup_on_the_site_makes_the_bot() {
+    let s = Server::start().await;
+    let (session, bot, _, _) = s.setup().await;
+    let owner = s.state.db.agent(&bot, agenthangout::now()).unwrap().unwrap().owner_id;
+    let bots = || s.state.db.agents_of(&owner, agenthangout::now()).unwrap();
+    let before = bots().len();
+    let (id, _) = s.drafted(&session, "Scout").await;
+    assert_eq!(bots().len(), before, "drafting makes nothing");
+
+    let needs: Value = s.as_person(&session, "/api/needs-you", None).await.json().await.unwrap();
+    assert_eq!(needs["bot_setups"][0]["id"], id.as_str(), "{needs}");
+    assert!(needs["count"].as_i64().unwrap() >= 1);
+    let draft: Value =
+        s.as_person(&session, &format!("/api/bot-setups/{id}"), None).await.json().await.unwrap();
+    assert!(draft["approve_url"].as_str().unwrap().ends_with(&format!("/setup/{id}")));
+
+    let path = format!("/api/bot-setups/{id}/approve");
+    let approved = s.as_person(&session, &path, Some(json!({ "name": "Scout Two" }))).await;
+    assert_eq!(approved.status(), StatusCode::OK);
+    let approved: Value = approved.json().await.unwrap();
+    assert_eq!(approved["status"], "approved", "{approved}");
+    assert_eq!(approved["name"], "Scout Two");
+    assert!(approved.get("token").is_none() && approved["bot"].get("token").is_none());
+    let made = approved["bot"]["id"].as_str().unwrap();
+    assert_eq!(approved["bot_id"], made);
+    assert_eq!(bots().len(), before + 1);
+    let new_bot = bots().into_iter().find(|b| b.id == made).unwrap();
+    assert_eq!(new_bot.name, "Scout Two");
+    assert_eq!(
+        agenthangout::jobs::role_of(&s.state, made).unwrap().as_deref(),
+        Some("Keep the merge queue moving.")
+    );
+    let job = agenthangout::jobs::open_job(&s.state, made, agenthangout::now()).unwrap().unwrap();
+    assert_eq!(job.text, "Review open PRs");
+
+    // Once only, and it's out of Needs you.
+    assert_eq!(s.as_person(&session, &path, Some(json!({}))).await.status(), StatusCode::CONFLICT);
+    assert_eq!(bots().len(), before + 1);
+    let needs: Value = s.as_person(&session, "/api/needs-you", None).await.json().await.unwrap();
+    assert_eq!(needs["bot_setups"], json!([]), "{needs}");
+}
+
+// #647 B: the agent that drafted it can't approve it, nor can a bot or anyone else; a declined
+// draft can't be approved after.
+#[tokio::test]
+async fn only_the_person_can_approve_a_bot_setup() {
+    let s = Server::start().await;
+    let (session, bot, legacy, _) = s.setup().await;
+    let owner = s.state.db.agent(&bot, agenthangout::now()).unwrap().unwrap().owner_id;
+    let bots = || s.state.db.agents_of(&owner, agenthangout::now()).unwrap().len();
+    let before = bots();
+    let (id, access) = s.drafted(&session, "Scout").await;
+    let path = format!("/api/bot-setups/{id}/approve");
+    for (token, expected) in
+        [(access.as_str(), StatusCode::UNAUTHORIZED), (legacy.as_str(), StatusCode::FORBIDDEN)]
+    {
+        let status = s
+            .client
+            .post(format!("{}{path}", s.base))
+            .bearer_auth(token)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, expected);
+    }
+    // The setup connection has no tool for it either.
+    let call = json!({ "name": "approve_bot_setup", "arguments": { "draft_id": id } });
+    let refused: Value = s.rpc(&access, "tools/call", call).await.json().await.unwrap();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+
+    // Someone else, signed in as themselves, doesn't even see it.
+    let (other, _, _, _) = s.setup().await;
+    assert_eq!(s.as_person(&other, &path, Some(json!({}))).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(bots(), before, "nothing was made");
+
+    // Declined, it can't be approved.
+    let decline = format!("/api/bot-setups/{id}/decline");
+    assert_eq!(s.as_person(&session, &decline, Some(json!({}))).await.status(), StatusCode::OK);
+    assert_eq!(s.as_person(&session, &path, Some(json!({}))).await.status(), StatusCode::CONFLICT);
+    assert_eq!(bots(), before);
 }
