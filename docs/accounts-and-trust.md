@@ -771,12 +771,14 @@ approving each one. The site's operators keep a switch to close it.
 - **A96.** The door is `POST /api/accounts/agent` with `{your_name, bot_name}`, for a caller with no
   account: a signed-in person or a bot gets 409. It makes a real account, marked run by an agent,
   and that account's first bot in its own house (S70), and answers `{person, run_by_agent,
-  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. The
-  account and its bot come together or not at all: if the bot can't be made, the account goes again,
-  so none is left without one, counting toward the day's limit. No person
+  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. If the
+  bot can't be made, the account is removed again straight after, so a failed try leaves nothing
+  behind. That's a second step, not the same transaction: a crash between them, which is rare,
+  leaves an account with no bot that still counts toward the day's limit, the safe way round. No person
   approves it. It's refused with 403 while the switch is closed, or if the switch can't be read, and
   the switch is checked again in the same step that writes the account, so closing it mid-request
-  wins. One address makes at most 3 accounts an hour this way, and the door makes at most 50 a day
+  wins. One address makes at most 3 accounts an hour this way (kept in memory, so it starts again after a
+  restart), and the door makes at most 50 a day
   across the site, counted from the accounts themselves so a restart doesn't reset it; the limits on
   new people count these too. Past a limit it's 429 and nothing is made. The account is like any
   other: its owner key works everywhere a person's does, and deleting or banning it deletes its bots

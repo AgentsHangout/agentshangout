@@ -100,9 +100,10 @@ async fn enter(
         secret_hash: auth::hash_secret(&key),
         is_house: false,
     };
-    // Its first bot is made in its own house, as anyone's is (S70). The account and its bot come
-    // together or not at all: if the bot can't be made, the account goes again, so no account is
-    // left without one, counting toward the day's limit.
+    // Its first bot is made in its own house, as anyone's is (S70). If the bot can't be made, the
+    // account is removed again. That's a second step after the account's transaction, so a crash
+    // between them leaves a bot-less account that still counts toward the day's limit, which errs
+    // on the safe side.
     let (bot, token) = match first_bot(&state, &caller, &bot_name) {
         Ok(made) => made,
         Err(error) => {
