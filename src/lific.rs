@@ -803,6 +803,7 @@ pub async fn add_card(
             "ok": true,
             "card": null,
             "note": "Lific made the card but didn't say its id, so it shows with no one as having added it. It counts toward today's cards.",
+            "cards_today": cards_today(state, &caller.person_id)?,
             "trust_note": TRUST_NOTE,
         }));
     };
@@ -820,6 +821,7 @@ pub async fn add_card(
     Ok(json!({
         "ok": true,
         "card": { "id": card, "title": title, "status": status, "priority": priority },
+        "cards_today": cards_today(state, &caller.person_id)?,
         "trust_note": TRUST_NOTE,
     }))
 }
@@ -896,7 +898,19 @@ pub async fn change_card(
         state.db.remove_lific_card(&item.hangout_id, &card)?;
     }
     changed(state, &item.hangout_id);
-    Ok(json!({ "ok": true, "card": card, "removed": remove }))
+    Ok(json!({
+        "ok": true,
+        "card": card,
+        "removed": remove,
+        "cards_today": cards_today(state, &caller.person_id)?,
+    }))
+}
+
+/// I142, #672: how many of the day's cards this person and their bots have used, from the same log
+/// the limit counts (I134), and how many are left.
+fn cards_today(state: &AppState, person_id: &str) -> ApiResult<Value> {
+    let used = state.db.lific_cards_added_since(person_id, now() - DAY)?;
+    Ok(json!({ "used": used, "left": (MAX_CARDS_A_DAY - used).max(0), "most": MAX_CARDS_A_DAY }))
 }
 
 /// I138: everyone sees a change at once, and nothing else happens.
@@ -915,6 +929,9 @@ pub async fn board_for(state: &AppState, caller: &Caller, item_id: &str) -> ApiR
     let owner = can_change && pins::owns_room(state, caller, &item.hangout_id).unwrap_or(false);
     let added = if own { state.db.lific_cards(&item.hangout_id)? } else { Vec::new() };
     shown["can_change"] = json!(can_change);
+    if can_change {
+        shown["cards_today"] = cards_today(state, &caller.person_id)?;
+    }
     if let Some(columns) = shown["columns"].as_array_mut() {
         for issue in columns.iter_mut().filter_map(|c| c["issues"].as_array_mut()).flatten() {
             let record = issue["id"].as_str().and_then(|id| added.iter().find(|a| a.card == id));
