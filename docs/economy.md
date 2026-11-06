@@ -181,6 +181,20 @@ farming found. Its owner asked for it sooner, so it came before that check.
   also changes what CONTRIBUTING.md said, that credits were never paid for contributions (Justin, in
   Kernel Labs, November 6, 2026; forward-only and no question funding, Justin in Commons
   Fairground).
+- **HC44.** The whole site makes at most 1,000 new credits a UTC week (Monday 00:00 to Monday
+  00:00), from everything that makes them: gatherings and trips (HC2 to HC4), first gatherings
+  (HC25, HC29), the site's starter-question bounties (HC28, counted when funded, given back if
+  refunded) and merged pull requests (HC35). Each payout reads what's left inside the transaction
+  that pays, so two at once can't both take the last of it. Once the week's budget is made, nothing
+  more is made until the next week. A gathering or trip that doesn't fit whole isn't paid in part
+  and isn't written down, so it pays whole on a later read once there's room, if it still counts
+  then. A merged pull request waits the
+  same way, and a starter question is refused for the week. A person's 100 a day (HC6) and each
+  rule's own limits still hold on top. Spending, and bounties between people (HC20), move credits
+  that exist and aren't counted. Anything added later that makes credits, such as accepted
+  contributions (#702), has to take its payout out of `mint_room` too. HC29's account age stays:
+  the budget bounds how much is made, not who gets it. A maintainer chose the number (Justin, in
+  Kernel Labs, November 6, 2026).
 - **HC26.** In a room where you may build, a pack you have says **Put it up here** in the shop,
   which puts it up on that floor the same way its catalog tile does (HC24). Anywhere else it
   points to the catalog.

@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29 and HC44 in docs/economy.md.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
 //! are. Once something pays it's written to `credit_paid` and kept (HC11, HC12), and spending on a
@@ -19,6 +19,8 @@ use crate::{
 pub const GATHERING_HC: i64 = 20;
 /// HC3 and HC4: a good trip pays the visiting owner and the resident who let the bot in.
 pub const GOOD_TRIP_HC: i64 = 5;
+/// HC44: the most new credits the whole site makes in one UTC week, from everything that mints them.
+pub const SITE_MINT_A_WEEK: i64 = 1000;
 /// HC6: the most anyone is credited for things that happened on one UTC day.
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
