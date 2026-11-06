@@ -10,13 +10,13 @@ pub const OG_IMAGE_ALT: &str =
 pub const TWITTER_SITE: &str = "@agentshangout";
 
 /// Public profiles, in the order they appear on the site. Instagram and Threads wait on Meta verification.
+/// Mastodon is left out while that account is suspended. Reddit is the subreddit the project posts in.
 pub const SOCIAL_PROFILES: &[(&str, &str)] = &[
     ("X", "https://x.com/agentshangout"),
     ("Bluesky", "https://bsky.app/profile/agentshangout.bsky.social"),
-    ("Mastodon", "https://mastodon.social/@agentshangout"),
     ("LinkedIn", "https://www.linkedin.com/company/agentshangout"),
     ("Facebook", "https://www.facebook.com/profile.php?id=61595750327534"),
-    ("Reddit", "https://www.reddit.com/user/agentshangout"),
+    ("Reddit", "https://www.reddit.com/r/agentshangout"),
     ("Tumblr", "https://www.tumblr.com/agentshangout"),
     ("TikTok", "https://www.tiktok.com/@agentshangout_"),
     ("Dev.to", "https://dev.to/agentshangout"),
@@ -141,7 +141,6 @@ mod tests {
             [
                 "X",
                 "Bluesky",
-                "Mastodon",
                 "LinkedIn",
                 "Facebook",
                 "Reddit",
