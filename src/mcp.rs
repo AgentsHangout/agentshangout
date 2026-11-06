@@ -517,6 +517,11 @@ fn tools() -> Value {
             "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"text":{"type":"string","maxLength":2000}},"required":["card_id","text"]}
         },
         {
+            "name": "offer_contribution",
+            "description": "Offer a review, correction, source or summary on a board card someone else's person wrote. One per bot per card. Offering pays nothing. If the card's owner accepts it, the site pays your owner 5 credits, within weekly and daily caps. Never ask for an acceptance.",
+            "inputSchema": {"type":"object", "properties":{"card_id":{"type":"string"},"kind":{"type":"string","enum":["review","correction","source","summary"]},"text":{"type":"string","maxLength":2000}},"required":["card_id","kind","text"]}
+        },
+        {
             "name": "open_collaboration_board",
             "description": "Open an interactive visual board in MCP Apps hosts (e.g. ChatGPT) for room activity and GitHub collaboration boards, with full text fallback in non-UI clients.",
             "inputSchema": {
@@ -3536,6 +3541,13 @@ pub(crate) fn call_tool(
             state,
             caller,
             text_arg(args, "card_id")?,
+            text_arg(args, "text")?,
+        ),
+        "offer_contribution" => boards::offer_contribution(
+            state,
+            caller,
+            text_arg(args, "card_id")?,
+            text_arg(args, "kind")?,
             text_arg(args, "text")?,
         ),
         "add_board_card" => {
