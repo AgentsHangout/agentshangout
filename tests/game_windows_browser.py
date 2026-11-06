@@ -79,6 +79,8 @@ with sync_playwright() as pw:
         assert close.is_visible()
         if touch:
             assert close.bounding_box()['height'] >= 44
+            assert close.evaluate('(el) => getComputedStyle(el).backgroundImage') != 'none', 'phone keeps the cream window buttons'
+            assert close.evaluate('(el) => getComputedStyle(el).borderRadius') == '0px', 'shared square window controls'
             rail = page.locator('.apple-tab-bar').bounding_box()
             if width > height:
                 assert box['x'] >= rail['x'] + rail['width'], 'landscape rail is clear'

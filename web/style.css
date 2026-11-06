@@ -3072,9 +3072,10 @@ input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, 
 .apple-hig.window-desktop .game-panel-head h2 { font-size: 14px; }
 .apple-hig.window-desktop .game-window .game-panel-head { background: #914021; color: #fff3d2; }
 .apple-hig.window-desktop .game-window .window-actions .wd-tbtn {
-  border-radius: 0 !important; color: #2b1d10;
-  background: linear-gradient(#f6ecce, #dfcd9f);
-  border: 1px solid #4d3620; box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c;
+  border-radius: 0 !important; color: #2b1d10 !important;
+  background: linear-gradient(#f6ecce, #dfcd9f) !important;
+  border: 1px solid #4d3620 !important;
+  box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c !important;
 }
 @media (pointer: coarse), (max-width: 759px) {
   .game-window .window-actions .wd-tbtn, .window-dock .wd-tbtn { min-width: 44px; min-height: 44px; }
