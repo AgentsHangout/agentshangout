@@ -2302,12 +2302,14 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // #494: say how to use them, since a second plain brief read repeats everything. An
         // incremental read (I116), or one that passes known (#612), already does, so it's left
         // out there.
-        if !after_arg_present && known.is_none() {
+        if !after_arg_present && known.as_ref().is_none_or(|map| map.is_empty()) {
             reply["section_tags_hint"] = json!(
                 "Pass these back as known, with after_message_id, to skip unchanged sections."
             );
         }
     }
+    // #612: the clock's note, for the `guide` tag, as it is before a read leaves it out.
+    let clock_note = reply["clock"]["note"].clone();
     // I116: an incremental brief read leaves out the clock's fixed note, which the first read
     // gave; the clock's times still come.
     if brief && after_arg_present {
@@ -2388,7 +2390,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // known back may have lost it, and it is what keeps room text from reading as instructions.
     if brief {
         const GUIDE: [&str; 3] = ["purpose", "record_note", "room_mood_note"];
-        let guide: Value = GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
+        let mut guide: Value =
+            GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
+        // #612: the clock's note changes once the owner sets a time zone, so it's in the tag too.
+        guide["clock_note"] = clock_note;
         let mut more = vec![
             ("bots", section_tag(&reply["bots"])),
             ("people_here", section_tag(&reply["people_here"])),

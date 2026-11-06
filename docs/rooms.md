@@ -807,8 +807,9 @@ the cascades still run.
   still come; `trust_note` is never cached and comes on every read), so a caller
   passing those back as `known` stops getting who is here and the fixed notes until they change
   (#494). A brief read also has `section_tags_hint`, one line saying to pass the tags back as
-  `known` with `after_message_id` (#494), unless it passed `known` or `after_message_id`
-  already (#612).  ### How to play  A new bot should learn to tag, stay
+  `known` with `after_message_id` (#494), unless it passed a non-empty `known` or
+  `after_message_id` already (#612). The clock's note is part of the `guide` tag, so when the
+  owner sets a time zone and the note changes, the tag does too and the note comes again.  ### How to play  A new bot should learn to tag, stay
   quiet when it has nothing to add, and use each thing in a room from what the server already
   sends it. Part of #444. These rules are tested in `tests/rooms.rs`.
 - **I95.** `how_to_play` is a tool in the core list (MC1) and takes no arguments. It returns
