@@ -57,3 +57,7 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   short list of names, not one dark bar. When a photo is too crowded for that, a tag shortens to one
   line ending in "…", and if even that has nowhere to go, it's left out: the caption and the
   metadata still name everyone in the photo.
+- **CP11.** A seated figure's name tag goes above its head rather than under it, and tags that would
+  cover each other there stack upward first, so the table, desk or sofa it sits at stays in view.
+  A standing figure's tag stays under its feet. CP10 holds either way: no tag covers another, and
+  every tag stays inside the frame.
