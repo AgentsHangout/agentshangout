@@ -3,8 +3,8 @@
 // the graph, so a bot's name, pause, permissions and friends are changed where they're shown.
 const SVG = 'http://www.w3.org/2000/svg';
 // Nodes keep clear of the edges so their names, drawn under them, aren't cut off.
+// W by H is the picture in the panel; expanded, the picture is the shape of the space it has (MM20).
 const W = 480, H = 300, SIDE = 54, TOP = 30, FOOT = 44;
-const within = (x, y) => [Math.min(W - SIDE, Math.max(SIDE, x)), Math.min(H - FOOT, Math.max(TOP, y))];
 // Where each kind of node starts before the layout settles: you on top, your bots under you, your
 // people to the left, the chosen bot's friends to the right and its bonds below it.
 const ANCHOR = {
@@ -39,6 +39,14 @@ const LABEL_HIGH = 13;
 // graph leaves round it, and how large a small graph may be fitted (so two nodes aren't blown up).
 const ZOOM_MIN = 0.5, ZOOM_MAX = 4, ZOOM_STEP = 1.25, FIT_PAD = 14, FIT_MAX = 1.5;
 const clampZoom = k => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, k)) * 1e4) / 1e4;
+// MM20: expanded, one unit of the picture is one pixel of the space it has, so more space spreads the
+// map out rather than enlarging it. It is never smaller than W by H, and on a very large screen it is
+// at most two and a half times that, so a small map isn't scattered across it.
+const SPREAD_MAX = 2.5;
+function frameFor(pw, ph) {
+  const u = Math.max(W / pw, H / ph, Math.min(1, SPREAD_MAX * W / pw, SPREAD_MAX * H / ph));
+  return { w: Math.round(pw * u), h: Math.round(ph * u) };
+}
 // BT12: how much larger than 11 a name is drawn at zoom `k`: larger on a narrow screen, and larger
 // again zoomed out (up to 15 / 11 more) so it stays as readable on screen. trust.css sets no size.
 const labelGrow = k => (globalThis.matchMedia?.('(max-width: 600px)').matches ? 13 / 11 : 1) * (k < 1 ? Math.min(15 / 11, 1 / k) : 1);
@@ -54,11 +62,19 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   let memories;
   // Where every node was last drawn, so a change doesn't throw the graph around.
   const placed = new Map();
-  // BT11: where the graph is looking: scale `k` and offset (`x`, `y`) in the graph's own 480 by 300.
+  // BT11: where the graph is looking: scale `k` and offset (`x`, `y`) in the picture's own units (MM20).
   // `auto` is a fitted view, which is fitted again when the people shown change; null before the first draw.
   let view = null;
   // BT11: ends what a press on the graph has going (a drag, a pan, a pinch) when the graph is drawn again.
   let cancels = [];
+  // MM19, MM20: whether the map fills the panel, the picture it is laid out in, and the picture wanted
+  // when expanded. `respace` sorts names out again after the picture changed shape.
+  let expanded = false, frame = { w: W, h: H }, room = null, respace = false, refocusToggle = false, measuring = false;
+  // MM22: why the notes couldn't be read, and which read of them is the current one.
+  let memoriesError = '', memoriesRequest = 0;
+  // MM23: a redraw put off while the owner is in a field, and the name they are typing for the bot.
+  let waiting = false, nameDraft;
+  const within = (x, y) => [Math.min(frame.w - SIDE, Math.max(SIDE, x)), Math.min(frame.h - FOOT, Math.max(TOP, y))];
   const body = host || panels.add('trust', 'Trust & bots', { onOpen: () => { if (!dirty && !busy) load(); } });
   body.classList.add('trust-body');
   const toggle = host ? null : panels.toggle('trust', 'Trust & bots', { short: 'Trust' });
@@ -147,6 +163,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     catch (_) { monitoring = { error: 'Settings saved. Monitoring health could not be refreshed; check again to see the latest state.' }; }
   }
   async function load() {
+    collapse();
     body.replaceChildren(text('Loading your bots and relationships…'));
     try {
       data = await api('/api/trust');
@@ -157,7 +174,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     }
   }
   async function choose(id) {
-    selected = id; monitoring = bonds = config = usage = memories = undefined; notice = ''; dirty = false; focus = 'bot'; view = null;
+    selected = id; monitoring = bonds = config = usage = memories = nameDraft = undefined; notice = ''; dirty = false; focus = 'bot'; view = null;
     saved = clone(bot().trust); draft = clone(saved);
     const request = ++generation;
     const healthRequest = ++healthGeneration;
@@ -169,22 +186,56 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         if (key === 'monitoring') monitoring = value;
         if (key === 'bonds') bonds = value.bonds;
         if (key === 'config') config = value;
-        // Do not replace fields while their owner is editing them.
-        if (!dirty && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) render();
+        renderWhenFree();
       }).catch(failure => {
         if (generation !== request || (key === 'monitoring' && healthRequest !== healthGeneration)) return;
         if (key === 'monitoring') monitoring = { error: failure.message };
         if (key === 'bonds') bonds = { error: failure.message };
         if (key === 'config') config = { error: failure.message };
-        if (!dirty) render();
+        renderWhenFree();
       });
     }
-    // MM16: memories draw on the graph when they come; without them nothing changes.
+    readMemories();
+  }
+  // MM16, MM22: memories draw on the graph when they come; without them the graph is unchanged, and
+  // the notes say whether they are being read, there are none, or reading them failed.
+  function readMemories() {
+    const id = selected, request = ++memoriesRequest;
+    memories = undefined; memoriesError = '';
     api(memoriesPath()).then(value => {
-      if (generation !== request) return;
+      if (request !== memoriesRequest || id !== selected) return;
       memories = memoriesFrom(value, id);
-      if (!dirty && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) render();
-    }).catch(() => { if (generation === request) memories = false; });
+      if (!memories) memoriesError = 'The server sent something that isn’t notes.';
+      renderWhenFree();
+    }).catch(failure => {
+      if (request !== memoriesRequest || id !== selected) return;
+      memories = false; memoriesError = failure?.message || '';
+      renderWhenFree();
+    });
+  }
+  // MM23: a field in this panel that its owner is in. Drawing the panel again would replace it, and
+  // what they typed with it, so what arrives meanwhile is drawn once they've left the panel's controls.
+  const typing = () => {
+    const at = document.activeElement;
+    return !!at && ['INPUT', 'SELECT', 'TEXTAREA'].includes(at.tagName) && !!body.contains?.(at);
+  };
+  function renderWhenFree() {
+    if (!typing()) { render(); return; }
+    if (waiting) return;
+    waiting = true;
+    body.addEventListener('focusout', settle);
+  }
+  // Focus going on to another of the panel's buttons or fields keeps waiting, so nothing is replaced
+  // under a press or a key; that control's own action draws the panel, or leaving it does.
+  function settle(e) {
+    const to = e?.relatedTarget;
+    if (to && body.contains(to)) return;
+    render();
+  }
+  function stopWaiting() {
+    if (!waiting) return;
+    waiting = false;
+    body.removeEventListener('focusout', settle);
   }
   // The subject a bot's note on a node in the graph is written under.
   function subjectOf(n) {
@@ -198,11 +249,17 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const asked = selected;
     await action(async () => {
       await api(`${memoriesPath()}/${encodeURIComponent(memory.id)}`, { method: 'DELETE' });
-      try { const value = await api(memoriesPath()); if (asked === selected) memories = memoriesFrom(value, asked); } catch (_) { if (asked === selected) memories = false; }
+      const request = ++memoriesRequest;
+      try {
+        const value = await api(memoriesPath());
+        if (asked === selected && request === memoriesRequest) { memories = memoriesFrom(value, asked); memoriesError = ''; }
+      } catch (failure) { if (asked === selected && request === memoriesRequest) { memories = false; memoriesError = failure.message; } }
     });
   }
   function render() {
     if (!data) return;
+    stopWaiting();
+    const toggleHadFocus = isToggle(document.activeElement);
     // U21: someone who runs the server reaches the server totals even with no bots of their own.
     const operator = me?.god_mode !== undefined && me?.god_mode !== null;
     const tabs = data.agents.length ? [['connections', 'Connections'], ['monitoring', 'Monitoring'], ['usage', 'Usage']] : operator ? [['connections', 'Connections'], ['usage', 'Usage']] : [];
@@ -224,6 +281,65 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       h('div', { id: 'trust-content', class: 'trust-content', role: tabs.length ? 'tabpanel' : null, 'aria-labelledby': tabs.length ? `trust-tab-${tab}` : null },
         ...(tab === 'monitoring' ? monitorView() : tab === 'usage' ? usageView() : connections())));
     body.querySelectorAll('button').forEach(b => { if (busy) b.disabled = true; });
+    // MM19: expanded, the panel the map is in takes the whole space under the top bar.
+    body.closest?.('.game-panel')?.classList.toggle('trust-expanded-panel', expanded && tab === 'connections');
+    if (toggleHadFocus || refocusToggle) { refocusToggle = false; body.querySelector('.trust-expand')?.focus(); }
+    if (expanded) measureSoon();
+  }
+  const isToggle = el => typeof el?.className === 'string' && el.className.split(' ').includes('trust-expand');
+
+  // MM19: Expand and Exit expanded. Escape exits, before anything else hears it, and focus goes back
+  // to the button. What is picked stays picked.
+  function setExpanded(on) {
+    if (expanded === on) return;
+    if (on) {
+      expanded = true; room = guessRoom();
+      addEventListener('keydown', onEscape, true); addEventListener('resize', measureSoon);
+    } else collapse();
+    refocusToggle = true; render();
+  }
+  function collapse() {
+    if (!expanded) return;
+    expanded = false; room = null;
+    removeEventListener('keydown', onEscape, true); removeEventListener('resize', measureSoon);
+    body.closest?.('.game-panel')?.classList.toggle('trust-expanded-panel', false);
+  }
+  function onEscape(e) {
+    if (e.key !== 'Escape' || document.querySelector?.('dialog[open]')) return;
+    // A panel closed while expanded opens again as it was; this Escape is left to the page.
+    if (body.isConnected === false || body.closest?.('[hidden]')) { collapse(); return; }
+    e.preventDefault(); e.stopPropagation();
+    setExpanded(false);
+  }
+  // A first guess at the space the map has when expanded, from the window; measuring corrects it.
+  function guessRoom() {
+    const ww = globalThis.innerWidth, wh = globalThis.innerHeight;
+    if (!ww || !wh) return null;
+    return ww >= 760 ? frameFor(Math.max(ww - 400, 200), Math.max(wh - 160, 200)) : frameFor(Math.max(ww - 36, 200), Math.max((wh - 160) * 0.6, 200));
+  }
+  function measureSoon() {
+    if (measuring) return;
+    const later = globalThis.requestAnimationFrame || globalThis.setTimeout;
+    if (!later) return;
+    measuring = true;
+    later(() => { measuring = false; measure(); });
+  }
+  function measure() {
+    if (!expanded) return;
+    const r = body.querySelector('.trust-stage')?.getBoundingClientRect?.();
+    if (!r || r.width < 50 || r.height < 50) return;
+    const next = frameFor(r.width, r.height);
+    if (room && Math.abs(next.w - room.w) <= 4 && Math.abs(next.h - room.h) <= 4) return;
+    room = next;
+    renderWhenFree();
+  }
+  // MM20: a picture of another shape takes every node with it, in proportion, so the map is spread
+  // over the space it has and names that still meet are moved apart.
+  function setFrame(next) {
+    if (next.w === frame.w && next.h === frame.h) return;
+    const sx = (next.w - 2 * SIDE) / (frame.w - 2 * SIDE), sy = (next.h - TOP - FOOT) / (frame.h - TOP - FOOT);
+    for (const [id, p] of placed) placed.set(id, { x: SIDE + (p.x - SIDE) * sx, y: TOP + (p.y - TOP) * sy });
+    frame = next; respace = true;
   }
 
   // U11, U12: what the chosen bot did lately, as counts, and for the people who run the server, the totals.
@@ -315,11 +431,14 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   function layout(nodes, edges) {
     const counts = {};
     const fresh = nodes.filter(n => !placed.has(n.id));
+    // MM20: in a larger picture each kind starts and settles proportionally further out, and lines are longer.
+    const f = Math.min(frame.w / W, frame.h / H);
+    const anchor = kind => [ANCHOR[kind][0] * frame.w / W, ANCHOR[kind][1] * frame.h / H];
     for (const n of nodes) {
       const was = placed.get(n.id);
       if (was) { n.x = was.x; n.y = was.y; continue; }
       const i = counts[n.kind] = (counts[n.kind] || 0) + 1;
-      const [x, y] = ANCHOR[n.kind];
+      const [x, y] = anchor(n.kind);
       n.x = x + ((i % 3) - 1) * 70 + i; n.y = y + Math.floor(i / 3) * 40 + (n.id === `mine:${selected}` ? 18 : 0);
     }
     if (fresh.length) {
@@ -330,7 +449,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i], b = nodes[j];
           const dx = a.x - b.x || 0.1, dy = a.y - b.y || 0.1, d2 = Math.max(dx * dx + dy * dy, 120);
-          const push = 3400 / d2, d = Math.sqrt(d2);
+          const push = 3400 * f * f / d2, d = Math.sqrt(d2);
           a.vx += dx / d * push; a.vy += dy / d * push; b.vx -= dx / d * push; b.vy -= dy / d * push;
           // Names are wider than nodes, so two side by side are pushed further apart.
           if (Math.abs(dy) < 28 && Math.abs(dx) < 92) { const side = (92 - Math.abs(dx)) * 0.08 * Math.sign(dx); a.vx += side; b.vx -= side; }
@@ -338,11 +457,11 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         for (const e of edges) {
           const a = byId.get(e.from), b = byId.get(e.to);
           const dx = b.x - a.x, dy = b.y - a.y, d = Math.max(Math.hypot(dx, dy), 1);
-          const pull = (d - REACH[e.kind]) * 0.05;
+          const pull = (d - REACH[e.kind] * f) * 0.05;
           a.vx += dx / d * pull; a.vy += dy / d * pull; b.vx -= dx / d * pull; b.vy -= dy / d * pull;
         }
         for (const n of nodes) {
-          const [ax, ay] = ANCHOR[n.kind];
+          const [ax, ay] = anchor(n.kind);
           n.vx += (ax - n.x) * 0.012; n.vy += (ay - n.y) * 0.012;
           const give = placed.has(n.id) ? 0.1 : 1;
           [n.x, n.y] = within(n.x + Math.max(-9, Math.min(9, n.vx)) * heat * give, n.y + Math.max(-9, Math.min(9, n.vy)) * heat * give);
@@ -351,7 +470,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     }
     // Then names that would still overlap are moved apart, sideways if they share a row.
     const wide = n => Math.min([...n.name].length, 13) * 6.6 + 10;
-    for (let step = 0; fresh.length && step < 80; step++) {
+    for (let step = 0; (fresh.length || respace) && step < 80; step++) {
       let moved = false;
       for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i], b = nodes[j];
@@ -361,8 +480,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         const [fixed, free] = placed.has(a.id) && !placed.has(b.id) ? [a, b] : placed.has(b.id) && !placed.has(a.id) ? [b, a] : [null, null];
         const sx = Math.sign(b.x - a.x) || 1, sy = Math.sign(b.y - a.y) || 1;
         // Sideways first, unless the frame's edge stops that; then up and down.
-        const room = n => sx > 0 === (n === b) ? W - SIDE - n.x : n.x - SIDE;
-        const sideways = overlapX < overlapY * 2 && room(fixed ? free : a) + room(fixed ? free : b) >= overlapX;
+        const space = n => sx > 0 === (n === b) ? frame.w - SIDE - n.x : n.x - SIDE;
+        const sideways = overlapX < overlapY * 2 && space(fixed ? free : a) + space(fixed ? free : b) >= overlapX;
         const along = sideways ? [overlapX / 2 + 1, 0] : [0, overlapY / 2 + 1];
         if (fixed) { const d = free === b ? 1 : -1; [free.x, free.y] = within(free.x + d * sx * along[0] * 2, free.y + d * sy * along[1] * 2); continue; }
         [a.x, a.y] = within(a.x - sx * along[0], a.y - sy * along[1]);
@@ -371,6 +490,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       if (!moved) break;
     }
     for (const n of nodes) placed.set(n.id, { x: n.x, y: n.y });
+    respace = false;
   }
   // BT8: where each name goes. Under its node unless that would run into another name or node, then
   // above it, then shortened, so names never sit on top of each other or on a head.
@@ -389,10 +509,10 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       for (const option of options) {
         const w = [...option.text].length * 6.4 + 6, half = HALF[n.kind];
         const at = { below: [n.x, n.y + half + 14], above: [n.x, n.y - half - 6], right: [n.x + half + 4 + w / 2, n.y + 4], left: [n.x - half - 4 - w / 2, n.y + 4] }[option.where];
-        const x = Math.min(W - w / 2 - 2, Math.max(w / 2 + 2, at[0])), y = at[1];
+        const x = Math.min(frame.w - w / 2 - 2, Math.max(w / 2 + 2, at[0])), y = at[1];
         const box = { x: x - w / 2, y: y - LABEL_HIGH + 3, w, h: LABEL_HIGH };
         const overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-        const cost = (box.y < 0 || box.y + box.h > H ? 1000 : 0)
+        const cost = (box.y < 0 || box.y + box.h > frame.h ? 1000 : 0)
           + taken.reduce((sum, t) => sum + overlap(box, t), 0) + bodies.reduce((sum, b) => sum + (b.id === n.id ? 0 : overlap(box, b)), 0);
         if (cost < best) { best = cost; chosen = { option, x, y, box }; }
         if (!cost) break;
@@ -405,6 +525,8 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   function connections() {
     for (const cancel of cancels) cancel();
     cancels = [];
+    setFrame(expanded && room ? room : { w: W, h: H });
+    const fw = frame.w, fh = frame.h;
     const { nodes, edges } = graph();
     layout(nodes, edges);
     if (!nodes.some(n => n.id === focusId())) focus = selected ? 'bot' : 'you';
@@ -465,19 +587,20 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       }
       return { x0, y0, x1, y1 };
     };
-    const key = nodes.map(n => n.id).sort().join('|');
+    // A picture of another shape (MM20) is fitted again, as a different set of nodes is (BT11).
+    const key = `${fw}x${fh} ${nodes.map(n => n.id).sort().join('|')}`;
     // Names are drawn larger zoomed out (BT12), so the fit is worked out again at the size they'll be
     // drawn until it settles; failing that, at the largest they can be, so no name is cut off.
     const scaleFor = grow => {
       const { x0, y0, x1, y1 } = bounds(grow);
-      return { k: clampZoom(Math.min((W - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (H - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX)), x0, y0, x1, y1 };
+      return { k: clampZoom(Math.min((fw - 2 * FIT_PAD) / Math.max(x1 - x0, 1), (fh - 2 * FIT_PAD) / Math.max(y1 - y0, 1), FIT_MAX)), x0, y0, x1, y1 };
     };
     const fitted = () => {
       let grow = labelGrow(FIT_MAX), at = scaleFor(grow);
       for (let i = 0; i < 12 && labelGrow(at.k) > grow + 1e-6; i++) at = scaleFor(grow = labelGrow(at.k));
       if (labelGrow(at.k) > grow + 1e-6) at = scaleFor(labelGrow(ZOOM_MIN));
       const { k, x0, y0, x1, y1 } = at;
-      return { k, x: W / 2 - (x0 + x1) / 2 * k, y: H / 2 - (y0 + y1) / 2 * k, auto: true, key };
+      return { k, x: fw / 2 - (x0 + x1) / 2 * k, y: fh / 2 - (y0 + y1) / 2 * k, auto: true, key };
     };
     if (!view || view.key !== key) view = fitted();
     const apply = () => {
@@ -490,29 +613,29 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const look = (k, x, y) => {
       const { x0, y0, x1, y1 } = bounds();
       const mx = (x0 + x1) / 2 * k, my = (y0 + y1) / 2 * k;
-      view = { k, x: Math.min(W - mx, Math.max(-mx, x)), y: Math.min(H - my, Math.max(-my, y)), auto: false, key };
+      view = { k, x: Math.min(fw - mx, Math.max(-mx, x)), y: Math.min(fh - my, Math.max(-my, y)), auto: false, key };
       apply();
     };
     // Zoom by `factor`, keeping the point (px, py) of the picture where it is.
-    const zoomAt = (factor, px = W / 2, py = H / 2) => {
+    const zoomAt = (factor, px = fw / 2, py = fh / 2) => {
       const k = clampZoom(view.k * factor), r = k / view.k;
       look(k, px - (px - view.x) * r, py - (py - view.y) * r);
     };
     const fit = () => { view = fitted(); apply(); };
-    // Where a pointer is on the picture, in the graph's 480 by 300 (the picture is scaled to its box).
-    const rootPoint = e => { const r = picture.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / (r.width || W), y: (e.clientY - r.top) * H / (r.height || H) }; };
+    // Where a pointer is on the picture, in the picture's own units (it is scaled to its box).
+    const rootPoint = e => { const r = picture.getBoundingClientRect(); return { x: (e.clientX - r.left) * fw / (r.width || fw), y: (e.clientY - r.top) * fh / (r.height || fh) }; };
     const pointers = new Map();
     let pan = null, pinch = null;
     const move = e => {
       if (!pointers.has(e.pointerId)) return;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pinch && pointers.size === 2) {
-        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = W / (r.width || W);
+        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = fw / (r.width || fw);
         const k = clampZoom(pinch.k * Math.hypot(a.x - b.x, a.y - b.y) / pinch.dist);
         const mx = ((a.x + b.x) / 2 - r.left) * s, my = ((a.y + b.y) / 2 - r.top) * s;
         look(k, mx - pinch.at.x * k, my - pinch.at.y * k);
       } else if (pan && pointers.size === 1) {
-        const s = W / (picture.getBoundingClientRect().width || W);
+        const s = fw / (picture.getBoundingClientRect().width || fw);
         look(view.k, pan.x + (e.clientX - pan.from.x) * s, pan.y + (e.clientY - pan.from.y) * s);
       }
     };
@@ -530,12 +653,12 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
       }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 2) {
-        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = W / (r.width || W);
+        const [a, b] = [...pointers.values()], r = picture.getBoundingClientRect(), s = fw / (r.width || fw);
         const mx = ((a.x + b.x) / 2 - r.left) * s, my = ((a.y + b.y) / 2 - r.top) * s;
         pan = null; pinch = { k: view.k, dist: Math.max(Math.hypot(a.x - b.x, a.y - b.y), 1), at: { x: (mx - view.x) / view.k, y: (my - view.y) / view.k } };
       } else if (e.button === 0 && !e.target?.closest?.('.trust-node')) pan = { from: { x: e.clientX, y: e.clientY }, x: view.x, y: view.y };
     };
-    const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${W} ${H}`, role: 'group', tabindex: 0,
+    const picture = svg('svg', { class: 'trust-graph', viewBox: `0 0 ${fw} ${fh}`, role: 'group', tabindex: 0,
       'aria-label': selected ? `${bot().name}’s connections` : 'Your connections', 'aria-keyshortcuts': '+ - 0',
       onpointerdown: press,
       // Only with Ctrl or Meta (which is how a trackpad pinch arrives): a plain wheel scrolls the page.
@@ -545,7 +668,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         if (e.key === '+' || e.key === '=') zoomAt(ZOOM_STEP); else if (e.key === '-' || e.key === '_') zoomAt(1 / ZOOM_STEP); else if (e.key === '0') fit(); else return;
         e.preventDefault();
       } },
-      svg('rect', { class: 'trust-ground', width: W, height: H, fill: TAN }), world);
+      svg('rect', { class: 'trust-ground', width: fw, height: fh, fill: TAN }), world);
     apply();
     // Dragging moves a node and its lines without drawing the graph again; a press that doesn't
     // move picks the node.
@@ -580,8 +703,22 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const zoom = h('div', { class: 'trust-zoom', role: 'group', 'aria-label': 'Zoom the connections' },
       button('+', () => zoomAt(ZOOM_STEP), { 'aria-label': 'Zoom in', title: 'Zoom in' }),
       button('−', () => zoomAt(1 / ZOOM_STEP), { 'aria-label': 'Zoom out', title: 'Zoom out' }),
-      button('Fit', fit, { 'aria-label': 'Fit the whole graph', title: 'Fit the whole graph' }));
-    return [about, h('div', { class: 'trust-stage' }, picture, zoom), legend, hint, inspector(byId.get(focusId()))];
+      button('Fit', fit, { 'aria-label': 'Fit the whole graph', title: 'Fit the whole graph' }),
+      // MM19: beside Fit, which still fits the map to the picture it is in.
+      button(expanded ? 'Exit expanded' : 'Expand', () => setExpanded(!expanded), {
+        class: 'trust-expand', 'aria-label': expanded ? 'Exit expanded map' : 'Expand the map to fill the screen',
+        title: expanded ? 'Exit expanded map (Esc)' : 'Expand the map to fill the screen',
+      }));
+    const picked = byId.get(focusId());
+    // MM21: the notes on what is picked sit beside the map, ahead of its settings. Expanded, the map and
+    // those notes are all there is, with the key under the notes.
+    const map = h('div', { class: `trust-map${expanded ? ' expanded' : ''}`, role: expanded ? 'region' : null,
+      'aria-label': expanded ? `${selected ? `${bot().name}’s` : 'Your'} map, expanded` : null },
+    h('div', { class: 'trust-stage' }, picture, zoom),
+    expanded || selected ? h('div', { class: 'trust-side' },
+      expanded && notice ? h('p', { class: 'error trust-notice', role: 'alert' }, notice) : null,
+      notesPanel(picked), expanded ? legend : null) : null);
+    return expanded ? [map] : [about, map, legend, hint, inspector(picked)];
   }
   function curve(a, b, bend) {
     if (!bend) return `M${a.x} ${a.y}L${b.x} ${b.y}`;
@@ -604,7 +741,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const box = (...children) => h('section', { class: 'trust-inspector', 'aria-live': 'polite' }, ...children);
     if (!n || n.kind === 'you') {
       const owner = data.owner_id;
-      return box(h('h3', { tabindex: -1 }, 'You'), selected ? noteView(noteOn(`person:${owner}`)) : null,
+      return box(h('h3', { tabindex: -1 }, 'You'),
         !data.agents.length ? h('div', { class: 'trust-empty' }, text('You have no bots yet. Add one through Crew in your house, and its relationships, permissions and monitoring will be here.'), button('Open your crew', crew, { class: 'primary' })) : null,
         h('h4', {}, 'Your people friendships'), text('Friendships between you and other people. Both people agree, and “Friends” permissions include their bots.', 'muted fine'),
         h('ul', { class: 'room-list trust-list' }, ...friendshipRows('person', owner)), addFriend('person', owner));
@@ -616,13 +753,27 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
     const f = n.friendship;
     const from = n.kind === 'person' ? data.owner_id : selected;
     const canAsk = !f && n.botId && data.bots.some(b => b.id === n.botId);
-    return box(h('h3', { tabindex: -1 }, n.name), noteView(noteOn(subjectOf(n))),
+    return box(h('h3', { tabindex: -1 }, n.name),
       h('dl', { class: 'facts' }, ...facts.map(([label, value]) => h('div', {}, h('dt', {}, label), h('dd', {}, value)))),
       n.bond && !f ? text('A bond grows from time together and grants no permissions.', 'muted fine') : null,
       h('div', { class: 'row-actions' },
         f?.status === 'pending' && f.to_id === from ? button('Accept', () => friendship('POST', f, true), { class: 'primary' }) : null,
         f ? button(f.status === 'accepted' ? 'Remove friend' : f.from_id === from ? 'Cancel request' : 'Decline', () => friendship('DELETE', f)) : null,
         canAsk ? button(`Ask to be ${bot().name}’s friend`, () => friendship('POST', { kind: 'bot', from_id: selected, to_id: n.botId })) : null));
+  }
+  // MM21, MM22: the chosen bot's notes on what is picked: being read, failed with a way to try again,
+  // none, or the notes themselves.
+  function notesPanel(n) {
+    if (!selected) return null;
+    const b = bot();
+    const own = !n || n.id === `mine:${selected}`;
+    const about = !n || n.kind === 'you' ? 'you' : n.name;
+    const rows = memories === undefined ? [h('p', { class: 'muted', role: 'status' }, `Reading ${b.name}’s notes…`)]
+      : memories === false ? [h('p', { class: 'error', role: 'alert' }, `Couldn’t read ${b.name}’s notes.${memoriesError ? ` ${memoriesError}` : ''}`),
+        h('div', { class: 'row-actions' }, button('Retry', () => { readMemories(); render(); }, { class: 'primary', 'aria-label': `Retry reading ${b.name}’s notes` }))]
+      : own ? memoryRows()
+      : [noteView(noteOn(n.kind === 'you' ? `person:${data.owner_id}` : subjectOf(n))) || text(`${b.name} has no note on ${about} yet.`, 'muted fine')];
+    return h('section', { class: 'trust-notes', 'aria-label': own ? `${b.name}’s notes` : `${b.name}’s note on ${about}`, 'aria-busy': memories === undefined ? 'true' : null }, ...rows);
   }
   // MM16: the bot's note on the picked node. A bot wrote it, so it is only ever text.
   function noteView(note) {
@@ -653,10 +804,11 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
   }
   function botEditor() {
     const b = bot();
-    const name = h('input', { value: b.name, maxLength: 60, required: true, autocomplete: 'off', 'aria-label': 'Bot name' });
+    // MM23: a name being typed outlasts the panel being drawn again.
+    const name = h('input', { value: nameDraft ?? b.name, maxLength: 60, required: true, autocomplete: 'off', 'aria-label': 'Bot name', oninput: e => { nameDraft = e.target.value; } });
     const rename = () => action(async () => {
       const result = await api(`${path()}/profile`, { method: 'PUT', body: { name: name.value.trim() } });
-      b.name = result.name;
+      b.name = result.name; nameDraft = undefined;
       const candidate = data.bots.find(c => c.id === selected); if (candidate) candidate.name = result.name;
     });
     return [h('h3', { tabindex: -1 }, b.name),
@@ -679,8 +831,7 @@ export function trustPanel({ h, api, panels, me, crew, figure, dress, schedule, 
         h('small', { class: 'trust-unsaved muted', role: 'status' }, dirty ? 'Unsaved changes' : 'All changes saved')),
       text('“Friends” means your accepted people friends, their bots, and this bot’s accepted bot friends. Requests and bonds don’t count.', 'muted fine'),
       h('h4', {}, `${b.name}’s bot friends`), text('Both bots’ owners agree. Your other bots aren’t included on their own.', 'muted fine'),
-      h('ul', { class: 'room-list trust-list' }, ...friendshipRows('bot', selected)), addFriend('bot', selected),
-      ...memoryRows()];
+      h('ul', { class: 'room-list trust-list' }, ...friendshipRows('bot', selected)), addFriend('bot', selected)];
   }
   function friendshipRows(kind, from) {
     const friends = data.friendships.filter(f => f.kind === kind && [f.from_id, f.to_id].includes(from));

@@ -40,6 +40,9 @@ A security problem doesn't go in an issue. See [SECURITY.md](SECURITY.md).
 
 ## Make the change
 
+For interface changes, follow the [brand kit](web/brand/README.md): choose the existing
+panel or menu before styling a control, and check desktop and phone layouts.
+
 1. Fork the repository, or branch if you have write access. Name the branch `fix/...`, `feat/...`,
    `docs/...` or `ci/...`, and cut it from `main`.
 2. For a bug, write a test that fails first, then make it pass.

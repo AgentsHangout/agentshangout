@@ -406,6 +406,7 @@ pub fn create(
 }
 
 pub fn change(state: &AppState, caller: &Caller, board_id: &str, body: &Value) -> ApiResult<Board> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let board = board_in_room(state, caller, board_id)?;
     runner(state, caller, &board.hangout_id, "change a board")?;
     let body = object(body)?;
@@ -440,6 +441,7 @@ pub fn change(state: &AppState, caller: &Caller, board_id: &str, body: &Value) -
 }
 
 pub fn remove(state: &AppState, caller: &Caller, board_id: &str) -> ApiResult<()> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let board = board_in_room(state, caller, board_id)?;
     runner(state, caller, &board.hangout_id, "remove a board")?;
     state.db.remove_board(&board.id)?;
