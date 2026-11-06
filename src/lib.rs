@@ -249,7 +249,7 @@ impl AppState {
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
-            lific: std::sync::RwLock::new(lific::Settings::default()),
+            lific: lific::Shared::default(),
             write_windows: Mutex::new(HashMap::new()),
             write_clock: Arc::new(clock),
         }))

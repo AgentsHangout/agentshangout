@@ -5,7 +5,14 @@
 //! that goes wrong, from a slow answer to a project that's no longer published, shows as
 //! unavailable with no issues, rather than old ones.
 
-use std::{net::SocketAddr, sync::RwLock, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{Mutex, RwLock},
+    time::{Duration, Instant},
+};
+
+use tokio::sync::Semaphore;
 
 use axum::{
     extract::{rejection::JsonRejection, Path, State},
@@ -34,6 +41,11 @@ pub const MAX_SHOWN: usize = 50;
 pub const MAX_TITLE: usize = 120;
 /// Lific's statuses, in the order its board shows them.
 const STATUSES: [&str; 5] = ["backlog", "todo", "active", "done", "cancelled"];
+/// I126: how long one read of a board is shown again to whoever asks next, so a room full of
+/// people and bots, or a bot in a loop, asks Lific once in that time.
+pub const REUSE: Duration = Duration::from_secs(5);
+/// I126: the most reads of Lific under way at once, across every board.
+const SLOTS: usize = 4;
 
 /// I124: where a Lific board may point. `origins` are `https` origins from
 /// `AGENTHANGOUT_LIFIC_ORIGINS`; `local` is the one instance beside this server, from
@@ -42,9 +54,63 @@ const STATUSES: [&str; 5] = ["backlog", "todo", "active", "done", "cancelled"];
 pub struct Settings {
     pub origins: Vec<String>,
     pub local: Option<String>,
+    /// For tests only, with no environment setting: the address every listed origin's name goes
+    /// to, in place of looking it up, so the pinned path can reach a stand-in on this machine.
+    #[doc(hidden)]
+    pub test_pin: Option<IpAddr>,
 }
 
-pub type Shared = RwLock<Settings>;
+/// One board's last read: when, for which link, and what it showed.
+type Recent = HashMap<String, (Instant, String, Value)>;
+
+/// I124, I126: the settings, the read slots, and each board's last read for `REUSE`.
+pub struct Shared {
+    settings: RwLock<Settings>,
+    slots: Semaphore,
+    recent: Mutex<Recent>,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Shared {
+            settings: RwLock::new(Settings::default()),
+            slots: Semaphore::new(SLOTS),
+            recent: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Shared {
+    /// Replaces the settings, and forgets every board's last read.
+    pub fn set(&self, settings: Settings) {
+        if let Ok(mut current) = self.settings.write() {
+            *current = settings;
+        }
+        if let Ok(mut recent) = self.recent.lock() {
+            recent.clear();
+        }
+    }
+
+    fn forget(&self, item_id: &str) {
+        if let Ok(mut recent) = self.recent.lock() {
+            recent.remove(item_id);
+        }
+    }
+
+    /// A read of this board, with this link, from under `REUSE` ago.
+    fn reused(&self, item_id: &str, link: &str) -> Option<Value> {
+        let recent = self.recent.lock().ok()?;
+        let (at, was, board) = recent.get(item_id)?;
+        (was == link && at.elapsed() < REUSE).then(|| board.clone())
+    }
+
+    fn keep(&self, item_id: &str, link: &str, board: &Value) {
+        if let Ok(mut recent) = self.recent.lock() {
+            recent.retain(|_, (at, _, _)| at.elapsed() < REUSE);
+            recent.insert(item_id.to_string(), (Instant::now(), link.to_string(), board.clone()));
+        }
+    }
+}
 
 impl Settings {
     /// I124: from the two settings. An entry that isn't a bare origin of the right kind is left
@@ -57,7 +123,7 @@ impl Settings {
             .filter(|origin| origin.starts_with("https://"))
             .collect();
         let local = local.map(str::trim).and_then(bare_origin);
-        Settings { origins, local }
+        Settings { origins, local, test_pin: None }
     }
 }
 
@@ -75,7 +141,7 @@ fn bare_origin(text: &str) -> Option<String> {
 }
 
 fn settings(state: &AppState) -> Settings {
-    state.lific.read().map(|s| s.clone()).unwrap_or_default()
+    state.lific.settings.read().map(|s| s.clone()).unwrap_or_default()
 }
 
 /// I124: the address to store, if this server allows it.
@@ -123,6 +189,7 @@ pub fn link(
     if !pins::owns_room(state, caller, &item.hangout_id)? {
         return Err(ApiError::forbidden("only the room's owner can link a Lific board"));
     }
+    state.lific.forget(&item.id);
     let Some(base) = base.filter(|base| !base.trim().is_empty()) else {
         state.db.clear_lific_link(&item.id)?;
         ops::refresh(state, &item.hangout_id);
@@ -132,7 +199,14 @@ pub fn link(
         ApiError::bad_request("that Lific address isn't one this server may reach")
     })?;
     let project = project_of(project.unwrap_or_default())?;
-    state.db.set_lific_link(&item.id, &origin, &project, &caller.person_id, now())?;
+    state.db.set_lific_link(
+        &item.id,
+        &item.hangout_id,
+        &origin,
+        &project,
+        &caller.person_id,
+        now(),
+    )?;
     ops::refresh(state, &item.hangout_id);
     Ok(json!({ "linked": true, "project": project }))
 }
@@ -183,16 +257,22 @@ async fn client_for(settings: &Settings, base: &Url) -> Result<Client, &'static 
     if settings.local.as_deref() == Some(origin.as_str()) {
         return builder.build().map_err(|_| "down");
     }
-    if base.scheme() != "https" {
-        return Err("refused");
-    }
     let host = base.host_str().ok_or("refused")?;
     let port = base.port_or_known_default().unwrap_or(443);
-    let address = tokio::time::timeout(TIMEOUT, notify::public_address(host))
-        .await
-        .map_err(|_| "slow")?
-        .ok_or("refused")?;
-    builder.resolve(host, SocketAddr::new(address.ip(), port)).build().map_err(|_| "down")
+    let ip = match settings.test_pin {
+        Some(ip) => ip,
+        None => {
+            if base.scheme() != "https" {
+                return Err("refused");
+            }
+            tokio::time::timeout(TIMEOUT, notify::public_address(host))
+                .await
+                .map_err(|_| "slow")?
+                .ok_or("refused")?
+                .ip()
+        }
+    };
+    builder.resolve(host, SocketAddr::new(ip, port)).build().map_err(|_| "down")
 }
 
 /// One public route's JSON, read up to `MAX_BYTES`.
@@ -269,14 +349,17 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
             .find(|m| m["id"].as_i64() == Some(id))
             .and_then(|m| m["name"].as_str().map(clean_title))
     };
+    let status_of = |row: &Value| row["status"].as_str().unwrap_or("backlog").to_string();
+    // A status Lific added after this was written has no column, so it's neither shown nor counted.
     let mut issues: Vec<&Value> = index["issues"]
         .as_array()
-        .map(|rows| rows.iter().filter(|row| row["deleted"] != true).collect())
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row["deleted"] != true && STATUSES.contains(&status_of(row).as_str()))
+                .collect()
+        })
         .unwrap_or_default();
-    let rank = |row: &&Value| {
-        let status = row["status"].as_str().unwrap_or("backlog");
-        STATUSES.iter().position(|s| *s == status).unwrap_or(STATUSES.len())
-    };
+    let rank = |row: &&Value| STATUSES.iter().position(|s| *s == status_of(row)).unwrap_or(0);
     issues.sort_by(|a, b| {
         rank(a).cmp(&rank(b)).then(
             a["sort_order"]
@@ -321,13 +404,17 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
     })
 }
 
-/// I125 to I127: the board as Lific's public routes have it right now, for anyone who can see
-/// the room. Nothing is kept between reads.
+/// I125 to I127: the board as Lific's public routes have it, read at most `REUSE` ago, for anyone
+/// who can see the room.
 pub async fn board(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value> {
     let item = board_item(state, caller, item_id)?;
-    let Some((base, project)) = state.db.lific_link(&item.id)? else {
+    let Some((base, project)) = state.db.lific_link(&item.id, &item.hangout_id)? else {
         return Ok(unavailable(&item.id, None, "not_linked"));
     };
+    let link = format!("{base} {project}");
+    if let Some(board) = state.lific.reused(&item.id, &link) {
+        return Ok(board);
+    }
     let settings = settings(state);
     // The list can shrink after a board was linked; one taken off it isn't asked again.
     if allowed(&settings, &base).is_none() {
@@ -337,6 +424,7 @@ pub async fn board(state: &AppState, caller: &Caller, item_id: &str) -> ApiResul
         return Ok(unavailable(&item.id, Some(&project), "not_allowed"));
     };
     let read = async {
+        let _slot = state.lific.slots.acquire().await.map_err(|_| "busy")?;
         let client = client_for(&settings, &base_url).await?;
         let route = |tail: &str| {
             base_url.join(&format!("/public/api/projects/{project}/{tail}")).map_err(|_| "down")
@@ -347,10 +435,12 @@ pub async fn board(state: &AppState, caller: &Caller, item_id: &str) -> ApiResul
         Ok::<_, &'static str>((index, modules))
     };
     let answer = tokio::time::timeout(TIMEOUT, read).await.unwrap_or(Err("slow"));
-    Ok(match answer {
+    let board = match answer {
         Ok((index, modules)) => columns(&item.id, &project, &index, modules.as_ref()),
         Err(reason) => unavailable(&item.id, Some(&project), reason),
-    })
+    };
+    state.lific.keep(&item.id, &link, &board);
+    Ok(board)
 }
 
 // Routes

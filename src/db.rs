@@ -1999,6 +1999,7 @@ CREATE TABLE IF NOT EXISTS vote_reminders (
 -- key. Its issues are never stored (I126). It goes with the board.
 CREATE TABLE IF NOT EXISTS lific_links (
     item_id     TEXT PRIMARY KEY REFERENCES floor_items(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
     base        TEXT NOT NULL,
     project     TEXT NOT NULL,
     set_by      TEXT NOT NULL REFERENCES people(id),
@@ -4398,6 +4399,9 @@ fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusql
         ("cities", "created_by"),
         ("houses", "created_by"),
         ("boards", "created_by"),
+        // #614: who set a station up; the board or clock stays with the room.
+        ("lific_links", "set_by"),
+        ("closing_clocks", "set_by"),
     ] {
         conn.execute(
             &format!("UPDATE {table} SET {column} = ?1 WHERE {column} = ?2"),
@@ -14315,16 +14319,19 @@ impl Db {
     pub fn set_lific_link(
         &self,
         item_id: &str,
+        hangout_id: &str,
         base: &str,
         project: &str,
         set_by: &str,
         at: i64,
     ) -> rusqlite::Result<()> {
         self.conn().execute(
-            "INSERT INTO lific_links (item_id, base, project, set_by, set_at) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (item_id) DO UPDATE SET base = excluded.base, project = excluded.project,
+            "INSERT INTO lific_links (item_id, hangout_id, base, project, set_by, set_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT (item_id) DO UPDATE SET hangout_id = excluded.hangout_id,
+                 base = excluded.base, project = excluded.project,
                  set_by = excluded.set_by, set_at = excluded.set_at",
-            params![item_id, base, project, set_by, at],
+            params![item_id, hangout_id, base, project, set_by, at],
         )?;
         Ok(())
     }
@@ -14335,12 +14342,16 @@ impl Db {
         Ok(())
     }
 
-    /// I124: a Lific board's origin and project.
-    pub fn lific_link(&self, item_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+    /// I124: a Lific board's origin and project, while it's in the room it was linked in.
+    pub fn lific_link(
+        &self,
+        item_id: &str,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Option<(String, String)>> {
         self.conn()
             .query_row(
-                "SELECT base, project FROM lific_links WHERE item_id = ?",
-                [item_id],
+                "SELECT base, project FROM lific_links WHERE item_id = ? AND hangout_id = ?",
+                [item_id, hangout_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()

@@ -6411,11 +6411,17 @@ async fn a_new_room_starts_with_a_notes_station_that_counts_readable_notes() {
 #[derive(Clone)]
 struct FakeLific {
     mode: Arc<std::sync::Mutex<&'static str>>,
+    /// How many times `/index` was asked for.
+    asked: Arc<AtomicUsize>,
 }
 
 impl FakeLific {
     fn set(&self, mode: &'static str) {
         *self.mode.lock().unwrap() = mode;
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
     }
 }
 
@@ -6432,6 +6438,9 @@ async fn fake_lific() -> (FakeLific, String) {
         Path((project, tail)): Path<(String, String)>,
     ) -> Response {
         let mode = *fake.mode.lock().unwrap();
+        if tail == "index" {
+            fake.asked.fetch_add(1, Ordering::SeqCst);
+        }
         if project != "DEMO" || mode == "unpublished" {
             return Code::NOT_FOUND.into_response();
         }
@@ -6448,6 +6457,11 @@ async fn fake_lific() -> (FakeLific, String) {
             "huge" => {
                 let pad = "x".repeat(300 * 1024);
                 axum::Json(json!({ "issues": [], "pad": pad })).into_response()
+            }
+            // Over the cap in chunks, with no Content-Length to give it away first.
+            "streamed" => {
+                let chunks = (0..40).map(|_| Ok::<_, std::io::Error>(vec![b' '; 8 * 1024]));
+                axum::body::Body::from_stream(futures_util::stream::iter(chunks)).into_response()
             }
             _ if tail == "modules" => {
                 axum::Json(json!([{ "id": 1, "name": "Board" }])).into_response()
@@ -6476,7 +6490,10 @@ async fn fake_lific() -> (FakeLific, String) {
             .into_response(),
         }
     }
-    let fake = FakeLific { mode: Arc::new(std::sync::Mutex::new("ok")) };
+    let fake = FakeLific {
+        mode: Arc::new(std::sync::Mutex::new("ok")),
+        asked: Arc::new(AtomicUsize::new(0)),
+    };
     let router = Router::new()
         .route("/public/api/projects/{project}/{tail}", get(answer))
         .with_state(fake.clone());
@@ -6487,8 +6504,10 @@ async fn fake_lific() -> (FakeLific, String) {
 }
 
 fn allow_lific(server: &Server, origins: &str, local: &str) {
-    *server.state.lific.write().unwrap() =
-        agenthangout::lific::Settings::from_settings(Some(origins), Some(local));
+    server
+        .state
+        .lific
+        .set(agenthangout::lific::Settings::from_settings(Some(origins), Some(local)));
 }
 
 // I123 to I126: the room's owner links a Lific board to an allowed instance; anyone in the room,
@@ -6598,9 +6617,12 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
         ("busy", "busy"),
         ("redirect", "redirected"),
         ("huge", "too_big"),
+        ("streamed", "too_big"),
         ("slow", "slow"),
     ] {
         fake.set(mode);
+        // Linking again forgets the last read, so this one asks Lific.
+        server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
         let started = std::time::Instant::now();
         let board = server.get(&ann.key, &path).await.ok();
         assert_eq!(board["available"], false, "{mode}: {board}");
@@ -6611,6 +6633,7 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
     }
 
     fake.set("many");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
     let board = server.get(&ann.key, &path).await.ok();
     assert_eq!((board["shown"].clone(), board["total"].clone()), (json!(50), json!(60)));
     assert_eq!(board["truncated"], true);
@@ -6627,6 +6650,66 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
         (board["available"].clone(), board["reason"].clone()),
         (json!(false), json!("down"))
     );
+}
+
+// I126: a board read is shown again for a few seconds, so a room of readers, or a bot in a loop,
+// asks Lific once; linking it again forgets that read.
+#[tokio::test]
+async fn a_lific_board_asks_lific_once_for_many_readers() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (fake, origin) = fake_lific().await;
+    allow_lific(&server, "", &origin);
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    for _ in 0..3 {
+        assert_eq!(server.get(&ann.key, &path).await.ok()["available"], true);
+        server.tool(&scout.token, "read_board", json!({ "board_id": id })).await;
+    }
+    assert_eq!(fake.asked(), 1, "six reads, one request");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    server.get(&ann.key, &path).await.ok();
+    assert_eq!(fake.asked(), 2);
+}
+
+// I124: the path for a listed origin goes to the address it was pinned to, not wherever its name
+// resolves: here a name with no DNS at all reaches the stand-in it's pinned to.
+#[tokio::test]
+async fn a_lific_board_reaches_a_listed_origin_through_its_pinned_address() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_fake, origin) = fake_lific().await;
+    let port = origin.rsplit(':').next().unwrap();
+    let listed = format!("http://lific.invalid:{port}");
+    server.state.lific.set(agenthangout::lific::Settings {
+        origins: vec![listed.clone()],
+        local: None,
+        test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+    });
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": listed, "project": "DEMO" })).await.ok();
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(board["available"], true, "{board}");
+    assert_eq!(board["total"], 2);
+}
+
+// #614: the person who linked a board can delete their account; the board stays with the room.
+#[tokio::test]
+async fn deleting_whoever_linked_a_lific_board_keeps_the_board() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_fake, origin) = fake_lific().await;
+    allow_lific(&server, "", &origin);
+    let id = server.item(&ann, &room, "lific_board", (0, 0)).await;
+    // As if Bo had run the room when it was linked.
+    server.state.db.set_lific_link(&id, &room, &origin, "DEMO", &bo.id, now()).unwrap();
+    server.state.db.delete_person(&bo.id, "Bo").expect("deleting Bo");
+    let board = server.get(&ann.key, &format!("/api/items/{id}/lific")).await.ok();
+    assert_eq!(board["linked"], true, "{board}");
 }
 
 // I124: an https address on the list whose name doesn't resolve to a public address is never asked.

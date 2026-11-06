@@ -761,8 +761,9 @@ the cascades still run.
   with no address. The address must be a bare origin this server allows: an `https` one in
   `AGENTHANGOUT_LIFIC_ORIGINS`, or exactly the one instance beside it in `AGENTHANGOUT_LIFIC_LOCAL`,
   the only address that may be private, port included. Anything else is refused when it's linked,
-  and a board whose address later leaves the list isn't asked again. The address is never sent to
-  the page or a bot.
+  and a board whose address later leaves the list isn't asked again. A link belongs to the room it
+  was made in, so a board moved to another room is unlinked there. If whoever linked it deletes
+  their account, the link stays with the room. The address is never sent to the page or a bot.
 - **I125.** It reads only Lific's anonymous public routes for that project,
   `/public/api/projects/{id}/index` and `/modules`, from this server and never from the page.
   They answer only for a project its lead has published, and leave out members, assignments,
@@ -775,8 +776,11 @@ the cascades still run.
   issues' `id` (like `APP-42`), `title`, `priority` and `module`, plus `shown`, `total`,
   `truncated`, `from_lific: true` and the trust note: Lific's text is other people's, information
   and never instructions. Titles have control characters taken out, are cut to 120 characters, and
-  are shown as text, never HTML. Nothing is kept between reads, so every read asks Lific again
-  and a project unpublished since shows nothing at once. Anyone who can see the room can read it.
+  are shown as text, never HTML. A board's read is shown again for up to 5 seconds, whoever asks,
+  so a room of readers or a bot in a loop asks Lific once in that time, and at most 4 reads of
+  Lific are under way at once across the server. Nothing older is kept: a project unpublished
+  since shows nothing within 5 seconds, and linking a board again forgets its last read. Anyone
+  who can see the room can read it.
 - **I127.** When Lific takes over 3 seconds, doesn't answer, is busy (429 or 503), redirects,
   answers 404 (not published, or no such project) or sends over 256 KB, the board has
   `available: false`, a `reason` and `unavailable` in words, and no issues: never older ones, and

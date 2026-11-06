@@ -68,10 +68,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         apps,
     );
     // I124: where a Lific board may point.
-    *state.lific.write().expect("lific settings") = agenthangout::lific::Settings::from_settings(
+    state.lific.set(agenthangout::lific::Settings::from_settings(
         env::var("AGENTHANGOUT_LIFIC_ORIGINS").ok().as_deref(),
         env::var("AGENTHANGOUT_LIFIC_LOCAL").ok().as_deref(),
-    );
+    ));
     // W100: who may read the public Commons bots list from another site.
     state.worlds.set_viewer_origins(worlds::parse_viewer_origins(
         env::var("AGENTHANGOUT_COMMONS_VIEWER_ORIGINS").ok().as_deref(),
