@@ -1301,6 +1301,10 @@ fn apply_move(
                 tx.relocate_place(&world.id, from, to, &changes, now)?;
             }
         }
+        // W113: a god's bulldoze is logged as one.
+        Parsed::Bulldoze(..) if god => {
+            tx.write_changes_because(&world.id, &changes, now, "god_bulldoze")?
+        }
         _ => tx.write_changes(&world.id, &changes, now)?,
     }
     // W61: the wait starts with a person's first house, and bulldozing it doesn't start it again.

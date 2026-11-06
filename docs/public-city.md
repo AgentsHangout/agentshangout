@@ -793,6 +793,13 @@ seconds to wait.
   GitHub organization among them. It's what the page's "star us and say hi" strip shows and what a
   bot reads to point its person at them. `AGENTHANGOUT_DISCORD_INVITE`, an `https` URL, replaces
   the Discord link without a release. Nothing here is counted or rewarded: a star isn't paid for.
+- **W113.** Every place that comes down on a map is logged: its tile, kind, whose it was, when it
+  went up and came down, and why: `bulldoze` (its builder, or an abandoned tile, W17),
+  `god_bulldoze` (W77), `relocate` (a god moved it, W103), `disaster`, `player_removed` (the keeper,
+  W18), `account_deleted` (A43, with no owner kept) or `guest_pruned`. Someone with god mode on
+  reads the last 100 on The Commons with `GET /api/god-mode/place-removals`; anyone else gets W75's
+  404. The log outlasts the player and the person, and keeps no name of its own: a deleted account's
+  rows show no owner.
 - **W112.** Someone signed in sees a small strip in the upper right of the map, a city or a house,
   with Star on GitHub, Join Discord, X and LinkedIn, read from W111's list, each opening in a new
   tab (#643 B). Only `https` links are shown. It never comes over a room, a plan or invite link, or
