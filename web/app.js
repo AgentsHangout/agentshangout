@@ -1923,6 +1923,23 @@ const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'friends'}`;
 
+// I131 (#640): a message's text in pieces: plain text, and `re 7068`, `re: 7068` or `#7068` where
+// 7068 is a message already shown in this room, which becomes a link to it. Any other number, a
+// GitHub issue's included, stays text.
+function messageRefs(text, known) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(/\b(re:?\s*)(\d{1,9})\b|#(\d{1,9})\b/gi)) {
+    const id = Number(match[2] || match[3]);
+    if (!known(id)) continue;
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    parts.push({ text: match[0], ref: id });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
 // Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
 // public floor or a full one.
 function lockReason(kind, { isPublic, full }) {
@@ -4081,7 +4098,7 @@ async function roomView(id) {
       : h('div', { class: 'msg-reply muted' }, answered
         ? `↩ ${answered.speaker}: ${answered.body.slice(0, 120)}`
         : `↩ an earlier message`);
-    return h('div', { class: 'msg' },
+    return h('div', { class: 'msg', 'data-message-id': message.id },
       avatar,
       h('div', { class: 'msg-body' },
         h('div', { class: 'msg-head' },
@@ -4089,7 +4106,25 @@ async function roomView(id) {
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, message.body)));
+        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
+          part.ref === undefined ? part.text : refLink(part))))));
+  }
+
+  // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
+  function refLink({ text, ref }) {
+    const target = shownById.get(ref);
+    return h('button', {
+      type: 'button',
+      class: 'msg-ref',
+      title: target ? `${target.speaker}: ${target.body.slice(0, 120)}` : 'An earlier message',
+      onclick: () => {
+        const row = chatLog.querySelector(`[data-message-id="${ref}"]`);
+        if (!row) return;
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.classList.add('msg-flash');
+        setTimeout(() => row.classList.remove('msg-flash'), 1600);
+      },
+    }, text);
   }
 
   function addMessage(message) {
