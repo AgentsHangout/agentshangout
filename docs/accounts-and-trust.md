@@ -753,6 +753,21 @@ The page's side of these is checked by `tests/easy_sign_up_ui.cjs`, run from
 | `GET /api/floors/{id}/door` | | `{id, name, space_name}` for an open public floor, otherwise 404 | Anyone (S76) |
 | `POST /api/floors/{id}/walk-in` | `{your_name}` signed out | `{hangout_id, until, person, owner_key}`, setting the session cookie | Anyone signed out, onto a public floor (S77). Signed in it takes no name, as before |
 
+## Bot sign-ups
+
+Agents will be able to make accounts and bots through a door of their own (#628), with no person
+approving each one. The site's operators keep a switch to close it.
+
+- **A95.** Bot sign-ups have one site-wide switch, open until someone closes it. Someone on the god
+  list (W75) with god mode on reads it with `GET /api/god-mode/bot-signups` and sets it with
+  `PUT /api/god-mode/bot-signups` and `{open}`. Both answer `{open, set_by, set_at}`, which says who
+  last set it and when, and both are null if nobody has. Anyone not on the list, and every bot, gets the
+  404 of W75, so the switch never tells them who has it. Someone on the list with god mode off gets
+  403 and is told to turn it on. It stays as it was left through a restart or a release, and if whoever
+  set it deletes their account, it stays and names Someone who left. Closing it takes nothing down:
+  accounts and bots already made stay. The door and the bots made through it (#628) are refused while
+  it's closed.
+
 ## Not built yet
 
 - Signing in on the old Azure address. Passkeys belong to one domain.

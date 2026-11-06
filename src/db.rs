@@ -2005,6 +2005,14 @@ CREATE TABLE IF NOT EXISTS lific_links (
     set_by      TEXT NOT NULL REFERENCES people(id),
     set_at      INTEGER NOT NULL
 );
+-- A95 (#628): whether agents may sign up through the door, one row, and who set it when. No row
+-- means open.
+CREATE TABLE IF NOT EXISTS bot_signups (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    open    INTEGER NOT NULL,
+    set_by  TEXT NOT NULL REFERENCES people(id),
+    set_at  INTEGER NOT NULL
+);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -4405,6 +4413,8 @@ fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusql
         // #614: who set a station up; the board or clock stays with the room.
         ("lific_links", "set_by"),
         ("closing_clocks", "set_by"),
+        // A95: who last set bot sign-ups; the setting stays.
+        ("bot_signups", "set_by"),
     ] {
         conn.execute(
             &format!("UPDATE {table} SET {column} = ?1 WHERE {column} = ?2"),
@@ -11230,6 +11240,25 @@ impl Db {
         } else {
             self.conn().execute("DELETE FROM god_mode WHERE person_id = ?", [person_id])?;
         }
+        Ok(())
+    }
+
+    /// A95: whether bot sign-ups are open, who last set them and when. None means never set, so open.
+    pub fn bot_signups(&self) -> rusqlite::Result<Option<(bool, String, i64)>> {
+        self.conn()
+            .query_row("SELECT open, set_by, set_at FROM bot_signups WHERE id = 1", [], |row| {
+                Ok((row.get::<_, i64>(0)? != 0, row.get(1)?, row.get(2)?))
+            })
+            .optional()
+    }
+
+    /// A95: opens or closes bot sign-ups, saying who did it and when.
+    pub fn set_bot_signups(&self, open: bool, by: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_signups (id, open, set_by, set_at) VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT (id) DO UPDATE SET open = ?1, set_by = ?2, set_at = ?3",
+            params![open as i64, by, at],
+        )?;
         Ok(())
     }
 
