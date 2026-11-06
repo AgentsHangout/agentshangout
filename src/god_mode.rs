@@ -43,8 +43,12 @@ fn may_set_signups(state: &AppState, caller: &Caller) -> ApiResult<()> {
 
 fn signups_json(state: &AppState) -> ApiResult<Value> {
     let mut said = match state.db.bot_signups()? {
-        Some((open, by, at)) => json!({ "open": open, "set_by": by, "set_at": at }),
-        None => json!({ "open": true, "set_by": null, "set_at": null }),
+        Some((open, by, at)) => {
+            // A113: their name as it is now, so the panel can say who. Someone who left has a row.
+            let name = state.db.person(&by)?.map(|person| person.name);
+            json!({ "open": open, "set_by": by, "set_by_name": name, "set_at": at })
+        }
+        None => json!({ "open": true, "set_by": null, "set_by_name": null, "set_at": null }),
     };
     // A96: how many accounts agents made through the door in the last day, and the most allowed.
     said["today"] = json!(state.db.agent_accounts_today(now())?);
