@@ -31,6 +31,7 @@ pub mod how_to_play;
 pub mod ical;
 pub mod items;
 pub mod jobs;
+pub mod lific;
 pub mod looks;
 pub mod mcp;
 pub mod meetups;
@@ -147,6 +148,8 @@ pub struct Shared {
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
+    /// I124: where a Lific board may point, from `AGENTHANGOUT_LIFIC_ORIGINS` and `_LOCAL`.
+    pub lific: lific::Shared,
     write_windows: Mutex<HashMap<String, Window>>,
     write_clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -246,6 +249,7 @@ impl AppState {
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
+            lific: lific::Shared::default(),
             write_windows: Mutex::new(HashMap::new()),
             write_clock: Arc::new(clock),
         }))

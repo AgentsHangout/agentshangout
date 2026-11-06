@@ -1082,6 +1082,23 @@ function paintResearchBoard(g, x, y) {
   r(g, '#f4f1e8', x - 2, y - 14, 10, 2);
 }
 
+// A Lific issue board on legs: three columns of cards, like its board view (I123).
+function paintLificBoard(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#4a4f58', x - 8, y - 8, 2, 7);
+  r(g, '#4a4f58', x + 6, y - 8, 2, 7);
+  r(g, '#3a3f47', x - 12, y - 31, 24, 23);
+  r(g, '#f4f1e8', x - 10, y - 29, 20, 19);
+  r(g, '#c9c4b8', x - 4, y - 29, 1, 19);
+  r(g, '#c9c4b8', x + 3, y - 29, 1, 19);
+  r(g, '#8e9bb2', x - 9, y - 27, 4, 3);
+  r(g, '#8e9bb2', x - 9, y - 22, 4, 3);
+  r(g, '#8e9bb2', x - 9, y - 17, 4, 3);
+  r(g, '#f2b84b', x - 2, y - 27, 4, 3);
+  r(g, '#f2b84b', x - 2, y - 22, 4, 3);
+  r(g, '#3ddc97', x + 5, y - 27, 4, 3);
+}
+
 // A wooden ballot box with a brass latch and paper slot for room votes (I111).
 function paintBallotBox(g, x, y) {
   r(g, SHADOW, x - 7, y - 2, 14, 2);
@@ -4184,6 +4201,7 @@ const ITEMS = {
   corkboard: { paint: paintCorkboard, side: edgeOf(25, '#d89a6c', '#4a3120'), rise: 31 },
   research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
   ballot_box: { paint: paintBallotBox, side: edgeOf(16, '#8a5c37', '#6b4628'), rise: 21 },
+  lific_board: { paint: paintLificBoard, side: edgeOf(25, '#3a3f47', '#4a4f58'), rise: 31 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },
   armchair: {
@@ -4424,6 +4442,7 @@ const USES = {
   corkboard: { spots: 1, pose: 'stand', hands: true },
   research_board: { spots: 1, pose: 'stand', hands: true },
   ballot_box: { spots: 1, pose: 'stand', hands: true },
+  lific_board: { spots: 1, pose: 'stand', hands: true },
   game_table: { spots: 2, pose: 'sit', hands: true },
   aquarium: { spots: 2, pose: 'stand' },
   fireplace: { spots: 2, pose: 'stand' },
