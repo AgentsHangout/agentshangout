@@ -881,6 +881,21 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
     key opens it at the room's top left corner. A press and hold is the browser's own, so it works
     where the browser sends one (desktop and Android, not iOS Safari).
 
+## Game windows
+
+- **W114.** Map and room panels are windows within the game, between its navigation and status
+  controls. Several can remain open; selecting a window brings it forward. Drag its title to move
+  it, or its bottom-right grip to resize it. Arrow keys on the title or grip do the same.
+  Maximize fills the available game area and Restore returns to the previous size and position.
+  Minimize keeps contents and unfinished input in a compact, draggable bottom dock; its named
+  button restores the window and its X closes it. Closing removes the dock entry. Escape closes
+  the active window. Resizing the viewport keeps windows and dock controls reachable, including
+  on touch screens. The window body owns scrolling; nested My bots content does not add a second
+  vertical scrollbar. Expanded connections stay inside their window, below its controls.
+  Room on the phone minimizes all windows to reveal the interior. Geometry is local to the current
+  page; navigation discards it. See `tests/game_windows_ui.cjs` and
+  `python tests/game_windows_browser.py` (using `tests/game_windows.html`).
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone

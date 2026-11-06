@@ -55,7 +55,7 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 `mobile_rust/tests/phone-layout.html` checks M1 and the landscape navigation in a real browser. Serve the repository locally, open the page in portrait and landscape, and require every check to pass. `python mobile_rust/tests/android_rotation.py --serial emulator-5554` checks M2 against an installed APK by moving the emulator's sensor while system auto-rotate is off; it restores the sensor and preference afterwards.
 
 ### 6. Phone sheets and room layout
-- **M3.** Phone sheets have a full-width dismiss handle at least 44px high, accepting touch, pen, and mouse pointers. A downward drag of at least 56px dismisses the sheet; short or cancelled gestures restore it. Close buttons, tap-outside, and Escape continue to work. The phone header and body form one plain surface without nested desktop bevels or backdrop blur over the animated game.
+- **M3.** Phone sheets have a full-width dismiss handle at least 44px high, accepting touch, pen, and mouse pointers. A downward drag of at least 56px dismisses the sheet; short or cancelled gestures restore it. Close buttons and Escape continue to work. W114 game windows stay open when the world is tapped so the world and several windows remain usable together. The phone header and body form one plain surface without nested desktop bevels or backdrop blur over the animated game.
 - **M4.** A phone room starts with the whole scene fitted inside the available viewport at its original 480:252 aspect ratio, in portrait and landscape. The landscape navigation rail is reserved once. Pinch to zoom and pan a zoomed room; rotation keeps the camera within the new bounds. Repeated room information and floor navigation live in More; guest-access and quiet-room warnings appear inside Chat and More. Desktop presentation stays unchanged.
 - **M5.** The room performance probe exercises the actual renderer, checking stationary artwork and label stability as well as moving and seated label positions. Timing is reported without a device-independent pass threshold. Android performance comparisons sample the same foreground interaction and reject backgrounded or restarted sessions.
 
@@ -145,3 +145,13 @@ Open `mobile_rust/src-tauri/gen/apple/` in Xcode to run on iOS Simulator or conn
 - **Physical Device:** Pixel 10 Pro XL (Android 15, ARM64) over Wi-Fi ADB.
 - **Emulator:** Pixel 8 API 34 (x86_64).
 - **Backend Compatibility:** 100% compliant with existing tests (`cargo test --locked`).
+
+
+### Movable game windows (W114)
+
+Map and room panels share the window controls described in `docs/public-city.md` W114.
+The title can be dragged with a finger, the corner bracket resizes, and Maximize fills
+only the available game area above navigation. Minimize keeps the panel in a draggable
+dock and X closes it. Controls have 44-pixel touch targets. The existing sheet grabber
+remains a dismiss shortcut; dragging the title moves the window instead. Resizing or
+rotating the screen keeps the title and dock reachable. See `web/brand/README.md`.

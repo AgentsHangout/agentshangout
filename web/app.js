@@ -3042,7 +3042,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     say('Build mode is off.');
   }
 
-  // The panels are one at a time. Opening another one ends build mode, except an item's notes, and
+  // Changing the active window ends build mode, except an item's notes, and
   // closing those comes back to what was there.
   function panelChanged(was, now) {
     if (was === 'itemnotes' && now !== 'itemnotes') notesOf = null;
@@ -6104,10 +6104,8 @@ async function roomView(id) {
       backPath === '/' ? null : link('/', 'The Commons', { class: 'wd-btn wide' }),
     ].filter(Boolean)));
 
-  // One panel at a time, as on the map. Beside the room the chat is what the others cover, so closing
-  // one that took its place brings the chat back, and closing the chat itself leaves it shut.
+  // W114: chat stays open behind other windows; minimizing must not reopen it implicitly.
   let showing = null;
-  let chatBehind = false;
   const syncRoomTabs = panels.onChange;
   panels.onChange = () => {
     syncRoomTabs();
@@ -6116,15 +6114,6 @@ async function roomView(id) {
     if (was === 'room' && showing !== 'room') typingComposer.stop();
     frame.root.classList.toggle('has-panel', Boolean(showing));
     builder.panelChanged(was, showing);
-    if (was === 'room' && showing) {
-      chatBehind = true;
-    } else if (!showing && builder.backToCatalog(was)) {
-      panels.open('build');
-    } else if (!showing) {
-      const reopen = chatBehind && was !== 'room' && beside.matches;
-      chatBehind = false;
-      if (reopen) panels.open('room');
-    }
   };
 
   say('The buttons along the top open the chat, the crew and everything else here.');
@@ -6179,6 +6168,8 @@ async function roomView(id) {
   // Escape closes the panel. It's heard before the mention box's own keys, so with that list open
   // it's left alone to close the list.
   const onKey = (event) => {
+    // Window handles own their arrow keys, even while a build tool is in hand.
+    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock')) return;
     if (builder.key(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -6209,6 +6200,7 @@ async function roomView(id) {
   leaveRoom = () => {
     removeEventListener('pagehide', goAway);
     goAway();
+    panels.destroy();
     typingComposer.destroy();
     typingHints.destroy();
     stream.close();
@@ -8016,7 +8008,7 @@ const EMOTE_MENU = [['wave', 'Wave'], ['cheer', 'Cheer'], ['think', 'Think'], ['
 // A narrow screen gets sheets instead of side panels, and a dock along the bottom.
 const COMPACT = '(max-width: 759px)';
 
-// The panels that open over a game window from buttons in its title bar, one at a time. Each has a
+// The panels that open over a game window from buttons in its title bar. Each has a
 // close button of its own, and Escape closes it. `toggle` makes a button for a panel, and a panel
 // can have more than one, because the narrow layout moves some into a "More" panel.
 // The phone chrome is for a touch screen. A mouse window keeps the desktop game, even when it is
@@ -8295,7 +8287,7 @@ function installAppleHigRoom({ frame, panels }) {
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [
     { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
-    { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
+    { id: 'room', label: 'Room', icon: '🏠', action: () => panels.minimizeAll() },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
     { id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') },
     { id: 'more', label: 'More', icon: '⋯', action: () => panels.open('more') },
@@ -8397,53 +8389,168 @@ function installSheetDrag(handle, sheet, dismiss) {
 }
 
 function createPanels(root) {
-  const panels = new Map();
-  const toggles = new Map();
-  let current = null;
-  const scrim = h('div', { class: 'sheet-scrim', hidden: true, onclick: () => set.close() });
-  root.append(scrim);
-
-  const sync = () => {
-    for (const [name, panel] of panels) panel.el.hidden = name !== current;
-    for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(name === current));
-    scrim.hidden = !current;
-    if (current) {
-      scrim.classList.add('visible');
-      try { navigator.vibrate?.(10); } catch (_) {}
-    } else {
-      scrim.classList.remove('visible');
+  // W114: geometry and lifecycle belong to the shared game surface, never the page body.
+  const panels = new Map(), toggles = new Map();
+  let current = null, order = 0, dockPosition = null;
+  const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
+    'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
+  const dockItems = h('div', { class: 'window-dock-items' });
+  const dock = h('nav', { class: 'window-dock', 'aria-label': 'Minimized windows', hidden: true }, dockHandle, dockItems);
+  root.append(dock);
+  root.classList.add('window-desktop');
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, Math.max(lo, hi)));
+  function bounds() {
+    const r = root.getBoundingClientRect();
+    const well = root.querySelector('.wd-well')?.getBoundingClientRect() || r;
+    let left = Math.max(r.left, well.left), right = Math.min(r.right, well.right);
+    let top = Math.max(r.top, well.top), bottom = Math.min(r.bottom, well.bottom);
+    for (const bar of root.querySelectorAll('.wd-title, .wd-stats, .wd-status, .apple-tab-bar, .build-dock')) {
+      const box = bar.getBoundingClientRect();
+      if (!box.height || getComputedStyle(bar).display === 'none') continue;
+      // Landscape navigation is a vertical rail, not a header that consumes all height.
+      if (box.height > box.width && box.top <= top + 2 && box.bottom >= bottom - 2) {
+        if (box.left <= left + 2) left = Math.max(left, box.right);
+        else if (box.right >= right - 2) right = Math.min(right, box.left);
+      } else if (box.width > (right - left) / 2) {
+        if (box.top <= top + 2) top = Math.max(top, box.bottom);
+        else if (box.bottom >= bottom - 2) bottom = Math.min(bottom, box.top);
+      }
     }
-  };
-  const shown = (button) => button.offsetParent !== null;
+    return { x: left - r.left + 6, y: top - r.top + 6,
+      w: Math.max(1, right - left - 12), h: Math.max(1, bottom - top - 12) };
+  }
 
+  function fit(rect, area) {
+    const w = clamp(rect.w, Math.min(280, area.w), area.w);
+    const h = clamp(rect.h, Math.min(160, area.h), area.h);
+    return { x: clamp(rect.x, area.x, area.x + area.w - w), y: clamp(rect.y, area.y, area.y + area.h - h), w, h };
+  }
+  function place(el, rect) {
+    for (const [key, value] of Object.entries({ left: rect.x, top: rect.y, width: rect.w, height: rect.h }))
+      el.style.setProperty(key, `${value}px`, 'important');
+  }
+  function layout() {
+    if (!root.getBoundingClientRect().width) return;
+    const area = bounds();
+    for (const [name, panel] of panels) {
+      if (!panel.rect && panel.state === 'open') {
+        const wide = ['bots', 'crew', 'lific'].includes(name);
+        panel.rect = { x: area.x + area.w - (wide ? 880 : 400), y: area.y + 12,
+          w: wide ? 880 : 400, h: Math.min(600, area.h - 24) };
+      }
+      if (!panel.rect) continue;
+      panel.rect = fit(panel.rect, area);
+      place(panel.el, panel.maximized ? area : panel.rect);
+    }
+    const size = dock.getBoundingClientRect();
+    const w = Math.min(size.width || 240, area.w), height = Math.min(size.height || 44, area.h);
+    const pos = dockPosition || { x: area.x, y: area.y + area.h - height };
+    dockPosition = { x: clamp(pos.x, area.x, area.x + area.w - w), y: clamp(pos.y, area.y, area.y + area.h - height) };
+    dock.style.left = `${dockPosition.x}px`; dock.style.top = `${dockPosition.y}px`;
+    dock.style.maxWidth = `${area.w}px`;
+  }
+  function sync() {
+    for (const [name, panel] of panels) {
+      panel.el.hidden = panel.state !== 'open';
+      panel.el.style.setProperty('z-index', String(4 + panel.order), 'important');
+      panel.el.classList.toggle('window-active', name === current);
+      panel.maxButton.setAttribute('aria-label', `${panel.maximized ? 'Restore' : 'Maximize'} ${panel.title}`);
+      panel.maxButton.title = panel.maximized ? 'Restore size' : 'Maximize';
+      panel.maxButton.textContent = panel.maximized ? '❐' : '□';
+      panel.grip.hidden = panel.maximized;
+      panel.dockEntry.hidden = panel.state !== 'minimized';
+    }
+    for (const [name, list] of toggles) for (const button of list)
+      button.setAttribute('aria-expanded', String(panels.get(name)?.state === 'open'));
+    dock.hidden = ![...panels.values()].some(p => p.state === 'minimized');
+    layout();
+  }
+  function activate(name) {
+    if (current === name) return;
+    current = name;
+    // Keep stacking below contextual menus rather than accumulating unbounded z-index values.
+    const sorted = [...panels.values()].sort((a, b) => a.order - b.order);
+    sorted.forEach((panel, i) => { panel.order = i; });
+    order = sorted.length;
+    panels.get(name).order = ++order;
+    sync(); set.onChange();
+  }
+  function next() {
+    return [...panels].filter(([, p]) => p.state === 'open').sort((a, b) => b[1].order - a[1].order)[0]?.[0] || null;
+  }
+  function back(name) {
+    if (current) panels.get(current).el.focus({ preventScroll: true });
+    else [...(toggles.get(name) || []), ...(toggles.get('more') || [])].find(b => b.offsetParent !== null)?.focus();
+  }
+  // Pointer capture keeps a drag alive beyond the handle; cancel never leaves listeners on window.
+  function movable(handle, read, write, enabled = () => true) {
+    let drag = null;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
+      event.preventDefault(); event.stopPropagation();
+      handle.focus({ preventScroll: true });
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, rect: { ...read() } };
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y);
+    });
+    const end = () => { drag = null; };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('lostpointercapture', end);
+    handle.addEventListener('keydown', event => {
+      if (event.target !== handle || !enabled()) return;
+      const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+      if (!delta) return;
+      event.preventDefault(); event.stopPropagation();
+      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16));
+    });
+  }
+  movable(dockHandle, () => dockPosition, (rect, x, y) => { dockPosition = { x: rect.x + x, y: rect.y + y }; layout(); });
+  const observer = new ResizeObserver(layout);
+  observer.observe(root);
+  const well = root.querySelector('.wd-well');
+  if (well) observer.observe(well);
+  observer.observe(dock);
   const set = {
     onChange: () => {},
-    get current() {
-      return current;
-    },
-    // `options.onOpen` runs each time the panel opens, and `options.onClose` each time it's closed,
-    // but not when another panel takes its place.
+    get current() { return current; },
+    destroy() { observer.disconnect(); },
     add(name, title, options, ...content) {
-      const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: () => set.close() });
+      const closeThis = () => { current = name; set.close(); };
+      const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: closeThis });
       const body = h('div', { class: 'game-panel-body' }, ...content);
-      const el = h('aside', { class: `game-panel game-panel-${name}`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true },
-        grabber,
-        h('header', { class: 'game-panel-head' },
-          h('h2', {}, title),
-          h('button', { type: 'button', class: 'wd-tbtn sheet-close', 'aria-label': `Close ${title}`, onclick: () => set.close() }, '✕')),
-        body);
-      installSheetDrag(grabber, el, () => set.close());
+      const maxButton = h('button', { type: 'button', class: 'wd-tbtn', onclick: () => set.maximize(name) }, '□');
+      const head = h('header', { class: 'game-panel-head', tabindex: 0,
+        'aria-label': `Move ${title} with arrow keys or drag`, title: 'Drag to move; double-click to maximize' },
+        h('h2', {}, title),
+        h('div', { class: 'window-actions' },
+          h('button', { type: 'button', class: 'wd-tbtn', title: 'Minimize', 'aria-label': `Minimize ${title}`, onclick: () => set.minimize(name) }, '−'),
+          maxButton,
+          h('button', { type: 'button', class: 'wd-tbtn sheet-close', title: 'Close', 'aria-label': `Close ${title}`, onclick: closeThis }, '✕')));
+      const grip = h('button', { type: 'button', class: 'window-resize', title: 'Drag to resize; arrow keys also resize', 'aria-label': `Resize ${title} with arrow keys or drag` }, '◢');
+      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, body, grip);
+      const restore = h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Restore ${title}`, onclick: () => set.open(name) }, title);
+      const dockEntry = h('div', { class: 'window-dock-entry', hidden: true }, restore,
+        h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Close minimized ${title}`, onclick: closeThis }, '✕'));
+      dockItems.append(dockEntry);
+      const panel = { el, body, title, maxButton, grip, dockEntry, state: 'closed', rect: null, maximized: false, order: 0,
+        onOpen: options?.onOpen, onClose: options?.onClose };
+      panels.set(name, panel);
+      el.addEventListener('pointerdown', () => activate(name));
+      el.addEventListener('focusin', () => activate(name));
+      head.addEventListener('dblclick', event => { if (!event.target.closest('button')) set.maximize(name); });
+      movable(head, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }, () => !panel.maximized);
+      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); });
+      installSheetDrag(grabber, el, closeThis);
       root.append(el);
-      panels.set(name, { el, body, onOpen: options?.onOpen, onClose: options?.onClose });
       return body;
     },
     toggle(name, label, { short, className = '', aria } = {}) {
-      const button = h('button', {
-        type: 'button',
-        class: `wd-tbtn ${className}`.trim(),
-        'aria-expanded': 'false',
-        'aria-controls': `panel-${name}`,
-        'aria-label': aria || label,
+      const button = h('button', { type: 'button', class: `wd-tbtn ${className}`.trim(),
+        'aria-expanded': 'false', 'aria-controls': `panel-${name}`, 'aria-label': aria || label,
         onclick: () => (current === name ? set.close() : set.open(name)),
       }, h('span', { class: 'long' }, label), short ? h('span', { class: 'short', 'aria-hidden': 'true' }, short) : null);
       toggles.set(name, [...(toggles.get(name) || []), button]);
@@ -8452,22 +8559,40 @@ function createPanels(root) {
     open(name) {
       const panel = panels.get(name);
       if (!panel) return;
-      current = name;
-      sync();
-      set.onChange();
-      panel.onOpen?.();
+      const fresh = panel.state === 'closed';
+      panel.state = 'open';
+      activate(name); sync();
+      if (fresh) panel.onOpen?.();
       panel.el.focus({ preventScroll: true });
+    },
+    minimize(name = current) {
+      const panel = panels.get(name);
+      if (!panel || panel.state !== 'open') return;
+      panel.state = 'minimized';
+      if (current === name) current = next();
+      sync(); set.onChange();
+      panel.dockEntry.children[0].focus({ preventScroll: true });
+    },
+    minimizeAll() {
+      for (const panel of panels.values()) if (panel.state === 'open') panel.state = 'minimized';
+      current = null;
+      sync(); set.onChange();
+    },
+    maximize(name = current) {
+      const panel = panels.get(name);
+      if (!panel) return;
+      panel.maximized = !panel.maximized;
+      activate(name); sync();
     },
     close(focus = true) {
       const was = current;
       if (!was) return;
-      current = null;
+      panels.get(was).state = 'closed';
+      current = next();
       sync();
       panels.get(was).onClose?.();
       set.onChange();
-      if (!focus) return;
-      const back = [...(toggles.get(was) || []), ...(toggles.get('more') || [])].find(shown);
-      back?.focus();
+      if (focus) back(was);
     },
   };
   return set;
@@ -10673,6 +10798,7 @@ async function worldView(id, { home = false } = {}) {
   if (guide) setTimeout(guide.arrive);
   document.documentElement.classList.add('in-game');
   leaveRoom = () => {
+    panels.destroy();
     watch.stop();
     clearTimeout(placeCardTimer);
     clearTimeout(outsidesTimer);
