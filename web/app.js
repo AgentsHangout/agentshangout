@@ -7,6 +7,7 @@ import { planInviteView } from './plan-invite.js';
 import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
+import { createClientUpdates } from './client-updates.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -32,6 +33,21 @@ function h(tag, props = {}, ...children) {
   }
   el.append(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
   return el;
+}
+
+const clientUpdates = createClientUpdates();
+void clientUpdates.start();
+
+function clientUpdateControl() {
+  const element = h('div', { 'aria-live': 'polite' });
+  const render = ({ ready }) => {
+    element.replaceChildren(...[
+      ready ? h('p', { class: 'muted' }, 'An app update is ready.') : null,
+      h('button', { type: 'button', class: 'ghost', onclick: () => { void clientUpdates.activate(); } }, 'Refresh app'),
+    ].filter(Boolean));
+  };
+  const stop = clientUpdates.subscribe(render);
+  return { element, stop };
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -268,14 +284,15 @@ function showToken(name, token, mcpUrl, { intro, brief, harness } = {}) {
     h('div', { class: 'modal-actions' }, copyButton(() => text)));
 }
 
-// A button's action, with any failure shown next to it.
+// A button's action, with any failure shown next to it. The action gets the event, for a menu's
+// choice or a drop.
 function act(errorEl, run) {
   return async (event) => {
     const button = event.currentTarget;
     errorEl.hidden = true;
     button.disabled = true;
     try {
-      await run();
+      await run(event);
     } catch (error) {
       errorEl.textContent = error.message;
       errorEl.hidden = false;
@@ -952,6 +969,7 @@ async function homeParts(me) {
     signInOpen: open,
   });
 
+  const updateControl = clientUpdateControl();
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
     onlyOwnerKeyNudge(me, status),
@@ -959,6 +977,7 @@ async function homeParts(me) {
     freeTimesField(me),
     housePlansField(me),
     photosField(),
+    updateControl?.element,
     ownerKeyControl(me),
     h('button', {
       type: 'button',
@@ -1066,11 +1085,11 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
-    stop: () => stop(),
+    stop: () => { stop(); updateControl.stop(); },
   };
 }
 
@@ -3182,7 +3201,18 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     }, 'Unlink')));
   // I132: the owner's link form stays folded away, so the board itself comes first.
   const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
+  // I147: credit to Lific, and its stars as the server last heard them from GitHub.
+  const LIFIC_REPO = 'https://github.com/VoidNullable/lific';
+  const repoLink = (props, ...children) => h('a', { href: LIFIC_REPO, target: '_blank', rel: 'noopener noreferrer', ...props }, ...children);
+  const lificStars = h('span', { class: 'lific-star-count', hidden: true });
+  const lificCredit = h('p', { class: 'muted lific-credit' },
+    'Boards by ', repoLink({}, 'Lific'), ', open source by VoidNullable. ',
+    repoLink({ class: 'lific-star', title: 'Star Lific on GitHub' }, h('span', { 'aria-hidden': 'true' }, '★'), ' Star', lificStars));
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink, lificCredit);
+  function showLificStars(stars) {
+    lificStars.hidden = !Number.isFinite(stars);
+    lificStars.textContent = lificStars.hidden ? '' : stars.toLocaleString('en-US');
+  }
 
   // I132: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
@@ -3257,6 +3287,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       if (asked !== lificOf) return;
       lificLink.hidden = !board.you_can_link;
       lificForm.hidden = false;
+      showLificStars(board.credit?.stars);
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
@@ -10797,7 +10828,8 @@ async function route() {
     }
     app.replaceChildren(h('main', { class: 'home' }, h('div', { class: 'card' },
       h('h2', {}, 'That didn\'t load'),
-      h('p', { class: 'muted' }, error.message))));
+      h('p', { class: 'muted' }, error.message),
+      h('button', { type: 'button', class: 'primary', onclick: () => clientUpdates.reload() }, 'Reload app'))));
   }
 }
 
