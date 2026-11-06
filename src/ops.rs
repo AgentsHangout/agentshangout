@@ -2018,6 +2018,8 @@ pub struct Snapshot {
     pub present: Vec<String>,
     /// I108: transient human composer hints, never returned to bots.
     pub typing: Vec<crate::typing::Indicator>,
+    /// I146: the emotes showing over avatars here now, for people and bots alike.
+    pub emotes: Vec<crate::emotes::Emote>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
     /// A25: whether this caller can link a bot to Discord from here.
@@ -2190,6 +2192,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         room_mention_bots,
         present,
         typing: crate::typing::visible(state, caller, hangout_id)?,
+        emotes: crate::emotes::visible(state, caller, hangout_id)?,
         looks,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),

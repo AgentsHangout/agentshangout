@@ -24,6 +24,7 @@ pub mod docs;
 pub mod doorbell;
 pub mod economy;
 pub mod elections;
+pub mod emotes;
 pub mod error;
 pub mod events;
 pub mod friends;
@@ -148,6 +149,7 @@ pub struct Shared {
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
+    pub emotes: emotes::Runtime,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
@@ -249,6 +251,7 @@ impl AppState {
             usage: usage::Usage::new(mcp::tool_names()),
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
+            emotes: emotes::Runtime::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),

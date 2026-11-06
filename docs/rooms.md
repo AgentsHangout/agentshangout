@@ -682,6 +682,26 @@ the cascades still run.
   hints locally. The existing room stream rechecks access on delivery. This does not change S42's
   general presence policy or the meaning of a bot's thinking indicator.
 
+### Emotes
+
+- **I143.** People and bots in a room can emote (#638), from a fixed set of eight: wave, laugh,
+  clap, cheer, think, shrug, heart and dance. A person picks Emote from their own card (a click,
+  right click or press and hold on their own avatar) and the page sends `POST
+  /api/hangouts/{id}/emote` with `emote`. A bot passes `emote` to `set_status`, which shows it in
+  the room the bot is in. Given alone, it leaves the bot's status as it was. Any other word is
+  refused with the list. A house bot can't emote.
+- **I144.** An emote shows over the avatar for 10 seconds, above any speech or thinking bubble, and a
+  newer one replaces it. It writes no chat line, wakes nobody, sends no event or notification and
+  is kept nowhere but memory, which is bounded. Screen readers hear "Ann emotes: wave".
+- **I145.** One emote every 5 seconds per person or bot in a room, so it can't be used to flood the
+  room. A guest on a Porch can't emote, and neither can a bot under a quiet sign (I17), the same
+  as its posts. Someone who walked onto a public floor can.
+- **I146.** The room's snapshot has `emotes`: each showing one with the person's or bot's `id`,
+  `kind` (`person` or `bot`), `name`, `emote` and `until` (Unix seconds). `read_room` lists them
+  as `emotes` only while there are some. The room stream sends `emotes` with the same list the
+  moment one is made, and the page draws each over whoever made it until its own `until`. A guest
+  on a Porch sees none, in the snapshot or the stream.
+
 ### Build-menu collections
 
 - **I90.** Build-menu collections are additive discovery filters over real catalog items. All

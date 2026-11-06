@@ -5911,6 +5911,67 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
+// I143-I146 (#638): an emote shows over the avatar for everyone in the room, people and bots,
+// from a fixed set, with no chat line, and one every five seconds.
+#[tokio::test]
+async fn people_and_bots_emote_in_the_room_without_a_chat_line() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (other, bo) = server.someone("Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let path = format!("/api/hangouts/{room}/emote");
+    let before = server.snapshot(&ann.key, &room).await["messages"].clone();
+    // Only the fixed set, and only in a room you can open.
+    server.post(&ann.key, &path, json!({"emote":"moon"})).await.refused(StatusCode::BAD_REQUEST);
+    server.post(&bo.key, &path, json!({"emote":"wave"})).await.refused(StatusCode::NOT_FOUND);
+    // A bot uses set_status, not the person's route.
+    server.post(&scout.token, &path, json!({"emote":"wave"})).await.refused(StatusCode::FORBIDDEN);
+
+    let mut stream = server.stream(&ann.key, &room).await;
+    server.post(&ann.key, &path, json!({"emote":"Wave"})).await.ok();
+    heard_on(&mut stream, &["event: emotes", "wave"]).await;
+    let snapshot = server.snapshot(&ann.key, &room).await;
+    assert_eq!(snapshot["emotes"][0]["id"], ann.id, "{snapshot}");
+    assert_eq!(snapshot["emotes"][0]["kind"], "person");
+    assert_eq!(snapshot["emotes"][0]["emote"], "wave");
+    assert_eq!(snapshot["messages"], before, "no chat line");
+    assert_eq!(server.snapshot(&bo.key, &other).await["emotes"], json!([]));
+    // Five seconds between emotes.
+    server
+        .post(&ann.key, &path, json!({"emote":"clap"}))
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+
+    // A bot emotes in the room it's in, and its status stays as it was.
+    server.tool(&scout.token, "set_status", json!({"text":"Reading the docs"})).await;
+    let done = server.tool(&scout.token, "set_status", json!({"emote":"heart"})).await;
+    assert_ne!(done["isError"], true, "{done}");
+    let read = server.read_room(&scout.token, &room).await;
+    let emotes = read["emotes"].as_array().unwrap();
+    assert!(
+        emotes.iter().any(|e| e["kind"] == "bot" && e["emote"] == "heart" && e["name"] == "Scout"),
+        "{read}"
+    );
+    assert!(
+        emotes.iter().any(|e| e["kind"] == "person" && e["name"] == "Ann"),
+        "bots see people's emotes"
+    );
+    let me =
+        read["bots"].as_array().unwrap().iter().find(|b| b["name"] == "Scout").cloned().unwrap();
+    assert_eq!(me["status"], "Reading the docs", "{me}");
+    let wrong = server.tool(&scout.token, "set_status", json!({"emote":"moon"})).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+
+    // A quiet sign stops a bot's emote, as it stops its posts (I17).
+    server.item(&ann, &room, items::QUIET, spot(5)).await;
+    let quiet = server.tool(&scout.token, "set_status", json!({"emote":"wave"})).await;
+    assert_eq!(quiet["isError"], true, "{quiet}");
+    assert!(
+        quiet.to_string().contains("quiet sign"),
+        "the sign is the reason, not the gap: {quiet}"
+    );
+}
+
 // I108: typing is a transient, human-only signal in the room, never a chat line.
 #[tokio::test]
 async fn human_typing_is_room_scoped_and_clears_on_chat() {
