@@ -34,6 +34,11 @@ class CameraCanvas {
     this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${height}" rx="2" fill="#182033" opacity="0.94"/>`);
     lines.forEach((line,i)=>this.add(`<text x="${x}" y="${y+i*7}" font-family="DejaVu Sans" font-size="5.5" text-anchor="middle" fill="#ffffff">${cameraEscape(line)}</text>`));
   }
+  // CP12: the room's name in marker on the wall board, cut to one line, never the board's own words.
+  boardTitle(name) {
+    const chars=[...String(name||'').trim()],text=chars.length>26?chars.slice(0,25).join('')+'…':chars.join('');
+    if(text)this.add(`<text x="240" y="35" font-family="DejaVu Sans" font-size="11" text-anchor="middle" fill="#20283e">${cameraEscape(text)}</text>`);
+  }
   svg(frame) {
     const defs=this.defs.map(d=>`<linearGradient id="${d.id}" gradientUnits="userSpaceOnUse" x1="${d.x1}" y1="${d.y1}" x2="${d.x2}" y2="${d.y2}">${d.stops.map(s=>`<stop offset="${s.at}" stop-color="${cameraEscape(s.color)}"/>`).join('')}</linearGradient>`).join('');
     return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="504" viewBox="${frame.x} ${frame.y} ${frame.width} ${frame.height}"><defs>${defs}</defs><g shape-rendering="crispEdges">${this.parts.join('')}</g></svg>`;
@@ -115,7 +120,7 @@ function placeLabels(g,figures,frame,maxChars) {
 }
 function cameraSvg(scene) {
   const g=new CameraCanvas(),look=scene.look,frame=scene.frame;
-  paintRoom(g,12,look);paintBehind(g,look.hidden,0);
+  paintRoom(g,12,look);g.boardTitle(scene.title);paintBehind(g,look.hidden,0);
   const placed=cameraPlaced(scene);
   for(const item of placed)if(item.flat)paintItem(g,item,0);
   const figures=cameraFigures(scene,placed);

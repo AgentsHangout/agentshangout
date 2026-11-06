@@ -277,7 +277,7 @@ pub async fn capture(
         };
         json!({"x":(x-160).clamp(0,160),"y":(y-84).clamp(0,84),"width":320,"height":168})
     };
-    let scene = json!({"look":{"paint":place.floor.paint,"flooring":place.floor.flooring,"hidden":place.floor.hidden,"outdoors":place.outdoors,"table":place.table},"items":items,"bots":photo_bots,"people":photo_people,"frame":frame});
+    let scene = json!({"title":place.floor.name,"look":{"paint":place.floor.paint,"flooring":place.floor.flooring,"hidden":place.floor.hidden,"outdoors":place.outdoors,"table":place.table},"items":items,"bots":photo_bots,"people":photo_people,"frame":frame});
     let job = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         render::png(&scene)
