@@ -1923,6 +1923,16 @@ const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'friends'}`;
 
+// Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
+// public floor or a full one.
+function lockReason(kind, { isPublic, full }) {
+  if (kind.pack_needed) return `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`;
+  if (kind.god_needed) return 'needs god mode';
+  if (!kind.unlocked) return friendsText(kind.friends_needed);
+  if (kind.mood === 'flirty' && isPublic) return 'private floors only';
+  return full ? 'this floor is full' : null;
+}
+
 // I90, E40: collections only filter existing catalog entries; All keeps every category available.
 function selectedBuildCollection(catalog, id) {
   return (catalog?.collections || []).find((collection) => collection.id === id) || null;
@@ -2573,11 +2583,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       picture: buildPicture(`item:${kind.kind}:${kind.w}:${kind.h}`, () => fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL)),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
-      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`
-        : !kind.unlocked ? friendsText(kind.friends_needed)
-        : kind.mood === 'flirty' && isPublic ? 'private floors only'
-          : full ? 'this floor is full'
-            : null,
+      why: lockReason(kind, { isPublic, full }),
       shop: kind.pack_needed || null,
       onclick: () => {
         const { x, y } = firstSpot(kind.w, kind.h);

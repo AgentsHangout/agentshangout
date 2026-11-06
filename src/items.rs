@@ -1649,6 +1649,13 @@ fn store_item(
     kind: &Kind,
     (x, y, facing): (i64, i64, i64),
 ) -> ApiResult<ApiResult<String>> {
+    // I128: only someone with god mode on puts up a Lific board. A pack or template from anyone
+    // else leaves it out, as it does a piece that doesn't fit.
+    if kind.kind == "lific_board" && !god_mode::is_on_for(state, caller)? {
+        return Ok(Err(ApiError::forbidden(
+            "only someone with god mode on can put up a Lific board",
+        )));
+    }
     let spot = footprint(kind, x, y, facing);
     let table = table_of(state, floor_id)?.cells();
     let id = auth::new_id();
@@ -2169,7 +2176,9 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
         "items": CATALOG.iter().map(|kind| {
             let paid = paid_pack_with(kind.kind)
                 .filter(|pack| !god && !bought.iter().any(|word| word == pack.pack));
-            let unlocked = (god || kind.friends <= friends) && paid.is_none();
+            // I128: a Lific board only for someone with god mode on.
+            let gods_only = kind.kind == "lific_board";
+            let unlocked = (god || kind.friends <= friends) && paid.is_none() && (god || !gods_only);
             json!({
                 "kind": kind.kind,
                 "label": kind.label,
@@ -2187,6 +2196,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                 "unlocked": unlocked,
                 "friends_needed": (kind.friends > friends && !god).then_some(kind.friends),
                 "pack_needed": paid.map(|pack| pack.pack),
+                "god_needed": (gods_only && !god).then_some(true),
             })
         }).collect::<Vec<_>>(),
         "max_items": MAX_ITEMS,
