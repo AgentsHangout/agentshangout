@@ -124,4 +124,75 @@ impl Db {
             |row| row.get(0),
         )
     }
+
+    /// A101: the people this person has blocked, whose lines they and their bots don't see.
+    pub fn blocked_ids(
+        &self,
+        person_id: &str,
+    ) -> rusqlite::Result<std::collections::HashSet<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT blocked_id FROM person_blocks WHERE blocker_id = ?")?;
+        let rows = stmt.query_map([person_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// A106: the trips between `a` and `b`, either way, asked or under way, so each can be ended the
+    /// ordinary way (`city::end_trip`), which leaves no sign of why.
+    pub fn trips_between(&self, a: &str, b: &str, now: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT t.id FROM trips t JOIN agents g ON g.id = t.agent_id
+             WHERE t.status IN ('asking', 'here') AND (t.ends_at IS NULL OR t.ends_at > ?3)
+               AND ((g.owner_id = ?2 AND EXISTS (SELECT 1 FROM residents r
+                                                 WHERE r.house_id = t.house_id AND r.person_id = ?1))
+                 OR (g.owner_id = ?1 AND EXISTS (SELECT 1 FROM residents r
+                                                 WHERE r.house_id = t.house_id AND r.person_id = ?2)))",
+        )?;
+        let rows = stmt.query_map(params![a, b, now], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// A106: when `a` blocks `b`, what was between them ends, in one transaction: friendships (theirs
+    /// and their bots'), house keys either way, invites to a place either way, and apprentice
+    /// proposals still open between them, declined as an owner would. Trips are ended first, the
+    /// ordinary way (`trips_between`). Safe to run again: a block made twice ends them again.
+    pub fn end_ties(&self, a: &str, b: &str, now: i64) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM explicit_friendships WHERE kind = 'person'
+               AND ((from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1))",
+            params![a, b],
+        )?;
+        tx.execute(
+            "DELETE FROM explicit_friendships WHERE kind = 'bot'
+               AND ((from_id IN (SELECT id FROM agents WHERE owner_id = ?1)
+                     AND to_id IN (SELECT id FROM agents WHERE owner_id = ?2))
+                 OR (from_id IN (SELECT id FROM agents WHERE owner_id = ?2)
+                     AND to_id IN (SELECT id FROM agents WHERE owner_id = ?1)))",
+            params![a, b],
+        )?;
+        tx.execute(
+            "DELETE FROM passes WHERE
+                (EXISTS (SELECT 1 FROM residents r WHERE r.house_id = passes.house_id AND r.person_id = ?1)
+                 AND agent_id IN (SELECT id FROM agents WHERE owner_id = ?2))
+             OR (EXISTS (SELECT 1 FROM residents r WHERE r.house_id = passes.house_id AND r.person_id = ?2)
+                 AND agent_id IN (SELECT id FROM agents WHERE owner_id = ?1))",
+            params![a, b],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO friend_invite_ends (invite_id)
+             SELECT id FROM friend_invites
+             WHERE (from_person = ?1 AND to_person = ?2) OR (from_person = ?2 AND to_person = ?1)",
+            params![a, b],
+        )?;
+        tx.execute(
+            "UPDATE apprentice_proposals SET status = 'declined', declined_by = 'owner', decided_at = ?3
+             WHERE status IN ('asking_bot', 'asking_owners')
+               AND ((proposer_owner = ?1 AND partner_owner = ?2)
+                 OR (proposer_owner = ?2 AND partner_owner = ?1))",
+            params![a, b, now],
+        )?;
+        tx.commit()
+    }
 }
