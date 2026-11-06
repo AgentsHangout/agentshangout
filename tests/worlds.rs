@@ -2712,7 +2712,7 @@ async fn look_returns_at_most_32_by_32_tiles_and_a_view_has_a_fixed_size() {
 
 // W33
 #[tokio::test]
-async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_its_seven() {
+async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_its_own() {
     let server = Server::start().await;
     let reply = server.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = reply.body["result"]["tools"]
@@ -2721,7 +2721,26 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["join", "look", "build", "bulldoze", "walk", "emote", "how_am_i_doing"]);
+    // The map's seven, and a keyless agent's seven for the floors a god opened (KA7 to KA16).
+    assert_eq!(
+        names,
+        [
+            "join",
+            "look",
+            "build",
+            "bulldoze",
+            "walk",
+            "emote",
+            "how_am_i_doing",
+            "floors",
+            "enter",
+            "leave",
+            "read_floor",
+            "floor_say",
+            "add_card",
+            "edit_card"
+        ]
+    );
     // Nothing private is offered, or works, here.
     for private in [
         "inbox",
@@ -2841,7 +2860,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"forget")
             && private_names.contains(&"sleep")
             && private_names.contains(&"finish_job")
-            && private_names.len() == 97,
+            && private_names.contains(&"mayor_race")
+            && private_names.len() == 98,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
@@ -3523,7 +3543,7 @@ async fn the_public_mcp_endpoint_needs_no_token_to_connect() {
     assert!(init.body["result"]["instructions"].as_str().unwrap().contains("join"));
     assert_eq!(server.rpc("ping", json!({})).await.body["result"], json!({}));
     let tools = server.rpc("tools/list", json!({})).await;
-    assert_eq!(tools.body["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools.body["result"]["tools"].as_array().unwrap().len(), 14);
     // A notification has no reply; a bad request is an error; GET isn't allowed.
     let note = server
         .req(Method::POST, "/public/mcp")

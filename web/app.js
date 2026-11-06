@@ -1,11 +1,13 @@
-import { LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
+import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
+import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
+import { createClientUpdates } from './client-updates.js';
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -31,6 +33,21 @@ function h(tag, props = {}, ...children) {
   }
   el.append(...children.flat().filter((child) => child !== null && child !== undefined && child !== false));
   return el;
+}
+
+const clientUpdates = createClientUpdates();
+void clientUpdates.start();
+
+function clientUpdateControl() {
+  const element = h('div', { 'aria-live': 'polite' });
+  const render = ({ ready }) => {
+    element.replaceChildren(...[
+      ready ? h('p', { class: 'muted' }, 'An app update is ready.') : null,
+      h('button', { type: 'button', class: 'ghost', onclick: () => { void clientUpdates.activate(); } }, 'Refresh app'),
+    ].filter(Boolean));
+  };
+  const stop = clientUpdates.subscribe(render);
+  return { element, stop };
 }
 
 async function api(path, { method = 'GET', body } = {}) {
@@ -489,6 +506,168 @@ function onlyOwnerKeyNudge(me, status) {
   return nudge;
 }
 
+// W112, #643 B: a small strip in the upper right for someone signed in: star the repo, join the
+// Discord, and X or LinkedIn when the site lists them. The links come from GET /api/links, the same
+// list bots read. It never stands in the way of signing in, and the cross hides it in this browser;
+// without storage it just shows again next time.
+const SOCIAL_STRIP_HIDDEN = 'social-strip-hidden';
+const SOCIAL_STRIP_PROFILES = [['Discord', 'Join Discord'], ['X', 'X'], ['LinkedIn', 'LinkedIn']];
+function socialStrip(links) {
+  const safe = (url) => typeof url === 'string' && url.startsWith('https://');
+  const buttons = [
+    safe(links.star) ? ['Star on GitHub', links.star] : null,
+    ...SOCIAL_STRIP_PROFILES.map(([name, label]) => {
+      const found = (links.profiles || []).find((profile) => profile.name === name);
+      return found && safe(found.url) ? [label, found.url] : null;
+    }),
+  ].filter(Boolean);
+  if (!buttons.length) return null;
+  const strip = h('aside', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
+    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'social-strip-link' }, label)),
+    h('button', {
+      type: 'button',
+      class: 'ghost social-strip-hide',
+      'aria-label': 'Hide these links',
+      onclick: () => {
+        try {
+          localStorage.setItem(SOCIAL_STRIP_HIDDEN, '1');
+        } catch { /* it comes back next time */ }
+        strip.remove();
+      },
+    }, '✕'));
+  return strip;
+}
+async function showSocialStrip() {
+  try {
+    if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
+  } catch { /* no storage, so it shows */ }
+  if (document.querySelector('.social-strip')) return;
+  const at = location.pathname;
+  const me = await api('/api/me').catch(() => null);
+  if (!me) return;
+  const links = await api('/api/links').catch(() => null);
+  const strip = links && socialStrip(links);
+  // Only on the page it was asked for: someone may have gone into a room meanwhile.
+  if (strip && location.pathname === at && !document.querySelector('.social-strip')) document.body.append(strip);
+}
+
+// MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it
+// closes, how many have voted (ballots are secret, so no totals), the person's own ballot, standing
+// or withdrawing, and last week's mayor. A ballot is cast from this room, so the server checks the
+// person is on it; whatever it refuses, it says why, and that's shown as it is.
+function mayorPanel(roomId, botsHere = () => []) {
+  const root = h('div', { class: 'mayor-panel' }, h('p', { class: 'muted' }, 'Loading...'));
+  const error = formError();
+  const who = (candidate) => (candidate.kind === 'bot' ? `${candidate.name} (bot)` : candidate.name);
+  const run = (action) => async (event) => {
+    const button = event?.currentTarget;
+    error.hidden = true;
+    if (button) button.disabled = true;
+    try {
+      await action();
+      await load();
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+  function render(race) {
+    const mine = race.your_ballot;
+    const rows = race.candidates.map((candidate) => {
+      const chosen = mine && mine.kind === candidate.kind && mine.id === candidate.id;
+      return h('li', { class: chosen ? 'mayor-choice chosen' : 'mayor-choice' },
+        h('span', {}, who(candidate)),
+        chosen
+          ? h('strong', {}, 'Your vote')
+          : h('button', {
+            type: 'button',
+            class: mine ? 'ghost' : 'primary',
+            onclick: run(() => api('/api/mayor/ballot', { method: 'PUT', body: { kind: candidate.kind, id: candidate.id, hangout_id: roomId } })),
+          }, mine ? 'Change to them' : 'Vote'));
+    });
+    const last = race.last_week && race.last_week.mayor;
+    root.replaceChildren(
+      last
+        ? h('p', {}, h('strong', {}, 'Mayor this week: '), who(last), ` (${race.last_week.votes} votes${race.last_week.tie_draw ? ', drawn from a tie' : ''})`)
+        : h('p', { class: 'muted' }, 'No mayor this week.'),
+      h('p', {}, `Voting closes ${race.closes_local}. ${race.voted} ${race.voted === 1 ? 'person has' : 'people have'} voted so far.`),
+      rows.length
+        ? h('ul', { class: 'mayor-choices' }, ...rows)
+        : h('p', { class: 'muted' }, 'Nobody is standing yet.'),
+      h('p', { class: 'muted fine' }, race.note),
+      race.can_nominate ? nominateRow(race) : null,
+      error,
+      h('div', { class: 'modal-actions' },
+        race.you_stand
+          ? h('button', { type: 'button', class: 'ghost', onclick: run(() => api('/api/mayor/stand', { method: 'DELETE' })) }, 'Withdraw')
+          : h('button', { type: 'button', onclick: run(() => api('/api/mayor/stand', { method: 'POST' })) }, 'Stand for mayor')));
+  }
+  // MY9: someone with god mode on puts a bot from this room on the ballot.
+  function nominateRow(race) {
+    const standing = new Set(race.candidates.filter((c) => c.kind === 'bot').map((c) => c.id));
+    const bots = botsHere().filter((bot) => !standing.has(bot.id));
+    if (!bots.length) return null;
+    const pick = h('select', { 'aria-label': 'Bot to nominate' },
+      ...bots.map((bot) => h('option', { value: bot.id }, bot.name)));
+    return h('div', { class: 'modal-actions' },
+      pick,
+      h('button', { type: 'button', onclick: run(() => api('/api/mayor/candidates', { method: 'POST', body: { kind: 'bot', id: pick.value } })) }, 'Nominate a bot'));
+  }
+  async function load() {
+    render(await api('/api/mayor'));
+  }
+  load().catch((failure) => {
+    root.replaceChildren(h('p', {}, failure.message), error);
+  });
+  return root;
+}
+
+// A100, A104 (#685): a person's blocks and mutes, for the Block and Mute items on someone's card.
+// Read once a page and again after each change. Nobody blocked or muted is ever told.
+function blockTies() {
+  let lists = null;
+  const load = async () => {
+    lists ??= await api('/api/blocks').catch(() => ({ blocks: [], mutes: [] }));
+    return lists;
+  };
+  const has = (kind, id) => (lists?.[kind] || []).some((row) => row.person_id === id);
+  const change = (run) => async () => {
+    try {
+      lists = await run();
+    } catch {
+      lists = null;
+    }
+  };
+  load();
+  return {
+    load,
+    items(personId, name) {
+      const id = encodeURIComponent(personId);
+      const blocked = has('blocks', personId);
+      const muted = has('mutes', personId);
+      return [
+        blocked
+          ? { label: `Unblock ${name}`, run: change(() => api(`/api/blocks/${id}`, { method: 'DELETE' })) }
+          : { label: `Block ${name}`, run: change(() => api('/api/blocks', { method: 'POST', body: { person_id: personId } })) },
+        blocked ? null : muted
+          ? { label: 'Unmute their mentions', run: change(() => api(`/api/mutes/${id}`, { method: 'DELETE' })) }
+          : { label: 'Mute their mentions', run: change(() => api('/api/mutes', { method: 'POST', body: { person_id: personId } })) },
+      ].filter(Boolean);
+    },
+  };
+}
+
+// MY6, #639: last week's mayor, when they're a person, for their card's badge. Asked once per page.
+let mayorAsked = null;
+function mayorPersonId() {
+  mayorAsked ??= api('/api/mayor')
+    .then((race) => (race.last_week?.mayor?.kind === 'person' ? race.last_week.mayor.id : null))
+    .catch(() => null);
+  return mayorAsked;
+}
+
 // A87, A54: replacing the owner key, in Account on the map and in every room. Someone who skipped
 // saving it gets a new one here. A session a site started can't, so it says how to get to it instead.
 function ownerKeyControl(me) {
@@ -789,6 +968,7 @@ async function homeParts(me) {
     signInOpen: open,
   });
 
+  const updateControl = clientUpdateControl();
   const accountCard = me && h('div', { class: 'card' },
     h('h2', {}, `Hi, ${me.name}`),
     onlyOwnerKeyNudge(me, status),
@@ -796,6 +976,7 @@ async function homeParts(me) {
     freeTimesField(me),
     housePlansField(me),
     photosField(),
+    updateControl?.element,
     ownerKeyControl(me),
     h('button', {
       type: 'button',
@@ -903,11 +1084,11 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn()],
+    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
-    stop: () => stop(),
+    stop: () => { stop(); updateControl.stop(); },
   };
 }
 
@@ -1924,6 +2105,23 @@ const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'friends'}`;
 
+// I131 (#640): a message's text in pieces: plain text, and `re 7068`, `re: 7068` or `#7068` where
+// 7068 is a message already shown in this room, which becomes a link to it. Any other number, a
+// GitHub issue's included, stays text.
+function messageRefs(text, known) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(/\b(re:?\s*)(\d{1,9})\b|#(\d{1,9})\b/gi)) {
+    const id = Number(match[2] || match[3]);
+    if (!known(id)) continue;
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    parts.push({ text: match[0], ref: id });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
 // Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
 // public floor or a full one.
 function lockReason(kind, { isPublic, full }) {
@@ -2369,6 +2567,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       case 'lific': openLific(item); break;
+      case 'mayor': modal('Mayor voting box', mayorPanel(id, () => view().agents || [])); break;
       default: break;
     }
   }
@@ -2976,7 +3175,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   let lificOf = null;
   const lificError = formError();
   const lificInfo = h('p', { class: 'muted', role: 'status' });
-  const lificColumns = h('div', { class: 'stack lific-columns' });
+  const lificColumns = h('div', { class: 'lific-kanban' });
   const lificForm = h('form', {
     class: 'stack',
     hidden: true,
@@ -3000,9 +3199,73 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
         await loadLific();
       }),
     }, 'Unlink')));
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificForm);
+  // I132: the owner's link form stays folded away, so the board itself comes first.
+  const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
 
+  // I132: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
+
+  // I139: Lific not taking a change comes back as a reply, said like an unavailable board.
+  async function lificSend(path, options) {
+    const reply = await api(`/api/items/${encodeURIComponent(lificOf)}/lific/cards${path}`, options);
+    if (reply.ok === false) throw new Error(reply.unavailable || 'Lific didn\'t take that change.');
+    await loadLific();
+  }
+  const lificMove = (card, status) => lificSend(`/${encodeURIComponent(card)}`, { method: 'PUT', body: { status } });
+
+  // I140: anyone who may change the board adds at the top of a column, drags cards between
+  // columns or uses Move to, and Remove shows only to whoever may take a card down.
+  function lificKanban(columns, canChange = false) {
+    return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) => {
+      const name = LIFIC_STATUS[column.status] || column.status;
+      const adder = canChange && column.status !== 'cancelled' ? h('form', {
+        class: 'lific-add',
+        onsubmit: submitter(lificError, async (data) => {
+          await lificSend('', { method: 'POST', body: { title: data.title, status: column.status } });
+        }),
+      }, h('input', { type: 'text', name: 'title', placeholder: 'Add a card', 'aria-label': `Add a card to ${name}`, maxlength: 120, required: true })) : null;
+      const cards = column.issues.map((issue) => h('div', {
+        class: 'lific-card',
+        'data-priority': issue.priority || 'none',
+        draggable: canChange && Boolean(issue.id),
+        ondragstart: (event) => { event.dataTransfer.setData('text/plain', issue.id); },
+      },
+      issue.id ? h('small', { class: 'lific-id' }, issue.id) : null,
+      h('p', {}, issue.title),
+      h('small', { class: 'muted' }, [
+        issue.priority && issue.priority !== 'none' ? issue.priority : '',
+        issue.module || '',
+        issue.added_by ? `added by ${issue.added_by.name}${issue.added_by.is_bot ? ' (bot)' : ''}` : '',
+      ].filter(Boolean).join(' · ')),
+      canChange && issue.id ? h('div', { class: 'lific-card-actions' },
+        h('select', {
+          'aria-label': `Move ${issue.id} to`,
+          onchange: act(lificError, async (event) => { await lificMove(issue.id, event.target.value); }),
+        }, h('option', { value: '', selected: true, disabled: true }, 'Move to…'),
+        ...Object.entries(LIFIC_STATUS).filter(([status]) => status !== column.status).map(([status, label]) => h('option', { value: status }, label))),
+        issue.can_remove ? h('button', {
+          type: 'button',
+          onclick: act(lificError, async () => {
+            if (!confirm(`Remove ${issue.id} from the board? It goes to Lific's trash.`)) return;
+            await lificSend(`/${encodeURIComponent(issue.id)}`, { method: 'DELETE' });
+          }),
+        }, 'Remove') : null) : null));
+      return h('section', {
+        class: 'lific-column',
+        'aria-label': name,
+        ondragover: canChange ? (event) => event.preventDefault() : null,
+        ondrop: canChange ? act(lificError, async (event) => {
+          event.preventDefault();
+          const card = event.dataTransfer.getData('text/plain');
+          if (card && !column.issues.some((issue) => issue.id === card)) await lificMove(card, column.status);
+        }) : null,
+      },
+      h('h3', {}, name, ' ', h('small', {}, String(column.issues.length))),
+      adder,
+      ...(cards.length ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]));
+    });
+  }
 
   async function loadLific() {
     const asked = lificOf;
@@ -3011,16 +3274,12 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     try {
       const board = await api(`/api/items/${encodeURIComponent(asked)}/lific`);
       if (asked !== lificOf) return;
-      lificForm.hidden = !board.you_can_link;
+      lificLink.hidden = !board.you_can_link;
+      lificForm.hidden = false;
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
-      lificColumns.replaceChildren(...(board.columns || []).filter((column) => column.issues.length).map((column) =>
-        h('section', { class: 'stack' },
-          h('h3', {}, `${LIFIC_STATUS[column.status] || column.status} (${column.issues.length})`),
-          ...column.issues.map((issue) => h('div', { class: 'note' },
-            h('p', {}, `${issue.id || ''} ${issue.title}`.trim()),
-            h('small', { class: 'muted' }, [issue.priority && issue.priority !== 'none' ? issue.priority : '', issue.module || ''].filter(Boolean).join(' · ')))))));
+      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change) : []));
     } catch (error) {
       if (asked !== lificOf) return;
       lificColumns.replaceChildren();
@@ -3034,7 +3293,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     lificOf = item.id;
     lificInfo.textContent = 'Asking Lific…';
     lificColumns.replaceChildren();
-    lificForm.hidden = true;
+    lificLink.hidden = true;
+    lificLink.open = false;
     panels.open('lific');
     loadLific();
   }
@@ -4003,12 +4263,22 @@ async function roomView(id) {
     : []);
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
+    mayor: mayorPersonId,
+    ties: blockTies(),
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
       chatInput.focus();
     },
     extras: roomBotsMenu,
+    // I143: Emote on your own card, unless you're a guest on a Porch.
+    emote: snapshot.guest && snapshot.floor?.floor.access !== 'public' ? null : async (word) => {
+      try {
+        await api(`/api/hangouts/${encodeURIComponent(id)}/emote`, { method: 'POST', body: { emote: word } });
+      } catch (failure) {
+        say(failure.message);
+      }
+    },
   });
   // W109: a right click (or a press and hold) on the room's bare floor opens the room's own menu:
   // Room permissions for whoever runs the space, then My bots. Anything else under the pointer keeps
@@ -4075,22 +4345,43 @@ async function roomView(id) {
     }
     const owner = person(message.person_id);
     const isBot = Boolean(message.agent_id);
-    const avatar = h('span', { class: 'avatar' }, isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
+    // KA10: a keyless agent's line says so, live or from the snapshot.
+    const keyless = Boolean(message.keyless) || (snapshot.keyless_message_ids || []).includes(message.id);
+    const avatar = h('span', { class: 'avatar' }, keyless ? '✦' : isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
     avatar.style.background = colorOf(message.person_id);
     const answered = message.reply_to ? shownById.get(message.reply_to) : null;
     const replyLine = !message.reply_to ? null
       : h('div', { class: 'msg-reply muted' }, answered
         ? `↩ ${answered.speaker}: ${answered.body.slice(0, 120)}`
         : `↩ an earlier message`);
-    return h('div', { class: 'msg' },
+    return h('div', { class: 'msg', 'data-message-id': message.id },
       avatar,
       h('div', { class: 'msg-body' },
         h('div', { class: 'msg-head' },
           h('strong', {}, message.speaker),
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
+          keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, message.body)));
+        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
+          part.ref === undefined ? part.text : refLink(part))))));
+  }
+
+  // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
+  function refLink({ text, ref }) {
+    const target = shownById.get(ref);
+    return h('button', {
+      type: 'button',
+      class: 'msg-ref',
+      title: target ? `${target.speaker}: ${target.body.slice(0, 120)}` : 'An earlier message',
+      onclick: () => {
+        const row = chatLog.querySelector(`[data-message-id="${ref}"]`);
+        if (!row) return;
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.classList.add('msg-flash');
+        setTimeout(() => row.classList.remove('msg-flash'), 1600);
+      },
+    }, text);
   }
 
   function addMessage(message) {
@@ -4951,6 +5242,7 @@ async function roomView(id) {
     renderBoard();
     renderPins();
     typingHints.fromSnapshot(snapshot.typing, typingVersion);
+    room.setEmotes(snapshot.emotes || []);
     renderLegend();
     renderStats();
     renderCalendar();
@@ -5356,6 +5648,8 @@ async function roomView(id) {
     if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true, group: 'Everyone', detail: 'every bot here that listens' });
     for (const who of snapshot.people) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'Here', detail: 'person', color: colorOf(who.id) });
     for (const bot of snapshot.agents) add(bot.name, 'bot', { group: 'Here', detail: botLine(bot), color: colorOf(bot.owner_id) });
+    // S88: your own bots that aren't here. Tagging one brings it here.
+    for (const bot of snapshot.summonable || []) add(bot.name, 'bot', { group: 'Your bots', detail: 'brings it here', color: colorOf(snapshot.you.person_id) });
     if (inSquare() && city) {
       for (const who of city.people || []) if (who.id !== snapshot.you.person_id) add(who.name, 'person', { group: 'In this city', detail: 'person' });
       for (const bot of city.bots || []) if (!bot.is_house) add(bot.name, 'bot', { group: 'In this city', detail: 'bot' });
@@ -5438,6 +5732,26 @@ async function roomView(id) {
     bountyCreditsAt = Date.now();
     return bountyCredits;
   }
+  // KA15, KA17: a keyless agent's card, which only whoever runs the space can take down.
+  function keylessCardUi(card) {
+    return h('article', { class: 'board-card' },
+      h('h4', {}, card.title),
+      card.text ? h('p', {}, card.text) : null,
+      h('p', { class: 'muted' },
+        `${card.written_by}, keyless agent`,
+        card.answers ? ` · answers ${card.answers}` : '',
+        ' · ',
+        whenText(card.updated_at)),
+      canRunBoards() ? h('button', {
+        type: 'button',
+        class: 'ghost danger',
+        onclick: act(boardsError, async () => {
+          await api(`/api/keyless-cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
+          await loadBoards(true);
+        }),
+      }, 'Take down') : null);
+  }
+
   function bountyCardUi(card) {
     const bounty = card.bounty;
     if (bounty) return h('section', { class: 'bounty-block' },
@@ -5582,6 +5896,7 @@ async function roomView(id) {
             await loadBoards(true);
           }),
         }, `Remove ${board.name}`) : null,
+        ...(board.keyless_cards || []).map(keylessCardUi),
         ...(board.cards || []).map((card) => {
           const rewrite = card.person_id === snapshot.you.person_id || canRunBoards();
           const statuses = board.kind === 'jobs' ? ['open', 'filled'] : board.kind === 'issues' ? ['open', 'closed'] : [];
@@ -5839,6 +6154,8 @@ async function roomView(id) {
     reloadSoon();
   });
   stream.addEventListener('typing', (event) => typingHints.update(JSON.parse(event.data)));
+  // I146: an emote shows the moment it's made.
+  stream.addEventListener('emotes', (event) => room.setEmotes(JSON.parse(event.data)));
   stream.addEventListener('camera', (event) => room.cameraFlash(JSON.parse(event.data).bot_id));
   stream.addEventListener('refresh', reloadSoon);
   stream.addEventListener('confirmed', () => {
@@ -8207,6 +8524,15 @@ function needsYouPanel(panels) {
       error);
   }
 
+  // #647 B: a bot the person's agent drafted, waiting for them to approve it on its own page.
+  function botSetupItem(setup) {
+    return item(
+      h('p', {}, 'Your agent drafted a bot for you: ', h('strong', {}, setup.name)),
+      h('small', { class: 'muted' }, `Waiting until ${timeFormat.format(fromUnix(setup.expires_at))}`),
+      h('div', { class: 'event-actions' },
+        link(`/setup/${encodeURIComponent(setup.id)}`, 'Read it and approve', { class: 'link' })));
+  }
+
   function checkInItem(checkIn) {
     const error = formError();
     const answer = (response) => act(error, done(() =>
@@ -8418,6 +8744,7 @@ function needsYouPanel(panels) {
   function render(list) {
     const parts = [
       ...(list.job_reports || []).map(jobReportItem),
+      ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),
@@ -8499,6 +8826,15 @@ const BOT_STATE_WORD = { working: 'Working', idle: 'Idle', asleep: 'Asleep', off
 function myBotsMenu(bots, openPanel) {
   const rows = bots.map((bot) => ({ label: bot.name, cost: bot.state ? BOT_STATE_WORD[bot.state] || null : bot.where || null, run: openPanel }));
   return { label: 'My bots', items: [...rows, ...(rows.length ? [null] : []), { label: 'Open My bots', run: openPanel }] };
+}
+
+// I143: the Emote submenu on your own card: each emote shows over you for everyone in the room.
+const EMOTE_WORDS = ['wave', 'laugh', 'clap', 'cheer', 'think', 'shrug', 'heart', 'dance'];
+function emoteMenu(emote) {
+  return {
+    label: 'Emote',
+    items: EMOTE_WORDS.map((word) => ({ label: `${EMOTE_GLYPHS[word]} ${wordName(word)}`, run: () => emote(word) })),
+  };
 }
 
 // W109: the Room permissions submenu, only for whoever runs the space. It says who can come in now
@@ -8736,7 +9072,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [] }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null, ties = null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -8780,16 +9116,21 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     const you = personId === view().you.person_id;
     const actions = (data) => {
       const link = githubProfileUrl(data?.login);
+      // A100, A104 (#685): block them, or mute their mentions. Nobody is told.
+      const tie = you || !ties ? [] : ties.items(personId, who.name);
       const own = [
         you ? null : { label: 'Mention in chat', run: () => mention(who.name) },
+        you && emote ? emoteMenu(emote) : null,
         link ? { label: 'View on GitHub', href: link } : null,
+        ...tie,
       ].filter(Boolean);
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
     };
+    let sub = 'Person';
     const spec = (items) => ({
       title: you ? `${who.name} (you)` : who.name,
-      sub: 'Person',
+      sub,
       className: 'person-card',
       body,
       items,
@@ -8800,8 +9141,10 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     if (pin) menu.open(spec(actions(undefined)), x, y, 'click');
     else menu.peek(spec([]), x, y);
     document.addEventListener('keydown', onEscape, true);
-    const data = await lookup(personId);
+    const [data, mayorId] = await Promise.all([lookup(personId), mayor()]);
     if (!showing() || shownFor !== personId) return;
+    // MY6, #639: the badge.
+    if (mayorId === personId) sub = 'Person · Mayor this week';
     body.replaceChildren(personCardBody(data));
     menu.update(spec(pin ? actions(data) : []));
   }
@@ -10429,6 +10772,7 @@ async function route() {
   const joinHouseMatch = path.match(/^\/join-house\/([^/]+)$/);
   const worldMatch = path.match(/^\/world\/([^/]+)$/);
   const planMatch = path.match(/^\/p\/([^/]+)$/);
+  const setupMatch = path.match(/^\/setup\/([^/]+)$/);
   try {
     let view;
     if (roomMatch) view = await roomView(decodeURIComponent(roomMatch[1]));
@@ -10444,6 +10788,7 @@ async function route() {
         h, api, field, formError, secretRow, spanText, googleCalendarUrl, startCity: startCityDialog,
       });
     }
+    else if (setupMatch) view = await botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
     else if (path === '/worlds') view = await worldsView();
     else if (COMING_BACK[path]) {
       view = await backFromElsewhere(COMING_BACK[path]);
@@ -10452,6 +10797,10 @@ async function route() {
     else view = await homeView();
     app.replaceChildren(view);
     if (view instanceof Node) document.documentElement.dataset.clientReady = 'true';
+    // W112: on the map, a city or a house, never over a room or a link someone was sent.
+    const stripHere = !roomMatch && !joinMatch && !joinCityMatch && !joinHouseMatch && !planMatch && !setupMatch && !COMING_BACK[path];
+    if (stripHere) showSocialStrip();
+    else document.querySelector('.social-strip')?.remove();
     // These pages need someone signed in, so only they save the clock.
     if (roomMatch || cityMatch || houseMatch) saveClock();
   } catch (error) {
@@ -10467,7 +10816,8 @@ async function route() {
     }
     app.replaceChildren(h('main', { class: 'home' }, h('div', { class: 'card' },
       h('h2', {}, 'That didn\'t load'),
-      h('p', { class: 'muted' }, error.message))));
+      h('p', { class: 'muted' }, error.message),
+      h('button', { type: 'button', class: 'primary', onclick: () => clientUpdates.reload() }, 'Reload app'))));
   }
 }
 

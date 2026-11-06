@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 148] = [
+pub static CATALOG: [Kind; 149] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -365,6 +365,9 @@ pub static CATALOG: [Kind; 148] = [
     // I123: a published Lific project's issues, read through this server.
     piece("lific_board", "Lific board", WORK, STARTER, 2, feels("drive"), (2, 1))
         .used("reading the issue board", 1),
+    // MY7: the Town Square's mayor voting box, which the server puts up there and nobody places.
+    piece("mayor_ballot_box", "Mayor voting box", WORK, STARTER, 2, feels("drive"), (1, 1))
+        .used("voting for mayor", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1414,6 +1417,7 @@ fn opens(kind: &str) -> Option<&'static str> {
         "research_board" => Some("research"),
         "ballot_box" => Some("votes"),
         "lific_board" => Some("lific"),
+        "mayor_ballot_box" => Some("mayor"),
         _ => None,
     }
 }
@@ -1651,6 +1655,12 @@ fn store_item(
 ) -> ApiResult<ApiResult<String>> {
     // I128: only someone with god mode on puts up a Lific board. A pack or template from anyone
     // else leaves it out, as it does a piece that doesn't fit.
+    // MY7: the mayor's voting box is the server's, put up on the Town Square only.
+    if kind.kind == "mayor_ballot_box" {
+        return Ok(Err(ApiError::forbidden(
+            "the mayor voting box stands on the Town Square, put there by the site",
+        )));
+    }
     if kind.kind == "lific_board" && !god_mode::is_on_for(state, caller)? {
         return Ok(Err(ApiError::forbidden(
             "only someone with god mode on can put up a Lific board",
@@ -2078,6 +2088,7 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
             "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
             "votes" => "open_vote, cast_vote and close_vote",
             "lific" => "read_board, with this item's id as board_id",
+            "mayor" => "mayor_race, to read the week's race or stand; people vote here",
             _ => unreachable!(),
         };
         reply["opens"] = json!(action);

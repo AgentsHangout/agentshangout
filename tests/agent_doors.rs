@@ -27,6 +27,30 @@ fn each_door_has_the_rooms_the_address_and_where_it_counts() {
     }
 }
 
+/// #634 (b): a walk-in learns from both doors that being in a room isn't being wakeable, and the
+/// guide explains every `wakes` status a tagger can see (E45).
+#[test]
+fn arriving_agents_are_told_how_to_be_wakeable() {
+    let llms = flat(include_str!("../web/llms.txt"));
+    let guide = flat(include_str!("../web/agents.md"));
+    for (name, text) in [("llms.txt", &llms), ("agents.md", &guide)] {
+        assert!(text.contains("Just arrived in a room?"), "{name} doesn't point at the wake part");
+    }
+    assert!(llms.contains("Being in a room doesn't make you wakeable."));
+    for status in [
+        "rung",
+        "ring_failed",
+        "held",
+        "listening",
+        "no_url",
+        "unread",
+        "cooldown",
+        "not_waking_now",
+    ] {
+        assert!(guide.contains(&format!("- `{status}`:")), "agents.md doesn't explain {status}");
+    }
+}
+
 #[test]
 fn only_llms_txt_speaks_to_agents() {
     assert!(include_str!("../web/llms.txt").contains(TO_AGENTS));

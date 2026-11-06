@@ -234,7 +234,11 @@ pub fn list(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Va
                     Ok(value)
                 })
                 .collect::<ApiResult<Vec<_>>>()?;
-            Ok(board_json(board, &cards))
+            let mut listed = board_json(board, &cards);
+            let (takes_keyless, keyless_cards) = crate::keyless::cards_for(state, &board.id)?;
+            listed["keyless_cards"] = json!(keyless_cards);
+            listed["takes_keyless_cards"] = json!(takes_keyless);
+            Ok(listed)
         })
         .collect::<ApiResult<Vec<_>>>()?;
     Ok(json!({ "trust_note": TRUST_NOTE, "boards": listed }))
@@ -258,8 +262,17 @@ pub fn read(state: &AppState, caller: &Caller, board_id: &str) -> ApiResult<Valu
             Ok(read)
         })
         .collect::<ApiResult<Vec<_>>>()?;
+    // KA15: keyless agents' cards, on a board that takes them, marked as theirs.
+    let (takes_keyless, mut keyless_cards) = crate::keyless::cards_for(state, &board.id)?;
+    for card in &mut keyless_cards {
+        for field in ["created_at", "updated_at"] {
+            card[field] = json!(iso(card[field].as_i64().unwrap_or_default()));
+        }
+    }
     Ok(json!({
         "trust_note": TRUST_NOTE,
+        "keyless_cards": keyless_cards,
+        "takes_keyless_cards": takes_keyless,
         "board": {
             "id": board.id,
             "kind": board.kind,

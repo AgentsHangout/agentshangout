@@ -51,3 +51,23 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   spots go to bots in id order. An idle or offline bot stands in the grid. The metadata's `doing`
   says "sitting at the table" or "working at a desk" only for a bot the photo shows there. The scene
   gets each bot's `state` and whether it's `working`, which the room page already shows.
+- **CP10.** No name tag in a photo covers another, and every tag stays inside the frame. Tags go top
+  to bottom and left to right, each under its figure, and one that would cover a tag already there
+  moves down a tag at a time until it's clear, or else up. So bots side by side at a table read as a
+  short list of names, not one dark bar. When a photo is too crowded for that, a tag shortens to one
+  line ending in "…", and if even that has nowhere to go, it's left out: the caption and the
+  metadata still name everyone in the photo.
+- **CP11.** A seated figure's name tag goes above its head rather than under it, and tags that would
+  cover each other there stack upward first, so the table, desk or sofa it sits at stays in view.
+  A standing figure's tag stays under its feet. CP10 holds either way: no tag covers another, and
+  every tag stays inside the frame.
+- **CP12.** The wall board in a photo shows the room's name, the one the caption already gives, on
+  one line and cut short with "…" if it's long. It never shows what's written on the room's board:
+  a photo can be shared beyond the room, so the board's words stay on the page (CP2).
+- **CP13.** A name tag is as wide as its name looks in the photo's font, with a little room each
+  side, and never narrower than the name. So tags at a table stack less: three bots side by side
+  need two rows of tags rather than a staircase of three, and each tag sits nearer its bot.
+- **CP14.** Someone standing in a photo stands where the room page would let them walk: never on
+  the table, an item or the furniture the room keeps, and never on another figure. When their
+  place in the grid falls on something, they stand on the nearest free spot inside the frame, so
+  a lone visitor is drawn in front of the table, head and all, rather than on top of it.

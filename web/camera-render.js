@@ -1,6 +1,11 @@
 // Trusted, bounded Canvas-to-SVG adapter for the server camera. No DOM, network, or user code.
 // The drawing functions above come unchanged from room.js; this adds labels to the still.
 const cameraEscape = (text) => String(text).replace(/[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '\uFFFD').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+// CP13: how wide a tag's words are at its 5.5 size, from DejaVu Sans. Lowercase letters, digits and
+// space are at most 3.5 wide; m, w, capitals and anything else get a full 5.5, so a tag is never too
+// narrow for its name, only snug.
+const tagTextWidth=line=>[...line].reduce((sum,c)=>sum+(/[a-ln-vx-z0-9 .,'!:;|()-]/.test(c)?3.5:5.5),0);
+const tagWidth=lines=>Math.max(...lines.map(tagTextWidth),5.5)+8;
 class CameraCanvas {
   constructor() { this.parts=[];this.defs=[];this.fillStyle='#000';this.globalAlpha=1;this.matrix=[1,0,0,1,0,0];this.stack=[];this.path=[]; }
   add(text) { if(this.parts.length>=40000)throw Error('camera drawing limit');this.parts.push(text); }
@@ -17,7 +22,8 @@ class CameraCanvas {
   ellipse(x,y,rx,ry,rotation,start,end) { if(Math.abs(end-start-Math.PI*2)>0.001||rotation!==0)throw Error('unsupported camera path');this.path.push(`<ellipse cx="${x}" cy="${y}" rx="${rx}" ry="${ry}" ${this.style()}/>`); }
   fill() { for(const part of this.path)this.add(part); }
   createLinearGradient(x1,y1,x2,y2) { const id=`camera-gradient-${this.defs.length}`;const stops=[];this.defs.push({id,x1,y1,x2,y2,stops});return {id,addColorStop(at,color){stops.push({at,color})}}; }
-  label(name,x,y,maxChars) {
+  // A name tag's lines and size, wrapped at maxChars, before it's put anywhere.
+  labelLines(name,maxChars) {
     const lines=[];let line='';
     for(const word of String(name).split(/\s+/u)) {
       const chars=[...word];
@@ -27,9 +33,16 @@ class CameraCanvas {
       line+=(line?' ':'')+rest;
     }
     if(line||!lines.length)lines.push(line);
-    const width=Math.max(...lines.map(l=>[...l].length),1)*5.5+8;
-    this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${lines.length*7+3}" rx="2" fill="#182033" opacity="0.94"/>`);
+    return {lines,width:tagWidth(lines),height:lines.length*7+3};
+  }
+  label(x,y,{lines,width,height}) {
+    this.add(`<rect x="${x-width/2}" y="${y-6}" width="${width}" height="${height}" rx="2" fill="#182033" opacity="0.94"/>`);
     lines.forEach((line,i)=>this.add(`<text x="${x}" y="${y+i*7}" font-family="DejaVu Sans" font-size="5.5" text-anchor="middle" fill="#ffffff">${cameraEscape(line)}</text>`));
+  }
+  // CP12: the room's name in marker on the wall board, cut to one line, never the board's own words.
+  boardTitle(name) {
+    const chars=[...String(name||'').trim()],text=chars.length>26?chars.slice(0,25).join('')+'…':chars.join('');
+    if(text)this.add(`<text x="240" y="35" font-family="DejaVu Sans" font-size="11" text-anchor="middle" fill="#20283e">${cameraEscape(text)}</text>`);
   }
   svg(frame) {
     const defs=this.defs.map(d=>`<linearGradient id="${d.id}" gradientUnits="userSpaceOnUse" x1="${d.x1}" y1="${d.y1}" x2="${d.x2}" y2="${d.y2}">${d.stops.map(s=>`<stop offset="${s.at}" stop-color="${cameraEscape(s.color)}"/>`).join('')}</linearGradient>`).join('');
@@ -64,18 +77,69 @@ function cameraFigures(scene,placed) {
   const who=[...scene.bots.map(b=>({...b,person:false,...placeBot(b)})),...(scene.people||[]).map(p=>({...p,person:true,spot:null,at:null}))];
   const loose=who.filter(f=>!f.spot);
   const cols=Math.min(frame.width<480?3:4,Math.max(1,loose.length)),rows=Math.ceil(loose.length/cols);
+  // CP14: someone standing stands where the page would let them walk, never on the table or an
+  // item, and not on anyone else: the nearest free cell to their place in the grid.
+  fillGrid(look.hidden||[],placed,tableShift(look.table));
+  const stood=who.filter(f=>f.spot).map(f=>({x:f.spot.x,y:f.spot.y}));
+  const standClear=(x,y)=>{
+    const col=Math.floor(x/CELL),row=Math.floor(y/CELL);
+    for(let radius=0;radius<30;radius++)for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
+      // Their body too, not just their feet, so nobody's head is drawn on the tabletop.
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==radius||!free(col+dx,row+dy)||!free(col+dx,row+dy-2))continue;
+      const at={x:(col+dx)*CELL+CELL/2,y:(row+dy)*CELL+CELL/2};
+      if(inFrame(at)&&!stood.some(s=>Math.abs(s.x-at.x)<16&&Math.abs(s.y-at.y)<12)){stood.push(at);return at;}
+    }
+    return {x,y};
+  };
   return who.map(f=>{
     const worn=f.person?{look:personLook(f.look)}:{wears:botLook(f.look)};
     if(f.spot)return {...f,...worn,path:[],pose:f.spot.pose,facing:f.spot.facing||'front',phase:0,x:f.spot.x,y:f.spot.y};
     const i=loose.indexOf(f);
-    return {...f,...worn,path:[],pose:'stand',facing:'front',phase:0,
-      x:frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
-      y:frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows)};
+    const at=standClear(frame.x+frame.width*(0.08+(i%cols+0.5)*0.84/cols),
+      frame.y+frame.height*0.43+(Math.floor(i/cols)+0.5)*(frame.height*0.43)/Math.max(1,rows));
+    return {...f,...worn,path:[],pose:'stand',facing:'front',phase:0,x:at.x,y:at.y};
+  });
+}
+// CP10: where each name tag goes, so none covers another and each stays in the photo. Tags go top to
+// bottom, left to right, each under its figure; one that would cover a tag already put moves down a
+// tag at a time until it's clear, or else up. If no spot is free, a one-line tag cut short with "…"
+// tries the same, and if that won't fit either the tag is left out: the caption still names everyone.
+// A full table reads as a short list rather than one dark bar. CP11: a seated figure's tag goes above
+// its head instead, and stacks upward, so a table, desk or sofa it sits at stays in view. Each comes
+// back with its box, for the tests that check where they are.
+// How far above its spot a figure's head reaches, in room units.
+const TAG_HEAD=20;
+function placeLabels(g,figures,frame,maxChars) {
+  const boxes=[];
+  const order=[...figures].sort((a,b)=>a.y-b.y||a.x-b.x);
+  const clear=(x,y,t)=>!boxes.some(b=>Math.abs(b.x-x)*2<b.width+t.width+2&&y-6<b.y-6+b.height+1&&b.y-6<y-6+t.height+1);
+  const fits=(y,t)=>y-6>=frame.y&&y-6+t.height<=frame.y+frame.height;
+  const short=name=>{
+    const chars=[...String(name)];
+    const text=chars.length>maxChars?chars.slice(0,maxChars-1).join('')+'…':chars.join('');
+    return {lines:[text],width:tagWidth([text]),height:10};
+  };
+  const spot=(x,y0,t,up)=>{
+    const steps=up?[-(t.height+1),t.height+1]:[t.height+1,-(t.height+1)];
+    for(const step of steps){
+      for(let n=0,y=y0;n<24;n++,y+=step){if(fits(y,t)&&clear(x,y,t))return y;}
+    }
+    return null;
+  };
+  return order.flatMap(f=>{
+    const seated=f.pose==='sit';
+    for(const t of [g.labelLines(f.name,maxChars),short(f.name)]){
+      const x=Math.min(Math.max(f.x,frame.x+t.width/2),frame.x+frame.width-t.width/2);
+      // Above the head, its box ending a unit clear of it; or under the feet.
+      const y=spot(x,seated?f.y-TAG_HEAD-t.height+5:f.y+8,t,seated);
+      if(y!==null){boxes.push({x,y,width:t.width,height:t.height});return [{f,x,y,t}];}
+    }
+    return [];
   });
 }
 function cameraSvg(scene) {
   const g=new CameraCanvas(),look=scene.look,frame=scene.frame;
-  paintRoom(g,12,look);paintBehind(g,look.hidden,0);
+  paintRoom(g,12,look);g.boardTitle(scene.title);paintBehind(g,look.hidden,0);
   const placed=cameraPlaced(scene);
   for(const item of placed)if(item.flat)paintItem(g,item,0);
   const figures=cameraFigures(scene,placed);
@@ -84,7 +148,7 @@ function cameraSvg(scene) {
     ...figures.map(f=>({y:f.spot?.over||f.y,draw:()=>f.person?drawPerson(g,f,0):drawBot(g,f,0)}))];
   layers.sort((a,b)=>a.y-b.y);for(const layer of layers)layer.draw();
   for(const f of figures)f.spot?.busy?.(g,f,0);
-  for(const f of figures)g.label(f.name,f.x,f.y+8,frame.width<480?14:16);
+  for(const tag of placeLabels(g,figures,frame,frame.width<480?14:16))g.label(tag.x,tag.y,tag.t);
   // Where each bot was drawn, so the photo's metadata says only what the picture shows.
   const where=at=>figures.filter(f=>!f.person&&f.at===at).map(f=>f.id);
   return {svg:g.svg(frame),at:where('item'),table:where('table'),desk:where('desk')};

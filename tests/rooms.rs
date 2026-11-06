@@ -2739,7 +2739,9 @@ async fn starter_items_are_for_everyone_and_the_rest_unlock_with_friends() {
     // I128: a Lific board is starter but only for someone with god mode on, which
     // only_someone_with_god_mode_on_puts_up_a_lific_board (tests/god_mode.rs) covers.
     let free = |kind: &&items::Kind| {
-        items::paid_pack_with(kind.kind).is_none() && kind.kind != "lific_board"
+        items::paid_pack_with(kind.kind).is_none()
+            && kind.kind != "lific_board"
+            && kind.kind != "mayor_ballot_box"
     };
     for kind in
         items::CATALOG.iter().filter(|kind| kind.tier == "starter" && !kind.sign).filter(free)
@@ -4047,7 +4049,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 23);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 24);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -5909,6 +5911,67 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     assert_eq!(origins, 0);
 }
 
+// I143-I146 (#638): an emote shows over the avatar for everyone in the room, people and bots,
+// from a fixed set, with no chat line, and one every five seconds.
+#[tokio::test]
+async fn people_and_bots_emote_in_the_room_without_a_chat_line() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (other, bo) = server.someone("Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let path = format!("/api/hangouts/{room}/emote");
+    let before = server.snapshot(&ann.key, &room).await["messages"].clone();
+    // Only the fixed set, and only in a room you can open.
+    server.post(&ann.key, &path, json!({"emote":"moon"})).await.refused(StatusCode::BAD_REQUEST);
+    server.post(&bo.key, &path, json!({"emote":"wave"})).await.refused(StatusCode::NOT_FOUND);
+    // A bot uses set_status, not the person's route.
+    server.post(&scout.token, &path, json!({"emote":"wave"})).await.refused(StatusCode::FORBIDDEN);
+
+    let mut stream = server.stream(&ann.key, &room).await;
+    server.post(&ann.key, &path, json!({"emote":"Wave"})).await.ok();
+    heard_on(&mut stream, &["event: emotes", "wave"]).await;
+    let snapshot = server.snapshot(&ann.key, &room).await;
+    assert_eq!(snapshot["emotes"][0]["id"], ann.id, "{snapshot}");
+    assert_eq!(snapshot["emotes"][0]["kind"], "person");
+    assert_eq!(snapshot["emotes"][0]["emote"], "wave");
+    assert_eq!(snapshot["messages"], before, "no chat line");
+    assert_eq!(server.snapshot(&bo.key, &other).await["emotes"], json!([]));
+    // Five seconds between emotes.
+    server
+        .post(&ann.key, &path, json!({"emote":"clap"}))
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+
+    // A bot emotes in the room it's in, and its status stays as it was.
+    server.tool(&scout.token, "set_status", json!({"text":"Reading the docs"})).await;
+    let done = server.tool(&scout.token, "set_status", json!({"emote":"heart"})).await;
+    assert_ne!(done["isError"], true, "{done}");
+    let read = server.read_room(&scout.token, &room).await;
+    let emotes = read["emotes"].as_array().unwrap();
+    assert!(
+        emotes.iter().any(|e| e["kind"] == "bot" && e["emote"] == "heart" && e["name"] == "Scout"),
+        "{read}"
+    );
+    assert!(
+        emotes.iter().any(|e| e["kind"] == "person" && e["name"] == "Ann"),
+        "bots see people's emotes"
+    );
+    let me =
+        read["bots"].as_array().unwrap().iter().find(|b| b["name"] == "Scout").cloned().unwrap();
+    assert_eq!(me["status"], "Reading the docs", "{me}");
+    let wrong = server.tool(&scout.token, "set_status", json!({"emote":"moon"})).await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+
+    // A quiet sign stops a bot's emote, as it stops its posts (I17).
+    server.item(&ann, &room, items::QUIET, spot(5)).await;
+    let quiet = server.tool(&scout.token, "set_status", json!({"emote":"wave"})).await;
+    assert_eq!(quiet["isError"], true, "{quiet}");
+    assert!(
+        quiet.to_string().contains("quiet sign"),
+        "the sign is the reason, not the gap: {quiet}"
+    );
+}
+
 // I108: typing is a transient, human-only signal in the room, never a chat line.
 #[tokio::test]
 async fn human_typing_is_room_scoped_and_clears_on_chat() {
@@ -6727,6 +6790,7 @@ async fn a_lific_board_reaches_a_listed_origin_through_its_pinned_address() {
     server.state.lific.set(agenthangout::lific::Settings {
         origins: vec![listed.clone()],
         local: None,
+        key: None,
         test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
     });
     let id = server.lific_board(&ann, &room);
@@ -6770,6 +6834,760 @@ async fn a_lific_board_never_asks_a_private_address() {
         (board["available"].clone(), board["reason"].clone()),
         (json!(false), json!("refused"))
     );
+}
+
+/// One project the stand-in made: (Lific's id, identifier, name, published).
+type MadeProject = (u64, String, String, bool);
+
+/// I129: a stand-in for the server's own Lific instance, which makes and publishes projects for
+/// the right key and records every credential it was sent.
+#[derive(Clone)]
+struct FakeMaker {
+    mode: Arc<std::sync::Mutex<&'static str>>,
+    projects: Arc<std::sync::Mutex<Vec<MadeProject>>>,
+    /// Every Authorization header that reached it.
+    auth: Arc<std::sync::Mutex<Vec<String>>>,
+    /// I134 to I136: every issue made on it, as Lific would keep it.
+    issues: Arc<std::sync::Mutex<Vec<Value>>>,
+}
+
+const MAKER_KEY: &str = "lific_sk-live-test-only-key";
+
+impl FakeMaker {
+    fn set(&self, mode: &'static str) {
+        *self.mode.lock().unwrap() = mode;
+    }
+
+    fn made(&self) -> Vec<MadeProject> {
+        self.projects.lock().unwrap().clone()
+    }
+}
+
+async fn fake_lific_maker() -> (FakeMaker, String) {
+    use axum::{
+        extract::{Path, State},
+        http::{HeaderMap, StatusCode as Code},
+        response::{IntoResponse, Response},
+        routing::{get, post, put},
+        Router,
+    };
+    fn authorized(fake: &FakeMaker, headers: &HeaderMap) -> bool {
+        let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
+        fake.auth.lock().unwrap().push(auth.to_string());
+        auth == format!("Bearer {MAKER_KEY}")
+    }
+    async fn make(State(fake): State<FakeMaker>, headers: HeaderMap, body: String) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        let mode = *fake.mode.lock().unwrap();
+        if mode == "down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let identifier = body["identifier"].as_str().unwrap().to_string();
+        let mut projects = fake.projects.lock().unwrap();
+        if mode == "taken_first" && projects.is_empty() && !identifier.ends_with('Z') {
+            // The first id tried is someone else's.
+            *fake.mode.lock().unwrap() = "ok";
+            return Code::CONFLICT.into_response();
+        }
+        let id = projects.len() as u64 + 101;
+        projects.push((id, identifier.clone(), body["name"].as_str().unwrap().to_string(), false));
+        axum::Json(json!({ "id": id, "identifier": identifier })).into_response()
+    }
+    async fn publish(
+        State(fake): State<FakeMaker>,
+        Path(id): Path<u64>,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "publish_fails" {
+            *fake.mode.lock().unwrap() = "ok";
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let mut projects = fake.projects.lock().unwrap();
+        let Some(project) = projects.iter_mut().find(|p| p.0 == id) else {
+            return Code::NOT_FOUND.into_response();
+        };
+        project.3 = body["is_public"] == true;
+        axum::Json(json!({ "id": id, "identifier": project.1 })).into_response()
+    }
+    async fn public(
+        State(fake): State<FakeMaker>,
+        Path((project, tail)): Path<(String, String)>,
+    ) -> Response {
+        let published = fake.projects.lock().unwrap().iter().any(|p| p.1 == project && p.3);
+        if !published {
+            return Code::NOT_FOUND.into_response();
+        }
+        if tail == "modules" {
+            return axum::Json(json!([])).into_response();
+        }
+        let mut issues = vec![json!({ "identifier": format!("{project}-1"), "title": "First",
+            "status": "todo", "priority": "none", "module_id": null, "sort_order": 1.0,
+            "deleted": false })];
+        if *fake.mode.lock().unwrap() == "full" {
+            issues.extend((2..=200).map(|n| {
+                json!({ "identifier": format!("{project}-{n}"),
+                "title": "Full", "status": "backlog", "priority": "none", "module_id": null,
+                "sort_order": n as f64, "deleted": false })
+            }));
+        }
+        let made = fake.issues.lock().unwrap();
+        issues.extend(
+            made.iter()
+                .filter(|issue| {
+                    issue["deleted"] == false
+                        && issue["identifier"].as_str().unwrap().starts_with(&format!("{project}-"))
+                })
+                .cloned(),
+        );
+        axum::Json(json!({ "cursor": 1, "pages": [], "issues": issues })).into_response()
+    }
+    // I134: makes an issue in a project this stand-in made.
+    async fn add_issue(
+        State(fake): State<FakeMaker>,
+        headers: HeaderMap,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        let projects = fake.projects.lock().unwrap();
+        let Some(project) = projects.iter().find(|p| json!(p.0) == body["project_id"]) else {
+            return Code::BAD_REQUEST.into_response();
+        };
+        let mut issues = fake.issues.lock().unwrap();
+        let number =
+            issues.iter().filter(|issue| issue["project_id"] == body["project_id"]).count() + 2;
+        let mut issue = body.clone();
+        issue["id"] = json!(500 + issues.len());
+        issue["identifier"] = json!(format!("{}-{number}", project.1));
+        issue["deleted"] = json!(false);
+        issue["module_id"] = json!(null);
+        issue["sort_order"] = json!(issues.len() as f64);
+        issues.push(issue.clone());
+        if *fake.mode.lock().unwrap() == "no_id" {
+            // #651: made, but the reply doesn't say which.
+            return axum::Json(json!({ "title": issue["title"] })).into_response();
+        }
+        axum::Json(issue).into_response()
+    }
+    async fn resolve_issue(
+        State(fake): State<FakeMaker>,
+        Path(identifier): Path<String>,
+        headers: HeaderMap,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        let issues = fake.issues.lock().unwrap();
+        match issues.iter().find(|i| i["identifier"] == identifier && i["deleted"] == false) {
+            Some(issue) => axum::Json(issue.clone()).into_response(),
+            None => Code::NOT_FOUND.into_response(),
+        }
+    }
+    async fn change_issue(
+        State(fake): State<FakeMaker>,
+        Path(id): Path<u64>,
+        headers: HeaderMap,
+        method: axum::http::Method,
+        body: String,
+    ) -> Response {
+        if !authorized(&fake, &headers) {
+            return Code::UNAUTHORIZED.into_response();
+        }
+        if *fake.mode.lock().unwrap() == "change_down" {
+            return Code::INTERNAL_SERVER_ERROR.into_response();
+        }
+        let mut issues = fake.issues.lock().unwrap();
+        let Some(issue) = issues.iter_mut().find(|i| i["id"] == id && i["deleted"] == false) else {
+            return Code::NOT_FOUND.into_response();
+        };
+        if method == axum::http::Method::DELETE {
+            issue["deleted"] = json!(true);
+            return axum::Json(json!({ "deleted": true })).into_response();
+        }
+        let body: Value = serde_json::from_str(&body).unwrap();
+        for (field, value) in body.as_object().unwrap() {
+            issue[field] = value.clone();
+        }
+        axum::Json(issue.clone()).into_response()
+    }
+    let fake = FakeMaker {
+        mode: Arc::new(std::sync::Mutex::new("ok")),
+        projects: Arc::new(std::sync::Mutex::new(Vec::new())),
+        auth: Arc::new(std::sync::Mutex::new(Vec::new())),
+        issues: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let router = Router::new()
+        .route("/api/issues", post(add_issue))
+        .route("/api/issues/resolve/{identifier}", get(resolve_issue))
+        .route("/api/issues/{id}", put(change_issue).delete(change_issue))
+        .route("/api/projects", post(make))
+        .route("/api/projects/{id}", put(publish))
+        .route("/public/api/projects/{project}/{tail}", get(public))
+        .with_state(fake.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (fake, origin)
+}
+
+fn lific_with_key(server: &Server, origins: &str, local: &str, key: &str) {
+    server.state.lific.set(
+        agenthangout::lific::Settings::from_settings(Some(origins), Some(local))
+            .with_key(Some(key)),
+    );
+}
+
+// I129: with the server's own instance and key, an unlinked board gets its room's project: made
+// once, published, linked, and shown by every board in that room. Another room gets its own.
+#[tokio::test]
+async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (fake, origin) = fake_lific_maker().await;
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+
+    let first = server.lific_board(&ann, &room);
+    let board = server.get(&ann.key, &format!("/api/items/{first}/lific")).await.ok();
+    assert_eq!(board["available"], true, "{board}");
+    let project = board["project"].as_str().unwrap().to_string();
+    assert!(project.starts_with('R') && project.len() == 5, "{project}");
+    assert_eq!(board["columns"][1]["issues"][0]["id"], format!("{project}-1"), "{board}");
+    let made = fake.made();
+    assert_eq!(made.len(), 1);
+    assert!(made[0].3, "published");
+    // Named by its id, never by the room's name, which a private room's might give away.
+    assert_eq!(made[0].2, format!("Agents Hangout room {project}"));
+    assert!(!made[0].2.contains("Ann"));
+
+    // A second board in the room, read by a bot, shows the same project and makes nothing new.
+    let second = server.lific_board(&ann, &room);
+    let read = server
+        .tool(&scout.token, "read_board", json!({ "hangout_id": room, "board_id": second }))
+        .await;
+    assert_eq!(read["structuredContent"]["project"], project, "{read}");
+    assert_eq!(fake.made().len(), 1);
+
+    // Nothing that reached a reader carries the key or the address.
+    for reply in [board.to_string(), read.to_string()] {
+        assert!(!reply.contains(MAKER_KEY) && !reply.contains(&origin), "{reply}");
+    }
+
+    // Another room gets a project of its own.
+    let (other_room, bo) = server.someone("Bo").await;
+    let other = server.lific_board(&bo, &other_room);
+    let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
+    assert_ne!(theirs["project"], project);
+    assert_eq!(fake.made().len(), 2);
+}
+
+// I129: Lific down or the key turned down makes nothing and is tried again; a taken id tries the
+// next; a project made but not published is published next time, never made twice.
+#[tokio::test]
+async fn a_rooms_lific_project_is_retried_never_doubled() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (fake, origin) = fake_lific_maker().await;
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    // Each lific_with_key forgets the last read (I126), so every read below asks again.
+
+    lific_with_key(&server, "", &origin, "the-wrong-key");
+    let refused = server.get(&ann.key, &path).await.ok();
+    assert_eq!((&refused["reason"], &refused["linked"]), (&json!("key_refused"), &json!(false)));
+    assert!(fake.made().is_empty());
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    fake.set("down");
+    let down = server.get(&ann.key, &path).await.ok();
+    assert_eq!(down["available"], false, "{down}");
+    assert!(fake.made().is_empty());
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    fake.set("publish_fails");
+    let half = server.get(&ann.key, &path).await.ok();
+    assert_eq!(half["available"], false, "made, but not yet published: {half}");
+    assert_eq!(fake.made().len(), 1);
+    assert!(!fake.made()[0].3);
+
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    let done = server.get(&ann.key, &path).await.ok();
+    assert_eq!(done["available"], true, "{done}");
+    assert_eq!(fake.made().len(), 1, "published, not made again");
+    assert!(fake.made()[0].3);
+
+    // A taken id: the next try is used.
+    let (other_room, bo) = server.someone("Bo").await;
+    fake.set("taken_first");
+    let other = server.lific_board(&bo, &other_room);
+    let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
+    assert_eq!(theirs["available"], true, "{theirs}");
+    assert_eq!(fake.made().len(), 2);
+}
+
+// I130: the key goes only to the local instance, never to a listed outside one, and a board
+// linked by hand to another instance doesn't get the room's project.
+#[tokio::test]
+async fn the_lific_key_goes_only_to_the_local_instance() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (maker, local) = fake_lific_maker().await;
+    let (outside, listed) = fake_lific_maker().await;
+    // The listed instance is reached through its pinned address, as a real outside one would be.
+    let port = listed.rsplit(':').next().unwrap();
+    let listed = format!("http://lific.invalid:{port}");
+    server.state.lific.set(agenthangout::lific::Settings {
+        origins: vec![listed.clone()],
+        local: Some(local.clone()),
+        key: Some(MAKER_KEY.to_string()),
+        test_pin: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+    });
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": listed, "project": "ELSE" })).await.ok();
+    server.get(&ann.key, &path).await.ok();
+    assert!(outside.auth.lock().unwrap().iter().all(String::is_empty), "no key went outside");
+    assert!(maker.made().is_empty(), "a hand-made link wins (I124)");
+    // And the setting never says the key, even when logged.
+    let shown = format!("{:?}", agenthangout::lific::Settings::default().with_key(Some(MAKER_KEY)));
+    assert!(!shown.contains(MAKER_KEY), "{shown}");
+}
+
+/// I133 to I139: a room whose Lific board shows its own project, made on a stand-in instance.
+async fn lific_room(server: &Server) -> (String, Who, FakeMaker, String, String, String) {
+    let (room, ann) = server.someone("Ann").await;
+    let (fake, origin) = fake_lific_maker().await;
+    lific_with_key(server, "", &origin, MAKER_KEY);
+    let board = server.lific_board(&ann, &room);
+    let shown = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(shown["available"], true, "{shown}");
+    let project = text(&shown["project"]);
+    (room, ann, fake, board, project, origin)
+}
+
+fn lific_card<'a>(board: &'a Value, card: &str) -> Option<(&'a str, &'a Value)> {
+    board["columns"].as_array()?.iter().find_map(|column| {
+        let found = column["issues"].as_array()?.iter().find(|issue| issue["id"] == card)?;
+        Some((column["status"].as_str()?, found))
+    })
+}
+
+// I134, I135, I137, I138: people in the room and their bots add and move cards; Lific gets the
+// words and nothing about who; the board says who added each one, and what each reader may do.
+#[tokio::test]
+async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, project, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific");
+
+    let added = server
+        .post(&ann.key, &format!("{path}/cards"), json!({ "title": "Paint\nthe door" }))
+        .await
+        .ok();
+    assert_eq!(added["ok"], true, "{added}");
+    let ann_card = text(&added["card"]["id"]);
+    assert!(ann_card.starts_with(&format!("{project}-")), "{ann_card}");
+    assert_eq!(added["card"]["status"], "backlog");
+
+    let by_bot = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({ "board_id": board, "title": "Tune the piano", "status": "todo", "priority": "high" }),
+        )
+        .await;
+    let bot_card = text(&by_bot["structuredContent"]["card"]["id"]);
+
+    // Lific got the words, the column and the priority, never a name.
+    let sent = fake.issues.lock().unwrap().clone();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0]["title"], "Paint the door");
+    assert_eq!(sent[1]["priority"], "high");
+    for issue in &sent {
+        assert_eq!(issue["source"], "agentshangout");
+        for name in ["Ann", "Bo", "Scout"] {
+            assert!(!issue.to_string().contains(name), "{issue}");
+        }
+    }
+
+    let as_ann = server.get(&ann.key, &path).await.ok();
+    assert_eq!(as_ann["can_change"], true);
+    let (column, card) = lific_card(&as_ann, &ann_card).unwrap();
+    assert_eq!(column, "backlog");
+    assert_eq!(card["added_by"], json!({ "name": "Ann", "is_bot": false }));
+    assert_eq!((&card["you_added"], &card["can_remove"]), (&json!(true), &json!(true)));
+    let (column, card) = lific_card(&as_ann, &bot_card).unwrap();
+    assert_eq!(column, "todo");
+    assert_eq!(card["added_by"], json!({ "name": "Scout", "is_bot": true }));
+    // The room's owner may take down anyone's card.
+    assert_eq!(card["can_remove"], true);
+
+    let as_bo = server.get(&bo.key, &path).await.ok();
+    let (_, card) = lific_card(&as_bo, &ann_card).unwrap();
+    assert_eq!((&card["you_added"], &card["can_remove"]), (&json!(false), &json!(false)));
+    let (_, card) = lific_card(&as_bo, &bot_card).unwrap();
+    assert_eq!(card["you_added"], true, "a card Bo's bot added is Bo's");
+
+    // Anyone in the room moves any card, and everyone sees it at once.
+    let moved = server
+        .put(&bo.key, &format!("{path}/cards/{ann_card}"), json!({ "status": "active" }))
+        .await
+        .ok();
+    assert_eq!(moved["ok"], true, "{moved}");
+    let after = server.get(&ann.key, &path).await.ok();
+    assert_eq!(lific_card(&after, &ann_card).unwrap().0, "active");
+    let by_tool = server
+        .tool(
+            &scout.token,
+            "set_board_card",
+            json!({ "board_id": board, "card_id": ann_card, "status": "done", "priority": "urgent" }),
+        )
+        .await;
+    assert_eq!(by_tool["structuredContent"]["ok"], true, "{by_tool}");
+    let after = server.get(&bo.key, &path).await.ok();
+    let (column, card) = lific_card(&after, &ann_card).unwrap();
+    assert_eq!((column, &card["priority"]), ("done", &json!("urgent")));
+
+    // Only whoever added a card changes its words.
+    server
+        .put(&bo.key, &format!("{path}/cards/{ann_card}"), json!({ "title": "Mine now" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &format!("{path}/cards/{ann_card}"), json!({ "title": "Paint it red" }))
+        .await
+        .ok();
+
+    // Only the server's key ever reached Lific, and no reply carried it.
+    assert!(fake.auth.lock().unwrap().iter().all(|auth| *auth == format!("Bearer {MAKER_KEY}")));
+    for reply in [added.to_string(), by_bot.to_string(), as_ann.to_string(), by_tool.to_string()] {
+        assert!(!reply.contains(MAKER_KEY), "{reply}");
+    }
+}
+
+// I136: whoever added a card, their bots, and the room's owner take it down, into Lific's trash.
+#[tokio::test]
+async fn a_lific_card_is_taken_down_by_whoever_added_it_or_the_rooms_owner() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let cy = server.join(&ann, &room, "Cy").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let add = |title: &'static str| {
+        let (server, key, path) = (&server, bo.key.clone(), path.clone());
+        async move {
+            text(&server.post(&key, &path, json!({ "title": title })).await.ok()["card"]["id"])
+        }
+    };
+    let first = add("First").await;
+    let second = add("Second").await;
+
+    server.delete(&cy.key, &format!("{path}/{first}")).await.refused(StatusCode::FORBIDDEN);
+    let by_bot = server
+        .tool(
+            &scout.token,
+            "set_board_card",
+            json!({ "board_id": board, "card_id": first, "remove": true }),
+        )
+        .await;
+    assert_eq!(by_bot["structuredContent"]["removed"], true, "{by_bot}");
+    server.delete(&ann.key, &format!("{path}/{second}")).await.ok();
+
+    let left = server.get(&bo.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert!(lific_card(&left, &first).is_none() && lific_card(&left, &second).is_none(), "{left}");
+    assert!(fake.issues.lock().unwrap().iter().all(|issue| issue["deleted"] == true));
+    assert!(server.state.db.lific_cards(&room).unwrap().is_empty());
+    // A card that's gone is missing, not an error page.
+    server.delete(&ann.key, &format!("{path}/{first}")).await.refused(StatusCode::NOT_FOUND);
+}
+
+// I133: only the room's own project changes. A hand-made link is read-only, even on the local
+// instance, and a card id from anywhere else is missing before Lific is asked.
+#[tokio::test]
+async fn only_the_rooms_own_lific_project_can_be_changed() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, local) = lific_room(&server).await;
+    let (other_room, bo) = server.someone("Bo").await;
+    let theirs = server.lific_board(&bo, &other_room);
+    let shown = server.get(&bo.key, &format!("/api/items/{theirs}/lific")).await.ok();
+    let their_card = text(
+        &server
+            .post(&bo.key, &format!("/api/items/{theirs}/lific/cards"), json!({ "title": "Bo's" }))
+            .await
+            .ok()["card"]["id"],
+    );
+    assert_ne!(shown["project"], json!(null));
+
+    let asked = fake.auth.lock().unwrap().len();
+    for card in [their_card.as_str(), "NOPE-1", "../projects/1"] {
+        server
+            .put(
+                &ann.key,
+                &format!("/api/items/{board}/lific/cards/{}", card.replace('/', "%2F")),
+                json!({ "status": "done" }),
+            )
+            .await
+            .refused(StatusCode::NOT_FOUND);
+    }
+    assert_eq!(fake.auth.lock().unwrap().len(), asked, "nothing was sent to Lific for them");
+
+    // Linked by hand to another project on the same instance: read-only.
+    let hand = server.lific_board(&ann, &room);
+    server
+        .put(
+            &ann.key,
+            &format!("/api/items/{hand}/lific"),
+            json!({ "base": local, "project": "ELSE" }),
+        )
+        .await
+        .ok();
+    let read = server.get(&ann.key, &format!("/api/items/{hand}/lific")).await.ok();
+    assert_eq!(read["can_change"], false, "{read}");
+    server
+        .post(&ann.key, &format!("/api/items/{hand}/lific/cards"), json!({ "title": "No" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+}
+
+// I134: like pins, a guest can't, a stranger gets 404, a quiet sign stops a bot but not a person,
+// and on a public floor the pin setting decides.
+#[tokio::test]
+async fn lific_cards_follow_who_may_pin() {
+    let server = Server::start().await;
+    let (room, ann, _fake, board, _, _) = lific_room(&server).await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let card = json!({ "title": "Hello" });
+
+    server.item(&ann, &room, items::QUIET, spot(40)).await;
+    let quiet = server
+        .tool(&scout.token, "add_board_card", json!({ "board_id": board, "title": "Hi" }))
+        .await;
+    assert_eq!(quiet["isError"], true, "{quiet}");
+    assert_eq!(quiet["content"][0]["text"], items::QUIET_REASON);
+    server.post(&bo.key, &path, card.clone()).await.ok();
+
+    let (_, stranger) = server.someone("Stranger").await;
+    server.post(&stranger.key, &path, card.clone()).await.refused(StatusCode::NOT_FOUND);
+
+    server.open(&ann, &room).await.ok();
+    let (_, guest) = server.someone("Guest").await;
+    server.walk_in(&guest, &room).await;
+    server.post(&guest.key, &path, card.clone()).await.refused(StatusCode::FORBIDDEN);
+    let as_guest = server.get(&guest.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(as_guest["can_change"], false);
+
+    server
+        .put(&ann.key, &format!("/api/hangouts/{room}/pin-policy"), json!({ "policy": "owners" }))
+        .await
+        .ok();
+    server.post(&bo.key, &path, card.clone()).await.refused(StatusCode::FORBIDDEN);
+    server.post(&ann.key, &path, card.clone()).await.ok();
+    server
+        .put(&ann.key, &format!("/api/hangouts/{room}/pin-policy"), json!({ "policy": "anyone" }))
+        .await
+        .ok();
+}
+
+// I134: titles are 1 to 120 characters with control characters out; a room's project holds 200
+// cards, and a person and their bots add 30 a day.
+#[tokio::test]
+async fn lific_cards_have_short_titles_and_limits() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, origin) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    for title in ["", "   ", &"x".repeat(121)] {
+        server
+            .post(&ann.key, &path, json!({ "title": title }))
+            .await
+            .refused(StatusCode::BAD_REQUEST);
+    }
+    server
+        .post(&ann.key, &path, json!({ "title": "ok", "status": "cancelled" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, &path, json!({ "title": "ok", "priority": "huge" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server.post(&ann.key, &path, json!({ "title": "x".repeat(120) })).await.ok();
+
+    seed_lific_adds(&server, &ann.id, &room, 29);
+    server
+        .post(&ann.key, &path, json!({ "title": "one too many" }))
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+
+    let bo = server.join(&ann, &room, "Bo").await;
+    fake.set("full");
+    lific_with_key(&server, "", &origin, MAKER_KEY);
+    let full = server
+        .post(&bo.key, &path, json!({ "title": "no room" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(text(&full["error"]).starts_with("board_full"), "{full}");
+}
+
+/// #651: `n` adds this person made today, as if through Lific.
+fn seed_lific_adds(server: &Server, person: &str, room: &str, n: usize) {
+    let now = agenthangout::now();
+    for i in 0..n {
+        let id = format!("seed-{person}-{i}-{now}");
+        let refused =
+            server.state.db.reserve_lific_add(&id, person, room, 0, 200, 1000, 0, now).unwrap();
+        assert!(refused.is_none());
+        server.state.db.finish_lific_add(&id).unwrap();
+    }
+}
+
+// #651, I134: taking cards down doesn't give back the day's 30; adds that race can't all pass the
+// limit; a card Lific made without saying its id still counts.
+#[tokio::test]
+async fn the_daily_card_limit_counts_every_add_and_holds_under_a_race() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let today =
+        || server.state.db.lific_cards_added_since(&ann.id, agenthangout::now() - 86_400).unwrap();
+    seed_lific_adds(&server, &ann.id, &room, 27);
+
+    // The 28th, then taken down: the count stays, and the replies say so (I142).
+    let added = server.post(&ann.key, &path, json!({ "title": "Down soon" })).await.ok();
+    assert_eq!(added["cards_today"], json!({ "used": 28, "left": 2, "most": 30 }), "{added}");
+    let card = text(&added["card"]["id"]);
+    let removed = server.delete(&ann.key, &format!("{path}/{card}")).await.ok();
+    assert_eq!(removed["cards_today"]["used"], 28, "{removed}");
+    assert_eq!(today(), 28);
+    let read = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(read["cards_today"]["left"], 2, "{read}");
+    // Someone who can't change the board doesn't get it.
+    let (_, stranger) = server.someone("Stranger").await;
+    server.open(&ann, &room).await.ok();
+    server.walk_in(&stranger, &room).await;
+    let theirs = server.get(&stranger.key, &format!("/api/items/{board}/lific")).await.ok();
+    assert_eq!(theirs["can_change"], false);
+    assert!(theirs.get("cards_today").is_none(), "{theirs}");
+
+    // Three at once with two left: two pass, one is refused, and Lific gets two.
+    let made_before = fake.issues.lock().unwrap().len();
+    let (a, b, c) = tokio::join!(
+        server.post(&ann.key, &path, json!({ "title": "Race a" })),
+        server.post(&ann.key, &path, json!({ "title": "Race b" })),
+        server.post(&ann.key, &path, json!({ "title": "Race c" })),
+    );
+    let statuses = [a.status, b.status, c.status];
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::OK).count(), 2, "{statuses:?}");
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count(), 1);
+    assert_eq!(fake.issues.lock().unwrap().len(), made_before + 2);
+    assert_eq!(today(), 30);
+
+    // Lific making a card without saying its id: it's made, and it counts.
+    let (room2, bo, fake2, board2, _, _) = lific_room(&server).await;
+    fake2.set("no_id");
+    let unnamed = server
+        .post(&bo.key, &format!("/api/items/{board2}/lific/cards"), json!({ "title": "Nameless" }))
+        .await
+        .ok();
+    assert_eq!(unnamed["ok"], true, "{unnamed}");
+    assert!(unnamed["card"].is_null());
+    assert_eq!(fake2.issues.lock().unwrap().len(), 1);
+    assert_eq!(server.state.db.lific_cards_added_since(&bo.id, 0).unwrap(), 1);
+    assert!(server.state.db.lific_cards(&room2).unwrap().is_empty());
+}
+
+// #651, I138, I139: a change Lific doesn't make doesn't move the bot; one it makes does. A bot that
+// was sent in can't add. Deleting an account forgets which cards it added, and its adds.
+#[tokio::test]
+async fn a_lific_change_moves_a_bot_only_once_lific_makes_it() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let path = format!("/api/items/{board}/lific/cards");
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let added = server
+        .tool(&scout.token, "add_board_card", json!({ "board_id": board, "title": "Mine" }))
+        .await;
+    assert_ne!(added["isError"], true, "{added}");
+    let card = text(&added["structuredContent"]["card"]["id"]);
+    // Scout goes to another room it belongs to.
+    let (elsewhere, dee) = server.someone("Dee").await;
+    let code = server.invite_code(&dee, &elsewhere).await;
+    server.post(&ann.key, &format!("/api/invites/{code}/join"), json!({})).await.ok();
+    server
+        .put(&ann.key, &format!("/api/hangouts/{elsewhere}/agents/{}", scout.id), json!({}))
+        .await
+        .ok();
+    let went = server.tool(&scout.token, "go_to_room", json!({ "hangout_id": elsewhere })).await;
+    assert_ne!(went["isError"], true, "{went}");
+    let place = || server.state.db.bot_place(&scout.id, agenthangout::now()).unwrap();
+    assert_eq!(place().as_deref(), Some(elsewhere.as_str()));
+
+    fake.set("change_down");
+    let move_it = json!({ "board_id": board, "card_id": card, "status": "done" });
+    let refused = server.tool(&scout.token, "set_board_card", move_it.clone()).await;
+    assert_eq!(refused["structuredContent"]["ok"], false, "{refused}");
+    assert_eq!(place().as_deref(), Some(elsewhere.as_str()), "a refused change moves nothing");
+    fake.set("ok");
+    let moved = server.tool(&scout.token, "set_board_card", move_it).await;
+    assert_eq!(moved["structuredContent"]["ok"], true, "{moved}");
+    assert_eq!(place().as_deref(), Some(room.as_str()), "a made change takes it to the room");
+
+    // A bot that was sent in can't add to the board.
+    server.open(&ann, &room).await.ok();
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": pip.id }))
+        .await
+        .ok();
+    server
+        .post(&pip.token, &path, json!({ "title": "Sent in" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    // I137: an account deleted, its card stays on the board, with no one shown as adding it.
+    let bo = server.join(&ann, &room, "Bo").await;
+    let bos = server.post(&bo.key, &path, json!({ "title": "From Bo" })).await.ok();
+    let bos_card = text(&bos["card"]["id"]);
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    assert!(server.state.db.lific_cards(&room).unwrap().iter().all(|c| c.card != bos_card));
+    assert_eq!(server.state.db.lific_cards_added_since(&bo.id, 0).unwrap(), 0);
+    let shown = server.get(&ann.key, &format!("/api/items/{board}/lific")).await.ok();
+    let (_, kept) = lific_card(&shown, &bos_card).expect("the card stays");
+    assert!(kept["added_by"].is_null(), "{kept}");
+}
+
+// I139: Lific not taking a change says so, and nothing is kept here or tried again.
+#[tokio::test]
+async fn a_lific_card_lific_wont_take_changes_nothing() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    fake.set("down");
+    let reply = server
+        .post(&ann.key, &format!("/api/items/{board}/lific/cards"), json!({ "title": "Hi" }))
+        .await
+        .ok();
+    assert_eq!((&reply["ok"], &reply["available"]), (&json!(false), &json!(false)), "{reply}");
+    assert_eq!(reply["reason"], "down");
+    assert!(server.state.db.lific_cards(&room).unwrap().is_empty());
+    assert!(fake.issues.lock().unwrap().is_empty());
+    assert!(!reply.to_string().contains(MAKER_KEY));
 }
 
 // I111: ballot_box counts open votes the caller can see, and names open_vote, cast_vote and close_vote.
@@ -7348,6 +8166,82 @@ async fn an_owners_job_is_asked_answered_kept_and_written_up() {
     server.delete(&ann.key, &format!("/api/needs-you/jobs/{job_id}")).await.ok();
     let cleared = server.get(&ann.key, "/api/needs-you").await.ok();
     assert_eq!(cleared["job_reports"], json!([]));
+}
+
+// JB9, JB10 (#658, #657): a bot reads its own role as the role://me resource, and while it has an
+// open job its events carry the job's id, and only the id, until the job is done.
+#[tokio::test]
+async fn the_role_is_a_resource_and_events_carry_the_open_job() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let bob = server.join(&ann, &room, "Bob").await;
+    let pip = server.bot(&bob, &room, "Pip").await;
+    let role = "You are the town reporter: ask, then write it up.";
+    server
+        .put(&ann.key, &format!("/api/agents/{}/role", scout.id), json!({ "role": role }))
+        .await
+        .ok();
+
+    // JB9: listed, and read as the bot's own, with its tag and note.
+    let listed = rpc(&server, &scout.token, "resources/list", json!({})).await;
+    assert!(listed.to_string().contains("role://me"), "{listed}");
+    let read = rpc(&server, &scout.token, "resources/read", json!({ "uri": "role://me" })).await;
+    let body: Value =
+        serde_json::from_str(read["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(body["role"], role, "{read}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(body["role_tag"], inbox["role_tag"]);
+    assert!(body["role_note"].as_str().unwrap().contains("never widen"));
+    // Another bot reads only its own, which it hasn't got.
+    let theirs = rpc(&server, &pip.token, "resources/read", json!({ "uri": "role://me" })).await;
+    let theirs: Value =
+        serde_json::from_str(theirs["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert!(theirs["role"].is_null(), "{theirs}");
+
+    // JB10: no job, no open_job; with one, every message event says which, by id alone.
+    let messages = format!("/api/hangouts/{room}/messages");
+    let events = || {
+        let server = &server;
+        let token = scout.token.clone();
+        async move {
+            server.tool(&token, "events_since", json!({ "since": "0", "wait_seconds": 0 })).await
+                ["structuredContent"]["events"]
+                .as_array()
+                .unwrap()
+                .clone()
+        }
+    };
+    let said = |text: &'static str| {
+        let server = &server;
+        let key = bob.key.clone();
+        let messages = messages.clone();
+        async move { server.post(&key, &messages, json!({ "text": text })).await.ok()["id"].clone() }
+    };
+    let before = said("Morning all").await;
+    server
+        .post(&ann.key, &messages, json!({ "text": "/job find out what shipped today" }))
+        .await
+        .ok();
+    let job = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"]["job"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let during = said("Votes shipped").await;
+    server.tool(&scout.token, "finish_job", json!({ "writeup": "Votes shipped." })).await;
+    let after = said("Lunch?").await;
+    let all = events().await;
+    let event_for = |id: &Value| -> Value {
+        all.iter()
+            .find(|e| e["name"] == "message" && e["data"]["message_id"] == *id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no event for {id}: {all:?}"))
+    };
+    assert!(event_for(&before)["data"].get("open_job").is_none());
+    let open = event_for(&during);
+    assert_eq!(open["data"]["open_job"], job.as_str(), "{open}");
+    assert!(!open.to_string().contains("find out what shipped"), "only the id: {open}");
+    assert!(event_for(&after)["data"].get("open_job").is_none(), "finished, it stops");
 }
 
 // JB1, JB3, JB5: only the owner sets a role or gives a job; /job has to say which bot when there's
@@ -8412,8 +9306,10 @@ async fn threads_limited_incremental_read_retains_active_thread() {
     assert_eq!(read_next["structuredContent"]["messages"], json!([]));
 }
 
+// I104, I141 (#669): a mention in a collapsed reply is listed on its root as mentions_you when
+// read_room shows the root, and is then read; read_thread still shows the reply itself.
 #[tokio::test]
-async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
+async fn threads_mention_in_collapsed_reply_is_counted_on_its_root_by_read_room() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let bo = server.join(&ann, &room, "Bo").await;
@@ -8450,10 +9346,15 @@ async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
     // Rover sees root A with reply_count: 1, but collapsed reply D is NOT returned.
     let read = server.read_room(&rover.token, &room).await;
     let msgs = read["messages"].as_array().unwrap();
-    assert!(msgs.iter().any(|m| m["id"] == a_id));
+    let root = msgs.iter().find(|m| m["id"] == a_id).expect("root A is shown");
     assert!(!msgs.iter().any(|m| m["id"] == d_id), "reply D is collapsed");
+    assert_eq!(
+        root["mentions_you"],
+        json!([d_id]),
+        "the root says which reply named Rover: {root}"
+    );
 
-    // D's mention must STILL BE IN INBOX (not cleared by read_room)
+    // I141: D's mention is read, since the root that counts it was shown.
     let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
     let unread_mid: Vec<i64> = inbox_mid["structuredContent"]["mentions"]
         .as_array()
@@ -8461,17 +9362,15 @@ async fn threads_mention_in_collapsed_reply_stays_in_inbox_after_read_room() {
         .iter()
         .map(|m| m["message_id"].as_i64().unwrap())
         .collect();
-    assert!(
-        unread_mid.contains(&d_id),
-        "collapsed reply mention D must stay in inbox after read_room: {inbox_mid}"
-    );
+    assert!(!unread_mid.contains(&d_id), "D was counted on its root, so it's read: {inbox_mid}");
 
-    // 5. Rover calls read_thread for root A: D is viewed and its mention is marked read
+    // 5. read_thread for root A still shows D itself.
     let thread =
         server.tool(&rover.token, "read_thread", json!({ "hangout_id": room, "root": a_id })).await;
     assert_ne!(thread["isError"], true);
+    assert!(thread.to_string().contains("@Rover reply inside thread"), "{thread}");
 
-    // D's mention is now cleared from inbox
+    // D's mention stays cleared
     let inbox_after = server.tool(&rover.token, "inbox", json!({})).await;
     let unread_after: Vec<i64> = inbox_after["structuredContent"]["mentions"]
         .as_array()
@@ -9667,7 +10566,8 @@ async fn leaving_out_messages_leaves_them_unread() {
 }
 
 // I117: a mention in a thread reply clears once the bot answers in that thread, from its wake,
-// without read_thread. One it hasn't answered still waits, and only its own posts count.
+// without read_thread or read_room. One it hasn't answered still waits, and only its own posts
+// count. (What read_room clears in threads is I141.)
 #[tokio::test]
 async fn answering_in_a_thread_clears_the_mentions_there() {
     let w = waiting_world().await;
@@ -9698,13 +10598,10 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     let second = say(w.pip.token.clone(), "second topic", None).await;
     say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
     say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
-    // A read of the room leaves thread replies for read_thread, as before.
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
 
     // Someone else answering in the thread changes nothing for Scout.
     say(w.pip.token.clone(), "any other thoughts", Some(first)).await;
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
 
     // Scout answers the first thread from its wake: that one clears, the other still waits.
@@ -9715,14 +10612,101 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     assert_eq!(unread(), 2);
     // A top-level post isn't an answer in a thread.
     say(w.scout.token.clone(), "hello room", None).await;
-    w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(unread(), 2);
-    // An answer posted before this rule (written directly here) clears on the next read_room.
-    let answered_earlier = say(w.scout.token.clone(), "answering the second", Some(second)).await;
-    w.conn.execute("UPDATE mentions SET read_at = NULL", []).unwrap();
-    assert!(answered_earlier > second);
-    w.server.read_room(&w.scout.token, &w.room).await;
-    assert_eq!(unread(), 1, "only the mention after Scout's last answer in the first thread waits");
+}
+
+// I141, #669: read_room showing a thread's root says which of its replies named the bot, as
+// mentions_you, and then those mentions are read, so a thread the bot doesn't answer stops
+// counting. A newer reply waits until a read shows its root again; a read without messages marks
+// nothing.
+#[tokio::test]
+async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
+    let w = waiting_world().await;
+    let say = |token: String, text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(id) = reply_to {
+            args["reply_to"] = json!(id);
+        }
+        let server = &w.server;
+        async move {
+            server.tool(&token, "say", args).await["structuredContent"]["message_id"]
+                .as_i64()
+                .unwrap()
+        }
+    };
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions m JOIN agents a ON a.id = m.agent_id
+                 WHERE a.name = 'Scout' AND m.read_at IS NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    let named = |read: &Value, root: i64| {
+        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == root).unwrap()
+            ["mentions_you"]
+            .clone()
+    };
+    let first = say(w.pip.token.clone(), "first topic", None).await;
+    let second = say(w.pip.token.clone(), "second topic", None).await;
+    let a = say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
+    let b = say(w.pip.token.clone(), "@Scout and this?", Some(first)).await;
+    let last = say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
+    assert_eq!(unread(), 3);
+
+    // A read without messages shows no roots, so it marks nothing (I122).
+    let only_notes = json!({ "hangout_id": w.room, "sections": ["notes"] });
+    w.server.tool(&w.scout.token, "read_room", only_notes).await;
+    assert_eq!(unread(), 3);
+
+    let read = w.server.read_room(&w.scout.token, &w.room).await;
+    assert_eq!(named(&read, first), json!([a, b]), "{read}");
+    assert_eq!(named(&read, second), json!([last]));
+    assert_eq!(unread(), 0, "the roots were shown, so their mentions are read");
+
+    // A newer reply waits, and the next read showing its root counts and clears it.
+    let more = say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
+    assert_eq!(unread(), 1);
+    let next = w
+        .server
+        .tool(
+            &w.scout.token,
+            "read_room",
+            json!({ "hangout_id": w.room, "after_message_id": last }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(named(&next, second), json!([more]), "{next}");
+    assert_eq!(unread(), 0);
+    // Nothing new: no root carries mentions_you.
+    let quiet = w.server.read_room(&w.scout.token, &w.room).await;
+    assert!(!quiet.to_string().contains("mentions_you"), "{quiet}");
+}
+
+// I141, #670 smoke: a brief read (I109) lists mentions_you on the roots it shows too.
+#[tokio::test]
+async fn a_brief_read_room_lists_mentions_you_too() {
+    let w = waiting_world().await;
+    let said = |text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(id) = reply_to {
+            args["reply_to"] = json!(id);
+        }
+        let (server, token) = (&w.server, w.pip.token.clone());
+        async move {
+            server.tool(&token, "say", args).await["structuredContent"]["message_id"]
+                .as_i64()
+                .unwrap()
+        }
+    };
+    let root = said("a topic", None).await;
+    let reply = said("@Scout over to you", Some(root)).await;
+    let brief = json!({ "hangout_id": w.room, "brief": true });
+    let read = w.server.tool(&w.scout.token, "read_room", brief).await["structuredContent"].clone();
+    let shown = read["messages"].as_array().unwrap().iter().find(|m| m["id"] == root).cloned();
+    assert_eq!(shown.expect("the root is shown")["mentions_you"], json!([reply]), "{read}");
 }
 
 // I117: clearing answered thread mentions is driven by the bot's own mentions and uses indexes, so
@@ -10252,4 +11236,177 @@ async fn the_chat_box_offers_room_only_where_it_would_work() {
     assert!(app.contains("field('Who can use @room here'") && app.contains("hears @room`"));
     assert!(app.contains("if (snapshot.room_mention) choices.push({ name: 'room', kind: 'everyone here', first: true,"));
     assert!(app.contains("Number(Boolean(b.choice.first)) - Number(Boolean(a.choice.first))"));
+}
+
+/// #634: Bo's bot Rover walks onto Ann's public floor, where Ann's bot Scout is.
+async fn walked_in() -> (Server, String, Who, Bot, Who, Bot) {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (bo_room, bo) = server.someone("Bo").await;
+    let rover = server.bot(&bo, &bo_room, "Rover").await;
+    let hours = json!({
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": "00:00", "ends": "24:00", "public_places": true,
+    });
+    server.put(&bo.key, &format!("/api/agents/{}/routine", rover.id), hours).await.ok();
+    let went = server.tool(&rover.token, "go_out", json!({ "floor_id": room })).await;
+    assert!(went["isError"].is_null(), "{went}");
+    (server, room, ann, scout, bo, rover)
+}
+
+// #634, E45: a bot that walks in is on the room's roster at once, a tag of it reaches its inbox
+// and its events, and the tagger is told whether it was woken. Rover has no wake-up URL but has
+// just called, so it's listening on events.
+#[tokio::test]
+async fn a_bot_that_walks_in_can_be_pinged_and_the_tagger_hears_how() {
+    let (server, room, _, scout, _, rover) = walked_in().await;
+    let seen = server.read_room(&scout.token, &room).await;
+    assert!(seen["tag_as"].as_array().unwrap().contains(&json!("@Rover")), "{seen}");
+    let said = json!({ "hangout_id": room, "text": "@Rover welcome in" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "listening" }]), "{reply}");
+    let id = reply["message_id"].clone();
+    let inbox = server.tool(&rover.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox["mentions"].as_array().unwrap().iter().any(|m| m["message_id"] == id), "{inbox}");
+    let events = server.tool(&rover.token, "events_since", json!({})).await;
+    let events = events["structuredContent"]["events"].as_array().unwrap().clone();
+    assert!(events.iter().any(|e| e["name"] == "mention" && e["data"]["message_id"] == id));
+
+    // Quiet for an hour, with no URL: it won't hear until it next calls, and the tagger is told so.
+    server.state.db.touch_agent_seen(&rover.id, now() - 3600).unwrap();
+    let said = json!({ "hangout_id": room, "text": "@Rover are you there?" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "no_url" }]), "{reply}");
+}
+
+// E45: a reason that's the owner's own setting reaches a tagger only as not_waking_now, so a
+// stranger learns nothing about how someone's bot is set up.
+#[tokio::test]
+async fn an_owners_wake_setting_shows_a_tagger_only_not_waking_now() {
+    let (server, room, _, scout, _, rover) = walked_in().await;
+    let mut trust = server.state.db.bot_trust(&rover.id).unwrap();
+    trust.wake.mode = "owner".to_string();
+    server.state.db.save_bot_trust(&rover.id, &trust).unwrap();
+    let said = json!({ "hangout_id": room, "text": "@Rover hello" });
+    let reply = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert_eq!(reply["wakes"], json!([{ "name": "Rover", "wake": "not_waking_now" }]), "{reply}");
+    assert!(!reply.to_string().contains("trust") && !reply.to_string().contains("owner"));
+    // A line that tags nobody has no wakes.
+    let said = json!({ "hangout_id": room, "text": "nice room" });
+    let plain = server.tool(&scout.token, "say", said).await["structuredContent"].clone();
+    assert!(plain.get("wakes").is_none(), "{plain}");
+}
+
+// A100, A102, A105 (#685): a block cuts mentions both ways, the blocker's bots and the blocked
+// person's bots included, and nobody is told. The bot sees whom by id. Taking it back restores it.
+#[tokio::test]
+async fn a_block_cuts_mentions_both_ways_and_a_bot_sees_whom() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let mentions = |token: String| {
+        let server = &server;
+        async move {
+            server.tool(&token, "inbox", json!({})).await["structuredContent"]["mentions"]
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    let person_mentions = |key: String| {
+        let server = &server;
+        async move {
+            server.get(&key, "/api/needs-you").await.ok()["mentions"].as_array().unwrap().len()
+        }
+    };
+    let bot_says = |token: String, text: &'static str| {
+        let (server, room) = (&server, room.clone());
+        async move { server.tool(&token, "say", json!({ "hangout_id": room, "text": text })).await }
+    };
+
+    server.post(&bo.key, &messages, json!({ "text": "@Scout before" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 1);
+
+    let blocked = server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    assert_eq!(blocked["blocks"][0]["person_id"], bo.id.as_str(), "{blocked}");
+    // Bo and Bo's bot reach neither Ann's bot nor Ann.
+    server.post(&bo.key, &messages, json!({ "text": "@Scout and @Ann after" })).await.ok();
+    bot_says(pip.token.clone(), "@Scout from Pip").await;
+    assert_eq!(mentions(scout.token.clone()).await, 1, "nothing new across the block");
+    assert_eq!(person_mentions(ann.key.clone()).await, 0);
+    // And the other way: Ann's bot and Ann reach neither Bo's bot nor Bo.
+    bot_says(scout.token.clone(), "@Pip from Scout").await;
+    server.post(&ann.key, &messages, json!({ "text": "@Bo and @Pip from Ann" })).await.ok();
+    assert_eq!(mentions(pip.token.clone()).await, 0);
+    assert_eq!(person_mentions(bo.key.clone()).await, 0);
+
+    // A105: Scout sees whom its person blocked, by id; Pip sees nothing about it.
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["blocks"]["blocked"], json!([bo.id]), "{inbox}");
+    assert!(inbox["blocks"]["note"].as_str().unwrap().contains("Never say"));
+    let theirs = server.tool(&pip.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(theirs.get("blocks").is_none(), "{theirs}");
+
+    // Taken back, mentions reach again.
+    server.delete(&ann.key, &format!("/api/blocks/{}", bo.id)).await.ok();
+    server.post(&bo.key, &messages, json!({ "text": "@Scout again" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 2);
+}
+
+// A104 (#685): a mute stops only the muted person's mentions of the muter, one way.
+#[tokio::test]
+async fn a_mute_stops_their_mentions_one_way() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let mentions = |token: String| {
+        let server = &server;
+        async move {
+            server.tool(&token, "inbox", json!({})).await["structuredContent"]["mentions"]
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    server.post(&ann.key, "/api/mutes", json!({ "person_id": bo.id })).await.ok();
+    server.post(&bo.key, &messages, json!({ "text": "@Scout hello" })).await.ok();
+    assert_eq!(mentions(scout.token.clone()).await, 0, "muted");
+    server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "@Pip hi" })).await;
+    assert_eq!(mentions(pip.token.clone()).await, 1, "a mute is one way");
+    let listed = server.get(&ann.key, "/api/blocks").await.ok();
+    assert_eq!(listed["mutes"][0]["name"], "Bo", "{listed}");
+    assert_eq!(listed["blocks"], json!([]));
+}
+
+// A100 (#685): only a person blocks, never themselves, and only someone who exists.
+#[tokio::test]
+async fn only_a_person_blocks_and_never_themselves() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let body = json!({ "person_id": bo.id });
+    server.post(&scout.token, "/api/blocks", body.clone()).await.refused(StatusCode::FORBIDDEN);
+    server
+        .post(&ann.key, "/api/blocks", json!({ "person_id": ann.id }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, "/api/blocks", json!({ "person_id": "nobody" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    // Twice is once; deleting either account deletes the block.
+    server.post(&ann.key, "/api/blocks", body.clone()).await.ok();
+    let again = server.post(&ann.key, "/api/blocks", body).await.ok();
+    assert_eq!(again["blocks"].as_array().unwrap().len(), 1);
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    assert_eq!(server.get(&ann.key, "/api/blocks").await.ok()["blocks"], json!([]));
 }

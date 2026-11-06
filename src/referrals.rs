@@ -31,6 +31,8 @@ pub struct Limits {
     new_people_per_address: Limiter,
     new_people: Limiter,
     named_invites: Limiter,
+    /// A96: accounts made through the agents' door, per address in an hour.
+    pub(crate) agent_accounts_per_address: Limiter,
 }
 
 impl Limits {
@@ -39,6 +41,11 @@ impl Limits {
             new_people_per_address: Limiter::new(4096, HOUR_SECS, NEW_PEOPLE_PER_ADDRESS_PER_HOUR),
             new_people: Limiter::new(1, HOUR_SECS, NEW_PEOPLE_PER_HOUR),
             named_invites: Limiter::new(4096, HOUR_SECS, NAMED_INVITES_PER_HOUR),
+            agent_accounts_per_address: Limiter::new(
+                4096,
+                HOUR_SECS,
+                crate::agent_door::PER_ADDRESS_PER_HOUR,
+            ),
         }
     }
 }

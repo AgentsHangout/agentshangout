@@ -159,6 +159,158 @@ mod tests {
         assert_eq!(png(&scene).unwrap().at_table, ["w"]);
     }
 
+    /// Each name tag's box as placed: [x left, y top, width, height].
+    fn tags(scene: &Value) -> Vec<(f64, f64, f64, f64)> {
+        let out = run(scene, Some("const s=JSON.parse(__camera_scene),g=new CameraCanvas();const p=cameraPlaced(s);JSON.stringify(placeLabels(g,cameraFigures(s,p),s.frame,s.frame.width<480?14:16).map(t=>[t.x-t.t.width/2,t.y-6,t.t.width,t.t.height]))")).unwrap();
+        serde_json::from_str(&out).unwrap()
+    }
+
+    fn apart(tags: &[(f64, f64, f64, f64)]) -> bool {
+        tags.iter().enumerate().all(|(i, a)| {
+            tags[i + 1..].iter().all(|b| {
+                a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1
+            })
+        })
+    }
+
+    // CP11: seated bots' tags go above their heads, clear of the table they sit at; a standing
+    // figure's tag stays under its feet. Still none covers another (CP10).
+    #[test]
+    fn seated_tags_go_above_heads_and_leave_the_table_in_view() {
+        let out = |scene: &Value| -> Vec<(f64, f64, f64, f64, f64, String)> {
+            let script = "const s=JSON.parse(__camera_scene),g=new CameraCanvas();const p=cameraPlaced(s);JSON.stringify(placeLabels(g,cameraFigures(s,p),s.frame,s.frame.width<480?14:16).map(t=>[t.x-t.t.width/2,t.y-6,t.t.width,t.t.height,t.f.y,t.f.pose]))";
+            serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
+        };
+        let mut bots = Vec::new();
+        for name in ["Grokliver Tree", "AgentsHangout PR", "morgbot 2.0", "Town Square Hermes"] {
+            bots.push(bot_in(name, "active", false));
+        }
+        bots.push(bot_in("Standing Sam", "idle", false));
+        let placed = out(&room(json!([]), json!(bots), whole()));
+        assert_eq!(placed.len(), 5, "{placed:?}");
+        let (seated, standing): (Vec<_>, Vec<_>) = placed.iter().partition(|t| t.5 == "sit");
+        assert_eq!(seated.len(), 4, "{placed:?}");
+        for t in &seated {
+            assert!(t.1 + t.3 <= t.4 - 20.0, "above its head, off the table: {t:?}");
+        }
+        for t in &standing {
+            assert!(t.1 >= t.4, "under its feet: {t:?}");
+        }
+        let boxes: Vec<_> = placed.iter().map(|t| (t.0, t.1, t.2, t.3)).collect();
+        assert!(apart(&boxes), "{boxes:?}");
+    }
+
+    // CP13: a tag is snug around its name, as the font really draws it: never narrower than the
+    // words, with room each side, and much narrower than the old 5.5 a letter.
+    #[test]
+    fn a_tag_fits_its_name_as_drawn() {
+        let mut options = resvg::usvg::Options::default();
+        options
+            .fontdb_mut()
+            .load_font_data(include_bytes!("../../assets/fonts/DejaVuSans.ttf").to_vec());
+        for name in [
+            "Grokliver Tree",
+            "AgentsHangout PR",
+            "morgbot 2.0",
+            "WWWWWWWWWWWWWWWW",
+            "mmmmmmmmmmmmmmmm",
+            "Ω漢字 Ünïcödé",
+            "x",
+        ] {
+            let script = format!(
+                "const g=new CameraCanvas(),t=g.labelLines({},16);g.label(200,50,t);JSON.stringify([t.width,t.lines.length,g.parts.filter(p=>p.startsWith('<text')).join('')])",
+                json!(name)
+            );
+            let (width, lines, texts): (f64, usize, String) =
+                serde_json::from_str(&run(&json!({}), Some(&script)).unwrap()).unwrap();
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100">{texts}</svg>"#
+            );
+            let tree = resvg::usvg::Tree::from_str(&svg, &options).unwrap();
+            let drawn = tree.root().abs_bounding_box().width() as f64;
+            assert!(drawn + 4.0 <= width, "{name}: drawn {drawn}, tag {width}");
+            let chars = name.chars().count().min(16) as f64;
+            if lines == 1 && ["Grokliver Tree", "AgentsHangout PR"].contains(&name) {
+                assert!(width < chars * 5.5 + 8.0 - 10.0, "{name}: {width}");
+            }
+        }
+        // Three bots side by side at the table need two rows of tags, not a staircase of three.
+        let bots: Vec<_> = ["Cake Claude", "Grokliver Tree", "morgbot 2.0"]
+            .iter()
+            .map(|n| bot_in(n, "active", false))
+            .collect();
+        let three = tags(&room(json!([]), json!(bots), whole()));
+        assert_eq!(three.len(), 3);
+        let mut rows: Vec<_> = three.iter().map(|t| t.1 as i64).collect();
+        rows.sort();
+        rows.dedup();
+        assert_eq!(rows.len(), 2, "{three:?}");
+    }
+
+    // CP14: nobody standing is drawn on the table, an item or another figure, even when their place
+    // in the grid falls there: they stand on the nearest cell the page would let them walk on.
+    #[test]
+    fn standing_figures_keep_off_the_table_items_and_each_other() {
+        let stands = |scene: &Value| -> Vec<(f64, f64, bool)> {
+            let script = "const s=JSON.parse(__camera_scene);const f=cameraFigures(s,cameraPlaced(s)).filter(f=>f.pose==='stand');JSON.stringify(f.map(f=>[f.x,f.y,clear(f.x,f.y)&&clear(f.x,f.y-12)]))";
+            serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
+        };
+        let piano = json!([{"id":"piano","item":"piano","x":30,"y":8,"w":4,"h":2,"facing":2}]);
+        let person = |name: &str| json!({"name":name,"color":"#ff8866","look":{}});
+        // One person alone: the middle of the grid is the middle of the table.
+        let seated: Vec<_> =
+            ["a", "b", "c", "d"].iter().map(|n| bot_in(n, "active", false)).collect();
+        let mut one = room(piano.clone(), json!(seated), whole());
+        one["people"] = json!([person("Justin")]);
+        // A crowd, in the whole room and in the table frame.
+        let idle: Vec<_> = (0..8).map(|i| bot_in(&format!("idle{i}"), "idle", false)).collect();
+        let mut crowd = room(piano.clone(), json!(idle), whole());
+        crowd["people"] = json!([person("Ann"), person("Bo")]);
+        let mut close = crowd.clone();
+        close["frame"] = json!({"x":120,"y":60,"width":240,"height":126});
+        for scene in [&one, &crowd, &close] {
+            let placed = stands(scene);
+            assert!(!placed.is_empty());
+            for (i, a) in placed.iter().enumerate() {
+                assert!(a.2, "standing on furniture: {a:?} in {placed:?}");
+                for b in &placed[i + 1..] {
+                    assert!(
+                        (a.0 - b.0).abs() >= 16.0 || (a.1 - b.1).abs() >= 12.0,
+                        "{a:?} on {b:?}"
+                    );
+                }
+            }
+        }
+        let justin = stands(&one)[0];
+        assert!(justin.1 >= 182.0, "in front of the table, not on it: {justin:?}");
+    }
+
+    // CP10: bots side by side at the table, with long names, get name tags that don't cover each
+    // other, and every tag stays in the frame. So does a crowded grid in a small frame.
+    #[test]
+    fn name_tags_never_cover_each_other() {
+        let mut bots = Vec::new();
+        for name in ["Grokliver Tree", "AgentsHangout PR", "morgbot 2.0", "Town Square Hermes"] {
+            bots.push(bot_in(name, "active", false));
+        }
+        let inside = |tags: &[(f64, f64, f64, f64)], w: f64, h: f64| {
+            tags.iter().all(|t| t.0 >= 0.0 && t.0 + t.2 <= w && t.1 >= 0.0 && t.1 + t.3 <= h)
+        };
+        let at_table = tags(&room(json!([]), json!(bots), whole()));
+        assert_eq!(at_table.len(), 4, "everyone at the table gets a tag: {at_table:?}");
+        assert!(apart(&at_table), "{at_table:?}");
+        assert!(inside(&at_table, 480.0, 252.0), "{at_table:?}");
+
+        // Too many for a small frame: tags shorten or drop, never cover each other or leave it.
+        let crowd: Vec<Value> =
+            (0..12).map(|n| bot(&format!("Visiting bot number {n}"), None)).collect();
+        let small = json!({"x":0,"y":0,"width":240,"height":126});
+        let grid = tags(&room(json!([]), json!(crowd), small));
+        assert!(!grid.is_empty() && grid.len() <= 12, "{grid:?}");
+        assert!(apart(&grid), "{grid:?}");
+        assert!(inside(&grid, 240.0, 126.0), "{grid:?}");
+    }
+
     // CP9: a moved table moves its seats, and a seat outside the frame leaves the bot standing.
     #[test]
     fn table_seats_follow_the_table_and_the_frame() {
@@ -256,6 +408,25 @@ mod tests {
             let items = json!([{"id":"i","item":kind,"x":12,"y":6,"w":3,"h":2,"facing":0}]);
             png(&room(items, json!([bot("a", Some("i"))]), whole())).unwrap();
         }
+    }
+    // CP12
+    #[test]
+    fn the_board_shows_the_room_name_cut_to_one_line_and_nothing_else() {
+        let svg = |title: Value| {
+            let mut scene = room(json!([]), json!([]), whole());
+            scene["title"] = title;
+            scene["whiteboard"] = json!("secret plan");
+            let out: Value = serde_json::from_str(&run(&scene, None).unwrap()).unwrap();
+            out["svg"].as_str().unwrap().to_string()
+        };
+        let board = |svg: &str| svg.matches("font-size=\"11\"").count();
+        let long = svg(json!("Commons <Fair> & a very long name"));
+        assert!(long.contains(">Commons &lt;Fair&gt; &amp; a very l…</text>"), "{long}");
+        assert_eq!(board(&long), 1);
+        assert!(!long.contains("secret"));
+        assert!(svg(json!("Lab")).contains(">Lab</text>"));
+        assert_eq!(board(&svg(json!("  "))), 0);
+        assert_eq!(board(&svg(Value::Null)), 0);
     }
     #[test]
     fn room_art_renders_as_a_bounded_png() {

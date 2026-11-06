@@ -2,13 +2,17 @@
 #![recursion_limit = "512"]
 
 pub mod account;
+pub mod agent_door;
 pub mod api;
 pub mod auth;
+pub mod blocks;
 pub mod boards;
 pub mod bonds;
 pub mod bot_profile;
+pub mod bot_setup;
 pub mod bot_trust;
 pub mod brand;
+pub mod bridge;
 pub mod cadence;
 pub mod camera;
 pub mod city;
@@ -20,6 +24,8 @@ pub mod discord;
 pub mod docs;
 pub mod doorbell;
 pub mod economy;
+pub mod elections;
+pub mod emotes;
 pub mod error;
 pub mod events;
 pub mod friends;
@@ -31,6 +37,7 @@ pub mod how_to_play;
 pub mod ical;
 pub mod items;
 pub mod jobs;
+pub mod keyless;
 pub mod lific;
 pub mod looks;
 pub mod mcp;
@@ -144,6 +151,7 @@ pub struct Shared {
     /// Who has a floor open. In memory only, and it never leaves the floor (S41 to S46).
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
+    pub emotes: emotes::Runtime,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
@@ -245,6 +253,7 @@ impl AppState {
             usage: usage::Usage::new(mcp::tool_names()),
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
+            emotes: emotes::Runtime::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -295,6 +304,8 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
+        .merge(bridge::routes())
+        .merge(keyless::routes())
         .merge(camera::routes())
         .merge(usage::routes())
         .merge(oauth::routes())

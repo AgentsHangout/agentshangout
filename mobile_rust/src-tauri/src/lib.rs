@@ -37,8 +37,8 @@ const MARK_PHONE: &str = r#"(function(){
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // Android installs its local-asset client after Wry's own WebViewClient exists, then
-            // opens SERVER on the same HTTPS origin. Other platforms keep external loading.
+            // Android installs its live client after Wry's own WebViewClient exists, then
+            // opens the configured server. Other platforms keep external loading.
             #[cfg(target_os = "android")]
             let url = "about:blank".parse().expect("valid bootstrap URL");
             #[cfg(not(target_os = "android"))]

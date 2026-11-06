@@ -15,7 +15,7 @@ use std::{
 use agenthangout::{
     app, auth,
     db::Db,
-    now, routines,
+    god_mode, now, routines,
     world::{self, Ground, Kind},
     worlds::{self, Move},
     AppState, Config,
@@ -128,6 +128,10 @@ impl Server {
 
     async fn put(&self, token: &str, path: &str, body: Value) -> Reply {
         self.send(token, Method::PUT, path, Some(body)).await
+    }
+
+    async fn delete(&self, token: &str, path: &str) -> Reply {
+        self.send(token, Method::DELETE, path, None).await
     }
 
     /// Someone nobody listed, and their first room.
@@ -338,6 +342,437 @@ impl Server {
 
 fn road_move(at: (i64, i64)) -> Value {
     json!({ "action": "road", "x": at.0, "y": at.1 })
+}
+
+/// A96: a request to the agents' door from one address.
+async fn door_from(server: &Server, address: &str, body: Value) -> Reply {
+    let response = server
+        .client
+        .post(format!("{}/api/accounts/agent", server.base))
+        .header("x-forwarded-for", address)
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    Reply { status, body: serde_json::from_str(&text).unwrap_or(Value::String(text)) }
+}
+
+// A96: an agent with no account walks through the door and gets a real account, run by an agent,
+// with its first bot, which works on /mcp at once. Gods see the count.
+#[tokio::test]
+async fn an_agent_makes_its_own_account_and_first_bot_through_the_door() {
+    let (server, justin, _) = Server::start().await;
+    let made =
+        door_from(&server, "203.0.113.5", json!({ "your_name": "Swarm", "bot_name": "Lead" }))
+            .await
+            .ok();
+    assert_eq!(made["run_by_agent"], true, "{made}");
+    assert_eq!(made["bot"]["name"], "Lead");
+    let (key, token) = (text(&made["owner_key"]), text(&made["bot_token"]));
+    let person = text(&made["person"]["id"]);
+    assert!(server.state.db.is_agent_account(&person).unwrap());
+
+    // The owner key is a real account's, and the bot token a real bot's.
+    let me = server.get(&key, "/api/me").await.ok();
+    assert_eq!(me["person_id"], person, "{me}");
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": { "name": "inbox", "arguments": {} } });
+    let inbox = server.post(&token, "/mcp", call).await.ok();
+    assert!(inbox["result"]["isError"].is_null(), "{inbox}");
+    // The bot is the account's own.
+    let bot = server.state.db.agent(&text(&made["bot"]["id"]), now()).unwrap().unwrap();
+    assert_eq!(bot.owner_id, person);
+
+    // Someone signed in, or a bot, doesn't use the door.
+    server
+        .post(&key, "/api/accounts/agent", json!({ "your_name": "Again", "bot_name": "Two" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    server
+        .post(&token, "/api/accounts/agent", json!({ "your_name": "Again", "bot_name": "Two" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    // A body that isn't the door's is refused.
+    door_from(&server, "203.0.113.6", json!({ "your_name": "X" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+
+    // Gods see how many came through in the last day.
+    server.switch(&justin, true).await;
+    let signups = server.get(&justin.key, "/api/god-mode/bot-signups").await.ok();
+    assert_eq!((&signups["today"], &signups["per_day"]), (&json!(1), &json!(50)), "{signups}");
+
+    // Deleting the account takes its mark with it.
+    server.state.db.delete_person(&person, "Swarm").unwrap();
+    assert!(!server.state.db.is_agent_account(&person).unwrap());
+}
+
+// A96: the door is shut while the switch is (A95), fails closed, and has limits: 3 an hour from one
+// address and 50 a day across the site. A refused try makes nothing.
+#[tokio::test]
+async fn the_door_shuts_with_the_switch_and_keeps_to_its_limits() {
+    let (server, justin, _) = Server::start().await;
+    let people = || server.state.db.person_count().unwrap();
+    let body = || json!({ "your_name": "Swarm", "bot_name": "Lead" });
+
+    server.switch(&justin, true).await;
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({ "open": false })).await.ok();
+    let before = people();
+    let shut = door_from(&server, "203.0.113.7", body()).await.refused(StatusCode::FORBIDDEN);
+    assert!(text(&shut["error"]).contains("closed"), "{shut}");
+    assert_eq!(people(), before, "nothing made while it's shut");
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({ "open": true })).await.ok();
+
+    // Three an hour from one address.
+    for _ in 0..3 {
+        door_from(&server, "203.0.113.8", body()).await.ok();
+    }
+    door_from(&server, "203.0.113.8", body()).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    door_from(&server, "203.0.113.9", body()).await.ok();
+
+    // Fifty a day across the site, counted in the database.
+    let made = server.state.db.agent_accounts_today(now()).unwrap();
+    for n in made..50 {
+        let id = format!("filler-{n}");
+        server
+            .state
+            .db
+            .create_agent_account(
+                &id,
+                "Filler",
+                &format!("key-{n}"),
+                &format!("feed-{n}"),
+                50,
+                now(),
+            )
+            .unwrap()
+            .unwrap();
+    }
+    let before = people();
+    door_from(&server, "203.0.113.10", body()).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(people(), before, "nothing made past the day's limit");
+}
+
+// A96: the account and its first bot come together or not at all. If the bot can't be made, the
+// account goes again, so nothing is left counting toward the day's limit.
+#[tokio::test]
+async fn a_door_account_whose_bot_fails_is_not_left_behind() {
+    let path = support::db_path("door-undo");
+    let db = Db::open(path.to_str().unwrap()).unwrap();
+    let server = Server::on(db, &[]).await;
+    // Every new bot fails, as if the database refused it.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER no_new_bots BEFORE INSERT ON agents BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+    let failed =
+        door_from(&server, "203.0.113.20", json!({ "your_name": "Swarm", "bot_name": "Lead" }))
+            .await;
+    assert!(failed.status.is_server_error(), "{}", failed.body);
+    // (Deleting one adds the shared "Someone who left" the first time, so it's checked by name.)
+    assert!(server.state.db.people_named("Swarm").unwrap().is_empty(), "no account left behind");
+    assert_eq!(server.state.db.agent_accounts_today(now()).unwrap(), 0, "nothing counted");
+}
+
+// MY1 to MY7 (#639): the Town Square gets its voting box; anyone stands, a person on a public floor
+// votes with a secret ballot, bots and door accounts don't, and Saturday's tally names the mayor.
+#[tokio::test]
+async fn the_week_elects_a_mayor_at_the_town_square() {
+    let (server, justin, _) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    let (own_room, ann) = server.someone("Ann").await;
+    server.go_in(&ann.key, spot).await.ok();
+    let (_, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    // MY3: old enough, and on the square now (opening it is being there).
+    let ready = |who: &Who| {
+        server.state.db.backdate_person(&who.id, now() - 8 * 86_400).unwrap();
+        let path = format!("/api/hangouts/{square}");
+        let walk_in = format!("/api/floors/{square}/walk-in");
+        let (server, key) = (&server, who.key.clone());
+        async move {
+            server.post(&key, &walk_in, json!({})).await;
+            server.get(&key, &path).await.ok()
+        }
+    };
+
+    // MY7: the box goes up on the square by itself, and nobody else can place one.
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let snapshot = server.get(&justin.key, &format!("/api/hangouts/{square}")).await.ok();
+    let boxes: Vec<&Value> = snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "mayor_ballot_box")
+        .collect();
+    assert_eq!(boxes.len(), 1, "{snapshot}");
+    assert_eq!(boxes[0]["opens"], "mayor");
+    let place = json!({ "kind": "mayor_ballot_box", "x": 5, "y": 5 });
+    server
+        .post(&ann.key, &format!("/api/floors/{own_room}/items"), place)
+        .await
+        .refused(StatusCode::FORBIDDEN);
+
+    // MY2: a person and a bot stand. A new account has to wait 7 days to.
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    ready(&ann).await;
+    let race = server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    assert_eq!(race["you_stand"], true, "{race}");
+    let race = server.tool(&eagle, "mayor_race", json!({ "action": "stand" })).await;
+    let eagle_id =
+        race["candidates"].as_array().unwrap().iter().find(|c| c["kind"] == "bot").unwrap()["id"]
+            .clone();
+    assert_eq!(race["candidates"].as_array().unwrap().len(), 2, "{race}");
+
+    // MY3: a person on the square votes; from a room that isn't public, or as a bot, or as a door
+    // account, it's refused.
+    let ballot = |room: &str| json!({ "kind": "bot", "id": eagle_id, "hangout_id": room });
+    server
+        .put(&ann.key, "/api/mayor/ballot", ballot(&own_room))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let voted = server.put(&ann.key, "/api/mayor/ballot", ballot(&square)).await.ok();
+    assert_eq!(voted["voted"], 1, "{voted}");
+    assert_eq!(voted["your_ballot"]["id"], eagle_id);
+    // MY4: no totals while the week is open.
+    assert!(!voted.to_string().contains("\"votes\":1"), "{voted}");
+    server.put(&eagle, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    let (door_room, door) = server.someone("Door").await;
+    server.go_in(&door.key, spot).await.ok();
+    ready(&door).await;
+    server.state.db.mark_agent_account(&door.id, now()).unwrap();
+    server
+        .put(&door.key, "/api/mayor/ballot", ballot(&square))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    // Neither a door account nor its bot stands, so door sign-ups can't fill the seats.
+    server.post(&door.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    let (_, door_bot) = server.bot(&door, &door_room, "Doorbot").await;
+    let refused = server.call(&door_bot, "mayor_race", json!({ "action": "stand" })).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    // Someone old enough who hasn't the square open is voting from home, and that's refused.
+    let (_, cy) = server.someone("Cy").await;
+    server.state.db.backdate_person(&cy.id, now() - 8 * 86_400).unwrap();
+    server.put(&cy.key, "/api/mayor/ballot", ballot(&square)).await.refused(StatusCode::FORBIDDEN);
+    let nobody = json!({ "kind": "person", "id": "no-such", "hangout_id": square });
+    ready(&justin).await;
+    server.put(&justin.key, "/api/mayor/ballot", nobody).await.refused(StatusCode::BAD_REQUEST);
+
+    // MY5, MY6: Saturday's tally names the mayor and opens the next week.
+    let closes = agenthangout::elections::next_close(now());
+    agenthangout::elections::settle_due(&server.state, closes + 1).unwrap();
+    let after = server.get(&ann.key, "/api/mayor").await.ok();
+    assert_eq!(after["last_week"]["mayor"]["name"], "Eagle", "{after}");
+    assert_eq!(after["last_week"]["votes"], 1);
+    assert_eq!(after["last_week"]["tie_draw"], false);
+    assert_eq!(after["candidates"], json!([]), "a new week starts empty");
+
+    // MY2, MY6: deleting the account behind the winner says Someone who left, and a deleted
+    // person's candidacy goes.
+    server.post(&ann.key, "/api/mayor/stand", json!({})).await.ok();
+    server.state.db.delete_person(&ann.id, "Ann").unwrap();
+    let gone = server.get(&justin.key, "/api/mayor").await.ok();
+    assert_eq!(gone["last_week"]["mayor"]["name"], "Someone who left", "{gone}");
+    assert_eq!(gone["candidates"], json!([]), "{gone}");
+}
+
+// MY9 (morgkorg): with god mode on, someone stands whenever they like, with no 7-day wait, and
+// puts anyone's bot on the ballot. Nobody else can nominate, and with god mode off neither can they.
+#[tokio::test]
+async fn god_mode_stands_any_time_and_nominates_bots() {
+    let (server, justin, _) = Server::start().await;
+    let (own_room, ann) = server.someone("Ann").await;
+    let (eagle_id, eagle) = server.bot(&ann, &own_room, "Eagle").await;
+    // Eagle is out on the square.
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    server.go_in(&ann.key, spot).await.ok();
+    let walk_in = json!({ "agent_id": eagle_id });
+    server.post(&ann.key, &format!("/api/floors/{square}/walk-in"), walk_in).await.ok();
+    agenthangout::elections::settle_due(&server.state, now()).unwrap();
+    let nominate = json!({ "kind": "bot", "id": eagle_id });
+
+    // God mode off: Justin is new, so he can't stand, and can't nominate.
+    server.post(&justin.key, "/api/mayor/stand", json!({})).await.refused(StatusCode::FORBIDDEN);
+    server
+        .post(&justin.key, "/api/mayor/candidates", nominate.clone())
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert_eq!(server.get(&justin.key, "/api/mayor").await.ok()["can_nominate"], false);
+
+    // God mode on: he stands, new as he is, and puts Ann's bot on the ballot.
+    server.switch(&justin, true).await;
+    assert_eq!(server.get(&justin.key, "/api/mayor").await.ok()["can_nominate"], true);
+    let stood = server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
+    assert_eq!(stood["you_stand"], true, "{stood}");
+    let race = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    let names: Vec<&str> = race["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{race}");
+    assert!(names.contains(&"Eagle"), "{race}");
+    // A bot that isn't out on a public floor is "not found", so its name never reaches the ballot.
+    let (hidden_bot, _) = server.bot(&ann, &own_room, "Private").await;
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": hidden_bot }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    // Twice is still once, and only bots that exist, as bots.
+    let again = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    assert_eq!(again["candidates"].as_array().unwrap().len(), 2, "{again}");
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": "no-such" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "person", "id": ann.id }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    // The bot can still take itself off, and its person can take it off too.
+    let withdrawn = server.tool(&eagle, "mayor_race", json!({ "action": "withdraw" })).await;
+    assert_eq!(withdrawn["candidates"].as_array().unwrap().len(), 1, "{withdrawn}");
+    server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+    let off = format!("/api/mayor/candidates/bot/{eagle_id}");
+    let by_owner = server.delete(&ann.key, &off).await.ok();
+    assert_eq!(by_owner["candidates"].as_array().unwrap().len(), 1, "{by_owner}");
+    server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
+
+    // Anyone else, and any bot, gets W75's 404, and never sees can_nominate as true.
+    server
+        .post(&ann.key, "/api/mayor/candidates", nominate.clone())
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    server.post(&eagle, "/api/mayor/candidates", nominate).await.refused(StatusCode::NOT_FOUND);
+    assert_eq!(server.get(&ann.key, "/api/mayor").await.ok()["can_nominate"], false);
+    // Someone else can't take Ann's bot off; only she and a god can.
+    let (_, cy) = server.someone("Cy").await;
+    server.delete(&cy.key, &off).await.refused(StatusCode::NOT_FOUND);
+}
+
+/// W113: the place removal log, as someone with god mode on reads it.
+async fn removals(server: &Server, god: &Who) -> Value {
+    server.get(&god.key, "/api/god-mode/place-removals").await.ok()["removals"].clone()
+}
+
+// W113 (morgkorg, after Soleceo's house went missing): every place that comes down is logged with
+// why, and only someone with god mode on reads it. A deleted account's rows keep no owner.
+#[tokio::test]
+async fn every_place_that_comes_down_is_logged_with_why() {
+    let (server, justin, _) = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+
+    // Ann takes her own house down: bulldoze, and it's hers.
+    let house = server.build(&ann, "house").await;
+    server.clear(&ann, house).await.ok();
+    // Justin, with god mode on, takes down Bo's: god_bulldoze.
+    let bos = server.build(&bo, "house").await;
+    server.switch(&justin, true).await;
+    server.clear(&justin, bos).await.ok();
+    let log = removals(&server, &justin).await;
+    assert_eq!(log[0]["reason"], "god_bulldoze", "{log}");
+    assert_eq!(log[0]["owner"], "Bo");
+    assert_eq!((log[0]["x"].as_i64(), log[0]["y"].as_i64()), (Some(bos.0), Some(bos.1)));
+    assert_eq!(log[1]["reason"], "bulldoze");
+    assert_eq!(log[1]["owner"], "Ann");
+    assert_eq!(log[1]["kind"], "house");
+
+    // An account deleted: its place comes down, logged with no owner, and its older rows lose theirs.
+    server.build(&bo, "house").await;
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    let log = removals(&server, &justin).await;
+    assert_eq!(log[0]["reason"], "account_deleted", "{log}");
+    assert!(log[0]["owner"].is_null());
+    assert!(log.as_array().unwrap().iter().all(|row| row["owner"] != "Bo"), "{log}");
+
+    // God mode off, or anyone else: no log.
+    server.switch(&justin, false).await;
+    server.get(&justin.key, "/api/god-mode/place-removals").await.refused(StatusCode::FORBIDDEN);
+    server.get(&ann.key, "/api/god-mode/place-removals").await.refused(StatusCode::NOT_FOUND);
+}
+
+// MY1, MY5: a week nobody voted in names no mayor, and a tie is drawn and says so.
+#[tokio::test]
+async fn an_empty_week_names_nobody_and_a_tie_is_drawn() {
+    let (server, justin, morg) = Server::start().await;
+    server.switch(&justin, true).await;
+    let spot = server.build(&justin, "square").await;
+    server.switch(&justin, false).await;
+    let square = text(&server.go_in(&justin.key, spot).await.ok()["hangout_id"]);
+    server.go_in(&morg.key, spot).await.ok();
+    let first = agenthangout::elections::next_close(now());
+    agenthangout::elections::settle_due(&server.state, first + 1).unwrap();
+    let empty = server.get(&justin.key, "/api/mayor").await.ok();
+    assert!(empty["last_week"]["mayor"].is_null(), "{empty}");
+
+    for who in [&justin, &morg] {
+        server.state.db.backdate_person(&who.id, now() - 8 * 86_400).unwrap();
+        server.post(&who.key, &format!("/api/floors/{square}/walk-in"), json!({})).await;
+        server.get(&who.key, &format!("/api/hangouts/{square}")).await.ok();
+    }
+    server.post(&justin.key, "/api/mayor/stand", json!({})).await.ok();
+    server.post(&morg.key, "/api/mayor/stand", json!({})).await.ok();
+    let vote = |for_id: &str| json!({ "kind": "person", "id": for_id, "hangout_id": square });
+    server.put(&justin.key, "/api/mayor/ballot", vote(&morg.id)).await.ok();
+    server.put(&morg.key, "/api/mayor/ballot", vote(&justin.id)).await.ok();
+    let second = agenthangout::elections::next_close(first + 1);
+    agenthangout::elections::settle_due(&server.state, second + 1).unwrap();
+    let tied = server.get(&justin.key, "/api/mayor").await.ok();
+    assert_eq!(tied["last_week"]["tie_draw"], true, "{tied}");
+    assert_eq!(tied["last_week"]["votes"], 1);
+}
+
+// A95
+#[tokio::test]
+async fn god_mode_opens_and_closes_bot_sign_ups_and_nobody_else_hears_of_it() {
+    let (server, justin, morg) = Server::start().await;
+    let path = "/api/god-mode/bot-signups";
+    let (room, stranger) = server.someone("Stranger").await;
+    let (_, bot) = server.bot(&stranger, &room, "Scout").await;
+
+    // Off the list, or a bot: the 404 of a route that isn't there, whatever is asked.
+    for token in [stranger.key.as_str(), bot.as_str()] {
+        server.get(token, path).await.refused(StatusCode::NOT_FOUND);
+        server.put(token, path, json!({ "open": false })).await.refused(StatusCode::NOT_FOUND);
+    }
+    // On the list with god mode off: told to turn it on first.
+    server.get(&justin.key, path).await.refused(StatusCode::FORBIDDEN);
+
+    server.switch(&justin, true).await;
+    let first = server.get(&justin.key, path).await.ok();
+    assert_eq!(
+        first,
+        json!({ "open": true, "set_by": null, "set_at": null, "today": 0, "per_day": 50 }),
+        "open until closed"
+    );
+    assert!(god_mode::bot_signups_open(&server.state).unwrap());
+    server.put(&justin.key, path, json!({ "nonsense": 1 })).await.refused(StatusCode::BAD_REQUEST);
+
+    let closed = server.put(&justin.key, path, json!({ "open": false })).await.ok();
+    assert_eq!((&closed["open"], &closed["set_by"]), (&json!(false), &json!(JUSTIN)));
+    assert!(closed["set_at"].is_i64());
+    assert!(!god_mode::bot_signups_open(&server.state).unwrap());
+    server.switch(&morg, true).await;
+    assert_eq!(server.get(&morg.key, path).await.ok()["open"], false, "one switch for the site");
+
+    // If whoever closed it leaves, it stays closed and names Someone who left.
+    server.state.db.delete_person(&justin.id, "Justin").unwrap();
+    assert!(!god_mode::bot_signups_open(&server.state).unwrap());
+    let after = server.get(&morg.key, path).await.ok();
+    assert_eq!(after["set_by"], agenthangout::db::SOMEONE_WHO_LEFT_ID);
+    let opened = server.put(&morg.key, path, json!({ "open": true })).await.ok();
+    assert_eq!((&opened["open"], &opened["set_by"]), (&json!(true), &json!(MORG)));
 }
 
 // W75

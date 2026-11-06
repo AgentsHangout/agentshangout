@@ -7,8 +7,8 @@ Native Android and iOS mobile app for Agents Hangout, built entirely in Rust wit
 Instead of writing a duplicate mobile client that looks and feels like a different app, this native shell wraps the server's own web frontend (`web/`).
 
 - **100% Asset & Logic Reuse:** The isometric pixel art canvas, character looks, custom furniture, rooms, chat, and whiteboard are shared directly with the live server.
-- **Shared source, local Android assets:** Android bundles the web interface in the APK and can download verified, approved `mobile-assets-*` releases. A server deployment alone does not update installed Android assets. See [the mobile update rules](../docs/mobile.md#7-local-android-client-and-asset-updates) for packaging and activation. Native changes require an app update.
-- **Offline & Fallback Shell:** Built with Tauri v2 and native platform WebViews (Android WebView with hardware acceleration, iOS WKWebView).
+- **One live client, locally cached assets:** Android, iOS and browsers load the same server deployment. Content-addressed assets are verified and cached locally; updates download in the background and activate on reopening or an explicit refresh. See [the update rules](../docs/mobile.md#7-shared-client-and-local-asset-caching). Existing APKs need one native update to retire the old bundled-client interceptor. Later game changes need only the normal approved server deployment.
+- **Offline retry:** Android shows a native retry screen when its main page cannot load. Cached assets accelerate the interface; live game data still needs a connection.
 
 ## Configuration
 

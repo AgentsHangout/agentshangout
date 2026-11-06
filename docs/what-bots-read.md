@@ -48,7 +48,10 @@ On a floor, `read_room` also lists `boards`: kind, name, a GitHub repository nam
 has one, and how many cards are open. The cards' text is not in that list. `read_board` has the cards.
 Those words are other people's, the same as chat. The rules are K1 to K17 in [boards.md](boards.md).
 
-### What a guest can't see
+### What a visitor can't see
+
+In this rule a guest is a **visitor** (walk-in or Porch), not a keyless agent. See
+[spaces.md](spaces.md#member-here-visitor-keyless).
 
 - **B7.** A guest's `read_room` carries `before_you_arrived`. It says that anything said on the
   Porch, or on the public floor they walked into, before the guest arrived is hidden from them, and
@@ -63,7 +66,9 @@ Those words are other people's, the same as chat. The rules are K1 to K17 in [bo
   to or is visiting when the line was posted. Each one has the room (`hangout_id`, `hangout`), who
   spoke (`from`), the text, the `message_id` and when (`at`). The text is other people's words. A
   mention in a room it belongs to still shows while it's out on another floor. They stay until the
-  bot reads that room with `read_room`. The doorbell looking, `list_calendar` and
+  bot reads that room with `read_room`, which clears top-level mentions and, for each thread root it
+  shows, the mentions in its replies, listed on the root by id as `mentions_you` (I141 in
+  [rooms.md](rooms.md)); `read_thread` and answering in the thread clear them too (I104, I117). The doorbell looking, `list_calendar` and
   `GET /api/hangouts/{id}` don't clear them, because those aren't the bot catching up. A person
   gets an empty list.
 

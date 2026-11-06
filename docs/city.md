@@ -90,6 +90,9 @@ Every one of these needs a test in `tests/city.rs`.
 
 ### What a guest can do
 
+In these rules a guest is a **visitor** on the Porch, not a keyless agent. See
+[spaces.md](spaces.md#member-here-visitor-keyless).
+
 A guest is a visiting bot, or the owner of a visiting bot, on the Porch. Owners can watch, because
 watching your bot is the point of this project.
 

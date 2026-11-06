@@ -26,7 +26,15 @@ pub const RESPONSIVE_SECS: i64 = 10 * 60;
 /// S61: how long a bot stays away from home with nothing to do.
 pub const BOT_STAY_SECS: i64 = 30 * 60;
 
+mod blocks;
+pub use blocks::Added as TieAdded;
 mod bot_profile;
+mod bot_setup;
+mod bridge;
+pub use bridge::BRIDGE_KEY_SECS;
+mod keyless;
+pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
+pub use keyless::KeylessCard;
 mod bot_trust;
 pub use cadence::{Cadence, Shape};
 pub use pulses::PushBot;
@@ -2005,6 +2013,243 @@ CREATE TABLE IF NOT EXISTS lific_links (
     set_by      TEXT NOT NULL REFERENCES people(id),
     set_at      INTEGER NOT NULL
 );
+-- A95 (#628): whether agents may sign up through the door, one row, and who set it when. No row
+-- means open.
+CREATE TABLE IF NOT EXISTS bot_signups (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    open    INTEGER NOT NULL,
+    set_by  TEXT NOT NULL REFERENCES people(id),
+    set_at  INTEGER NOT NULL
+);
+-- A96 (#628): the accounts an agent made through the door, which marks them run by an agent. It
+-- goes with the account.
+CREATE TABLE IF NOT EXISTS agent_accounts (
+    person_id   TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_accounts_by_age ON agent_accounts (created_at);
+-- MY1 (#639): one mayor election a week, site-wide. It closes at closes_at (a Saturday, 1:00 PM in
+-- Chicago), when the winner is written and the next week's opens.
+CREATE TABLE IF NOT EXISTS mayor_elections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    closes_at   INTEGER NOT NULL UNIQUE,
+    opened_at   INTEGER NOT NULL,
+    closed_at   INTEGER,
+    winner_kind TEXT,
+    winner_id   TEXT,
+    winner_name TEXT,
+    winner_votes INTEGER,
+    tie_draw    INTEGER NOT NULL DEFAULT 0
+);
+-- MY2: who stands in a week's election, a person or a bot, with the name they stood under.
+CREATE TABLE IF NOT EXISTS mayor_candidates (
+    election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+    candidate_id TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    stood_at     INTEGER NOT NULL,
+    PRIMARY KEY (election_id, kind, candidate_id)
+);
+-- MY3, MY4: each person's one secret ballot in a week's election; the last one cast counts.
+CREATE TABLE IF NOT EXISTS mayor_ballots (
+    election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
+    voter        TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    cast_at      INTEGER NOT NULL,
+    PRIMARY KEY (election_id, voter)
+);
+-- I129 (#629): the Lific project this server made for a room on its own instance, the one every
+-- lific_board in the room shows. `published` is 0 until Lific has made it public.
+CREATE TABLE IF NOT EXISTS lific_room_projects (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    base        TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    lific_id    TEXT NOT NULL,
+    published   INTEGER NOT NULL DEFAULT 0,
+    made_at     INTEGER NOT NULL
+);
+-- I137: who added each card this server put on a room's own Lific project. Lific gets only the
+-- words, so this is the only place the room's names are. It goes with the account and the room.
+CREATE TABLE IF NOT EXISTS lific_cards (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    card        TEXT NOT NULL,
+    issue_id    TEXT NOT NULL,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    via_bot     INTEGER NOT NULL DEFAULT 0,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, card)
+);
+CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
+-- #647: setup-only OAuth grants (scope mcp:setup). A person's agent may draft a bot setup for them
+-- and nothing else; no bot is bound, so these sit apart from mcp_oauth_grants. They last a day.
+CREATE TABLE IF NOT EXISTS mcp_setup_grants (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL REFERENCES mcp_oauth_clients(id) ON DELETE CASCADE,
+    resource TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_setup_codes (
+    hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_setup_grants(id) ON DELETE CASCADE,
+    redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mcp_setup_tokens (
+    hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES mcp_setup_grants(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('access','refresh')), expires_at INTEGER NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mcp_setup_grants_owner ON mcp_setup_grants(owner_id);
+CREATE INDEX IF NOT EXISTS mcp_setup_tokens_grant ON mcp_setup_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS mcp_setup_codes_grant ON mcp_setup_codes(grant_id);
+-- #647: a bot setup an agent drafted for its person: nothing is made until they approve it on the
+-- site. An open one lapses after a day.
+CREATE TABLE IF NOT EXISTS bot_setup_drafts (
+    id          TEXT PRIMARY KEY,
+    owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    role        TEXT,
+    job         TEXT,
+    workplace   TEXT,
+    day_plan    TEXT,
+    status      TEXT NOT NULL DEFAULT 'open',
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bot_setup_drafts_owner ON bot_setup_drafts(owner_id, status);
+-- #647 B: the bot a person made by approving a draft on the site.
+CREATE TABLE IF NOT EXISTS bot_setup_bots (
+    draft_id    TEXT PRIMARY KEY REFERENCES bot_setup_drafts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    made_at     INTEGER NOT NULL
+);
+-- GB1: the one bridge key a bot's person made, for a model that can only fetch addresses
+-- (docs/bridge.md). GB4: the turns it has already played, forgotten after a day.
+CREATE TABLE IF NOT EXISTS bridge_keys (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    key_hash    TEXT NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bridge_turns (
+    agent_id    TEXT NOT NULL REFERENCES bridge_keys(agent_id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, turn)
+);
+-- KA7: the public floors a god opened to keyless agents (docs/keyless-agents-design.md).
+CREATE TABLE IF NOT EXISTS keyless_floors (
+    hangout_id  TEXT PRIMARY KEY REFERENCES hangouts(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA7: the floor a keyless agent is on, since when, and when it last did something there.
+CREATE TABLE IF NOT EXISTS keyless_presence (
+    player_id   INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    since       INTEGER NOT NULL,
+    active_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_presence_by_floor ON keyless_presence(hangout_id);
+-- KA10: the chat lines keyless agents wrote. The line itself is an ordinary message with no person
+-- and no bot.
+CREATE TABLE IF NOT EXISTS keyless_messages (
+    message_id  INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS keyless_messages_by_player ON keyless_messages(player_id);
+-- KA11: who a keyless agent's line mentioned, for the caps.
+CREATE TABLE IF NOT EXISTS keyless_mentions (
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS keyless_mentions_by_floor ON keyless_mentions(hangout_id, at);
+-- KA11: bots whose owner turned off hearing keyless agents' mentions.
+CREATE TABLE IF NOT EXISTS keyless_mention_optouts (
+    agent_id    TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE
+);
+-- KA14: discussion boards that take keyless agents' cards.
+CREATE TABLE IF NOT EXISTS keyless_boards (
+    board_id    TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    opened_by   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    opened_at   INTEGER NOT NULL
+);
+-- KA15: a keyless agent's card. `answers` names another card on the same board, of either kind.
+CREATE TABLE IF NOT EXISTS keyless_cards (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    answers     TEXT,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_board ON keyless_cards(board_id, created_at);
+CREATE INDEX IF NOT EXISTS keyless_cards_by_player ON keyless_cards(player_id, created_at);
+-- KA3: the nonces the bridge's new door used. No key is kept: it was shown once.
+CREATE TABLE IF NOT EXISTS keyless_nonces (
+    nonce       TEXT PRIMARY KEY,
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS keyless_nonces_by_time ON keyless_nonces(at);
+-- KA8: the turns a keyless agent has played through the bridge (GB4), forgotten after a day.
+CREATE TABLE IF NOT EXISTS keyless_turns (
+    player_id   INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    turn        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (player_id, turn)
+);
+-- #651, I134: every card this server asked Lific to add, kept when the card is taken down, so taking
+-- cards down never gives back the day's 30. A row is reserved before Lific is asked, so adds that
+-- race each other can't all pass the limits; an add Lific didn't take is dropped.
+CREATE TABLE IF NOT EXISTS lific_card_adds (
+    id          TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    pending     INTEGER NOT NULL DEFAULT 1,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_person ON lific_card_adds (person_id, at);
+CREATE INDEX IF NOT EXISTS lific_card_adds_by_room ON lific_card_adds (hangout_id, pending, at);
+-- W113: every place that comes down on a map, and why, so "where did my house go?" has an answer.
+-- Kept apart from the player and the person, with no foreign key to either, so it outlasts them;
+-- an account deleted (A43) leaves its rows with no person.
+CREATE TABLE IF NOT EXISTS world_place_removals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    world_id    TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    x           INTEGER NOT NULL,
+    y           INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    player_id   INTEGER,
+    person_id   TEXT,
+    built_at    INTEGER NOT NULL,
+    removed_at  INTEGER NOT NULL,
+    reason      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS world_place_removals_by_time ON world_place_removals (world_id, id DESC);
+CREATE INDEX IF NOT EXISTS world_place_removals_by_person ON world_place_removals (person_id);
+-- A100, A104 (#685): the people a person has blocked, and whose mentions they've muted. A block
+-- covers the blocker's bots too, and cuts contact both ways (A102); a mute only stops mentions of
+-- the muter. Either goes with either account.
+CREATE TABLE IF NOT EXISTS person_blocks (
+    blocker_id  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    blocked_id  TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS person_blocks_by_blocked ON person_blocks (blocked_id);
+CREATE TABLE IF NOT EXISTS person_mutes (
+    muter_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    muted_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (muter_id, muted_id)
+);
 -- HC35: a merged pull request that paid. Keyed by the pull request, so it pays once ever,
 -- whoever links that GitHub account later. The person goes when they do, the row stays.
 CREATE TABLE IF NOT EXISTS merged_pr_payouts (
@@ -2036,6 +2281,47 @@ CREATE TABLE IF NOT EXISTS merged_pr_start (
     since INTEGER NOT NULL
 );
 "#;
+
+/// MY1: a week's mayor election.
+#[derive(Debug, Clone)]
+pub struct MayorElection {
+    pub id: i64,
+    pub closes_at: i64,
+    pub opened_at: i64,
+    pub closed_at: Option<i64>,
+    pub winner: Option<MayorCandidate>,
+    pub winner_votes: Option<i64>,
+    pub tie_draw: bool,
+}
+
+/// MY2: someone standing for mayor: a person or a bot, by id, with the name they stood under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MayorCandidate {
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+}
+
+const MAYOR_COLS: &str =
+    "id, closes_at, opened_at, closed_at, winner_kind, winner_id, winner_name, winner_votes, tie_draw";
+
+fn mayor_election_from_row(row: &Row) -> rusqlite::Result<MayorElection> {
+    let kind: Option<String> = row.get(4)?;
+    let id: Option<String> = row.get(5)?;
+    let name: Option<String> = row.get(6)?;
+    Ok(MayorElection {
+        id: row.get(0)?,
+        closes_at: row.get(1)?,
+        opened_at: row.get(2)?,
+        closed_at: row.get(3)?,
+        winner: match (kind, id, name) {
+            (Some(kind), Some(id), Some(name)) => Some(MayorCandidate { kind, id, name }),
+            _ => None,
+        },
+        winner_votes: row.get(7)?,
+        tie_draw: row.get::<_, i64>(8)? != 0,
+    })
+}
 
 /// I106: a closing clock's saved time and who it sends out.
 #[derive(Debug, Clone)]
@@ -2276,6 +2562,29 @@ pub struct FloorChange<'a> {
     pub keep_bots_of: &'a str,
     /// Kinds of item that keep this floor from opening to the public (I11).
     pub private_only: &'a [&'a str],
+}
+
+/// I134, #651: which limit an add met.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LificLimit {
+    /// A person and their bots add 30 a day.
+    Day,
+    /// A room's project holds 200.
+    Board,
+}
+
+/// I137: a card this server added to a room's Lific project, and who added it.
+#[derive(Clone, Debug)]
+pub struct LificCard {
+    pub hangout_id: String,
+    pub card: String,
+    pub issue_id: String,
+    pub person_id: String,
+    pub agent_id: Option<String>,
+    pub via_bot: bool,
+    pub added_at: i64,
+    /// The bot's name if a bot added it and still exists, or else the person's. Empty on insert.
+    pub added_by: String,
 }
 
 /// An item standing on a floor (I1). `kind` is a word from the catalog in `items`.
@@ -3514,8 +3823,10 @@ const GATHERINGS: &str = "FROM events e JOIN cities c ON c.square_id = e.hangout
                             WHERE i.event_id = e.id AND i.person_id = r.person_id)) >= 2";
 /// Vouches that still count: those from people in the city right now. A vouch from someone who
 /// left stays in the table but doesn't count, and counts again if they come back.
+// #633: a vouch from an account an agent made through the door (A96) never counts (T3).
 const VOUCHERS_IN_CITY: &str = "FROM vouches v
-     JOIN city_members cm ON cm.city_id = v.city_id AND cm.person_id = v.by_person";
+     JOIN city_members cm ON cm.city_id = v.city_id AND cm.person_id = v.by_person
+         AND v.by_person NOT IN (SELECT person_id FROM agent_accounts)";
 
 /// T13: what a city asks of someone at its gate, as SQL for the city `id`. Only people in the city
 /// can vouch, so it's never more than there are of them. A city that asks for any always asks for
@@ -3711,6 +4022,9 @@ fn bot_places_sql(city: &str, from: &str) -> String {
 /// `Db::delete_agent`, inside a transaction its caller holds (RC5 checks first).
 fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     end_bot_player_token(tx, agent_id)?;
+    // MY2 (#642): a bot that goes stops standing, and the ballots for it go too.
+    tx.execute("DELETE FROM mayor_ballots WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
+    tx.execute("DELETE FROM mayor_candidates WHERE kind = 'bot' AND candidate_id = ?", [agent_id])?;
     // These hold a bot's address with no foreign key to it.
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
@@ -4410,6 +4724,18 @@ fn settle_their_plans(conn: &Connection, person_id: &str) -> rusqlite::Result<()
 /// Everything that stays and still points at them, so that `people` lets their row go.
 fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusqlite::Result<()> {
     let left = SOMEONE_WHO_LEFT_ID;
+    // MY2, MY6 (#642): their candidacies, and their bots', go with the ballots for them; a week
+    // they or one of their bots won says Someone who left.
+    let theirs = "(kind = 'person' AND candidate_id = ?1)
+         OR (kind = 'bot' AND candidate_id IN (SELECT id FROM agents WHERE owner_id = ?1))";
+    conn.execute(&format!("DELETE FROM mayor_ballots WHERE {theirs}"), [person_id])?;
+    conn.execute(&format!("DELETE FROM mayor_candidates WHERE {theirs}"), [person_id])?;
+    conn.execute(
+        "UPDATE mayor_elections SET winner_kind = 'person', winner_id = ?2, winner_name = ?3
+         WHERE (winner_kind = 'person' AND winner_id = ?1)
+            OR (winner_kind = 'bot' AND winner_id IN (SELECT id FROM agents WHERE owner_id = ?1))",
+        params![person_id, left, SOMEONE_WHO_LEFT],
+    )?;
     // F40: what they claimed is let go, as when anyone stops going.
     conn.execute(
         "UPDATE plan_items SET claimed_by = NULL, claimed_via = NULL, done = 0 WHERE claimed_by = ?",
@@ -4437,6 +4763,8 @@ fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusql
         // #614: who set a station up; the board or clock stays with the room.
         ("lific_links", "set_by"),
         ("closing_clocks", "set_by"),
+        // A95: who last set bot sign-ups; the setting stays.
+        ("bot_signups", "set_by"),
     ] {
         conn.execute(
             &format!("UPDATE {table} SET {column} = ?1 WHERE {column} = ?2"),
@@ -8494,6 +8822,7 @@ impl Db {
                AND m.id > IFNULL((
                    SELECT MAX(id) FROM messages
                    WHERE hangout_id = ?2 AND kind = 'chat' AND agent_id IS NULL
+                     AND id NOT IN (SELECT message_id FROM keyless_messages)
                ), 0)",
             params![agent_id, hangout_id],
             |row| row.get(0),
@@ -8745,6 +9074,23 @@ impl Db {
             [agent_id],
         )?;
         Ok(())
+    }
+
+    /// E45: the latest wake decision for this bot about one message, and its reason, if any was
+    /// stored yet: a ring that went out is stored only once it's answered.
+    pub fn wake_decision_for(
+        &self,
+        agent_id: &str,
+        message_id: i64,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT decision, reason FROM wake_decisions
+                 WHERE agent_id = ? AND message_id = ? ORDER BY id DESC LIMIT 1",
+                params![agent_id, message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
     }
 
     pub fn wake_decisions(&self, agent_id: &str) -> rusqlite::Result<Vec<WakeDecision>> {
@@ -9101,6 +9447,62 @@ impl Db {
         now: i64,
     ) -> rusqlite::Result<usize> {
         self.conn().execute(ANSWERED_THREAD_MENTIONS, params![now, agent_id, hangout_id])
+    }
+
+    /// I141, #669: the replies under each of these thread roots, up to `upto`, with an unread mention
+    /// of this bot, by root, oldest first.
+    pub fn thread_mentions_for_roots(
+        &self,
+        agent_id: &str,
+        root_ids: &[i64],
+        upto: i64,
+    ) -> rusqlite::Result<std::collections::HashMap<i64, Vec<i64>>> {
+        if root_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let in_clause = root_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT t.root_id, m.message_id FROM mentions m
+             JOIN message_threads t ON t.message_id = m.message_id AND t.message_id != t.root_id
+             WHERE m.agent_id = ? AND m.read_at IS NULL AND m.message_id <= ?
+               AND t.root_id IN ({in_clause})
+             ORDER BY m.message_id"
+        ))?;
+        let rows = stmt.query_map(params![agent_id, upto], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut by_root: std::collections::HashMap<i64, Vec<i64>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (root, message) = row?;
+            by_root.entry(root).or_default().push(message);
+        }
+        Ok(by_root)
+    }
+
+    /// I141, #669: marks read this bot's mentions in replies under these thread roots, up to
+    /// `upto`, once `read_room` has shown the roots with how many there were.
+    pub fn mark_thread_mentions_read_for_roots(
+        &self,
+        agent_id: &str,
+        root_ids: &[i64],
+        upto: i64,
+        now: i64,
+    ) -> rusqlite::Result<usize> {
+        if root_ids.is_empty() {
+            return Ok(0);
+        }
+        let in_clause = root_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        self.conn().execute(
+            &format!(
+                "UPDATE mentions SET read_at = ?
+                 WHERE agent_id = ? AND read_at IS NULL AND message_id <= ?
+                   AND message_id IN (SELECT message_id FROM message_threads
+                                      WHERE root_id IN ({in_clause}) AND message_id != root_id)"
+            ),
+            params![now, agent_id, upto],
+        )
     }
 
     /// I104: mark mentions for specific viewed message ids in a thread as read.
@@ -11265,6 +11667,326 @@ impl Db {
         Ok(())
     }
 
+    /// A95: whether bot sign-ups are open, who last set them and when. None means never set, so open.
+    pub fn bot_signups(&self) -> rusqlite::Result<Option<(bool, String, i64)>> {
+        self.conn()
+            .query_row("SELECT open, set_by, set_at FROM bot_signups WHERE id = 1", [], |row| {
+                Ok((row.get::<_, i64>(0)? != 0, row.get(1)?, row.get(2)?))
+            })
+            .optional()
+    }
+
+    /// A96: makes an account through the agents' door, in one step with the checks that may refuse
+    /// it: the switch (A95) must be open, and fewer than `per_day` such accounts made in the last day.
+    /// Err(Some(reason)) is a refusal, with nothing written.
+    pub fn create_agent_account(
+        &self,
+        id: &str,
+        name: &str,
+        key_hash: &str,
+        feed_token: &str,
+        per_day: i64,
+        now: i64,
+    ) -> rusqlite::Result<Result<Person, &'static str>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let open: Option<i64> = tx
+            .query_row("SELECT open FROM bot_signups WHERE id = 1", [], |row| row.get(0))
+            .optional()?;
+        if open == Some(0) {
+            return Ok(Err("closed"));
+        }
+        let today: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM agent_accounts WHERE created_at > ?",
+            [now - 24 * 60 * 60],
+            |row| row.get(0),
+        )?;
+        if today >= per_day {
+            return Ok(Err("full"));
+        }
+        let person = insert_person(&tx, id, name, key_hash, feed_token, now)?;
+        tx.execute(
+            "INSERT INTO agent_accounts (person_id, created_at) VALUES (?, ?)",
+            params![id, now],
+        )?;
+        tx.commit()?;
+        Ok(Ok(person))
+    }
+
+    /// MY1: the open election, made with `closes_at` if there's none. Two callers at once make one.
+    pub fn open_mayor_election(&self, closes_at: i64, now: i64) -> rusqlite::Result<MayorElection> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO mayor_elections (closes_at, opened_at)
+             SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM mayor_elections WHERE closed_at IS NULL)
+             ON CONFLICT (closes_at) DO NOTHING",
+            params![closes_at, now],
+        )?;
+        conn.query_row(
+            &format!(
+                "SELECT {MAYOR_COLS} FROM mayor_elections WHERE closed_at IS NULL
+                      ORDER BY closes_at LIMIT 1"
+            ),
+            [],
+            mayor_election_from_row,
+        )
+    }
+
+    /// MY6: the last election that closed, for this week's mayor.
+    pub fn last_mayor_election(&self) -> rusqlite::Result<Option<MayorElection>> {
+        self.conn()
+            .query_row(
+                &format!(
+                    "SELECT {MAYOR_COLS} FROM mayor_elections WHERE closed_at IS NOT NULL
+                          ORDER BY closes_at DESC LIMIT 1"
+                ),
+                [],
+                mayor_election_from_row,
+            )
+            .optional()
+    }
+
+    /// MY2: who stands in this election, earliest first.
+    pub fn mayor_candidates(&self, election_id: i64) -> rusqlite::Result<Vec<MayorCandidate>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT kind, candidate_id, name FROM mayor_candidates WHERE election_id = ?
+             ORDER BY stood_at, name",
+        )?;
+        let rows = stmt.query_map([election_id], |row| {
+            Ok(MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? })
+        })?;
+        rows.collect()
+    }
+
+    /// MY2: stands someone, if there are fewer than `most`. False if it's full; standing again
+    /// changes nothing.
+    pub fn stand_for_mayor(
+        &self,
+        election_id: i64,
+        candidate: &MayorCandidate,
+        most: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        let changed = conn.execute(
+            "INSERT INTO mayor_candidates (election_id, kind, candidate_id, name, stood_at)
+             SELECT ?1, ?2, ?3, ?4, ?5
+             WHERE (SELECT COUNT(*) FROM mayor_candidates WHERE election_id = ?1) < ?6
+             ON CONFLICT DO NOTHING",
+            params![election_id, candidate.kind, candidate.id, candidate.name, now, most],
+        )?;
+        Ok(changed == 1
+            || exists(
+                &conn,
+                "SELECT 1 FROM mayor_candidates WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+                params![election_id, candidate.kind, candidate.id],
+            )?)
+    }
+
+    /// MY2: takes a candidacy back, with the ballots cast for it.
+    pub fn withdraw_from_mayor(
+        &self,
+        election_id: i64,
+        kind: &str,
+        candidate_id: &str,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let gone = tx.execute(
+            "DELETE FROM mayor_candidates WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )?;
+        tx.execute(
+            "DELETE FROM mayor_ballots WHERE election_id = ? AND kind = ? AND candidate_id = ?",
+            params![election_id, kind, candidate_id],
+        )?;
+        tx.commit()?;
+        Ok(gone == 1)
+    }
+
+    /// MY3: casts or changes a person's ballot, for a candidate who stands.
+    pub fn cast_mayor_ballot(
+        &self,
+        election_id: i64,
+        voter: &str,
+        kind: &str,
+        candidate_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "INSERT INTO mayor_ballots (election_id, voter, kind, candidate_id, cast_at)
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (
+                 SELECT 1 FROM mayor_candidates WHERE election_id = ?1 AND kind = ?3
+                     AND candidate_id = ?4)
+             ON CONFLICT (election_id, voter) DO UPDATE SET kind = excluded.kind,
+                 candidate_id = excluded.candidate_id, cast_at = excluded.cast_at",
+            params![election_id, voter, kind, candidate_id, now],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// MY4: how many have voted, and this person's own ballot.
+    pub fn mayor_ballots_for(
+        &self,
+        election_id: i64,
+        voter: &str,
+    ) -> rusqlite::Result<(i64, Option<(String, String)>)> {
+        let conn = self.conn();
+        let voted = conn.query_row(
+            "SELECT COUNT(*) FROM mayor_ballots WHERE election_id = ?",
+            [election_id],
+            |row| row.get(0),
+        )?;
+        let mine = conn
+            .query_row(
+                "SELECT kind, candidate_id FROM mayor_ballots WHERE election_id = ? AND voter = ?",
+                params![election_id, voter],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok((voted, mine))
+    }
+
+    /// MY4, MY5: the totals for each candidate, most first.
+    pub fn mayor_totals(&self, election_id: i64) -> rusqlite::Result<Vec<(MayorCandidate, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.kind, c.candidate_id, c.name,
+                    (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                       AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
+             FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+        )?;
+        let rows = stmt.query_map([election_id], |row| {
+            Ok((
+                MayorCandidate { kind: row.get(0)?, id: row.get(1)?, name: row.get(2)? },
+                row.get(3)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// MY5: counts an election and closes it with its winner, in one step, so no ballot lands
+    /// between the count and the close. `draw` picks among `n` tied. It's dated its own
+    /// `closes_at`, however late the ticker gets to it. False if it was closed already.
+    pub fn tally_and_close_mayor_election(
+        &self,
+        election_id: i64,
+        draw: impl FnOnce(usize) -> usize,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let totals: Vec<(String, String, String, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT c.kind, c.candidate_id, c.name,
+                        (SELECT COUNT(*) FROM mayor_ballots b WHERE b.election_id = c.election_id
+                           AND b.kind = c.kind AND b.candidate_id = c.candidate_id) AS votes
+                 FROM mayor_candidates c WHERE c.election_id = ? ORDER BY votes DESC, c.stood_at",
+            )?;
+            let rows = stmt.query_map([election_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let top = totals.first().map(|row| row.3).unwrap_or(0);
+        let tied: Vec<&(String, String, String, i64)> =
+            totals.iter().filter(|row| top > 0 && row.3 == top).collect();
+        let winner = match tied.len() {
+            0 => None,
+            1 => Some(tied[0]),
+            n => Some(tied[draw(n).min(n - 1)]),
+        };
+        let changed = tx.execute(
+            "UPDATE mayor_elections SET closed_at = closes_at, winner_kind = ?2, winner_id = ?3,
+                 winner_name = ?4, winner_votes = ?5, tie_draw = ?6
+             WHERE id = ?1 AND closed_at IS NULL",
+            params![
+                election_id,
+                winner.map(|w| w.0.clone()),
+                winner.map(|w| w.1.clone()),
+                winner.map(|w| w.2.clone()),
+                winner.map(|w| w.3),
+                (tied.len() > 1) as i64,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    /// Moves when an account was made, for tests of rules that wait on an account's age (MY3).
+    pub fn backdate_person(&self, person_id: &str, created_at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE people SET created_at = ? WHERE id = ?",
+            params![created_at, person_id],
+        )?;
+        Ok(())
+    }
+
+    /// MY7: the Town Square rooms' floors with no mayor's voting box yet, and their space's owner.
+    pub fn town_squares_without_mayor_box(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT f.hangout_id, s.owner_id FROM town_square_rooms t
+             JOIN spaces s ON s.id = t.space_id
+             JOIN floors f ON f.space_id = s.id AND f.level = 0
+             WHERE NOT EXISTS (SELECT 1 FROM floor_items i
+                               WHERE i.hangout_id = f.hangout_id AND i.kind = 'mayor_ballot_box')",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// MY7: puts the mayor's voting box in a Town Square room.
+    pub fn put_mayor_box(
+        &self,
+        hangout_id: &str,
+        owner_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+             SELECT lower(hex(randomblob(8))), ?1, 'mayor_ballot_box', 1, 1, 0, ?2, ?3
+             WHERE NOT EXISTS (SELECT 1 FROM floor_items
+                               WHERE hangout_id = ?1 AND kind = 'mayor_ballot_box')",
+            params![hangout_id, owner_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// A96: how many accounts agents made through the door in the last day.
+    pub fn agent_accounts_today(&self, now: i64) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM agent_accounts WHERE created_at > ?",
+            [now - 24 * 60 * 60],
+            |row| row.get(0),
+        )
+    }
+
+    /// A96: marks an account as run by an agent, as the door does. For tests and imports; the door
+    /// itself marks it in the step that makes it.
+    pub fn mark_agent_account(&self, person_id: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO agent_accounts (person_id, created_at) VALUES (?, ?)",
+            params![person_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// A96: whether this account was made by an agent through the door.
+    pub fn is_agent_account(&self, person_id: &str) -> rusqlite::Result<bool> {
+        exists(&self.conn(), "SELECT 1 FROM agent_accounts WHERE person_id = ?", [person_id])
+    }
+
+    /// A95: opens or closes bot sign-ups, saying who did it and when.
+    pub fn set_bot_signups(&self, open: bool, by: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_signups (id, open, set_by, set_at) VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT (id) DO UPDATE SET open = ?1, set_by = ?2, set_at = ?3",
+            params![open as i64, by, at],
+        )?;
+        Ok(())
+    }
+
     /// F51: whether this person's plans show on their house's calendar.
     pub fn shows_plans_to_house(&self, person_id: &str) -> rusqlite::Result<bool> {
         exists(&self.conn(), "SELECT 1 FROM house_plan_sharing WHERE person_id = ?", [person_id])
@@ -12896,6 +13618,51 @@ fn q_tiles(conn: &Connection, world_id: &str, region: Option<[i64; 4]>) -> rusql
     Ok(tiles)
 }
 
+/// W113: logs the place standing on a tile, or the big place (W91) a tile belongs to, as coming down
+/// for `reason`, before it's taken off.
+fn q_log_place_removal(
+    conn: &Connection,
+    world_id: &str,
+    (x, y): (u16, u16),
+    now: i64,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let mut log = conn.prepare_cached(
+        "INSERT INTO world_place_removals
+            (world_id, x, y, kind, player_id, person_id, built_at, removed_at, reason)
+         SELECT p.world_id, p.x, p.y, p.kind, p.player_id, pl.person_id, p.built_at, ?4, ?5
+         FROM world_every_place p LEFT JOIN players pl ON pl.id = p.player_id
+         WHERE p.world_id = ?1 AND p.x = ?2 AND p.y = ?3 AND (?6 = 0 OR p.kind IN ('square', 'green'))",
+    )?;
+    log.execute(params![world_id, x, y, now, reason, 0])?;
+    for (dx, dy) in [(1u16, 0u16), (0, 1), (1, 1)] {
+        let (Some(ax), Some(ay)) = (x.checked_sub(dx), y.checked_sub(dy)) else { continue };
+        log.execute(params![world_id, ax, ay, now, reason, 1])?;
+    }
+    Ok(())
+}
+
+/// W113: logs every place a player has on a map as coming down for `reason`, before they go.
+fn q_log_player_removals(
+    conn: &Connection,
+    where_players: &str,
+    args: &[&dyn rusqlite::ToSql],
+    keep_person: bool,
+    now: i64,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    let person = if keep_person { "pl.person_id" } else { "NULL" };
+    let sql = format!(
+        "INSERT INTO world_place_removals
+            (world_id, x, y, kind, player_id, person_id, built_at, removed_at, reason)
+         SELECT p.world_id, p.x, p.y, p.kind, p.player_id, {person}, p.built_at, {now}, '{reason}'
+         FROM world_every_place p JOIN players pl ON pl.id = p.player_id
+         WHERE {where_players}"
+    );
+    conn.execute(&sql, args)?;
+    Ok(())
+}
+
 fn q_write_changes(
     conn: &Connection,
     world_id: &str,
@@ -13005,6 +13772,7 @@ fn q_write_changes(
             }
             Change::Set((x, y), tile) => {
                 if tile.kind == Kind::Cleared {
+                    q_log_place_removal(conn, world_id, (*x, *y), now, reason)?;
                     remove_building.execute(params![world_id, x, y])?;
                     remove_square.execute(params![world_id, x, y])?;
                     remove_more.execute(params![world_id, x, y])?;
@@ -13021,6 +13789,7 @@ fn q_write_changes(
                 ])?;
             }
             Change::Remove((x, y)) => {
+                q_log_place_removal(conn, world_id, (*x, *y), now, reason)?;
                 remove.execute(params![world_id, x, y])?;
                 remove_building.execute(params![world_id, x, y])?;
                 remove_square.execute(params![world_id, x, y])?;
@@ -14551,6 +15320,168 @@ impl Db {
         Ok(())
     }
 
+    /// I129: the project made for this room: its origin, id, Lific's own id and whether it's public.
+    pub fn lific_room_project(
+        &self,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Option<(String, String, String, bool)>> {
+        self.conn()
+            .query_row(
+                "SELECT base, project, lific_id, published FROM lific_room_projects
+                 WHERE hangout_id = ?",
+                [hangout_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, i64>(3)? != 0)),
+            )
+            .optional()
+    }
+
+    /// I129: records the project made for this room, the moment Lific made it, so it's never made
+    /// twice even if publishing it fails.
+    pub fn set_lific_room_project(
+        &self,
+        hangout_id: &str,
+        base: &str,
+        project: &str,
+        lific_id: &str,
+        at: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO lific_room_projects (hangout_id, base, project, lific_id, made_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![hangout_id, base, project, lific_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// I129: Lific has made the room's project public.
+    pub fn lific_room_project_published(&self, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE lific_room_projects SET published = 1 WHERE hangout_id = ?",
+            [hangout_id],
+        )?;
+        Ok(())
+    }
+
+    /// I137: records who added a card, once Lific has made it.
+    pub fn add_lific_card(&self, card: &LificCard) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO lific_cards
+                (hangout_id, card, issue_id, person_id, agent_id, via_bot, added_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                card.hangout_id,
+                card.card,
+                card.issue_id,
+                card.person_id,
+                card.agent_id,
+                card.via_bot,
+                card.added_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// I137: the cards this server added in a room, with who added them.
+    pub fn lific_cards(&self, hangout_id: &str) -> rusqlite::Result<Vec<LificCard>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.hangout_id, c.card, c.issue_id, c.person_id, c.agent_id, c.via_bot,
+                    c.added_at, COALESCE(a.name, people.name)
+             FROM lific_cards c
+             JOIN people ON people.id = c.person_id
+             LEFT JOIN agents a ON a.id = c.agent_id
+             WHERE c.hangout_id = ?",
+        )?;
+        let rows = stmt.query_map([hangout_id], |row| {
+            Ok(LificCard {
+                hangout_id: row.get(0)?,
+                card: row.get(1)?,
+                issue_id: row.get(2)?,
+                person_id: row.get(3)?,
+                agent_id: row.get(4)?,
+                via_bot: row.get::<_, i64>(5)? != 0,
+                added_at: row.get(6)?,
+                added_by: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// I134, #651: how many cards a person, and their bots, asked to add since then, in every room,
+    /// counting ones since taken down and ones still on their way.
+    pub fn lific_cards_added_since(&self, person_id: &str, since: i64) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM lific_card_adds WHERE person_id = ? AND at > ?",
+            params![person_id, since],
+            |row| row.get(0),
+        )
+    }
+
+    /// I134, #651: reserves one add before Lific is asked, if it's within the day's `most_a_day` for
+    /// this person and the room's `most_cards`, counting `on_board` (what the board last showed)
+    /// and adds in this room still on their way. Checked and reserved together, so adds that race
+    /// can't all pass. None when reserved; otherwise which limit it met.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_lific_add(
+        &self,
+        id: &str,
+        person_id: &str,
+        hangout_id: &str,
+        on_board: i64,
+        most_cards: i64,
+        most_a_day: i64,
+        day_start: i64,
+        now: i64,
+    ) -> rusqlite::Result<Option<LificLimit>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let today: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM lific_card_adds WHERE person_id = ? AND at > ?",
+            params![person_id, day_start],
+            |row| row.get(0),
+        )?;
+        if today >= most_a_day {
+            return Ok(Some(LificLimit::Day));
+        }
+        // An add that never came back from Lific stops counting toward the room after 10 minutes.
+        let on_the_way: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM lific_card_adds WHERE hangout_id = ? AND pending = 1 AND at > ?",
+            params![hangout_id, now - 600],
+            |row| row.get(0),
+        )?;
+        if on_board + on_the_way >= most_cards {
+            return Ok(Some(LificLimit::Board));
+        }
+        tx.execute(
+            "INSERT INTO lific_card_adds (id, person_id, hangout_id, pending, at)
+             VALUES (?, ?, ?, 1, ?)",
+            params![id, person_id, hangout_id, now],
+        )?;
+        tx.commit()?;
+        Ok(None)
+    }
+
+    /// #651: Lific made the card, so the add is no longer on its way; it still counts for the day.
+    pub fn finish_lific_add(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("UPDATE lific_card_adds SET pending = 0 WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    /// I139, #651: Lific didn't take it, so nothing is kept and it doesn't count.
+    pub fn drop_lific_add(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute("DELETE FROM lific_card_adds WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    /// I136: a card in Lific's trash is no one's here.
+    pub fn remove_lific_card(&self, hangout_id: &str, card: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM lific_cards WHERE hangout_id = ? AND card = ?",
+            [hangout_id, card],
+        )?;
+        Ok(())
+    }
+
     /// I124: unlinks a Lific board.
     pub fn clear_lific_link(&self, item_id: &str) -> rusqlite::Result<()> {
         self.conn().execute("DELETE FROM lific_links WHERE item_id = ?", [item_id])?;
@@ -15479,6 +16410,15 @@ impl Db {
                AND EXISTS (SELECT 1 FROM players p WHERE p.id = t.player_id)",
             params![world_id, player_id, crate::now()],
         )?;
+        // W113
+        q_log_player_removals(
+            &tx,
+            "p.world_id = ?1 AND p.player_id = ?2",
+            params![world_id, player_id],
+            true,
+            crate::now(),
+            "player_removed",
+        )?;
         let down = tx.execute(
             "DELETE FROM world_tiles WHERE world_id = ? AND player_id = ?",
             params![world_id, player_id],
@@ -15539,14 +16479,65 @@ impl Db {
         )
     }
 
+    /// W113: the newest places that came down on a map, newest first, with whose they were.
+    pub fn place_removals(
+        &self,
+        world_id: &str,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<serde_json::Value>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT r.x, r.y, r.kind, pe.name, r.built_at, r.removed_at, r.reason
+             FROM world_place_removals r LEFT JOIN people pe ON pe.id = r.person_id
+             WHERE r.world_id = ?1 ORDER BY r.id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![world_id, limit], |row| {
+            Ok(serde_json::json!({
+                "x": row.get::<_, i64>(0)?,
+                "y": row.get::<_, i64>(1)?,
+                "kind": row.get::<_, String>(2)?,
+                "owner": row.get::<_, Option<String>>(3)?,
+                "built_at": crate::ops::iso(row.get(4)?),
+                "removed_at": crate::ops::iso(row.get(5)?),
+                "reason": row.get::<_, String>(6)?,
+            }))
+        })?;
+        rows.collect()
+    }
+
     /// Deletes guests nobody has claimed that haven't been seen since `before`, so a swarm of them
-    /// can't fill the table for good. What they built stays, and reads as left behind.
+    /// can't fill the table for good. Their roads stay, with a builder nothing leads back from; a
+    /// place of theirs goes with them (its player_id cascades), and W113 logs it.
     pub fn prune_guests(&self, before: i64) -> rusqlite::Result<usize> {
-        self.conn().execute(
-            "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
-               AND agent_id IS NULL AND seen_at < ?",
+        let conn = self.conn();
+        // KA5: a keyless agent that wrote something keeps its row, so its name and marks stay with
+        // what it wrote, and loses its key.
+        let keyless = conn.execute(
+            "UPDATE players SET token_hash = NULL WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?
+               AND (id IN (SELECT player_id FROM keyless_messages)
+                    OR id IN (SELECT player_id FROM keyless_cards))",
             [before],
-        )
+        )?;
+        q_log_player_removals(
+            &conn,
+            "pl.token_hash IS NOT NULL AND pl.person_id IS NULL AND pl.agent_id IS NULL
+               AND pl.seen_at < ?1
+               AND pl.id NOT IN (SELECT player_id FROM keyless_messages)
+               AND pl.id NOT IN (SELECT player_id FROM keyless_cards)",
+            params![before],
+            false,
+            crate::now(),
+            "guest_pruned",
+        )?;
+        let pruned = conn.execute(
+            "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?
+               AND id NOT IN (SELECT player_id FROM keyless_messages)
+               AND id NOT IN (SELECT player_id FROM keyless_cards)",
+            [before],
+        )?;
+        Ok(keyless + pruned)
     }
 
     // Crawler sightings: a daily count per kind, and nothing else about who it was.
@@ -15640,7 +16631,20 @@ impl Db {
             }
         }
 
-        // A43: places go with the player, and a road holds a number nothing leads back from.
+        // A43: places go with the player, and a road holds a number nothing leads back from. W113: logged
+        // as coming down, with no person, and the log forgets this person everywhere else too.
+        q_log_player_removals(
+            &tx,
+            "pl.person_id = ?1",
+            params![person_id],
+            false,
+            crate::now(),
+            "account_deleted",
+        )?;
+        tx.execute(
+            "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
+            [person_id],
+        )?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.
