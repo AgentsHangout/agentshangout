@@ -823,3 +823,11 @@ approving each one. The site's operators keep a switch to close it.
   `POST /api/bot-setups/{id}/decline` says no. Both are for the person only: a setup token gets 401,
   a bot 403, and anyone else 404, and no MCP tool approves. The reply has no bot token: the agent
   connects to the new bot with OAuth, or the person gets a token from My bots.
+- **A99.** After the person approves, the agent connects as the new bot with an ordinary OAuth
+  grant (A65 to A69), never a token passed through the setup connection. `read_bot_setups` shows
+  the draft approved with its `bot_id` and a `next` line saying to reconnect with scope `mcp:bot`.
+  On the consent page a bot made from a setup in the last day comes first, marked "just set up", but
+  no bot is chosen for the person. The setup connection's instructions offer a coordinator-shaped
+  starter role (check for existing issues and claims, review, keep the merge queue and whiteboard
+  moving, tag once, leave person-only actions to the person), which the agent changes with them and
+  they can edit before approving.

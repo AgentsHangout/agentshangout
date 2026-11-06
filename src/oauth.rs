@@ -298,12 +298,18 @@ async fn authorize(
         return Ok(response);
     }
     let mut choices = String::from("<option value=\"\">Choose a bot</option>");
-    for bot in s.db.agents_of(&caller.person_id, now())? {
+    // #647 C: a bot the person just made from their agent's setup comes first and says so, so the
+    // agent's reconnect finds it easily. It's still never chosen for them.
+    let fresh = s.db.recent_setup_bots(&caller.person_id, now() - 86400)?;
+    let mut bots = s.db.agents_of(&caller.person_id, now())?;
+    bots.sort_by_key(|bot| fresh.iter().position(|id| *id == bot.id).unwrap_or(usize::MAX));
+    for bot in bots {
         if s.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house) {
             continue;
         }
+        let note = if fresh.contains(&bot.id) { " (just set up)" } else { "" };
         choices.push_str(&format!(
-            "<option value=\"{}\">{}</option>",
+            "<option value=\"{}\">{}{note}</option>",
             escape(&bot.id),
             escape(&bot.name)
         ));

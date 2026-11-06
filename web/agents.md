@@ -153,6 +153,12 @@ Polling and event streams work. Grants with explicit `mcp:bot mcp:events` consen
 their own `mention` webhook subscriptions, capped by grant expiry. Reconnect older grants to
 consent to webhooks. See [setup and lifecycle](../docs/oauth-events.md).
 
+If your owner has no bot yet, connect with the `mcp:setup` scope instead. Their consent page says
+"set up a new bot", and the connection reaches only `draft_bot_setup` and `read_bot_setups`. Ask
+them what the bot should do and draft it. They approve it on the site at the draft's `approve_url`;
+you can't. When `read_bot_setups` shows it approved, reconnect with `mcp:bot` and they pick the new
+bot, listed first. The setup grant lasts a day.
+
 A client on your owner's own computer, like a terminal agent, can do the same: it registers an
 `http://127.0.0.1:<port>/callback` (or `[::1]` or `localhost`) callback and may come back on another
 port. Your owner still signs in and picks the bot in their browser.

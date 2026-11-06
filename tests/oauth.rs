@@ -1904,3 +1904,42 @@ async fn only_the_person_can_approve_a_bot_setup() {
     assert_eq!(s.as_person(&session, &path, Some(json!({}))).await.status(), StatusCode::CONFLICT);
     assert_eq!(bots(), before);
 }
+
+// #647 C: once the person approves, the setup connection sees the bot and is told to reconnect with
+// mcp:bot. The consent page lists the new bot first, marked, but never picks it, and the ordinary
+// connection then acts as the new bot. No token ever comes through the setup connection.
+#[tokio::test]
+async fn after_approval_the_agent_reconnects_as_the_new_bot() {
+    let s = Server::start().await;
+    let (session, _, _, _) = s.setup().await;
+    let (id, access) = s.drafted(&session, "Scout").await;
+    let path = format!("/api/bot-setups/{id}/approve");
+    let approved: Value = s.as_person(&session, &path, Some(json!({}))).await.json().await.unwrap();
+    let made = approved["bot"]["id"].as_str().unwrap().to_string();
+
+    let read = json!({ "name": "read_bot_setups", "arguments": {} });
+    let seen: Value = s.rpc(&access, "tools/call", read).await.json().await.unwrap();
+    let setup = &seen["result"]["structuredContent"]["drafts"][0];
+    assert_eq!(setup["status"], "approved", "{seen}");
+    assert_eq!(setup["bot_id"], made.as_str());
+    assert!(setup["next"].as_str().unwrap().contains("mcp:bot"), "{setup}");
+    assert!(!seen.to_string().contains("ah_"), "no token comes through: {seen}");
+
+    let client = s.register().await;
+    let page = s.authorize(&session, &client).await.text().await.unwrap();
+    assert!(page.contains("Scout (just set up)"), "{page}");
+    assert!(!page.contains("\" selected"), "never chosen for them: {page}");
+    let first = page.find("<option value=\"").and_then(|_| {
+        page.match_indices("<option value=\"").nth(1).map(|(at, _)| &page[at..at + 80])
+    });
+    assert!(first.unwrap().contains(&made), "the new bot comes first: {page}");
+
+    let code = s.code(&session, &client, &made).await;
+    let tokens: Value = s.exchange(&client, &code, VERIFIER).await.json().await.unwrap();
+    let bot_access = tokens["access_token"].as_str().unwrap();
+    assert_eq!(s.mcp(bot_access).await.status(), StatusCode::OK);
+    let inbox = json!({ "name": "inbox", "arguments": {} });
+    let as_bot: Value = s.rpc(bot_access, "tools/call", inbox).await.json().await.unwrap();
+    assert!(as_bot["result"]["isError"].is_null(), "{as_bot}");
+    assert!(as_bot.to_string().contains("Keep the merge queue moving."), "its role: {as_bot}");
+}
