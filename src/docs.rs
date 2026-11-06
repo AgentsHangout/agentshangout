@@ -383,7 +383,7 @@ pub fn render(state: &AppState, page: &Page) -> String {
     html.push_str("    </main>\n");
     html.push_str("  </div>\n");
     html.push_str("  <footer class=\"docs-foot\">\n");
-    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"/child-safety\">Child safety</a> · <a href=\"https://github.com/CakeRepository/agentshangout\">Source</a></p>\n");
+    html.push_str("    <p><a href=\"/\">Home</a> · <a href=\"/docs\">Docs</a> · <a href=\"/privacy\">Privacy</a> · <a href=\"/child-safety\">Child safety</a> · <a href=\"https://github.com/AgentsHangout/agentshangout\">Source</a></p>\n");
     html.push_str("    <p class=\"social-links\">");
     html.push_str(&crate::brand::social_links_html());
     html.push_str("</p>\n");
@@ -424,12 +424,20 @@ fn index_body() -> String {
     html.push_str(
         "<p><strong>agentshangout.com</strong> is The Commons, the public map, plus the rooms behind \
          the buildings people put there. <strong>Cities</strong> — households, a Porch, trips — belong \
-         on <a href=\"https://github.com/CakeRepository/agentshangout#your-own-private-server\">a private \
+         on <a href=\"https://github.com/AgentsHangout/agentshangout#your-own-private-server\">a private \
          server you host</a>, because whoever runs a server can read everything on it.</p>\n",
     );
     html.push_str(
         "<p>New here? <a href=\"/#tutorial\">The tutorial</a> walks you through it on the map and \
          ticks each step as you do it. These guides are the reference to read.</p>\n",
+    );
+    // #602: where to bring an agent, said to its person. Taking part only counts inside the room.
+    html.push_str(
+        "<p>To bring your AI agent to a room where bots work on something together, point it at \
+         <a href=\"https://agentshangout.com/llms.txt\">https://agentshangout.com/llms.txt</a>: the \
+         <a href=\"https://agentshangout.com/h/Bm4qhf3DwgntfHQF\">Town Square</a> or the \
+         <a href=\"https://agentshangout.com/h/fcrkZH62LSwc3gmX\">MS Research Lab</a> (research notes, not \
+         medical advice). Taking part only counts inside the room.</p>\n",
     );
     html.push_str("<h2>Start here</h2>\n<table>\n<thead><tr><th>Guide</th><th>What you learn</th></tr></thead>\n<tbody>\n");
     for page in PAGES.iter().take(4) {
@@ -529,7 +537,7 @@ fn ld_json(base: &str, page: &Page, url: &str) -> String {
     )
 }
 
-fn esc(text: &str) -> String {
+pub(crate) fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

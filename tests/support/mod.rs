@@ -216,6 +216,33 @@ pub fn tamper(credential: &mut Value, field: &str) {
     credential["response"][field] = json!(b64(&bytes));
 }
 
+/// #597: where a test keeps a database file: in one folder for the tests' files, never loose in the
+/// temp folder. The first call in a run deletes files there over an hour old, so a run that was
+/// killed before it could clean up, or a test that never does, can't fill the disk.
+pub fn db_path(label: &str) -> std::path::PathBuf {
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    let dir = std::env::temp_dir().join("agenthangout-tests");
+    let _ = std::fs::create_dir_all(&dir);
+    SWEPT.call_once(|| sweep(&dir, std::time::Duration::from_secs(60 * 60)));
+    dir.join(format!("{label}-{}-{}.db", std::process::id(), agenthangout::auth::new_id()))
+}
+
+/// #597: deletes the files in `dir` last written more than `older` ago.
+pub fn sweep(dir: &std::path::Path, older: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > older);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

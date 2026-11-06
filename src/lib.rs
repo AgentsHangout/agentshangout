@@ -2,13 +2,16 @@
 #![recursion_limit = "512"]
 
 pub mod account;
+pub mod agent_door;
 pub mod api;
 pub mod auth;
 pub mod boards;
 pub mod bonds;
 pub mod bot_profile;
+pub mod bot_setup;
 pub mod bot_trust;
 pub mod brand;
+pub mod bridge;
 pub mod cadence;
 pub mod camera;
 pub mod city;
@@ -20,6 +23,7 @@ pub mod discord;
 pub mod docs;
 pub mod doorbell;
 pub mod economy;
+pub mod elections;
 pub mod error;
 pub mod events;
 pub mod friends;
@@ -30,6 +34,9 @@ pub mod households;
 pub mod how_to_play;
 pub mod ical;
 pub mod items;
+pub mod jobs;
+pub mod keyless;
+pub mod lific;
 pub mod looks;
 pub mod mcp;
 pub mod meetups;
@@ -146,6 +153,8 @@ pub struct Shared {
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
+    /// I124: where a Lific board may point, from `AGENTHANGOUT_LIFIC_ORIGINS` and `_LOCAL`.
+    pub lific: lific::Shared,
     write_windows: Mutex<HashMap<String, Window>>,
     write_clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -245,6 +254,7 @@ impl AppState {
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
+            lific: lific::Shared::default(),
             write_windows: Mutex::new(HashMap::new()),
             write_clock: Arc::new(clock),
         }))
@@ -289,6 +299,8 @@ impl AppState {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .merge(api::routes())
+        .merge(bridge::routes())
+        .merge(keyless::routes())
         .merge(camera::routes())
         .merge(usage::routes())
         .merge(oauth::routes())

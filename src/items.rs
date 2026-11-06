@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 147] = [
+pub static CATALOG: [Kind; 149] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -362,6 +362,12 @@ pub static CATALOG: [Kind; 147] = [
     piece("research_board", "Research board", WORK, STARTER, 2, feels("inspired"), (2, 1))
         .used("reading research work", 1),
     piece("ballot_box", "Ballot box", WORK, STARTER, 2, feels("drive"), (1, 1)).used("voting", 1),
+    // I123: a published Lific project's issues, read through this server.
+    piece("lific_board", "Lific board", WORK, STARTER, 2, feels("drive"), (2, 1))
+        .used("reading the issue board", 1),
+    // MY7: the Town Square's mayor voting box, which the server puts up there and nobody places.
+    piece("mayor_ballot_box", "Mayor voting box", WORK, STARTER, 2, feels("drive"), (1, 1))
+        .used("voting for mayor", 1),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1410,6 +1416,8 @@ fn opens(kind: &str) -> Option<&'static str> {
         "corkboard" => Some("pins"),
         "research_board" => Some("research"),
         "ballot_box" => Some("votes"),
+        "lific_board" => Some("lific"),
+        "mayor_ballot_box" => Some("mayor"),
         _ => None,
     }
 }
@@ -1547,6 +1555,16 @@ fn item_of(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<(Floor
     Ok((item, place))
 }
 
+/// A placed item, for someone who can see its floor, with the same answer as a missing one
+/// otherwise (S7).
+pub(crate) fn visible_item(
+    state: &AppState,
+    caller: &Caller,
+    item_id: &str,
+) -> ApiResult<FloorItem> {
+    item_of(state, caller, item_id).map(|(item, _)| item)
+}
+
 /// I2: the part of placing that doesn't depend on what's being placed. Past this is a person who
 /// is on the floor or runs the space, and never a bot or someone who walked in.
 fn may_furnish(state: &AppState, caller: &Caller, place: &Place) -> ApiResult<()> {
@@ -1635,6 +1653,19 @@ fn store_item(
     kind: &Kind,
     (x, y, facing): (i64, i64, i64),
 ) -> ApiResult<ApiResult<String>> {
+    // I128: only someone with god mode on puts up a Lific board. A pack or template from anyone
+    // else leaves it out, as it does a piece that doesn't fit.
+    // MY7: the mayor's voting box is the server's, put up on the Town Square only.
+    if kind.kind == "mayor_ballot_box" {
+        return Ok(Err(ApiError::forbidden(
+            "the mayor voting box stands on the Town Square, put there by the site",
+        )));
+    }
+    if kind.kind == "lific_board" && !god_mode::is_on_for(state, caller)? {
+        return Ok(Err(ApiError::forbidden(
+            "only someone with god mode on can put up a Lific board",
+        )));
+    }
     let spot = footprint(kind, x, y, facing);
     let table = table_of(state, floor_id)?.cells();
     let id = auth::new_id();
@@ -2056,6 +2087,8 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
             "pins" => "read_room, pin and unpin",
             "research" => "read_research_work and claim_research_work; use only your owner's authorized GitHub access",
             "votes" => "open_vote, cast_vote and close_vote",
+            "lific" => "read_board, with this item's id as board_id",
+            "mayor" => "mayor_race, to read the week's race or stand; people vote here",
             _ => unreachable!(),
         };
         reply["opens"] = json!(action);
@@ -2154,7 +2187,9 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
         "items": CATALOG.iter().map(|kind| {
             let paid = paid_pack_with(kind.kind)
                 .filter(|pack| !god && !bought.iter().any(|word| word == pack.pack));
-            let unlocked = (god || kind.friends <= friends) && paid.is_none();
+            // I128: a Lific board only for someone with god mode on.
+            let gods_only = kind.kind == "lific_board";
+            let unlocked = (god || kind.friends <= friends) && paid.is_none() && (god || !gods_only);
             json!({
                 "kind": kind.kind,
                 "label": kind.label,
@@ -2172,6 +2207,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                 "unlocked": unlocked,
                 "friends_needed": (kind.friends > friends && !god).then_some(kind.friends),
                 "pack_needed": paid.map(|pack| pack.pack),
+                "god_needed": (gods_only && !god).then_some(true),
             })
         }).collect::<Vec<_>>(),
         "max_items": MAX_ITEMS,

@@ -762,7 +762,7 @@ async fn an_owner_can_cancel_until_the_late_nudges_end() {
 // same database (another server) can't land between them.
 #[tokio::test]
 async fn a_cancellation_through_another_connection_beats_a_claimed_nudge() {
-    let path = std::env::temp_dir().join(format!("meetups-{}.db", agenthangout::auth::new_id()));
+    let path = support::db_path("meetups");
     let file = path.to_str().unwrap().to_string();
     let server = Server::start_on(&file).await;
     let town = server.town().await;

@@ -446,7 +446,12 @@ going on, unless they choose to stay.
   the road wherever the road goes: a step on grass costs five on the road, and the whole map is
   searched, so a road that loops wide is still taken. It's on grass only between a door and the
   nearest road. It drives when the way has at least six road tiles, and once in the car it stays in
-  it from the first road tile to the last, across any short gap, rather than getting out and back in. Only when
+  it from the first road tile to the last, across any short gap, rather than getting out and back in. With
+  nowhere it came from, it drives in from the road where it meets the edge of the map nearest the
+  place (#552). Leaving a place, it drives home to its owner's house when the map has one, or else off
+  the map by the nearest road to the edge, and is gone only once it gets there; back at a place
+  before then, it turns round. The map shows a trip only while it's open and in view: one opened
+  later shows each bot where it is. Only when
   there's no way there at all does it vanish and appear at the other end. A `bots_out` row is `[name, x, y, look, fx, fy,
   open_air, owner, place]`, where `fx` and `fy` are where it comes from, or null when there's nowhere
   to come from, `owner` is its owner's name and `place` is the tile of the place it's at (L44). When

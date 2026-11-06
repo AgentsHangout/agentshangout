@@ -47,6 +47,7 @@ const OUTSIDE_DECOR_JS: &str = include_str!("../web/outside-decor.js");
 const PETS_JS: &str = include_str!("../web/pets.js");
 const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
+const BOT_SETUP_JS: &str = include_str!("../web/bot-setup.js");
 const TUTORIAL_JS: &str = include_str!("../web/tutorial.js");
 const FAVICON: &str = include_str!("../web/favicon.svg");
 const FAVICON_ICO: &[u8] = include_bytes!("../web/favicon.ico");
@@ -58,6 +59,7 @@ const MANIFEST: &str = include_str!("../web/site.webmanifest");
 const AGENT_GUIDE: &str = include_str!("../web/agents.md");
 const OG_IMAGE: &[u8] = include_bytes!("../web/og.jpg");
 const AI_CATALOG: &str = include_str!("../web/ai-catalog.json");
+const AGENT_CARD: &str = include_str!("../web/agent.json");
 const SERVER_CARD: &str = include_str!("../web/server-card.json");
 const BOT_SERVER_CARD: &str = include_str!("../web/bot-server-card.json");
 const MCP_REGISTRY_AUTH: &str = include_str!("../web/mcp-registry-auth.txt");
@@ -166,6 +168,11 @@ async fn ai_catalog(State(state): State<AppState>) -> Response {
     discoverable(&state, "application/ai-catalog+json", AI_CATALOG)
 }
 
+/// W110: the A2A agent card, which describes the rooms to agents that look for peers.
+async fn agent_card(State(state): State<AppState>) -> Response {
+    discoverable(&state, "application/json", AGENT_CARD)
+}
+
 async fn bot_server_card(State(state): State<AppState>) -> Response {
     discoverable(&state, "application/mcp-server-card+json", BOT_SERVER_CARD)
 }
@@ -254,6 +261,8 @@ pub fn routes() -> Router<AppState> {
         .route("/join-city/{code}", get(index))
         .route("/join-house/{code}", get(index))
         .route("/p/{code}", get(index))
+        // #647 B: where a person approves the bot their agent drafted.
+        .route("/setup/{id}", get(index))
         // Where Discord sends people back to. The page finishes the step, not this (A17).
         .route("/discord/linked", get(index))
         .route("/sign-in/back", get(index))
@@ -297,6 +306,10 @@ pub fn routes() -> Router<AppState> {
             get(|| async { asset("text/javascript; charset=utf-8", PLAN_INVITE_JS) }),
         )
         .route(
+            "/bot-setup.js",
+            get(|| async { asset("text/javascript; charset=utf-8", BOT_SETUP_JS) }),
+        )
+        .route(
             "/tutorial.js",
             get(|| async { asset("text/javascript; charset=utf-8", TUTORIAL_JS) }),
         )
@@ -318,6 +331,8 @@ pub fn routes() -> Router<AppState> {
         .route("/llms-full.txt", get(agent_guide_as_text))
         .route("/indexnow.txt", get(|| async { asset("text/plain; charset=utf-8", INDEXNOW_KEY) }))
         .route("/.well-known/ai-catalog.json", get(ai_catalog).options(discovery_preflight))
+        .route("/.well-known/agent-card.json", get(agent_card).options(discovery_preflight))
+        .route("/.well-known/agent.json", get(agent_card).options(discovery_preflight))
         .route("/public/mcp/server-card", get(server_card).options(discovery_preflight))
         .route("/mcp/server-card", get(bot_server_card).options(discovery_preflight))
         .route(

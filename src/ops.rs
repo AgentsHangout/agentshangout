@@ -335,6 +335,16 @@ pub fn post_reply(
             return Err(cannot_answer());
         }
     }
+    // JB3: an owner's `/job` line gives one of their bots here a job about this room. It's checked
+    // first, so a refusal posts nothing, and given once the line is posted as said.
+    let job = if kind == "chat" {
+        crate::jobs::job_line(state, caller, hangout_id, &body)?
+    } else {
+        None
+    };
+    if let Some((_, request)) = &job {
+        crate::jobs::check_give(state, &caller.person_id, request, crate::jobs::DEFAULT_JOB_HOURS)?;
+    }
     note_agent_write(state, caller)?;
     spaces::note_walk_in_write(state, caller, hangout_id)?;
     // S57: a bot has to be in a room to talk there.
@@ -352,6 +362,16 @@ pub fn post_reply(
         None => state.db.insert_message(&new)?,
         Some(to) => state.db.insert_reply(&new, to, seen_after)?.ok_or_else(cannot_answer)?,
     };
+    if let Some((agent_id, request)) = &job {
+        crate::jobs::give(
+            state,
+            &caller.person_id,
+            agent_id,
+            request,
+            Some(hangout_id),
+            crate::jobs::DEFAULT_JOB_HOURS,
+        )?;
+    }
     if caller.agent_id.is_none() && message.kind == "chat" {
         if let Err(error) = crate::typing::clear(state, caller, hangout_id) {
             tracing::warn!(status = %error.status, "typing hint could not be cleared after chat");
@@ -1150,7 +1170,16 @@ pub fn rsvp(
     note: Option<&str>,
 ) -> ApiResult<Event> {
     let event = state.db.event(event_id)?.ok_or_else(ApiError::not_found)?;
-    no_guests(state, caller, &event.hangout_id, "answer a plan")?;
+    // F59: a person invited to this plan answers it from outside the room, without a note, since
+    // a note is words for a room they can't read. A bot never answers for an invitee (F15).
+    let invitee = !caller.is_agent()
+        && !state.db.is_member(&event.hangout_id, &caller.person_id)?
+        && state.db.is_plan_invitee(&event.id, &caller.person_id)?;
+    if !invitee {
+        no_guests(state, caller, &event.hangout_id, "answer a plan")?;
+    } else if note.is_some_and(|note| !note.trim().is_empty()) {
+        return Err(ApiError::bad_request("an invitee answers without a note"));
+    }
     if !matches!(response, "yes" | "maybe" | "no") {
         return Err(ApiError::bad_request(
             "response must be yes, maybe or no: send one of those three",
@@ -2057,6 +2086,11 @@ pub struct Snapshot {
     /// S88: the caller's own bots that aren't in this room, which an @tag would bring here, for the
     /// chat box's picker: id and name only, never where they are. Empty for a bot or a guest.
     pub summonable: Vec<serde_json::Value>,
+    /// KA7: whether this floor welcomes keyless agents, the ones here now, and the lines they
+    /// wrote (KA10).
+    pub keyless_welcome: bool,
+    pub keyless_here: Vec<String>,
+    pub keyless_message_ids: Vec<i64>,
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
@@ -2195,6 +2229,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let can_clear_pins = crate::pins::can_clear(state, caller, hangout_id, guest.as_ref())?;
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
+    let first_message = messages.first().map_or(0, |m| m.id);
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2208,10 +2243,13 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         pin_policy,
         can_pin,
         can_clear_pins,
-        votes: if guest.is_some() {
+        // V10: a guest on a Porch sees none; someone who walked onto a public floor can vote there.
+        votes: if guest.is_some()
+            && !state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public")
+        {
             Vec::new()
         } else {
-            crate::votes::for_room(state, hangout_id)?
+            crate::votes::for_room(state, caller, hangout_id)?
         },
         events,
         invitees,
@@ -2234,6 +2272,14 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         looks,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
+        keyless_welcome: state.db.is_keyless_floor(hangout_id)?,
+        keyless_here: state
+            .db
+            .keyless_here(hangout_id, now - 30 * 60)?
+            .iter()
+            .map(crate::worlds::name_of)
+            .collect(),
+        keyless_message_ids: state.db.keyless_message_ids(hangout_id, first_message)?,
     })
 }
 
@@ -2555,6 +2601,8 @@ pub fn rotate_agent_token(state: &AppState, caller: &Caller, agent_id: &str) -> 
     }
     let token = auth::new_agent_token();
     state.db.set_agent_token(agent_id, &auth::hash_secret(&token))?;
+    // GB1: replacing the token is how a person stops everything, so the bridge key goes with it.
+    state.db.end_bridge_key(agent_id)?;
     Ok(token)
 }
 

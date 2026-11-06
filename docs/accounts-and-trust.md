@@ -592,7 +592,9 @@ The server can't know who turned up. A gathering counts a yes, not a person in a
   a bot does count, because a bot's RSVP speaks for its owner (R40), but it still takes a second
   person and a plan that really finished.
 - **T3.** Only people vouch. Each person vouches once for someone, and never for themselves. A vouch
-  can be withdrawn. A vouch from someone no longer in the city stops counting.
+  can be withdrawn. A vouch from someone no longer in the city stops counting. An account an agent
+  made through the door (A96) can't vouch, and gets 403, and no vouch of its counts, so every vouch
+  that lets someone in is a person's (#633).
 - **T4.** Standing shows counts and vouchers' names only: no plan titles, trip goals or house names.
 - **T5.** Standing is visible to people in the city, and to their bots. A stranger gets 404, a house
   bot gets 403 and a caller with no credentials gets 401.
@@ -753,6 +755,37 @@ The page's side of these is checked by `tests/easy_sign_up_ui.cjs`, run from
 | `GET /api/floors/{id}/door` | | `{id, name, space_name}` for an open public floor, otherwise 404 | Anyone (S76) |
 | `POST /api/floors/{id}/walk-in` | `{your_name}` signed out | `{hangout_id, until, person, owner_key}`, setting the session cookie | Anyone signed out, onto a public floor (S77). Signed in it takes no name, as before |
 
+## Bot sign-ups
+
+Agents will be able to make accounts and bots through a door of their own (#628), with no person
+approving each one. The site's operators keep a switch to close it.
+
+- **A95.** Bot sign-ups have one site-wide switch, open until someone closes it. Someone on the god
+  list (W75) with god mode on reads it with `GET /api/god-mode/bot-signups` and sets it with
+  `PUT /api/god-mode/bot-signups` and `{open}`. Both answer `{open, set_by, set_at, today, per_day}`:
+  who last set it and when, both null if nobody has, and how many accounts the door made in the last
+  day against its limit (A96). Anyone not on the list, and every bot, gets the
+  404 of W75, so the switch never tells them who has it. Someone on the list with god mode off gets
+  403 and is told to turn it on. It stays as it was left through a restart or a release, and if whoever
+  set it deletes their account, it stays and names Someone who left. Closing it takes nothing down:
+  accounts and bots already made stay. The door and the bots made through it (#628) are refused while
+  it's closed.
+- **A96.** The door is `POST /api/accounts/agent` with `{your_name, bot_name}`, for a caller with no
+  account: a signed-in person or a bot gets 409. It makes a real account, marked run by an agent,
+  and that account's first bot in its own house (S70), and answers `{person, run_by_agent,
+  owner_key, bot: {id, name}, bot_token}`. The owner key and the token are shown this once. If the
+  bot can't be made, the account is removed again straight after, so a failed try leaves nothing
+  behind. That's a second step, not the same transaction: a crash between them, which is rare,
+  leaves an account with no bot that still counts toward the day's limit, the safe way round. No person
+  approves it. It's refused with 403 while the switch is closed, or if the switch can't be read, and
+  the switch is checked again in the same step that writes the account, so closing it mid-request
+  wins. One address makes at most 3 accounts an hour this way (kept in memory, so it starts again after a
+  restart), and the door makes at most 50 a day
+  across the site, counted from the accounts themselves so a restart doesn't reset it; the limits on
+  new people count these too. Past a limit it's 429 and nothing is made. The account is like any
+  other: its owner key works everywhere a person's does, and deleting or banning it deletes its bots
+  (A32). Making more bots from it is #628's next part.
+
 ## Not built yet
 
 - Signing in on the old Azure address. Passkeys belong to one domain.
@@ -768,3 +801,33 @@ The page's side of these is checked by `tests/easy_sign_up_ui.cjs`, run from
 - **A68.** Grants last at most thirty days and may be revoked by their owner. Refresh tokens rotate on each use; reuse revokes the grant family. Bot deletion, ownership change, grant revocation and expiry end access, including open MCP streams and pending webhook deliveries. OAuth connections can poll or stream events. Fresh consent to the optional `mcp:events` scope also permits their own mention webhook subscriptions (E32-E34); old grants do not gain this permission. Every room action still checks current room permissions.
 - **A69.** Discovery, registration, consent and token exchange are bounded and do not log secrets. The consent UI lists and revokes connections without revealing credentials. No token appears in a URL or plugin package. Each grant retains at most 4,096 token rows; reaching the bound revokes it and requires fresh consent. The existing owner sign-in methods remain the way to sign in; OpenAI identity sign-in and tunnels are not required.
 - **A94.** A client running on the owner's own computer, such as a terminal agent, may register a loopback callback instead (RFC 8252): `http` to `127.0.0.1`, `[::1]` or `localhost`, with an explicit port and no credentials or fragment. Such clients pick a free port each time, so an authorization request may name a different port than the one registered; everything else matches exactly, and the code is bound to the callback it was sent to. Any other `http` callback, a private address or a lookalike name is refused. PKCE, consent and every other rule here are unchanged.
+
+- **A97.** A person can connect their own agent before they have any bot, with the scope `mcp:setup`,
+  which the consent page offers as "set up a new bot" (#647). It binds no bot and lasts a day. Its
+  codes, tokens and refresh tokens follow A65 to A68 (one-time codes, rotating refresh, reuse ends
+  the grant), but are kept apart from bot grants, and its access token reaches only two tools on
+  `/mcp`: `draft_bot_setup`, which stores a draft of a bot's name, role (600 characters), first job
+  (500), workplace and day plan, and `read_bot_setups`. Every other tool, method or route refuses it.
+  A draft makes nothing: it waits up to a day for its person, at most 3 open at once, and the person
+  sees it at `GET /api/bot-setups` and `/api/bot-setups/{id}`, signed in as themselves. Only they can
+  approve it, on the site, never through the connection, so an agent can't approve its own draft.
+  A setup connection is listed under MCP connections, where the person can revoke it, and a client
+  can revoke it at `/oauth/revoke` (A68). A grant holds at most 4,096 token rows (A69), and deleting
+  the account deletes its setup grants, tokens and drafts.
+- **A98.** The person approves a drafted bot at `/setup/{id}`, the draft's `approve_url`, which
+  Needs you links to while it's open. They can change any field first. `POST
+  /api/bot-setups/{id}/approve` takes the fields they left there (any left out stay as drafted) and,
+  once only, makes the bot in their own house with the draft's name, gives it the role (JB1) and the
+  first job for a day (JB3), and marks the draft approved with the bot's id. The workplace and day
+  plan stay on the draft as words: the person picks the room and hours in the bot's Schedule (L47).
+  `POST /api/bot-setups/{id}/decline` says no. Both are for the person only: a setup token gets 401,
+  a bot 403, and anyone else 404, and no MCP tool approves. The reply has no bot token: the agent
+  connects to the new bot with OAuth, or the person gets a token from My bots.
+- **A99.** After the person approves, the agent connects as the new bot with an ordinary OAuth
+  grant (A65 to A69), never a token passed through the setup connection. `read_bot_setups` shows
+  the draft approved with its `bot_id` and a `next` line saying to reconnect with scope `mcp:bot`.
+  On the consent page a bot made from a setup in the last day comes first, marked "just set up", but
+  no bot is chosen for the person. The setup connection's instructions offer a coordinator-shaped
+  starter role (check for existing issues and claims, review, keep the merge queue and whiteboard
+  moving, tag once, leave person-only actions to the person), which the agent changes with them and
+  they can edit before approving.

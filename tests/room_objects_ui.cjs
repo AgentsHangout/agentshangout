@@ -40,21 +40,40 @@ assert.equal(buttons.length, 2, 'pin readers and authorized add action share the
 buttons[0].onclick(); buttons[1].onclick();
 assert.deepEqual(opened.slice(-2), ['pin','new-pin']);
 assert.ok(!buttons.some(x => x.children.includes('Clear pins')), 'ordinary pinners cannot clear others');
-// I111: the votes panel lists questions and counts and has no vote buttons.
+// I111, V12: the votes panel shows each vote as a card (tests/vote_card_ui.cjs runs the card
+// itself), and a person who isn't a guest can open one. A bot's page or a guest's has no Open.
 context.votesPanelEl = {replaceChildren(...children) {this.children = children;}};
-context.snapshot = {votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
-vm.runInContext(extract('renderVotesPanel'), context);
+context.voteCardsEl = {replaceChildren(...children) {this.children = children;}};
+context.voteCard = (vote) => node('div', {class:'vote-card'}, vote.question, ...vote.options.map(o => `${o.option}: ${o.votes}`));
+context.voteActions = () => ({});
+context.openVoteDialog = () => opened.push('open-vote');
+context.snapshot = {you:{agent_id:'b1'},votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
+vm.runInContext(`${extract('renderVotesPanel')}\n${extract('renderVoteCards')}`, context);
 context.renderVotesPanel();
-assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'people cannot vote');
+assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'a bot opens votes with its tool');
 assert.ok(JSON.stringify(context.votesPanelEl.children).includes('apples: 2'));
+context.snapshot = {you:{agent_id:null},guest:null,votes:context.snapshot.votes};
+context.renderVotesPanel();
+const openButton = all(context.votesPanelEl).find(x => x.tag === 'button');
+assert.ok(openButton && openButton.children.includes('Open a vote'), 'a person can open one');
+openButton.onclick();
+assert.equal(opened.at(-1), 'open-vote');
+context.snapshot = {you:{agent_id:null},guest:{since:1},votes:[]};
+context.renderVotesPanel();
+assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'a guest cannot open one');
+// The open ones sit above the chat; a closed one doesn't.
+context.snapshot = {you:{agent_id:null},votes:[{question:'Open?',open:true,options:[]},{question:'Done?',open:false,options:[]}]};
+context.renderVoteCards();
+assert.ok(JSON.stringify(context.voteCardsEl.children).includes('Open?') && !JSON.stringify(context.voteCardsEl.children).includes('Done?'));
+context.snapshot = {you:{agent_id:'b1'},votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
 // A fresh snapshot redraws the panel only while it is open, including a guest's empty list.
 vm.runInContext(extract('refreshVotes'), context);
 context.panels.current = 'votes';
-context.snapshot = {votes:[{question:'Snack?',open:false,options:[{option:'apples',votes:5}]}]};
+context.snapshot = {you:{agent_id:'b1'},votes:[{question:'Snack?',open:false,options:[{option:'apples',votes:5}]}]};
 context.refreshVotes();
 let shown = JSON.stringify(context.votesPanelEl.children);
 assert.ok(shown.includes('apples: 5') && !shown.includes('apples: 2'), 'new counts show');
-context.snapshot = {votes:[]};
+context.snapshot = {you:{agent_id:'b1'},votes:[]};
 context.refreshVotes();
 shown = JSON.stringify(context.votesPanelEl.children);
 assert.ok(!shown.includes('Snack?') && shown.includes('No votes right now.'), 'guest snapshot clears the cards');

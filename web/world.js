@@ -4763,6 +4763,8 @@ export class World {
     this.applyPlayers(view.players, animate);
     this.applyCrawlers(view.crawlers, animate);
     this.applyPeople(view.people, animate);
+    // #552: whose buildings are where, so a bot leaving a place can drive home.
+    this.ownerRows = Array.isArray(view.owners) ? view.owners : [];
     // L17: bots at The Commons' places, by name, stroll by their door and walk or drive to the next.
     this.applyVisitors([...(Array.isArray(view.visitors) ? view.visitors : []), ...(Array.isArray(view.bots_out) ? view.bots_out : [])], animate);
     this.applyDoom(view.disaster);
@@ -5353,15 +5355,19 @@ export class World {
         if (!p) {
           // L62: a bot that just reached a place sets out from where it was, and goes there.
           const travels = animate && row[4] != null && row[5] != null && Number.isFinite(Number(row[4])) && Number.isFinite(Number(row[5]));
-          const fx = travels ? clamp(Math.round(Number(row[4])), 0, n - 1) : x;
-          const fy = travels ? clamp(Math.round(Number(row[5])), 0, n - 1) : y;
+          // #552: with nowhere it came from, a bot at a place drives in from the edge of town.
+          const origin = travels
+            ? [clamp(Math.round(Number(row[4])), 0, n - 1), clamp(Math.round(Number(row[5])), 0, n - 1)]
+            : animate && atPlace ? this.edgeRoad(x, y) : null;
+          const fx = origin ? origin[0] : x;
+          const fy = origin ? origin[1] : y;
           p = make(id, name, fx, fy, worn);
           p.born = animate ? this.time : -10;
           map.set(id, p);
           this.settle(p, atPlace, area);
           p.owner = owner;
           p.place = place;
-          if (animate && !travels) this.sparkle(p.px, p.py, 5);
+          if (animate && !origin) this.sparkle(p.px, p.py, 5);
           const [tx, ty] = this.standAt(p, x, y);
           if (!animate) {
             // On a page that has just opened, it's already where it is.
@@ -5372,21 +5378,73 @@ export class World {
           } else if (fx !== tx || fy !== ty) this.walkTo(p, tx, ty);
         } else {
           p.leaving = 0;
+          // Back at a place before it got home: it turns round and goes there instead.
+          const turned = p.homeward;
+          p.homeward = false;
           if (JSON.stringify(worn) !== p.worn) dress(p, name, p.kind, worn);
           this.settle(p, atPlace, area);
           p.owner = owner;
           p.place = place;
           const [tx, ty] = this.standAt(p, x, y);
-          if (!p.area && (p.x !== tx || p.y !== ty)) this.walkTo(p, tx, ty);
+          if (turned || (!p.area && (p.x !== tx || p.y !== ty))) this.walkTo(p, tx, ty);
           else if (p.area && !this.inArea(p, p.x, p.y)) this.walkTo(p, tx, ty);
         }
       });
     }
     for (const [id, p] of map) {
       if (seen.has(id)) continue;
-      if (animate && !p.leaving) p.leaving = this.time;
-      else if (!animate) map.delete(id);
+      if (!animate) {
+        map.delete(id);
+        continue;
+      }
+      if (p.leaving || p.homeward) continue;
+      // #552: a bot leaving a place drives off, home to its owner's house when the map has one, or
+      // else out of town by the nearest road off the edge, and is gone once it gets there. It used
+      // to fade out where it stood, so a bot going to a room looked like it vanished.
+      const to = p.place ? this.houseOf(p.owner) || this.edgeRoad(Math.round(p.px - 0.5), Math.round(p.py - 0.5)) : null;
+      if (!to) {
+        p.leaving = this.time;
+        continue;
+      }
+      p.homeward = true;
+      p.inside = false;
+      p.area = null;
+      p.wander = 0;
+      this.walkTo(p, to[0], to[1]);
+      if (!p.path.length) p.leaving = this.time;
     }
+  }
+
+  // #552: an owner's house on the map, from the owners list and the tiles: where their bot drives
+  // home to. Null when they have none here.
+  houseOf(owner) {
+    if (!owner) return null;
+    for (const row of this.ownerRows || []) {
+      if (!Array.isArray(row) || row[2] !== owner) continue;
+      const x = Math.round(Number(row[0]));
+      const y = Math.round(Number(row[1]));
+      if (x >= 0 && y >= 0 && x < this.n && y < this.n && this.kind[y * this.n + x] === K_HOUSE) return [x, y];
+    }
+    return null;
+  }
+
+  // #552: the road tile on the edge of the map nearest a tile: where a bot with nowhere it came from
+  // drives in, and one with no house drives off, out of town. Null when no road reaches the edge.
+  edgeRoad(x, y) {
+    const n = this.n;
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      for (const [ex, ey] of [[i, 0], [i, n - 1], [0, i], [n - 1, i]]) {
+        if (!this.roadAt(ex, ey)) continue;
+        const d = Math.abs(ex - x) + Math.abs(ey - y);
+        if (d < bestD) {
+          bestD = d;
+          best = [ex, ey];
+        }
+      }
+    }
+    return best;
   }
 
   // L17: a bot at a building is inside it, and one at an open-air place keeps to the place's tiles.
@@ -6224,6 +6282,8 @@ export class World {
           p.driving = driving;
           p.walking = !driving;
           if (!p.path.length) p.ride = null;
+          // #552: home, or off the edge of town: now it's gone.
+          if (p.homeward && !p.path.length && !p.leaving) p.leaving = this.time;
         } else {
           p.walking = false;
           // People and visitors potter about a little near where they were seen, then drift back.

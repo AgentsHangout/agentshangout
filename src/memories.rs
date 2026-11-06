@@ -759,6 +759,13 @@ pub fn remember(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Va
     };
     let input = note_input(args, Some("self"))?;
     let importance = importance_arg(&args["importance"])?;
+    // JB7: one of its own jobs, checked now, before the connection is held below.
+    let job = args["job"].as_str().map(str::trim).filter(|job| !job.is_empty());
+    if let Some(job) = job {
+        if !crate::jobs::is_jobs_of(state, &bot, job)? {
+            return Err(ApiError::not_found());
+        }
+    }
     let now = now();
     // The limit first, so a bot past it costs no lookups.
     check_use(&state.db.conn(), &bot, &SAVES, now, 1)?;
@@ -799,6 +806,16 @@ pub fn remember(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Va
         }
         reply
     };
+    // JB7: kept with one of its jobs, open or closed, so recall can find it by the job. Checked
+    // before the connection was taken (`job` above), since it can't be taken twice.
+    if let Some(job) = job {
+        tx.execute(
+            "INSERT INTO memory_jobs (memory_id, job_id) VALUES (?, ?)
+             ON CONFLICT (memory_id) DO UPDATE SET job_id = excluded.job_id",
+            params![reply["id"].as_str().unwrap_or_default(), job],
+        )?;
+        reply["job"] = json!(job);
+    }
     tx.commit()?;
     reply["saved_at"] = json!(iso(now));
     Ok(reply)
@@ -1128,7 +1145,14 @@ fn who_where_list(
 pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let (bot, owner) = bot_of(caller)?;
     let query = args["query"].as_str().map(str::trim).unwrap_or_default();
-    if query.is_empty() {
+    // JB7: only what it kept with one of its jobs; with no query, all of that, newest first.
+    let job = args["job"].as_str().map(str::trim).filter(|job| !job.is_empty());
+    if let Some(job) = job {
+        if !crate::jobs::is_jobs_of(state, &bot, job)? {
+            return Err(ApiError::not_found());
+        }
+    }
+    if query.is_empty() && job.is_none() {
         return Err(ApiError::bad_request(
             "query is required: a few words about what you want to remember",
         ));
@@ -1152,8 +1176,36 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
         Some(text) => Some(resolve_subject(&conn, &bot, &owner, &rooms, text)?.key()),
         None => None,
     };
-    let memories = load(&conn, &bot, None, subject.as_deref())?;
+    let mut memories = load(&conn, &bot, None, subject.as_deref())?;
+    if let Some(job) = job {
+        let kept: HashSet<String> = conn
+            .prepare("SELECT memory_id FROM memory_jobs WHERE job_id = ?")?
+            .query_map([job], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        memories.retain(|memory| kept.contains(&memory.id));
+    }
     let by_n: HashMap<i64, &Memory> = memories.iter().map(|memory| (memory.n, memory)).collect();
+    if query.is_empty() {
+        // JB7: a job's memories with no words to rank them by: the newest first.
+        let mut newest: Vec<&Memory> = memories.iter().collect();
+        newest.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.n.cmp(&b.n)));
+        newest.truncate(limit);
+        let names = names_of(
+            &conn,
+            &bot,
+            Some((&owner, &rooms)),
+            newest.iter().map(|memory| memory.subject.as_str()),
+        )?;
+        let results: Vec<Value> = newest
+            .iter()
+            .map(|memory| {
+                let mut item = memory_json(memory, names.get(&memory.subject).cloned().flatten());
+                item["why"] = json!(["job"]);
+                item
+            })
+            .collect();
+        return Ok(json!({ "job": job, "memories": results, "memory_note": MEMORY_NOTE }));
+    }
     let words = useful(&words_of(query));
     let lists = [
         ("words", words_list(&mut conn, &words, &by_n, now)?),

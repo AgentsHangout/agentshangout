@@ -17,9 +17,14 @@ use serde_json::json;
 
 pub(crate) const SCOPE: &str = "mcp:bot";
 pub(crate) const EVENTS_SCOPE: &str = "mcp:events";
+/// #647: "set up a new bot": a person's agent may draft a bot for them to approve, and nothing else.
+pub(crate) const SETUP_SCOPE: &str = "mcp:setup";
 fn valid_scope(scope: &str) -> bool {
-    matches!(scope, "mcp:bot" | "mcp:bot mcp:events" | "mcp:events mcp:bot")
+    matches!(scope, "mcp:bot" | "mcp:bot mcp:events" | "mcp:events mcp:bot" | "mcp:setup")
 }
+/// #647: setup codes and refresh tokens say so, so the token endpoint knows which grants they're for.
+const SETUP_CODE: &str = "ah_setupcode_";
+const SETUP_REFRESH: &str = "ah_setuprefresh_";
 pub(crate) fn webhook_scope(scope: &str) -> bool {
     valid_scope(scope) && scope.split(' ').any(|s| s == EVENTS_SCOPE)
 }
@@ -163,11 +168,11 @@ fn same_origin(s: &AppState, h: &HeaderMap) -> bool {
     h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(s.config.public_url.as_str())
 }
 async fn resource_metadata(State(s): State<AppState>) -> Response {
-    no_store(Json(json!({"resource":resource(&s),"authorization_servers":[s.config.public_url],"scopes_supported":[SCOPE,EVENTS_SCOPE],"bearer_methods_supported":["header"],"resource_name":"Agents Hangout bot MCP"})).into_response())
+    no_store(Json(json!({"resource":resource(&s),"authorization_servers":[s.config.public_url],"scopes_supported":[SCOPE,EVENTS_SCOPE,SETUP_SCOPE],"bearer_methods_supported":["header"],"resource_name":"Agents Hangout bot MCP"})).into_response())
 }
 async fn server_metadata(State(s): State<AppState>) -> Response {
     let b = &s.config.public_url;
-    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE,EVENTS_SCOPE],"authorization_response_iss_parameter_supported":true})).into_response())
+    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE,EVENTS_SCOPE,SETUP_SCOPE],"authorization_response_iss_parameter_supported":true})).into_response())
 }
 fn valid_redirect(raw: &str) -> bool {
     if raw.len() > 2048 {
@@ -280,19 +285,35 @@ async fn authorize(
     )? {
         return Ok(error("temporarily_unavailable"));
     }
+    let callback =
+        Url::parse(&r.redirect_uri).map_err(|_| ApiError::bad_request("invalid redirect"))?;
+    let policy = format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'", callback.origin().ascii_serialization());
+    // #647: setting up a new bot binds no bot, and can only draft one for you to approve here.
+    if r.scope == SETUP_SCOPE {
+        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            policy.parse().map_err(|_| ApiError::bad_request("invalid callback origin"))?,
+        );
+        return Ok(response);
+    }
     let mut choices = String::from("<option value=\"\">Choose a bot</option>");
-    for bot in s.db.agents_of(&caller.person_id, now())? {
+    // #647 C: a bot the person just made from their agent's setup comes first and says so, so the
+    // agent's reconnect finds it easily. It's still never chosen for them.
+    let fresh = s.db.recent_setup_bots(&caller.person_id, now() - 86400)?;
+    let mut bots = s.db.agents_of(&caller.person_id, now())?;
+    bots.sort_by_key(|bot| fresh.iter().position(|id| *id == bot.id).unwrap_or(usize::MAX));
+    for bot in bots {
         if s.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house) {
             continue;
         }
+        let note = if fresh.contains(&bot.id) { " (just set up)" } else { "" };
         choices.push_str(&format!(
-            "<option value=\"{}\">{}</option>",
+            "<option value=\"{}\">{}{note}</option>",
             escape(&bot.id),
             escape(&bot.name)
         ));
     }
-    let callback =
-        Url::parse(&r.redirect_uri).map_err(|_| ApiError::bad_request("invalid redirect"))?;
     // The owner can still leave webhooks out of a connection that asked for them.
     let (event_consent, event_choice) = if webhook_scope(&r.scope) {
         (
@@ -304,7 +325,6 @@ async fn authorize(
     };
     let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
     // The form's only cross-origin destination is this already validated registered callback.
-    let policy=format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'",callback.origin().ascii_serialization());
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         policy.parse().map_err(|_| ApiError::bad_request("invalid callback origin"))?,
@@ -346,6 +366,30 @@ async fn consent(
     }
     if c.decision == "deny" {
         return redirect(&r, "error", "access_denied", &s.config.public_url);
+    }
+    // #647: a setup grant, with no bot, lasting a day.
+    if r.scope == SETUP_SCOPE {
+        if c.decision != "allow" {
+            return Ok(error("invalid_request"));
+        }
+        let g = crate::db::SetupGrant {
+            id: auth::new_id(),
+            owner_id: caller.person_id,
+            client_id: r.client_id.clone(),
+            resource: r.resource.clone(),
+            expires_at: now() + 86400,
+        };
+        let code = format!("{SETUP_CODE}{}", auth::new_feed_token());
+        if !s.db.setup_issue_code(
+            &g,
+            &auth::hash_secret(&code),
+            &r.redirect_uri,
+            &r.code_challenge,
+            now(),
+        )? {
+            return Ok(error("access_denied"));
+        }
+        return redirect(&r, "code", &code, &s.config.public_url);
     }
     if c.decision != "allow"
         || !s.db.agents_of(&caller.person_id, now())?.iter().any(|a| a.id == c.agent_id)
@@ -393,6 +437,11 @@ async fn token(
     {
         return Ok(error("invalid_request"));
     }
+    // #647: a setup code or refresh token gets setup tokens, from the setup grants only.
+    let setup = r.code.starts_with(SETUP_CODE) || r.refresh_token.starts_with(SETUP_REFRESH);
+    if setup {
+        return setup_token(&s, &r);
+    }
     let access = format!("ah_oauth_{}", auth::new_feed_token());
     let refresh = format!("ah_refresh_{}", auth::new_feed_token());
     let pair = TokenPair {
@@ -432,6 +481,47 @@ async fn token(
     let Some(g) = g else { return Ok(error("invalid_grant")) };
     Ok(no_store(Json(json!({"access_token":access,"token_type":"Bearer","expires_in":(at+3600).min(g.expires_at)-at,"refresh_token":refresh,"scope":g.scope})).into_response()))
 }
+/// #647: the token endpoint for setup grants, the same exchange and rotation as for bots.
+fn setup_token(s: &AppState, r: &TokenRequest) -> ApiResult<Response> {
+    let access = format!("{}{}", crate::bot_setup::ACCESS_PREFIX, auth::new_feed_token());
+    let refresh = format!("{SETUP_REFRESH}{}", auth::new_feed_token());
+    let pair = TokenPair {
+        access_hash: auth::hash_secret(&access),
+        refresh_hash: auth::hash_secret(&refresh),
+    };
+    let at = now();
+    let g = match r.grant_type.as_str() {
+        "authorization_code" => {
+            if !(43..=128).contains(&r.code_verifier.len())
+                || !r
+                    .code_verifier
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+            {
+                return Ok(error("invalid_grant"));
+            }
+            s.db.setup_exchange(
+                &auth::hash_secret(&r.code),
+                &r.client_id,
+                &r.resource,
+                &r.redirect_uri,
+                &sign_in::challenge_for(&r.code_verifier),
+                &pair,
+                at,
+            )?
+        }
+        "refresh_token" => s.db.setup_refresh(
+            &auth::hash_secret(&r.refresh_token),
+            &r.client_id,
+            &r.resource,
+            &pair,
+            at,
+        )?,
+        _ => return Ok(error("unsupported_grant_type")),
+    };
+    let Some(g) = g else { return Ok(error("invalid_grant")) };
+    Ok(no_store(Json(json!({"access_token":access,"token_type":"Bearer","expires_in":(at+3600).min(g.expires_at)-at,"refresh_token":refresh,"scope":SETUP_SCOPE})).into_response()))
+}
 async fn revoke(
     State(s): State<AppState>,
     h: HeaderMap,
@@ -440,7 +530,9 @@ async fn revoke(
     if !limit(&s, &h, "revoke", 60) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    s.db.oauth_revoke_token(&auth::hash_secret(&r.token), &r.client_id)?;
+    let hash = auth::hash_secret(&r.token);
+    s.db.oauth_revoke_token(&hash, &r.client_id)?;
+    s.db.setup_revoke_token(&hash, &r.client_id)?;
     Ok(no_store(StatusCode::OK.into_response()))
 }
 async fn connections(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Response> {
@@ -458,6 +550,10 @@ async fn connections(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Respo
     let mut body=String::from("<p>Revoking a connection ends its access and refresh tokens. Existing bot tokens are unchanged.</p>");
     for (id, client, bot) in s.db.oauth_grants(&caller.person_id, now())? {
         body.push_str(&format!("<form method=\"post\" action=\"/oauth/connections/revoke\"><p>{} as {}</p><input type=\"hidden\" name=\"nonce\" value=\"{}\"><input type=\"hidden\" name=\"grant_id\" value=\"{}\"><button>Revoke connection</button></form>",escape(&client),escape(&bot),escape(&nonce),escape(&id)));
+    }
+    // #647, A68: setup connections can be ended here too.
+    for (id, client) in s.db.setup_grants(&caller.person_id, now())? {
+        body.push_str(&format!("<form method=\"post\" action=\"/oauth/connections/revoke\"><p>{} setting up a new bot</p><input type=\"hidden\" name=\"nonce\" value=\"{}\"><input type=\"hidden\" name=\"grant_id\" value=\"{}\"><button>Revoke connection</button></form>",escape(&client),escape(&nonce),escape(&id)));
     }
     Ok(html(body))
 }
@@ -478,6 +574,7 @@ async fn owner_revoke(
         return Ok(error("invalid_request"));
     }
     s.db.oauth_revoke(&r.grant_id, &c.person_id)?;
+    s.db.setup_revoke(&r.grant_id, &c.person_id)?;
     Ok(no_store(
         (StatusCode::SEE_OTHER, [(header::LOCATION, "/oauth/connections")]).into_response(),
     ))

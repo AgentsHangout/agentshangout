@@ -787,7 +787,7 @@ async fn standing_is_only_the_counts_the_doc_names_and_is_worked_out_on_every_re
 // T1
 #[tokio::test]
 async fn no_table_in_the_database_holds_a_score_or_a_copy_of_standing() {
-    let path = std::env::temp_dir().join(format!("trust-schema-{}.db", std::process::id()));
+    let path = support::db_path("trust-schema");
     let _ = std::fs::remove_file(&path);
     drop(Db::open(path.to_str().unwrap()).unwrap());
     let conn =
@@ -943,6 +943,27 @@ async fn a_gathering_that_has_not_happened_yet_counts_for_nobody_however_many_sa
         assert_eq!(standing["gatherings"], 0, "a plan that hasn't happened is not a gathering");
     }
     assert_eq!(server.city_view(&w.ann.key, &w.city).await.body["growth"]["gatherings"], 0);
+}
+
+// T3, #633: an account an agent made through the door can't vouch, and a vouch it made before
+// it was marked stops counting, so a swarm can't let itself in.
+#[tokio::test]
+async fn an_account_run_by_an_agent_cannot_vouch() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let cy = server.join_city(&w.code, "Cy").await;
+    server.require_vouches(&w.ann, &w.city, 2).await;
+    let eve = server.at_the_gate(&w.code, "Eve").await;
+    assert_ok(&server.vouch(&cy.key, &w.city, &eve.id).await);
+    assert_eq!(server.gate(&w.ann.key, &w.city).await[0]["vouches"], 1);
+
+    server.state.db.mark_agent_account(&cy.id, now()).unwrap();
+    assert_forbidden(&server.vouch(&cy.key, &w.city, &eve.id).await);
+    assert_eq!(server.gate(&w.ann.key, &w.city).await[0]["vouches"], 0, "its vouch stops counting");
+    // A person's vouch still counts, and one more lets Eve in.
+    assert_ok(&server.vouch(&w.ann.key, &w.city, &eve.id).await);
+    let second = server.vouch(&w.bo.key, &w.city, &eve.id).await;
+    assert_eq!(second.body["let_in"], true, "{}", second.body);
 }
 
 // T3

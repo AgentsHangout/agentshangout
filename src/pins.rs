@@ -72,7 +72,7 @@ fn public_floor(state: &AppState, hangout_id: &str) -> ApiResult<bool> {
     Ok(state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public"))
 }
 
-fn may_pin(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+pub(crate) fn may_pin(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     ops::no_house_bot(caller)?;
     ops::no_guests(state, caller, hangout_id, "pin on the board")?;
     items::no_quiet(state, caller, hangout_id)?;
@@ -95,10 +95,29 @@ fn may_unpin(state: &AppState, caller: &Caller, pin: &RoomPin) -> ApiResult<bool
     owns_room(state, caller, &pin.hangout_id)
 }
 
-fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+pub(crate) fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     ops::note_agent_write(state, caller)?;
     spaces::go_to(state, caller, hangout_id)?;
     Ok(())
+}
+
+/// #651, I139: `commit_write` for a write made somewhere else, like Lific. The checks come first:
+/// the bot's writes a minute, and whether it may go to the room. Nothing moves yet.
+pub(crate) fn before_outside_write(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+) -> ApiResult<()> {
+    ops::note_agent_write(state, caller)?;
+    spaces::may_go_to(state, caller, hangout_id)
+}
+
+/// #651, I138: once the outside write is made, the bot goes to the room. The write is done whatever
+/// happens here, so a failure is logged rather than answered.
+pub(crate) fn after_outside_write(state: &AppState, caller: &Caller, hangout_id: &str) {
+    if let Err(error) = spaces::go_to(state, caller, hangout_id) {
+        tracing::warn!(status = %error.status, "a bot's Lific write was made but it didn't go to the room");
+    }
 }
 
 // Reading
@@ -370,7 +389,7 @@ fn query_has_secret(text: &str) -> bool {
     })
 }
 
-fn no_secret(parts: &[&str]) -> ApiResult<()> {
+pub(crate) fn no_secret(parts: &[&str]) -> ApiResult<()> {
     if parts.iter().copied().any(looks_like_secret) {
         return Err(ApiError::bad_request("that looks like a token or API key"));
     }
@@ -934,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_preview_requests_fetch_once() {
-        let path = std::env::temp_dir().join(format!("pin-claim-{}.db", crate::auth::new_id()));
+        let path = crate::db::test_db_path("pin-claim");
         let db = crate::db::Db::open(path.to_str().unwrap()).unwrap();
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.pragma_update(None, "foreign_keys", true).unwrap();

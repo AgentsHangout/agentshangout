@@ -904,6 +904,10 @@ async fn get_routine(
     let mut shown = json!(view);
     // MM17: whether going home makes it bedtime, which the schedule is where its owner sets.
     shown["auto_bedtime"] = json!(crate::memories::auto_bedtime(&state, &agent.id)?);
+    // JB1, JB3: its role and its open job, which its owner sets on this page too.
+    let jobs = crate::jobs::for_owner(&state, &agent.id)?;
+    shown["role"] = jobs["role"].clone();
+    shown["job"] = jobs["job"].clone();
     Ok(Json(shown))
 }
 

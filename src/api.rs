@@ -120,6 +120,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/events/{id}/ics", get(event_ics))
         .route("/api/events/{id}/invite", post(plan_link))
         .route("/api/events/{id}/invite/rotate", post(replace_plan_link))
+        .route("/api/events/{id}/invitees", post(invite_people))
         .route("/api/plan-invites/{code}", get(plan_invite_preview))
         .route("/api/plan-invites/{code}/answer", post(answer_plan_invite))
         .route("/api/plan-invites/{code}/plan.ics", get(plan_invite_ics))
@@ -139,9 +140,16 @@ pub fn routes() -> Router<AppState> {
         .merge(god_mode::routes())
         .merge(spaces::routes())
         .merge(items::routes())
+        .merge(crate::lific::routes())
+        .merge(crate::agent_door::routes())
+        .merge(crate::brand::routes())
+        .merge(crate::elections::routes())
+        .merge(crate::bot_setup::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
+        .merge(crate::votes::routes())
+        .merge(crate::jobs::routes())
         .merge(outside::routes())
         .merge(looks::routes())
         .merge(households::routes())
@@ -1513,6 +1521,22 @@ async fn replace_plan_link(
     Ok(Json(json!({ "invite_url": referrals::replace_plan_link(&state, &caller, &id)? })))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvitePeople {
+    person_ids: Vec<String>,
+}
+
+/// F57: invites friends to a plan by name.
+async fn invite_people(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<InvitePeople>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(referrals::invite_people(&state, &caller, &id, &body.person_ids)?))
+}
+
 async fn plan_invite_preview(
     State(state): State<AppState>,
     MaybeCaller(caller): MaybeCaller,
@@ -1846,6 +1870,13 @@ async fn rsvp(
     Json(body): Json<RsvpBody>,
 ) -> ApiResult<Json<Value>> {
     let event = ops::rsvp(&state, &caller, &id, &body.response, body.note.as_deref())?;
+    // F59: an invitee answering from outside the room gets back only what a link shows, never the
+    // room, its notes or who else answered.
+    if !caller.is_agent() && !state.db.is_member(&event.hangout_id, &caller.person_id)? {
+        let mut plan = referrals::plan_preview_json(&event);
+        plan["your_response"] = json!(body.response);
+        return Ok(Json(plan));
+    }
     Ok(Json(json!(event)))
 }
 
@@ -2888,6 +2919,13 @@ mod tests {
             assert!(docs.contains(url), "docs missing {name}: {url}");
         }
         assert!(home.contains("https://discord.agentshangout.com"));
+        // W111: the same links for the strip and for bots, with no sign-in.
+        let links = server.get("", "/api/links").await.body;
+        assert_eq!(links["star"], crate::brand::STAR_URL, "{links}");
+        assert_eq!(
+            links["profiles"].as_array().unwrap().len(),
+            crate::brand::SOCIAL_PROFILES.len()
+        );
         assert!(home.contains(&format!("{}/icon-512.png", server.base)));
         let ld = json_ld(&home);
         let org = ld["@graph"]
@@ -3033,7 +3071,7 @@ mod tests {
         for path in ["/", "/app.js", "/llms.txt", "/agents.md", "/docs"] {
             let page = server.get("", path).await;
             let page = page.body.as_str().unwrap();
-            assert!(page.contains("https://github.com/CakeRepository/agentshangout"), "{path}");
+            assert!(page.contains("https://github.com/AgentsHangout/agentshangout"), "{path}");
         }
         // Every bot that visits reads these. A bug goes in an issue without asking, because that's
         // how a bug gets here, and anything else a bot might send still waits for its owner.

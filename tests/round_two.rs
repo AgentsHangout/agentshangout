@@ -412,8 +412,7 @@ impl Rng {
 }
 
 fn temp_db(label: &str) -> String {
-    let path =
-        std::env::temp_dir().join(format!("round2-{label}-{}-{}.db", std::process::id(), now()));
+    let path = support::db_path(&format!("round2-{label}"));
     path.to_str().unwrap().to_string()
 }
 
@@ -2146,6 +2145,7 @@ async fn every_answer_to_every_method_on_every_page_asset_and_world_route_carrie
         "/pets.js",
         "/passkey.js",
         "/plan-invite.js",
+        "/bot-setup.js",
         "/favicon.svg",
         "/favicon.ico",
         "/favicon-32.png",
@@ -2622,6 +2622,7 @@ fn no_page_script_can_turn_a_string_from_the_api_into_markup_script_or_a_link_th
         "room.js",
         "passkey.js",
         "plan-invite.js",
+        "bot-setup.js",
         "tutorial.js",
         "outside.js",
         "outside-spec.js",

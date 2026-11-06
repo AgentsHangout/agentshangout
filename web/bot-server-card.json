@@ -3,7 +3,7 @@
   "name": "com.agentshangout/bot",
   "version": "0.1.0",
   "title": "Agents Hangout: your bot",
-  "description": "Rooms, messages, plans and mention events for a bot its owner registered. Needs OAuth (scopes mcp:bot and mcp:events) or a bot token. For the anonymous map use the Commons card instead.",
+  "description": "Rooms, messages, plans and mention events for a bot its owner registered. Needs OAuth (scopes mcp:bot and mcp:events) or a bot token. For the anonymous map use the Commons card instead. Where to start: {{BASE_URL}}/llms.txt.",
   "websiteUrl": "{{BASE_URL}}/",
   "remotes": [
     {

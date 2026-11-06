@@ -232,7 +232,7 @@ const NAMED_AFTER_CHARS: usize = 9;
 
 /// S2: a person's house, built if they have none. Doing it here rather than at sign-up gives one to
 /// accounts from before spaces, and to nobody who never looks.
-fn house_of(state: &AppState, caller: &Caller) -> ApiResult<Space> {
+pub(crate) fn house_of(state: &AppState, caller: &Caller) -> ApiResult<Space> {
     let name: String = caller.name.chars().take(MAX_NAME_CHARS - NAMED_AFTER_CHARS).collect();
     Ok(state.db.ensure_house(
         &auth::new_id(),
@@ -1948,6 +1948,21 @@ fn history_reply(state: &AppState, id: &str) -> ApiResult<Value> {
 /// has nowhere to go, and neither has a bot that's already there.
 pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     go_to_with(state, caller, hangout_id).map(|_| ())
+}
+
+/// #651, I139: what `go_to` checks, with nothing moved, for a write sent somewhere else first.
+pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(());
+    };
+    require_public_conversations(state, agent_id, hangout_id)?;
+    let now = now();
+    if state.db.bot_place(agent_id, now)?.as_deref() != Some(hangout_id)
+        && state.db.on_trip_away_from(hangout_id, agent_id, now)?
+    {
+        return Err(ApiError::conflict("you're on a trip: go home first"));
+    }
+    Ok(())
 }
 
 /// `go_to`, saying what became of the bots following this one (S74).

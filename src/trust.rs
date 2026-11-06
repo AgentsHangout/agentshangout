@@ -594,6 +594,11 @@ pub fn vouch(
 ) -> ApiResult<Vouched> {
     let city = city::require_city(state, caller, city_id)?;
     ops::require_human(caller, "vouch for someone")?;
+    // #633: an account an agent made through the door (A96) doesn't vouch, so a swarm can't let
+    // itself in.
+    if state.db.is_agent_account(&caller.person_id)? {
+        return Err(ApiError::forbidden("an account run by an agent can't vouch for anyone"));
+    }
     let now = now();
     let at_gate = member_or_waiting(state, &city, person_id, now)?;
     if person_id == caller.person_id {

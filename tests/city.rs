@@ -4560,11 +4560,7 @@ async fn a_member_of_a_city_keeps_every_power_over_an_ordinary_hangout_of_their_
 #[tokio::test]
 async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it() {
     use rusqlite::Connection;
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-upgrade-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-upgrade");
     let path_text = path.to_str().unwrap().to_string();
     let _ = std::fs::remove_file(&path);
     let old_tables: [(&str, &[&str]); 12] = [
@@ -4785,6 +4781,32 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "bot_seen_places",
         "bot_follows",
         "look_marks",
+        "plan_invited_by",
+        "vote_reminders",
+        "lific_links",
+        "bot_signups",
+        "agent_accounts",
+        "mayor_elections",
+        "mayor_candidates",
+        "mayor_ballots",
+        "lific_room_projects",
+        "mcp_setup_grants",
+        "mcp_setup_codes",
+        "mcp_setup_tokens",
+        "bot_setup_drafts",
+        "bot_setup_bots",
+        "bridge_keys",
+        "bridge_turns",
+        "keyless_floors",
+        "keyless_presence",
+        "keyless_messages",
+        "keyless_mentions",
+        "keyless_mention_optouts",
+        "keyless_boards",
+        "keyless_cards",
+        "keyless_nonces",
+        "keyless_turns",
+        "lific_card_adds",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4996,6 +5018,39 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "brought_in_owners",
             "bedtime_told",
             "bedtime_off",
+            "plan_invited_by",
+            "vote_person_ballots",
+            "person_votes",
+            "vote_visitors",
+            "memory_jobs",
+            "bot_jobs",
+            "bot_roles",
+            "vote_reminders",
+            "lific_links",
+            "bot_signups",
+            "agent_accounts",
+            "mayor_ballots",
+            "mayor_candidates",
+            "mayor_elections",
+            "lific_room_projects",
+            "bot_setup_bots",
+            "keyless_turns",
+            "keyless_nonces",
+            "keyless_cards",
+            "keyless_boards",
+            "keyless_mention_optouts",
+            "keyless_mentions",
+            "keyless_messages",
+            "keyless_presence",
+            "keyless_floors",
+            "bridge_turns",
+            "bridge_keys",
+            "bot_setup_drafts",
+            "mcp_setup_tokens",
+            "mcp_setup_codes",
+            "mcp_setup_grants",
+            "lific_card_adds",
+            "lific_cards",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
@@ -5149,6 +5204,38 @@ async fn an_owner_dismisses_a_question_and_the_bot_stops_waiting_on_it() {
     }
     let sixth = server.ask_owner(&fern.token, &w.ann_home.living, "One too many?").await;
     assert_eq!(sixth.status, StatusCode::CONFLICT, "{}", sixth.body);
+}
+
+// V10
+#[tokio::test]
+async fn a_guest_on_a_porch_neither_sees_nor_casts_its_votes() {
+    // V10: a Porch isn't a public floor, so a visiting bot can't vote there, and isn't told of it.
+    let set = GuestSet::new(true).await;
+    let server = &set.server;
+    let (porch, ann) = (set.porch(), &set.w.ann);
+    assert_ok(
+        &server
+            .put(&ann.key, &format!("/api/hangouts/{porch}/agents/{}", set.ann_bot.id), json!({}))
+            .await,
+    );
+    let opened = server
+        .tool(
+            &set.ann_bot.token,
+            "open_vote",
+            json!({ "hangout_id": porch, "question": "Tea?", "options": ["yes", "no"], "minutes": 30 }),
+        )
+        .await;
+    assert_ne!(opened["isError"], true, "{opened}");
+    let vote = text(&opened["structuredContent"]["id"]);
+    let cast = server
+        .tool(&set.scout.token, "cast_vote", json!({ "vote_id": vote, "option": "yes" }))
+        .await;
+    assert_eq!(cast["isError"], true, "{cast}");
+    assert!(cast.to_string().contains("guests can't vote"), "{cast}");
+    let inbox = server.tool(&set.scout.token, "inbox", json!({})).await;
+    assert!(inbox["structuredContent"].get("open_votes").is_none(), "{inbox}");
+    let page = server.get(&set.scout.token, &format!("/api/hangouts/{porch}")).await;
+    assert_eq!(page.body["votes"], json!([]), "{}", page.body);
 }
 
 // R45

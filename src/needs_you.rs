@@ -72,6 +72,13 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
             }
         }
     }
+    // F58: plans a friend invited them to by name, which aren't in any room of theirs.
+    let invited: Vec<Value> = state
+        .db
+        .invited_plans(&caller.person_id, now)?
+        .iter()
+        .map(|(event, by)| crate::referrals::invited_plan_json(event, by))
+        .collect();
     check_ins.sort_by(|a, b| (a.0.created_at, &a.0.id).cmp(&(b.0.created_at, &b.0.id)));
     let check_ins: Vec<Value> = check_ins
         .into_iter()
@@ -137,18 +144,27 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
             })
         })
         .collect();
+    // JB6: what an owner's bots found or did on the jobs they gave them.
+    let job_reports = crate::jobs::reports_for(&state, &caller.person_id, now)?;
+    // #647 B: bots an agent drafted for this person, waiting for their approval.
+    let bot_setups = crate::bot_setup::for_needs_you(&state, &caller.person_id)?;
     let count = questions.len()
+        + bot_setups.len()
+        + job_reports.len()
         + check_ins.len()
         + waiting.len()
         + requests.len()
         + invites.len()
         + apprentices.len()
         + plans.len()
+        + invited.len()
         + trips.len()
         + scenes.len()
         + passes.len()
         + mentions.len();
     Ok(Json(json!({
+        "job_reports": job_reports,
+        "bot_setups": bot_setups,
         "questions": questions,
         "check_ins": check_ins,
         "waiting": waiting,
@@ -156,6 +172,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         "invites": invites,
         "apprentices": apprentices,
         "plans": plans,
+        "invited_plans": invited,
         "trips": trips,
         "scenes": scenes,
         "passes": passes,

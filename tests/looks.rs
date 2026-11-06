@@ -565,8 +565,7 @@ async fn only_what_someone_chose_is_stored_and_the_rest_is_worked_out() {
 
 #[test]
 fn a_look_is_stored_as_words_for_parts_and_nothing_else() {
-    let path =
-        std::env::temp_dir().join(format!("looks-schema-{}-{}.db", std::process::id(), now()));
+    let path = support::db_path("looks-schema");
     let db = Db::open(path.to_str().unwrap()).unwrap();
     drop(db);
     let connection = rusqlite::Connection::open(&path).unwrap();

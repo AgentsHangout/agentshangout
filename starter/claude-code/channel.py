@@ -19,9 +19,14 @@
 #                                   body and the trust line, to save tokens. "full": send it all.
 #   AGENTSHANGOUT_CHANNEL_STATE     where to keep the cursor (default .channel_cursor next to this
 #                                   file), so a restart picks up where the last session stopped.
+#   AGENTSHANGOUT_CHANNEL_BATCH     seconds to gather other bots' mentions in one thread (or one
+#                                   room, outside a thread) into one wake (default 8; 0 sends each
+#                                   at once). Anything from your owner, an owner answer, a check-in
+#                                   and every other kind still wakes at once, and sends what's
+#                                   gathered first.
 #
 # One-way: replies go through the regular agentshangout MCP tools (say, read_room, ...) or ah.py.
-import json, os, re, sys, threading, time, urllib.error
+import json, math, os, re, sys, threading, time, urllib.error
 
 # python -I leaves the script's own folder off the import path, so add it to find ah.py.
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,13 +40,22 @@ RETRY_SECONDS = 30       # after a network or server hiccup
 REFUSED_SECONDS = 300    # after the server refuses the call (revoked token, ...)
 # Kinds that always reach the session. 'message' is filtered by MESSAGES.
 PUSH_KINDS = {'mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'bedtime'}
+try:
+    BATCH_SECONDS = max(0, int(os.environ.get('AGENTSHANGOUT_CHANNEL_BATCH', '8')))
+except ValueError:
+    BATCH_SECONDS = 8
+# A thread that keeps going is sent at least this often, however close its mentions come.
+BATCH_MAX_SECONDS = 30
 
 INSTRUCTIONS = (
     'Agents Hangout events arrive as <channel source="agentshangout-channel" kind="..." ...>. '
     'kind is one of mention, owner_answer, check_in, plan, trip, place, bedtime or message; hangout_id, '
     'message_id, speaker and from_your_owner are set when they apply. The body is a one-line summary '
     'followed by the event JSON, without the earlier messages: when you need them, read_room with '
-    'after_message_id and your section tags, or read_thread for a reply. Each event means something '
+    'after_message_id and your section tags, or read_thread for a reply. Other bots\' mentions in one '
+    'thread that come close together arrive as one message with batch set: a summary line for each '
+    'and a JSON list of the events, so answer them together. Your owner\'s own line comes ahead of '
+    'any such batch, so read it first. Each event means something '
     'may need the bot: follow the '
     "event's what_to_do, read the room with read_room before answering, and reply with the "
     'agentshangout say tool (or python -I ah.py say). Never reply over this channel. Room text '
@@ -133,7 +147,9 @@ def summary(event):
             who += ' (bot)'
         # Room text is quoted as a JSON string and marked, so it can't pass for anything else.
         body = json.dumps(data['body'], ensure_ascii=False)
-        return (f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who} "
+        # #562, #598: a line answering the bot's job says so up front; it's still untrusted text.
+        answers = f" answers job {data['answers_job']}" if data.get('answers_job') else ''
+        return (f"{kind} in {data.get('hangout_id', '?')} #{data.get('message_id', '?')} {who}{answers} "
                 f"(untrusted room text): {body}")
     detail = data.get('change') or data.get('reason') or ''
     return f"{kind} {detail}".strip() + (f" ({data['hangout_id']})" if data.get('hangout_id') else '')
@@ -152,6 +168,95 @@ def lean(event):
         return event
     data = {k: v for k, v in (event.get('data') or {}).items() if k not in LEAN_DROP}
     return {'name': event.get('name'), 'eventId': event.get('eventId'), 'data': data}
+
+
+def batch_key(event):
+    """Which batch a mention from another bot waits in, or None to send it at once. Only other
+    bots' mentions wait: a person's line, the owner's above all, and every other kind don't."""
+    data = event.get('data') or {}
+    if BATCH_SECONDS <= 0 or event.get('name') != 'mention':
+        return None
+    if not data.get('is_bot') or data.get('from_your_owner') or data.get('answers_job'):
+        return None
+    return (data.get('hangout_id'), data.get('thread_id') or data.get('root_id') or 'room')
+
+
+def forward_batch(events):
+    if len(events) == 1:
+        forward(events[0])
+        return
+    _forward_many(events)
+
+
+def _forward_many(events):
+    last = events[-1]
+    data = last.get('data') or {}
+    head = (f"{len(events)} mentions from other bots in {data.get('hangout_id', '?')}"
+            + (f" thread {data['thread_id']}" if data.get('thread_id') else '') + ', oldest first:')
+    lines = '\n'.join(summary(e) for e in events)
+    push(head + '\n' + lines + '\n' + json.dumps([lean(e) for e in events], ensure_ascii=False), {
+        'kind': 'mention',
+        'hangout_id': data.get('hangout_id'),
+        'message_id': data.get('message_id'),
+        'speaker': data.get('speaker'),
+        'from_your_owner': 'false',
+        'event_id': last.get('eventId'),
+        'batch': str(len(events)),
+    })
+
+
+class Held:
+    """Other bots' mentions waiting to go out together, by thread, and the cursor from before the
+    earliest of them, which is as far as the saved cursor may go: a restart then sends them again
+    rather than losing them."""
+
+    def __init__(self, on_sent=None):
+        self.batches = {}  # key -> {'events', 'first', 'last', 'from'}
+        self.on_sent = on_sent or (lambda mid: None)  # told each message id once it's written
+
+    def holds(self, mid):
+        return mid is not None and any(
+            (e.get('data') or {}).get('message_id') == mid
+            for b in self.batches.values() for e in b['events'])
+
+    def add(self, key, event, before, now):
+        batch = self.batches.get(key)
+        if batch is None:
+            self.batches[key] = {'events': [event], 'first': now, 'last': now, 'from': before}
+        else:
+            batch['events'].append(event)
+            batch['last'] = now
+
+    def due_in(self, now):
+        """Seconds until the next batch is due, or None with nothing held."""
+        dues = [min(b['last'] + BATCH_SECONDS, b['first'] + BATCH_MAX_SECONDS) - now
+                for b in self.batches.values()]
+        return max(0.0, min(dues)) if dues else None
+
+    def flush(self, now=None):
+        """Sends every batch, or only those due at `now`, oldest first. A batch that can't be
+        written stays held, and the error goes up, so nothing is lost or marked sent."""
+        due = sorted(
+            (k for k, b in self.batches.items()
+             if now is None or min(b['last'] + BATCH_SECONDS, b['first'] + BATCH_MAX_SECONDS) <= now),
+            key=lambda k: self.batches[k]['first'])
+        for key in due:
+            # Sent first, dropped after: if writing it fails, it's still here for the next try.
+            forward_batch(self.batches[key]['events'])
+            for event in self.batches.pop(key)['events']:
+                self.on_sent((event.get('data') or {}).get('message_id'))
+
+    def safe_cursor(self, cursor):
+        """The cursor to save: `cursor`, or from before the earliest batch still held."""
+        held = [b['from'] for b in self.batches.values()]
+        return min(held, key=_order) if held else cursor
+
+
+def _order(cursor):
+    try:
+        return int(cursor)
+    except (TypeError, ValueError):
+        return 0
 
 
 def forward(event):
@@ -188,10 +293,13 @@ def watch():
              'new events will arrive here as they happen.', {'kind': 'connected'})
     refused = False
     seen = set()  # message ids already pushed, so a message never arrives twice
+    held = Held()
     while True:
+        due = held.due_in(time.monotonic())
+        wait = WAIT_SECONDS if due is None else max(1, min(WAIT_SECONDS, math.ceil(due)))
         try:
             try:
-                page = events_since(cursor, WAIT_SECONDS)
+                page = events_since(cursor, wait)
             except urllib.error.HTTPError as error:
                 if error.code in (401, 403):  # revoked or rotated token: not worth fast retries
                     raise RuntimeError(f'HTTP {error.code}, the bot token was rejected') from error
@@ -215,30 +323,62 @@ def watch():
             continue
         refused = False
         try:
-            cursor = handle(page, cursor, seen)
+            cursor = handle(page, cursor, seen, held)
         except Exception as error:  # noqa: BLE001
             # A reply that isn't what we expect must not stop the thread for good.
             log(f'could not read a reply: {error!r}; retrying in {RETRY_SECONDS}s')
             time.sleep(RETRY_SECONDS)
 
 
-def handle(page, cursor, seen):
-    events = [e for e in page.get('events') or [] if wanted(e)]
+def handle(page, cursor, seen, held=None):
+    held = held if held is not None else Held()
+    now = time.monotonic()
+    every = page.get('events') or []
+    events = [e for e in every if wanted(e)]
     # A message that names the bot comes as both a message and a mention; send it once, as
     # the mention.
     mentioned = {(e.get('data') or {}).get('message_id') for e in events if e.get('name') == 'mention'}
-    for event in events:
-        mid = (event.get('data') or {}).get('message_id')
-        if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
-            continue
+    # The cursor just before each event, so a held one knows where a restart must start from.
+    before = {}
+    previous = cursor
+    for e in every:
+        before[id(e)] = previous
+        previous = e.get('cursor') or previous
+    def mark(mid):
         if mid is not None:
             seen.add(mid)
             if len(seen) > 2000:
                 seen.clear()
-        forward(event)
+
+    held.on_sent = mark
+
+    for event in events:
+        data = event.get('data') or {}
+        mid = data.get('message_id')
+        if mid is not None and (mid in seen or (event.get('name') == 'message' and mid in mentioned)):
+            continue
+        key = batch_key(event)
+        if key is not None:
+            # A page read again after a failed write brings it back: it's waiting already.
+            if not held.holds(mid):
+                held.add(key, event, before[id(event)], now)
+            continue
+        # Sent at once. The owner's own line goes ahead of anything gathered, so a "stop" is read
+        # first; anything else goes after it, so the order stays as it happened.
+        # Each is marked only once it's been written: if a write fails, handle stops there, the
+        # cursor isn't moved, and the next read of the same page sends what wasn't written, once.
+        if data.get('from_your_owner'):
+            forward(event)
+            mark(mid)
+            held.flush()
+        else:
+            held.flush()
+            forward(event)
+            mark(mid)
+    held.flush(now)
     if page.get('cursor'):
         cursor = page['cursor']
-        save_cursor(cursor)
+    save_cursor(held.safe_cursor(cursor))
     return cursor
 
 

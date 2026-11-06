@@ -2,6 +2,8 @@
 //! the shipped web/*.js in Node for the map, a room and the home page, signed in as a person. A
 //! runtime error while a page builds itself, like #558's `const done` used before it was declared,
 //! fails here instead of on the live site.
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -20,7 +22,8 @@ async fn pages_start_without_errors() {
             god_ids: vec![],
         },
     );
-    let server = tokio::spawn(async move { axum::serve(listener, app(state)).await });
+    let served = state.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, app(served)).await });
     let owner: Value = Client::new()
         .post(format!("{base}/api/hangouts"))
         .json(&json!({"name":"Smoke Cafe", "your_name":"Owner", "create_code":"test"}))
@@ -34,8 +37,28 @@ async fn pages_start_without_errors() {
         .unwrap();
     let key = owner["owner_key"].as_str().unwrap().to_string();
     let room = owner["hangout"]["id"].as_str().unwrap();
-    for path in ["/".to_string(), "/world/commons".to_string(), format!("/h/{room}")] {
-        let (base, key) = (base.clone(), key.clone());
+    // S86: a bot of Owner's in the room, so its crew row (picture, badge, Bonds) is built too.
+    support::legacy_bot(&state, owner["person"]["id"].as_str().unwrap(), room, "Scout");
+    // V12: an open vote, so its card is drawn over the chat.
+    Client::new()
+        .post(format!("{base}/api/hangouts/{room}/votes"))
+        .bearer_auth(owner["owner_key"].as_str().unwrap())
+        .json(&json!({"question":"Lunch?", "options":["Tacos","Pizza"], "minutes":30}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    // F58: a friend invited to one of Owner's plans by name, so their Needs you draws an invited
+    // plan when the home page loads, and that code runs here too.
+    let friend_key = invited_friend(&base, &key, room).await;
+    for (key, path) in [
+        (key.clone(), "/".to_string()),
+        (key.clone(), "/world/commons".to_string()),
+        (key.clone(), format!("/h/{room}")),
+        (friend_key, "/".to_string()),
+    ] {
+        let base = base.clone();
         let output = tokio::task::spawn_blocking(move || {
             std::process::Command::new("node")
                 .args(["tests/page_smoke.mjs", &base, &key, &path])
@@ -52,4 +75,53 @@ async fn pages_start_without_errors() {
         );
     }
     server.abort();
+}
+
+/// Owner proposes a plan and invites a friend to it by name; the friend's key is returned. They're
+/// friends through the friend's own room, which Owner joins (FR1).
+async fn invited_friend(base: &str, owner_key: &str, room: &str) -> String {
+    let client = Client::new();
+    let send = |key: &str, path: &str, body: Value| {
+        client.post(format!("{base}{path}")).bearer_auth(key).json(&body).send()
+    };
+    let json = |reply: reqwest::Response| async move {
+        reply.error_for_status().unwrap().json::<Value>().await.unwrap()
+    };
+    let plan = json(
+        send(
+            owner_key,
+            &format!("/api/hangouts/{room}/events"),
+            json!({"title":"Smoke tacos","starts_at":"2031-06-06T18:00:00Z"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    let theirs = json(
+        send(
+            "",
+            "/api/hangouts",
+            json!({"name":"Friend place","your_name":"Friend","create_code":"test"}),
+        )
+        .await
+        .unwrap(),
+    )
+    .await;
+    let code = theirs["invite_url"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    json(send(owner_key, &format!("/api/invites/{code}/join"), json!({})).await.unwrap()).await;
+    let friend = theirs["person"]["id"].as_str().unwrap();
+    let plan_id = plan["id"].as_str().unwrap();
+    let sent = json(
+        send(owner_key, &format!("/api/events/{plan_id}/invitees"), json!({"person_ids":[friend]}))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(sent["invited"].as_array().map(Vec::len), Some(1), "{sent}");
+    let friend_key = theirs["owner_key"].as_str().unwrap().to_string();
+    let needs =
+        client.get(format!("{base}/api/needs-you")).bearer_auth(&friend_key).send().await.unwrap();
+    let needs = json(needs).await;
+    assert_eq!(needs["invited_plans"].as_array().map(Vec::len), Some(1), "{needs}");
+    friend_key
 }

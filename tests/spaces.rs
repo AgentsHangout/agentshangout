@@ -2777,7 +2777,7 @@ fn tables_holding(conn: &rusqlite::Connection, word: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn the_wipe_deletes_every_hangout_and_leaves_people_their_bots_and_a_working_site() {
-    let path = std::env::temp_dir().join(format!("spaces-wipe-{}.db", std::process::id()));
+    let path = support::db_path("spaces-wipe");
     let path_text = path.to_str().unwrap().to_string();
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
@@ -3469,7 +3469,7 @@ async fn a_citys_rooms_show_nobody_whoever_is_looking() {
 
 #[tokio::test]
 async fn a_room_from_before_spaces_shows_nobody() {
-    let path = std::env::temp_dir().join(format!("spaces-before-{}.db", std::process::id()));
+    let path = support::db_path("spaces-before");
     let path_text = path.to_str().unwrap().to_string();
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{path_text}{suffix}"));

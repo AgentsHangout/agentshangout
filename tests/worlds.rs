@@ -5,6 +5,8 @@
 //! Time is real for anything that goes over HTTP. The tests that need to look days ahead call the
 //! functions in `worlds` directly with a time of their own.
 
+mod support;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::atomic::{AtomicU32, Ordering},
@@ -2710,7 +2712,7 @@ async fn look_returns_at_most_32_by_32_tiles_and_a_view_has_a_fixed_size() {
 
 // W33
 #[tokio::test]
-async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_its_seven() {
+async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_its_own() {
     let server = Server::start().await;
     let reply = server.rpc("tools/list", json!({})).await;
     let names: Vec<&str> = reply.body["result"]["tools"]
@@ -2719,7 +2721,26 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["join", "look", "build", "bulldoze", "walk", "emote", "how_am_i_doing"]);
+    // The map's seven, and a keyless agent's seven for the floors a god opened (KA7 to KA16).
+    assert_eq!(
+        names,
+        [
+            "join",
+            "look",
+            "build",
+            "bulldoze",
+            "walk",
+            "emote",
+            "how_am_i_doing",
+            "floors",
+            "enter",
+            "leave",
+            "read_floor",
+            "floor_say",
+            "add_card",
+            "edit_card"
+        ]
+    );
     // Nothing private is offered, or works, here.
     for private in [
         "inbox",
@@ -2785,6 +2806,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // how_to_play (I95) teaches tagging and what each thing in a room is for.
     // report_usage (U23) lets a bot report its own cost to its owner.
     // remember, recall, forget and sleep (MM6, MM8, MM11) are a bot's own memories.
+    // finish_job (JB6) closes a bot's own job with a write-up for its owner.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2837,7 +2859,9 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"recall")
             && private_names.contains(&"forget")
             && private_names.contains(&"sleep")
-            && private_names.len() == 96,
+            && private_names.contains(&"finish_job")
+            && private_names.contains(&"mayor_race")
+            && private_names.len() == 98,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
@@ -3344,6 +3368,35 @@ async fn whatever_fetches_llms_agents_or_the_public_mcp_endpoint_is_a_visitor() 
     server.get("/public/mcp").ua("curl/8.5").ip("203.0.113.36").send().await;
     server.post("/llms.txt", json!({})).ua("curl/8.5").ip("203.0.113.37").send().await;
     assert_eq!(server.state.worlds.visitors(now()).len(), 4);
+    // W110: the agent card is read only by agents too.
+    server.get("/.well-known/agent.json").ua("curl/8.5").ip("203.0.113.38").send().await;
+    assert_eq!(server.state.worlds.visitors(now()).len(), 5);
+}
+
+// W110
+#[tokio::test]
+async fn the_agent_card_describes_both_rooms_and_isnt_an_endpoint() {
+    let server = Server::start().await;
+    let card = server.get("/.well-known/agent-card.json").send().await;
+    assert_eq!(card.status, StatusCode::OK, "{}", card.show());
+    // Clients before A2A 0.3 look at agent.json, and find the same card.
+    let older = server.get("/.well-known/agent.json").send().await;
+    assert_eq!(older.status, StatusCode::OK, "{}", older.show());
+    assert_eq!(older.body, card.body);
+    assert_eq!(card.headers["content-type"], "application/json");
+    assert_eq!(card.headers["access-control-allow-origin"], "*");
+    assert_eq!(card.body["url"], json!(format!("{}/llms.txt", server.base)));
+    assert!(card.body["description"].as_str().unwrap().contains("isn't an A2A endpoint"));
+    let skills = card.body["skills"].as_array().unwrap();
+    let ids: Vec<_> = skills.iter().map(|skill| skill["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["town-square", "ms-research-lab"]);
+    for (skill, room) in skills.iter().zip(["h/Bm4qhf3DwgntfHQF", "h/fcrkZH62LSwc3gmX"]) {
+        let said = skill["description"].as_str().unwrap();
+        for words in [room, "https://agentshangout.com/llms.txt", "only counts inside the room"] {
+            assert!(said.contains(words), "{} lacks {words}", skill["id"]);
+        }
+    }
+    assert!(skills[1]["description"].as_str().unwrap().contains("not medical advice"));
 }
 
 // W42
@@ -3455,11 +3508,7 @@ async fn frogs_and_visitors_are_in_memory_only() {
     assert_eq!(server.state.worlds.visitors(now()).len(), 1);
     // A new process, on the same database, starts with an empty street: only the daily count was kept.
     let day = worlds::today(now());
-    let db_file = std::env::temp_dir().join(format!(
-        "agenthangout-street-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let db_file = support::db_path("agenthangout-street");
     let path = db_file.to_str().unwrap().to_string();
     {
         let first = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -3494,7 +3543,7 @@ async fn the_public_mcp_endpoint_needs_no_token_to_connect() {
     assert!(init.body["result"]["instructions"].as_str().unwrap().contains("join"));
     assert_eq!(server.rpc("ping", json!({})).await.body["result"], json!({}));
     let tools = server.rpc("tools/list", json!({})).await;
-    assert_eq!(tools.body["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools.body["result"]["tools"].as_array().unwrap().len(), 14);
     // A notification has no reply; a bad request is an error; GET isn't allowed.
     let note = server
         .req(Method::POST, "/public/mcp")
@@ -4482,11 +4531,7 @@ async fn sending_a_bot_home_ends_its_player_token_and_the_bot_joins_again_with_i
 // W3
 #[tokio::test]
 async fn a_bot_deleted_from_the_database_leaves_a_player_that_cannot_play_on_as_a_claimed_one() {
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-bot-gone-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-bot-gone");
     let path = path.to_str().unwrap().to_string();
     {
         let server = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -4620,11 +4665,7 @@ async fn a_new_commons_is_the_highway_and_nothing_else_and_nobody_can_bulldoze_i
 // W28
 #[tokio::test]
 async fn a_restart_leaves_the_commons_as_it_was() {
-    let path = std::env::temp_dir().join(format!(
-        "agenthangout-restart-{}-{}.db",
-        std::process::id(),
-        now()
-    ));
+    let path = support::db_path("agenthangout-restart");
     let path = path.to_str().unwrap().to_string();
     {
         let first = Server::boot(Db::open(&path).unwrap(), None, None).await;
@@ -5076,11 +5117,7 @@ async fn a_person_has_one_house_and_three_other_places() {
 }
 
 fn temp_db() -> String {
-    let unique = auth::new_id();
-    std::env::temp_dir()
-        .join(format!("agenthangout-test-{unique}.db"))
-        .to_string_lossy()
-        .into_owned()
+    support::db_path("agenthangout-test").to_string_lossy().into_owned()
 }
 
 // W56
@@ -5581,8 +5618,7 @@ async fn road_losses_survive_rebuilding_and_rollback_but_never_change_owners() {
 // W97: the record is durable and bounded on read, and expired guests can't donate roads or history.
 #[test]
 fn road_history_survives_reopening_and_guest_expiry_never_reassigns_roads() {
-    let path =
-        std::env::temp_dir().join(format!("agentshangout-road-history-{}.db", auth::new_id()));
+    let path = support::db_path("agentshangout-road-history");
     let path_str = path.to_str().unwrap();
     let builder;
     {

@@ -4,6 +4,7 @@ import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
 import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
 import { planInviteView } from './plan-invite.js';
+import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
 
@@ -487,6 +488,133 @@ function onlyOwnerKeyNudge(me, status) {
       },
     }, 'Not now'));
   return nudge;
+}
+
+// W112, #643 B: a small strip in the upper right for someone signed in: star the repo, join the
+// Discord, and X or LinkedIn when the site lists them. The links come from GET /api/links, the same
+// list bots read. It never stands in the way of signing in, and the cross hides it in this browser;
+// without storage it just shows again next time.
+const SOCIAL_STRIP_HIDDEN = 'social-strip-hidden';
+const SOCIAL_STRIP_PROFILES = [['Discord', 'Join Discord'], ['X', 'X'], ['LinkedIn', 'LinkedIn']];
+function socialStrip(links) {
+  const safe = (url) => typeof url === 'string' && url.startsWith('https://');
+  const buttons = [
+    safe(links.star) ? ['Star on GitHub', links.star] : null,
+    ...SOCIAL_STRIP_PROFILES.map(([name, label]) => {
+      const found = (links.profiles || []).find((profile) => profile.name === name);
+      return found && safe(found.url) ? [label, found.url] : null;
+    }),
+  ].filter(Boolean);
+  if (!buttons.length) return null;
+  const strip = h('aside', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
+    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'social-strip-link' }, label)),
+    h('button', {
+      type: 'button',
+      class: 'ghost social-strip-hide',
+      'aria-label': 'Hide these links',
+      onclick: () => {
+        try {
+          localStorage.setItem(SOCIAL_STRIP_HIDDEN, '1');
+        } catch { /* it comes back next time */ }
+        strip.remove();
+      },
+    }, '✕'));
+  return strip;
+}
+async function showSocialStrip() {
+  try {
+    if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
+  } catch { /* no storage, so it shows */ }
+  if (document.querySelector('.social-strip')) return;
+  const at = location.pathname;
+  const me = await api('/api/me').catch(() => null);
+  if (!me) return;
+  const links = await api('/api/links').catch(() => null);
+  const strip = links && socialStrip(links);
+  // Only on the page it was asked for: someone may have gone into a room meanwhile.
+  if (strip && location.pathname === at && !document.querySelector('.social-strip')) document.body.append(strip);
+}
+
+// MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it
+// closes, how many have voted (ballots are secret, so no totals), the person's own ballot, standing
+// or withdrawing, and last week's mayor. A ballot is cast from this room, so the server checks the
+// person is on it; whatever it refuses, it says why, and that's shown as it is.
+function mayorPanel(roomId, botsHere = () => []) {
+  const root = h('div', { class: 'mayor-panel' }, h('p', { class: 'muted' }, 'Loading...'));
+  const error = formError();
+  const who = (candidate) => (candidate.kind === 'bot' ? `${candidate.name} (bot)` : candidate.name);
+  const run = (action) => async (event) => {
+    const button = event?.currentTarget;
+    error.hidden = true;
+    if (button) button.disabled = true;
+    try {
+      await action();
+      await load();
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+  function render(race) {
+    const mine = race.your_ballot;
+    const rows = race.candidates.map((candidate) => {
+      const chosen = mine && mine.kind === candidate.kind && mine.id === candidate.id;
+      return h('li', { class: chosen ? 'mayor-choice chosen' : 'mayor-choice' },
+        h('span', {}, who(candidate)),
+        chosen
+          ? h('strong', {}, 'Your vote')
+          : h('button', {
+            type: 'button',
+            class: mine ? 'ghost' : 'primary',
+            onclick: run(() => api('/api/mayor/ballot', { method: 'PUT', body: { kind: candidate.kind, id: candidate.id, hangout_id: roomId } })),
+          }, mine ? 'Change to them' : 'Vote'));
+    });
+    const last = race.last_week && race.last_week.mayor;
+    root.replaceChildren(
+      last
+        ? h('p', {}, h('strong', {}, 'Mayor this week: '), who(last), ` (${race.last_week.votes} votes${race.last_week.tie_draw ? ', drawn from a tie' : ''})`)
+        : h('p', { class: 'muted' }, 'No mayor this week.'),
+      h('p', {}, `Voting closes ${race.closes_local}. ${race.voted} ${race.voted === 1 ? 'person has' : 'people have'} voted so far.`),
+      rows.length
+        ? h('ul', { class: 'mayor-choices' }, ...rows)
+        : h('p', { class: 'muted' }, 'Nobody is standing yet.'),
+      h('p', { class: 'muted fine' }, race.note),
+      race.can_nominate ? nominateRow(race) : null,
+      error,
+      h('div', { class: 'modal-actions' },
+        race.you_stand
+          ? h('button', { type: 'button', class: 'ghost', onclick: run(() => api('/api/mayor/stand', { method: 'DELETE' })) }, 'Withdraw')
+          : h('button', { type: 'button', onclick: run(() => api('/api/mayor/stand', { method: 'POST' })) }, 'Stand for mayor')));
+  }
+  // MY9: someone with god mode on puts a bot from this room on the ballot.
+  function nominateRow(race) {
+    const standing = new Set(race.candidates.filter((c) => c.kind === 'bot').map((c) => c.id));
+    const bots = botsHere().filter((bot) => !standing.has(bot.id));
+    if (!bots.length) return null;
+    const pick = h('select', { 'aria-label': 'Bot to nominate' },
+      ...bots.map((bot) => h('option', { value: bot.id }, bot.name)));
+    return h('div', { class: 'modal-actions' },
+      pick,
+      h('button', { type: 'button', onclick: run(() => api('/api/mayor/candidates', { method: 'POST', body: { kind: 'bot', id: pick.value } })) }, 'Nominate a bot'));
+  }
+  async function load() {
+    render(await api('/api/mayor'));
+  }
+  load().catch((failure) => {
+    root.replaceChildren(h('p', {}, failure.message), error);
+  });
+  return root;
+}
+
+// MY6, #639: last week's mayor, when they're a person, for their card's badge. Asked once per page.
+let mayorAsked = null;
+function mayorPersonId() {
+  mayorAsked ??= api('/api/mayor')
+    .then((race) => (race.last_week?.mayor?.kind === 'person' ? race.last_week.mayor.id : null))
+    .catch(() => null);
+  return mayorAsked;
 }
 
 // A87, A54: replacing the owner key, in Account on the map and in every room. Someone who skipped
@@ -1020,13 +1148,26 @@ function windowPanel({ title, label, heading = 'h2' }, ...content) {
 
 // A plan's link, for a person to send to a friend who isn't here (F8). Bots never get one.
 // F56: `fresh` when it opens straight after proposing, as the plan's invite step.
-async function sharePlan(event, { fresh = false } = {}) {
+// F57: and friends picked by name, who are told and answer in their Needs you. `here()` is the
+// room's people, who can already see the plan; `reload()` shows each new invitee on it (F61).
+async function sharePlan(event, { fresh = false, here = () => [], reload = async () => {} } = {}) {
   const error = formError();
   const { invite_url: first } = await api(`/api/events/${event.id}/invite`, { method: 'POST' });
   const row = h('div', {}, secretRow(first));
+  const byName = friendInviter({
+    here,
+    invite: async (personId) => {
+      const result = await api(`/api/events/${event.id}/invitees`, { method: 'POST', body: { person_ids: [personId] } });
+      if (result.in_room?.length) throw new Error('They\'re in this room, so they can already see it.');
+      if (result.already?.length) throw new Error('They\'re already invited.');
+      if (result.full?.length) throw new Error('The plan is full: it has all the guests it can take.');
+      await reload();
+    },
+  });
   const dialog = modal(fresh ? 'Invite people' : 'Invite a friend',
     fresh ? h('p', {}, 'Your plan is up, and everyone in this room can see it and answer.') : null,
-    h('p', {}, 'Send this link to someone who isn\'t here yet. They can answer with no account.'),
+    byName,
+    h('p', {}, 'Or send this link to someone who isn\'t here yet. They can answer with no account.'),
     h('p', { class: 'muted' }, 'They\'ll see the plan\'s title, time and place, and your name. They won\'t see this room.'),
     row,
     error,
@@ -1829,6 +1970,44 @@ function mentionBox(input, { names, load, pick }) {
   return wrap;
 }
 
+// V12: one vote as a card: its question, who opened it and when it closes, a button per option for
+// someone who may vote (their choice marked), each option's count and who chose it, and Close for
+// whoever opened it. A visitor, who walked onto a public floor, is marked as one.
+//   cast(option)  votes, and returns a promise
+//   close()       closes it early, for its opener
+function voteCard(vote, { cast = null, close = null } = {}) {
+  const voterName = (voter) => `${voter.person || `${voter.bot} (${voter.owner ? `${voter.owner}'s bot` : 'a bot'})`}${voter.visitor ? ', visiting' : ''}`;
+  const status = h('small', { class: 'muted', role: 'status' });
+  const run = (action) => async () => {
+    try {
+      await action();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+  const when = vote.open ? `closes ${untilText(Math.floor(Date.parse(vote.closes_at) / 1000))}` : 'closed';
+  return h('div', { class: `card vote-card${vote.open ? ' open' : ''}` },
+    h('strong', {}, vote.question),
+    h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`),
+    h('ul', { class: 'vote-options' }, vote.options.map((option) => h('li', {},
+      vote.open && cast
+        ? h('button', {
+          type: 'button',
+          class: vote.you_voted === option.option ? 'chosen' : 'ghost',
+          'aria-pressed': String(vote.you_voted === option.option),
+          onclick: run(() => cast(option.option)),
+        }, option.option)
+        : h('strong', {}, option.option),
+      ` ${option.votes}`,
+      option.voters.length ? h('small', { class: 'muted' }, ` \u00b7 ${option.voters.map(voterName).join(', ')}`) : null))),
+    vote.voters_hidden ? h('small', { class: 'muted' }, 'Only the room\'s members see who voted.') : null,
+    vote.open && close && vote.you_opened
+      ? h('button', { type: 'button', class: 'link', onclick: run(close) }, 'Close it now')
+      : null,
+    h('small', { class: 'muted' }, vote.note || 'A room poll, not an owner\'s approval.'),
+    status);
+}
+
 // Invites a friend by name: typing @ lists the people you share a room or city with. It only shows
 // them this place's normal invite page, so whatever that asks of them still applies.
 //   invite(personId)  sends the invite, and returns a promise
@@ -1871,6 +2050,33 @@ const PIC_TALL = 64;
 const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const friendsText = (count) => `needs ${count} ${count === 1 ? 'friend' : 'friends'}`;
+
+// I131 (#640): a message's text in pieces: plain text, and `re 7068`, `re: 7068` or `#7068` where
+// 7068 is a message already shown in this room, which becomes a link to it. Any other number, a
+// GitHub issue's included, stays text.
+function messageRefs(text, known) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(/\b(re:?\s*)(\d{1,9})\b|#(\d{1,9})\b/gi)) {
+    const id = Number(match[2] || match[3]);
+    if (!known(id)) continue;
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    parts.push({ text: match[0], ref: id });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
+// Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
+// public floor or a full one.
+function lockReason(kind, { isPublic, full }) {
+  if (kind.pack_needed) return `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`;
+  if (kind.god_needed) return 'needs god mode';
+  if (!kind.unlocked) return friendsText(kind.friends_needed);
+  if (kind.mood === 'flirty' && isPublic) return 'private floors only';
+  return full ? 'this floor is full' : null;
+}
 
 // I90, E40: collections only filter existing catalog entries; All keeps every category available.
 function selectedBuildCollection(catalog, id) {
@@ -2306,6 +2512,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'votes': panels.open('votes'); break;
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
+      case 'lific': openLific(item); break;
+      case 'mayor': modal('Mayor voting box', mayorPanel(id, () => view().agents || [])); break;
       default: break;
     }
   }
@@ -2521,11 +2729,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       picture: buildPicture(`item:${kind.kind}:${kind.w}:${kind.h}`, () => fitPicture(itemPicture(kind.kind, kind.w, kind.h), PIC_WIDTH, PIC_TALL)),
       label: kind.label,
       lines: [`Beauty ${kind.beauty}`, kind.mood ? wordName(kind.mood) : 'No mood', ...(kind.holds_notes ? ['Holds notes'] : []), ...(kind.does ? ['Bots can use it'] : [])],
-      why: kind.pack_needed ? `in the ${wordName(kind.pack_needed).toLowerCase()} pack: press to see it in the shop`
-        : !kind.unlocked ? friendsText(kind.friends_needed)
-        : kind.mood === 'flirty' && isPublic ? 'private floors only'
-          : full ? 'this floor is full'
-            : null,
+      why: lockReason(kind, { isPublic, full }),
       shop: kind.pack_needed || null,
       onclick: () => {
         const { x, y } = firstSpot(kind.w, kind.h);
@@ -2911,6 +3115,135 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       }),
     }, 'Clear it')));
   panels.add('closing', 'Closing clock', {}, closingInfo, closingError, closingForm);
+
+  // I123 to I127: a Lific board shows a published project's issues, read through this server.
+  // Lific's words are other people's, so they go in as text only.
+  let lificOf = null;
+  const lificError = formError();
+  const lificInfo = h('p', { class: 'muted', role: 'status' });
+  const lificColumns = h('div', { class: 'lific-kanban' });
+  const lificForm = h('form', {
+    class: 'stack',
+    hidden: true,
+    onsubmit: submitter(lificError, async (data) => {
+      await api(`/api/items/${encodeURIComponent(lificOf)}/lific`, {
+        method: 'PUT',
+        body: { base: data.base, project: data.project },
+      });
+      await loadLific();
+    }),
+  },
+  field('Lific address', h('input', { type: 'url', name: 'base', placeholder: 'https://lific.example', required: true })),
+  field('Project', h('input', { type: 'text', name: 'project', placeholder: 'APP', required: true, maxlength: 16 })),
+  h('small', { class: 'muted' }, 'Only a published project shows, and publishing makes the whole project public.'),
+  h('div', { class: 'event-actions' },
+    h('button', { type: 'submit', class: 'primary' }, 'Link it'),
+    h('button', {
+      type: 'button',
+      onclick: act(lificError, async () => {
+        await api(`/api/items/${encodeURIComponent(lificOf)}/lific`, { method: 'PUT', body: { base: null } });
+        await loadLific();
+      }),
+    }, 'Unlink')));
+  // I132: the owner's link form stays folded away, so the board itself comes first.
+  const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
+
+  // I132: the working columns always show, so an empty project still looks like a board.
+  const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
+
+  // I139: Lific not taking a change comes back as a reply, said like an unavailable board.
+  async function lificSend(path, options) {
+    const reply = await api(`/api/items/${encodeURIComponent(lificOf)}/lific/cards${path}`, options);
+    if (reply.ok === false) throw new Error(reply.unavailable || 'Lific didn\'t take that change.');
+    await loadLific();
+  }
+  const lificMove = (card, status) => lificSend(`/${encodeURIComponent(card)}`, { method: 'PUT', body: { status } });
+
+  // I140: anyone who may change the board adds at the top of a column, drags cards between
+  // columns or uses Move to, and Remove shows only to whoever may take a card down.
+  function lificKanban(columns, canChange = false) {
+    return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) => {
+      const name = LIFIC_STATUS[column.status] || column.status;
+      const adder = canChange && column.status !== 'cancelled' ? h('form', {
+        class: 'lific-add',
+        onsubmit: submitter(lificError, async (data) => {
+          await lificSend('', { method: 'POST', body: { title: data.title, status: column.status } });
+        }),
+      }, h('input', { type: 'text', name: 'title', placeholder: 'Add a card', 'aria-label': `Add a card to ${name}`, maxlength: 120, required: true })) : null;
+      const cards = column.issues.map((issue) => h('div', {
+        class: 'lific-card',
+        'data-priority': issue.priority || 'none',
+        draggable: canChange && Boolean(issue.id),
+        ondragstart: (event) => { event.dataTransfer.setData('text/plain', issue.id); },
+      },
+      issue.id ? h('small', { class: 'lific-id' }, issue.id) : null,
+      h('p', {}, issue.title),
+      h('small', { class: 'muted' }, [
+        issue.priority && issue.priority !== 'none' ? issue.priority : '',
+        issue.module || '',
+        issue.added_by ? `added by ${issue.added_by.name}${issue.added_by.is_bot ? ' (bot)' : ''}` : '',
+      ].filter(Boolean).join(' · ')),
+      canChange && issue.id ? h('div', { class: 'lific-card-actions' },
+        h('select', {
+          'aria-label': `Move ${issue.id} to`,
+          onchange: act(lificError, async (event) => { await lificMove(issue.id, event.target.value); }),
+        }, h('option', { value: '', selected: true, disabled: true }, 'Move to…'),
+        ...Object.entries(LIFIC_STATUS).filter(([status]) => status !== column.status).map(([status, label]) => h('option', { value: status }, label))),
+        issue.can_remove ? h('button', {
+          type: 'button',
+          onclick: act(lificError, async () => {
+            if (!confirm(`Remove ${issue.id} from the board? It goes to Lific's trash.`)) return;
+            await lificSend(`/${encodeURIComponent(issue.id)}`, { method: 'DELETE' });
+          }),
+        }, 'Remove') : null) : null));
+      return h('section', {
+        class: 'lific-column',
+        'aria-label': name,
+        ondragover: canChange ? (event) => event.preventDefault() : null,
+        ondrop: canChange ? act(lificError, async (event) => {
+          event.preventDefault();
+          const card = event.dataTransfer.getData('text/plain');
+          if (card && !column.issues.some((issue) => issue.id === card)) await lificMove(card, column.status);
+        }) : null,
+      },
+      h('h3', {}, name, ' ', h('small', {}, String(column.issues.length))),
+      adder,
+      ...(cards.length ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]));
+    });
+  }
+
+  async function loadLific() {
+    const asked = lificOf;
+    if (!asked) return;
+    lificError.hidden = true;
+    try {
+      const board = await api(`/api/items/${encodeURIComponent(asked)}/lific`);
+      if (asked !== lificOf) return;
+      lificLink.hidden = !board.you_can_link;
+      lificForm.hidden = false;
+      lificInfo.textContent = board.available
+        ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
+        : board.unavailable;
+      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change) : []));
+    } catch (error) {
+      if (asked !== lificOf) return;
+      lificColumns.replaceChildren();
+      lificInfo.textContent = '';
+      lificError.textContent = error.message;
+      lificError.hidden = false;
+    }
+  }
+
+  function openLific(item) {
+    lificOf = item.id;
+    lificInfo.textContent = 'Asking Lific…';
+    lificColumns.replaceChildren();
+    lificLink.hidden = true;
+    lificLink.open = false;
+    panels.open('lific');
+    loadLific();
+  }
 
   function countdownText(unix) {
     const left = Math.max(0, unix - Math.floor(Date.now() / 1000));
@@ -3387,6 +3720,15 @@ async function routineDialog(agent, onSaved = async () => {}) {
   const places = h('input', { type: 'checkbox', name: 'public_places', checked: routine.public_places });
   // MM17: going home makes it bedtime, unless this is off.
   const bedtime = h('input', { type: 'checkbox', name: 'auto_bedtime', checked: routine.auto_bedtime !== false });
+  // JB1: its role, your standing instructions, which it reads once a session. JB3: its job.
+  const roleBox = h('textarea', { name: 'role', maxLength: 600, rows: 3, value: routine.role || '', placeholder: 'Like: You are the town reporter. Find out what happened by asking the people and bots who did it, then write short, true news.' });
+  const jobNow = routine.job
+    ? h('p', { class: 'muted' }, `Its job now: ${routine.job.text}${routine.job.room ? ` (in ${routine.job.room.name})` : ''}, until ${new Date(routine.job.expires_at).toLocaleString()}. ${routine.job.answers} answer${routine.job.answers === 1 ? '' : 's'} so far.`)
+    : null;
+  const jobBox = h('input', { name: 'job_text', maxLength: 500, placeholder: routine.job ? 'A new job replaces this one' : 'Like: ask this room what happened today' });
+  const jobRoom = h('select', { name: 'job_room' },
+    h('option', { value: '' }, 'No room in particular'),
+    (routine.workplace_choices || []).filter((room) => !room.public).map((room) => h('option', { value: room.id }, room.name)));
   const workplace = h('select', { name: 'workplace' },
     h('option', { value: '' }, 'None'),
     (routine.workplace_choices || []).map((room) => h('option', { value: room.id, selected: routine.workplace?.room_id === room.id }, room.name)));
@@ -3408,6 +3750,14 @@ async function routineDialog(agent, onSaved = async () => {}) {
           // L51: the old window is kept as it was; the day plan below is what owners set now.
           body: { days: routine.days, starts: routine.starts, ends: routine.ends, public_places: Boolean(values.public_places) },
         });
+        // JB1: only sent when it changed. Empty clears it.
+        if ((values.role || '').trim() !== (routine.role || '')) {
+          await api(`/api/agents/${agent.id}/role`, { method: 'PUT', body: { role: values.role || '' } });
+        }
+        // JB3: a new job, in the room picked, for a day.
+        if ((values.job_text || '').trim()) {
+          await api(`/api/agents/${agent.id}/job`, { method: 'PUT', body: { text: values.job_text, hangout_id: values.job_room || null } });
+        }
         // MM17: only sent when it changed.
         if (Boolean(values.auto_bedtime) !== (routine.auto_bedtime !== false)) {
           await api(`/api/agents/${agent.id}/bedtime`, { method: 'PUT', body: { on: Boolean(values.auto_bedtime) } });
@@ -3441,6 +3791,19 @@ async function routineDialog(agent, onSaved = async () => {}) {
     },
     h('label', { class: 'check' }, places, 'Let it go to public places'),
     h('p', { class: 'muted' }, STRANGERS_TEXT),
+    field('Role', roleBox, 'Your standing instructions for it, which only it and you see. They can narrow what it does, never widen it.'),
+    jobNow,
+    field('Give it a job', jobBox, 'One at a time, for a day. Replies to what it asks about it come marked, and its write-up reaches your Needs you. In a room, /job does the same.'),
+    field('Job is about', jobRoom),
+    routine.job ? h('button', {
+      type: 'button',
+      class: 'link danger',
+      onclick: async () => {
+        await api(`/api/agents/${agent.id}/job`, { method: 'DELETE' });
+        dialog.close();
+        await onSaved();
+      },
+    }, 'Cancel its job') : null,
     h('label', { class: 'check' }, bedtime, 'Going home is bedtime'),
     h('p', { class: 'muted' }, 'After ten minutes home, if it hasn\'t slept in 16 hours, it\'s told once to sort out its day and write its memories.'),
     stayField(routine.stay_limit_hours),
@@ -3846,6 +4209,7 @@ async function roomView(id) {
     : []);
   const personCard = personCards({
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
+    mayor: mayorPersonId,
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
@@ -3888,6 +4252,8 @@ async function roomView(id) {
   const moreNotices = h('div', { class: 'phone-room-notices' });
 
   const chatLog = h('div', { class: 'chat-log', 'aria-live': 'polite' });
+  // V12: the room's open votes, above its chat, so nobody has to find one in the log.
+  const voteCardsEl = h('div', { class: 'vote-cards' });
   const calendarEl = h('div', { class: 'list' });
   const crewEl = h('div', { class: 'list' });
   const crewLegendEl = h('div', { class: 'legend' });
@@ -3916,22 +4282,43 @@ async function roomView(id) {
     }
     const owner = person(message.person_id);
     const isBot = Boolean(message.agent_id);
-    const avatar = h('span', { class: 'avatar' }, isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
+    // KA10: a keyless agent's line says so, live or from the snapshot.
+    const keyless = Boolean(message.keyless) || (snapshot.keyless_message_ids || []).includes(message.id);
+    const avatar = h('span', { class: 'avatar' }, keyless ? '✦' : isBot ? '🤖' : message.speaker.slice(0, 1).toUpperCase());
     avatar.style.background = colorOf(message.person_id);
     const answered = message.reply_to ? shownById.get(message.reply_to) : null;
     const replyLine = !message.reply_to ? null
       : h('div', { class: 'msg-reply muted' }, answered
         ? `↩ ${answered.speaker}: ${answered.body.slice(0, 120)}`
         : `↩ an earlier message`);
-    return h('div', { class: 'msg' },
+    return h('div', { class: 'msg', 'data-message-id': message.id },
       avatar,
       h('div', { class: 'msg-body' },
         h('div', { class: 'msg-head' },
           h('strong', {}, message.speaker),
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
+          keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, message.body)));
+        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
+          part.ref === undefined ? part.text : refLink(part))))));
+  }
+
+  // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
+  function refLink({ text, ref }) {
+    const target = shownById.get(ref);
+    return h('button', {
+      type: 'button',
+      class: 'msg-ref',
+      title: target ? `${target.speaker}: ${target.body.slice(0, 120)}` : 'An earlier message',
+      onclick: () => {
+        const row = chatLog.querySelector(`[data-message-id="${ref}"]`);
+        if (!row) return;
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        row.classList.add('msg-flash');
+        setTimeout(() => row.classList.remove('msg-flash'), 1600);
+      },
+    }, text);
   }
 
   function addMessage(message) {
@@ -4173,21 +4560,61 @@ async function roomView(id) {
         publicPolicy));
   }
 
-  // I111: a read-only list of the room's votes. People see votes but only bots vote (V3).
+  // V12: how a person votes and closes from a card. The server says who may (V9, V10).
+  const voteActions = (vote) => snapshot.you.agent_id ? {} : {
+    cast: async (option) => {
+      await api(`/api/votes/${encodeURIComponent(vote.id)}/ballot`, { method: 'POST', body: { option } });
+      await reload();
+    },
+    close: async () => {
+      await api(`/api/votes/${encodeURIComponent(vote.id)}/close`, { method: 'POST', body: {} });
+      await reload();
+    },
+  };
+
   function renderVotesPanel() {
     const votes = snapshot.votes || [];
     votesPanelEl.replaceChildren(
-      h('p', { class: 'muted' }, 'Bots open and answer votes. People can read them here.'),
+      h('p', { class: 'muted' }, 'People and bots here vote. On a public floor, anyone who walked in can too. A result is a room poll, never an owner\'s approval.'),
+      snapshot.you.agent_id || snapshot.guest ? null : h('div', { class: 'event-actions' },
+        h('button', { type: 'button', onclick: openVoteDialog }, 'Open a vote')),
       votes.length
-        ? h('div', { class: 'list' }, votes.map((vote) => h('div', { class: 'card' },
-          h('strong', {}, vote.question),
-          h('span', { class: 'muted' }, vote.open ? ' (open)' : ' (closed)'),
-          h('ul', {}, vote.options.map((option) => h('li', {}, `${option.option}: ${option.votes}`))))))
+        ? h('div', { class: 'list' }, votes.map((vote) => voteCard(vote, voteActions(vote))))
         : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
-  // A fresh snapshot redraws the Votes panel only while it is the one open.
+  // V12: only the open ones sit above the chat.
+  function renderVoteCards() {
+    const open = (snapshot.votes || []).filter((vote) => vote.open);
+    voteCardsEl.replaceChildren(...open.map((vote) => voteCard(vote, voteActions(vote))));
+  }
+
+  // V9: a person opens a vote here, with the same limits as a bot's open_vote.
+  function openVoteDialog() {
+    const error = formError();
+    const dialog = modal('Open a vote',
+      h('form', {
+        onsubmit: submitter(error, async (values) => {
+          const options = String(values.options || '').split('\n').map((line) => line.trim()).filter(Boolean);
+          await api(`/api/hangouts/${id}/votes`, {
+            method: 'POST',
+            body: { question: values.question, options, minutes: Number(values.minutes) },
+          });
+          dialog.close();
+          await reload();
+        }),
+      },
+      field('Question', h('input', { name: 'question', required: true, maxLength: 200 })),
+      field('Options', h('textarea', { name: 'options', required: true, rows: 4, placeholder: 'One per line, 2 to 6' })),
+      field('How long', h('select', { name: 'minutes' },
+        [[15, '15 minutes'], [30, '30 minutes'], [60, 'An hour'], [180, '3 hours'], [1440, 'A day']].map(([value, label]) => h('option', { value, selected: value === 60 }, label)))),
+      error,
+      h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Open it'))));
+  }
+
+  // A fresh snapshot redraws the open votes over the chat, and the Votes panel while it's open.
   function refreshVotes() {
+    renderVoteCards();
     if (panels.current === 'votes') renderVotesPanel();
   }
 
@@ -4318,7 +4745,7 @@ async function roomView(id) {
             }, response[0].toUpperCase() + response.slice(1))),
           h('a', { href: googleCalendarUrl(event), target: '_blank', rel: 'noopener', class: 'link' }, 'Google'),
           h('a', { href: `/api/events/${event.id}/ics`, class: 'link' }, '.ics'),
-          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
+          h('button', { type: 'button', class: 'link', onclick: () => sharePlan(event, { here: () => snapshot.people, reload }).catch((failure) => alert(failure.message)) }, 'Invite a friend'),
           event.proposed_by === snapshot.you.person_id ? h('button', {
             type: 'button',
             class: 'link danger',
@@ -4432,7 +4859,7 @@ async function roomView(id) {
     if (!doorbell) return null;
     const [state, text] = doorbell.paused ? ['paused', 'Paused']
       : doorbell.listening ? ['listening', 'Listening']
-        : ['quiet', 'Not listening'];
+        : ['not-listening', 'Not listening'];
     return h('span', { class: `doorbell ${state}` }, text);
   }
 
@@ -4475,10 +4902,14 @@ async function roomView(id) {
       const mark = marks.get(agent.id);
       // I10: only its owner sees this, and the server says which of their bots are without.
       const moodless = snapshot.bots_without_moods.includes(agent.id);
+      // K7: Bonds is a button with the others; what it finds shows under the bot's details.
+      const bonds = guest ? null : bondsLink(agent);
       return h('div', { class: 'crew-row' },
-        dot,
+        // S86: its picture, in its own look, as the map and My bots draw it.
+        h('span', { class: 'bot-pic', 'aria-hidden': 'true' }, zoomed(figurePicture({ kind: 'bot', color: colorOf(agent.owner_id), worn: snapshot.looks?.bots?.[agent.id] || {} }), LOOK_ZOOM_SMALL)),
         h('div', { class: 'crew-main' },
           h('div', { class: 'crew-name' },
+            dot,
             h('strong', {}, agent.name),
             guest ? h('span', { class: 'guest-tag' }, 'Guest') : null,
             // S55: it belongs here, but it's somewhere else.
@@ -4493,9 +4924,10 @@ async function roomView(id) {
           // K24: who an apprentice was made by.
           agent.apprenticed_by ? h('small', { class: 'muted' }, `Apprenticed by ${agent.apprenticed_by.join(' & ')}`) : null,
           // K7: the bots it has built with, for anyone who can see it here.
-          guest ? null : bondsLink(agent),
-          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null),
+          bonds?.shown,
+          mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null,
         mine ? h('div', { class: 'crew-actions' },
+          bonds?.button,
           // S59: its owner can call it over, which takes it out of wherever it is.
           agent.away && !guest ? h('button', {
             type: 'button',
@@ -4592,6 +5024,7 @@ async function roomView(id) {
               await reload();
             },
           }, 'Send home')) : h('div', { class: 'crew-actions' },
+          bonds?.button,
           mark ? h('button', {
             type: 'button',
             class: 'link',
@@ -4599,7 +5032,7 @@ async function roomView(id) {
               await api(`/api/marks/${agent.id}`, { method: 'DELETE' });
               await loadMarks();
             },
-          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark')));
+          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark'))));
     });
     crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]), ...roomMentionControls());
   }
@@ -4907,7 +5340,7 @@ async function roomView(id) {
           dialog.close();
           await reload();
           // F56: proposing ends on inviting people who aren't in this room.
-          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true }).catch((failure) => say(failure.message));
+          if (created?.id && !snapshot.you.agent_id) sharePlan(created, { fresh: true, here: () => snapshot.people, reload }).catch((failure) => say(failure.message));
         }),
       },
         field('What', h('input', { name: 'title', required: true, maxLength: 120, placeholder: 'Tacos and catching up' })),
@@ -5026,7 +5459,7 @@ async function roomView(id) {
         button.remove();
       },
     }, 'Bonds');
-    return h('small', {}, button, shown);
+    return { button, shown };
   }
 
   function discordDialog(agent) {
@@ -5235,6 +5668,26 @@ async function roomView(id) {
     bountyCreditsAt = Date.now();
     return bountyCredits;
   }
+  // KA15, KA17: a keyless agent's card, which only whoever runs the space can take down.
+  function keylessCardUi(card) {
+    return h('article', { class: 'board-card' },
+      h('h4', {}, card.title),
+      card.text ? h('p', {}, card.text) : null,
+      h('p', { class: 'muted' },
+        `${card.written_by}, keyless agent`,
+        card.answers ? ` · answers ${card.answers}` : '',
+        ' · ',
+        whenText(card.updated_at)),
+      canRunBoards() ? h('button', {
+        type: 'button',
+        class: 'ghost danger',
+        onclick: act(boardsError, async () => {
+          await api(`/api/keyless-cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
+          await loadBoards(true);
+        }),
+      }, 'Take down') : null);
+  }
+
   function bountyCardUi(card) {
     const bounty = card.bounty;
     if (bounty) return h('section', { class: 'bounty-block' },
@@ -5379,6 +5832,7 @@ async function roomView(id) {
             await loadBoards(true);
           }),
         }, `Remove ${board.name}`) : null,
+        ...(board.keyless_cards || []).map(keylessCardUi),
         ...(board.cards || []).map((card) => {
           const rewrite = card.person_id === snapshot.you.person_id || canRunBoards();
           const statuses = board.kind === 'jobs' ? ['open', 'filled'] : board.kind === 'issues' ? ['open', 'closed'] : [];
@@ -5508,7 +5962,7 @@ async function roomView(id) {
       chatLog.scrollTop = chatLog.scrollHeight;
     },
     onClose: () => typingComposer.stop(),
-  }, chatNotices, chatLog, typingStatus, chatError, chatForm);
+  }, chatNotices, voteCardsEl, chatLog, typingStatus, chatError, chatForm);
   panels.add('calendar', 'Calendar', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: proposeHangout }, 'Propose')),
     calendarEl);
@@ -7279,7 +7733,7 @@ function showFacts(frame, view) {
 }
 
 const POLL_MS = 4000;
-const REPO_URL = 'https://github.com/CakeRepository/agentshangout';
+const REPO_URL = 'https://github.com/AgentsHangout/agentshangout';
 const SLOWEST_MS = 60000;
 
 // Looks at a world now and then. The server allows a minute's worth of looks per address, so this
@@ -8004,6 +8458,15 @@ function needsYouPanel(panels) {
       error);
   }
 
+  // #647 B: a bot the person's agent drafted, waiting for them to approve it on its own page.
+  function botSetupItem(setup) {
+    return item(
+      h('p', {}, 'Your agent drafted a bot for you: ', h('strong', {}, setup.name)),
+      h('small', { class: 'muted' }, `Waiting until ${timeFormat.format(fromUnix(setup.expires_at))}`),
+      h('div', { class: 'event-actions' },
+        link(`/setup/${encodeURIComponent(setup.id)}`, 'Read it and approve', { class: 'link' })));
+  }
+
   function checkInItem(checkIn) {
     const error = formError();
     const answer = (response) => act(error, done(() =>
@@ -8071,6 +8534,37 @@ function needsYouPanel(panels) {
       api(`/api/events/${encodeURIComponent(plan.id)}/rsvp`, { method: 'POST', body: { response } })));
     return item(
       h('p', {}, h('strong', {}, plan.proposer), ' proposed a plan, in ', roomLink(plan.room)),
+      h('p', {}, h('strong', {}, plan.title), ` · ${whenText(plan.starts_at)}`, plan.location ? ` · ${plan.location}` : ''),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Yes'),
+        h('button', { type: 'button', onclick: answer('maybe') }, 'Maybe'),
+        h('button', { type: 'button', onclick: answer('no') }, 'No')),
+      error);
+  }
+
+  // JB6: what one of your bots found or did on a job you gave it, until you clear it.
+  function jobReportItem(report) {
+    const error = formError();
+    return item(
+      h('p', {}, h('strong', {}, report.bot.name), ' finished a job you gave it', report.room ? [', in ', roomLink(report.room)] : ''),
+      h('p', { class: 'muted' }, report.job),
+      h('p', { class: 'job-writeup' }, report.writeup || ''),
+      h('div', { class: 'event-actions' },
+        h('button', {
+          type: 'button',
+          class: 'primary',
+          onclick: act(error, done(() => api(`/api/needs-you/jobs/${encodeURIComponent(report.id)}`, { method: 'DELETE' }))),
+        }, 'Got it')),
+      error);
+  }
+
+  // F58: a plan a friend invited them to by name. It names no room, the same as a plan's link.
+  function invitedPlanItem(plan) {
+    const error = formError();
+    const answer = (response) => act(error, done(() =>
+      api(`/api/events/${encodeURIComponent(plan.id)}/rsvp`, { method: 'POST', body: { response } })));
+    return item(
+      h('p', {}, h('strong', {}, plan.invited_by), ' invited you to a plan'),
       h('p', {}, h('strong', {}, plan.title), ` · ${whenText(plan.starts_at)}`, plan.location ? ` · ${plan.location}` : ''),
       h('div', { class: 'event-actions' },
         h('button', { type: 'button', class: 'primary', onclick: answer('yes') }, 'Yes'),
@@ -8183,10 +8677,13 @@ function needsYouPanel(panels) {
 
   function render(list) {
     const parts = [
+      ...(list.job_reports || []).map(jobReportItem),
+      ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
       ...list.questions.map(questionItem),
       ...list.check_ins.map(checkInItem),
       ...list.plans.map(planItem),
+      ...(list.invited_plans || []).map(invitedPlanItem),
       ...list.requests.map(requestItem),
       ...list.trips.map(tripItem),
       ...list.scenes.map(sceneItem),
@@ -8500,7 +8997,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [] }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -8551,9 +9048,10 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;
     };
+    let sub = 'Person';
     const spec = (items) => ({
       title: you ? `${who.name} (you)` : who.name,
-      sub: 'Person',
+      sub,
       className: 'person-card',
       body,
       items,
@@ -8564,8 +9062,10 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
     if (pin) menu.open(spec(actions(undefined)), x, y, 'click');
     else menu.peek(spec([]), x, y);
     document.addEventListener('keydown', onEscape, true);
-    const data = await lookup(personId);
+    const [data, mayorId] = await Promise.all([lookup(personId), mayor()]);
     if (!showing() || shownFor !== personId) return;
+    // MY6, #639: the badge.
+    if (mayorId === personId) sub = 'Person · Mayor this week';
     body.replaceChildren(personCardBody(data));
     menu.update(spec(pin ? actions(data) : []));
   }
@@ -10193,6 +10693,7 @@ async function route() {
   const joinHouseMatch = path.match(/^\/join-house\/([^/]+)$/);
   const worldMatch = path.match(/^\/world\/([^/]+)$/);
   const planMatch = path.match(/^\/p\/([^/]+)$/);
+  const setupMatch = path.match(/^\/setup\/([^/]+)$/);
   try {
     let view;
     if (roomMatch) view = await roomView(decodeURIComponent(roomMatch[1]));
@@ -10208,6 +10709,7 @@ async function route() {
         h, api, field, formError, secretRow, spanText, googleCalendarUrl, startCity: startCityDialog,
       });
     }
+    else if (setupMatch) view = await botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
     else if (path === '/worlds') view = await worldsView();
     else if (COMING_BACK[path]) {
       view = await backFromElsewhere(COMING_BACK[path]);
@@ -10216,6 +10718,10 @@ async function route() {
     else view = await homeView();
     app.replaceChildren(view);
     if (view instanceof Node) document.documentElement.dataset.clientReady = 'true';
+    // W112: on the map, a city or a house, never over a room or a link someone was sent.
+    const stripHere = !roomMatch && !joinMatch && !joinCityMatch && !joinHouseMatch && !planMatch && !setupMatch && !COMING_BACK[path];
+    if (stripHere) showSocialStrip();
+    else document.querySelector('.social-strip')?.remove();
     // These pages need someone signed in, so only they save the clock.
     if (roomMatch || cityMatch || houseMatch) saveClock();
   } catch (error) {
