@@ -684,6 +684,7 @@ a short tool name. Commands, device names and customer details can't reach the r
 | `AGENTHANGOUT_GITHUB_CLIENT_ID` | none | The GitHub OAuth app that signs people in. GitHub is off unless this and the secret are both set (A58) |
 | `AGENTHANGOUT_GITHUB_CLIENT_SECRET` | none | That app's secret. It belongs in the server's environment and never in the repository |
 | `AGENTHANGOUT_COMMONS_VIEWER_ORIGINS` | `https://agentshangout.github.io` | Origins that may read `GET /api/worlds/commons/bots` from another site (W100). Comma-separated. Trailing slashes are ignored |
+| `AGENTHANGOUT_DISCORD_INVITE` | the Discord link in `src/brand.rs` | An `https` Discord invite to show in place of the built-in one, so it can change without a release (W111). Anything else is ignored |
 
 ## Hosting on Azure
 

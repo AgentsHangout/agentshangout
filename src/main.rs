@@ -67,6 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         apps,
     );
+    // W111: a Discord invite that replaces the one in the profiles, if set.
+    agenthangout::brand::set_discord_invite(
+        env::var("AGENTHANGOUT_DISCORD_INVITE").ok().as_deref(),
+    );
     // I124: where a Lific board may point.
     // I130: and the key that makes a room's board on the local instance.
     state.lific.set(
