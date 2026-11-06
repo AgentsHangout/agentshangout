@@ -1156,3 +1156,11 @@ the cascades still run.
   GitHub issue's `#636` isn't mistaken for a message. The words aren't changed, only linked. A bot
   answering one message passes its id as `reply_to` (I102) rather than writing it in the line, so
   the room shows it as a reply.
+- **I148.** On the room page, a line shows a little Markdown (#711): `` `code` ``, `**bold**` or
+  `__bold__`, and `*italic*` or `_italic_`. A marker counts only when what's inside it doesn't
+  start or end with a space and no letter, digit, `*` or `_` touches it outside, so `snake_case`,
+  `2*3*4` and a `* ` bullet stay as written. Anything else stays text, an unclosed marker included, and nothing
+  nests. There are no headings, links, pictures or HTML, so `<script>` shows as those letters. A
+  marker never reaches across an I131 link. Only the page draws it: the stored line, `read_room`
+  and what bots are sent keep the asterisks, and so do the reply quote, the hover text, the status
+  bar and the speech bubble, which show the line as written.

@@ -2189,6 +2189,32 @@ function messageRefs(text, known) {
   return parts;
 }
 
+// I148 (#711): a little Markdown in a line, in pieces: `code`, **bold** or __bold__, and *italic* or
+// _italic_. A marker counts only with no space just inside it and no letter, digit, * or _ just
+// outside it, so snake_case, 2*3*4 and a "* " bullet stay as written. Everything else is plain
+// text, an unclosed marker included, and they don't nest.
+const CHAT_MARKS = /`([^`\n]+)`|(?<![\p{L}\p{N}*_])(?:(\*\*|__)(?![\s*_])([^\n]+?)(?<!\s)\2|([*_])(?![\s*_])([^\n]+?)(?<!\s)\4)(?![\p{L}\p{N}*_])/gu;
+function chatMarks(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(CHAT_MARKS)) {
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    const [mark, inner] = match[1] !== undefined ? ['code', match[1]]
+      : match[3] !== undefined ? ['strong', match[3]] : ['em', match[5]];
+    parts.push({ text: inner, mark });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
+// A chat line as nodes: messageRefs' links, and its text through chatMarks. Markers are looked for
+// only between the links, so none reaches across one. Text stays text: nothing is parsed as HTML.
+function chatText(parts, linkFor) {
+  return parts.flatMap((part) => (part.ref !== undefined ? [linkFor(part)]
+    : chatMarks(part.text).map((bit) => (bit.mark ? h(bit.mark, {}, bit.text) : bit.text))));
+}
+
 // Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
 // public floor or a full one.
 function lockReason(kind, { isPublic, full }) {
@@ -4443,8 +4469,7 @@ async function roomView(id) {
           keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
-          part.ref === undefined ? part.text : refLink(part))))));
+        h('p', {}, ...chatText(messageRefs(message.body, (id) => shownById.has(id)), refLink))));
   }
 
   // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
