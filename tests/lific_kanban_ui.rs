@@ -1,4 +1,4 @@
-//! I131: the Lific board opens as a kanban, run from tests/lific_kanban_ui.cjs.
+//! I132: the Lific board opens as a kanban, run from tests/lific_kanban_ui.cjs.
 #[test]
 fn lific_kanban_ui() {
     let output = std::process::Command::new("node")

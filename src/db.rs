@@ -2030,6 +2030,19 @@ CREATE TABLE IF NOT EXISTS lific_room_projects (
     published   INTEGER NOT NULL DEFAULT 0,
     made_at     INTEGER NOT NULL
 );
+-- I137: who added each card this server put on a room's own Lific project. Lific gets only the
+-- words, so this is the only place the room's names are. It goes with the account and the room.
+CREATE TABLE IF NOT EXISTS lific_cards (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    card        TEXT NOT NULL,
+    issue_id    TEXT NOT NULL,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    via_bot     INTEGER NOT NULL DEFAULT 0,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, card)
+);
+CREATE INDEX IF NOT EXISTS lific_cards_by_person ON lific_cards (person_id, added_at);
 "#;
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -2271,6 +2284,20 @@ pub struct FloorChange<'a> {
     pub keep_bots_of: &'a str,
     /// Kinds of item that keep this floor from opening to the public (I11).
     pub private_only: &'a [&'a str],
+}
+
+/// I137: a card this server added to a room's Lific project, and who added it.
+#[derive(Clone, Debug)]
+pub struct LificCard {
+    pub hangout_id: String,
+    pub card: String,
+    pub issue_id: String,
+    pub person_id: String,
+    pub agent_id: Option<String>,
+    pub via_bot: bool,
+    pub added_at: i64,
+    /// The bot's name if a bot added it and still exists, or else the person's. Empty on insert.
+    pub added_by: String,
 }
 
 /// An item standing on a floor (I1). `kind` is a word from the catalog in `items`.
@@ -14513,6 +14540,69 @@ impl Db {
         self.conn().execute(
             "UPDATE lific_room_projects SET published = 1 WHERE hangout_id = ?",
             [hangout_id],
+        )?;
+        Ok(())
+    }
+
+    /// I137: records who added a card, once Lific has made it.
+    pub fn add_lific_card(&self, card: &LificCard) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO lific_cards
+                (hangout_id, card, issue_id, person_id, agent_id, via_bot, added_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                card.hangout_id,
+                card.card,
+                card.issue_id,
+                card.person_id,
+                card.agent_id,
+                card.via_bot,
+                card.added_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// I137: the cards this server added in a room, with who added them.
+    pub fn lific_cards(&self, hangout_id: &str) -> rusqlite::Result<Vec<LificCard>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.hangout_id, c.card, c.issue_id, c.person_id, c.agent_id, c.via_bot,
+                    c.added_at, COALESCE(a.name, people.name)
+             FROM lific_cards c
+             JOIN people ON people.id = c.person_id
+             LEFT JOIN agents a ON a.id = c.agent_id
+             WHERE c.hangout_id = ?",
+        )?;
+        let rows = stmt.query_map([hangout_id], |row| {
+            Ok(LificCard {
+                hangout_id: row.get(0)?,
+                card: row.get(1)?,
+                issue_id: row.get(2)?,
+                person_id: row.get(3)?,
+                agent_id: row.get(4)?,
+                via_bot: row.get::<_, i64>(5)? != 0,
+                added_at: row.get(6)?,
+                added_by: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// I134: how many cards a person, and their bots, added since then, in every room.
+    pub fn lific_cards_added_since(&self, person_id: &str, since: i64) -> rusqlite::Result<i64> {
+        self.conn().query_row(
+            "SELECT COUNT(*) FROM lific_cards WHERE person_id = ? AND added_at > ?",
+            params![person_id, since],
+            |row| row.get(0),
+        )
+    }
+
+    /// I136: a card in Lific's trash is no one's here.
+    pub fn remove_lific_card(&self, hangout_id: &str, card: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM lific_cards WHERE hangout_id = ? AND card = ?",
+            [hangout_id, card],
         )?;
         Ok(())
     }

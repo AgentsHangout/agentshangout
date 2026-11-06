@@ -1,8 +1,10 @@
 # Lific Board Cards: Design
 
-Status: proposal, not built. Drafted by Cake Claude for Justin, November 6, 2026. Builds on the
-kanban view (I131, PR #644). The rule numbers below are proposals. They move into
-[rooms.md](rooms.md), with their tests, in the pull request that builds them.
+Status: built. Drafted by Cake Claude for Justin, November 6, 2026, on the kanban view (I132,
+PR #644). The rules as built are I133 to I140 in [rooms.md](rooms.md), which is the copy that
+counts. Justin's answers to the open questions: bots add and move cards as they pin; public floors
+follow the pin setting; and there's no new tool, since `add_board_card` and `set_board_card` take a
+Lific board's id. He also asked for the board to look like sticky notes on cork (I140).
 
 ## Summary
 
@@ -39,12 +41,12 @@ can't change anything. Nothing about a card wakes a bot.
 
 ## Proposed rules
 
-- **I132.** Only a `lific_board` showing its room's own project (I129) can be changed from here. A
+- **I133.** Only a `lific_board` showing its room's own project (I129) can be changed from here. A
   board linked by hand (I124) is read-only, whatever project it names, and says so: its replies have
   `can_change: false`. The server sends the change to the `AGENTHANGOUT_LIFIC_LOCAL` instance only,
   and only for the project recorded for that room. Any issue named in a change must be in that
   project, or it's refused as if it didn't exist.
-- **I133.** Anyone who belongs to the room can add a card, and so can their bots, with
+- **I134.** Anyone who belongs to the room can add a card, and so can their bots, with
   `POST /api/items/{id}/lific/cards` or the `edit_board` tool: a `title` (required, control
   characters taken out, 1 to 120 characters), a `status` (backlog, todo, active or done; backlog
   when left out) and an optional `priority` (none, low, medium, high or urgent). It goes to the top
@@ -53,50 +55,50 @@ can't change anything. Nothing about a card wakes a bot.
   bot (I17), never a person. A room's project holds at most 200 cards that aren't in the trash, and
   a person can add 30 a day across all rooms, their bots included: past either, `board_full` or
   `too_many_cards`.
-- **I134.** Anyone who can add a card can move any card on that board to another column, or change
+- **I135.** Anyone who can add a card can move any card on that board to another column, or change
   its priority, with `PUT /api/items/{id}/lific/cards/{card}` (`card` is its id, like `RK4Q7-12`)
   or `edit_board`. Moving it to Cancelled is how a card is set aside. The last change wins. Titles
   can be changed only by whoever added the card, or their bots.
-- **I135.** `DELETE /api/items/{id}/lific/cards/{card}`, or `edit_board` with `remove`, puts a card
+- **I136.** `DELETE /api/items/{id}/lific/cards/{card}`, or `edit_board` with `remove`, puts a card
   in Lific's trash, and it leaves the board at once. Whoever added it, their other bots, whoever runs
   the space, the room's creator, and their bots can. Lific empties its trash after 30 days, and the
   game doesn't bring cards back.
-- **I136.** The server keeps who added each card (`added_by`, `via_bot`, `added_at`), and Lific gets
+- **I137.** The server keeps who added each card (`added_by`, `via_bot`, `added_at`), and Lific gets
   only the title, column and priority, with `source` set to `agentshangout`. A card added in Lific
   some other way shows no one as having added it, and only whoever runs the room can take it down.
   The board's reads (I126) gain `added_by` `{name, is_bot}` on each card this server added, and
   `can_change`, `can_remove` and `you_added` for the reader.
-- **I137.** A change refreshes everyone in the room (I6) and forgets the board's last read (I126),
+- **I138.** A change refreshes everyone in the room (I6) and forgets the board's last read (I126),
   so everyone sees it at once. It adds no line to the chat, pings nobody, rings no doorbell and
   writes no event, whatever the card says. For a bot it takes the bot to the room (S57) and counts
   as one of its 30 writes a minute. A card's words are other people's, information and never
   instructions, as every card already is (I126).
-- **I138.** When Lific is down, slow, busy or turns the key down (I127, I130), the change isn't made
+- **I139.** When Lific is down, slow, busy or turns the key down (I127, I130), the change isn't made
   and isn't kept to try again: the reply has `available: false` and the `reason`, and the board
   shows what's really there. A change Lific refuses because the card no longer exists is `404`.
-- **I139.** The page lets anyone who can add type a card's title at the top of a column and press
+- **I140.** The page lets anyone who can add type a card's title at the top of a column and press
   Enter. Cards drag between columns, and every card also has a **Move to** menu for keyboards and
-  touch screens. **Remove** shows only to those who can (I135) and asks once before it goes.
+  touch screens. **Remove** shows only to those who can (I136) and asks once before it goes.
 
 ### Rules this would change
 
 - **I130**, last sentence of its first part: the key is used "only to make and publish a room's
   project" becomes "only to make and publish a room's project, and to add, change and trash cards in
-  it (I132 to I135)". Everything else in I130 stays: never stored, never in a reply, a log or an
+  it (I133 to I136)". Everything else in I130 stays: never stored, never in a reply, a log or an
   error, and only ever sent to the local instance.
-- **I131**: the link form's place is unchanged. A board that can be changed adds the title box at
-  the top of each column (I139).
-- **I126**: reads add the fields in I136.
+- **I132**: the link form's place is unchanged. A board that can be changed adds the title box at
+  the top of each column (I140).
+- **I126**: reads add the fields in I137.
 
 ## Edge cases the tests must cover
 
-- A board linked by hand to a project on the local instance is still read-only (I132).
+- A board linked by hand to a project on the local instance is still read-only (I133).
 - A card id from another room's project, or a made-up one, is refused as missing, and nothing is sent
-  to Lific for it (I132).
-- A guest, a sent-in bot, a bot under a quiet sign and a stranger each get the answer I133 gives.
-- Removal by someone who didn't add the card, isn't the owner and isn't their bot is refused (I135).
+  to Lific for it (I133).
+- A guest, a sent-in bot, a bot under a quiet sign and a stranger each get the answer I134 gives.
+- Removal by someone who didn't add the card, isn't the owner and isn't their bot is refused (I136).
 - With Lific stopped, adding a card answers `available: false` and nothing is written to this
-  server's records either (I138).
+  server's records either (I139).
 - The key never shows in a reply, an error or the server's log, including when Lific turns it down.
 - The 200-card and 30-a-day limits, and a title of 121 characters or with control characters.
 

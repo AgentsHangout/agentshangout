@@ -1515,17 +1515,41 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .tutorial-tick { flex: 0 0 18px; display: inline-grid; place-items: center; height: 18px; border: 1px solid var(--line); background: var(--bg); color: var(--good); font-size: 13px; line-height: 1; }
 .tutorial-step.done summary { color: var(--muted); font-weight: 400; }
 .tutorial-docs { margin-top: 12px; }
-/* I131: the Lific board is a kanban, wide enough for its columns, scrolling sideways when it isn't. */
-.wd-game > .game-panel-lific { width: min(880px, calc(100% - 24px)); }
-.lific-kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 8px; overflow-x: auto; padding-bottom: 4px; align-items: start; }
+/* I132, I140: the Lific board is a corkboard of sticky notes, wide enough for its columns and
+   scrolling sideways when it isn't. A note's colour is its priority. */
+.wd-game > .game-panel-lific { width: min(900px, calc(100% - 24px)); }
+.lific-kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 10px; overflow-x: auto; padding: 10px; align-items: start;
+  background: radial-gradient(circle at 20% 30%, rgba(90, 55, 25, .25) 1px, transparent 1.5px) 0 0 / 9px 9px, radial-gradient(circle at 70% 60%, rgba(255, 230, 190, .18) 1px, transparent 1.5px) 0 0 / 7px 7px, #b98a57;
+  box-shadow: inset 0 0 0 4px #7a5230, inset 0 0 0 5px #4d3620, inset 0 2px 8px rgba(0, 0, 0, .35); }
 .lific-kanban:empty { display: none; }
-.lific-column { display: grid; gap: 6px; align-content: start; min-width: 0; padding: 6px; background: #e2d2a8; box-shadow: inset 1px 1px 0 #a98d5c, inset -1px -1px 0 #fff7dc; }
-.lific-column h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin: 0; color: #6e2a14; font: 700 14px/1.25 var(--serif); }
-.lific-column h3 small { font: 400 12px/1.2 var(--ui); color: var(--muted); }
-.lific-card { display: grid; gap: 2px; padding: 6px 8px; background: #fff8e4; border: 1px solid #a98d5c; box-shadow: 0 1px 0 rgba(77, 54, 32, .35); }
-.lific-card p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
-.lific-id { font: 700 11px/1.2 var(--ui); color: #8e2f18; }
-.lific-empty { margin: 0; font-size: 12px; font-style: italic; }
+.lific-column { display: grid; gap: 12px; align-content: start; min-width: 0; min-height: 120px; padding: 4px 4px 10px; }
+.lific-column h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin: 0; padding: 3px 8px; color: #fff3d6; background: rgba(60, 34, 16, .55); font: 700 14px/1.25 var(--serif); text-shadow: 0 1px 0 rgba(0, 0, 0, .5); }
+.lific-column h3 small { font: 400 12px/1.2 var(--ui); color: #f2dcb0; }
+.lific-card {
+  --note: #fff07a;
+  position: relative; display: grid; gap: 4px; align-content: start; min-height: 96px; padding: 16px 10px 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .25), rgba(0, 0, 0, .04) 85%, rgba(0, 0, 0, .1)), var(--note);
+  color: #2d2414; font-family: "Segoe Print", "Bradley Hand", "Chalkboard SE", "Comic Sans MS", cursive;
+  box-shadow: 2px 3px 0 rgba(0, 0, 0, .12), 3px 8px 10px -4px rgba(0, 0, 0, .45);
+  transform: rotate(-1.4deg); transition: transform .12s ease;
+}
+.lific-card:nth-of-type(even) { transform: rotate(1.2deg); }
+.lific-card:nth-of-type(3n) { transform: rotate(-.4deg); }
+.lific-card:hover, .lific-card:focus-within { transform: rotate(0) scale(1.03); z-index: 1; }
+.lific-card[draggable="true"] { cursor: grab; }
+.lific-card::before { content: ''; position: absolute; top: -7px; left: 50%; width: 46px; height: 16px; transform: translateX(-50%) rotate(-3deg); background: rgba(255, 252, 235, .55); box-shadow: 0 1px 1px rgba(0, 0, 0, .15); }
+.lific-card[data-priority="low"] { --note: #b8f0a4; }
+.lific-card[data-priority="medium"] { --note: #a8dcff; }
+.lific-card[data-priority="high"] { --note: #ffc27a; }
+.lific-card[data-priority="urgent"] { --note: #ff9fb4; }
+.lific-card p { margin: 0; font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+.lific-card .muted { color: rgba(45, 36, 20, .7); font-size: 11px; }
+.lific-id { font: 700 11px/1.2 var(--ui); color: rgba(45, 36, 20, .75); }
+.lific-card-actions { display: flex; gap: 4px; align-items: center; margin-top: 2px; font-family: var(--ui); }
+.lific-card-actions select, .lific-card-actions button { min-height: 26px; padding: 0 6px; font-size: 11px; background: rgba(255, 255, 255, .55); border: 1px solid rgba(45, 36, 20, .35); }
+.lific-empty { margin: 0; padding: 8px; font-size: 12px; font-style: italic; color: #f2dcb0; }
+.lific-add input { width: 100%; padding: 8px; font-size: 13px; background: rgba(255, 252, 235, .7); border: 1px dashed rgba(60, 34, 16, .6); }
+@media (prefers-reduced-motion: reduce) { .lific-card { transition: none; } }
 
 .game-panel:focus { outline: none; }
 .game-panel:focus-visible { outline: 2px solid #8e2f18; outline-offset: -2px; }
