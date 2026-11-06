@@ -87,6 +87,19 @@ impl Server {
         db: Db,
         clock: impl Fn() -> i64 + Send + Sync + 'static,
     ) -> Self {
+        Self::boot(db, clock, false).await
+    }
+
+    /// A107-A112: a server that asks for the community rules, as a deployed one does.
+    async fn start_with_rules() -> Self {
+        Self::boot(Db::open(":memory:").unwrap(), now, true).await
+    }
+
+    async fn boot(
+        db: Db,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+        require_rules: bool,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
@@ -98,6 +111,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules,
             },
             clock,
         );
@@ -5909,6 +5923,155 @@ async fn deleted_bot_pins_keep_their_untrusted_origin() {
     let origins: i64 =
         conn.query_row("SELECT COUNT(*) FROM room_pin_bot_origins", [], |r| r.get(0)).unwrap();
     assert_eq!(origins, 0);
+}
+
+// A107-A112 (#686): writing what others read takes the community rules accepted. Reading never
+// does, a bot writes under its owner's acceptance and can always ask its owner, and accepting lets
+// every write through.
+#[tokio::test]
+async fn writes_others_read_take_the_community_rules_accepted() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let version = text(&server.get(&ann.key, "/api/me").await.ok()["rules_version"]);
+    assert_eq!(server.get(&ann.key, "/api/me").await.ok()["rules_accepted"], false);
+    let before = server.snapshot(&ann.key, &room).await["messages"].clone();
+
+    // A person: each write others read is refused, with the reason, and nothing is written.
+    let refused = |reply: Reply, what: &str| {
+        let body = reply.refused(StatusCode::FORBIDDEN);
+        assert_eq!(body["reason"], "rules_not_accepted", "{what}: {body}");
+        assert!(body["error"].as_str().unwrap().contains("/rules"), "{what}: {body}");
+    };
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+            .await,
+        "chat",
+    );
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/notes"), json!({"text":"a note"}))
+            .await,
+        "note",
+    );
+    refused(
+        server
+            .put(&ann.key, &format!("/api/hangouts/{room}/whiteboard"), json!({"text":"plan"}))
+            .await,
+        "whiteboard",
+    );
+    refused(
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/pins"),
+                json!({"kind":"note","caption":"hello"}),
+            )
+            .await,
+        "pin",
+    );
+    refused(
+        server
+            .post(&ann.key, &format!("/api/hangouts/{room}/emote"), json!({"emote":"wave"}))
+            .await,
+        "emote",
+    );
+    refused(
+        server
+            .post(
+                &ann.key,
+                &format!("/api/hangouts/{room}/votes"),
+                json!({"question":"Lunch?","options":["Yes","No"],"minutes":10}),
+            )
+            .await,
+        "vote",
+    );
+    // Reading is never gated.
+    assert_eq!(server.snapshot(&ann.key, &room).await["messages"], before, "nothing was posted");
+
+    // A bot: refused for its owner, saying so, but it can always ask its owner.
+    for (tool, args) in [
+        ("say", json!({"hangout_id": room, "text": "hello"})),
+        ("share_note", json!({"hangout_id": room, "text": "a fact"})),
+        ("set_whiteboard", json!({"hangout_id": room, "text": "plan"})),
+        ("pin", json!({"hangout_id": room, "kind": "note", "caption": "hi"})),
+        (
+            "open_vote",
+            json!({"hangout_id": room, "question": "Lunch?", "options": ["Yes", "No"], "minutes": 10}),
+        ),
+        ("set_status", json!({"emote": "wave"})),
+    ] {
+        let result = server.tool(&scout.token, tool, args).await;
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+        assert!(
+            result.to_string().contains("your owner hasn't accepted the community rules"),
+            "{tool} names the reason: {result}"
+        );
+    }
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["owner_rules_accepted"], false, "{inbox}");
+    assert_eq!(inbox["rules_url"], "/rules");
+    let asked = server.tool(&scout.token, "ask_owner", json!({"hangout_id": room, "question": "Could you accept the community rules at /rules?"})).await;
+    assert_ne!(asked["isError"], true, "ask_owner is never gated: {asked}");
+
+    // Only the current version can be accepted, by a person.
+    server
+        .post(&ann.key, "/api/rules/accept", json!({"version":"1999-01"}))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&scout.token, "/api/rules/accept", json!({"version": version}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let accepted =
+        server.post(&ann.key, "/api/rules/accept", json!({"version": version})).await.ok();
+    assert_eq!(accepted["rules_accepted"], true, "{accepted}");
+
+    // Now everything goes through, for Ann and for her bot.
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"hi"}))
+        .await
+        .ok();
+    let said = server.tool(&scout.token, "say", json!({"hangout_id": room, "text": "hello"})).await;
+    assert_ne!(said["isError"], true, "{said}");
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(inbox.get("owner_rules_accepted").is_none(), "nothing to say once accepted: {inbox}");
+}
+
+// A112: someone who accepted an earlier version keeps writing through the grace window, and is
+// told a new version is out.
+#[tokio::test]
+async fn an_earlier_acceptance_writes_through_the_grace_window() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.state.db.accept_rules(&ann.id, "2000-01", agenthangout::now() - 86_400).unwrap();
+    let me = server.get(&ann.key, "/api/me").await.ok();
+    assert_eq!(me["rules_accepted"], false);
+    assert_eq!(me["rules_update"]["version"], me["rules_version"], "{me}");
+    server
+        .post(&ann.key, &format!("/api/hangouts/{room}/messages"), json!({"text":"still here"}))
+        .await
+        .ok();
+}
+
+// A107: the rules page is public, readable without scripts, names its version, and is linked.
+#[tokio::test]
+async fn the_rules_page_is_public_and_linked() {
+    let server = Server::start_with_rules().await;
+    let page = server.client.get(format!("{}/rules", server.base)).send().await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = page.text().await.unwrap();
+    assert!(body.contains("<h1>Community rules</h1>"));
+    assert!(body.contains(&format!("Version {}", agenthangout::rules::version())));
+    assert!(!body.contains("<script"), "readable without scripts");
+    assert!(!body.contains("{{"), "addresses filled in");
+    for path in ["/", "/privacy", "/child-safety", "/docs"] {
+        let page = server.client.get(format!("{}{path}", server.base)).send().await.unwrap();
+        assert!(page.text().await.unwrap().contains("href=\"/rules\""), "{path} links the rules");
+    }
+    let sitemap = server.client.get(format!("{}/sitemap.xml", server.base)).send().await.unwrap();
+    assert!(sitemap.text().await.unwrap().contains("/rules</loc>"));
 }
 
 // I143-I146 (#638): an emote shows over the avatar for everyone in the room, people and bots,

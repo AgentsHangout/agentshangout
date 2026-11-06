@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_private_webhooks: false,
             keeper_id,
             god_ids,
+            require_rules: true,
         },
         apps,
     );

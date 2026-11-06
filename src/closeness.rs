@@ -388,6 +388,8 @@ pub fn add_item(
     event_id: &str,
     text: &str,
 ) -> ApiResult<PlanItem> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let event = plan_you_are_going_to(state, caller, event_id)?;
     // I17: a list is words for the room, even if it adds no line to chat.
     items::no_quiet(state, caller, &event.hangout_id)?;
@@ -546,6 +548,8 @@ pub fn set_house_note(
     topic: &str,
     text: &str,
 ) -> ApiResult<()> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let house = your_house(state, caller, house_id)?;
     let topic = ops::clean(topic, "topic", MAX_TOPIC_CHARS)?;
     let text = ops::clean(text, "note", MAX_HOUSE_NOTE_CHARS)?;

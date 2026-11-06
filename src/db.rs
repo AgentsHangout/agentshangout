@@ -2232,6 +2232,13 @@ CREATE TABLE IF NOT EXISTS world_place_removals (
 );
 CREATE INDEX IF NOT EXISTS world_place_removals_by_time ON world_place_removals (world_id, id DESC);
 CREATE INDEX IF NOT EXISTS world_place_removals_by_person ON world_place_removals (person_id);
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
 "#;
 
 /// MY1: a week's mayor election.
@@ -16353,6 +16360,26 @@ impl Db {
     /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
     /// a column added later without one makes this fail instead of keeping what it holds. It's one
     /// transaction, so if anything fails they still have their account.
+    /// A108: whether `person_id` accepted `version`, and whether they accepted any other version.
+    pub fn rules_accepted(&self, person_id: &str, version: &str) -> rusqlite::Result<(bool, bool)> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2)",
+            params![person_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+    }
+
+    /// A108: records that `person_id` accepted `version`. Accepting it again keeps the first time.
+    pub fn accept_rules(&self, person_id: &str, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_acceptances (person_id, version, accepted_at)
+             VALUES (?, ?, ?)",
+            params![person_id, version, now],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_person(&self, person_id: &str, name: &str) -> rusqlite::Result<AccountGone> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;

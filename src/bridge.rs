@@ -654,7 +654,12 @@ fn keyless_perform(
                 ));
             }
             let name = keyless::enter(state, agent, &target)?;
-            Ok(format!("Joined {name}"))
+            // A111a: joining accepts the community rules in force now.
+            Ok(format!(
+                "Joined {name}. Joining accepts the community rules at {}{}",
+                state.config.public_url,
+                crate::rules::RULES_PATH
+            ))
         }
         "say" => {
             let said = keyless::say(state, agent, need("something to say")?, None)?;

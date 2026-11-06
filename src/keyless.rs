@@ -266,6 +266,8 @@ pub fn say(
     reply_to: Option<i64>,
 ) -> ApiResult<Said> {
     let (hangout_id, since) = floor_of(state, agent)?;
+    // A111a: it accepted the rules in force when it joined.
+    crate::rules::require_keyless(state, since)?;
     let now = now();
     let text = ops::clean(text, "text", MAX_LINE_CHARS)?;
     let (last_hour, last_at) = state.db.keyless_lines_since(agent.player.id, now - HOUR)?;
@@ -373,7 +375,8 @@ pub fn add_card(
     text: &str,
     answers: Option<&str>,
 ) -> ApiResult<KeylessCard> {
-    let (hangout_id, _) = floor_of(state, agent)?;
+    let (hangout_id, joined) = floor_of(state, agent)?;
+    crate::rules::require_keyless(state, joined)?;
     let boards = state.db.keyless_boards_on(&hangout_id)?;
     let board = match board_id {
         Some(id) => boards.iter().find(|board| board.id == id),
@@ -426,6 +429,8 @@ pub fn edit_card(
         .keyless_card(card_id)?
         .filter(|card| card.player_id == agent.player.id)
         .ok_or_else(ApiError::not_found)?;
+    let (_, joined) = floor_of(state, agent)?;
+    crate::rules::require_keyless(state, joined)?;
     let title = match title {
         Some(title) => ops::clean(title, "title", MAX_TITLE_CHARS)?,
         None => card.title.clone(),

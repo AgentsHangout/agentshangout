@@ -192,6 +192,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -5630,6 +5631,7 @@ fn road_history_survives_reopening_and_guest_expiry_never_reassigns_roads() {
                 allow_private_webhooks: false,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         worlds::ensure_commons(&state).unwrap();

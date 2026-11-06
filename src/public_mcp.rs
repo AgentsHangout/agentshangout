@@ -469,7 +469,10 @@ fn call_tool(state: &AppState, headers: &HeaderMap, name: &str, args: &Value) ->
                 args.floor_id.ok_or_else(|| ApiError::bad_request("floor_id is required"))?;
             let name = crate::keyless::enter(state, &agent, &floor_id)?;
             Ok(
-                json!({ "ok": true, "floor": { "id": floor_id, "name": name }, "next": "read_floor" }),
+                // A111a: entering accepts the community rules in force now.
+                json!({ "ok": true, "floor": { "id": floor_id, "name": name }, "next": "read_floor",
+                    "rules": { "version": crate::rules::version(), "url": crate::rules::RULES_PATH,
+                        "note": "Entering accepts these community rules. Read them before you post." } }),
             )
         }
         "leave" => {

@@ -1695,6 +1695,18 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["open_votes"] = json!(open_votes);
         reply["vote_how"] = json!(crate::votes::VOTE_HOW);
     }
+    // A111, A112: only when the owner has something to do about the community rules: not yet
+    // accepted, or a new version in its grace window.
+    if state.config.require_rules && !caller.is_house {
+        let rules = crate::rules::view(state, &caller.person_id, crate::now())?;
+        if rules["rules_accepted"] == false {
+            reply["owner_rules_accepted"] = json!(false);
+            reply["rules_url"] = rules["rules_url"].clone();
+            if let Some(update) = rules.get("rules_update") {
+                reply["rules_update"] = update.clone();
+            }
+        }
+    }
     // MM13: bedtime, only when it is.
     if crate::memories::bedtime(state, caller)? {
         reply["bedtime"] = json!(true);
@@ -4261,6 +4273,7 @@ mod tests {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let (ann_person, ann) = person(&state, "Ann");

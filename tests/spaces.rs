@@ -118,6 +118,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: Some(keeper_id.clone()),
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();

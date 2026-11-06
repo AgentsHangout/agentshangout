@@ -14,6 +14,7 @@ async fn bots_drive_to_and_from_places() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     let server = tokio::spawn(async move { axum::serve(listener, app(state)).await });

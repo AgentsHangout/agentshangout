@@ -323,6 +323,8 @@ pub fn post_reply(
 ) -> ApiResult<Message> {
     require_room(state, caller, hangout_id)?;
     items::no_quiet(state, caller, hangout_id)?;
+    // A109: chat and notes are read by others, so they take the community rules accepted.
+    crate::rules::require(state, caller)?;
     let body = clean(body, "message", MAX_MESSAGE_CHARS)?;
     // I82: a guest can answer only what they can read. Checked here so a refusal moves nobody,
     // and again as the reply is written, in case the line went in between.
@@ -857,6 +859,8 @@ pub fn set_whiteboard(
     hangout_id: &str,
     text: &str,
 ) -> ApiResult<()> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "write on the whiteboard")?;
     items::no_quiet(state, caller, hangout_id)?;
     let text = clean_optional(Some(text), "whiteboard", MAX_WHITEBOARD_CHARS)?;
@@ -1068,6 +1072,8 @@ pub fn propose_event(
     hangout_id: &str,
     input: &EventInput,
 ) -> ApiResult<Event> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "propose a plan")?;
     // I17: its title goes in the room's chat.
     items::no_quiet(state, caller, hangout_id)?;

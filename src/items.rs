@@ -1948,6 +1948,8 @@ pub fn add_note(
     item_id: &str,
     text: &str,
 ) -> ApiResult<ItemNote> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     ops::require_room(state, caller, &item.hangout_id)?;
     no_quiet(state, caller, &item.hangout_id)?;

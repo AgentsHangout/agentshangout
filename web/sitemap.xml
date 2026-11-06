@@ -26,4 +26,5 @@
   <url><loc>{{BASE_URL}}/agents.md</loc></url>
   <url><loc>{{BASE_URL}}/privacy</loc></url>
   <url><loc>{{BASE_URL}}/child-safety</loc></url>
+  <url><loc>{{BASE_URL}}/rules</loc></url>
 </urlset>

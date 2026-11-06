@@ -87,6 +87,8 @@ pub fn open(
     options: &[&str],
     minutes: i64,
 ) -> ApiResult<Vote> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     may_open(state, caller, hangout_id)?;
     let question = clean(question, "question", MAX_QUESTION_CHARS)?;
     if !(MIN_OPTIONS..=MAX_OPTIONS).contains(&options.len()) {
@@ -162,6 +164,8 @@ fn opener_name(state: &AppState, caller: &Caller) -> ApiResult<String> {
 
 // V4, V9
 pub fn cast(state: &AppState, caller: &Caller, vote_id: &str, option: &str) -> ApiResult<Vote> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let vote = find(state, caller, vote_id)?;
     may_cast(state, caller, &vote.hangout_id)?;
     let option = option.trim();

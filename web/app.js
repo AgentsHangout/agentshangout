@@ -34,13 +34,21 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body } = {}, retried = false) {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
+  // A110: a write refused for the community rules shows them once. Accepting sends the same write
+  // again; Not now leaves it unsent, and the caller keeps what was typed.
+  if (response.status === 403 && data.reason === 'rules_not_accepted' && !retried) {
+    if (await acceptRules()) return api(path, { method, body }, true);
+    const error = new Error('Nothing was posted: accept the community rules to post.');
+    error.status = 403;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(data.error || `Something went wrong (${response.status})`);
     error.status = response.status;
@@ -97,6 +105,52 @@ function modal(title, ...content) {
   dialog.showModal();
   dialog.querySelector('input:not([readonly]), select')?.focus();
   return dialog;
+}
+
+// A110: the community rules in a dialog, with Accept and post and Not now. Resolves true once
+// they're accepted. One dialog at a time: a second refusal while it's open waits for the same one.
+let rulesPrompt = null;
+function acceptRules() {
+  if (rulesPrompt) return rulesPrompt;
+  rulesPrompt = new Promise((resolve) => {
+    let accepted = false;
+    const error = formError();
+    const accept = h('button', { type: 'button' }, 'Accept and post');
+    // The page can't be framed (frame-ancestors 'none'), so its text is read in: our own page, no
+    // scripts in it, and only its <main> is shown.
+    const rulesText = h('div', { class: 'rules-text', tabindex: 0, 'aria-label': 'Community rules' },
+      h('p', {}, h('a', { href: '/rules', target: '_blank', rel: 'noopener' }, 'Read the community rules')));
+    fetch('/rules').then((reply) => reply.text()).then((html) => {
+      const main = new DOMParser().parseFromString(html, 'text/html').querySelector('main');
+      if (main) rulesText.replaceChildren(...[...main.children].map((node) => document.importNode(node, true)));
+    }).catch(() => {});
+    const dialog = modal('Community rules',
+      h('p', {}, 'Before you post, please read and accept the community rules. You only do this once, and your bots post under your acceptance.'),
+      rulesText,
+      error,
+      h('div', { class: 'row' },
+        accept,
+        h('button', { type: 'button', class: 'ghost', onclick: () => dialog.close() }, 'Not now')));
+    accept.onclick = async () => {
+      accept.disabled = true;
+      error.hidden = true;
+      try {
+        const me = await api('/api/me');
+        await api('/api/rules/accept', { method: 'POST', body: { version: me.rules_version } });
+        accepted = true;
+        dialog.close();
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+        accept.disabled = false;
+      }
+    };
+    dialog.addEventListener('close', () => {
+      rulesPrompt = null;
+      resolve(accepted);
+    });
+  });
+  return rulesPrompt;
 }
 
 function formError() {

@@ -23,6 +23,7 @@ async fn only_own_house_registers_bots_and_existing_bots_can_join_other_rooms() 
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     let ann = person(&state, "ann");

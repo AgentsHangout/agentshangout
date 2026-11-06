@@ -60,6 +60,7 @@ pub mod research_labs;
 pub mod research_work;
 pub mod room_mentions;
 pub mod routines;
+pub mod rules;
 pub mod sign_in;
 pub mod spaces;
 pub mod travel;
@@ -111,6 +112,10 @@ pub struct Config {
     pub keeper_id: Option<String>,
     /// The people who have the God mode switch (W75): their ids, from `AGENTHANGOUT_GODS`.
     pub god_ids: Vec<String>,
+    /// A107-A112: writing what others read takes the community rules accepted. Always on for a
+    /// deployed server (main.rs). Off only in tests that aren't about the rules, which build their
+    /// own Config.
+    pub require_rules: bool,
 }
 
 /// The apps registered elsewhere that prove someone's account there. A server has none by default.

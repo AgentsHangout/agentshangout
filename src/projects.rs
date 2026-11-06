@@ -59,6 +59,8 @@ pub fn start_project(
     name: &str,
     purpose: Option<&str>,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let agent_id = bot_of(caller)?;
     if !may_take_part(state, agent_id)? {
         return Err(ApiError::forbidden("you stay home, so you can't start a project"));
@@ -540,6 +542,8 @@ pub fn build_studio(
     kind: Option<&str>,
     purpose: Option<&str>,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let (space, _) = if let Some(lab) = state.db.research_lab(project_id)? {
         // RL5: the owner, or an ordinary bot of theirs, can build a research lab.
         ops::require_room(state, caller, project_id)?;
