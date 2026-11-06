@@ -2579,8 +2579,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   border-radius: 24px 24px 0 0 !important;
   border-top: 0.5px solid var(--apple-border) !important;
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.22) !important;
-  max-height: 75vh !important;
-  overflow-y: auto !important;
+  max-height: 75dvh !important;
+  overflow: hidden !important;
   transform: translateY(100%);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1) !important;
   padding: 8px 16px calc(24px + env(safe-area-inset-bottom)) !important;
@@ -2594,12 +2594,16 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 .apple-build-sheet-head {
   display: flex;
+  flex: none;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   padding: 0 4px;
 }
 
 .apple-build-sheet-head h3 {
+  flex: 1;
+  min-width: 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--apple-text);
@@ -2617,6 +2621,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 .apple-tools-grid {
   display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   padding-bottom: 8px;
@@ -2771,7 +2778,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   border: none !important;
   border-top: 0.5px solid var(--apple-border) !important;
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.25) !important;
-  max-height: 85vh !important;
+  max-height: min(85dvh, calc(100dvh - max(12px, env(safe-area-inset-top)))) !important;
+  overflow: hidden;
   z-index: 20 !important;
   transform: translateY(0);
   animation: apple-sheet-slide-up 0.32s cubic-bezier(0.32, 0.72, 0, 1) !important;
@@ -2793,6 +2801,12 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   background: none;
   box-shadow: none;
   overscroll-behavior-y: contain;
+}
+/* M11: the panel body owns scrolling, rather than a list inside that body. */
+.apple-hig .game-panel-body :is(.around, .board-read) {
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
 }
 .apple-hig .chat-form input {
   min-height: 44px;
@@ -2859,11 +2873,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 /* Native dialogs are attached to the document, outside the phone's game window. */
 @media (max-width: 759px), (pointer: coarse) {
   .modal { background: #eee2c8; border-radius: 16px; border: 1px solid #bba57e; box-shadow: 0 12px 32px rgba(0, 0, 0, .3); padding: 12px; }
-  .modal-head { min-height: 48px; padding: 0 0 10px; color: #2c1e11; background: none; box-shadow: none; text-shadow: none; }
+  .modal { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); scroll-padding-top: 76px; overscroll-behavior-y: contain; }
+  .modal-head { position: sticky; top: -12px; z-index: 2; min-height: 60px; padding: 12px 0 10px; color: #2c1e11; background: #eee2c8; box-shadow: none; text-shadow: none; }
   .modal-head h2 { font: 700 18px/1.3 system-ui, sans-serif; }
   .modal-head button { min-width: 44px; min-height: 44px; padding: 0 8px; border: none; border-radius: 50%; background: rgba(60, 40, 10, .12); box-shadow: none; }
   .modal > :not(.modal-head) { margin-left: 0; margin-right: 0; }
   .modal > textarea { width: 100%; }
+  .modal :is(.around, .board-read) { max-height: none; overflow: visible; scrollbar-gutter: auto; }
 }
 
 
@@ -2883,6 +2899,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 /* A phone on its side: the tab bar takes the left edge, so the map keeps the height. */
 @media (orientation: landscape) {
+  .apple-hig > .game-panel {
+    left: calc(76px + env(safe-area-inset-left)) !important;
+    width: calc(100% - 76px - env(safe-area-inset-left)) !important;
+  }
   .apple-hig .wd-well {
     left: calc(76px + env(safe-area-inset-left)) !important;
     right: 0 !important;
