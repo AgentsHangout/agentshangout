@@ -3048,3 +3048,57 @@ input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, 
 .mayor-choices { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
 .mayor-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mayor-choice.chosen strong { color: var(--accent, inherit); }
+
+/* W114: shared movable windows. Geometry is constrained to the game well by createPanels. */
+.wd-game.window-desktop { position: relative; isolation: isolate; }
+.wd-room.window-desktop:not(.apple-hig).has-panel .room-host { right: 8px; }
+.wd-game.window-desktop > .game-window {
+  position: absolute !important; grid-area: auto !important; inset: auto !important; margin: 0 !important;
+  min-width: 0 !important; max-width: none !important; min-height: 0 !important; max-height: none !important;
+  box-sizing: border-box; overflow: hidden; transform: translateY(0) !important;
+  animation: none !important; transition: none !important;
+  border-radius: 0 !important; padding: 3px !important;
+}
+.wd-game.window-desktop > .game-window[hidden] { display: none !important; }
+.game-window > .game-panel-head { flex: none; cursor: move; touch-action: none; user-select: none; gap: 6px; }
+.game-window > .game-panel-head h2 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-window .window-actions { display: flex; flex: none; gap: 3px; }
+.game-window .window-actions .wd-tbtn { border-radius: 0; display: inline-flex !important; align-items: center; justify-content: center; }
+.game-window > .game-panel-head:focus-visible { outline: 2px solid #cf7a34; outline-offset: -2px; }
+.game-window > .game-panel-body { flex: 1; min-height: 0; min-width: 0; overscroll-behavior: contain; padding-bottom: 30px; }
+/* Only the outer body scrolls. A nested My bots body otherwise gets a second scrollbar. */
+.game-window .game-panel-body :is(.game-panel-body, .around, .board-read) { overflow: visible; max-height: none; scrollbar-gutter: auto; }
+.game-window.window-active { outline: 2px solid #cf7a34; outline-offset: -2px; }
+.game-window .window-resize {
+  position: absolute; right: 3px; bottom: 3px; width: 28px; height: 28px;
+  min-height: 0; padding: 0; cursor: nwse-resize; touch-action: none;
+  color: var(--wd-dk); background: var(--wd-face); border: 0; z-index: 6;
+}
+.game-window .window-resize[hidden] { display: none; }
+.window-dock {
+  position: absolute; z-index: 90; display: flex; align-items: stretch; gap: 4px;
+  box-sizing: border-box; padding: 3px; background: var(--wd-face); border: 1px solid #4d3620;
+  box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c;
+}
+.window-dock[hidden], .window-dock-entry[hidden] { display: none; }
+.window-dock-handle { cursor: move; touch-action: none; flex: none; }
+.window-dock-items { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+.window-dock-entry { display: flex; flex: none; }
+.window-dock-entry > :first-child { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.window-desktop > .game-menu { z-index: 100; }
+.window-desktop .sheet-scrim { display: none !important; }
+.apple-hig.window-desktop > .game-window { background: #eee2c8 !important; }
+.apple-hig.window-desktop .game-panel-head { padding: 4px; min-height: 44px; }
+.apple-hig.window-desktop .game-panel-head h2 { font-size: 14px; }
+.apple-hig.window-desktop .game-window .game-panel-head { background: #914021; color: #fff3d2; }
+.apple-hig.window-desktop .game-window .window-actions .wd-tbtn {
+  border-radius: 0 !important; color: #2b1d10 !important;
+  background: linear-gradient(#f6ecce, #dfcd9f) !important;
+  border: 1px solid #4d3620 !important;
+  box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c !important;
+}
+@media (pointer: coarse), (max-width: 759px) {
+  .game-window .window-actions .wd-tbtn, .window-dock .wd-tbtn { min-width: 44px; min-height: 44px; }
+  .game-window .window-resize { width: 44px; height: 44px; }
+  .game-window > .game-panel-body { padding-bottom: 46px; }
+}

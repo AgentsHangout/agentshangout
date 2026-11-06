@@ -144,3 +144,7 @@ div.trust-memory { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 
 }
 .trust-usage { width: 100%; border-collapse: collapse; font-size: .85em; margin: 6px 0; }
 .trust-usage th, .trust-usage td { text-align: left; padding: 2px 6px; border-bottom: 1px solid rgba(120, 90, 44, .25); overflow-wrap: anywhere; }
+
+/* W114: graph expansion never covers the shared window controls. */
+.game-window.trust-expanded-panel > .game-panel-body { position: relative; overflow: hidden; }
+.game-window.trust-expanded-panel .trust-map.expanded { inset: 0; }

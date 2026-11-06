@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>W114 game windows regression fixture</title>
+<link rel="stylesheet" href="../web/style.css">
+<link rel="stylesheet" href="../web/trust.css">
+<body>
+<script type="module">
+// Run through any static server from the repository root. Uses production DOM and CSS.
+const source = await (await fetch('../web/app.js')).text();
+const hSource = source.slice(source.indexOf('function h('), source.indexOf('\nconst clientUpdates'));
+const panelSource = source.slice(source.indexOf('function createPanels('), source.indexOf('// What goes in the panels'));
+const dragSource = source.slice(source.indexOf('function installSheetDrag('), source.indexOf('function createPanels('));
+const {h, createPanels} = new Function(`${hSource}\n${dragSource}\n${panelSource}\nreturn {h, createPanels}`)();
+const {windowFrame} = await import('../web/city.js');
+const frame = windowFrame({label:'Agents Hangout · Window workspace', stats:[], heading:'h1'});
+const root = frame.root;
+root.classList.add('wd-game', 'wd-room');
+document.documentElement.classList.add('in-game');
+if (new URLSearchParams(location.search).has('phone')) {
+  root.classList.add('apple-hig');
+  root.append(h('nav', {class:'apple-tab-bar'}, h('button', {}, 'World'), h('button', {}, 'Room')));
+}
+frame.host.style.cssText = 'position:absolute;inset:0;background:repeating-linear-gradient(45deg,#627a43,#627a43 40px,#5c733e 40px,#5c733e 80px)';
+frame.message.textContent = 'Drag a title, resize a corner, or minimize a window.';
+const panels = createPanels(root);
+const log = h('div', {class:'chat-log'}, ...Array.from({length:30}, (_,i) => h('p', {}, `Message ${i+1}: planning the next room.`)));
+panels.add('room', 'Chat', {}, log, h('form', {class:'chat-form'}, h('input', {'aria-label':'Message', value:'Keep this draft'})));
+const nested = h('div', {class:'game-panel-body'}, ...Array.from({length:18}, (_,i) => h('p', {}, `Bot ${i+1} · Connections, monitoring and permissions`)));
+panels.add('bots', 'My bots', {}, h('h3', {}, 'Connections'), nested);
+frame.actions.append(panels.toggle('room', 'Chat'), panels.toggle('bots', 'My bots'));
+// Real routes can open panels before attaching the game frame.
+panels.open('room');
+document.body.append(root);
+panels.open('bots');
+root.addEventListener('keydown', event => { if (event.key === 'Escape') panels.close(); });
+window.fixture = {panels, root, frame, nested};
+</script>
+</body>
+</html>
