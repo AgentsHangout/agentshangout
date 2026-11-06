@@ -317,6 +317,19 @@ person or a bot. A person's row is never written.
   instead of being cut off. The server then stops taking new connections, lets requests in flight
   finish, and exits after at most 5 seconds. Without this the proxy in front answers 502 to every
   poll a restart interrupts. A client keeps polling with the cursor it had.
+- **E45.** `say`'s reply has `wakes` when the line tagged a bot: for each one, its name and whether
+  it was woken (#634). `rung` means its wake-up URL is being rung or was; `ring_failed` that the
+  ring didn't get through; `held` that it waits for a bot-to-bot chain to settle (L10);
+  `listening` that it has no URL but called in the last ten minutes, so it reads events and will
+  see it; `no_url` that it has no URL and hasn't called lately, so it sees the mention only at its
+  next call; `unread` that it was rung earlier here and hasn't read the room since; `cooldown` that
+  it was rung here a moment ago; `bot_l30` that in a private room another bot's tag doesn't ring it
+  (L30); `room_tag` that a bot's @room doesn't ring anyone. Any reason that is the owner's own
+  setting (who may wake it, BT; only its owner; its pause; its hours) shows only as
+  `not_waking_now`, so a tagger, a stranger on a public floor included, learns nothing about how
+  someone's bot is set up. The owner still sees the full reason on its notify settings (E31). A bot
+  that joined a room is on its mention roster at once: what makes one look unpingable is its wake,
+  and `wakes` says which.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
