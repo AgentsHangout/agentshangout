@@ -956,3 +956,104 @@ async fn funded_question_checks_room_quiet_amount_and_cancel_after_leaving() {
     assert_eq!(own["balance"], 20);
     assert_eq!(own["open_questions"], json!([]));
 }
+
+// HC36, HC37, HC42, HC43: a bot offers a contribution on someone else's card, the card's owner
+// accepts it as a person, the site pays the bot's owner once, and a guest sees only what was said.
+#[tokio::test]
+async fn an_accepted_contribution_pays_the_bots_owner_once() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let own = server.bot(&ann, &room, "Own").await;
+    let (_, eve) = server.someone("Eve").await;
+    for person in [&ann.id, &bo.id, &eve.id] {
+        server.state.db.age_person(person, 8 * 24 * 60 * 60).unwrap();
+    }
+    let board = text(&server.board(&ann.key, &room, "discussion", "Notes").await.ok()["id"]);
+    let card = text(&server.card(&ann.key, &board, "Claim", "Treatment X helps").await.ok()["id"]);
+    let offer = |token: String, kind: &'static str| {
+        let card = card.clone();
+        let server = &server;
+        async move {
+            server
+                .tool(
+                    &token,
+                    "offer_contribution",
+                    json!({"card_id":card,"kind":kind,"text":"See the 2024 trial"}),
+                )
+                .await
+        }
+    };
+    assert_eq!(
+        offer(own.token.clone(), "source").await["isError"],
+        true,
+        "not on its owner's card"
+    );
+    assert_eq!(offer(scout.token.clone(), "rumour").await["isError"], true, "only the four kinds");
+    let offered = offer(scout.token.clone(), "correction").await;
+    let id = text(&offered["structuredContent"]["id"]);
+    assert_eq!(offer(scout.token.clone(), "review").await["isError"], true, "one per bot");
+    // HC42: offering pays nothing.
+    assert_eq!(server.get(&bo.key, "/api/credits").await.ok()["balance"], 0);
+
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let shown = &listed(&list, "Claim").unwrap()["contributions"][0];
+    assert_eq!((&shown["kind"], &shown["bot_name"]), (&json!("correction"), &json!("Scout")));
+    assert_eq!((&shown["can_accept"], &shown["accepted"]), (&json!(true), &json!(false)), "{list}");
+    let list = server.get(&bo.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    assert_eq!(listed(&list, "Claim").unwrap()["contributions"][0]["can_accept"], false);
+
+    let accept = format!("/api/cards/{card}/contributions/accept");
+    let body = json!({"contribution_id":id});
+    server.post(&own.token, &accept, body.clone()).await.refused(StatusCode::FORBIDDEN);
+    server.post(&bo.key, &accept, body.clone()).await.refused(StatusCode::CONFLICT);
+    assert_eq!(server.post(&ann.key, &accept, body.clone()).await.ok()["amount"], 5);
+    // A retry, as a page sending it twice would, pays nothing more.
+    server.post(&ann.key, &accept, body.clone()).await.refused(StatusCode::CONFLICT);
+    let credits = server.get(&bo.key, "/api/credits").await.ok();
+    assert_eq!(credits["balance"], 5, "{credits}");
+    assert_eq!(credits["history"][0]["kind"], "contribution", "{credits}");
+    assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["balance"], 0, "the site paid");
+    let list = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let shown = &listed(&list, "Claim").unwrap()["contributions"][0];
+    assert_eq!((&shown["accepted"], &shown["can_accept"]), (&json!(true), &json!(false)));
+
+    // HC43: a walk-in guest sees what was offered and by which bot, never whose or whether it paid.
+    server
+        .put(
+            &ann.key,
+            &format!("/api/floors/{room}"),
+            json!({"access":"public", "create_code":CODE}),
+        )
+        .await
+        .ok();
+    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({})).await.ok();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let later = text(&server.card(&ann.key, &board, "Later", "More").await.ok()["id"]);
+    // Opening the floor sent Scout home, so Bo's other bot comes in.
+    let finch = server.bot(&bo, &room, "Finch").await;
+    let summary = server
+        .tool(
+            &finch.token,
+            "offer_contribution",
+            json!({"card_id":later,"kind":"summary","text":"In short"}),
+        )
+        .await;
+    assert!(summary.get("isError").is_none(), "{summary}");
+    let seen = server.get(&eve.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let card_seen = listed(&seen, "Later").unwrap_or_else(|| panic!("{seen}"));
+    assert_eq!(
+        card_seen["contributions"],
+        json!([{"id": card_seen["contributions"][0]["id"], "kind":"summary","text":"In short","bot_name":"Finch"}]),
+        "{seen}"
+    );
+    server
+        .post(
+            &eve.key,
+            &format!("/api/cards/{later}/contributions/accept"),
+            json!({"contribution_id":"x"}),
+        )
+        .await
+        .refused(StatusCode::FORBIDDEN);
+}
