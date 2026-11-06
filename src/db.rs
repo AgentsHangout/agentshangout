@@ -8182,17 +8182,20 @@ fn staying_or_home(
     .optional()
 }
 
-/// #609: the last message in thread ?1 before ?2 whose mention event bot ?4 was actually sent. It's
-/// the bot's own event row, not the mentions table, since a mention is counted for a bot that isn't
-/// sent the event (one at the recycling plant, RC2). A pruned event only means more context is sent.
-/// Driven by the thread's (root_id, message_id) index, newest first, probing bot_events' unique
-/// (agent_id, ref_key), so it doesn't grow with the bot's other events. Public so a test can check
-/// its plan.
+/// #609: the last message in thread ?1 before ?2 whose thread mention event was recorded for bot ?3.
+/// It's the bot's own event row, not the mentions table, since a mention is counted for a bot that
+/// isn't sent the event (one at the recycling plant, RC2), and only a thread mention's (one with
+/// this `thread_id`), since a watched workboard change (RW11) shares the key but carries no context.
+/// A recorded event may still not have reached the bot, so the event says where its context starts
+/// (`context_after`). Driven by the thread's (root_id, message_id) index, newest first, probing
+/// bot_events' unique (agent_id, ref_key), so it doesn't grow with the bot's other events. Public so
+/// a test can check its plan.
 pub const LAST_THREAD_MENTION: &str = "SELECT lt.message_id FROM message_threads lt
-                   CROSS JOIN bot_events le
-                   WHERE lt.root_id = ?1 AND lt.message_id < ?2
-                     AND le.agent_id = ?4 AND le.ref_key = 'mention:' || lt.message_id
-                   ORDER BY lt.message_id DESC LIMIT 1";
+     CROSS JOIN bot_events le
+     WHERE lt.root_id = ?1 AND lt.message_id < ?2
+       AND le.agent_id = ?3 AND le.ref_key = 'mention:' || lt.message_id
+       AND json_extract(le.data, '$.thread_id') = ?1
+     ORDER BY lt.message_id DESC LIMIT 1";
 
 /// I117: the update behind `mark_answered_thread_mentions_read`. Driven by this bot's few unread
 /// mentions in this room, through message_threads' primary key and its (root_id, message_id) index,
@@ -10708,32 +10711,49 @@ impl Db {
         rows.collect()
     }
 
+    /// #609: the last message in a thread before `before_id` whose mention event was recorded for
+    /// this bot, which its context then starts after.
+    pub fn last_thread_mention(
+        &self,
+        root_id: i64,
+        before_id: i64,
+        agent_id: &str,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(LAST_THREAD_MENTION, params![root_id, before_id, agent_id], |row| row.get(0))
+            .optional()
+    }
+
     /// I105: messages in a thread before `before_id`, oldest first (bounded slice for mentions).
+    /// #609: never the root, which the event sends as `root`, and only those after `after_id`.
     pub fn thread_messages_before(
         &self,
         root_id: i64,
         before_id: i64,
+        after_id: Option<i64>,
         agent_id: &str,
         since: Option<i64>,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
-        // #609: the root goes in the event's own `root`, so it's left out here, and so is anything
-        // up to this bot's last mention in the thread, which that mention's event already carried.
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
              JOIN message_threads t ON t.message_id = messages.id
              WHERE t.root_id = ?1 AND messages.id < ?2 AND messages.created_at > ?3
-               AND messages.id <> ?1
-               AND messages.id > COALESCE((
-                   {LAST_THREAD_MENTION}
-               ), 0)
+               AND messages.id <> ?1 AND messages.id > ?6
                AND messages.kind != 'note'
                AND (messages.agent_id IS NULL OR messages.agent_id != ?4)
              ORDER BY messages.id DESC LIMIT ?5"
         ))?;
         let rows = stmt.query_map(
-            params![root_id, before_id, since.unwrap_or(i64::MIN), agent_id, limit],
+            params![
+                root_id,
+                before_id,
+                since.unwrap_or(i64::MIN),
+                agent_id,
+                limit,
+                after_id.unwrap_or(0)
+            ],
             message_from_row,
         )?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;

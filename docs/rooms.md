@@ -916,6 +916,10 @@ the cascades still run.
   the root was posted before arrival), and a bounded slice of up to 10 earlier messages in the thread
   (excluding the receiving bot's own messages per E4). Its `what_to_do` directs the bot to `read_thread`.
   The slice leaves out the root, which is already in `root`, and everything up to and including the
-  last earlier message in that thread whose `mention` event this bot was sent, since that event
-  already carried it (#609). So a bot mentioned again in a busy thread gets only what's new since. A
-  mention it wasn't sent (at the recycling plant, RC2), or whose event has expired, doesn't count.
+  last earlier message in that thread whose thread `mention` event was recorded for this bot, since
+  that event carried it (#609). So a bot mentioned again in a busy thread gets only what's new since.
+  A mention it wasn't sent (at the recycling plant, RC2), an expired event, and a watched workboard
+  change (RW11), which carries no context, don't count. A recorded event may still never have reached
+  the bot (a stream opened without a cursor, a session that isn't kept, a failed webhook), so when the
+  slice is cut this way the event has `context_after`, the message id it starts after, and its
+  `what_to_do` says to call `read_thread` if the bot doesn't have what came before.
