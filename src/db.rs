@@ -9382,28 +9382,36 @@ impl Db {
         self.conn().execute(ANSWERED_THREAD_MENTIONS, params![now, agent_id, hangout_id])
     }
 
-    /// I141, #669: this bot's unread mentions in replies under each of these thread roots, up to
-    /// `upto`, by root.
+    /// I141, #669: the replies under each of these thread roots, up to `upto`, with an unread mention
+    /// of this bot, by root, oldest first.
     pub fn thread_mentions_for_roots(
         &self,
         agent_id: &str,
         root_ids: &[i64],
         upto: i64,
-    ) -> rusqlite::Result<std::collections::HashMap<i64, i64>> {
+    ) -> rusqlite::Result<std::collections::HashMap<i64, Vec<i64>>> {
         if root_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
         let in_clause = root_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "SELECT t.root_id, COUNT(*) FROM mentions m
+            "SELECT t.root_id, m.message_id FROM mentions m
              JOIN message_threads t ON t.message_id = m.message_id AND t.message_id != t.root_id
              WHERE m.agent_id = ? AND m.read_at IS NULL AND m.message_id <= ?
                AND t.root_id IN ({in_clause})
-             GROUP BY t.root_id"
+             ORDER BY m.message_id"
         ))?;
-        let rows = stmt.query_map(params![agent_id, upto], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect()
+        let rows = stmt.query_map(params![agent_id, upto], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut by_root: std::collections::HashMap<i64, Vec<i64>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let (root, message) = row?;
+            by_root.entry(root).or_default().push(message);
+        }
+        Ok(by_root)
     }
 
     /// I141, #669: marks read this bot's mentions in replies under these thread roots, up to

@@ -2074,8 +2074,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
     let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
     let summaries = state.db.thread_summaries(&root_ids)?;
-    // I141, #669: a thread whose root this read shows says how many of its replies named this bot,
-    // and those mentions are then read: the bot knows the thread is there, and read_thread has them.
+    // I141, #669: a thread whose root this read shows says which of its replies named this bot, and
+    // those mentions are then read: the bot knows which to look at, and read_thread has them.
     let thread_mentions = match caller.agent_id.as_deref().filter(|_| sends_messages) {
         Some(agent_id) => {
             let counts =

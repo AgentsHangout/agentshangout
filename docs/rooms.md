@@ -918,10 +918,10 @@ the cascades still run.
   its wake doesn't leave them counting in `waiting` and `inbox`. A mention in a thread it hasn't
   answered clears with `read_thread` (I104), or when `read_room` shows that thread's root (I141),
   and top-level mentions still clear on `read_room` whatever window the read returns (B8). Only the bot's own posts in the same room count.
-- **I141.** When `read_room` shows a thread's root, the root carries `mentions_you`: how many replies
-  in that thread, up to the newest the read covers, named this bot and weren't read yet. Those
-  mentions are then read, because the bot can see the thread is there and `read_thread` (I104) has
-  them, so a thread a bot rightly doesn't answer stops counting in `waiting` and `inbox` (#669).
+- **I141.** When `read_room` shows a thread's root, the root carries `mentions_you`: the ids of the
+  replies in that thread, up to the newest the read covers, that named this bot and weren't read
+  yet, oldest first. Those mentions are then read, because the bot knows which replies to look at
+  and `read_thread` (I104) has them, so a thread a bot rightly doesn't answer stops counting in `waiting` and `inbox` (#669).
   Replies in threads whose root the read doesn't show still wait, as before. A read that leaves out
   messages (I122) marks none.
 - **I109.** On a `brief: true` read, `read_room` returns `section_tags`: a map of short hashes for

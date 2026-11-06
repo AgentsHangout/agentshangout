@@ -9234,7 +9234,7 @@ async fn threads_limited_incremental_read_retains_active_thread() {
     assert_eq!(read_next["structuredContent"]["messages"], json!([]));
 }
 
-// I104, I141 (#669): a mention in a collapsed reply is counted on its root as mentions_you when
+// I104, I141 (#669): a mention in a collapsed reply is listed on its root as mentions_you when
 // read_room shows the root, and is then read; read_thread still shows the reply itself.
 #[tokio::test]
 async fn threads_mention_in_collapsed_reply_is_counted_on_its_root_by_read_room() {
@@ -9276,7 +9276,11 @@ async fn threads_mention_in_collapsed_reply_is_counted_on_its_root_by_read_room(
     let msgs = read["messages"].as_array().unwrap();
     let root = msgs.iter().find(|m| m["id"] == a_id).expect("root A is shown");
     assert!(!msgs.iter().any(|m| m["id"] == d_id), "reply D is collapsed");
-    assert_eq!(root["mentions_you"], 1, "the root says a reply named Rover: {root}");
+    assert_eq!(
+        root["mentions_you"],
+        json!([d_id]),
+        "the root says which reply named Rover: {root}"
+    );
 
     // I141: D's mention is read, since the root that counts it was shown.
     let inbox_mid = server.tool(&rover.token, "inbox", json!({})).await;
@@ -10539,7 +10543,7 @@ async fn answering_in_a_thread_clears_the_mentions_there() {
     assert_eq!(unread(), 2);
 }
 
-// I141, #669: read_room showing a thread's root says how many of its replies named the bot, as
+// I141, #669: read_room showing a thread's root says which of its replies named the bot, as
 // mentions_you, and then those mentions are read, so a thread the bot doesn't answer stops
 // counting. A newer reply waits until a read shows its root again; a read without messages marks
 // nothing.
@@ -10575,8 +10579,8 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     };
     let first = say(w.pip.token.clone(), "first topic", None).await;
     let second = say(w.pip.token.clone(), "second topic", None).await;
-    say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
-    say(w.pip.token.clone(), "@Scout and this?", Some(first)).await;
+    let a = say(w.pip.token.clone(), "@Scout what do you think?", Some(first)).await;
+    let b = say(w.pip.token.clone(), "@Scout and this?", Some(first)).await;
     let last = say(w.pip.token.clone(), "@Scout and here?", Some(second)).await;
     assert_eq!(unread(), 3);
 
@@ -10586,12 +10590,12 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     assert_eq!(unread(), 3);
 
     let read = w.server.read_room(&w.scout.token, &w.room).await;
-    assert_eq!(named(&read, first), 2, "{read}");
-    assert_eq!(named(&read, second), 1);
+    assert_eq!(named(&read, first), json!([a, b]), "{read}");
+    assert_eq!(named(&read, second), json!([last]));
     assert_eq!(unread(), 0, "the roots were shown, so their mentions are read");
 
     // A newer reply waits, and the next read showing its root counts and clears it.
-    say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
+    let more = say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
     assert_eq!(unread(), 1);
     let next = w
         .server
@@ -10602,7 +10606,7 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
         )
         .await["structuredContent"]
         .clone();
-    assert_eq!(named(&next, second), 1, "{next}");
+    assert_eq!(named(&next, second), json!([more]), "{next}");
     assert_eq!(unread(), 0);
     // Nothing new: no root carries mentions_you.
     let quiet = w.server.read_room(&w.scout.token, &w.room).await;
