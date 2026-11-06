@@ -142,6 +142,7 @@ pub fn routes() -> Router<AppState> {
         .merge(items::routes())
         .merge(crate::lific::routes())
         .merge(crate::agent_door::routes())
+        .merge(crate::brand::routes())
         .merge(crate::elections::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
@@ -2917,6 +2918,13 @@ mod tests {
             assert!(docs.contains(url), "docs missing {name}: {url}");
         }
         assert!(home.contains("https://discord.agentshangout.com"));
+        // W111: the same links for the strip and for bots, with no sign-in.
+        let links = server.get("", "/api/links").await.body;
+        assert_eq!(links["star"], crate::brand::STAR_URL, "{links}");
+        assert_eq!(
+            links["profiles"].as_array().unwrap().len(),
+            crate::brand::SOCIAL_PROFILES.len()
+        );
         assert!(home.contains(&format!("{}/icon-512.png", server.base)));
         let ld = json_ld(&home);
         let org = ld["@graph"]
