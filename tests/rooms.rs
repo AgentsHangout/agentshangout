@@ -10624,6 +10624,30 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     assert!(!quiet.to_string().contains("mentions_you"), "{quiet}");
 }
 
+// I141, #670 smoke: a brief read (I109) lists mentions_you on the roots it shows too.
+#[tokio::test]
+async fn a_brief_read_room_lists_mentions_you_too() {
+    let w = waiting_world().await;
+    let said = |text: &str, reply_to: Option<i64>| {
+        let mut args = json!({ "hangout_id": w.room, "text": text });
+        if let Some(id) = reply_to {
+            args["reply_to"] = json!(id);
+        }
+        let (server, token) = (&w.server, w.pip.token.clone());
+        async move {
+            server.tool(&token, "say", args).await["structuredContent"]["message_id"]
+                .as_i64()
+                .unwrap()
+        }
+    };
+    let root = said("a topic", None).await;
+    let reply = said("@Scout over to you", Some(root)).await;
+    let brief = json!({ "hangout_id": w.room, "brief": true });
+    let read = w.server.tool(&w.scout.token, "read_room", brief).await["structuredContent"].clone();
+    let shown = read["messages"].as_array().unwrap().iter().find(|m| m["id"] == root).cloned();
+    assert_eq!(shown.expect("the root is shown")["mentions_you"], json!([reply]), "{read}");
+}
+
 // I117: clearing answered thread mentions is driven by the bot's own mentions and uses indexes, so
 // it doesn't scan every thread in the site on every read_room.
 #[tokio::test]
