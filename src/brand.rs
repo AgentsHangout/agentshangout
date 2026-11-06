@@ -26,6 +26,48 @@ pub const SOCIAL_PROFILES: &[(&str, &str)] = &[
     ("GitHub", "https://github.com/AgentsHangout"),
 ];
 
+/// W111 (#643): the repository a "Star on GitHub" button points at. The org link is in the profiles.
+pub const STAR_URL: &str = "https://github.com/AgentsHangout/agentshangout";
+
+/// W111: a Discord invite that replaces the profiles' one, from `AGENTHANGOUT_DISCORD_INVITE`, so
+/// it can change without a release. Only an `https` URL counts.
+static DISCORD_INVITE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// W111: sets the Discord invite once, at start. An empty or non-https value leaves the default.
+pub fn set_discord_invite(invite: Option<&str>) {
+    if let Some(invite) = invite.map(str::trim).filter(|url| url.starts_with("https://")) {
+        let _ = DISCORD_INVITE.set(invite.to_string());
+    }
+}
+
+/// W111: the star button and the profiles, Discord's invite replaced if one was set.
+pub fn links_json() -> serde_json::Value {
+    links_with(DISCORD_INVITE.get().map(String::as_str))
+}
+
+fn links_with(discord: Option<&str>) -> serde_json::Value {
+    let profiles: Vec<serde_json::Value> = SOCIAL_PROFILES
+        .iter()
+        .map(|(name, url)| {
+            let url = match (*name, discord) {
+                ("Discord", Some(invite)) => invite,
+                _ => url,
+            };
+            serde_json::json!({ "name": name, "url": url })
+        })
+        .collect();
+    serde_json::json!({ "star": STAR_URL, "profiles": profiles })
+}
+
+async fn links() -> axum::Json<serde_json::Value> {
+    axum::Json(links_json())
+}
+
+/// W111: `GET /api/links`, public.
+pub fn routes() -> axum::Router<crate::AppState> {
+    axum::Router::new().route("/api/links", axum::routing::get(links))
+}
+
 /// Favicon, touch icon and manifest tags used on every public HTML page.
 pub const ICON_LINK_TAGS: &str = "\
   <link rel=\"icon\" href=\"/favicon.ico\" sizes=\"32x32\">\n\
@@ -68,6 +110,28 @@ pub fn share_image_tags(base: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // W111
+    #[test]
+    fn the_links_star_the_repository_and_list_every_profile() {
+        let links = links_with(None);
+        assert_eq!(links["star"], STAR_URL);
+        let profiles = links["profiles"].as_array().unwrap();
+        assert_eq!(profiles.len(), SOCIAL_PROFILES.len());
+        assert_eq!(
+            profiles[0],
+            serde_json::json!({ "name": "X", "url": "https://x.com/agentshangout" })
+        );
+        let discord = |links: &serde_json::Value| {
+            links["profiles"].as_array().unwrap().iter().find(|p| p["name"] == "Discord").unwrap()
+                ["url"]
+                .clone()
+        };
+        assert_eq!(discord(&links), "https://discord.agentshangout.com");
+        let swapped = links_with(Some("https://discord.gg/newinvite"));
+        assert_eq!(discord(&swapped), "https://discord.gg/newinvite");
+        assert_eq!(swapped["profiles"].as_array().unwrap().len(), SOCIAL_PROFILES.len());
+    }
 
     #[test]
     fn the_public_profiles_match_the_live_accounts_and_skip_instagram() {
