@@ -7063,6 +7063,8 @@ async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
     let first = server.lific_board(&ann, &room);
     let board = server.get(&ann.key, &format!("/api/items/{first}/lific")).await.ok();
     assert_eq!(board["available"], true, "{board}");
+    // I132: the room's own project asks nobody to link anything, the room's owner included.
+    assert_eq!(board["you_can_link"], false, "{board}");
     let project = board["project"].as_str().unwrap().to_string();
     assert!(project.starts_with('R') && project.len() == 5, "{project}");
     assert_eq!(board["columns"][1]["issues"][0]["id"], format!("{project}-1"), "{board}");
@@ -7092,6 +7094,61 @@ async fn an_unlinked_lific_board_gets_its_rooms_own_project() {
     let theirs = server.get(&bo.key, &format!("/api/items/{other}/lific")).await.ok();
     assert_ne!(theirs["project"], project);
     assert_eq!(fake.made().len(), 2);
+}
+
+// I147: the board credits Lific with a link to its repository and its star count, which the server
+// asks GitHub for in the background, at most once an hour. Bots reading the board don't get it.
+#[tokio::test]
+async fn a_lific_board_credits_lific_with_its_stars() {
+    use axum::{extract::State, routing::get, Json, Router};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (_fake, origin) = fake_lific().await;
+    allow_lific(&server, "https://lific.example", &origin);
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+
+    // Not set to ask GitHub: the credit is there, with no count.
+    let board = server.get(&ann.key, &path).await.ok();
+    assert_eq!(board["credit"]["url"], "https://github.com/VoidNullable/lific", "{board}");
+    assert_eq!(board["credit"]["stars"], Value::Null);
+
+    let asked = Arc::new(AtomicUsize::new(0));
+    let router = Router::new()
+        .route(
+            "/repos/VoidNullable/lific",
+            get(|State(asked): State<Arc<AtomicUsize>>| async move {
+                asked.fetch_add(1, Ordering::SeqCst);
+                Json(json!({ "full_name": "VoidNullable/lific", "stargazers_count": 86 }))
+            }),
+        )
+        .with_state(asked.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let github = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    server.state.lific.count_stars_from(Some(&github));
+
+    // The first read doesn't wait on GitHub; a later one has the count.
+    let mut stars = Value::Null;
+    for _ in 0..50 {
+        stars = server.get(&ann.key, &path).await.ok()["credit"]["stars"].clone();
+        if stars != Value::Null {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stars, json!(86));
+    for _ in 0..5 {
+        server.get(&ann.key, &path).await.ok();
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "asked once in the hour");
+
+    let read = server
+        .tool(&scout.token, "read_board", json!({ "hangout_id": room, "board_id": id }))
+        .await;
+    assert!(read["structuredContent"]["credit"].is_null(), "{read}");
 }
 
 // I129: Lific down or the key turned down makes nothing and is tried again; a taken id tries the
@@ -11409,4 +11466,93 @@ async fn only_a_person_blocks_and_never_themselves() {
     assert_eq!(again["blocks"].as_array().unwrap().len(), 1);
     server.state.db.delete_person(&bo.id, "Bo").unwrap();
     assert_eq!(server.get(&ann.key, "/api/blocks").await.ok()["blocks"], json!([]));
+}
+
+// A101 (#685): someone a person blocked, and their bots, aren't seen by the blocker or the
+// blocker's bots: not in read_room, read_thread, the page or events, with only a count said. The
+// blocked person still sees the blocker's lines: it's one way.
+#[tokio::test]
+async fn a_blocked_persons_lines_are_hidden_from_the_blocker_one_way() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pip = server.bot(&bo, &room, "Pip").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+
+    let root = server.post(&ann.key, &messages, json!({ "text": "Ann asks a thing" })).await.ok();
+    let root_id = root["id"].as_i64().unwrap();
+    server.post(&bo.key, &messages, json!({ "text": "Bo says hi" })).await.ok();
+    server.tool(&pip.token, "say", json!({ "hangout_id": room, "text": "Pip says hi" })).await;
+    server
+        .post(&bo.key, &messages, json!({ "text": "Bo replies", "reply_to": root_id }))
+        .await
+        .ok();
+
+    // Scout, Ann's bot: none of Bo's or Pip's lines, only a count.
+    let read = server.read_room(&scout.token, &room).await;
+    let said = read["messages"].to_string();
+    assert!(said.contains("Ann asks a thing"), "{read}");
+    assert!(!said.contains("Bo says hi") && !said.contains("Pip says hi"), "{read}");
+    // Bo's line, Pip's line, and Bo's reply in the thread (the room reads every line it held).
+    assert_eq!(read["hidden"], 3, "{read}");
+    let thread = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": room, "root": root_id }))
+        .await["structuredContent"]
+        .clone();
+    assert!(!thread.to_string().contains("Bo replies"), "{thread}");
+    assert_eq!(thread["hidden"], 1);
+    let events =
+        server.tool(&scout.token, "events_since", json!({ "since": "0", "wait_seconds": 0 })).await;
+    assert!(!events.to_string().contains("Bo says hi"), "no message event: {events}");
+
+    // The REST read a bot polls the room with, too.
+    let rest = server.get(&scout.token, &format!("/api/hangouts/{room}/messages")).await.ok();
+    assert!(!rest.to_string().contains("Bo says hi"), "{rest}");
+    // A root Bo wrote, answered by Ann, shows only as hidden in its thread.
+    let bos_root = server.post(&bo.key, &messages, json!({ "text": "Bo starts one" })).await.ok();
+    let bos_root = bos_root["id"].as_i64().unwrap();
+    server
+        .post(&ann.key, &messages, json!({ "text": "Ann answers it", "reply_to": bos_root }))
+        .await
+        .ok();
+    let theirs_thread = server
+        .tool(&scout.token, "read_thread", json!({ "hangout_id": room, "root": bos_root }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(theirs_thread["root"]["text_hidden"], "hidden", "{theirs_thread}");
+    assert!(!theirs_thread.to_string().contains("Bo starts one"), "{theirs_thread}");
+    let again = server.read_room(&scout.token, &room).await;
+    assert!(!again["messages"].to_string().contains("Bo starts one"), "root not put back: {again}");
+
+    // Ann's page the same.
+    let page = server.snapshot(&ann.key, &room).await;
+    assert!(!page["messages"].to_string().contains("Bo says hi"), "{page}");
+    assert!(page["hidden"].as_u64().unwrap() >= 3, "{page}");
+
+    // Bo still sees Ann's lines, and his own.
+    let theirs = server.read_room(&pip.token, &room).await;
+    let seen = theirs["messages"].to_string();
+    assert!(seen.contains("Ann asks a thing") && seen.contains("Bo says hi"), "{theirs}");
+    assert!(theirs.get("hidden").is_none(), "{theirs}");
+}
+
+// A106 (#685): a new block ends a friendship between the two people.
+#[tokio::test]
+async fn a_block_ends_a_friendship_between_them() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let ask = json!({ "kind": "person", "from_id": ann.id, "to_id": bo.id });
+    server.post(&ann.key, "/api/trust/friendships", ask.clone()).await.ok();
+    server.post(&bo.key, "/api/trust/friendships/accept", ask).await.ok();
+    let friends = |key: String| {
+        let server = &server;
+        async move { server.get(&key, "/api/trust").await.ok()["friendships"].clone() }
+    };
+    assert_eq!(friends(ann.key.clone()).await.as_array().unwrap().len(), 1);
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    assert_eq!(friends(ann.key.clone()).await, json!([]));
+    assert_eq!(friends(bo.key.clone()).await, json!([]));
 }

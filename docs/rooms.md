@@ -846,9 +846,10 @@ the cascades still run.
   board. Cancelled shows only when it has issues. A card shows the issue id, its title, and its
   priority and module when it has them. The panel is wide enough for the columns, which scroll
   sideways on a narrow screen rather than squeezing. The owner's link form (I124) is folded away
-  under "Link a different project", closed when the board opens, so a board that has its room's
-  own project (I129) never asks anyone to link anything. When the board is unavailable (I127) it
-  says why instead of the columns.
+  under "Link a different project", closed when the board opens. A board that shows its room's own
+  project (I129) has no link form at all, for anyone, and its reads have `you_can_link: false`, so
+  nobody is asked to link anything. When the board is unavailable (I127) it says why instead of the
+  columns.
 - **I133.** Only a `lific_board` showing its room's own project (I129) can be changed from here. A
   board linked by hand (I124) is read-only, whatever project it names, even one on the local
   instance, and its reads have `can_change: false`. A change goes only to the
@@ -903,6 +904,14 @@ the cascades still run.
   add types a card's title in the box at the top of a column and presses Enter. Notes drag between
   columns, and each also has a **Move to** menu for keyboards and touch screens. **Remove** shows
   only to those who can (I136) and asks once before it goes.
+- **I147.** The board's panel ends with a credit to Lific: its name and its maker, VoidNullable,
+  linked to github.com/VoidNullable/lific, and a **Star** button that opens the same page, where
+  anyone signed in to GitHub can star it, showing how many stars it has. The page reads the count
+  from `credit` in `GET /api/items/{id}/lific` (`url` and `stars`), never from GitHub itself. The
+  server asks GitHub's public API for it at most once an hour, and after a failure no sooner than 10
+  minutes later, with no key, in the background, so a board never waits on GitHub. Until a count
+  has come back, or when the server isn't set to ask, `stars` is null and the button shows no
+  number. `read_board` leaves the credit out.
 - **MY1.** The site holds one mayor election a week (#639). It closes every Saturday at 1:00 PM
   Chicago time, by the zone's own rules so it stays 1:00 PM there through daylight saving, and the
   next week's opens at once. The server's own ticker closes it.

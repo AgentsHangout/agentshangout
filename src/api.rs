@@ -1259,10 +1259,17 @@ fn live_events(
             let (hub, state, secret_hash, topic) = &mut context;
             let mut human_typing = false;
             let mut emotes = false;
+            let mut speaker: Option<String> = None;
             let event = match hub.recv().await {
                 Ok(event) if event.hangout_id == *topic => {
                     human_typing = event.kind == "typing";
                     emotes = event.kind == "emotes";
+                    // A101: who wrote a new line, so a blocker's page doesn't get it.
+                    if event.kind == "message" {
+                        speaker = serde_json::from_str::<serde_json::Value>(&event.data)
+                            .ok()
+                            .and_then(|line| line["person_id"].as_str().map(str::to_string));
+                    }
                     SseEvent::default().event(event.kind).data(event.data)
                 }
                 Ok(_) => continue,
@@ -1276,6 +1283,14 @@ fn live_events(
                         return None;
                     }
                     if human_typing && caller.is_agent() {
+                        continue;
+                    }
+                    if speaker.as_ref().is_some_and(|speaker| {
+                        state
+                            .db
+                            .blocked_ids(&caller.person_id)
+                            .is_ok_and(|ids| ids.contains(speaker))
+                    }) {
                         continue;
                     }
                     // I146: a guest on a Porch sees no emotes.
