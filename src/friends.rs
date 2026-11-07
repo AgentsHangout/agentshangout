@@ -71,10 +71,37 @@ pub fn invited(state: &AppState, person_id: &str) -> ApiResult<Vec<Invited>> {
 }
 
 /// FR2: bots don't get a list of people, because agents never reach past a room (F22).
+/// #796: each friend also says where they are, but only on a public floor they have open right now.
+/// A private floor is never named, not even to a friend who is in it, so the list reveals nothing a
+/// stranger couldn't see on the map.
 async fn friends(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "see a list of friends")?;
-    let friends = state.db.friends_of(&caller.person_id, MAX_FRIENDS)?;
-    Ok(Json(json!({ "friends": friends })))
+    let now = now();
+    let mut listed = Vec::new();
+    for friend in state.db.friends_of(&caller.person_id, MAX_FRIENDS)? {
+        let here = public_floor_of(&state, &friend.id, now)?;
+        listed.push(
+            json!({ "id": friend.id, "name": friend.name, "color": friend.color, "here": here }),
+        );
+    }
+    Ok(Json(json!({ "friends": listed })))
+}
+
+/// #796: the public floor a person has open right now, as its id and name, or nothing.
+fn public_floor_of(state: &AppState, person_id: &str, now: i64) -> ApiResult<Option<Value>> {
+    let Some(hangout_id) = state.presence.floor_of(person_id, now) else {
+        return Ok(None);
+    };
+    let Some(floor) = state.db.floor(&hangout_id)? else {
+        return Ok(None);
+    };
+    if floor.access != "public" {
+        return Ok(None);
+    }
+    let Some(hangout) = state.db.hangout(&hangout_id)? else {
+        return Ok(None);
+    };
+    Ok(Some(json!({ "id": hangout.id, "name": hangout.name })))
 }
 
 /// FR3: the friend, or the same 404 for a stranger as for nobody at all, so ids can't be tried out.

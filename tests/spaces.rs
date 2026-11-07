@@ -4809,3 +4809,110 @@ async fn a_bot_plays_a_game_by_using_it() {
     assert_eq!(table["kind"], "billiards", "{table}");
     assert!((0..=15).contains(&table["score"].as_i64().unwrap()), "{table}");
 }
+
+// S28, W105 (#811): an owner's quiet public studio stays in public_floors and keeps its floor_id
+// in list_city even when more than 50 newer empty public floors exist.
+#[tokio::test]
+async fn an_owners_quiet_public_studio_stays_in_public_floors_and_list_city_past_fifty_newer_empty_floors(
+) {
+    let server = Server::start().await;
+    let (studio, ann) = server.someone("Ann").await;
+    let house = text(&server.get(&ann.key, "/api/spaces").await.ok()["house"]["space"]["id"]);
+    let (scout, token) = server.bot(&ann, &house, "Scout").await;
+    let routine = json!({
+        "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        "starts": "00:00",
+        "ends": "24:00",
+        "public_places": true,
+    });
+    server.put(&ann.key, &format!("/api/agents/{scout}/routine"), routine).await.ok();
+
+    let spot = server.build(&ann, "studio").await;
+    assert_eq!(text(&server.go_in(&ann.key, spot).await.ok()["hangout_id"]), studio);
+    server.open(&ann, &studio).await;
+    server.post(&ann.key, &format!("/api/hangouts/{studio}/away"), json!({})).await.ok();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    for n in 0..55 {
+        let (room, who) = server.someone(&format!("Owner {n}")).await;
+        server.open(&who, &room).await;
+    }
+
+    let list = server.get(&ann.key, "/api/spaces/public").await.ok();
+    let ids: Vec<String> =
+        list["floors"].as_array().unwrap().iter().map(|f| text(&f["id"])).collect();
+    assert!(ids.contains(&studio), "owner's studio missing from /api/spaces/public: {ids:?}");
+
+    let call = |name: &str, arguments: Value| {
+        let server = &server;
+        let token = token.clone();
+        let body = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        });
+        async move {
+            let reply = server.post(&token, "/mcp", body).await.ok()["result"].clone();
+            assert!(reply["isError"].is_null(), "{reply}");
+            reply["structuredContent"].clone()
+        }
+    };
+    let public = call("public_floors", json!({})).await;
+    let bot_ids: Vec<String> =
+        public["places"].as_array().unwrap().iter().map(|f| text(&f["id"])).collect();
+    assert!(bot_ids.contains(&studio), "owner's studio missing from public_floors: {bot_ids:?}");
+
+    let city = call("list_city", json!({})).await;
+    let at_spot = city["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["x"] == spot.0 && p["y"] == spot.1)
+        .unwrap_or_else(|| panic!("{city}"));
+    assert_eq!(at_spot["floor_id"], studio.as_str(), "{at_spot}");
+}
+
+// S62, S67, S81 (#811): when a bot calls read_room before entering a floor, an owner-member floor
+// points it to go_to_room (no invite needed), an open public floor points it to go_out, and a
+// stranger's private or turned-out floor stays "not found".
+#[tokio::test]
+async fn reading_a_floor_before_entering_tells_a_bot_how_to_enter_without_revealing_private_rooms()
+{
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    let (_, token) = server.bot(&ann, &home, "Scout").await;
+    let studio = text(&server.third_space(&ann, "Ann's Studio").await.ok()["hangout"]["id"]);
+
+    let msg = server.tool_error(&token, "read_room", json!({ "hangout_id": studio })).await;
+    assert!(
+        msg.contains(&format!("call go_to_room with hangout_id {studio} first"))
+            && msg.contains("no invite is needed")
+            && msg.contains(&format!("read_room with hangout_id {home}")),
+        "{msg}"
+    );
+
+    let (cafe, bo) = server.someone("Bo").await;
+    let den = text(&server.third_space(&bo, "Bo's Den").await.ok()["hangout"]["id"]);
+    server.open(&bo, &cafe).await;
+
+    let pub_msg = server.tool_error(&token, "read_room", json!({ "hangout_id": cafe })).await;
+    assert!(
+        pub_msg.contains(&format!("call go_out with floor_id {cafe} first"))
+            && pub_msg.contains(&format!("read_room with hangout_id {home}")),
+        "{pub_msg}"
+    );
+
+    assert_eq!(
+        server.tool_error(&token, "read_room", json!({ "hangout_id": den })).await,
+        "not found"
+    );
+
+    server.walk_in(&ann, &cafe).await.ok();
+    server
+        .post(&bo.key, &format!("/api/spaces/{cafe}/people/{}/turn-out", ann.id), json!({}))
+        .await
+        .ok();
+    assert_eq!(
+        server.tool_error(&token, "read_room", json!({ "hangout_id": cafe })).await,
+        "not found"
+    );
+}

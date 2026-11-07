@@ -10687,6 +10687,28 @@ async function worldView(id, { home = false } = {}) {
   const aroundList = h('ul', { class: 'around' });
   panels.add('around', 'Who\'s around', {}, aroundCount, aroundList);
 
+  // #796: My friends, from /api/friends. Each friend says where they are only on a public floor
+  // open right now; a private one is never named. Read when the panel opens.
+  const friendsCount = h('p', { class: 'muted' });
+  const friendsError = h('p', { class: 'error', role: 'status' });
+  const friendsList = h('ul', { class: 'around friends-list' });
+  async function loadFriends() {
+    try {
+      const { friends } = await api('/api/friends');
+      friendsError.textContent = '';
+      friendsCount.textContent = friends.length
+        ? `${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}. Where they are shows only on a public floor.`
+        : 'No friends yet. Once someone shares a room or city with you, they show up here.';
+      friendsList.replaceChildren(...friends.map((friend) => h('li', { class: 'around-row' },
+        h('span', { class: 'around-name' },
+          h('strong', {}, friend.name),
+          h('small', { class: 'muted' }, ` ${friend.here ? `on ${friend.here.name}` : 'not on a public floor right now'}`)))));
+    } catch (error) {
+      friendsError.textContent = `Couldn't load your friends: ${error.message}`;
+    }
+  }
+  panels.add('friends', 'My friends', { onOpen: loadFriends }, friendsCount, friendsError, friendsList);
+
   // G9: where the tutorial's buttons go on the map. Each gets a person to a control, and they use it.
   const tutorialShows = () => ({
     account: () => account.open('Looking around is free. An account gets you a house on this map.'),
@@ -10755,6 +10777,7 @@ async function worldView(id, { home = false } = {}) {
     squareButton,
     research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
+    me?.kind === 'person' ? panels.toggle('friends', 'My friends', { short: 'Friends', className: 'friends-button' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     creditCoin(me, account),
     needs ? needs.toggle : null,
@@ -10774,6 +10797,7 @@ async function worldView(id, { home = false } = {}) {
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
     moreRow('around', 'Who\'s around'),
+    me?.kind === 'person' ? moreRow('friends', 'My friends') : null,
     ...notificationActions(me),
     moreRow('about', 'About'),
     signups?.row,
