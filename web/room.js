@@ -4565,13 +4565,13 @@ function spotsOf({ use, side, facing, left, top, wide, deep, y }) {
     const along = bunks ? 0.5 : (i + 0.5) / spots;
     const lift = bunks?.[i] ?? 0;
     const [ax, ay] = turned
-      ? clearOf(right ? left + wide + 6 : left - 6, top + deep * along + 4)
+      ? clearOf(right ? left + wide + 6 : left - 6, top + deep * along + 4 + lift)
       : clearOf(left + wide * along, y + 3 + lift);
     const drop = i % 2;
     if (!on) return { x: ax, y: ay, ax, ay, pose, drop, hands, busy, facing: turned ? (right ? 'left' : 'right') : 'back' };
     // Someone on a seat has their feet behind its front edge, and `over` keeps them painted on it.
     const seat = turned
-      ? { x: left + wide / 2 + (right ? 3 : -3), y: top - 3 + (deep - 8) * along, facing: right ? 'right' : 'left' }
+      ? { x: left + wide / 2 + (right ? 3 : -3), y: top - 3 + (deep - 8) * along + lift, facing: right ? 'right' : 'left' }
       : { x: left + 7 + (wide - 14) * along, y: y - 7 + lift, facing: 'front' };
     return { ...seat, ax, ay, pose, drop, over: y + 1 };
   });
