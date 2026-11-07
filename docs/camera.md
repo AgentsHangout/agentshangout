@@ -91,3 +91,6 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   (`delete_photo` with `photo_id`) can take one of the owner's photos down before it expires, with
   its bytes and subjects. The reply is `{"deleted": id}`. Anyone else, an expired photo and a photo
   that never was all get the same 404 `not found`.
+- **CP18.** No name tag covers the wall board. A seated figure's tag that has no room above its head
+  below the board goes under its feet instead, next to its seat, rather than up onto the board or
+  down onto the faces at the table. CP10 still holds.

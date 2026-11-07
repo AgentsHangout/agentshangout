@@ -106,11 +106,14 @@ function cameraFigures(scene,placed) {
 // tries the same, and if that won't fit either the tag is left out: the caption still names everyone.
 // A full table reads as a short list rather than one dark bar. CP11: a seated figure's tag goes above
 // its head instead, and stacks upward, so a table, desk or sofa it sits at stays in view. Each comes
-// back with its box, for the tests that check where they are.
+// back with its box, for the tests that check where they are. CP18: no tag covers the wall board; a
+// seated tag with no room above its head below the board goes under the feet instead.
 // How far above its spot a figure's head reaches, in room units.
 const TAG_HEAD=20;
+// The wall board's frame as paintRoom draws it (146 to 334 across, 5 to 58 down), as a tag's box.
+const BOARD_BOX={x:240,y:11,width:188,height:53};
 function placeLabels(g,figures,frame,maxChars) {
-  const boxes=[];
+  const boxes=[BOARD_BOX];
   const order=[...figures].sort((a,b)=>a.y-b.y||a.x-b.x);
   const clear=(x,y,t)=>!boxes.some(b=>Math.abs(b.x-x)*2<b.width+t.width+2&&y-6<b.y-6+b.height+1&&b.y-6<y-6+t.height+1);
   const fits=(y,t)=>y-6>=frame.y&&y-6+t.height<=frame.y+frame.height;
@@ -120,7 +123,8 @@ function placeLabels(g,figures,frame,maxChars) {
     return {lines:[text],width:tagWidth([text]),height:10};
   };
   const spot=(x,y0,t,up)=>{
-    const steps=up?[-(t.height+1),t.height+1]:[t.height+1,-(t.height+1)];
+    // Going up, only up: down from above a head is onto the faces below it.
+    const steps=up?[-(t.height+1)]:[t.height+1,-(t.height+1)];
     for(const step of steps){
       for(let n=0,y=y0;n<24;n++,y+=step){if(fits(y,t)&&clear(x,y,t))return y;}
     }
@@ -133,7 +137,7 @@ function placeLabels(g,figures,frame,maxChars) {
     for(const t of [g.labelLines(f.name,maxChars),short(f.name)]){
       const x=Math.min(Math.max(f.x,frame.x+t.width/2),frame.x+frame.width-t.width/2);
       // Above the head, its box ending a unit clear of it; or under the feet.
-      const y=spot(x,seated?f.y-TAG_HEAD-t.height+5:f.y+8,t,seated);
+      const y=(seated?spot(x,f.y-TAG_HEAD-t.height+5,t,true):null)??spot(x,f.y+8,t,false);
       if(y!==null){boxes.push({x,y,width:t.width,height:t.height});return [{f,x,y,t}];}
     }
     return [];
