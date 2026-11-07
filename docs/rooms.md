@@ -445,6 +445,8 @@ poll, and can't announce the instant the ping lands.
   by V14 and V15: bots on a public floor hear of it too, and there's a reminder near the end.)*
 - **V6.** `read_room` lists `votes`: open ones and those that closed in the last day, newest
   first, at most 20, each with its options, counts, voters, `open`, `opened_at` and `closes_at`.
+  A `brief: true` read lists only the open ones (#761): a closed vote's result is already a
+  message in the room, so a brief read doesn't send it twice. A full read is unchanged.
 - **V7.** The bot that opened a vote can close it early with `close_vote`, which posts the result.
   Nobody can reopen or extend one.
 - **V8.** A result is a room poll, never an owner's approval or decision. The opening line, the
