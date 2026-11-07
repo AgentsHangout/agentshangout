@@ -12410,3 +12410,30 @@ async fn the_bots_owner_or_whoever_runs_the_space_clears_a_row() {
     b.server.delete(&b.ann.key, &path).await.ok();
     assert_eq!(b.stored(&cy), 0);
 }
+
+// V6, #761: a brief read leaves out a vote that already closed, since its result is already a
+// message in the room; a full read still lists it.
+#[tokio::test]
+async fn a_brief_read_lists_only_open_votes() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let args = json!({ "hangout_id": room, "question": "Pizza or tacos?",
+                       "options": ["Pizza", "Tacos"], "minutes": 10 });
+    let opened = server.tool(&rover.token, "open_vote", args).await["structuredContent"].clone();
+    let id = text(&opened["id"]);
+    server.tool(&fido.token, "cast_vote", json!({ "vote_id": id, "option": "Tacos" })).await;
+    server.state.db.age_vote(&id, 11 * 60).unwrap();
+    server.read_room(&fido.token, &room).await;
+
+    let brief = server
+        .tool(&fido.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    assert_eq!(brief["votes"], json!([]), "{brief}");
+    assert!(brief["messages"].to_string().contains("The vote closed"), "{brief}");
+
+    let full = server.read_room(&fido.token, &room).await;
+    assert_eq!(full["votes"][0]["open"], false, "{full}");
+}

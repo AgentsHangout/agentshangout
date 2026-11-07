@@ -2213,10 +2213,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     });
     let listed_pins = pins::mcp_pins(state, caller, &hangout.id, snapshot.guest.as_ref())?;
     let room_votes = votes::for_room(state, caller, &hangout.id)?;
-    let open_votes = room_votes
-        .iter()
-        .filter(|v| v.get("open").and_then(Value::as_bool).unwrap_or(false))
-        .count() as i64;
+    let is_open = |v: &Value| v.get("open").and_then(Value::as_bool).unwrap_or(false);
+    let open_votes = room_votes.iter().filter(|v| is_open(v)).count() as i64;
+    // #761: a brief read lists only open votes; a closed one's result is already a room message.
+    let votes_shown: Vec<Value> =
+        room_votes.iter().filter(|v| !brief || is_open(v)).cloned().collect();
     // I122: a brief read says when each bot here last spoke in this room, so a presence check
     // needs no second call. A guest only sees from their arrival, so earlier lines don't count.
     let last_posted = if brief {
@@ -2307,7 +2308,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // I86, I87: whether @room is on here, and whether this bot hears it.
         "room_mentions": crate::room_mentions::for_read(state, caller, &hangout.id)?,
         // V6: open votes, and ones that closed in the last day.
-        "votes": room_votes,
+        "votes": votes_shown,
         "pin_policy": snapshot.pin_policy,
         "invitees": snapshot.invitees.iter().map(|invitee| json!({
             "event_id": invitee.event_id,
