@@ -4087,7 +4087,6 @@ function paintSpaceHelmet(g, x, y) {
   r(g, '#5d8fd0', x - 6, y - 11, 1, 1);
 }
 
-// A dark pitted rock on a stone plinth, a glint of iron in it and a brass plate on the front.
 // #774: coin sinks in the stargazer pack.
 function paintCometJar(g, x, y) {
   r(g, SHADOW, x - 4, y - 1, 8, 1);
@@ -4111,6 +4110,7 @@ function paintLunarRover(g, x, y) {
   r(g, '#1b2030', x - 7, y - 2, 4, 2);
   r(g, '#1b2030', x + 3, y - 2, 4, 2);
 }
+// A dark pitted rock on a stone plinth, a glint of iron in it and a brass plate on the front.
 function paintMeteorite(g, x, y) {
   r(g, SHADOW, x - 8, y - 2, 16, 2);
   r(g, '#3b4158', x - 6, y - 8, 12, 6);
