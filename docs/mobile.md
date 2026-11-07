@@ -148,11 +148,18 @@ Open `mobile_rust/src-tauri/gen/apple/` in Xcode to run on iOS Simulator or conn
 - **Backend Compatibility:** 100% compliant with existing tests (`cargo test --locked`).
 
 
-### Movable game windows (W114)
+### Dockable game windows (W114–W115)
 
-Map and room panels share the window controls described in `docs/public-city.md` W114.
-The title can be dragged with a finger, the corner bracket resizes, and Maximize fills
-only the available game area above navigation. Minimize keeps the panel in a draggable
-dock and X closes it. Controls have 44-pixel touch targets. The existing sheet grabber
-remains a dismiss shortcut; dragging the title moves the window instead. Resizing or
-rotating the screen keeps the title and dock reachable. See `web/brand/README.md`.
+Map and room panels share `docs/public-city.md` W114–W115. Portrait phones use a
+bottom dock; short landscape screens use a sidebar. Panels in the same zone use
+tabs, leaving the room visible and unobstructed. Drag a title to preview a zone,
+then release to dock. Choose **Float over game** in Layout before moving a window
+over the scene. Drag a divider to resize the dock and room together; its central
+44-pixel touch target also accepts arrow keys. Layout offers zone choices, presets
+and Reset; preferences return when rotation provides more room.
+
+Maximize uses the workspace and temporarily hides the room; Restore returns to the
+dock. Minimize reserves a compact bar at the top or bottom and X closes the panel.
+Controls have 44-pixel touch targets. The existing sheet grabber remains a dismiss
+shortcut. Rotation keeps titles, navigation and the minimized bar reachable. See
+`web/brand/README.md` and `tests/game_window_zones.py`.

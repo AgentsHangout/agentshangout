@@ -50,6 +50,7 @@ pub mod ops;
 pub mod outside;
 pub mod passkey;
 pub mod pins;
+pub mod pr_credits;
 pub mod projects;
 pub mod public_mcp;
 pub mod publishing;

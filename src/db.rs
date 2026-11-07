@@ -2326,6 +2326,36 @@ CREATE TABLE IF NOT EXISTS rules_versions (
     version     TEXT PRIMARY KEY,
     first_seen  INTEGER NOT NULL
 );
+-- HC35: a merged pull request that paid. Keyed by the pull request, so it pays once ever,
+-- whoever links that GitHub account later. The person goes when they do, the row stays.
+CREATE TABLE IF NOT EXISTS merged_pr_payouts (
+    repo           TEXT NOT NULL,
+    number         INTEGER NOT NULL,
+    -- Cleared with the person's account (A73), like the GitHub display cache.
+    github_user_id TEXT,
+    person_id      TEXT REFERENCES people(id) ON DELETE SET NULL,
+    amount         INTEGER NOT NULL CHECK (amount > 0),
+    -- The UTC day it paid, which HC6's daily cap counts.
+    day            INTEGER NOT NULL,
+    -- When it was merged, so the next look starts from the last one paid.
+    merged_at      INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL,
+    PRIMARY KEY (repo, number)
+);
+CREATE INDEX IF NOT EXISTS merged_pr_payouts_person ON merged_pr_payouts(person_id, day);
+CREATE INDEX IF NOT EXISTS merged_pr_payouts_day ON merged_pr_payouts(day);
+-- HC35: when a person's merged pull requests were last looked up, at most once an hour.
+CREATE TABLE IF NOT EXISTS merged_pr_checks (
+    person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    checked_at INTEGER NOT NULL
+);
+-- HC35: when merged pull requests started paying. Written once, by the first look anyone's
+-- merged pull requests get, and never again, so a later migration or restart can't move it; only
+-- pull requests merged after it pay.
+CREATE TABLE IF NOT EXISTS merged_pr_start (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    since INTEGER NOT NULL
+);
 -- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
 -- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
 -- target_id too when the target is that person, except on a minor_safety report, which keeps
@@ -3532,6 +3562,8 @@ pub struct CreditTotals {
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
+    /// HC35: how many merged pull requests paid.
+    pub merged_prs: i64,
 }
 
 /// HC20: the open bounty on `card` that `bot` may answer, or why it can't. One answer per bot, so
@@ -3576,6 +3608,33 @@ fn answer_refusal(
     Ok(Ok(bounty))
 }
 
+/// HC44: when this UTC week began, Monday 00:00. The Unix epoch was a Thursday.
+pub fn week_start(now: i64) -> i64 {
+    let week = 7 * crate::ops::DAY_SECS;
+    let shift = 3 * crate::ops::DAY_SECS;
+    (now + shift).div_euclid(week) * week - shift
+}
+
+/// HC44: how many new credits the site can still make this UTC week, out of `SITE_MINT_A_WEEK`:
+/// less everything that paid this week from gatherings, trips, merged pull requests and accepted
+/// contributions, and every
+/// starter question funded this week that hasn't been refunded. Read inside the transaction that
+/// pays, so two payouts at once can't both take the last of it.
+pub fn mint_room(conn: &Connection, now: i64) -> rusqlite::Result<i64> {
+    let since = week_start(now);
+    let made: i64 = conn.query_row(
+        "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE created_at >= ?1)
+              + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE created_at >= ?1)
+              + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE created_at >= ?1)
+              + (SELECT COALESCE(SUM(q.amount), 0) FROM question_bounties q
+                   JOIN starter_questions s ON s.bounty_id = q.id
+                  WHERE s.created_at >= ?1 AND q.status <> 'refunded')",
+        [since],
+        |row| row.get(0),
+    )?;
+    Ok((crate::economy::SITE_MINT_A_WEEK - made).max(0))
+}
+
 /// HC28: what a starter question's bounty is, paid by the site, and how many the whole site funds a
 /// week, so a new city can get a question answered before anyone there has credits to fund it.
 pub const STARTER_QUESTION_HC: i64 = 10;
@@ -3603,8 +3662,8 @@ fn starter_refusal(
     Ok(None)
 }
 
-/// HC29: how old an account must be, when a plan on The Commons ends, for its yes to count there
-/// or for it to be paid, so a second account made for the purpose can't make a plan count.
+/// HC41: how old an account must be to accept or be paid for a contribution. HC29 used it too,
+/// until HC44's weekly budget took its place there.
 pub const COMMONS_ACCOUNT_DAYS: i64 = 7;
 /// HC29: how many first gatherings The Commons pays a week across the whole site, so what it mints
 /// doesn't grow with the number of accounts.
@@ -12424,9 +12483,9 @@ impl Db {
 
     /// HC29: plans on a public floor of a place on The Commons (not a house) that count as a
     /// gathering for `person_id`, as R40 counts one in a Town Square: confirmed, over, and a yes from
-    /// at least two people, never through a plan's link (F17). Only accounts at least
-    /// `COMMONS_ACCOUNT_DAYS` old when it ended count, the person paid among them. Only a first
-    /// gathering is ever paid from these (HC25).
+    /// at least two people, never through a plan's link (F17). There's no account age here: HC44's
+    /// weekly budget bounds what they all make. Only a first gathering is ever paid from these
+    /// (HC25).
     pub fn commons_gatherings(
         &self,
         person_id: &str,
@@ -12441,31 +12500,171 @@ impl Db {
                JOIN worlds w ON w.id = d.world_id AND w.kind = 'public'
               WHERE e.status = 'confirmed' AND e.ends_at < ?2
                 AND (SELECT COUNT(*) FROM rsvps r
-                       JOIN people p ON p.id = r.person_id AND p.created_at <= e.ends_at - ?3
                       WHERE r.event_id = e.id AND r.response = 'yes'
                         AND NOT EXISTS (SELECT 1 FROM plan_invitees i
                                         WHERE i.event_id = e.id AND i.person_id = r.person_id)) >= 2
-                AND EXISTS (SELECT 1 FROM rsvps y JOIN people me ON me.id = y.person_id
-                            WHERE y.event_id = e.id AND y.person_id = ?1 AND y.response = 'yes'
-                              AND me.created_at <= e.ends_at - ?3)
+                AND EXISTS (SELECT 1 FROM rsvps y
+                            WHERE y.event_id = e.id AND y.person_id = ?1 AND y.response = 'yes')
                 AND NOT EXISTS (SELECT 1 FROM plan_invitees i
                                 WHERE i.event_id = e.id AND i.person_id = ?1)
               ORDER BY e.ends_at, e.id",
         )?;
-        let rows = stmt.query_map(
-            params![person_id, now, COMMONS_ACCOUNT_DAYS * crate::ops::DAY_SECS],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    CreditSource {
-                        kind: CreditKind::Gathering,
-                        source: row.get(1)?,
-                        at: row.get(2)?,
-                    },
-                ))
-            },
-        )?;
+        let rows = stmt.query_map(params![person_id, now], |row| {
+            Ok((
+                row.get(0)?,
+                CreditSource { kind: CreditKind::Gathering, source: row.get(1)?, at: row.get(2)? },
+            ))
+        })?;
         rows.collect()
+    }
+
+    /// HC35: whether to look up `person`'s merged pull requests now: they've linked GitHub at
+    /// sign-in, and it's been `CHECK_EVERY_SECS` since the last look. Claiming it marks the look,
+    /// so two at once don't both reach GitHub. Gives the GitHub account's id and login.
+    pub fn claim_pr_check(
+        &self,
+        person: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<(String, String)>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let link: Option<(String, String)> = tx
+            .query_row(
+                "SELECT account_id, account_name FROM sign_in_links
+                  WHERE person_id = ? AND site = 'github'",
+                [person],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some(link) = link else { return Ok(None) };
+        let due = tx
+            .query_row(
+                "SELECT checked_at FROM merged_pr_checks WHERE person_id = ?",
+                [person],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_none_or(|at| now - at >= crate::pr_credits::CHECK_EVERY_SECS);
+        if !due {
+            return Ok(None);
+        }
+        tx.execute("INSERT OR IGNORE INTO merged_pr_start(id, since) VALUES(1, ?)", [now])?;
+        tx.execute(
+            "INSERT INTO merged_pr_checks(person_id, checked_at) VALUES(?1, ?2)
+             ON CONFLICT(person_id) DO UPDATE SET checked_at = excluded.checked_at",
+            params![person, now],
+        )?;
+        tx.commit()?;
+        Ok(Some(link))
+    }
+
+    /// HC35: where the next look at `github_user_id`'s merged pull requests starts: when the
+    /// latest that paid was merged, or when merged pull requests started paying, whichever is later.
+    pub fn last_paid_merge(&self, github_user_id: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn().query_row(
+            "SELECT MAX(COALESCE((SELECT MAX(merged_at) FROM merged_pr_payouts
+                                   WHERE github_user_id = ?1), 0),
+                        COALESCE((SELECT since FROM merged_pr_start WHERE id = 1), 0))",
+            [github_user_id],
+            |row| row.get(0),
+        )
+    }
+
+    /// HC35: a look that couldn't reach GitHub is tried again after `RETRY_AFTER_SECS`, not the
+    /// whole hour.
+    pub fn retry_pr_check_soon(&self, person: &str, now: i64) -> rusqlite::Result<()> {
+        use crate::pr_credits::{CHECK_EVERY_SECS, RETRY_AFTER_SECS};
+        self.conn().execute(
+            "UPDATE merged_pr_checks SET checked_at = ?2 WHERE person_id = ?1",
+            params![person, now - CHECK_EVERY_SECS + RETRY_AFTER_SECS],
+        )?;
+        Ok(())
+    }
+
+    /// HC35: pays `person` for the merged pull requests in `prs` that haven't paid anyone yet,
+    /// oldest first, while `github_user_id` is still the GitHub account they've linked. Each pays
+    /// `PR_CREDIT_HC`, and no more are paid once the person's `PRS_A_DAY_PER_PERSON` for today,
+    /// HC6's daily cap on everything that paid them today, the site's `PR_CREDITS_A_DAY` for today,
+    /// or the site's `PR_CREDIT_SUPPLY` in all is reached. The rest wait for a later day. Every limit is read in the same transaction that
+    /// pays, so two at once can't both pass one. Returns how many paid.
+    pub fn pay_merged_prs(
+        &self,
+        person: &str,
+        github_user_id: &str,
+        prs: &[crate::pr_credits::MergedPr],
+        now: i64,
+    ) -> rusqlite::Result<i64> {
+        use crate::pr_credits::{
+            PRS_A_DAY_PER_PERSON, PR_CREDITS_A_DAY, PR_CREDIT_HC, PR_CREDIT_SUPPLY, PR_REPO,
+        };
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let linked = exists(
+            &tx,
+            "SELECT 1 FROM sign_in_links WHERE person_id = ? AND site = 'github' AND account_id = ?",
+            params![person, github_user_id],
+        )?;
+        if !linked {
+            return Ok(0);
+        }
+        let day = now.div_euclid(crate::ops::DAY_SECS);
+        // Forward-only: a pull request merged before merged pull requests started paying never pays.
+        tx.execute("INSERT OR IGNORE INTO merged_pr_start(id, since) VALUES(1, ?)", [now])?;
+        let start: i64 =
+            tx.query_row("SELECT since FROM merged_pr_start WHERE id = 1", [], |row| row.get(0))?;
+        // HC6: everything that paid this person today, from gatherings, trips and pull requests.
+        let mut paid_today: i64 = tx.query_row(
+            "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid
+                      WHERE person_id = ?1 AND day = ?2)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts
+                      WHERE person_id = ?1 AND day = ?2)",
+            params![person, day],
+            |row| row.get(0),
+        )?;
+        let (mut mine_today, mut site_today, mut site_ever): (i64, i64, i64) = tx.query_row(
+            "SELECT (SELECT COUNT(*) FROM merged_pr_payouts WHERE person_id = ?1 AND day = ?2),
+                    (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE day = ?2),
+                    (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts)",
+            params![person, day],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let mut room = mint_room(&tx, now)?;
+        let mut paid = 0;
+        for pr in prs.iter().filter(|pr| pr.merged_at >= start) {
+            if room < PR_CREDIT_HC
+                || mine_today >= PRS_A_DAY_PER_PERSON
+                || paid_today + PR_CREDIT_HC > crate::economy::DAILY_CAP_HC
+                || site_today + PR_CREDIT_HC > PR_CREDITS_A_DAY
+                || site_ever + PR_CREDIT_HC > PR_CREDIT_SUPPLY
+            {
+                break;
+            }
+            let added = tx.execute(
+                "INSERT OR IGNORE INTO merged_pr_payouts
+                     (repo, number, github_user_id, person_id, amount, day, merged_at, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    PR_REPO,
+                    pr.number,
+                    github_user_id,
+                    person,
+                    PR_CREDIT_HC,
+                    day,
+                    pr.merged_at,
+                    now
+                ],
+            )?;
+            if added == 1 {
+                room -= PR_CREDIT_HC;
+                paid_today += PR_CREDIT_HC;
+                mine_today += 1;
+                site_today += PR_CREDIT_HC;
+                site_ever += PR_CREDIT_HC;
+                paid += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(paid)
     }
 
     /// HC5 and HC13: when this person met a city's gate, if they have: `wait` after they joined,
@@ -12538,10 +12737,13 @@ impl Db {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut day_paid: HashMap<i64, i64> = HashMap::new();
         {
-            // HC39: what accepted contributions paid counts toward the same day's cap.
+            // HC6, HC35 and HC39: what merged pull requests and accepted contributions paid count
+            // toward the same day's cap.
             let mut stmt = tx.prepare(
                 "SELECT day, SUM(amount) FROM (
                      SELECT day, amount FROM credit_paid WHERE person_id = ?1
+                     UNION ALL
+                     SELECT day, amount FROM merged_pr_payouts WHERE person_id = ?1
                      UNION ALL
                      SELECT day, amount FROM contribution_payouts WHERE recipient_id = ?1)
                   GROUP BY day",
@@ -12569,6 +12771,7 @@ impl Db {
             let mut gathering_paid = tx
                 .prepare("SELECT 1 FROM credit_paid WHERE kind = 'gathering' AND person_id = ?")?
                 .exists([person_id])?;
+            let mut room = mint_room(&tx, now)?;
             for (city_id, source) in sorted {
                 if paid.exists(params![source.kind.word(), source.source, person_id])? {
                     continue;
@@ -12595,7 +12798,10 @@ impl Db {
                 let day = source.at.div_euclid(crate::ops::DAY_SECS);
                 let so_far = day_paid.entry(day).or_insert(0);
                 let amount = worth(source.kind).min(cap - *so_far);
-                if amount <= 0 {
+                // HC44: never more than the site can still make this week. What doesn't fit
+                // isn't written down at all, so it's paid whole on a later read, once a new week
+                // has room.
+                if amount <= 0 || amount > room {
                     continue;
                 }
                 insert.execute(params![
@@ -12608,6 +12814,7 @@ impl Db {
                     now
                 ])?;
                 *so_far += amount;
+                room -= amount;
                 if is_first {
                     gathering_paid = true;
                 }
@@ -12635,9 +12842,21 @@ impl Db {
                     good_trips: row.get(3)?,
                     hosted_trips: row.get(4)?,
                     spent: 0,
+                    merged_prs: 0,
                 })
             },
         )?;
+        // HC35: what merged pull requests paid counts as paid, and as paid today.
+        let (pr_paid, pr_today, prs): (i64, i64, i64) = conn.query_row(
+            "SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(CASE WHEN day = ?2 THEN amount END), 0),
+                    COUNT(*)
+               FROM merged_pr_payouts WHERE person_id = ?1",
+            params![person_id, today],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        totals.paid += pr_paid;
+        totals.paid_today += pr_today;
+        totals.merged_prs = prs;
         totals.paid += conn.query_row(
             "SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')",
             [person_id], |row| row.get::<_, i64>(0),
@@ -12679,6 +12898,10 @@ impl Db {
               WHERE (q.sponsor_id = ?1 AND q.status = 'refunded'
                      AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id = q.id))
                  OR (q.recipient_id = ?1 AND q.status = 'paid')
+             UNION ALL
+             SELECT 'merged_pr', r.amount, r.created_at, r.created_at, NULL, NULL, NULL
+               FROM merged_pr_payouts r
+              WHERE r.person_id = ?1
              UNION ALL
              SELECT 'contribution', x.amount, x.created_at, x.created_at, NULL, NULL, NULL
                FROM contribution_payouts x
@@ -12739,14 +12962,14 @@ impl Db {
         if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
             return Ok(Some("already funded"));
         }
-        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + {}", contributions::CONTRIBUTIONS_PAID), [sponsor], |r| r.get(0))?;
+        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + {}", contributions::CONTRIBUTIONS_PAID), [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
-        // HC25, HC28 and HC42: a first gathering's credits, a starter question's award and what
-        // accepted contributions paid never fund a question, or throwaway accounts could each
-        // collect some and pass it all to one person. Packs are paid for from them first, so only
-        // what packs haven't used is held back.
+        // HC25, HC28, HC35 and HC42: a first gathering's credits, a starter question's award, what
+        // merged pull requests paid and what accepted contributions paid never fund a question, or
+        // throwaway accounts could each collect some and pass it all to one person. Packs are paid
+        // for from them first, so only what packs haven't used is held back.
         let held: i64 = tx.query_row(
             &format!(
                 "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
@@ -12754,6 +12977,8 @@ impl Db {
                              + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
                                 JOIN starter_questions s ON s.bounty_id=q.id
                                 WHERE q.recipient_id=?1 AND q.status='paid')
+                             + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts
+                                WHERE person_id=?1)
                              + {}
                              - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
                                 WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
@@ -12764,7 +12989,7 @@ impl Db {
         )?;
         if balance - held < amount {
             return Ok(Some(
-                "credits from your first gathering, a starter question or a contribution buy packs but can't fund a question",
+                "credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question",
             ));
         }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
@@ -12832,6 +13057,10 @@ impl Db {
         }
         if let Some(reason) = starter_refusal(&tx, sponsor, now)? {
             return Ok(Some(reason));
+        }
+        // HC44: the site's bounty is new credits, so it comes out of this week's budget.
+        if mint_room(&tx, now)? < STARTER_QUESTION_HC {
+            return Ok(Some("the site has made all its credits for this week"));
         }
         tx.execute(
             "INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')",
@@ -12929,6 +13158,7 @@ impl Db {
         }
         let balance: i64 = tx.query_row(
             &format!("SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
                   - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
                   + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))
                   + {}", contributions::CONTRIBUTIONS_PAID),
@@ -16706,6 +16936,11 @@ impl Db {
                (SELECT account_id FROM sign_in_links WHERE person_id = ? AND site = 'github')",
             [person_id],
         )?;
+        // HC35: a merged pull request that paid stays paid, but no longer names the account.
+        tx.execute(
+            "UPDATE merged_pr_payouts SET github_user_id = NULL WHERE person_id = ?",
+            [person_id],
+        )?;
         // RE6: reports they filed or that name them stay, with their id blanked, unless the
         // report is about a minor's safety: that one keeps everything.
         reports::blank_person(&tx, person_id)?;
@@ -18406,7 +18641,7 @@ mod tests {
         assert_eq!(paid.balance, 20);
         assert_eq!(
             db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
         );
         assert!(db.open_questions("p1").unwrap().is_empty());
 
@@ -18415,7 +18650,7 @@ mod tests {
         assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
         assert_eq!(
             db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
-            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
         );
         assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
 
@@ -18528,25 +18763,95 @@ mod tests {
         assert!(db.commons_gatherings("p2", at + CREDIT_DAY).unwrap().is_empty());
     }
 
-    // HC29: a second account made for the purpose, or someone's own bot, doesn't make a plan count
+    // HC29: someone's own bot answering for them is still one yes, so it doesn't make a plan count.
+    // There's no account age (HC44): a new account earns from its first day, and the weekly budget
+    // bounds what many accounts could make between them.
     #[test]
-    fn a_new_second_account_or_your_own_bot_is_not_a_second_yes_on_the_commons() {
+    fn your_own_bot_is_not_a_second_yes_on_the_commons_and_new_accounts_count() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
         db.remove_city_member("c1", "p2", "p2", 0).unwrap();
         public_floor(&db, "hz-lr", "p1");
         let at = OLD_ENOUGH + 2 * CREDIT_DAY;
-        // Bo and an account made the day before.
-        db.create_person("alt", "Alt", "key-alt", "feed-alt", at - CREDIT_DAY).unwrap();
-        plan(&db, "with-alt", "hz-lr", at, "confirmed");
-        db.upsert_rsvp("with-alt", "p1", "no", None, "", 0).unwrap();
-        db.upsert_rsvp("with-alt", "alt", "yes", None, "", 0).unwrap();
         // Bo, and Bo again through his bot.
         plan(&db, "with-bot", "hz-lr", at, "confirmed");
         db.upsert_rsvp("with-bot", "p1", "no", None, "", 0).unwrap();
         db.upsert_rsvp("with-bot", "p2", "yes", Some("b2"), "", 0).unwrap();
         assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 0);
-        assert_eq!(credits_of(&db, "alt", at + CREDIT_DAY).balance, 0);
+        // Bo and someone who joined the day before.
+        db.create_person("new", "New", "key-new", "feed-new", at - CREDIT_DAY).unwrap();
+        plan(&db, "with-new", "hz-lr", at + 60, "confirmed");
+        db.upsert_rsvp("with-new", "p1", "no", None, "", 0).unwrap();
+        db.upsert_rsvp("with-new", "new", "yes", None, "", 0).unwrap();
+        assert_eq!(credits_of(&db, "p2", at + CREDIT_DAY).balance, 20);
+        assert_eq!(credits_of(&db, "new", at + CREDIT_DAY).balance, 20);
+    }
+
+    // HC44: a UTC week starts Monday 00:00, and the room left is the budget less what was made
+    // that week, however it was made
+    #[test]
+    fn the_weekly_budget_counts_everything_made_since_monday() {
+        use crate::economy::SITE_MINT_A_WEEK;
+        assert_eq!(SITE_MINT_A_WEEK, 1000, "the number a maintainer chose");
+        // 2026-11-02 was a Monday.
+        let monday = 1_793_577_600;
+        assert_eq!(week_start(monday), monday);
+        assert_eq!(week_start(monday + 6 * CREDIT_DAY + 86_399), monday);
+        assert_eq!(week_start(monday - 1), monday - 7 * CREDIT_DAY);
+        let db = funded_question_fixture();
+        let room = |at| mint_room(&db.conn(), at).unwrap();
+        // The fixture's seed paid 20 at time 0, long before this week.
+        assert_eq!(room(monday), SITE_MINT_A_WEEK);
+        db.conn().execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p2','gathering','w1','c1',20,0,?1)", [monday + 10]).unwrap();
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..3), monday + 20).unwrap(), 2);
+        assert_eq!(db.fund_starter_question("s1", "q1", "p2", monday + 30).unwrap(), None);
+        assert_eq!(room(monday + 40), SITE_MINT_A_WEEK - 20 - 20 - STARTER_QUESTION_HC);
+        // An accepted contribution counts too.
+        db.conn().execute("INSERT INTO contribution_payouts(card_id,contribution_id,acceptor_id,recipient_id,amount,day,created_at) VALUES('c-card','c-1','p1','p2',10,0,?1)", [monday + 35]).unwrap();
+        assert_eq!(room(monday + 40), SITE_MINT_A_WEEK - 20 - 20 - STARTER_QUESTION_HC - 10);
+        db.conn().execute("DELETE FROM contribution_payouts", []).unwrap();
+        // A refunded starter question gives its share back, and next week starts over.
+        db.resolve_question("q1", "p2", None).unwrap();
+        assert_eq!(room(monday + 50), SITE_MINT_A_WEEK - 40);
+        assert_eq!(room(monday + 7 * CREDIT_DAY), SITE_MINT_A_WEEK);
+    }
+
+    // HC44: once the week's budget is made, nothing more pays: not a gathering, a merged pull
+    // request or a starter question. A gathering that didn't fit pays on a read in a later week.
+    #[test]
+    fn nothing_mints_past_the_weekly_budget() {
+        use crate::economy::SITE_MINT_A_WEEK;
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        let monday = 1_793_577_600;
+        // Everyone else made all but 10 of this week's credits, less than a gathering's 20.
+        db.conn().execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p2','gathering','others','c1',?1,0,?2)", params![SITE_MINT_A_WEEK - 10, monday]).unwrap();
+        plan(&db, "first", "sq", monday + 100, "confirmed");
+        // Ann's first gathering doesn't fit, so it isn't paid in part, and her pull requests (10
+        // each) take what's left.
+        assert_eq!(credits_of(&db, "p1", monday + CREDIT_DAY).balance, 0);
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..3), monday + CREDIT_DAY).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(2..4), monday + CREDIT_DAY).unwrap(),
+            0
+        );
+        db.conn().execute("INSERT INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Q','','p1',0,0)", []).unwrap();
+        assert_eq!(
+            db.fund_starter_question("s1", "q1", "p1", monday + CREDIT_DAY).unwrap(),
+            Some("the site has made all its credits for this week")
+        );
+        // Next week there's room again: the gathering pays whole, and so do the pull requests.
+        let next = monday + 7 * CREDIT_DAY;
+        assert_eq!(credits_of(&db, "p1", next).balance, 30);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(2..4), next).unwrap(), 2);
     }
 
     // HC29: when the weekly cap turns away a Commons first gathering, someone's first gathering in
@@ -18606,6 +18911,234 @@ mod tests {
             20,
             "next week pays"
         );
+    }
+
+    fn link_github(db: &Db, person: &str, account: &str) {
+        db.conn()
+            .execute(
+                "INSERT INTO sign_in_links(person_id,site,account_id,account_name,linked_at)
+                 VALUES(?1,'github',?2,?2,0)",
+                params![person, account],
+            )
+            .unwrap();
+    }
+
+    /// Merged pull requests started paying at `since`, for a test.
+    fn prs_pay_from(db: &Db, since: i64) {
+        db.conn()
+            .execute("INSERT OR REPLACE INTO merged_pr_start(id, since) VALUES(1, ?)", [since])
+            .unwrap();
+    }
+
+    fn merged(numbers: std::ops::Range<i64>) -> Vec<crate::pr_credits::MergedPr> {
+        numbers.map(|number| crate::pr_credits::MergedPr { number, merged_at: number }).collect()
+    }
+
+    // HC35: a merged pull request pays its author's linked account 10, oldest first, 3 a day, and
+    // each pays once ever
+    #[test]
+    fn merged_pull_requests_pay_three_a_day_and_each_once() {
+        use crate::pr_credits::PR_CREDIT_HC;
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        let day = 40 * CREDIT_DAY;
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day).unwrap(), 3);
+        let totals = db.credit_totals("p1", day.div_euclid(CREDIT_DAY)).unwrap();
+        assert_eq!((totals.paid, totals.merged_prs), (3 * PR_CREDIT_HC, 3));
+        assert_eq!(totals.paid_today, 3 * PR_CREDIT_HC, "it counts toward today");
+        // The same day pays no more, and the same pull requests never pay twice.
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day + 60).unwrap(), 0);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day + CREDIT_DAY).unwrap(), 2);
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day + 2 * CREDIT_DAY).unwrap(),
+            0
+        );
+        assert_eq!(db.credit_totals("p1", 0).unwrap().merged_prs, 5);
+        // They're in the history, and they spend like any credit.
+        assert!(db.credit_history("p1", 50).unwrap().iter().any(|line| line.kind == "merged_pr"));
+        let pack = a_pack_for_sale();
+        let after = crate::economy::spend(&db, &ann(None), pack.pack, None, day + 2 * CREDIT_DAY);
+        assert_eq!(after.unwrap().balance, 5 * PR_CREDIT_HC - pack.cost);
+    }
+
+    // HC35: a pull request pays only the account linked to the GitHub account that wrote it, and
+    // linking that GitHub account to someone else later doesn't pay it again
+    #[test]
+    fn a_merged_pull_request_pays_only_its_linked_author_once_ever() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        let day = 40 * CREDIT_DAY;
+        // Bo hasn't linked that GitHub account, so nothing pays.
+        assert_eq!(db.pay_merged_prs("p2", "gh-ann", &merged(1..2), day).unwrap(), 0);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..2), day).unwrap(), 1);
+        db.remove_sign_in_link("p1", "github").unwrap();
+        link_github(&db, "p2", "gh-ann");
+        assert_eq!(db.pay_merged_prs("p2", "gh-ann", &merged(1..2), day + CREDIT_DAY).unwrap(), 0);
+        assert_eq!(db.credit_totals("p2", 0).unwrap().paid, 0);
+    }
+
+    // HC35: only pull requests merged after merged pull requests started paying ever pay, and the
+    // credits they pay can't fund a question
+    #[test]
+    fn only_new_merges_pay_and_never_fund_a_question() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 3);
+        let day = 40 * CREDIT_DAY;
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day).unwrap(),
+            3,
+            "1 and 2 are older"
+        );
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..6), day + CREDIT_DAY).unwrap(), 0);
+        assert_eq!(db.last_paid_merge("gh-ann").unwrap(), Some(5));
+        assert_eq!(
+            db.last_paid_merge("gh-nobody").unwrap(),
+            Some(3),
+            "a first look starts at the start"
+        );
+        db.conn().execute("INSERT OR IGNORE INTO boards(id,hangout_id,kind,name,created_by,created_at) VALUES('board','sq','discussion','Questions','p1',0)", []).unwrap();
+        db.conn().execute("INSERT OR IGNORE INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Q','','p1',0,0)", []).unwrap();
+        assert_eq!(
+            db.fund_question("b1", "q1", "p1", 5, day + CREDIT_DAY).unwrap(),
+            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
+        );
+    }
+
+    // HC35 and HC6: merged pull requests count toward the day's 100 with everything else that paid
+    #[test]
+    fn merged_pull_requests_count_toward_the_daily_cap() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        let day = 40 * CREDIT_DAY;
+        let today = day.div_euclid(CREDIT_DAY);
+        db.conn()
+            .execute(
+                "INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at)
+                 VALUES('p1','gathering','g1','c1',95,?1,0)",
+                [today],
+            )
+            .unwrap();
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day).unwrap(),
+            0,
+            "95 + 10 is over"
+        );
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day + CREDIT_DAY).unwrap(), 3);
+        // And a gathering the next day gets only what's left of its 100.
+        let next = today + 1;
+        let sources = [(
+            "c1".to_string(),
+            CreditSource {
+                kind: CreditKind::Gathering,
+                source: "late".into(),
+                at: next * CREDIT_DAY + 10,
+            },
+        )];
+        db.conn()
+            .execute(
+                "INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at)
+                 VALUES('p1','gathering','g2','c1',60,?1,0)",
+                [next],
+            )
+            .unwrap();
+        db.settle_credits("p1", &sources, |_| 20, 100, day + CREDIT_DAY).unwrap();
+        let late: i64 = db
+            .conn()
+            .query_row("SELECT amount FROM credit_paid WHERE source_id='late'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(late, 10, "60 + 30 from pull requests leaves 10");
+    }
+
+    // HC35: deleting an account keeps what its pull requests paid, but no longer names the GitHub
+    // account
+    #[test]
+    fn deleting_an_account_clears_its_github_id_from_payouts() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..2), 40 * CREDIT_DAY).unwrap(), 1);
+        db.delete_person("p1", "Ann").unwrap();
+        let (who, person): (Option<String>, Option<String>) = db
+            .conn()
+            .query_row("SELECT github_user_id, person_id FROM merged_pr_payouts", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((who, person), (None, None));
+        // Nothing names the account now, so a look would start where merged pull requests did.
+        assert_eq!(db.last_paid_merge("gh-ann").unwrap(), Some(0));
+    }
+
+    // HC35: the whole site makes only so much from merged pull requests in a day, and in all
+    #[test]
+    fn merged_pull_requests_mint_only_so_much_a_day_and_in_all() {
+        use crate::pr_credits::{PR_CREDITS_A_DAY, PR_CREDIT_HC, PR_CREDIT_SUPPLY};
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        let day = 40 * CREDIT_DAY;
+        let today = day.div_euclid(CREDIT_DAY);
+        let fill = |amount: i64, on: i64, from: i64| {
+            db.conn()
+                .execute(
+                    "INSERT INTO merged_pr_payouts(repo,number,github_user_id,person_id,amount,day,merged_at,created_at)
+                     VALUES('other/repo',?1,'gh-x',NULL,?2,?3,0,0)",
+                    params![from, amount, on],
+                )
+                .unwrap();
+        };
+        fill(PR_CREDITS_A_DAY, today, 1);
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day).unwrap(),
+            0,
+            "today's are used up"
+        );
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day + CREDIT_DAY).unwrap(), 3);
+        // Near the supply, only what fits pays, and then nothing ever does.
+        let ever: i64 = db
+            .conn()
+            .query_row("SELECT SUM(amount) FROM merged_pr_payouts", [], |r| r.get(0))
+            .unwrap();
+        fill(PR_CREDIT_SUPPLY - ever - PR_CREDIT_HC, today - 10, 2);
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(10..14), day + 2 * CREDIT_DAY).unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(10..14), day + 3 * CREDIT_DAY).unwrap(),
+            0
+        );
+    }
+
+    // HC35: merged pull requests are looked up at most once an hour, and only for someone who has
+    // linked GitHub
+    #[test]
+    fn merged_pull_requests_are_looked_up_at_most_hourly_for_a_linked_account() {
+        use crate::pr_credits::CHECK_EVERY_SECS;
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        assert_eq!(db.claim_pr_check("p1", 100).unwrap(), None, "no GitHub linked");
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        assert_eq!(db.claim_pr_check("p1", 100).unwrap(), Some(("gh-ann".into(), "gh-ann".into())));
+        assert_eq!(db.claim_pr_check("p1", 100 + CHECK_EVERY_SECS - 1).unwrap(), None);
+        let later = 100 + CHECK_EVERY_SECS;
+        assert!(db.claim_pr_check("p1", later).unwrap().is_some());
+        // A look that couldn't reach GitHub is tried again sooner than the hour.
+        db.retry_pr_check_soon("p1", later).unwrap();
+        let retry = crate::pr_credits::RETRY_AFTER_SECS;
+        assert_eq!(db.claim_pr_check("p1", later + retry - 1).unwrap(), None);
+        assert!(db.claim_pr_check("p1", later + retry).unwrap().is_some());
     }
 
     // HC25: a first gathering pays once in all, so leaving a city and joining another doesn't make
@@ -20085,7 +20618,7 @@ mod tests {
         // Bo can't pass the award on through a question of his own.
         assert_eq!(
             db.fund_question("b4", "q4", "p2", 5, 3).unwrap(),
-            Some("credits from your first gathering, a starter question or a contribution buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
         );
     }
 

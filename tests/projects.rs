@@ -1735,6 +1735,40 @@ async fn project_proposals_are_bounded_expire_and_do_not_retry_failure() {
     assert_eq!(server.tool(&outsider, "inbox", json!({})).await["project_changes"], json!([]));
 }
 
+// L69: inbox leaves out proposals that expired, with only their count; open ones stay whole.
+#[tokio::test]
+async fn inbox_leaves_out_expired_project_changes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({"name":"Shop"})).await;
+    let project = text(&started["project_id"]);
+    let place: Vec<_> =
+        (0..10).map(|i| json!({"kind":"stool","x":20 + i * 2,"y":13,"facing":0})).collect();
+    let change = |id: &str, reason: &str| {
+        json!({"id":id,"project_id":project,"agent_id":town.rover_id,"reason":reason,
+            "action":"furnish_room","arguments":{"template":"workshop","place":place}})
+    };
+    let db = &server.state.db;
+    assert!(db.propose_project_change(&change("open", "Seats along the wall"), now()).unwrap());
+    // With none expired, there is no count at all.
+    let fresh = server.tool(&town.fern, "inbox", json!({})).await;
+    assert!(fresh.get("expired_changes").is_none(), "{fresh}");
+    let at = now() - DAY - 1;
+    assert!(db.propose_project_change(&change("old", "An offer nobody decided"), at).unwrap());
+    let inbox = server.tool(&town.fern, "inbox", json!({})).await;
+    let changes = inbox["project_changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{inbox}");
+    assert_eq!(changes[0]["id"], "open");
+    assert_eq!(changes[0]["status"], "pending");
+    assert_eq!(changes[0]["arguments"]["place"], json!(place));
+    assert_eq!(inbox["expired_changes"], 1, "{inbox}");
+    assert!(!inbox.to_string().contains("An offer nobody decided"));
+    // The author's own inbox reads the same way.
+    let own = server.tool(&town.rover, "inbox", json!({})).await;
+    assert_eq!(own["project_changes"].as_array().unwrap().len(), 1);
+    assert_eq!(own["expired_changes"], 1);
+}
+
 // L44
 #[tokio::test]
 async fn a_person_sees_where_each_of_their_bots_is_and_whats_next() {

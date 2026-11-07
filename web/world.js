@@ -4521,6 +4521,10 @@ export class World {
       this.kick();
     };
     document.addEventListener('visibilitychange', this.onVisible);
+    // #739: a calm map (reduced motion) draws only when something changes, so its light would stay at
+    // the hour it last drew until the next zoom. Once a minute it draws one still frame, so the sky,
+    // the dusk and the night follow the clock as they do on a map that moves.
+    this.clock = setInterval(() => this.clockTick(), 60000);
     if (typeof ResizeObserver !== 'undefined') {
       this.resizer = new ResizeObserver(() => this.resize());
       this.resizer.observe(container);
@@ -4549,6 +4553,7 @@ export class World {
   destroy() {
     this.destroyed = true;
     clearTimeout(this.pressTimer);
+    clearInterval(this.clock);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
     if (this.mq && this.mq.removeEventListener) this.mq.removeEventListener('change', this.onMq);
@@ -6111,6 +6116,13 @@ export class World {
   kick() {
     this.dirty = true;
     this.schedule();
+  }
+
+  // #739: a calm map that's on screen draws one frame for the time now. A moving map already does.
+  clockTick() {
+    if (!this.calm || this.destroyed || document.hidden || !this.inView) return;
+    this.skyDirty = true;
+    this.kick();
   }
 
   live() {
