@@ -8735,6 +8735,19 @@ pub const LAST_THREAD_MENTION: &str = "SELECT lt.message_id FROM message_threads
        AND json_extract(le.data, '$.thread_id') = ?1
      ORDER BY lt.message_id DESC LIMIT 1";
 
+/// #730: the last top-level mention event recorded for bot ?3 in room ?1 before message ?2, as a
+/// message id. Not a thread mention (it has a `thread_id`, I105) and not a watched workboard change
+/// (RW11, whose `what_to_do` is ?4), which carry no context. Recorded isn't delivered, so the event
+/// says where its context starts. Driven by the bot's own events, newest first, through
+/// bot_events_by_bot. Public so a test can check its plan.
+pub const LAST_ROOM_MENTION_EVENT: &str =
+    "SELECT json_extract(le.data, '$.message_id') FROM bot_events le
+     WHERE le.agent_id = ?3 AND le.name = 'mention' AND le.hangout_id = ?1
+       AND json_extract(le.data, '$.thread_id') IS NULL
+       AND json_extract(le.data, '$.what_to_do') != ?4
+       AND json_extract(le.data, '$.message_id') < ?2
+     ORDER BY le.id DESC LIMIT 1";
+
 /// I117: the update behind `mark_answered_thread_mentions_read`. Driven by this bot's few unread
 /// mentions in this room, through message_threads' primary key and its (root_id, message_id) index,
 /// so it doesn't grow with the site. Public so a test can check its query plan.
@@ -11198,17 +11211,25 @@ impl Db {
         before_id: i64,
         agent_id: &str,
         since: Option<i64>,
+        after_id: Option<i64>,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
              WHERE hangout_id = ? AND id < ? AND created_at > ? AND kind != 'note'
-               AND (agent_id IS NULL OR agent_id != ?)
+               AND (agent_id IS NULL OR agent_id != ?) AND id > ?
              ORDER BY id DESC LIMIT ?"
         ))?;
         let rows = stmt.query_map(
-            params![hangout_id, before_id, since.unwrap_or(i64::MIN), agent_id, limit],
+            params![
+                hangout_id,
+                before_id,
+                since.unwrap_or(i64::MIN),
+                agent_id,
+                after_id.unwrap_or(0),
+                limit
+            ],
             message_from_row,
         )?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -11370,6 +11391,23 @@ impl Db {
     ) -> rusqlite::Result<Option<i64>> {
         self.conn()
             .query_row(LAST_THREAD_MENTION, params![root_id, before_id, agent_id], |row| row.get(0))
+            .optional()
+    }
+
+    /// #730: the last top-level mention event recorded for this bot in a room before `before_id`.
+    pub fn last_room_mention_event(
+        &self,
+        hangout_id: &str,
+        before_id: i64,
+        agent_id: &str,
+        watch_line: &str,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                LAST_ROOM_MENTION_EVENT,
+                params![hangout_id, before_id, agent_id, watch_line],
+                |row| row.get(0),
+            )
             .optional()
     }
 
