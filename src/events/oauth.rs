@@ -48,6 +48,72 @@ pub fn my_monitoring(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     Ok(view)
 }
 
+/// E46 (#698): inbox's `wake_warning`. The connection a bot calls through can stay connected
+/// (its grant live, the owner's settings unchanged) while its mention subscription has expired or
+/// been suspended, so tags in a room it covered no longer wake the bot. Nothing is said when the
+/// bot isn't calling through an OAuth connection, or when its connection's grant isn't live.
+pub fn wake_warning(state: &AppState, caller: &Caller) -> ApiResult<Option<Value>> {
+    let Some(agent) = caller.agent_id.as_deref() else {
+        return Ok(None);
+    };
+    let at = now();
+    let Some(mine) = state
+        .db
+        .oauth_access(&caller.secret_hash, &format!("{}/mcp", state.config.public_url), at)?
+        .map(|grant| grant.id)
+    else {
+        return Ok(None);
+    };
+    // Cheap read-only gate: a healthy connection skips the full monitoring view (which writes).
+    if !state.db.oauth_has_lapsed_subscription(&mine, at)? {
+        return Ok(None);
+    }
+    let view = state.db.oauth_monitoring(&caller.person_id, agent, at)?;
+    let this = view["connections"].as_array().and_then(|all| all.iter().find(|c| c["id"] == mine));
+    Ok(this.and_then(|connection| lapsed_coverage(connection, &view["eligible_rooms"])))
+}
+
+/// E46: the expired or suspended subscriptions of one live connection, each with the rooms in its
+/// filter that no active subscription covers now. A lapsed subscription whose rooms are all
+/// covered by another one says nothing. Only ids, status, expiry and named rooms are returned,
+/// never a callback URL or signing key.
+pub(crate) fn lapsed_coverage(connection: &Value, rooms: &Value) -> Option<Value> {
+    if connection["status"] != "active" {
+        return None;
+    }
+    let rooms = rooms.as_array()?;
+    let mut lapsed = Vec::new();
+    for sub in connection["subscriptions"].as_array()? {
+        if sub["status"] != "expired" && sub["status"] != "suspended" {
+            continue;
+        }
+        let uncovered: Vec<Value> = rooms
+            .iter()
+            .filter(|room| {
+                room["covered"] == false
+                    && (sub["hangout_id"].is_null() || sub["hangout_id"] == room["id"])
+            })
+            .map(|room| json!({"id": room["id"], "name": room["name"]}))
+            .collect();
+        if uncovered.is_empty() {
+            continue;
+        }
+        lapsed.push(json!({
+            "subscription_id": sub["id"],
+            "status": sub["status"],
+            "expires_at": sub["expires_at"],
+            "hangout_id": sub["hangout_id"],
+            "uncovered_rooms": uncovered,
+        }));
+    }
+    (!lapsed.is_empty()).then(|| {
+        json!({
+            "subscriptions": lapsed,
+            "note": "Your connection is still on, but these mention subscriptions have lapsed, so tags in uncovered_rooms are recorded without waking you. Subscriptions last about an hour and your host renews them: renew the same subscription with events/subscribe (same callback and room filter) to resume from its cursor. Don't reconnect. monitoring_status has the details.",
+        })
+    })
+}
+
 /// Identity locks live only while an operation holds or waits for them. The registry mutex is
 /// never held across an await; a callback can block only its own subscription identity.
 pub(crate) struct Runtime {
@@ -252,12 +318,10 @@ pub(crate) async fn unsubscribe(
     params: &Value,
 ) -> Result<Value, Fail> {
     count_write(state, caller)?;
-    let (_g, id, _, _) = identity(state, caller, params)?;
+    let (g, id, _, _) = identity(state, caller, params)?;
     let _guard = state.oauth_events.subscription(&id).await;
     live(state, caller)?;
-    if let Some(sub) = state.db.oauth_subscription(&id).map_err(internal)? {
-        state.db.oauth_retire_subscription(&sub, "stopped").map_err(internal)?;
-    }
+    state.db.oauth_stop_subscription(&id, &g.id).map_err(internal)?;
     Ok(json!({}))
 }
 
@@ -570,6 +634,44 @@ mod tests {
             state.db.save_bot_trust("bot", &trust).unwrap();
             assert!(!wake_permitted(&state, "bot", &row), "{mode}");
         }
+    }
+
+    #[tokio::test]
+    async fn stopping_an_expired_subscription_discards_its_resume_cursor() {
+        use axum::{routing::post, Json, Router};
+        let (state, caller, _) = queued_subscription();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let callback = Router::new().route(
+                "/",
+                post(|Json(body): Json<Value>| async move {
+                    Json(json!({"challenge":body["challenge"]}))
+                }),
+            );
+            axum::serve(listener, callback).await.unwrap();
+        });
+        let params = json!({"name":"mention","arguments":{"hangout_id":"room"},"delivery":{"mode":"webhook","url":url,"secret":format!("whsec_{}",b64_encode(&[b'a';32]))}});
+        let initial = subscribe(&state, &caller, &params).await.unwrap();
+        let id = initial["id"].as_str().unwrap();
+        state.db.conn().execute("UPDATE oauth_event_subscriptions SET expires_at=0", []).unwrap();
+        deliver(&state).await.unwrap();
+        assert!(state.db.oauth_subscription(id).unwrap().is_none());
+        assert!(state.db.oauth_health_cursor(id).unwrap().is_some());
+        state
+            .db
+            .insert_bot_event("bot", "mention", Some("room"), "while-off", "{}", now(), 0)
+            .unwrap();
+        unsubscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(
+            state.db.oauth_health_cursor(id).unwrap(),
+            None,
+            "an explicit stop must clear an expired identity's resume cursor"
+        );
+        let restarted = subscribe(&state, &caller, &params).await.unwrap();
+        assert_eq!(restarted["id"], initial["id"]);
+        assert_eq!(restarted["cursor"], state.db.bot_event_head("bot").unwrap().to_string());
+        assert_ne!(restarted["cursor"], initial["cursor"]);
     }
 
     #[tokio::test]

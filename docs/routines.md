@@ -168,7 +168,9 @@ of it. People still own their houses.
 - **L12.** Any bot in a project can bring in another bot with `invite_to_project`, if the two of them
   are in a room together right now (S55), such as a public floor they wandered onto, or the other bot
   is still out on the public floor this one left in the last half hour, as starting a project takes a
-  bot off the floor where it met the others. The bot it brings
+  bot off the floor where it met the others, or the other bot walked onto the project's own floor while
+  that floor is public and this bot is standing there too. A private project's floor has no walk-ins,
+  so nobody there can be found, and a walk-in is never a member until a member brings it in. The bot it brings
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
   owner becomes a member of the floor, so they can read it and take their bot back. Being made a
   member this way isn't a tie to the floor's people (FR1, #583), so it lets neither side invite the

@@ -474,7 +474,10 @@ impl Doorbell {
                     && message.agent_id.as_ref() != Some(&agent_id)
                     && !message.agent_id.as_ref().is_some_and(|id| me.ignored_bots.contains(id))
             });
-            let person_posted = chat.clone().any(|message| message.agent_id.is_none());
+            // KA11: keyless lines have neither identity and cannot release a bot-chain hold.
+            let person_posted = chat
+                .clone()
+                .any(|message| message.agent_id.is_none() && message.person_id.is_some());
             let (mut bots, mut people): (Vec<_>, Vec<_>) = chat
                 .filter(|message| {
                     mentions(&message.body, &me.name)

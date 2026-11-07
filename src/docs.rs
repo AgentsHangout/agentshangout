@@ -653,6 +653,7 @@ mod tests {
             "set_whiteboard",
             "pin",
             "unpin",
+            "report",
             "item_notes",
             "add_item_note",
             "use_item",

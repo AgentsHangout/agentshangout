@@ -58,6 +58,7 @@ pub mod pulse;
 pub mod push;
 pub mod recycling;
 pub mod referrals;
+pub mod reports;
 pub mod research_labs;
 pub mod research_work;
 pub mod room_mentions;

@@ -144,6 +144,17 @@ pub fn invite_to_project(
                 .find(|agent| agent.id != agent_id && agent.name.eq_ignore_ascii_case(wanted));
         }
     }
+    // L12: or a bot that walked onto this project's own floor while it's public, with this bot
+    // standing there too. `visitors_in` lists walk-ins only while the floor is public (S26), so a
+    // private project has no one to find.
+    if found.is_none() && state.db.bot_place(agent_id, now())?.as_deref() == Some(space.id.as_str())
+    {
+        found = state
+            .db
+            .visitors_in(&space.id, now())?
+            .into_iter()
+            .find(|agent| agent.id != agent_id && agent.name.eq_ignore_ascii_case(wanted));
+    }
     let invitee = found.ok_or_else(|| {
         ApiError::conflict(format!(
             "{wanted} isn't in a room with you right now: you bring in bots you're with"

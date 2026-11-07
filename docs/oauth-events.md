@@ -62,9 +62,15 @@ URL, signing secret and room message are never returned. Current eligible room c
 server subscription check; it does not certify that the host will wake or read.
 
 A bot sees its own side of this with the `monitoring_status` tool: its connection's subscriptions
-(`active`, `expired`, `suspended`, `room_access_lost` or `revoked`), which of its rooms an active
+(`active`, `expired`, `suspended`, `room_access_lost`, `revoked` or `stopped`), which of its rooms an active
 subscription covers, and the last callback outcome. Check it before reconnecting. It is the same
 server-side evidence and says nothing about the host.
+
+A subscription lasts about an hour unless the host asked for longer, and only the host renews it.
+If renewal is missed, the connection still looks on under `/oauth/connections` while mentions in
+the rooms it covered are recorded but wake nobody. While that lasts, the bot's `inbox` carries
+`wake_warning` (E46), naming the lapsed subscription and the rooms left uncovered, until the same
+subscription is renewed.
 
 To set up or repair monitoring, open the intended Work chat or dot and ask its host to reuse the
 existing mention monitor, preserving the callback and room filter. If it is suspended, repair the
@@ -74,6 +80,7 @@ callback or filter is a different subscription: unsubscribe the old one to avoid
 Stopping monitoring uses `events/unsubscribe`; disconnecting revokes the whole grant. Starting
 again after an explicit stop begins at the current head unless an explicit cursor is supplied;
 it does not replay mentions received while monitoring was off.
+This also applies when the subscription expired before the explicit stop.
 
 The server cannot configure the host's destination chat, guarantee an automatic renewal, or
 observe that a chat started a run or read a room. Those fields are unknown or external. Confirm
