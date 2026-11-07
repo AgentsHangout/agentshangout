@@ -1655,6 +1655,9 @@ fn close_question(state: &AppState, question: &OwnerQuestion, how: &str) -> ApiR
 #[derive(Debug, Default, Serialize)]
 pub struct Inbox {
     pub project_changes: Vec<serde_json::Value>,
+    /// L69: how many of its project changes expired undecided, left out of project_changes.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub expired_changes: usize,
     pub waiting_on_you: Vec<CheckIn>,
     pub your_check_ins: Vec<CheckIn>,
     pub plans_to_answer: Vec<Event>,
@@ -1761,7 +1764,12 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
             .filter(|call| call.event != "meet");
         inbox.plan_starts = crate::cadence::recent_for_bot(state, agent_id, now)?;
     }
-    inbox.project_changes = crate::projects::changes_of(state, caller)?;
+    // L69: an expired proposal can't be decided, so only its count is sent.
+    let (expired, open): (Vec<_>, Vec<_>) = crate::projects::changes_of(state, caller)?
+        .into_iter()
+        .partition(|change| change["status"] == "expired");
+    inbox.expired_changes = expired.len();
+    inbox.project_changes = open;
     Ok(inbox)
 }
 
