@@ -2487,6 +2487,22 @@ CREATE TABLE IF NOT EXISTS room_claims (
 CREATE TRIGGER IF NOT EXISTS room_claims_leave AFTER DELETE ON room_agents BEGIN
     DELETE FROM room_claims WHERE hangout_id = OLD.hangout_id AND agent_id = OLD.agent_id;
 END;
+-- GM1 (#727): each play of a game in a room, with the score the server rolled. A bot's play keeps
+-- its owner as person_id too. It goes with the room, the bot or the account.
+CREATE TABLE IF NOT EXISTS game_plays (
+    id          INTEGER PRIMARY KEY,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    item_id     TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    roll       INTEGER NOT NULL,
+    week        INTEGER NOT NULL,
+    at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS game_plays_board ON game_plays (kind, week, roll DESC);
+CREATE INDEX IF NOT EXISTS game_plays_room ON game_plays (hangout_id, kind, week, roll DESC);
+CREATE INDEX IF NOT EXISTS game_plays_player ON game_plays (person_id, agent_id, hangout_id, kind, at);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -2536,6 +2552,55 @@ fn mayor_election_from_row(row: &Row) -> rusqlite::Result<MayorElection> {
         winner_votes: row.get(7)?,
         tie_draw: row.get::<_, i64>(8)? != 0,
     })
+}
+
+/// GM2: one play to record. The score was rolled on the server.
+pub struct NewPlay<'a> {
+    pub hangout_id: &'a str,
+    pub item_id: &'a str,
+    pub kind: &'a str,
+    /// The bot that played, or None for a person.
+    pub agent_id: Option<&'a str>,
+    /// The person who played, or the bot's owner.
+    pub person_id: &'a str,
+    pub score: i64,
+    pub week: i64,
+    pub now: i64,
+}
+
+/// GM3: how many plays a player gets in a room for one kind of game.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayCaps {
+    pub per_hour: i64,
+    pub cooldown_secs: i64,
+}
+
+/// GM2, GM3: what recording a play did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PlayOutcome {
+    Played {
+        best_week: i64,
+        best_ever: i64,
+        rank: i64,
+        remaining: i64,
+    },
+    /// Nothing was written; the player can play again at `next_at`.
+    Capped {
+        next_at: i64,
+    },
+}
+
+/// GM5, GM6: one line on a board.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BoardLine {
+    pub kind: String,
+    pub best: i64,
+    pub hangout_id: Option<String>,
+    pub room: Option<String>,
+    pub bot_id: Option<String>,
+    pub bot: Option<String>,
+    #[serde(skip)]
+    pub person_id: Option<String>,
 }
 
 /// I106: a closing clock's saved time and who it sends out.
@@ -6104,6 +6169,165 @@ impl Db {
             params![id, owner_id, now],
         )?;
         Ok(Ok(()))
+    }
+
+    /// GM2, GM3: records a play within its caps, in one transaction: at most `per_hour` plays by
+    /// this player in this room for this kind in the last hour, and none within `cooldown_secs` of
+    /// the last. Counted by player, room and kind, so moving or copying the object keeps the budget.
+    pub fn record_play(&self, play: &NewPlay, caps: PlayCaps) -> rusqlite::Result<PlayOutcome> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (made, oldest, last): (i64, Option<i64>, Option<i64>) = tx.query_row(
+            "SELECT COUNT(*), MIN(at), MAX(at) FROM game_plays
+             WHERE person_id = ?1 AND agent_id IS ?2 AND hangout_id = ?3 AND kind = ?4 AND at > ?5",
+            params![play.person_id, play.agent_id, play.hangout_id, play.kind, play.now - 3600],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        if let Some(last) = last.filter(|last| play.now - last < caps.cooldown_secs) {
+            return Ok(PlayOutcome::Capped { next_at: last + caps.cooldown_secs });
+        }
+        if made >= caps.per_hour {
+            return Ok(PlayOutcome::Capped { next_at: oldest.unwrap_or(play.now) + 3600 });
+        }
+        tx.execute(
+            "INSERT INTO game_plays (hangout_id, item_id, kind, agent_id, person_id, roll, week, at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                play.hangout_id,
+                play.item_id,
+                play.kind,
+                play.agent_id,
+                play.person_id,
+                play.score,
+                play.week,
+                play.now
+            ],
+        )?;
+        let (best_week, best_ever, higher): (i64, i64, i64) = tx.query_row(
+            "SELECT
+                 (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3),
+                 (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2),
+                 (SELECT COUNT(*) FROM game_plays
+                   WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3 AND roll > ?4)",
+            params![play.hangout_id, play.kind, play.week, play.score],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        tx.commit()?;
+        Ok(PlayOutcome::Played {
+            best_week,
+            best_ever,
+            rank: higher + 1,
+            remaining: caps.per_hour - made - 1,
+        })
+    }
+
+    /// GM5: a room's best players for one kind: each player's best, highest first, at most
+    /// `limit`, this week (`Some(week)`) or ever.
+    pub fn room_board(
+        &self,
+        hangout_id: &str,
+        kind: &str,
+        week: Option<i64>,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<BoardLine>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT p.kind, MAX(p.roll), p.agent_id, a.name, p.person_id FROM game_plays p
+             LEFT JOIN agents a ON a.id = p.agent_id
+             WHERE p.hangout_id = ?1 AND p.kind = ?2 AND (?3 IS NULL OR p.week = ?3)
+             GROUP BY p.person_id, p.agent_id ORDER BY 2 DESC, MIN(p.at) LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(params![hangout_id, kind, week, limit], |row| {
+            Ok(BoardLine {
+                kind: row.get(0)?,
+                best: row.get(1)?,
+                hangout_id: None,
+                room: None,
+                bot_id: row.get(2)?,
+                bot: row.get(3)?,
+                person_id: Some(row.get(4)?),
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// GM5: the kinds of game played in a room, with the room's best this week and ever.
+    pub fn room_bests(
+        &self,
+        hangout_id: &str,
+        week: i64,
+    ) -> rusqlite::Result<Vec<(String, Option<i64>, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT kind, MAX(CASE WHEN week = ?2 THEN roll END), MAX(roll) FROM game_plays
+             WHERE hangout_id = ?1 GROUP BY kind ORDER BY kind",
+        )?;
+        let rows = stmt.query_map(params![hangout_id, week], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// GM6: the best rooms across the site, public floors only: each room's best per kind, at most
+    /// `limit` per kind, this week or ever.
+    pub fn top_rooms(&self, week: Option<i64>, limit: i64) -> rusqlite::Result<Vec<BoardLine>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT kind, best, hangout_id, name FROM (
+                 SELECT p.kind, MAX(p.roll) AS best, p.hangout_id, h.name, MIN(p.at) AS first,
+                        ROW_NUMBER() OVER (PARTITION BY p.kind ORDER BY MAX(p.roll) DESC, MIN(p.at)) AS n
+                 FROM game_plays p
+                 JOIN floors f ON f.hangout_id = p.hangout_id AND f.access = 'public'
+                 JOIN hangouts h ON h.id = p.hangout_id
+                 WHERE ?1 IS NULL OR p.week = ?1
+                 GROUP BY p.kind, p.hangout_id)
+             WHERE n <= ?2 ORDER BY kind, best DESC, first",
+        )?;
+        let rows = stmt.query_map(params![week, limit], |row| {
+            Ok(BoardLine {
+                kind: row.get(0)?,
+                best: row.get(1)?,
+                hangout_id: Some(row.get(2)?),
+                room: Some(row.get(3)?),
+                bot_id: None,
+                bot: None,
+                person_id: None,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// GM6: the best bots across the site: each bot's best per kind, at most `limit` per kind, with
+    /// the room it scored that in only when that room is a public floor.
+    pub fn top_bots(&self, week: Option<i64>, limit: i64) -> rusqlite::Result<Vec<BoardLine>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT t.kind, t.best, t.agent_id, t.bot, f.hangout_id, h.name FROM (
+                 SELECT p.kind, MAX(p.roll) AS best, p.agent_id, a.name AS bot, MIN(p.at) AS first,
+                        (SELECT q.hangout_id FROM game_plays q
+                          WHERE q.agent_id = p.agent_id AND q.kind = p.kind
+                            AND (?1 IS NULL OR q.week = ?1)
+                          ORDER BY q.roll DESC, q.at LIMIT 1) AS best_room,
+                        ROW_NUMBER() OVER (PARTITION BY p.kind ORDER BY MAX(p.roll) DESC, MIN(p.at)) AS n
+                 FROM game_plays p JOIN agents a ON a.id = p.agent_id
+                 WHERE p.agent_id IS NOT NULL AND (?1 IS NULL OR p.week = ?1)
+                 GROUP BY p.kind, p.agent_id) t
+             LEFT JOIN floors f ON f.hangout_id = t.best_room AND f.access = 'public'
+             LEFT JOIN hangouts h ON h.id = f.hangout_id
+             WHERE t.n <= ?2 ORDER BY t.kind, t.best DESC, t.first",
+        )?;
+        let rows = stmt.query_map(params![week, limit], |row| {
+            Ok(BoardLine {
+                kind: row.get(0)?,
+                best: row.get(1)?,
+                bot_id: Some(row.get(2)?),
+                bot: Some(row.get(3)?),
+                hangout_id: row.get(4)?,
+                room: row.get(5)?,
+                person_id: None,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn agent_by_token(&self, token_hash: &str, now: i64) -> rusqlite::Result<Option<Agent>> {

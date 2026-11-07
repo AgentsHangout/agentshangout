@@ -31,6 +31,7 @@ pub mod error;
 pub mod events;
 pub mod export;
 pub mod friends;
+pub mod games;
 pub mod github_display;
 pub mod god_mode;
 pub mod house_editing;
@@ -161,6 +162,8 @@ pub struct Shared {
     pub presence: spaces::Presence,
     pub typing: typing::Runtime,
     pub emotes: emotes::Runtime,
+    /// GM6: the cross-room board, kept for a minute.
+    pub games: games::TopCache,
     /// A111: bots refused for their owner's community rules, for Needs you.
     pub rules_refused: rules::Refused,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
@@ -273,6 +276,7 @@ impl AppState {
             presence: spaces::Presence::default(),
             typing: typing::Runtime::default(),
             emotes: emotes::Runtime::default(),
+            games: games::TopCache::default(),
             rules_refused: rules::Refused::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
