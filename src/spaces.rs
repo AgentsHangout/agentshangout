@@ -1614,9 +1614,14 @@ pub fn require_public_conversations(state: &AppState, agent_id: &str, room: &str
 /// this is where it is once it's home. Both rooms reload.
 pub fn place_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResult<()> {
     require_public_conversations(state, agent_id, hangout_id)?;
-    let now = now();
     // CR8: put in a room at once, a bot is off the road.
     state.db.end_drive(agent_id)?;
+    put_bot(state, agent_id, hangout_id)
+}
+
+/// `place_bot` without touching drives: what an arriving car does once it has ended its own.
+pub(crate) fn put_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResult<()> {
+    let now = now();
     let was = state.db.bot_place(agent_id, now)?;
     let dest = state
         .db
@@ -1965,7 +1970,18 @@ fn history_reply(state: &AppState, id: &str) -> ApiResult<Value> {
 /// S57, S58: a bot takes itself to a room it can be in, before it does something there. A person
 /// has nowhere to go, and neither has a bot that's already there.
 pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
-    go_to_with(state, caller, hangout_id).map(|_| ())
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Ok(());
+    };
+    // CR6: on the road it does nothing anywhere, and an action that sets the car going is itself
+    // not done: only the drive starts.
+    if let Some(drive) = crate::travel::current_drive(state, agent_id, now())? {
+        return Err(crate::travel::still_driving(state, &drive, now()));
+    }
+    match go_to_with(state, caller, hangout_id)?.drive {
+        Some(drive) => Err(crate::travel::still_driving(state, &drive, now())),
+        None => Ok(()),
+    }
 }
 
 /// What `go_to_with` came to: the bots that followed, and the drive it began, if it did.
@@ -1981,11 +1997,9 @@ pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResu
     };
     require_public_conversations(state, agent_id, hangout_id)?;
     let now = now();
-    // CR6: nothing is done in the room it's driving to until it gets there.
+    // CR6: on the road it does nothing in any room until it gets there.
     if let Some(drive) = crate::travel::current_drive(state, agent_id, now)? {
-        if drive.hangout_id == hangout_id {
-            return Err(crate::travel::still_driving(state, &drive, now));
-        }
+        return Err(crate::travel::still_driving(state, &drive, now));
     }
     if state.db.bot_place(agent_id, now)?.as_deref() != Some(hangout_id)
         && state.db.on_trip_away_from(hangout_id, agent_id, now)?

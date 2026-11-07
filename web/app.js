@@ -10585,6 +10585,9 @@ async function worldView(id, { home = false } = {}) {
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
   // Where the map can center on a bot, or null when it has no tile.
   function botTile(bot) {
+    // CR10: a bot on the road is where its car is now.
+    const car = world.driveTile?.(bot.name);
+    if (car) return car;
     const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
     return bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
   }
@@ -10597,7 +10600,7 @@ async function worldView(id, { home = false } = {}) {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
       rows = sorted.length ? sorted.map((bot) => {
         const tile = botTile(bot);
-        const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
+        const focusOn = tile ? () => { if (!world.followDriver?.(bot.name, { zoom: 1.5 })) world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
         // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
         const offMap = !tile && Boolean(bot.room);
         const spaceId = offMap ? offMapFloors.get(bot.room.id) : null;

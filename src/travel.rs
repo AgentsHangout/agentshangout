@@ -372,8 +372,21 @@ fn follow_to(
 // CR5 to CR9: bots drive between places on the map.
 
 /// CR4: the car a bot drives. Until a bot's owner can choose (the garage), the first starter car.
-fn car_of(_state: &AppState, _agent_id: &str) -> &'static cars::Car {
-    cars::find(cars::DEFAULT_CAR).unwrap_or(&cars::CARS[0])
+fn car_of(state: &AppState, agent_id: &str) -> &'static cars::Car {
+    let first = cars::find(cars::DEFAULT_CAR).unwrap_or(&cars::CARS[0]);
+    let chosen = || -> ApiResult<Option<&'static cars::Car>> {
+        let Some(car) = state.db.chosen_car(agent_id)?.and_then(|id| cars::find(&id)) else {
+            return Ok(None);
+        };
+        let Some(agent) = state.db.agent(agent_id, now())? else {
+            return Ok(None);
+        };
+        // CR4: a car its owner no longer owns is the first starter.
+        let owned =
+            car.price == 0 || state.db.has_bought(&agent.owner_id, &cars::spend_key(car.id))?;
+        Ok(owned.then_some(car))
+    };
+    chosen().ok().flatten().unwrap_or(first)
 }
 
 /// The road tile beside a building's door, or the door's own tile when no road touches it. It's
@@ -456,12 +469,14 @@ pub fn start_drive(
 /// that walked in (L7) was put on its floor when it set out, so arriving only shows it there.
 fn settle(state: &AppState, drive: &Drive, now: i64) {
     let arrived = || -> ApiResult<()> {
-        if !state.db.end_drive(&drive.agent_id)? {
+        // Only the drive that arrived, and only once: a newer drive of this bot is left alone.
+        if !state.db.end_this_drive(drive)? {
             return Ok(());
         }
         let place = state.db.bot_place(&drive.agent_id, now)?;
-        if place.as_deref() != Some(drive.hangout_id.as_str()) {
-            crate::spaces::place_bot(state, &drive.agent_id, &drive.hangout_id)?;
+        if place.as_deref() != Some(drive.hangout_id.as_str()) && may_still_enter(state, drive)? {
+            crate::spaces::require_public_conversations(state, &drive.agent_id, &drive.hangout_id)?;
+            crate::spaces::put_bot(state, &drive.agent_id, &drive.hangout_id)?;
         }
         state.worlds.mark_stale(COMMONS_ID);
         Ok(())
@@ -469,6 +484,22 @@ fn settle(state: &AppState, drive: &Drive, now: i64) {
     if let Err(error) = arrived() {
         tracing::warn!(status = %error.status, "a bot's car could not be settled");
     }
+}
+
+/// CR6: when the car arrives, the bot may still go in: its owner wasn't turned out of the floor
+/// meanwhile, and neither it nor its owner was suspended or held. If not, it stays where it was.
+fn may_still_enter(state: &AppState, drive: &Drive) -> ApiResult<bool> {
+    let Some(agent) = state.db.agent(&drive.agent_id, now())? else {
+        return Ok(false);
+    };
+    let holds = state.db.holds_on(&agent.owner_id, Some(&agent.id))?;
+    if holds.bot_suspended || holds.restricted || holds.banned {
+        return Ok(false);
+    }
+    Ok(match state.db.floor(&drive.hangout_id)? {
+        Some(floor) => !state.db.is_turned_out(&floor.space_id, &agent.owner_id)?,
+        None => true,
+    })
 }
 
 /// CR6: every car that has arrived puts its bot in the room.
@@ -503,7 +534,7 @@ pub fn current_drive(state: &AppState, agent_id: &str, now: i64) -> ApiResult<Op
 pub fn still_driving(state: &AppState, drive: &Drive, now: i64) -> ApiError {
     let name = state.db.hangout(&drive.hangout_id).ok().flatten().map(|room| room.name);
     ApiError::conflict(format!(
-        "you're still driving to {}: {} more seconds, then you can do things there",
+        "You're driving to {}, there in {} s: you can do things once you arrive",
         name.as_deref().unwrap_or("that room"),
         (drive.arrive_at - now).max(1)
     ))

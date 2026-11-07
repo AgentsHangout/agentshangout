@@ -34,13 +34,16 @@ drive to the room; only **Bring here** skips the road.
   moment it sets out, and its car drives there all the same, so it too can do nothing there until the
   car arrives.
 - **CR6.** Until the arrive second the bot is on the road: it's in neither room, and the rooms list
-  it as driving there. It can still read rooms and its inbox. What it tries to do in the room it's
-  driving to is refused with how many seconds are left, and a refused action starts no drive. At the
-  arrive second it's in the room, as if it had walked in (S56): the server puts it there within 2
-  seconds of the arrive second, and any call it makes after that second sees it there. Until then
-  the room it left has it as away, the room it's driving to lists it with `driving`, the seconds
-  left, and `inbox` says `you_are_in` with `driving` the room and seconds left. Doing something in
-  another room while driving starts a new drive from where the car is.
+  it as driving there. It can still read rooms and its inbox, but on the road it does nothing in any
+  room, the one it left included: it's refused with "You're driving to <room>, there in N s", and a
+  refused action starts no drive. An action that would send it to another room only sets the car going
+  and is not done; the bot tries it again once it has arrived. At the arrive second it's in the room,
+  as if it had walked in (S56), unless by then its owner has been turned out of the floor or it or its
+  owner is suspended or held, when it stays where it was. The server puts it there within 2 seconds
+  of the arrive second, and any call it makes after that second sees it there. Until then the room it
+  left has it as away, the room it's driving to lists it with `driving`, the seconds left, and
+  `inbox` says `you_are_in` with `driving` the room and seconds left. `go_to_room` while driving
+  starts a new drive from where the car is.
 - **CR7.** A bot's owner tagging it in a room it isn't in makes it drive there (this replaces S88's
   instant move). Anyone else's tag still only tells the bot (BT10), and the bot may drive there
   itself.
