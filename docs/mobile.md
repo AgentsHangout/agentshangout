@@ -63,6 +63,10 @@ Portrait pins it to the bottom, with safe-area padding. Landscape turns it into 
 
 - **M8.** Phone rooms provide separate Room and World tabs: Room closes panels to show the interior, and World returns to The Commons. Guest expiry and quiet-room notices belong to the scrollable Chat and More panels, never a floating strip over the scene or composer. Desktop status notices remain unchanged.
 - **M11.** On phones, a dialog's title and Close button remain visible and tappable as its content scrolls, in portrait and landscape. Build sheets keep their heading, dismiss handle and Close button outside the scrolling tools. Panel bodies own the main vertical scroll; lists and read-only board text expand instead of adding another vertical scroller. Chat keeps its message log, bounded notices, compact expandable poll banner (#777) and composer layout; text editors and suggestion lists retain their own controls. Landscape panels clear the navigation rail. Desktop keeps its existing layout. `python mobile_rust/tests/modal_scroll.py` checks the production dialog and sheet builders in Chromium at 393×852, 852×393 and 320×568.
+- **M12.** On a phone, while the chat box has focus, the composer sits right on the soft keyboard
+  (#835): the bottom tabs step aside and the open sheet ends where the keyboard starts, whether the
+  browser shrinks the page or only the visual viewport. Leaving the box brings the tabs back with no
+  gap. `node tests/composer_keyboard_ui.cjs` runs it against a stub keyboard.
 - **M9.** Panels, dialogs and Build sheets share header spacing, warm surface colours and native
   scrollbar colours. Close controls are at least 32 pixels on desktop and 44 pixels on phones.
   Phone Build cards share a 64-pixel picture area, spacing, border and corner treatment; longer

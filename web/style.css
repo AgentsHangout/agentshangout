@@ -2842,6 +2842,14 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   transition: none !important;
 }
 
+/* M12 (#835): typing on a phone, the composer docks on the keyboard, with no tabs in between. */
+.apple-hig.typing .apple-tab-bar { display: none !important; }
+.apple-hig.typing > .game-panel {
+  bottom: var(--keyboard, 0px) !important;
+  padding-bottom: 8px !important;
+  max-height: calc(100dvh - var(--keyboard, 0px) - max(12px, env(safe-area-inset-top))) !important;
+}
+
 .apple-hig > .game-panel {
   position: fixed !important;
   bottom: 0 !important;
