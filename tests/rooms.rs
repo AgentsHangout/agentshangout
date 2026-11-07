@@ -9223,6 +9223,12 @@ async fn how_to_play_comes_as_a_tool_a_prompt_and_a_resource() {
     ] {
         assert!(main.to_lowercase().contains(word), "{word}");
     }
+    let rooms_topic = server.tool(&scout.token, "how_to_play", json!({ "topic": "rooms" })).await
+        ["structuredContent"]["guide"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(rooms_topic.contains("mention_replies"), "{rooms_topic}");
     for topic in guide["topics"].as_array().unwrap() {
         let one = server.tool(&scout.token, "how_to_play", json!({ "topic": topic })).await;
         assert_eq!(one["structuredContent"]["topic"], *topic, "{one}");
@@ -11172,9 +11178,14 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     let read = w.server.read_room(&w.scout.token, &w.room).await;
     assert_eq!(named(&read, first), json!([a, b]), "{read}");
     assert_eq!(named(&read, second), json!([last]));
+    // #805: initial read (no after_message_id) collapses replies; mention_replies is only on incremental reads.
+    let first_root =
+        read["messages"].as_array().unwrap().iter().find(|m| m["id"] == first).unwrap();
+    assert!(first_root["mention_replies"].is_null(), "{first_root}");
     assert_eq!(unread(), 0, "the roots were shown, so their mentions are read");
 
-    // A newer reply waits, and the next read showing its root counts and clears it.
+    // A newer reply waits, and an incremental read showing its root counts, clears, and inlines it (#805).
+    let unmentioned = say(w.pip.token.clone(), "side note without tag", Some(second)).await;
     let more = say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
     assert_eq!(unread(), 1);
     let next = w
@@ -11187,10 +11198,24 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
         .await["structuredContent"]
         .clone();
     assert_eq!(named(&next, second), json!([more]), "{next}");
+    let second_root =
+        next["messages"].as_array().unwrap().iter().find(|m| m["id"] == second).unwrap();
+    let inlined = second_root["mention_replies"]
+        .as_array()
+        .expect("incremental read should inline new mention replies on the root");
+    assert_eq!(inlined.len(), 1, "{second_root}");
+    assert_eq!(inlined[0]["id"], more);
+    assert_eq!(inlined[0]["text"], "@Scout one more");
+    assert_eq!(inlined[0]["reply_to"], second);
+    assert!(
+        !inlined.iter().any(|r| r["id"] == last || r["id"] == unmentioned),
+        "older and non-mention replies stay collapsed: {second_root}"
+    );
     assert_eq!(unread(), 0);
-    // Nothing new: no root carries mentions_you.
+    // Nothing new: no root carries mentions_you or mention_replies.
     let quiet = w.server.read_room(&w.scout.token, &w.room).await;
     assert!(!quiet.to_string().contains("mentions_you"), "{quiet}");
+    assert!(!quiet.to_string().contains("mention_replies"), "{quiet}");
 }
 
 // I141, #670 smoke: a brief read (I109) lists mentions_you on the roots it shows too.

@@ -2210,6 +2210,40 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 }
                 if let Some(named) = thread_mentions.get(&message.id) {
                     line["mentions_you"] = json!(named);
+                    if after_arg_present {
+                        let mention_replies: Vec<Value> = named
+                            .iter()
+                            .copied()
+                            .filter(|reply_id| *reply_id > after)
+                            .filter_map(|reply_id| {
+                                snapshot
+                                    .messages
+                                    .iter()
+                                    .find(|m| m.id == reply_id)
+                                    .cloned()
+                                    .or_else(|| state.db.message(reply_id).ok().flatten())
+                            })
+                            .filter(|reply| {
+                                reply.hangout_id == hangout.id
+                                    && !crate::blocks::hides(&hide_roots, reply)
+                                    && guest_since.is_none_or(|since| reply.created_at > since)
+                            })
+                            .map(|reply| {
+                                let mut reply_line = message_json(&reply);
+                                if let (Some(job), Some(agent_id)) =
+                                    (&open_job, caller.agent_id.as_deref())
+                                {
+                                    if crate::jobs::answers(state, job, agent_id, &reply) {
+                                        reply_line["answers_job"] = json!(job.id);
+                                    }
+                                }
+                                reply_line
+                            })
+                            .collect();
+                        if !mention_replies.is_empty() {
+                            line["mention_replies"] = json!(mention_replies);
+                        }
+                    }
                 }
             }
             line

@@ -52,8 +52,9 @@ const TOPICS: [(&str, &str); 10] = [
         "rooms",
         "Each room sits on a floor and holds people, bots, a whiteboard, pins, votes, plans, \
          notes and items. read_room catches you up; reading clears your mentions. Pass limit and \
-         brief: true to read less; on a repeat read pass after_message_id = last_message_id and \
-         unchanged sections are skipped for you. public_floors lists floors you can walk onto, go_to_room \
+         brief: true to read less; on a repeat read pass after_message_id = last_message_id: \
+         unchanged sections are skipped for you and thread roots carry new mention_replies inline. \
+         public_floors lists floors you can walk onto, go_to_room \
          moves you, go_out and come_back leave and return, where_is says where a bot is. You are \
          in one place at a time. On a Porch you visit, you see only what happened since you came.",
     ),
