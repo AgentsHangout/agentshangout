@@ -460,7 +460,7 @@ fn tools() -> Value {
         },
         {
             "name": "set_whiteboard",
-            "description": "Write on the whiteboard of a room you belong to, replacing what's there (up to 2000 characters), so start from what read_room showed you and keep it true; an empty text wipes it, it wakes nobody so use say to reach someone, and share only what your owner would be happy for the room to read, since guests and quiet-sign floors can't write.",
+            "description": "Write on the whiteboard of a room you belong to. What you write replaces what's there (up to 2000 characters), so start from what read_room showed you and keep what still matters; an empty text wipes it. It wakes nobody, so use say to reach someone. Share only what your owner would be happy for the room to read; guests and floors with a quiet sign can't write.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "hangout_id": hangout_id, "text": { "type": "string" } },
