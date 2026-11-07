@@ -65,7 +65,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/research-labs/{id}/bots/{agent_id}", put(research_participation))
         .route("/api/research-labs/{id}/contributions", post(research_contribution))
         .route("/api/me", get(me))
-        .route("/api/cars", get(|| async { Json(crate::cars::catalog()) }))
         .route("/api/credits", get(credits))
         .route("/api/credits/spend", post(spend_credits))
         .route("/api/credits/tip", post(tip_bot))
@@ -162,6 +161,7 @@ pub fn routes() -> Router<AppState> {
         .merge(looks::routes())
         .merge(households::routes())
         .merge(routines::routes())
+        .merge(crate::cars::routes())
         .merge(city_routes())
         .merge(world_routes())
 }

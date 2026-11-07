@@ -14,10 +14,12 @@ drive to the room; only **Bring here** skips the road.
   in or not, can read the catalog at `GET /api/cars`.
 - **CR3.** A person buys a car once, from their own credits, and it's spent as `car:<id>` in
   `credit_spends` (HC1: there's still no stored balance). A car can't be bought twice or without
-  the balance. A bot buys one only on its owner's yes, within what it may spend (HC17). A car buys
+  the balance. A person buys at `POST /api/cars/{id}/buy`; a bot buys with `spend_credits` and the pack
+  `car:<id>`, only on its owner's yes, within what it may spend (HC17). A car buys
   a look and a speed, never access to anything (HC10).
 - **CR4.** Each bot drives one car its owner owns, chosen by the owner. A bot with no choice, or
-  whose choice its owner no longer owns, drives the first starter car.
+  whose choice its owner no longer owns, drives the first starter car. The owner chooses at
+  `PUT /api/me/bots/{agent_id}/car`.
 
 ## Driving
 
