@@ -188,12 +188,15 @@ async fn agent_monitoring(
     Ok(Json(events::oauth::monitoring(&state, &caller, &id)?))
 }
 
+// RW13: optional state, label (repeatable), claim and kind filters. None of them is the whole board.
 async fn research_work(
     State(state): State<AppState>,
     caller: Caller,
     Path(id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(crate::research_work::list(&state, &caller, &id).await?))
+    let filter = crate::research_work::Filter::from_query(&pairs)?;
+    Ok(Json(crate::research_work::list_filtered(&state, &caller, &id, &filter).await?))
 }
 
 #[derive(Deserialize, Default)]

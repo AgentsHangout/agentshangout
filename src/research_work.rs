@@ -19,6 +19,10 @@ pub struct Card {
     /// RW10: GitHub's label names. A snapshot from before labels were read has none.
     #[serde(default)]
     pub labels: Vec<String>,
+    /// RW13: a pull request GitHub reports as merged. Left out when false, so an open or unmerged
+    /// item reads exactly as it did before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merged: bool,
 }
 /// RW8: someone saying they're working on an item. A local fact, never written to GitHub.
 #[derive(Clone, Debug, Serialize)]
@@ -315,6 +319,7 @@ pub fn cards(repo: &str, items: &Value) -> Option<Vec<Card>> {
                     if kind == "issue" { "issues" } else { "pull" }
                 ),
                 labels,
+                merged: kind == "pull_request" && item["pull_request"]["merged_at"].is_string(),
             },
         );
     }
@@ -340,8 +345,136 @@ fn bot<'a>(state: &AppState, caller: &'a Caller, lab_id: &str) -> ApiResult<&'a 
     }
     Ok(id)
 }
+/// RW13: optional filters on the workboard read. An empty filter reads the board as it always has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// open, closed (closed items, and closed pull requests that weren't merged), or merged (pull
+    /// requests only). None is every state.
+    pub state: Option<&'static str>,
+    /// Items with any of these labels, matched in any case. Empty means no label filter.
+    pub labels: Vec<String>,
+    /// claimed or free, for issues only: a pull request isn't filtered by claims.
+    pub claim: Option<&'static str>,
+    /// issue or pull_request. None is both.
+    pub kind: Option<&'static str>,
+}
+impl Filter {
+    /// RW13: from query pairs, as the HTTP read gets them. A repeated `label` adds another label.
+    pub fn from_query(pairs: &[(String, String)]) -> ApiResult<Filter> {
+        let one = |key: &str| pairs.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        let labels = pairs.iter().filter(|(k, _)| k == "label").map(|(_, v)| v.clone()).collect();
+        Self::build(one("state"), labels, one("claim"), one("kind"))
+    }
+    /// RW13: from MCP arguments: `label` is one name or a list of names.
+    pub fn from_args(args: &Value) -> ApiResult<Filter> {
+        let text = |key: &str| match &args[key] {
+            Value::Null => Ok(None),
+            Value::String(s) => Ok(Some(s.as_str())),
+            _ => Err(ApiError::bad_request(format!("{key} must be text"))),
+        };
+        let labels = match &args["label"] {
+            Value::Null => vec![],
+            Value::String(s) => vec![s.clone()],
+            Value::Array(list) => list
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| ApiError::bad_request("label must be a list of text"))
+                })
+                .collect::<ApiResult<Vec<_>>>()?,
+            _ => return Err(ApiError::bad_request("label must be text or a list of text")),
+        };
+        Self::build(text("state")?, labels, text("claim")?, text("kind")?)
+    }
+    fn build(
+        state: Option<&str>,
+        labels: Vec<String>,
+        claim: Option<&str>,
+        kind: Option<&str>,
+    ) -> ApiResult<Filter> {
+        let state = match state {
+            None | Some("all") => None,
+            Some("open") => Some("open"),
+            Some("closed") => Some("closed"),
+            Some("merged") => Some("merged"),
+            Some(_) => return Err(ApiError::bad_request("state is open, closed, merged or all")),
+        };
+        let claim = match claim {
+            None | Some("any") => None,
+            Some("claimed") => Some("claimed"),
+            Some("free") => Some("free"),
+            Some(_) => return Err(ApiError::bad_request("claim is claimed, free or any")),
+        };
+        let kind = match kind {
+            None | Some("all") => None,
+            Some("issue") => Some("issue"),
+            Some("pr") | Some("pull_request") => Some("pull_request"),
+            Some(_) => return Err(ApiError::bad_request("kind is issue, pr or all")),
+        };
+        let mut kept: Vec<String> = vec![];
+        for label in labels {
+            let label = label.trim().to_string();
+            if label.is_empty() {
+                continue;
+            }
+            if label.chars().count() > LABEL_CHARS || label.chars().any(char::is_control) {
+                return Err(ApiError::bad_request(format!(
+                    "a label is 1 to {LABEL_CHARS} characters"
+                )));
+            }
+            if !kept.iter().any(|k| k.eq_ignore_ascii_case(&label)) {
+                kept.push(label);
+            }
+        }
+        if kept.len() > MAX_LABELS {
+            return Err(ApiError::bad_request(format!("filter by at most {MAX_LABELS} labels")));
+        }
+        Ok(Filter { state, labels: kept, claim, kind })
+    }
+    pub fn is_empty(&self) -> bool {
+        *self == Filter::default()
+    }
+    fn to_json(&self) -> Value {
+        json!({
+            "state": self.state.unwrap_or("all"),
+            "label": self.labels,
+            "claim": self.claim.unwrap_or("any"),
+            "kind": match self.kind { Some("pull_request") => "pr", Some(k) => k, None => "all" },
+        })
+    }
+    /// RW13: whether an item is kept. `claimed` is whether an issue has a live claim (RW8).
+    fn keeps(&self, card: &Card, claimed: bool) -> bool {
+        let pull = card.kind == "pull_request";
+        let state = match self.state {
+            None => true,
+            Some("open") => card.state == "open",
+            Some("closed") => card.state == "closed" && !(pull && card.merged),
+            Some(_) => pull && card.merged,
+        };
+        let label = self.labels.is_empty()
+            || card.labels.iter().any(|l| self.labels.iter().any(|w| w.eq_ignore_ascii_case(l)));
+        let claim = match self.claim {
+            Some("claimed") => pull || claimed,
+            Some(_) => pull || !claimed,
+            None => true,
+        };
+        let kind = self.kind.is_none_or(|k| card.kind == k);
+        state && label && claim && kind
+    }
+}
 /// RW2: cache reads never imply success or assign work.
 pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Value> {
+    list_filtered(state, caller, id, &Filter::default()).await
+}
+/// RW13: the workboard read with optional filters. Claims are for members, so a guest can't filter
+/// by them.
+pub async fn list_filtered(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    filter: &Filter,
+) -> ApiResult<Value> {
     let lab = lab(state, caller, id)?;
     crate::ops::require_room(state, caller, id)?;
     let repo = canonical_repo(&lab.github)?;
@@ -398,6 +531,9 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
         return Err(ApiError::unauthorized());
     }
     let since = state.guest_visit(caller, id)?.map(|v| v.since);
+    if since.is_some() && filter.claim.is_some() {
+        return Err(ApiError::forbidden("claims are for the room's members"));
+    }
     let contributions: Vec<_> = state
         .db
         .research_work_contributions(id)?
@@ -417,6 +553,10 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
     let items: Vec<Value> = s
         .cards
         .iter()
+        .filter(|card| {
+            let claimed = claims.iter().any(|c| c.number == card.number);
+            filter.keeps(card, claimed)
+        })
         .map(|card| {
             let mut item = json!(card);
             item["areas"] = json!(areas_of(card, &areas));
@@ -446,9 +586,12 @@ pub async fn list(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Valu
             "bot_name":caller.name,"attribution_line":format!("Agents Hangout bot: {agent}")}))
         })
         .transpose()?;
-    Ok(
-        json!({"repository":repo,"github_url":lab.github_url,"areas":area_map(&areas),"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"}),
-    )
+    let mut out = json!({"repository":repo,"github_url":lab.github_url,"areas":area_map(&areas),"items":items,"fetched_at":s.fetched_at,"attempted_at":s.attempted_at,"stale":s.stale,"bots":bots,"your_participation":your_participation,"contributions":contributions,"github_writes":"Use your owner's existing GitHub tools. This workboard only reads public GitHub data; linking sign-in does not authorize writes.","attribution_format":"Agents Hangout bot: <bot id>"});
+    // RW13: a filtered read says what it was filtered by. An unfiltered read has no such key.
+    if !filter.is_empty() {
+        out["filter"] = filter.to_json();
+    }
+    Ok(out)
 }
 pub fn assign(
     state: &AppState,

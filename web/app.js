@@ -9980,13 +9980,41 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
       if (roomId && labs[0]) {
         const work = h('section', { class: 'research-work' }, h('p', { class: 'muted' }, 'Reading public GitHub work…'));
         body.append(work);
-        try {
-          const data = await api(`/api/research-labs/${encodeURIComponent(labs[0].id)}/work`);
-          if (ticket !== current) return;
-          work.replaceChildren(...[...researchWorkContent(data, labs[0].id), researchParticipation(labs[0].id, data.bots || [])].filter(Boolean));
-        } catch (failure) {
-          work.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message));
-        }
+        const labId = labs[0].id;
+        const base = `/api/research-labs/${encodeURIComponent(labId)}/work`;
+        let filter = workFilterFromUrl();
+        let labels = null;
+        let latest = 0;
+        // RW13: each change asks the server again, and an answer that's been overtaken is dropped.
+        const paint = async () => {
+          const mine = ++latest;
+          try {
+            if (!labels) {
+              // The label menu lists every label on the board, so the first read has no filter.
+              const everything = await api(base);
+              if (ticket !== current || mine !== latest) return;
+              labels = [...new Set((everything.items || []).flatMap((item) => item.labels || []))]
+                .sort((a, b) => a.localeCompare(b));
+            }
+            const data = await api(`${base}?${workQuery(filter)}`);
+            if (ticket !== current || mine !== latest) return;
+            const member = (data.items || []).every((item) => Array.isArray(item.watchers));
+            work.replaceChildren(...[
+              researchFilterBar(filter, labels, member, change),
+              ...researchWorkContent(data, labId),
+              researchParticipation(labId, data.bots || []),
+            ].filter(Boolean));
+          } catch (failure) {
+            if (ticket !== current || mine !== latest) return;
+            work.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message));
+          }
+        };
+        const change = (next) => {
+          filter = next;
+          workFilterToUrl(filter);
+          paint();
+        };
+        await paint();
       }
     } catch (failure) {
       if (ticket !== current) return;
@@ -10048,6 +10076,71 @@ function researchDisplay({ panels, say, research, state, lookup }) {
   };
 }
 
+// RW13: the workroom's filters live in the page address as work_state, work_label, work_claim and
+// work_kind, so a filtered board can be shared. The defaults are open items of any kind and aren't written.
+const WORK_STATES = ['open', 'closed', 'merged', 'all'];
+const WORK_CLAIMS = ['any', 'claimed', 'free'];
+const WORK_KINDS = ['all', 'issue', 'pr'];
+function workFilterFromUrl() {
+  const q = new URLSearchParams(location.search);
+  const pick = (key, allowed, fallback) => (allowed.includes(q.get(key)) ? q.get(key) : fallback);
+  return {
+    state: pick('work_state', WORK_STATES, 'open'),
+    labels: q.getAll('work_label').map((label) => label.trim()).filter(Boolean).slice(0, 10),
+    claim: pick('work_claim', WORK_CLAIMS, 'any'),
+    kind: pick('work_kind', WORK_KINDS, 'all'),
+  };
+}
+function workFilterToUrl(filter) {
+  const q = new URLSearchParams(location.search);
+  for (const key of ['work_state', 'work_label', 'work_claim', 'work_kind']) q.delete(key);
+  if (filter.state !== 'open') q.set('work_state', filter.state);
+  filter.labels.forEach((label) => q.append('work_label', label));
+  if (filter.claim !== 'any') q.set('work_claim', filter.claim);
+  if (filter.kind !== 'all') q.set('work_kind', filter.kind);
+  const query = q.toString();
+  history.replaceState({}, '', `${location.pathname}${query ? `?${query}` : ''}${location.hash}`);
+}
+function workQuery(filter) {
+  const q = new URLSearchParams({ state: filter.state });
+  filter.labels.forEach((label) => q.append('label', label));
+  if (filter.claim !== 'any') q.set('claim', filter.claim);
+  if (filter.kind !== 'all') q.set('kind', filter.kind);
+  return q.toString();
+}
+// RW13: one compact bar over the board. Claims are issues only, so that segment is shown to members
+// alone (guests get no claims to filter by), and labels are every label on the board, not just the
+// ones this filter keeps. Each change asks the server again through `change`.
+function researchFilterBar(filter, labels, member, change) {
+  const segment = (name, options, current, key) => h('div', { class: 'research-segment', role: 'group', 'aria-label': name },
+    h('span', { class: 'muted' }, name),
+    ...options.map(([value, text]) => h('button', {
+      type: 'button',
+      'aria-pressed': String(current === value),
+      onclick: () => change({ ...filter, [key]: value }),
+    }, text)));
+  const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+  const menu = h('details', { class: 'research-labels' },
+    h('summary', {}, filter.labels.length ? `Labels (${filter.labels.length})` : 'Labels'),
+    labels.length
+      ? labels.map((label) => h('label', { class: 'field' },
+        h('input', {
+          type: 'checkbox',
+          checked: filter.labels.some((chosen) => same(chosen, label)),
+          onchange: (event) => {
+            const rest = filter.labels.filter((chosen) => !same(chosen, label));
+            change({ ...filter, labels: event.target.checked ? [...rest, label] : rest });
+          },
+        }),
+        ' ', label))
+      : h('p', { class: 'muted' }, 'No labels on this board.'));
+  return h('div', { class: 'research-filters', role: 'region', 'aria-label': 'Filter GitHub work' },
+    segment('State', [['open', 'Open'], ['closed', 'Closed'], ['merged', 'Merged'], ['all', 'All']], filter.state, 'state'),
+    segment('Kind', [['all', 'All'], ['issue', 'Issues'], ['pr', 'Pull requests']], filter.kind, 'kind'),
+    member ? segment('Claims (issues)', [['any', 'Any'], ['claimed', 'Claimed'], ['free', 'Free']], filter.claim, 'claim') : null,
+    menu);
+}
+
 function researchWorkContent(work, labId) {
   // Public source links are constructed from the verified repository and numeric issue number.
   const sourceLink = (item, text) => {
@@ -10060,21 +10153,10 @@ function researchWorkContent(work, labId) {
   const items = unavailable ? [] : work.items || [];
   const card = (item) => h('article', { class: 'board-card' },
     h('h4', {}, sourceLink(item, `#${item.number} ${item.title}`)),
-    // The snapshot only says open or closed. A closed pull request isn't known to be merged (RW2).
-    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.state === 'open' ? 'open' : 'closed'}`),
+    // The snapshot only says open or closed. A merged pull request is marked as merged (RW13).
+    h('p', { class: 'muted' }, `${item.kind === 'issue' ? 'Issue' : 'Pull request'} · ${item.merged ? 'merged' : item.state === 'open' ? 'open' : 'closed'}`),
     ...researchItemDetails(item, labId));
-  const tabs = [['pull_request', 'Pull requests'], ['issue', 'Issues']].map(([kind, label]) => {
-    const shown = items.filter((item) => item.kind === kind);
-    const list = h('div', { class: 'research-list' }, ...shown.map(card),
-      shown.length ? null : h('p', { class: 'muted' }, `No ${label.toLowerCase()} in this snapshot.`));
-    return { kind, list, button: h('button', { type: 'button', 'aria-pressed': 'false' }, `${label} (${shown.length})`) };
-  });
-  const pick = (kind) => tabs.forEach((tab) => {
-    tab.button.setAttribute('aria-pressed', String(tab.kind === kind));
-    tab.list.hidden = tab.kind !== kind;
-  });
-  tabs.forEach((tab) => tab.button.addEventListener('click', () => pick(tab.kind)));
-  pick(items.some((item) => item.kind === 'pull_request') || !items.length ? 'pull_request' : 'issue');
+  const list = h('div', { class: 'research-list' }, ...items.map(card));
   const status = unavailable
     ? 'GitHub snapshot unavailable. GitHub could not be read and no earlier snapshot is saved.'
     : work.stale
@@ -10084,9 +10166,8 @@ function researchWorkContent(work, labId) {
     h('h3', {}, 'GitHub snapshot'),
     h('p', { class: work.stale ? 'research-stale' : 'muted', role: 'status' }, status),
     ...(unavailable ? [] : [
-      h('div', { class: 'research-tabs', role: 'group', 'aria-label': 'GitHub work' }, ...tabs.map((tab) => tab.button)),
-      ...tabs.map((tab) => tab.list),
-      items.length ? null : h('p', { class: 'muted' }, 'No public issues or pull requests in this snapshot.'),
+      list,
+      items.length ? null : h('p', { class: 'muted' }, work.filter ? 'Nothing matches these filters in this snapshot.' : 'No public issues or pull requests in this snapshot.'),
       h('p', { class: 'muted fine' }, 'Counts are items in this snapshot, up to 100 recently updated, not repository totals. The room’s research display bars are decorative.'),
     ]),
     h('h3', {}, 'Bot awards & swag'),

@@ -63,13 +63,18 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
         if v.lock().unwrap()["fail"] == true {
             (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})))
         } else {
-            (
-                StatusCode::OK,
-                Json(json!([
-                    {"number":9,"title":"Research idea","state":v.lock().unwrap()["issue9"].as_str().unwrap_or("open"),"labels":[{"name":"bug","color":"d73a4a"},{"name":"Map"}]},
-                    {"number":12,"title":"Fix the plots","state":"open","pull_request":{}}
-                ])),
-            )
+            let extra = v.lock().unwrap()["extra"] == true;
+            let mut items = vec![
+                json!({"number":9,"title":"Research idea","state":v.lock().unwrap()["issue9"].as_str().unwrap_or("open"),"labels":[{"name":"bug","color":"d73a4a"},{"name":"Map"}]}),
+                json!({"number":12,"title":"Fix the plots","state":"open","pull_request":{}}),
+            ];
+            // RW13: three more only when `extra` is set, so the other tests keep their board.
+            if extra {
+                items.push(json!({"number":13,"title":"Merged fix","state":"closed","labels":[{"name":"ui"}],"pull_request":{"merged_at":"2026-11-06T10:00:00Z"}}));
+                items.push(json!({"number":14,"title":"Dropped idea","state":"closed","labels":[{"name":"Bug"}],"pull_request":{"merged_at":null}}));
+                items.push(json!({"number":15,"title":"Old issue","state":"closed","labels":[]}));
+            }
+            (StatusCode::OK, Json(Value::Array(items)))
         }
     }
     async fn pr(State(v): State<Arc<Mutex<Value>>>) -> Json<Value> {
@@ -710,4 +715,118 @@ async fn rw11_watchers_hear_when_an_item_changes_and_nobody_is_rung() {
     assert!(research_work::watch(&state, &outsider, "lab", 9).is_err());
     let house = auth::Caller { is_house: true, ..bot.clone() };
     assert!(research_work::watch(&state, &house, "lab", 9).is_err());
+}
+
+// RW13: the workboard filters by state, label, claim and kind; no filter reads as it always has.
+#[tokio::test]
+async fn rw13_filters_narrow_the_board_and_no_filter_changes_nothing() {
+    let (state, owner, bot, upstream) = setup().await;
+    upstream.lock().unwrap()["extra"] = json!(true);
+    let all = research_work::list(&state, &owner, "lab").await.unwrap();
+    assert!(all.get("filter").is_none());
+    assert_eq!(all["items"].as_array().unwrap().len(), 5);
+    assert!(all["items"][0].get("merged").is_none(), "unmerged items keep their shape");
+    let numbers = |v: &Value| -> Vec<u64> {
+        v["items"].as_array().unwrap().iter().map(|i| i["number"].as_u64().unwrap()).collect()
+    };
+    let read = |pairs: Vec<(&str, &str)>| {
+        let pairs: Vec<(String, String)> =
+            pairs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let filter = research_work::Filter::from_query(&pairs).unwrap();
+        (state.clone(), filter)
+    };
+    let board = |filter: research_work::Filter| {
+        let state = state.clone();
+        let owner = owner.clone();
+        async move { research_work::list_filtered(&state, &owner, "lab", &filter).await.unwrap() }
+    };
+
+    // The default is every state, as before.
+    let v = board(read(vec![]).1).await;
+    assert_eq!(numbers(&v), vec![9, 12, 13, 14, 15]);
+    assert!(v.get("filter").is_none());
+
+    // open: no closed item. closed: closed issues and closed pull requests not merged, not 13.
+    assert_eq!(numbers(&board(read(vec![("state", "open")]).1).await), vec![9, 12]);
+    assert_eq!(numbers(&board(read(vec![("state", "closed")]).1).await), vec![14, 15]);
+    assert_eq!(numbers(&board(read(vec![("state", "merged")]).1).await), vec![13]);
+    let v = board(read(vec![("state", "merged")]).1).await;
+    assert_eq!(v["items"][0]["merged"], true);
+    assert_eq!(v["filter"]["state"], "merged");
+
+    // Labels match in any case, and any of several labels keeps an item.
+    assert_eq!(numbers(&board(read(vec![("label", "BUG")]).1).await), vec![9, 14]);
+    assert_eq!(
+        numbers(&board(read(vec![("label", "bug"), ("label", "ui")]).1).await),
+        vec![9, 13, 14]
+    );
+
+    // Kind: pr is pull requests, and a claim filter never hides a pull request.
+    assert_eq!(numbers(&board(read(vec![("kind", "pr")]).1).await), vec![12, 13, 14]);
+    assert_eq!(numbers(&board(read(vec![("kind", "issue")]).1).await), vec![9, 15]);
+    assert_eq!(
+        numbers(&board(read(vec![("claim", "claimed"), ("kind", "pr")]).1).await),
+        vec![12, 13, 14]
+    );
+
+    // Claims apply to issues: nobody's claimed 9 yet, so free keeps 9 and 15 and claimed keeps none.
+    assert_eq!(
+        numbers(&board(read(vec![("claim", "free"), ("kind", "issue")]).1).await),
+        vec![9, 15]
+    );
+    assert_eq!(
+        numbers(&board(read(vec![("claim", "claimed"), ("kind", "issue")]).1).await),
+        Vec::<u64>::new()
+    );
+    research_work::claim(&state, &bot, "lab", 9, false).unwrap();
+    assert_eq!(
+        numbers(&board(read(vec![("claim", "claimed"), ("kind", "issue")]).1).await),
+        vec![9]
+    );
+    assert_eq!(numbers(&board(read(vec![("claim", "free"), ("kind", "issue")]).1).await), vec![15]);
+
+    // Filters combine, and the applied filter says so.
+    let v = board(read(vec![("state", "open"), ("label", "bug"), ("kind", "issue")]).1).await;
+    assert_eq!(numbers(&v), vec![9]);
+    assert_eq!(v["filter"], json!({"state":"open","label":["bug"],"claim":"any","kind":"issue"}));
+
+    // Bad values are refused, and a guest can't filter by claims.
+    assert!(research_work::Filter::from_query(&[("state".into(), "wat".into())]).is_err());
+    assert!(research_work::Filter::from_query(&[("kind".into(), "epic".into())]).is_err());
+    assert!(research_work::Filter::from_query(&[("label".into(), "x".repeat(51))]).is_err());
+    let args = json!({"state":"open","label":["bug","ui"],"claim":"free","kind":"pr"});
+    let f = research_work::Filter::from_args(&args).unwrap();
+    assert_eq!(f.labels, vec!["bug", "ui"]);
+    assert_eq!(f.kind, Some("pull_request"));
+    assert!(research_work::Filter::from_args(&json!({"label": 3})).is_err());
+    let stranger = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    let guest_claims = research_work::Filter::from_args(&json!({"claim":"free"})).unwrap();
+    assert!(research_work::list_filtered(&state, &stranger, "lab", &guest_claims).await.is_err());
+
+    // Over HTTP, the same filters come from the query string, and a repeated label adds one.
+    let base = serve(state.clone()).await;
+    let v: Value = reqwest::Client::new()
+        .get(format!("{base}/api/research-labs/lab/work?state=merged&label=ui&label=bug"))
+        .bearer_auth("owner-token")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(numbers(&v), vec![13]);
+    assert_eq!(v["filter"]["label"], json!(["ui", "bug"]));
+    let bad = reqwest::Client::new()
+        .get(format!("{base}/api/research-labs/lab/work?state=nope"))
+        .bearer_auth("owner-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
 }

@@ -9,6 +9,13 @@ function extract(name) {
   if (source.slice(start - 6, start) === 'async ') start -= 6;
   return source.slice(start, source.indexOf('\n}\n', start) + 2);
 }
+// The vm context has its own arrays and objects, so comparisons go through plain JSON.
+const plain = (value) => JSON.parse(JSON.stringify(value));
+function slice(start, end) {
+  const from = source.indexOf(start);
+  assert.ok(from >= 0, `missing ${start}`);
+  return source.slice(from, source.indexOf(end, from));
+}
 function node(tag, props = {}, ...children) {
   return { tag, ...props, children: children.flat().filter(Boolean),
     events: {}, addEventListener(kind, handler) { this.events[kind] = handler; },
@@ -30,6 +37,14 @@ const writes = [];
 const reads = [];
 const lab = { id: 'lab-1', name: 'MS (Multiple Sclerosis) Research Lab', floor_id: 'floor-1', github: 'AgentsHangout/Cure-MS', can_place: true };
 const context = {
+  // RW13: the workroom's filters are read from and written to the page address.
+  location: { search: '', pathname: '/h/floor-1', hash: '' },
+  history: { replaceState(_state, _title, url) {
+    const [pathname, query = ''] = url.split('?');
+    context.location.pathname = pathname;
+    context.location.search = query ? `?${query}` : '';
+  } },
+  URLSearchParams,
   h: node,
   field: (label, element) => node('label', {}, label, element),
   link: (href, text, props) => node('a', { ...props, href }, text),
@@ -46,14 +61,14 @@ const context = {
     }
     reads.push(path);
     if (path === '/api/research-labs/floor-1') return lab;
-    if (path.endsWith('/work')) return workReply;
+    if (path.split('?')[0].endsWith('/work')) return workReply;
     return { eligibility: { can_create: canCreate, age_days: 29, friends: 30 }, labs: [lab] };
   },
 };
 vm.createContext(context);
-vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${extract('researchWorkContent')}
+vm.runInContext(`${extract('researchRepositoryLink')}\n${extract('researchMapObject')}\n${extract('researchMapCard')}\n${extract('researchMenuLink')}\n${extract('researchLabsPanel')}\n${slice('// RW13: the workroom', 'function researchWorkContent(')}\n${extract('researchFilterBar')}\n${extract('researchWorkContent')}
 ${extract('researchLabLookup')}
-${extract('researchDisplay')}\n${extract('researchParticipation')}\n${extract('researchItemDetails')}\nthis.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
+${extract('researchDisplay')}\n${extract('researchParticipation')}\n${extract('researchItemDetails')}\nthis.filterFromUrl = workFilterFromUrl; this.filterToUrl = workFilterToUrl; this.workQuery = workQuery; this.filterBar = researchFilterBar; this.panel = researchLabsPanel; this.workContent = researchWorkContent; this.researchDisplay = researchDisplay; this.lookup = researchLabLookup; this.repositoryLink = researchRepositoryLink; this.participation = researchParticipation; this.mapObject = researchMapObject; this.mapCard = researchMapCard; this.menuLink = researchMenuLink;`, context);
 const panels = {
   add(name, title, options) { open = options.onOpen; return body = node('section'); },
   toggle() { return node('button'); },
@@ -124,28 +139,28 @@ async function check() {
   assert.ok(find(body, node => node.children?.some(text => typeof text === 'string' && text.includes('Ann’s bot'))), 'awards display bot and owner names');
   // The research display panel: a GitHub snapshot in its own states, never sample data.
   const text = tree => find(tree, n => n.role === 'status').children.join('');
-  const pressed = tree => find(tree, n => n['aria-pressed'] === 'true').children.join('');
   const articles = tree => { const all = []; (function walk(n) { if (!n || typeof n !== 'object' || n.hidden) return; if (n.tag === 'article') all.push(n); (n.children || []).forEach(walk); })(tree); return all; };
   const fresh = { repository: lab.github, fetched_at: 100, stale: false, items: [
     { number: 7, title: 'Add a review', kind: 'pull_request', state: 'closed' },
-    { number: 8, title: 'Trial notes', kind: 'issue', state: 'open' }] };
+    { number: 8, title: 'Trial notes', kind: 'issue', state: 'open' },
+    { number: 21, title: 'Shipped', kind: 'pull_request', state: 'closed', merged: true }] };
   let shown = node('section', {}, ...context.workContent(fresh));
   assert.ok(text(shown).startsWith('Refreshed'), 'a fresh snapshot says when it was refreshed');
-  assert.equal(pressed(shown), 'Pull requests (1)', 'pull requests open first, counted from the snapshot');
-  assert.equal(articles(shown).length, 1, 'only the chosen tab shows');
+  assert.equal(articles(shown).length, 3, 'every item shows in one list, no tabs');
+  assert.equal(find(shown, n => n.tag === 'button'), undefined, 'the kind filter lives in the bar, not here');
   assert.equal(find(shown, n => n.tag === 'a').rel, 'noopener noreferrer');
   assert.equal(find(shown, n => n.tag === 'a').href, 'https://github.com/AgentsHangout/Cure-MS/pull/7');
   assert.ok(find(shown, n => n.children?.includes('Pull request · closed')), 'a closed pull request is shown as closed');
-  assert.ok(!JSON.stringify(shown.children.filter(n => n.tag === 'div')).includes('merged'), 'the snapshot rows never claim a merge');
-  find(shown, n => n.tag === 'button' && n.children[0].startsWith('Issues')).events.click();
-  assert.equal(pressed(shown), 'Issues (1)');
-  assert.equal(articles(shown)[0].children[0].children[0].href, 'https://github.com/AgentsHangout/Cure-MS/issues/8');
+  assert.ok(find(shown, n => n.children?.includes('Pull request · merged')), 'a merged pull request says so');
+  assert.equal(articles(shown)[1].children[0].children[0].href, 'https://github.com/AgentsHangout/Cure-MS/issues/8');
   shown = node('section', {}, ...context.workContent({ ...fresh, items: [] }));
   assert.ok(text(shown).startsWith('Refreshed'), 'an empty snapshot is still a successful one');
   assert.ok(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')));
+  shown = node('section', {}, ...context.workContent({ ...fresh, items: [], filter: { state: 'closed' } }));
+  assert.ok(find(shown, n => n.children?.includes('Nothing matches these filters in this snapshot.')), 'a filtered empty list says the filters matched nothing');
   shown = node('section', {}, ...context.workContent({ ...fresh, stale: true }));
   assert.ok(text(shown).startsWith('Stale'), 'a failed refresh keeps the last snapshot and says it is stale');
-  assert.equal(articles(shown).length, 1);
+  assert.equal(articles(shown).length, 3, 'a stale snapshot still lists what was saved');
   // RW8 to RW11: areas, the last CI read, claims and watchers, and a watch button with a lab id.
   const rich = { repository: lab.github, fetched_at: 100, stale: false, items: [
     { number: 9, title: 'Fix the plots', kind: 'pull_request', state: 'open', labels: ['bug'], areas: ['Bugs'],
@@ -189,6 +204,44 @@ async function check() {
   assert.ok(text(shown).startsWith('GitHub snapshot unavailable'), 'nothing saved and nothing fetched is unavailable, not empty');
   assert.equal(find(shown, n => n.tag === 'button'), undefined, 'an unavailable snapshot shows no tabs or rows');
   assert.equal(find(shown, n => n.children?.includes('No public issues or pull requests in this snapshot.')), undefined);
+  // RW13: the filters live in the address, the bar asks again on every change, and a guest sees no claim filter.
+  context.location.search = '?work_state=closed&work_label=bug&work_label=UI&work_kind=pr&work_claim=free';
+  const fromUrl = context.filterFromUrl();
+  assert.deepEqual({ ...fromUrl, labels: [...fromUrl.labels] }, { state: 'closed', labels: ['bug', 'UI'], claim: 'free', kind: 'pr' });
+  assert.equal(context.workQuery(fromUrl), 'state=closed&label=bug&label=UI&claim=free&kind=pr');
+  context.location.search = '?work_state=nope&work_kind=epic';
+  assert.deepEqual({ ...context.filterFromUrl(), labels: [] }, { state: 'open', labels: [], claim: 'any', kind: 'all' }, 'unknown values fall back to the defaults');
+  context.location.search = '?from=elsewhere&work_state=all';
+  context.filterToUrl({ state: 'open', labels: ['a b'], claim: 'any', kind: 'issue' });
+  assert.equal(context.location.search, '?from=elsewhere&work_label=a+b&work_kind=issue', 'defaults stay out of the address and other parameters stay');
+  const changes = [];
+  const bar = context.filterBar({ state: 'open', labels: ['bug'], claim: 'any', kind: 'all' }, ['bug', 'docs'], true, next => changes.push(next));
+  const inGroup = (tree, group, words) => find(find(tree, n => n['aria-label'] === group), n => n.tag === 'button' && n.children[0] === words);
+  assert.equal(inGroup(bar, 'State', 'Open')['aria-pressed'], 'true');
+  inGroup(bar, 'State', 'Merged').onclick();
+  assert.deepEqual(plain(changes.at(-1)), { state: 'merged', labels: ['bug'], claim: 'any', kind: 'all' });
+  const boxes = []; (function walk(n) { if (!n || typeof n !== 'object') return; if (n.type === 'checkbox') boxes.push(n); (n.children || []).forEach(walk); })(bar);
+  boxes[1].onchange({ target: { checked: true } });
+  assert.deepEqual(plain(changes.at(-1).labels), ['bug', 'docs'], 'a second label joins the first');
+  boxes[0].onchange({ target: { checked: false } });
+  assert.deepEqual(plain(changes.at(-1).labels), [], 'unticking a label drops it');
+  assert.ok(inGroup(bar, 'Claims (issues)', 'Claimed'), 'members see the claim filter');
+  const guestBar = context.filterBar({ state: 'open', labels: [], claim: 'any', kind: 'all' }, [], false, () => {});
+  assert.equal(find(guestBar, n => n['aria-label'] === 'Claims (issues)'), undefined, 'guests get no claim filter');
+  // The panel reads the board with the address filters, and each bar change reads it again.
+  context.location.search = '?work_state=closed&work_kind=pr';
+  reads.length = 0;
+  const filtered = context.panel({ panels, me: { kind: 'person' }, roomId: 'floor-1', openBoards() {} });
+  await filtered.load();
+  assert.ok(reads.includes('/api/research-labs/lab-1/work'), 'the first read is unfiltered, for the label menu');
+  assert.ok(reads.includes('/api/research-labs/lab-1/work?state=closed&kind=pr'), 'the board is read with the address filters');
+  const region = find(body, n => n['aria-label'] === 'Filter GitHub work');
+  assert.ok(region, 'the filter bar shows on the workroom');
+  await new Promise(resolve => setImmediate(resolve));
+  inGroup(region, 'Kind', 'Issues').onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.location.search, '?work_state=closed&work_kind=issue', 'the address follows the bar');
+  assert.ok(reads.includes('/api/research-labs/lab-1/work?state=closed&kind=issue'), 'a change reads the board again');
   // Using the display opens this room's workroom and carries no lab id of its own.
   assert.ok(source.includes("else if (item?.kind === 'research_display') useDisplay();"));
   assert.ok(source.includes("item.kind === 'research_display' ? action('Use display', useDisplay) : null"), 'the Build list gives keyboard users a way to use the display');
