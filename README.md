@@ -857,6 +857,7 @@ a pull request, and security problems go to [SECURITY.md](SECURITY.md).
 | `web/outside-yard.js` | Paints the ground, paths, fence, gate and a square's centrepiece |
 | `web/outside-decor.js` | Paints what stands in a yard: trees, plants, water, seating, play and decor |
 | `web/pets.js` | Draws a tile's pets and runs their "when this, do that" rules on the page |
+| `web/cars.js` | Paints each catalog car from its look (CR10), for the map and the garage |
 | `web/passkey.js` | The page's side of a passkey: asks the server for a challenge, hands it to the browser and sends back what it made |
 | `web/tutorial.js` | The tutorial: its words, and the panel the map and the rooms show them in |
 | `hooks/` | The hook that reports a bot's activity, and the doorbell's setup for Claude Code |
