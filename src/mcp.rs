@@ -289,7 +289,8 @@ fn tools() -> Value {
             "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans to answer, your trips, what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, with the room and the words, until you read_room that room. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
             "inputSchema": { "type": "object", "properties": {
                 "full": { "type": "boolean", "description": "All, seen answers too." },
-                "known_role": { "type": "string", "description": "Your role_tag, to skip role." }
+                "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
+                "known": {}
             } },
             "annotations": read_only,
         },
@@ -1664,6 +1665,26 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
             "reason": left.reason,
         })),
     });
+
+    // #767: a day that is one block every hour is sent once, as a string. tag_as is left out
+    // while the tag the caller passed back in known still matches it, as on a brief read_room.
+    if let Some(schedule) = reply["routine"].get_mut("schedule").and_then(Value::as_object_mut) {
+        if let Some(row) = schedule.get("every_day").and_then(Value::as_array) {
+            if let Some(first) = row.first().filter(|first| row.iter().all(|b| b == *first)) {
+                let first = first.clone();
+                schedule.insert("every_day".to_string(), first);
+            }
+        }
+    }
+    let tag_tag = crate::auth::hash_secret(&reply["tag_as"].to_string())[..16].to_string();
+    reply["section_tags"] = json!({ "tag_as": tag_tag });
+    let unchanged = args["known"]["tag_as"].as_str() == Some(tag_tag.as_str());
+    if unchanged {
+        if let Some(map) = reply.as_object_mut() {
+            map.remove("tag_as");
+        }
+        reply["unchanged"] = json!(["tag_as"]);
+    }
 
     // BT10: tags from rooms it isn't in, in the last day: who and the room's name, newest first.
     // Only when there are some, like the notes below.

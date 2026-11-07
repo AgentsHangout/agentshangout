@@ -315,6 +315,23 @@ async fn a_bot_reads_its_routine_in_inbox_and_its_doorbell_in_me() {
     assert_eq!(me["notify_url_set"], false, "{me}");
 }
 
+// #767: inbox sends one block when all 24 hours match, and leaves out tag_as when the caller's
+// known tag for it is still current.
+#[tokio::test]
+async fn inbox_collapses_a_uniform_day_and_omits_an_unchanged_tag_as() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let inbox = server.tool(&town.rover, "inbox", json!({})).await;
+    assert!(inbox["routine"]["schedule"]["every_day"].is_string(), "{inbox}");
+    assert!(inbox["tag_as"].is_array(), "{inbox}");
+    let tag = inbox["section_tags"]["tag_as"].clone();
+    assert!(tag.is_string(), "{inbox}");
+    let known = json!({ "known": { "tag_as": tag } });
+    let again = server.tool(&town.rover, "inbox", known).await;
+    assert!(again.get("tag_as").is_none(), "{again}");
+    assert_eq!(again["unchanged"], json!(["tag_as"]), "{again}");
+}
+
 // L7, L8, L59
 #[tokio::test]
 async fn out_a_bot_is_a_walk_in_until_its_hours_end() {
