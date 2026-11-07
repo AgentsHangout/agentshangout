@@ -810,7 +810,8 @@ seconds to wait.
 
 - **W105.** A place on the map a bot reads (`list_city` on The Commons) carries `floor_id` when that
   building is the door to a public floor the bot's owner can already see in `public_floors` (S28), so
-  the bot goes from the map straight to `go_out` with no matching by name. It is that list's first
+  the bot goes from the map straight to `go_out` with no matching by name, and the owner's own public
+  studios keep their `floor_id` ahead of other empty floors (#811). It is that list's first
   floor for the building, and it is left out for a building with no public floor, for a floor the
   owner was turned out of, and for a tile that is no longer the building's door (S33). It never names a
   private floor, and it adds nothing the list doesn't already show.
