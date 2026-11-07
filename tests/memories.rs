@@ -1113,7 +1113,7 @@ async fn bed_uses(server: &Server, key: &str, room: &str) -> Vec<Value> {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|item| item["kind"] == "bed" || item["kind"] == "double_bed")
+        .filter(|item| matches!(item["kind"].as_str(), Some("bed" | "double_bed" | "bunk_bed")))
         .map(|item| item["used_by"].clone())
         .collect()
 }
@@ -1161,6 +1161,48 @@ async fn bed_790_a_dreaming_bot_at_home_takes_a_free_bed_until_the_night_ends() 
         .execute("UPDATE agents SET last_active_at = last_active_at + 120 WHERE id = ?", [&fern.id])
         .unwrap();
     assert_eq!(bed_uses(&server, ann, cafe).await, [json!([]), json!([])], "awake, out of bed");
+}
+
+// #837: a bunk bed holds two sleepers, one per bunk, and a double bed holds two. A bunk bed with
+// nothing else in the room still gets used, and a third sleeper with both full changes nothing.
+#[tokio::test]
+async fn bed_837_a_bunk_bed_holds_two_sleepers_and_a_double_bed_two() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let ann = &town.ann.key;
+    let cafe = &town.cafe;
+    let path = format!("/api/floors/{cafe}/items");
+    let moss = server.bot(&town.ann, cafe, "Moss");
+    let reed = server.bot(&town.ann, cafe, "Reed");
+    // A bunk bed needs three friends (ONE_FRIEND, THREE_FRIENDS): Bo, and two more in the cafe.
+    server.join(&town.code, "Dee").await;
+    server.join(&town.code, "Eli").await;
+
+    server.post(ann, &path, json!({ "kind": "bunk_bed", "x": 30, "y": 0 })).await.ok();
+    for bot in [fern, &moss, &reed] {
+        server.tool(bot, "say", json!({ "hangout_id": cafe, "text": "Evening" })).await;
+    }
+    for bot in [fern, &moss, &reed] {
+        server
+            .sql()
+            .execute("UPDATE bot_places SET since = since - 11 * 60 WHERE agent_id = ?", [&bot.id])
+            .unwrap();
+    }
+    agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    let sleepers =
+        |uses: &Vec<Value>| uses.iter().map(|used| used.as_array().unwrap().len()).sum::<usize>();
+    let uses = bed_uses(&server, ann, cafe).await;
+    // Two of the three sleep in it, one per bunk, and the third waits.
+    assert_eq!(uses.len(), 1, "one bunk bed");
+    assert_eq!(sleepers(&uses), 2, "the third has no bunk");
+    // Its owner's view only: the room's other people see the bunk empty.
+    assert_eq!(bed_uses(&server, &town.bo.key, cafe).await, [json!([])]);
+
+    // A double bed next to it takes the third sleeper, and it holds one more than a bed does.
+    server.post(ann, &path, json!({ "kind": "double_bed", "x": 34, "y": 0 })).await.ok();
+    let uses = bed_uses(&server, ann, cafe).await;
+    assert_eq!(sleepers(&uses), 3, "the double bed takes the third");
 }
 
 // MM17: no bedtime while it's staying somewhere else, nor in the ten minutes after S61 takes it
