@@ -662,6 +662,14 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     if god_mode::may_use(&state, &caller.person_id) {
         me["god_mode"] = json!(state.db.god_mode_on(&caller.person_id)?);
     }
+    // RE14, RE15: what operators told them, until they've seen it, and their own hold (RE11).
+    let notices = crate::review::notices_for(&state, &caller.person_id)?;
+    if !notices.is_empty() {
+        me["notices"] = json!(notices);
+    }
+    if let Some(hold) = crate::review::hold_for(&state, &caller.person_id)? {
+        me["hold"] = json!(hold);
+    }
     // A108, A112: where they stand with the community rules.
     if let (Some(map), Value::Object(rules)) =
         (me.as_object_mut(), crate::rules::view(&state, &caller.person_id, now())?)
@@ -1277,6 +1285,13 @@ fn live_events(
             let mut emotes = false;
             let mut speaker: Option<String> = None;
             let event = match hub.recv().await {
+                // RE20: a hold landed. Every stream checks its caller again and says nothing.
+                Ok(event) if event.kind == crate::review::RECHECK => {
+                    match state.authenticate(secret_hash) {
+                        Ok(Some(caller)) if crate::review::may_stream(state, &caller) => continue,
+                        _ => return None,
+                    }
+                }
                 Ok(event) if event.hangout_id == *topic => {
                     human_typing = event.kind == "typing";
                     emotes = event.kind == "emotes";
@@ -1295,7 +1310,8 @@ fn live_events(
             };
             let still_allowed = match state.authenticate(secret_hash) {
                 Ok(Some(caller)) => {
-                    if !allowed(state, &caller, topic) {
+                    if !allowed(state, &caller, topic) || !crate::review::may_stream(state, &caller)
+                    {
                         return None;
                     }
                     if human_typing && caller.is_agent() {

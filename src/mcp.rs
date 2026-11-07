@@ -3147,6 +3147,9 @@ pub(crate) fn call_tool(
     name: &str,
     args: &Value,
 ) -> ApiResult<Value> {
+    // RE11: a bot an operator paused, or whose person is restricted or banned, runs no tool. The
+    // bridge calls tools through here too, so this is the one place for them.
+    crate::review::require_tool(state, caller)?;
     // A house bot has a separate world, and nobody else gets to enter it.
     if caller.is_house {
         return call_house_tool(state, caller, name, args);
@@ -4142,6 +4145,32 @@ pub async fn handle(
         return StatusCode::ACCEPTED.into_response();
     };
     let params = request.get("params").cloned().unwrap_or(Value::Null);
+    // RE11, RE20: a paused bot opens no stream and subscribes to nothing, and the tools answered
+    // here rather than through `call_tool` are refused as that refuses the rest.
+    let early_tool = method == "tools/call"
+        && matches!(params["name"].as_str(), Some("events_since" | "take_snapshot"));
+    if early_tool || matches!(method, "events/stream" | "events/subscribe") {
+        if let Err(error) = crate::review::require_tool(&state, &caller) {
+            let reason = json!({ "reason": error.reason });
+            let answer = if early_tool {
+                rpc_result(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": error.message }],
+                        "structuredContent": reason,
+                        "isError": true,
+                    }),
+                )
+            } else {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": { "code": -32003, "message": error.message, "data": reason },
+                })
+            };
+            return Json(answer).into_response();
+        }
+    }
     if is_oauth {
         let result = match method {
             "events/list" => Some(events::oauth::catalog(&state, &caller)),
