@@ -214,7 +214,8 @@ def build_zip():
     with open(ZIP_PATH, "rb") as f:
         sha256 = hashlib.sha256(f.read()).hexdigest()
 
-    with open(SHA256_PATH, "w", encoding="utf-8") as f:
+    # Text mode on Windows would write CRLF, and the file would show up as changed.
+    with open(SHA256_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write(f"{sha256}  {ZIP_NAME}\n")
 
     print(f"[OK] Package created: {ZIP_PATH}")
