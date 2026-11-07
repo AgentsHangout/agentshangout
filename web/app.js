@@ -65,12 +65,72 @@ async function api(path, { method = 'GET', body } = {}, retried = false) {
     error.status = 403;
     throw error;
   }
+  // RE11: a suspended account's sign-in reaches only its own page, to delete it.
+  if (response.status === 403 && data.reason === 'banned') void showBanned();
   if (!response.ok) {
     const error = new Error(data.error || `Something went wrong (${response.status})`);
     error.status = response.status;
+    error.reason = data.reason;
     throw error;
   }
   return data;
+}
+
+// RE14, RE15: marks an operator's notice seen, so it isn't shown again.
+const seeNotice = (id) => api(`/api/notices/${encodeURIComponent(id)}/seen`, { method: 'POST', body: {} });
+
+// RE19: Download my data. A link to the export that, when clicked, fetches it and saves it as a
+// file, or says why it couldn't, such as the once-an-hour limit. Nothing is kept on the server.
+function myDataLink() {
+  const status = h('span', { class: 'muted', role: 'status' });
+  const say = (words) => status.replaceChildren(words ? ` ${words}` : '');
+  let busy = false;
+  const link = h('a', {
+    href: '/api/account/export',
+    download: 'agents-hangout-data.json',
+    onclick: async (event) => {
+      event.preventDefault();
+      if (busy) return;
+      busy = true;
+      say('Getting your data…');
+      try {
+        const response = await fetch('/api/account/export', { credentials: 'same-origin' });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `Something went wrong (${response.status})`);
+        }
+        const url = URL.createObjectURL(await response.blob());
+        const save = h('a', { href: url, download: 'agents-hangout-data.json' });
+        document.body.append(save);
+        save.click();
+        save.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        say('Downloaded.');
+      } catch (error) {
+        say(error.message);
+      } finally {
+        busy = false;
+      }
+    },
+  }, 'Download my data');
+  return h('p', {}, link, status);
+}
+
+// RE11: what a banned person sees instead of the site: why, and the way to delete their account.
+// A property of the function, not a variable, so it can't be read before it's declared.
+async function showBanned() {
+  if (showBanned.shown) return;
+  showBanned.shown = true;
+  const me = await api('/api/me').catch(() => null);
+  const told = (me?.notices || []).find((notice) => notice.kind === 'ban_person');
+  app.replaceChildren(h('main', { class: 'home' }, h('div', { class: 'card' },
+    h('h2', {}, 'Your account is suspended'),
+    h('p', {}, told ? told.text : 'An operator has suspended this account.'),
+    h('p', { class: 'muted' }, 'You can download your data and delete your account. Nothing else is open to you until an operator lifts the suspension.'),
+    myDataLink(),
+    h('div', { class: 'event-actions' },
+      me && !me.sign_in_session ? h('button', { type: 'button', class: 'ghost danger', onclick: () => deleteAccountDialog(me) }, 'Delete account') : null,
+      h('button', { type: 'button', class: 'ghost', onclick: async () => { await api('/api/session', { method: 'DELETE' }).catch(() => {}); showBanned.shown = false; await go('/'); } }, 'Sign out')))));
 }
 
 async function go(path) {
@@ -603,6 +663,18 @@ function showRulesNotice(me) {
   document.body.append(notice);
 }
 
+// RE14, RE15: each notice an operator sent, or an operator's minor_safety alert, over the page
+// until it's marked seen. The text is the server's, put in as text.
+function showModerationNotices(me) {
+  for (const notice of me?.notices || []) {
+    if (document.querySelector(`.moderation-notice[data-id="${Number(notice.id)}"]`)) continue;
+    const bar = h('div', { class: 'rules-notice moderation-notice', role: 'status', 'data-id': String(Number(notice.id)) },
+      h('span', {}, notice.text),
+      h('button', { type: 'button', onclick: async () => { try { await seeNotice(notice.id); bar.remove(); } catch { /* it shows again next time */ } } }, 'Got it'));
+    document.body.append(bar);
+  }
+}
+
 async function showSocialStrip() {
   try {
     if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
@@ -1046,6 +1118,7 @@ async function homeParts(me) {
     photosField(),
     updateControl?.element,
     ownerKeyControl(me),
+    myDataLink(),
     h('button', {
       type: 'button',
       class: 'ghost',
@@ -1759,12 +1832,15 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
-    // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', contribution: "Your bot's contribution was accepted" };
+    // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
+    // contributions, which carry when they happened rather than a UTC day.
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found' };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
+        // HC53: a drawn coin says which bot found it.
+        : line.kind === 'coin' ? ` · A coin found${line.bot ? ` by ${line.bot}` : ''}`
         : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
       h('span', { class: 'muted' }, ` · ${line.kind === 'spend' || QUESTION[line.kind] ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
     // replaceChildren would write each null out as the word, so the parts not shown are dropped.
@@ -2312,9 +2388,10 @@ const where = (bot) => {
 };
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
 // Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
-// has no spot on the map (S89), so there's nothing to center on.
+// has no spot on the map (S89), so there's nothing to center on. `settingsPath`, only when you run
+// that space, links to its settings (S90).
 const offMapText = (bot) => `${bot.room?.name || 'Its room'} isn't on the map, so there's nowhere to center on it`;
-function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
+function yourBotRow(bot, { focusOn = null, offMap = false, settingsPath = null, reload }) {
   return h('div', { class: 'row' },
     // L44: its picture, in its own look, as the map and the wardrobe draw it.
     h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
@@ -2322,7 +2399,7 @@ function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
       h('small', {}, where(bot)),
-      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot)) : null,
+      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot), settingsPath ? [' ', link(settingsPath, 'Space settings')] : null) : null,
       h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
       h('small', { class: 'muted' }, bot.next
         ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
@@ -3336,18 +3413,48 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   }
   const lificMove = (card, status) => lificSend(`/${encodeURIComponent(card)}`, { method: 'PUT', body: { status } });
 
+  // I150: a busy Done shows its latest few (the server sends it newest first), and a viewer may
+  // show all of it or hide it to its title and count. The choice is this browser's, per board.
+  const LIFIC_DONE_SHOWN = 5;
+  let lificBoard = null;
+  const lificDoneKey = (board) => `lific-done:${board}`;
+  function lificDoneView(board) {
+    try { return localStorage.getItem(lificDoneKey(board)) || 'latest'; } catch { return 'latest'; }
+  }
+  function setLificDoneView(view) {
+    if (!lificBoard) return;
+    try { localStorage.setItem(lificDoneKey(lificBoard.of), view); } catch { /* only for now, then */ }
+    lificBoard.done = view;
+    drawLific();
+  }
+  function drawLific() {
+    const { board } = lificBoard;
+    lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change, lificBoard.done) : []));
+  }
+
   // I140: anyone who may change the board adds at the top of a column, drags cards between
   // columns or uses Move to, and Remove shows only to whoever may take a card down.
-  function lificKanban(columns, canChange = false) {
+  function lificKanban(columns, canChange = false, doneView = 'latest') {
     return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) => {
       const name = LIFIC_STATUS[column.status] || column.status;
+      const isDone = column.status === 'done';
+      const count = isDone && Number.isFinite(column.done_count) ? column.done_count : column.issues.length;
+      const hidden = isDone && count > 0 && doneView === 'hidden';
+      const folded = isDone && !hidden && doneView !== 'all' && column.issues.length > LIFIC_DONE_SHOWN;
+      const issues = hidden ? [] : folded ? column.issues.slice(0, LIFIC_DONE_SHOWN) : column.issues;
+      const doneButton = (words, view) => h('button', { type: 'button', class: 'lific-done-toggle', onclick: () => setLificDoneView(view) }, words);
+      const doneToggles = !isDone || !count ? [] : hidden ? [doneButton('Show done', 'latest')] : [
+        folded ? doneButton(`Show all ${count} done`, 'all') : null,
+        doneView === 'all' && column.issues.length > LIFIC_DONE_SHOWN ? doneButton(`Show the latest ${LIFIC_DONE_SHOWN}`, 'latest') : null,
+        doneButton('Hide done', 'hidden'),
+      ];
       const adder = canChange && column.status !== 'cancelled' ? h('form', {
         class: 'lific-add',
         onsubmit: submitter(lificError, async (data) => {
           await lificSend('', { method: 'POST', body: { title: data.title, status: column.status } });
         }),
       }, h('input', { type: 'text', name: 'title', placeholder: 'Add a card', 'aria-label': `Add a card to ${name}`, maxlength: 120, required: true })) : null;
-      const cards = column.issues.map((issue) => h('div', {
+      const cards = issues.map((issue) => h('div', {
         class: 'lific-card',
         'data-priority': issue.priority || 'none',
         draggable: canChange && Boolean(issue.id),
@@ -3383,9 +3490,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
           if (card && !column.issues.some((issue) => issue.id === card)) await lificMove(card, column.status);
         }) : null,
       },
-      h('h3', {}, name, ' ', h('small', {}, String(column.issues.length))),
-      adder,
-      ...(cards.length ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]));
+      h('h3', {}, name, ' ', h('small', {}, String(count))),
+      hidden ? null : adder,
+      ...(cards.length || hidden ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]),
+      ...doneToggles);
     });
   }
 
@@ -3402,7 +3510,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
-      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change) : []));
+      lificBoard = { of: asked, board, done: lificDoneView(asked) };
+      drawLific();
     } catch (error) {
       if (asked !== lificOf) return;
       lificColumns.replaceChildren();
@@ -4326,6 +4435,7 @@ async function roomView(id) {
   let { snapshot } = opened;
   const me = await api('/api/me').catch(() => null);
   showRulesNotice(me);
+  showModerationNotices(me);
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
@@ -6281,7 +6391,7 @@ async function roomView(id) {
   // it's left alone to close the list.
   const onKey = (event) => {
     // Window handles own their arrow keys, even while a build tool is in hand.
-    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock')) return;
+    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock, .window-zone-divider, .window-zone-tabs')) return;
     if (builder.key(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -8504,7 +8614,22 @@ function installSheetDrag(handle, sheet, dismiss) {
 function createPanels(root) {
   // W114: geometry and lifecycle belong to the shared game surface, never the page body.
   const panels = new Map(), toggles = new Map();
-  let current = null, order = 0, dockPosition = null;
+  let current = null, order = 0, dockPosition = null, barEdge = 'bottom';
+  const EDGES = ['left', 'right', 'top', 'bottom'];
+  const storageKey = `game-zones-v1:${typeof location === 'undefined' ? '/' : location.pathname}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch { /* local convenience only */ }
+  const ratios = Object.fromEntries(EDGES.map(edge => [edge, Math.max(.18, Math.min(.65, Number(saved.ratios?.[edge]) || .32))]));
+  const workspace = h('div', { class: 'window-workspace', 'aria-hidden': 'true' });
+  const preview = h('div', { class: 'window-snap-preview', hidden: true, 'aria-hidden': 'true' });
+  const announcement = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  root.append(workspace, preview, announcement);
+  const zones = new Map();
+  let zoneArea = null, pendingSnap = null;
+  function save() {
+    try { localStorage.setItem(storageKey, JSON.stringify({ ratios,
+      zones: Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) })); } catch { /* storage can be blocked */ }
+  }
   const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
     'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
   const dockItems = h('div', { class: 'window-dock-items' });
@@ -8514,7 +8639,7 @@ function createPanels(root) {
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, Math.max(lo, hi)));
   function bounds() {
     const r = root.getBoundingClientRect();
-    const well = root.querySelector('.wd-well')?.getBoundingClientRect() || r;
+    const well = workspace.getBoundingClientRect();
     let left = Math.max(r.left, well.left), right = Math.min(r.right, well.right);
     let top = Math.max(r.top, well.top), bottom = Math.min(r.bottom, well.bottom);
     for (const bar of root.querySelectorAll('.wd-title, .wd-stats, .wd-status, .apple-tab-bar, .build-dock')) {
@@ -8543,25 +8668,98 @@ function createPanels(root) {
     for (const [key, value] of Object.entries({ left: rect.x, top: rect.y, width: rect.w, height: rect.h }))
       el.style.setProperty(key, `${value}px`, 'important');
   }
+  // Responsive consolidation changes the presentation, never a saved zone preference.
+  function effective(edge, area) {
+    if (area.w < 620) return 'bottom';
+    if (area.h < 520) return 'right';
+    if (area.w < 900 && (edge === 'left' || edge === 'right')) return 'right';
+    if (area.h < 820 && edge === 'top') return 'bottom';
+    return edge;
+  }
+  function groupsFor(area, moving = null, destination = null) {
+    const groups = Object.fromEntries(EDGES.map(edge => [edge, []]));
+    for (const [name, panel] of panels) {
+      const edge = name === moving ? destination : panel.zone;
+      if (panel.state === 'open' && edge !== 'float') groups[effective(edge, area)].push([name, panel]);
+    }
+    return groups;
+  }
+  function geometry(area, groups) {
+    const gap = 8, sizes = {};
+    for (const edge of EDGES) {
+      const dimension = edge === 'left' || edge === 'right' ? area.w : area.h;
+      const minimum = 280;
+      sizes[edge] = groups[edge].length ? Math.max(Math.min(minimum, dimension * .6), dimension * ratios[edge]) : 0;
+    }
+    // The scene always retains usable space. Multiple windows in a zone use tabs, not stacking.
+    for (const [first, second, dimension, reserve] of [['left', 'right', area.w, Math.min(280, area.w * .4)], ['top', 'bottom', area.h, Math.min(240, area.h * .35)]]) {
+      const total = sizes[first] + sizes[second];
+      const budget = Math.max(0, dimension - reserve - gap * (Number(!!sizes[first]) + Number(!!sizes[second])));
+      if (total > budget) { sizes[first] *= budget / total; sizes[second] *= budget / total; }
+    }
+    const l = sizes.left ? sizes.left + gap : 0, r = sizes.right ? sizes.right + gap : 0;
+    const t = sizes.top ? sizes.top + gap : 0, b = sizes.bottom ? sizes.bottom + gap : 0;
+    return { center: { x: area.x + l, y: area.y + t, w: Math.max(1, area.w - l - r), h: Math.max(1, area.h - t - b) },
+      left: { x: area.x, y: area.y + t, w: sizes.left, h: area.h - t - b },
+      right: { x: area.x + area.w - sizes.right, y: area.y + t, w: sizes.right, h: area.h - t - b },
+      top: { x: area.x, y: area.y, w: area.w, h: sizes.top },
+      bottom: { x: area.x, y: area.y + area.h - sizes.bottom, w: area.w, h: sizes.bottom } };
+  }
   function layout() {
     if (!root.getBoundingClientRect().width) return;
-    const area = bounds();
+    const full = bounds(), area = { ...full };
+    const barHeight = dock.hidden ? 0 : Math.min(56, full.h * .2);
+    area.h -= barHeight;
+    if (barEdge === 'top') area.y += barHeight;
+    zoneArea = area;
+    const groups = groupsFor(area), boxes = geometry(area, groups);
+    const maximized = [...panels.values()].find(panel => panel.maximized && panel.state === 'open');
+    const well = root.querySelector('.wd-well');
+    if (well) { place(well, boxes.center); well.style.visibility = maximized ? 'hidden' : ''; }
+    for (const edge of EDGES) {
+      const members = groups[edge], zone = zones.get(edge), rect = boxes[edge];
+      const active = [...members].sort((a, b) => b[1].order - a[1].order)[0]?.[1];
+      const tabHeight = members.length > 1 ? 44 : 0;
+      zone.tabs.hidden = !!maximized || members.length < 2;
+      zone.divider.hidden = !!maximized || !members.length;
+      const buttons = members.map(([, panel]) => panel.tab);
+      if (buttons.length !== zone.tabs.children.length || buttons.some((button, i) => zone.tabs.children[i] !== button)) zone.tabs.replaceChildren(...buttons);
+      place(zone.tabs, { ...rect, h: tabHeight });
+      const vertical = edge === 'left' || edge === 'right';
+      place(zone.divider, vertical
+        ? { x: edge === 'left' ? rect.x + rect.w : rect.x - 8, y: rect.y, w: 8, h: rect.h }
+        : { x: rect.x, y: edge === 'top' ? rect.y + rect.h : rect.y - 8, w: rect.w, h: 8 });
+      zone.extent = vertical ? rect.w : rect.h;
+      zone.divider.setAttribute('aria-valuenow', String(Math.round(zone.extent / (vertical ? area.w : area.h) * 100)));
+      for (const [, panel] of members) {
+        panel.el.hidden = maximized ? panel !== maximized : panel !== active;
+        panel.tab.setAttribute('aria-selected', String(panel === active));
+        panel.tab.tabIndex = panel === active ? 0 : -1;
+        panel.allocated = { ...rect, y: rect.y + tabHeight, h: Math.max(1, rect.h - tabHeight) };
+        place(panel.el, panel === maximized ? area : panel.allocated);
+      }
+    }
     for (const [name, panel] of panels) {
-      if (!panel.rect && panel.state === 'open') {
+      panel.el.dataset.zone = panel.zone;
+      panel.grip.hidden = panel.maximized || panel.zone !== 'float';
+      panel.position.value = panel.zone;
+      if (panel.state !== 'open') { panel.el.hidden = true; continue; }
+      if (!panel.rect) {
         const wide = ['bots', 'crew', 'lific'].includes(name);
         panel.rect = { x: area.x + area.w - (wide ? 880 : 400), y: area.y + 12,
           w: wide ? 880 : 400, h: Math.min(600, area.h - 24) };
       }
-      if (!panel.rect) continue;
+      if (panel.zone !== 'float') continue;
+      panel.el.hidden = !!maximized && panel !== maximized;
       panel.rect = fit(panel.rect, area);
       place(panel.el, panel.maximized ? area : panel.rect);
     }
-    const size = dock.getBoundingClientRect();
-    const w = Math.min(size.width || 240, area.w), height = Math.min(size.height || 44, area.h);
-    const pos = dockPosition || { x: area.x, y: area.y + area.h - height };
-    dockPosition = { x: clamp(pos.x, area.x, area.x + area.w - w), y: clamp(pos.y, area.y, area.y + area.h - height) };
+    for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(!panels.get(name)?.el.hidden));
+    // #735: a hidden dock has no size, and asking for it after the writes above lays the page out again.
+    const size = dock.hidden ? { width: 0 } : dock.getBoundingClientRect(), w = Math.min(size.width || 240, full.w);
+    dockPosition = { x: clamp(dockPosition?.x ?? full.x, full.x, full.x + full.w - w), y: barEdge === 'top' ? full.y : full.y + full.h - barHeight };
     dock.style.left = `${dockPosition.x}px`; dock.style.top = `${dockPosition.y}px`;
-    dock.style.maxWidth = `${area.w}px`;
+    dock.style.maxWidth = `${full.w}px`;
   }
   function sync() {
     for (const [name, panel] of panels) {
@@ -8571,7 +8769,7 @@ function createPanels(root) {
       panel.maxButton.setAttribute('aria-label', `${panel.maximized ? 'Restore' : 'Maximize'} ${panel.title}`);
       panel.maxButton.title = panel.maximized ? 'Restore size' : 'Maximize';
       panel.maxButton.textContent = panel.maximized ? '❐' : '□';
-      panel.grip.hidden = panel.maximized;
+      panel.grip.hidden = panel.maximized || panel.zone !== 'float';
       panel.dockEntry.hidden = panel.state !== 'minimized';
     }
     for (const [name, list] of toggles) for (const button of list)
@@ -8579,15 +8777,19 @@ function createPanels(root) {
     dock.hidden = ![...panels.values()].some(p => p.state === 'minimized');
     layout();
   }
-  function activate(name) {
+  // #735: `later` is for a caller that lays the windows out itself once it's done, so opening one
+  // makes the browser work out the page's layout once, not twice.
+  function activate(name, later = false) {
     if (current === name) return;
+    for (const [other, panel] of panels) if (other !== name) panel.maximized = false;
     current = name;
     // Keep stacking below contextual menus rather than accumulating unbounded z-index values.
     const sorted = [...panels.values()].sort((a, b) => a.order - b.order);
     sorted.forEach((panel, i) => { panel.order = i; });
     order = sorted.length;
     panels.get(name).order = ++order;
-    sync(); set.onChange();
+    if (!later) sync();
+    set.onChange();
   }
   function next() {
     return [...panels].filter(([, p]) => p.state === 'open').sort((a, b) => b[1].order - a[1].order)[0]?.[0] || null;
@@ -8597,20 +8799,26 @@ function createPanels(root) {
     else [...(toggles.get(name) || []), ...(toggles.get('more') || [])].find(b => b.offsetParent !== null)?.focus();
   }
   // Pointer capture keeps a drag alive beyond the handle; cancel never leaves listeners on window.
-  function movable(handle, read, write, enabled = () => true) {
+  function movable(handle, read, write, enabled = () => true, lifecycle = {}) {
     let drag = null;
     handle.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
+      if (drag || event.isPrimary === false || event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
       event.preventDefault(); event.stopPropagation();
       handle.focus({ preventScroll: true });
+      lifecycle.start?.(event);
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, rect: { ...read() } };
       handle.setPointerCapture(event.pointerId);
     });
     handle.addEventListener('pointermove', event => {
       if (!drag || event.pointerId !== drag.id) return;
-      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y);
+      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y, event);
     });
-    const end = () => { drag = null; };
+    const end = event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const original = drag.rect; drag = null;
+      if (event.type === 'pointerup') lifecycle.finish?.(event);
+      else lifecycle.cancel?.(original);
+    };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
     handle.addEventListener('lostpointercapture', end);
@@ -8619,14 +8827,33 @@ function createPanels(root) {
       const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
       if (!delta) return;
       event.preventDefault(); event.stopPropagation();
-      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16));
+      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16), event);
+      lifecycle.finish?.(event);
     });
   }
-  movable(dockHandle, () => dockPosition, (rect, x, y) => { dockPosition = { x: rect.x + x, y: rect.y + y }; layout(); });
+  movable(dockHandle, () => ({ ...dockPosition, edge: barEdge }), (rect, x, y, event) => {
+    const area = bounds();
+    barEdge = event.type === 'keydown' ? (y < 0 ? 'top' : y > 0 ? 'bottom' : barEdge)
+      : rect.y + y < area.y + area.h / 2 ? 'top' : 'bottom';
+    dockPosition = { x: rect.x + x, y: rect.y + y }; layout();
+  }, () => true, { cancel: rect => { barEdge = rect.edge; dockPosition = rect; layout(); } });
+  for (const edge of EDGES) {
+    const tabs = h('div', { class: 'window-zone-tabs', role: 'tablist', 'aria-label': `${edge} dock windows`, hidden: true });
+    const vertical = edge === 'left' || edge === 'right';
+    const divider = h('button', { type: 'button', class: `window-zone-divider ${vertical ? 'vertical' : 'horizontal'}`,
+      role: 'separator', 'aria-label': `Resize ${edge} dock`, 'aria-orientation': vertical ? 'vertical' : 'horizontal',
+      'aria-valuemin': '18', 'aria-valuemax': '65', hidden: true });
+    zones.set(edge, { tabs, divider }); root.append(tabs, divider);
+    movable(divider, () => ({ amount: zones.get(edge).extent / (vertical ? zoneArea.w : zoneArea.h), saved: ratios[edge] }), (rect, x, y) => {
+      const dimension = vertical ? zoneArea.w : zoneArea.h;
+      const delta = vertical ? x : y;
+      ratios[edge] = clamp(rect.amount + delta * (edge === 'right' || edge === 'bottom' ? -1 : 1) / dimension, .18, .65);
+      layout();
+    }, () => !!zoneArea, { finish: save, cancel: rect => { ratios[edge] = rect.saved; layout(); } });
+  }
   const observer = new ResizeObserver(layout);
   observer.observe(root);
-  const well = root.querySelector('.wd-well');
-  if (well) observer.observe(well);
+  observer.observe(workspace);
   observer.observe(dock);
   const set = {
     onChange: () => {},
@@ -8637,30 +8864,89 @@ function createPanels(root) {
       const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: closeThis });
       const body = h('div', { class: 'game-panel-body' }, ...content);
       const maxButton = h('button', { type: 'button', class: 'wd-tbtn', onclick: () => set.maximize(name) }, '□');
+      const position = h('select', { 'aria-label': `Position for ${title}`, onchange: event => {
+        set.dock(name, event.target.value); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus();
+      } }, ...[...EDGES.map(edge => [edge, `Dock ${edge}`]), ['float', 'Float over game']].map(([value, label]) => h('option', { value }, label)));
+      const controls = h('div', { class: 'window-layout-controls', hidden: true }, position,
+        ...[['right', 'Right sidebar'], ['split', 'Split sides'], ['bottom', 'Bottom panel']].map(([preset, label]) =>
+          h('button', { type: 'button', onclick: () => { set.preset(preset); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus(); } }, label)),
+        h('button', { type: 'button', onclick: () => { set.resetLayout(); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus(); } }, 'Reset layout'));
+      const layoutButton = h('button', { type: 'button', class: 'wd-tbtn', title: 'Layout', 'aria-label': `Layout ${title}`, 'aria-expanded': 'false',
+        onclick: () => { controls.hidden = !controls.hidden; layoutButton.setAttribute('aria-expanded', String(!controls.hidden)); if (!controls.hidden) position.focus(); } }, '▦');
       const head = h('header', { class: 'game-panel-head', tabindex: 0,
         'aria-label': `Move ${title} with arrow keys or drag`, title: 'Drag to move; double-click to maximize' },
         h('h2', {}, title),
-        h('div', { class: 'window-actions' },
+        h('div', { class: 'window-actions' }, layoutButton,
           h('button', { type: 'button', class: 'wd-tbtn', title: 'Minimize', 'aria-label': `Minimize ${title}`, onclick: () => set.minimize(name) }, '−'),
           maxButton,
           h('button', { type: 'button', class: 'wd-tbtn sheet-close', title: 'Close', 'aria-label': `Close ${title}`, onclick: closeThis }, '✕')));
       const grip = h('button', { type: 'button', class: 'window-resize', title: 'Drag to resize; arrow keys also resize', 'aria-label': `Resize ${title} with arrow keys or drag` }, '◢');
-      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, body, grip);
+      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, controls, body, grip);
       const restore = h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Restore ${title}`, onclick: () => set.open(name) }, title);
       const dockEntry = h('div', { class: 'window-dock-entry', hidden: true }, restore,
         h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Close minimized ${title}`, onclick: closeThis }, '✕'));
       dockItems.append(dockEntry);
-      const panel = { el, body, title, maxButton, grip, dockEntry, state: 'closed', rect: null, maximized: false, order: 0,
+      const tab = h('button', { type: 'button', class: 'wd-tbtn', role: 'tab', 'aria-controls': `panel-${name}`, onclick: () => set.open(name) }, title);
+      const preferred = saved.zones?.[name];
+      const panel = { el, body, title, maxButton, grip, dockEntry, tab, position, zone: [...EDGES, 'float'].includes(preferred) ? preferred : 'right', allocated: null, state: 'closed', rect: null, maximized: false, order: 0,
         onOpen: options?.onOpen, onClose: options?.onClose };
       panels.set(name, panel);
       el.addEventListener('pointerdown', () => activate(name));
       el.addEventListener('focusin', () => activate(name));
       head.addEventListener('dblclick', event => { if (!event.target.closest('button')) set.maximize(name); });
-      movable(head, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }, () => !panel.maximized);
-      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); });
+      const clearPreview = () => { preview.hidden = true; pendingSnap = null; };
+      movable(head, () => panel.rect, (rect, x, y, event) => {
+        activate(name);
+        if (event.type === 'keydown' && panel.zone !== 'float') {
+          set.dock(name, x < 0 ? 'left' : x > 0 ? 'right' : y < 0 ? 'top' : 'bottom'); return;
+        }
+        if (panel.zone === 'float') { panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }
+        if (event.type === 'keydown') return;
+        const host = root.getBoundingClientRect(), area = zoneArea;
+        const px = event.clientX - host.left, py = event.clientY - host.top;
+        const distances = [['left', Math.abs(px - area.x)], ['right', Math.abs(px - area.x - area.w)],
+          ['top', Math.abs(py - area.y)], ['bottom', Math.abs(py - area.y - area.h)]].sort((a, b) => a[1] - b[1]);
+        clearPreview();
+        if (distances[0][1] > 64 || px < area.x - 24 || px > area.x + area.w + 24 || py < area.y - 24 || py > area.y + area.h + 24) return;
+        pendingSnap = distances[0][0];
+        const edge = effective(pendingSnap, area), boxes = geometry(area, groupsFor(area, name, pendingSnap));
+        place(preview, boxes[edge]); preview.textContent = `Dock ${pendingSnap}`; preview.hidden = false;
+      }, () => !panel.maximized, { start: clearPreview, finish: () => {
+        const edge = pendingSnap; clearPreview(); if (edge) set.dock(name, edge);
+      }, cancel: rect => { clearPreview(); if (panel.zone === 'float') panel.rect = rect; layout(); } });
+      tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const members = [...tab.parentElement.children], index = members.indexOf(tab);
+        const target = event.key === 'Home' ? 0 : event.key === 'End' ? members.length - 1 : (index + (event.key === 'ArrowLeft' ? -1 : 1) + members.length) % members.length;
+        event.preventDefault(); event.stopPropagation(); members[target].click(); members[target].focus();
+      });
+      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); }, () => panel.zone === 'float', { cancel: rect => { panel.rect = rect; layout(); } });
       installSheetDrag(grabber, el, closeThis);
       root.append(el);
       return body;
+    },
+    dock(name, edge) {
+      const panel = panels.get(name);
+      if (!panel || ![...EDGES, 'float'].includes(edge)) return;
+      if (edge === 'float' && panel.zone !== 'float' && panel.allocated) panel.rect = { ...panel.allocated };
+      panel.zone = edge; panel.maximized = false;
+      activate(name); sync(); save();
+      announcement.textContent = `${panel.title}: ${edge === 'float' ? 'floating over game' : `docked ${edge}`}`;
+    },
+    float(name) { set.dock(name, 'float'); },
+    preset(preset) {
+      if (!['right', 'split', 'bottom'].includes(preset)) return;
+      let index = 0;
+      for (const panel of panels.values()) {
+        panel.zone = preset === 'split' ? (index++ % 2 ? 'left' : 'right') : preset;
+        panel.maximized = false;
+      }
+      sync(); save(); announcement.textContent = 'Window layout updated';
+    },
+    resetLayout() {
+      for (const edge of EDGES) ratios[edge] = .32;
+      barEdge = 'bottom'; dockPosition = null;
+      set.preset('right');
     },
     toggle(name, label, { short, className = '', aria } = {}) {
       const button = h('button', { type: 'button', class: `wd-tbtn ${className}`.trim(),
@@ -8675,7 +8961,7 @@ function createPanels(root) {
       if (!panel) return;
       const fresh = panel.state === 'closed';
       panel.state = 'open';
-      activate(name); sync();
+      activate(name, true); sync();
       if (fresh) panel.onOpen?.();
       panel.el.focus({ preventScroll: true });
     },
@@ -9001,9 +9287,21 @@ function needsYouPanel(panels) {
       h('div', { class: 'row' }, h('button', { type: 'button', onclick: done(() => acceptRules()) }, 'Read and accept')));
   }
 
+  // RE14, RE15: what an operator told them, or an operator's alert, until it's marked seen.
+  function noticeItem(notice) {
+    const error = formError();
+    return item(
+      h('p', {}, notice.text),
+      h('small', { class: 'muted' }, `Only you can see this · ${whenText(notice.at)}`),
+      h('div', { class: 'event-actions' },
+        h('button', { type: 'button', onclick: act(error, done(() => seeNotice(notice.id))) }, 'Got it')),
+      error);
+  }
+
   function render(list) {
     const parts = [
       ...(list.rules ? [rulesItem(list.rules)] : []),
+      ...(list.notices || []).map(noticeItem),
       ...(list.job_reports || []).map(jobReportItem),
       ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
@@ -9797,6 +10095,115 @@ function botSignupsPanel(panels) {
   };
 }
 
+// RE8 to RE12: the operators' review queue, for someone on the god list while god mode is on. Groups
+// come minor_safety first, then oldest first, each with its copy, why, and who reported it. Every
+// word from a report goes in as text. Closing, lifting and releasing each ask first.
+const REPORT_ACTIONS = [
+  ['dismiss', 'Dismiss: nothing was wrong'],
+  ['remove_content', 'Remove the message, card, note or pin'],
+  ['warn', 'Warn the person'],
+  ['suspend_bot', 'Suspend the bot'],
+  ['restrict_person', 'Restrict the person'],
+  ['ban_person', 'Ban the person'],
+];
+const HOLD_NAMES = { suspend_bot: 'Bot suspended', restrict_person: 'Restricted', ban_person: 'Banned' };
+function reportsPanel(panels) {
+  const body = panels.add('reports', 'Reports', { onOpen: () => load() });
+  const row = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: () => panels.open('reports') }, 'Reports');
+  let ticket = 0;
+  async function load() {
+    const asked = ++ticket;
+    body.replaceChildren(h('p', { class: 'muted' }, 'Reading the reports…'));
+    try {
+      const data = await api('/api/reports');
+      if (asked === ticket) render(data);
+    } catch (failure) {
+      if (asked !== ticket) return;
+      body.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message),
+        h('button', { type: 'button', onclick: load }, 'Try again'));
+    }
+  }
+  // The copy as the reporter saw it: one line a field.
+  const copyLines = (copy) => (copy && typeof copy === 'object' ? Object.entries(copy) : [])
+    .filter(([, value]) => value !== null && value !== '' && typeof value !== 'object')
+    .map(([key, value]) => h('li', {}, `${key}: ${value}`));
+  const reporterText = (report) => {
+    const who = report.reporter?.name || 'A deleted account';
+    return report.by_bot ? `${who}, through their bot ${report.bot?.name || ''}`.trim() : who;
+  };
+  function groupItem(group) {
+    const error = formError();
+    const select = h('select', { name: 'action', 'aria-label': 'Action' },
+      ...REPORT_ACTIONS.map(([value, label]) => h('option', { value }, label)));
+    const note = h('textarea', { name: 'note', maxLength: 1000, rows: 2, placeholder: 'A note for the log (optional)', 'aria-label': 'Note for the log' });
+    const close = act(error, async () => {
+      const label = REPORT_ACTIONS.find(([value]) => value === select.value)[1];
+      const many = group.reporters === 1 ? 'this report' : `all ${group.reporters} reports about it`;
+      if (!confirm(`${label}? This closes ${many}, and can't be undone.`)) return;
+      await api(`/api/reports/${encodeURIComponent(group.report_id)}/close`, { method: 'POST', body: { action: select.value, note: note.value } });
+      await load();
+    });
+    const about = [
+      group.person?.name ? `Person: ${group.person.name}` : null,
+      group.bot?.name ? `Bot: ${group.bot.name}` : null,
+      group.room?.name ? `Room: ${group.room.name}` : null,
+    ].filter(Boolean).join(' · ');
+    return h('article', { class: group.minor_safety ? 'check-in waiting report-urgent' : 'check-in' },
+      h('p', {}, group.minor_safety ? h('strong', {}, 'Minor safety. ') : null,
+        `${group.reasons.join(', ')} about a ${group.target_kind}, reported by ${group.reporters}`),
+      about ? h('p', { class: 'muted' }, about) : null,
+      h('ul', { class: 'report-copy' }, ...copyLines(group.copy)),
+      h('ul', {}, ...group.reports.map((report) => h('li', {},
+        `${reporterText(report)} (${report.reason}, ${whenText(report.created_at)})${report.details ? `: ${report.details}` : ''}`))),
+      field('Close with', select),
+      note,
+      h('div', { class: 'event-actions' }, h('button', { type: 'button', class: 'primary', onclick: close }, 'Close report')),
+      error);
+  }
+  function holdItem(hold) {
+    const error = formError();
+    const whose = hold.hold === 'suspend_bot' && hold.person?.name ? `, ${hold.person.name}'s bot` : '';
+    const lift = act(error, async () => {
+      if (!confirm(`Lift this for ${hold.name || 'them'}? They can act again straight away.`)) return;
+      await api('/api/reports/lift', { method: 'POST', body: { hold: hold.hold, id: hold.id } });
+      await load();
+    });
+    return h('li', {}, `${HOLD_NAMES[hold.hold] || hold.hold}: ${hold.name || 'someone who left'}${whose} (${hold.reason}, ${whenText(hold.at)}) `,
+      h('button', { type: 'button', class: 'link', onclick: lift }, 'Lift'), error);
+  }
+  function heldItem(held) {
+    const error = formError();
+    const release = act(error, async () => {
+      if (!confirm(`Release report ${held.report_id}? Its copy and details are dropped 90 days after it closed, which may be now.`)) return;
+      await api(`/api/reports/${encodeURIComponent(held.report_id)}/release`, { method: 'POST', body: {} });
+      await load();
+    });
+    return h('li', {}, `Report ${held.report_id}, closed ${whenText(held.closed_at)} `,
+      h('button', { type: 'button', class: 'link', onclick: release }, 'Release'), error);
+  }
+  function render(data) {
+    const groups = data.groups || [];
+    const holds = data.holds || [];
+    const held = data.held || [];
+    body.replaceChildren(
+      h('h3', {}, 'Open reports'),
+      ...(groups.length ? groups.map(groupItem) : [h('p', { class: 'muted' }, 'No open reports.')]),
+      h('h3', {}, 'Suspended, restricted and banned'),
+      holds.length ? h('ul', {}, ...holds.map(holdItem)) : h('p', { class: 'muted' }, 'Nobody.'),
+      held.length ? h('h3', {}, 'Minor-safety copies kept') : null,
+      held.length ? h('ul', {}, ...held.map(heldItem)) : null,
+      h('p', { class: 'muted fine' }, 'Only the people who run this site see this. Reporters only hear that their report was reviewed.'));
+  }
+  return {
+    row,
+    // Turning god mode off takes the panel away, even while it's open.
+    show(on) {
+      row.hidden = !on;
+      if (!on && panels.current === 'reports') panels.close(false);
+    },
+  };
+}
+
 // "/" is The Commons, and "/world/{id}" is any world.
 async function worldView(id, { home = false } = {}) {
   const path = encodeURIComponent(id);
@@ -9917,6 +10324,7 @@ async function worldView(id, { home = false } = {}) {
     }
     godButton?.setAttribute('aria-pressed', String(godOn));
     signups?.show(godOn);
+    reports?.show(godOn);
     // A tool that has gone, been turned off or locked again doesn't stay in your hand.
     // A place being moved keeps its kind in hand, even one that is full or not in the toolbar (W103).
     if (tool && !pendingMove && (!toolShown(tool) || placesFull.has(tool) || lockOf(tool))) choose(null);
@@ -9963,6 +10371,8 @@ async function worldView(id, { home = false } = {}) {
   const needs = me?.kind === 'person' ? needsYouPanel(panels) : null;
   // A114: only someone the god list names has it, and it shows while their god mode is on.
   const signups = typeof me?.god_mode === 'boolean' ? botSignupsPanel(panels) : null;
+  // RE8: the review queue, beside it and on the same terms.
+  const reports = typeof me?.god_mode === 'boolean' ? reportsPanel(panels) : null;
 
   let pendingResearchLab = null;
   let placingResearchLab = false;
@@ -9997,6 +10407,8 @@ async function worldView(id, { home = false } = {}) {
 
   let botsTab = 'yours';
   let myBots = [];
+  // S90: the floors of your own spaces that have no building on the map, as the space each belongs to.
+  let offMapFloors = new Map();
   // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
   // bot's connections, monitoring and usage (what Trust & bots showed), in one place.
   const botsBody = h('div', { class: 'my-bots-list' });
@@ -10004,6 +10416,11 @@ async function worldView(id, { home = false } = {}) {
   panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
   const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
+  // Where the map can center on a bot, or null when it has no tile.
+  function botTile(bot) {
+    const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
+    return bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
+  }
   function renderBots() {
     const tabs = h('div', { class: 'row-actions', role: 'tablist' },
       ...[['yours', 'My bots'], ['everyone', 'Everyone out']].map(([tab, label]) =>
@@ -10012,12 +10429,12 @@ async function worldView(id, { home = false } = {}) {
     if (botsTab === 'yours') {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
       rows = sorted.length ? sorted.map((bot) => {
-        const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
-        const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
+        const tile = botTile(bot);
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
         // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
         const offMap = !tile && Boolean(bot.room);
-        return yourBotRow(bot, { focusOn, offMap, reload: async () => { await loadBots(true); trust?.load(); } });
+        const spaceId = offMap ? offMapFloors.get(bot.room.id) : null;
+        return yourBotRow(bot, { focusOn, offMap, settingsPath: spaceId ? `/s/${encodeURIComponent(spaceId)}` : null, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
@@ -10060,6 +10477,11 @@ async function worldView(id, { home = false } = {}) {
     botsLoad = (async () => {
       const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
       myBots = bots;
+      // S90: /api/spaces lists only your own spaces, so this says nothing about anyone else's. It's
+      // asked only when some bot is in a room with no tile (S89), the one case that has a use for it.
+      const offMap = bots.some((bot) => bot.room && !botTile(bot));
+      const owned = offMap ? await api('/api/spaces').catch(() => null) : null;
+      offMapFloors = new Map(owned ? [owned.house, ...owned.third].filter((each) => !each.on_map).flatMap((each) => each.floors.map((floor) => [floor.id, each.space.id])) : []);
       // The count over a building turns gold for one of these.
       world.myBots = new Set(bots.map((bot) => bot.name));
       world.ownerName = me.name;
@@ -10188,6 +10610,7 @@ async function worldView(id, { home = false } = {}) {
     ...notificationActions(me),
     moreRow('about', 'About'),
     signups?.row,
+    reports?.row,
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),
     link('/worlds', 'Worlds', { class: 'wd-btn wide' }),
@@ -11116,6 +11539,7 @@ async function route() {
     }
     else view = await homeView();
     app.replaceChildren(view);
+    if (showBanned.shown) return;
     if (view instanceof Node) document.documentElement.dataset.clientReady = 'true';
     // W112: on the map, a city or a house, never over a room or a link someone was sent.
     const stripHere = !roomMatch && !joinMatch && !joinCityMatch && !joinHouseMatch && !planMatch && !setupMatch && !COMING_BACK[path];
@@ -11124,6 +11548,7 @@ async function route() {
     // These pages need someone signed in, so only they save the clock.
     if (roomMatch || cityMatch || houseMatch) saveClock();
   } catch (error) {
+    if (showBanned.shown || error.reason === 'banned') return;
     if (error.status === 401 || error.status === 404) {
       history.replaceState({}, '', '/');
       try {

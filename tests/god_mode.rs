@@ -410,6 +410,124 @@ async fn an_agent_makes_its_own_account_and_first_bot_through_the_door() {
     assert!(!server.state.db.is_agent_account(&person).unwrap());
 }
 
+// A116: the first bot counts, and deleting it cannot reset the rolling mint limit.
+#[tokio::test]
+async fn door_mints_count_deleted_bots_in_the_hour() {
+    let (server, _, _) = Server::start().await;
+    let made = door_from(&server, "203.0.113.5", json!({"your_name":"Swarm", "bot_name":"Lead"}))
+        .await
+        .ok();
+    let key = text(&made["owner_key"]);
+    let first = text(&made["bot"]["id"]);
+    let room = server.state.db.bot_place(&first, now()).unwrap().unwrap();
+    let path = format!("/api/hangouts/{room}/agents");
+    server.post(&key, &path, json!({"name":"Second"})).await.ok();
+    server.post(&key, &format!("/api/agents/{first}/delete"), json!({"name":"Lead"})).await.ok();
+    let response = server
+        .client
+        .post(format!("{}{path}", server.base))
+        .bearer_auth(&key)
+        .json(&json!({"name":"Third"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry: u64 = response.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((1..=3600).contains(&retry));
+}
+
+// A117: closing the door also stops existing door accounts minting, without stopping their bots.
+#[tokio::test]
+async fn door_mints_obey_the_switch() {
+    let (server, justin, _) = Server::start().await;
+    let made = door_from(&server, "203.0.113.5", json!({"your_name":"Swarm", "bot_name":"Lead"}))
+        .await
+        .ok();
+    let key = text(&made["owner_key"]);
+    let room = server.state.db.bot_place(&text(&made["bot"]["id"]), now()).unwrap().unwrap();
+    server.switch(&justin, true).await;
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({"open":false})).await.ok();
+    server
+        .post(&key, &format!("/api/hangouts/{room}/agents"), json!({"name":"Second"}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(server
+        .state
+        .db
+        .agent_by_token(&auth::hash_secret(&text(&made["bot_token"])), now())
+        .unwrap()
+        .is_some());
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({"open":true})).await.ok();
+    server.post(&key, &format!("/api/hangouts/{room}/agents"), json!({"name":"Second"})).await.ok();
+}
+
+// A116/A117: ordinary accounts keep their rules, and a bot/outsider can't use a swarm's authority.
+#[tokio::test]
+async fn door_mints_preserve_person_accounts_and_owner_authority() {
+    let (server, justin, _) = Server::start().await;
+    let made = door_from(&server, "203.0.113.5", json!({"your_name":"Swarm", "bot_name":"Lead"}))
+        .await
+        .ok();
+    let room = server.state.db.bot_place(&text(&made["bot"]["id"]), now()).unwrap().unwrap();
+    let path = format!("/api/hangouts/{room}/agents");
+    server
+        .post(&text(&made["bot_token"]), &path, json!({"name":"Sneak"}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(!server.post(&justin.key, &path, json!({"name":"Sneak"})).await.status.is_success());
+    server.switch(&justin, true).await;
+    server.put(&justin.key, "/api/god-mode/bot-signups", json!({"open":false})).await.ok();
+    let spaces = server.get(&justin.key, "/api/spaces").await.ok();
+    let room = text(&spaces["house"]["floors"][0]["id"]);
+    for n in 0..11 {
+        server
+            .post(
+                &justin.key,
+                &format!("/api/hangouts/{room}/agents"),
+                json!({"name":format!("Person's bot {n}")}),
+            )
+            .await
+            .ok();
+    }
+}
+
+// A116/A117: the ten-bot cap is a 409, a deletion frees a place and revokes its token,
+// and the account deletion cascade revokes all remaining credentials.
+#[tokio::test]
+async fn door_mints_stop_at_ten_and_deletion_revokes_access() {
+    let (server, _, _) = Server::start().await;
+    let made = door_from(&server, "203.0.113.5", json!({"your_name":"Swarm", "bot_name":"Lead"}))
+        .await
+        .ok();
+    let key = text(&made["owner_key"]);
+    let person = text(&made["person"]["id"]);
+    let first = text(&made["bot"]["id"]);
+    let room = server.state.db.bot_place(&first, now()).unwrap().unwrap();
+    let path = format!("/api/hangouts/{room}/agents");
+    // Nine bots from previous hours, plus the first bot just made by the door.
+    for n in 0..9 {
+        server
+            .state
+            .db
+            .create_agent(
+                &format!("old-{n}"),
+                &person,
+                "Old",
+                &format!("old-hash-{n}"),
+                now() - 7200,
+            )
+            .unwrap();
+    }
+    server.post(&key, &path, json!({"name":"Too many"})).await.refused(StatusCode::CONFLICT);
+    server.post(&key, &format!("/api/agents/{first}/delete"), json!({"name":"Lead"})).await.ok();
+    server.get(&text(&made["bot_token"]), "/api/me").await.refused(StatusCode::UNAUTHORIZED);
+    let replacement = server.post(&key, &path, json!({"name":"Replacement"})).await.ok();
+    server.state.db.delete_person(&person, "Swarm").unwrap();
+    server.get(&key, "/api/me").await.refused(StatusCode::UNAUTHORIZED);
+    server.get(&text(&replacement["token"]), "/api/me").await.refused(StatusCode::UNAUTHORIZED);
+    assert!(server.state.db.agents_of(&person, now()).unwrap().is_empty());
+}
+
 // A96: the door is shut while the switch is (A95), fails closed, and has limits: 3 an hour from one
 // address and 50 a day across the site. A refused try makes nothing.
 #[tokio::test]

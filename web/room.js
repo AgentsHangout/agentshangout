@@ -3,6 +3,9 @@
 
 const W = 480;
 const H = 252;
+// I152: how often a room draws, in milliseconds, while its window is in use and while it isn't.
+const FRAME_MS = 1000 / 30;
+const AWAY_FRAME_MS = 1000 / 8;
 const WALL = 66;
 const CELL = 6;
 const COLS = W / CELL;
@@ -4547,7 +4550,9 @@ export function itemPicture(item, w, h) {
   const canvas = document.createElement('canvas');
   canvas.width = (sign ? SIGN_WIDE : Math.max(wide, 24)) + 2;
   canvas.height = Math.max(rise, deep) + 2;
-  paint(canvas.getContext('2d'), canvas.width / 2, canvas.height - 1, 0, wide, deep);
+  // #735: fitPicture reads every pixel back, so the picture is kept in memory, not on the GPU, where
+  // each read waits for the GPU to finish and copy it back.
+  paint(canvas.getContext('2d', { willReadFrequently: true }), canvas.width / 2, canvas.height - 1, 0, wide, deep);
   return canvas;
 }
 
@@ -5916,18 +5921,35 @@ export class Room {
       r(g, bit.color, Math.round(bit.x), Math.round(bit.y), 2, 2);
     }
 
+    // I152: a tag is moved only when its bot or person has.
     for (const bot of bots) {
-      bot.tag.style.left = `${(bot.x / W) * 100}%`;
-      bot.tag.style.top = `${(bot.y / H) * 100}%`;
+      if (bot.tagX !== bot.x || bot.tagY !== bot.y) {
+        bot.tagX = bot.x;
+        bot.tagY = bot.y;
+        bot.tag.style.left = `${(bot.x / W) * 100}%`;
+        bot.tag.style.top = `${(bot.y / H) * 100}%`;
+      }
       const drop = (bot.seat || bot.spot) && !bot.path.length && (bot.seat || bot.spot).drop;
       bot.tag.classList.toggle('drop', Boolean(drop));
     }
     for (const person of people) {
-      person.tag.style.left = `${(person.x / W) * 100}%`;
-      person.tag.style.top = `${(person.y / H) * 100}%`;
+      if (person.tagX !== person.x || person.tagY !== person.y) {
+        person.tagX = person.x;
+        person.tagY = person.y;
+        person.tag.style.left = `${(person.x / W) * 100}%`;
+        person.tag.style.top = `${(person.y / H) * 100}%`;
+      }
       const raised = person.seat && !person.path.length && person.seat.drop;
       person.chip.style.bottom = raised ? TAG_RAISED : TAG_OVER_HEAD;
     }
-    requestAnimationFrame((t) => this.frame(t));
+    this.next();
+  }
+
+  // I152: the next frame waits out the room's frame gap, except while an item is being placed.
+  next() {
+    const gap = this.ghost ? 0 : document.hasFocus && !document.hasFocus() ? AWAY_FRAME_MS : FRAME_MS;
+    const wait = gap - (performance.now() - this.last);
+    if (wait > 4) setTimeout(() => this.running && requestAnimationFrame((t) => this.frame(t)), wait);
+    else requestAnimationFrame((t) => this.frame(t));
   }
 }

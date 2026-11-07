@@ -1735,6 +1735,40 @@ async fn project_proposals_are_bounded_expire_and_do_not_retry_failure() {
     assert_eq!(server.tool(&outsider, "inbox", json!({})).await["project_changes"], json!([]));
 }
 
+// L69: inbox leaves out proposals that expired, with only their count; open ones stay whole.
+#[tokio::test]
+async fn inbox_leaves_out_expired_project_changes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({"name":"Shop"})).await;
+    let project = text(&started["project_id"]);
+    let place: Vec<_> =
+        (0..10).map(|i| json!({"kind":"stool","x":20 + i * 2,"y":13,"facing":0})).collect();
+    let change = |id: &str, reason: &str| {
+        json!({"id":id,"project_id":project,"agent_id":town.rover_id,"reason":reason,
+            "action":"furnish_room","arguments":{"template":"workshop","place":place}})
+    };
+    let db = &server.state.db;
+    assert!(db.propose_project_change(&change("open", "Seats along the wall"), now()).unwrap());
+    // With none expired, there is no count at all.
+    let fresh = server.tool(&town.fern, "inbox", json!({})).await;
+    assert!(fresh.get("expired_changes").is_none(), "{fresh}");
+    let at = now() - DAY - 1;
+    assert!(db.propose_project_change(&change("old", "An offer nobody decided"), at).unwrap());
+    let inbox = server.tool(&town.fern, "inbox", json!({})).await;
+    let changes = inbox["project_changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{inbox}");
+    assert_eq!(changes[0]["id"], "open");
+    assert_eq!(changes[0]["status"], "pending");
+    assert_eq!(changes[0]["arguments"]["place"], json!(place));
+    assert_eq!(inbox["expired_changes"], 1, "{inbox}");
+    assert!(!inbox.to_string().contains("An offer nobody decided"));
+    // The author's own inbox reads the same way.
+    let own = server.tool(&town.rover, "inbox", json!({})).await;
+    assert_eq!(own["project_changes"].as_array().unwrap().len(), 1);
+    assert_eq!(own["expired_changes"], 1);
+}
+
 // L44
 #[tokio::test]
 async fn a_person_sees_where_each_of_their_bots_is_and_whats_next() {
@@ -1962,4 +1996,74 @@ async fn saying_yes_to_a_plan_on_a_public_floor_is_no_tie() {
     let names: Vec<String> =
         friends["friends"].as_array().unwrap().iter().map(|f| text(&f["name"])).collect();
     assert!(!names.contains(&"Bo".to_string()), "{names:?}");
+}
+
+// L12, S26
+#[tokio::test]
+async fn a_walk_in_on_a_public_project_floor_can_be_brought_in_but_a_private_one_hides_it() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+    let bring_in = json!({ "project_id": project, "bot": "Rover" });
+
+    // Private: Rover can't read it, and Fern can't find it.
+    server.refused(&town.rover, "read_room", json!({ "hangout_id": floor })).await;
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // Public: Rover walks in, Fern is standing there, and can bring it in.
+    server
+        .put(
+            &town.ann.key,
+            &format!("/api/floors/{floor}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    server
+        .post(
+            &town.bo.key,
+            &format!("/api/floors/{floor}/walk-in"),
+            json!({ "agent_id": town.rover_id }),
+        )
+        .await
+        .ok();
+    server.tool(&town.fern, "invite_to_project", bring_in).await;
+    server.tool(&town.rover, "read_room", json!({ "hangout_id": floor })).await;
+}
+
+// L12, S26
+#[tokio::test]
+async fn a_walk_in_ends_with_a_public_floor_and_a_bot_elsewhere_cant_bring_one_in() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    // Fern's home, read before she has a second room.
+    let home = text(&server.get(&town.fern, "/api/me").await.ok()["hangouts"][0]["id"]);
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+    let bring_in = json!({ "project_id": project, "bot": "Rover" });
+    let access = |value: &str| json!({ "access": value, "create_code": CODE });
+    let walk_in = format!("/api/floors/{floor}/walk-in");
+    let rover = json!({ "agent_id": town.rover_id });
+
+    // (a) Rover walks in, then the floor goes private, which ends the walk-in: refused.
+    server.put(&town.ann.key, &format!("/api/floors/{floor}"), access("public")).await.ok();
+    server.post(&town.bo.key, &walk_in, rover.clone()).await.ok();
+    server
+        .put(&town.ann.key, &format!("/api/floors/{floor}"), json!({ "access": "private" }))
+        .await
+        .ok();
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // (b) Public again with Rover on it, but Fern is standing somewhere else: refused.
+    server.put(&town.ann.key, &format!("/api/floors/{floor}"), access("public")).await.ok();
+    server.post(&town.bo.key, &walk_in, rover).await.ok();
+    server.tool(&town.fern, "go_to_room", json!({ "hangout_id": home })).await;
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // Back on the floor with it, the same call works.
+    server.tool(&town.fern, "go_to_room", json!({ "hangout_id": floor })).await;
+    server.tool(&town.fern, "invite_to_project", bring_in).await;
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::camera::{CameraSubject, StoredPhoto};
+use crate::camera::{CameraSubject, PhotoStore, StoredPhoto, PHOTOS_ON_SITE, PHOTOS_PER_OWNER};
 
 /// CP2: a bot or person still in a photo. No row means photos are on with an empty stamp, and a
 /// bot is only itself while the same owner has it.
@@ -95,13 +95,16 @@ impl Db {
         tx.commit()
     }
 
+    /// CP15, CP16: stores a photo, or says why not. An owner already keeping PHOTOS_PER_OWNER loses
+    /// their oldest in the same transaction, so captures storing at once can't keep more or take
+    /// down the same one twice. A full site refuses rather than taking down anyone's photo.
     pub fn store_room_photo(
         &self,
         photo: &StoredPhoto,
         owner: &str,
         subjects: &[CameraSubject],
         now: i64,
-    ) -> rusqlite::Result<bool> {
+    ) -> rusqlite::Result<PhotoStore> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM room_photos WHERE expires_at<=?", [now])?;
@@ -117,7 +120,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if !room_open || epoch != photo.room_epoch || subjects.is_empty() {
-            return Ok(false);
+            return Ok(PhotoStore::AccessChanged);
         }
         for subject in subjects {
             let still: bool = tx.query_row(
@@ -126,7 +129,7 @@ impl Db {
                 |r| r.get(0),
             )?;
             if !still {
-                return Ok(false);
+                return Ok(PhotoStore::AccessChanged);
             }
         }
         let total: i64 = tx.query_row("SELECT COUNT(*) FROM room_photos", [], |r| r.get(0))?;
@@ -134,8 +137,23 @@ impl Db {
             tx.query_row("SELECT COUNT(*) FROM room_photos WHERE owner_id=?", [owner], |r| {
                 r.get(0)
             })?;
-        if total >= 200 || own >= 10 {
-            return Ok(false);
+        let mut rotated = None;
+        if own >= PHOTOS_PER_OWNER {
+            // CP16: the oldest go, so the owner keeps PHOTOS_PER_OWNER with the new one.
+            let oldest: Vec<String> = tx
+                .prepare(
+                    "SELECT id FROM room_photos WHERE owner_id=? ORDER BY expires_at,created_at,id LIMIT ?",
+                )?
+                .query_map(params![owner, own - PHOTOS_PER_OWNER + 1], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for id in &oldest {
+                tx.execute("DELETE FROM room_photos WHERE id=?", [id])?;
+            }
+            rotated = oldest.into_iter().next();
+        } else if total >= PHOTOS_ON_SITE {
+            let next_frees_at: i64 =
+                tx.query_row("SELECT MIN(expires_at) FROM room_photos", [], |r| r.get(0))?;
+            return Ok(PhotoStore::SiteFull { next_frees_at });
         }
         tx.execute("INSERT INTO room_photos(id,hangout_id,owner_id,created_at,expires_at,png,metadata,room_epoch) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",params![photo.id,photo.room_id,owner,photo.created_at,photo.expires_at,photo.png,photo.metadata.to_string(),photo.room_epoch])?;
         for subject in subjects {
@@ -147,7 +165,16 @@ impl Db {
             }
         }
         tx.commit()?;
-        Ok(true)
+        Ok(PhotoStore::Stored { rotated })
+    }
+
+    /// CP17: takes down one of this owner's unexpired photos, with its bytes and subjects. False
+    /// when there's no such photo of theirs.
+    pub fn delete_room_photo(&self, id: &str, owner: &str, now: i64) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "DELETE FROM room_photos WHERE id=? AND owner_id=? AND expires_at>?",
+            params![id, owner, now],
+        )? > 0)
     }
 
     pub fn room_photo(&self, id: &str, now: i64) -> rusqlite::Result<Option<StoredPhoto>> {
@@ -228,7 +255,7 @@ mod tests {
         assert!(db.camera_allowed("person", "a").unwrap());
         assert!(db.camera_allowed("room", "r").unwrap());
         let both = [subject(&db, "bot", "bot"), subject(&db, "person", "a")];
-        assert!(db.store_room_photo(&photo("p"), "a", &both, 100).unwrap());
+        assert!(db.store_room_photo(&photo("p"), "a", &both, 100).unwrap().is_stored());
         assert!(db.room_photo("p", 100).unwrap().is_some());
     }
     #[test]
@@ -239,7 +266,8 @@ mod tests {
             let old = subject(&db, kind, id);
             assert!(db
                 .store_room_photo(&photo("old"), "a", std::slice::from_ref(&old), 100)
-                .unwrap());
+                .unwrap()
+                .is_stored());
             db.set_camera_allowed(kind, id, false).unwrap();
             assert!(db.camera_subject(kind, id).unwrap().is_none());
             assert!(db.room_photo("old", 100).unwrap().is_none());
@@ -249,41 +277,54 @@ mod tests {
             assert!(db.room_photo("old", 100).unwrap().is_none());
             assert!(!db
                 .store_room_photo(&photo("late-old-render"), "a", std::slice::from_ref(&old), 100)
-                .unwrap());
+                .unwrap()
+                .is_stored());
             assert!(db
                 .store_room_photo(&photo("new"), "a", std::slice::from_ref(&new), 100)
-                .unwrap());
+                .unwrap()
+                .is_stored());
         }
     }
     #[test]
     fn a_room_with_photos_off_stores_and_serves_none_and_on_again_brings_none_back() {
         let db = fixture();
         let bot = subject(&db, "bot", "bot");
-        assert!(db.store_room_photo(&photo("old"), "a", std::slice::from_ref(&bot), 100).unwrap());
+        assert!(db
+            .store_room_photo(&photo("old"), "a", std::slice::from_ref(&bot), 100)
+            .unwrap()
+            .is_stored());
         let before = db.camera_room_epoch("r").unwrap();
         db.set_camera_allowed("room", "r", false).unwrap();
         assert!(db.room_photo("old", 100).unwrap().is_none());
         let mut late = photo("while-off");
         late.room_epoch = db.camera_room_epoch("r").unwrap();
-        assert!(!db.store_room_photo(&late, "a", std::slice::from_ref(&bot), 100).unwrap());
+        assert!(!db
+            .store_room_photo(&late, "a", std::slice::from_ref(&bot), 100)
+            .unwrap()
+            .is_stored());
         db.set_camera_allowed("room", "r", true).unwrap();
         assert!(db.room_photo("old", 100).unwrap().is_none());
         assert!(!db
             .store_room_photo(&photo("started-before"), "a", std::slice::from_ref(&bot), 100)
-            .unwrap());
+            .unwrap()
+            .is_stored());
         assert_ne!(before, db.camera_room_epoch("r").unwrap());
     }
     #[test]
     fn a_floor_closing_still_invalidates_photos_and_renders() {
         let db = fixture();
         let bot = subject(&db, "bot", "bot");
-        assert!(db.store_room_photo(&photo("new"), "a", std::slice::from_ref(&bot), 100).unwrap());
+        assert!(db
+            .store_room_photo(&photo("new"), "a", std::slice::from_ref(&bot), 100)
+            .unwrap()
+            .is_stored());
         db.conn().execute("UPDATE floors SET access='private' WHERE hangout_id='r'", []).unwrap();
         db.conn().execute("UPDATE floors SET access='public' WHERE hangout_id='r'", []).unwrap();
         assert!(db.room_photo("new", 100).unwrap().is_none());
         assert!(!db
             .store_room_photo(&photo("late-public-render"), "a", std::slice::from_ref(&bot), 100)
-            .unwrap());
+            .unwrap()
+            .is_stored());
     }
     #[test]
     fn photos_from_before_the_change_are_not_served_and_new_ones_fail_closed_on_an_older_binary() {
@@ -297,7 +338,10 @@ mod tests {
             .unwrap();
         assert!(db.room_photo("before", 100).unwrap().is_none());
         let bot = subject(&db, "bot", "bot");
-        assert!(db.store_room_photo(&photo("new"), "a", std::slice::from_ref(&bot), 100).unwrap());
+        assert!(db
+            .store_room_photo(&photo("new"), "a", std::slice::from_ref(&bot), 100)
+            .unwrap()
+            .is_stored());
         // What v0.1.231 asks before it serves a photo.
         let served: bool = db.conn().query_row(
             "SELECT NOT EXISTS(SELECT 1 FROM room_photo_subjects s LEFT JOIN agents a ON a.id=s.agent_id AND a.owner_id=s.owner_id LEFT JOIN camera_consents c ON c.agent_id=a.id AND c.owner_id=s.owner_id AND c.grant_id=s.grant_id WHERE s.photo_id='new' AND (a.id IS NULL OR c.agent_id IS NULL))
@@ -313,7 +357,10 @@ mod tests {
         let mut live = photo("live");
         live.expires_at += 60;
         for p in [&expired, &live] {
-            assert!(db.store_room_photo(p, "a", std::slice::from_ref(&grant), 100).unwrap());
+            assert!(db
+                .store_room_photo(p, "a", std::slice::from_ref(&grant), 100)
+                .unwrap()
+                .is_stored());
         }
         assert_eq!(db.purge_expired_room_photos(86499).unwrap(), 0);
         assert_eq!(db.purge_expired_room_photos(86500).unwrap(), 1);
@@ -331,7 +378,10 @@ mod tests {
     fn ownership_transfer_invalidates_old_photos_even_if_transferred_back() {
         let db = fixture();
         let old = subject(&db, "bot", "bot");
-        assert!(db.store_room_photo(&photo("old"), "a", std::slice::from_ref(&old), 100).unwrap());
+        assert!(db
+            .store_room_photo(&photo("old"), "a", std::slice::from_ref(&old), 100)
+            .unwrap()
+            .is_stored());
         db.conn().execute("UPDATE agents SET owner_id='b' WHERE id='bot'", []).unwrap();
         assert!(db.room_photo("old", 100).unwrap().is_none());
         db.set_camera_allowed("bot", "bot", false).unwrap();
@@ -341,6 +391,90 @@ mod tests {
         assert!(db.room_photo("old", 100).unwrap().is_none());
         assert!(!db
             .store_room_photo(&photo("late"), "a", std::slice::from_ref(&old), 100)
-            .unwrap());
+            .unwrap()
+            .is_stored());
+    }
+    fn stored_photo(db: &Db, id: &str, owner: &str, expires_at: i64) -> PhotoStore {
+        let mut p = photo(id);
+        p.expires_at = expires_at;
+        db.store_room_photo(&p, owner, &[subject(db, "bot", "bot")], 100).unwrap()
+    }
+    fn count(db: &Db, sql: &str) -> i64 {
+        db.conn().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+    #[test]
+    fn a_change_during_capture_is_access_changed() {
+        let db = fixture();
+        let bot = subject(&db, "bot", "bot");
+        db.set_camera_allowed("bot", "bot", false).unwrap();
+        let refused = db.store_room_photo(&photo("p"), "a", std::slice::from_ref(&bot), 100);
+        assert_eq!(refused.unwrap(), PhotoStore::AccessChanged);
+    }
+    #[test]
+    fn the_eleventh_photo_takes_down_the_oldest_with_its_bytes_and_subjects() {
+        let db = fixture();
+        for n in 0..10 {
+            let stored = stored_photo(&db, &format!("p{n}"), "a", 90000 - n);
+            assert_eq!(stored, PhotoStore::Stored { rotated: None });
+        }
+        assert_eq!(
+            stored_photo(&db, "p10", "a", 95000),
+            PhotoStore::Stored { rotated: Some("p9".into()) }
+        );
+        assert!(db.room_photo("p9", 100).unwrap().is_none());
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photos WHERE owner_id='a'"), 10);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photo_figures WHERE photo_id='p9'"), 0);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photo_subjects WHERE photo_id='p9'"), 0);
+        // Someone else's photos are never the ones that go.
+        assert!(stored_photo(&db, "b0", "b", 80000).is_stored());
+        assert_eq!(
+            stored_photo(&db, "p11", "a", 95000),
+            PhotoStore::Stored { rotated: Some("p8".into()) }
+        );
+        assert!(db.room_photo("b0", 100).unwrap().is_some());
+    }
+    #[test]
+    fn a_full_site_refuses_with_when_the_soonest_expires_but_a_full_owner_still_rotates() {
+        let db = fixture();
+        let conn = db.conn();
+        for p in 0..19 {
+            conn.execute("INSERT INTO people VALUES(?1,?1,'#000000',?1,?1,1)", [format!("o{p}")])
+                .unwrap();
+        }
+        drop(conn);
+        for p in 0..19 {
+            for n in 0..10 {
+                let expires = 90000 + p * 100 + n;
+                assert!(
+                    stored_photo(&db, &format!("o{p}-{n}"), &format!("o{p}"), expires).is_stored()
+                );
+            }
+        }
+        for n in 0..9 {
+            assert!(stored_photo(&db, &format!("b{n}"), "b", 70000 + n).is_stored());
+        }
+        assert!(stored_photo(&db, "a0", "a", 89000).is_stored());
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photos"), 200);
+        assert_eq!(
+            stored_photo(&db, "b9", "b", 99000),
+            PhotoStore::SiteFull { next_frees_at: 70000 }
+        );
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photos"), 200);
+        // o0 keeps ten, so its next one takes the place of its own oldest and the site stays at 200.
+        assert_eq!(
+            stored_photo(&db, "o0-new", "o0", 99000),
+            PhotoStore::Stored { rotated: Some("o0-0".into()) }
+        );
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photos"), 200);
+    }
+    #[test]
+    fn only_the_owner_deletes_a_photo_and_only_before_it_expires() {
+        let db = fixture();
+        assert!(stored_photo(&db, "p", "a", 1000).is_stored());
+        assert!(!db.delete_room_photo("p", "b", 100).unwrap());
+        assert!(!db.delete_room_photo("p", "a", 1000).unwrap());
+        assert!(db.delete_room_photo("p", "a", 999).unwrap());
+        assert!(!db.delete_room_photo("p", "a", 999).unwrap());
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM room_photo_figures"), 0);
     }
 }

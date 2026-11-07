@@ -1,4 +1,4 @@
-//! CP1–CP6: composed 2D room photos from the existing trusted room art.
+//! CP1–CP17: composed 2D room photos from the existing trusted room art.
 mod render;
 
 use crate::{
@@ -24,6 +24,36 @@ pub struct CameraSubject {
     pub subject_id: String,
     pub owner_id: String,
     pub stamp: String,
+}
+
+/// CP16: how many unexpired photos one person keeps, across all their bots.
+pub const PHOTOS_PER_OWNER: i64 = 10;
+/// CP16: how many unexpired photos the whole site keeps.
+pub const PHOTOS_ON_SITE: i64 = 200;
+
+/// CP15, CP16: what storing a photo did.
+#[derive(Debug, PartialEq)]
+pub enum PhotoStore {
+    /// Stored, and `rotated` is the owner's oldest photo when it went to make room.
+    Stored { rotated: Option<String> },
+    /// Someone's photo setting, the room's, or the floor changed during capture.
+    AccessChanged,
+    /// The site keeps PHOTOS_ON_SITE; the soonest of them expires at `next_frees_at`.
+    SiteFull { next_frees_at: i64 },
+}
+
+impl PhotoStore {
+    pub fn is_stored(&self) -> bool {
+        matches!(self, Self::Stored { .. })
+    }
+}
+
+/// CP15: refused because a photo setting changed. Retrying won't help until it changes back.
+fn access_changed(why: &str) -> ApiError {
+    ApiError::forbidden(format!(
+        "photo_access_changed: {why}; don't retry until that setting changes"
+    ))
+    .with_details(json!({"code":"photo_access_changed"}))
 }
 
 pub struct StoredPhoto {
@@ -55,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/camera/me", get(my_permission).put(set_my_permission))
         .route("/api/floors/{id}/camera", get(room_permission).put(set_room_permission))
         .route("/photos/{id}", get(image))
+        .route("/api/photos/{id}", axum::routing::delete(delete))
 }
 
 async fn permission(
@@ -137,6 +168,22 @@ async fn image(State(state): State<AppState>, Path(id): Path<String>) -> ApiResu
     )
         .into_response())
 }
+/// CP17: the photo's owner, or one of the owner's bots, takes it down early. Anyone else is told
+/// it isn't there, as for a photo that never was.
+pub fn delete_photo(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Value> {
+    ops::no_house_bot(caller)?;
+    if !state.db.delete_room_photo(id, &caller.person_id, now())? {
+        return Err(ApiError::not_found());
+    }
+    Ok(json!({ "deleted": id }))
+}
+async fn delete(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(delete_photo(&state, &caller, &id)?))
+}
 fn eligibility(state: &AppState, caller: &Caller, room: &str) -> ApiResult<String> {
     ops::no_house_bot(caller)?;
     let bot =
@@ -149,14 +196,14 @@ fn eligibility(state: &AppState, caller: &Caller, room: &str) -> ApiResult<Strin
         return Err(ApiError::forbidden("camera photos require a public floor"));
     }
     if !state.db.camera_allowed("room", room)? {
-        return Err(ApiError::forbidden("photos are turned off in this room"));
+        return Err(access_changed("photos are turned off in this room"));
     }
     if state.db.bot_place(&bot, now())?.as_deref() != Some(room) {
         return Err(ApiError::forbidden("the camera bot must be present in this room"));
     }
     if !state.db.camera_allowed("bot", &bot)? {
-        return Err(ApiError::forbidden(
-            "your owner turned Photos off for this bot; only they can turn it back on",
+        return Err(access_changed(
+            "your owner turned Photos off for this bot, and only they can turn it back on",
         ));
     }
     Ok(bot)
@@ -235,7 +282,7 @@ pub async fn capture(
             .db
             .camera_subject(kind, id)?
             .filter(|s| &s.owner_id == owner)
-            .ok_or_else(|| ApiError::forbidden("photo settings changed"))?;
+            .ok_or_else(|| access_changed("someone's photo setting changed"))?;
         subjects.push(subject);
     }
     let looks = crate::looks::worn(state, Wearer::Bot, &ids)?;
@@ -324,17 +371,35 @@ pub async fn capture(
         png: rendered.png,
         metadata,
     };
-    if !state.db.store_room_photo(&photo, &caller.person_id, &subjects, at)? {
-        return Err(ApiError::too_many_requests(
-            "photo access changed or storage quota is full; try after reviewing consent or expiry",
-        ));
-    }
+    let rotated = match state.db.store_room_photo(&photo, &caller.person_id, &subjects, at)? {
+        PhotoStore::Stored { rotated } => rotated,
+        PhotoStore::AccessChanged => {
+            return Err(access_changed(
+                "a photo setting, the room's photos or the floor changed during capture",
+            ))
+        }
+        PhotoStore::SiteFull { next_frees_at } => {
+            let next = ops::iso(next_frees_at);
+            return Err(ApiError::too_many_requests(format!(
+                "photo_quota_full: the site keeps {PHOTOS_ON_SITE} photos at once; the next frees at {next}"
+            ))
+            .retry_after(u64::try_from(next_frees_at - at).unwrap_or(0).max(1))
+            .with_details(
+                json!({"code":"photo_quota_full","kept":PHOTOS_ON_SITE,"next_frees_at":next}),
+            ));
+        }
+    };
     let photo = state
         .db
         .room_photo(&id, now())?
-        .ok_or_else(|| ApiError::forbidden("photo access changed during capture"))?;
+        .ok_or_else(|| access_changed("a photo setting changed during capture"))?;
     ops::publish(state, &input.hangout_id, "camera", json!({"bot_id":camera_bot}).to_string());
-    Ok((photo.metadata, photo.png))
+    let mut metadata = photo.metadata;
+    // CP16: the owner's oldest photo, taken down to keep ten.
+    if let Some(old) = rotated {
+        metadata["rotated"] = json!(old);
+    }
+    Ok((metadata, photo.png))
 }
 
 /// CP5: run at startup and every minute, even when no one takes another photo.

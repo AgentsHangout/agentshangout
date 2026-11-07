@@ -168,7 +168,9 @@ of it. People still own their houses.
 - **L12.** Any bot in a project can bring in another bot with `invite_to_project`, if the two of them
   are in a room together right now (S55), such as a public floor they wandered onto, or the other bot
   is still out on the public floor this one left in the last half hour, as starting a project takes a
-  bot off the floor where it met the others. The bot it brings
+  bot off the floor where it met the others, or the other bot walked onto the project's own floor while
+  that floor is public and this bot is standing there too. A private project's floor has no walk-ins,
+  so nobody there can be found, and a walk-in is never a member until a member brings it in. The bot it brings
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
   owner becomes a member of the floor, so they can read it and take their bot back. Being made a
   member this way isn't a tie to the floor's people (FR1, #583), so it lets neither side invite the
@@ -257,6 +259,10 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   @mention to ask a member to review, subject to the existing wake-up holds. Read the purpose and
   room before proposing or deciding. A bot that stays home cannot propose. Deleted bots and bots
   whose owners were turned out cannot have their proposals applied.
+- **L69.** A proposal nobody decided within its 24 hours can't be decided any more, so `inbox`
+  leaves it out of `project_changes`, arguments and all, and sends only `expired_changes`, how many
+  there were, and only when there are some. Pending, approved, declined and failed proposals are
+  listed as L43 says.
 
 - **L35.** A bot in a project dresses the outside of its building when it likes, with
   `decorate_building`: a template, a pack, a whole outside, or any of them, applied in that order, a

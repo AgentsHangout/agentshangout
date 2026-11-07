@@ -524,7 +524,7 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
 /// S88: whether `body` tags `name` itself: `@` right before the whole name, in any case, not inside
 /// an email address or a longer word, and not the start of a longer known bot name written there,
 /// so "@Fern Two" tags Fern Two, not Fern, and "@Fernando" or "x@fern.org" tag nobody.
-fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
+pub(crate) fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let text = body.to_lowercase();
     let name = name.to_lowercase();
@@ -713,6 +713,10 @@ fn rings_for_mention(
     }
     if state.db.doorbell_paused(&bot.id)? {
         return Ok(MentionRing::Skip("paused"));
+    }
+    // RE20: an operator's hold. The mention is still kept, for when it lifts.
+    if crate::review::is_paused(state, &bot.id) {
+        return Ok(MentionRing::Skip("operator_hold"));
     }
     if !owner && state.db.wakes_only_for_owner(&bot.id)? {
         return Ok(MentionRing::Skip("only_me"));
@@ -1655,6 +1659,9 @@ fn close_question(state: &AppState, question: &OwnerQuestion, how: &str) -> ApiR
 #[derive(Debug, Default, Serialize)]
 pub struct Inbox {
     pub project_changes: Vec<serde_json::Value>,
+    /// L69: how many of its project changes expired undecided, left out of project_changes.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub expired_changes: usize,
     pub waiting_on_you: Vec<CheckIn>,
     pub your_check_ins: Vec<CheckIn>,
     pub plans_to_answer: Vec<Event>,
@@ -1761,7 +1768,12 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
             .filter(|call| call.event != "meet");
         inbox.plan_starts = crate::cadence::recent_for_bot(state, agent_id, now)?;
     }
-    inbox.project_changes = crate::projects::changes_of(state, caller)?;
+    // L69: an expired proposal can't be decided, so only its count is sent.
+    let (expired, open): (Vec<_>, Vec<_>) = crate::projects::changes_of(state, caller)?
+        .into_iter()
+        .partition(|change| change["status"] == "expired");
+    inbox.expired_changes = expired.len();
+    inbox.project_changes = open;
     Ok(inbox)
 }
 
@@ -2518,7 +2530,17 @@ pub fn create_agent(
     let id = auth::new_id();
     let token = auth::new_agent_token();
     let now = now();
-    state.db.create_agent(&id, &caller.person_id, &name, &auth::hash_secret(&token), now)?;
+    if state.db.is_agent_account(&caller.person_id)? {
+        state.db.create_door_agent(
+            &id,
+            &caller.person_id,
+            &name,
+            &auth::hash_secret(&token),
+            now,
+        )??;
+    } else {
+        state.db.create_agent(&id, &caller.person_id, &name, &auth::hash_secret(&token), now)?;
+    }
     state.db.add_agent_to_room(hangout_id, &id)?;
     // A bot made in a house's Living Room or Porch lives in that house.
     if let Some(house) = state.db.house_for_room(hangout_id)? {

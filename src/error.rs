@@ -19,6 +19,8 @@ pub struct ApiError {
     pub refused_move: bool,
     /// A short word saying why, for a caller to act on rather than read (A109: `rules_not_accepted`).
     pub reason: Option<&'static str>,
+    /// Fields a caller can branch on, such as a `code`, sent beside `error` (CP15).
+    pub details: Option<serde_json::Value>,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -31,6 +33,7 @@ impl ApiError {
             retry_after: None,
             refused_move: false,
             reason: None,
+            details: None,
         }
     }
 
@@ -41,6 +44,12 @@ impl ApiError {
 
     pub fn with_reason(mut self, reason: &'static str) -> Self {
         self.reason = Some(reason);
+        self
+    }
+
+    /// Adds fields beside `error`. `details` is an object.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
         self
     }
 
@@ -88,13 +97,36 @@ impl From<rusqlite::Error> for ApiError {
     }
 }
 
+impl From<crate::db::DoorMintRefusal> for ApiError {
+    fn from(refused: crate::db::DoorMintRefusal) -> Self {
+        use crate::db::DoorMintRefusal;
+        match refused {
+            DoorMintRefusal::Closed => {
+                Self::forbidden("bot sign-ups are closed on this site right now")
+            }
+            DoorMintRefusal::Full => Self::conflict(
+                "this agent-run account already has 10 bots; delete one before making another",
+            ),
+            DoorMintRefusal::Hourly(seconds) => Self::too_many_requests(
+                "this agent-run account has made 2 bots this hour; wait before making another",
+            )
+            .retry_after(seconds),
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let wait = self.wait();
-        let body = match self.reason {
+        let mut body = match self.reason {
             Some(reason) => json!({ "error": self.message, "reason": reason }),
             None => json!({ "error": self.message }),
         };
+        if let Some(serde_json::Value::Object(details)) = self.details {
+            for (key, value) in details {
+                body.as_object_mut().unwrap().entry(key).or_insert(value);
+            }
+        }
         let mut response = (self.status, Json(body)).into_response();
         if let Some(secs) = wait {
             response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));

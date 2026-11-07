@@ -28,6 +28,7 @@ pub mod elections;
 pub mod emotes;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod friends;
 pub mod games;
 pub mod github_display;
@@ -51,6 +52,7 @@ pub mod ops;
 pub mod outside;
 pub mod passkey;
 pub mod pins;
+pub mod pr_credits;
 pub mod projects;
 pub mod public_mcp;
 pub mod publishing;
@@ -58,8 +60,10 @@ pub mod pulse;
 pub mod push;
 pub mod recycling;
 pub mod referrals;
+pub mod reports;
 pub mod research_labs;
 pub mod research_work;
+pub mod review;
 pub mod room_mentions;
 pub mod routines;
 pub mod rules;
@@ -170,6 +174,8 @@ pub struct Shared {
     pub lific: lific::Shared,
     /// KA4, KA9, KA11, KA16: serialize keyless checks and writes in this single-process server.
     pub(crate) keyless_actions: Mutex<()>,
+    /// RE19: when each person last downloaded their data.
+    pub(crate) exports: export::Limits,
     write_windows: Mutex<HashMap<String, Window>>,
     write_clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -278,6 +284,7 @@ impl AppState {
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
             lific: lific::Shared::default(),
             keyless_actions: Mutex::new(()),
+            exports: export::Limits::default(),
             write_windows: Mutex::new(HashMap::new()),
             write_clock: Arc::new(clock),
         }))
@@ -333,6 +340,8 @@ pub fn app(state: AppState) -> Router {
         .fallback(web::not_found)
         // A109: every /api write route takes the community rules accepted, but the ungated ones.
         .layer(middleware::from_fn_with_state(state.clone(), rules::gate_writes))
+        // RE11: and every /api request meets the operators' holds, beside the rules gate.
+        .layer(middleware::from_fn_with_state(state.clone(), review::gate))
         // Inside everything but the rules gate, so it sees what was answered and the route (U1).
         .layer(middleware::from_fn_with_state(state.clone(), usage::observe))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

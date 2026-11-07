@@ -285,6 +285,25 @@ mod tests {
         assert!(justin.1 >= 182.0, "in front of the table, not on it: {justin:?}");
     }
 
+    // CP11: a bot sitting with its back to the camera, on the table's near side, has the table above
+    // it, so its tag goes under its feet, not onto the tabletop.
+    #[test]
+    fn a_back_facing_seat_puts_its_tag_under_the_feet() {
+        let script = "const s=JSON.parse(__camera_scene),g=new CameraCanvas();const p=cameraPlaced(s);JSON.stringify(placeLabels(g,cameraFigures(s,p),s.frame,s.frame.width<480?14:16).map(t=>[t.f.name,t.y-6,t.f.y,t.f.facing]))";
+        let bots: Vec<_> =
+            ["a1", "a2", "a3", "a4", "near"].iter().map(|n| bot_in(n, "active", false)).collect();
+        let placed: Vec<(String, f64, f64, String)> = serde_json::from_str(
+            &run(&room(json!([]), json!(bots), whole()), Some(script)).unwrap(),
+        )
+        .unwrap();
+        let near = placed.iter().find(|t| t.0 == "near").expect("the fifth bot sits too");
+        assert_eq!(near.3, "back", "{placed:?}");
+        assert!(near.1 >= near.2, "under its feet, off the table: {near:?}");
+        for far in placed.iter().filter(|t| t.3 == "front") {
+            assert!(far.1 < far.2, "a far-side seat's tag stays above its head: {far:?}");
+        }
+    }
+
     // CP10: bots side by side at the table, with long names, get name tags that don't cover each
     // other, and every tag stays in the frame. So does a crowded grid in a small frame.
     #[test]

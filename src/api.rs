@@ -147,6 +147,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::elections::routes())
         .merge(crate::bot_setup::routes())
         .merge(crate::blocks::routes())
+        .merge(crate::reports::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
@@ -520,6 +521,14 @@ async fn make_person(
 
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    // HC35: what's newly merged pays before the balance is read, within a few seconds.
+    if !caller.is_house {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::pr_credits::check(&state, &caller.person_id),
+        )
+        .await;
+    }
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
 }
 
@@ -653,6 +662,14 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     // W75: someone with the God mode switch is told where it's set. Nobody else hears it exists.
     if god_mode::may_use(&state, &caller.person_id) {
         me["god_mode"] = json!(state.db.god_mode_on(&caller.person_id)?);
+    }
+    // RE14, RE15: what operators told them, until they've seen it, and their own hold (RE11).
+    let notices = crate::review::notices_for(&state, &caller.person_id)?;
+    if !notices.is_empty() {
+        me["notices"] = json!(notices);
+    }
+    if let Some(hold) = crate::review::hold_for(&state, &caller.person_id)? {
+        me["hold"] = json!(hold);
     }
     // A108, A112: where they stand with the community rules.
     if let (Some(map), Value::Object(rules)) =
@@ -1269,6 +1286,13 @@ fn live_events(
             let mut emotes = false;
             let mut speaker: Option<String> = None;
             let event = match hub.recv().await {
+                // RE20: a hold landed. Every stream checks its caller again and says nothing.
+                Ok(event) if event.kind == crate::review::RECHECK => {
+                    match state.authenticate(secret_hash) {
+                        Ok(Some(caller)) if crate::review::may_stream(state, &caller) => continue,
+                        _ => return None,
+                    }
+                }
                 Ok(event) if event.hangout_id == *topic => {
                     human_typing = event.kind == "typing";
                     emotes = event.kind == "emotes";
@@ -1287,7 +1311,8 @@ fn live_events(
             };
             let still_allowed = match state.authenticate(secret_hash) {
                 Ok(Some(caller)) => {
-                    if !allowed(state, &caller, topic) {
+                    if !allowed(state, &caller, topic) || !crate::review::may_stream(state, &caller)
+                    {
                         return None;
                     }
                     if human_typing && caller.is_agent() {

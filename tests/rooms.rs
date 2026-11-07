@@ -6932,6 +6932,23 @@ async fn fake_lific() -> (FakeLific, String) {
                     .collect();
                 axum::Json(json!({ "cursor": 1, "issues": issues, "pages": [] })).into_response()
             }
+            // I149: two open cards and twelve done ones, the done ones last changed out of board order.
+            "busy_done" => {
+                let open = (1..=2).map(|n| {
+                    json!({ "identifier": format!("DEMO-T{n}"), "title": format!("Open {n}"),
+                            "status": "todo", "priority": "low", "module_id": null,
+                            "sort_order": n as f64, "deleted": false,
+                            "updated_at": "2026-11-01T01:00:00Z" })
+                });
+                let done = (1..=12).map(|n| {
+                    json!({ "identifier": format!("DEMO-D{n}"), "title": format!("Finished task number {n}"),
+                            "status": "done", "priority": "medium", "module_id": 1,
+                            "sort_order": n as f64, "deleted": false,
+                            "updated_at": format!("2026-11-01T00:{:02}:00Z", (n * 5) % 12) })
+                });
+                let issues: Vec<Value> = open.chain(done).collect();
+                axum::Json(json!({ "cursor": 1, "issues": issues, "pages": [] })).into_response()
+            }
             _ => axum::Json(json!({
                 "cursor": 9,
                 "issues": [
@@ -7106,6 +7123,66 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
         (board["available"].clone(), board["reason"].clone()),
         (json!(false), json!("down"))
     );
+}
+
+// I149: Done lists its newest first with done_count; a bot's read keeps only the latest 5 of it,
+// whichever way it asks, and every other column is the same as a person's.
+#[tokio::test]
+async fn a_bots_lific_read_folds_done_to_its_latest_five() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (fake, origin) = fake_lific().await;
+    allow_lific(&server, "", &origin);
+    fake.set("busy_done");
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    let ids = |column: &Value| -> Vec<String> {
+        column["issues"].as_array().unwrap().iter().map(|i| text(&i["id"]).to_string()).collect()
+    };
+    let newest = ["DEMO-D7", "DEMO-D2", "DEMO-D9", "DEMO-D4", "DEMO-D11"];
+
+    // A person gets all twelve, newest first.
+    let board = server.get(&ann.key, &path).await.ok();
+    let done = &board["columns"][3];
+    assert_eq!(
+        (done["status"].as_str(), done["done_count"].as_i64()),
+        (Some("done"), Some(12)),
+        "{board}"
+    );
+    assert_eq!(ids(done).len(), 12);
+    assert_eq!(ids(done)[..5], newest, "{done}");
+    assert_eq!(board["shown"], 14);
+    assert_eq!(board["truncated"], false, "a person's read holds every card");
+
+    // A bot gets the count and the latest 5, by read_board or the route, and is told some are out.
+    let read = server.tool(&scout.token, "read_board", json!({ "board_id": id })).await;
+    let read = &read["structuredContent"];
+    let route = server.get(&scout.token, &path).await.ok();
+    for bot in [read, &route] {
+        let done = &bot["columns"][3];
+        assert_eq!(done["done_count"], 12, "{bot}");
+        assert_eq!(ids(done), newest, "{bot}");
+        assert_eq!(bot["shown"], 7, "shown counts what the read holds");
+        assert_eq!(bot["total"], 14);
+        assert_eq!(bot["truncated"], true, "the read says it doesn't hold every card");
+        for open in [0, 1, 2, 4] {
+            assert_eq!(bot["columns"][open], board["columns"][open], "column {open} is unchanged");
+        }
+    }
+    println!(
+        "read_board with 12 done cards: {} characters in full, {} folded",
+        board["columns"].to_string().len(),
+        read["columns"].to_string().len()
+    );
+
+    // A board a bot sees whole isn't truncated.
+    fake.set("small");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    let route = server.get(&scout.token, &path).await.ok();
+    assert_eq!((&route["shown"], &route["total"]), (&json!(2), &json!(2)), "{route}");
+    assert_eq!(route["truncated"], false, "{route}");
 }
 
 // I126: a board read is shown again for a few seconds, so a room of readers, or a bot in a loop,
@@ -11303,6 +11380,68 @@ async fn the_last_mention_in_a_thread_is_found_by_index() {
         .collect();
     let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
     assert!(scans.is_empty(), "a full scan: {plan:?}");
+}
+
+// I151, #730: a second top-level mention carries only what came after the first one's event.
+#[tokio::test]
+async fn a_second_top_level_mention_carries_only_what_is_new() {
+    let w = waiting_world().await;
+    let say = |text: &str| {
+        let args = json!({ "hangout_id": w.room, "text": text });
+        let token = w.pip.token.clone();
+        let server = &w.server;
+        async move {
+            let said = server.tool(&token, "say", args).await;
+            said["structuredContent"]["message_id"].as_i64().expect("posted")
+        }
+    };
+    let early = say("an early line").await;
+    let first = say("@Scout what do you think?").await;
+    let after = say("a line after the first mention").await;
+    let second = say("@Scout and now?").await;
+
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap().clone();
+    let event_for = |id: i64| -> Value {
+        events
+            .iter()
+            .find(|e| e["name"] == "mention" && e["data"]["message_id"] == id)
+            .unwrap_or_else(|| panic!("a mention event for {id}"))["data"]
+            .clone()
+    };
+    let ids = |data: &Value| -> Vec<i64> {
+        let lines = data["context"].as_array().unwrap();
+        lines.iter().map(|line| line["message_id"].as_i64().unwrap()).collect()
+    };
+    let first_event = event_for(first);
+    assert_eq!(ids(&first_event), [early]);
+    assert!(first_event.get("context_after").is_none(), "{first_event}");
+    let second_event = event_for(second);
+    assert_eq!(ids(&second_event), [after], "not the first mention or what it carried");
+    assert_eq!(second_event["context_after"], first, "{second_event}");
+    let what = second_event["what_to_do"].as_str().unwrap();
+    assert!(what.contains(&format!("after message {first}")) && what.contains("read_room"));
+}
+
+// I151, #730: finding out whether a message's mention event was recorded is one probe of the
+// bot's unique (agent_id, ref_key) index, so it doesn't grow with the bot's other events.
+#[tokio::test]
+async fn a_recorded_top_level_mention_is_found_by_one_index_probe() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::TOP_LEVEL_MENTION_EVENT))
+        .unwrap()
+        .query_map(rusqlite::params!["bot", 2, "x"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(plan.len(), 1, "{plan:?}");
+    assert!(
+        plan[0].starts_with("SEARCH") && plan[0].contains("bot_events_once"),
+        "(agent_id, ref_key) is one probe: {plan:?}"
+    );
+    assert!(plan[0].contains("agent_id=? AND ref_key=?"), "{plan:?}");
 }
 
 // I86, I88, E5, #536: the room tag is not the display name of a bot called Room.

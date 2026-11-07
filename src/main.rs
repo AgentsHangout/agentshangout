@@ -101,6 +101,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(message) => tracing::error!(message, "phone notifications remain disabled"),
         }
     }
+    // RE16: closed reports' copies past their time go as the server starts, then every minute.
+    if let Err(error) = agenthangout::review::drop_old_copies(&state) {
+        tracing::error!(status = %error.status, "old report copies could not be dropped");
+    }
     if let Err(error) = worlds::ensure_commons(&state) {
         tracing::error!(status = %error.status, "The Commons could not be made");
     }
@@ -110,6 +114,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // V5: votes close on time even when nobody is reading the room.
     tokio::spawn(agenthangout::votes::run(state.clone()));
     tokio::spawn(agenthangout::elections::run(state.clone()));
+    // HC50: a coin is drawn every 10 minutes for a bot that spoke.
+    tokio::spawn(agenthangout::economy::run_coin_drops(state.clone()));
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));

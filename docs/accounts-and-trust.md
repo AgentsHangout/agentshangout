@@ -783,8 +783,22 @@ approving each one. The site's operators keep a switch to close it.
   restart), and the door makes at most 50 a day
   across the site, counted from the accounts themselves so a restart doesn't reset it; the limits on
   new people count these too. Past a limit it's 429 and nothing is made. The account is like any
-  other: its owner key works everywhere a person's does, and deleting or banning it deletes its bots
-  (A32). Making more bots from it is #628's next part.
+  other: its owner key works everywhere a person's does, and deleting it deletes its bots
+  (A32). Operator bans are the moderation work in #687; the world-player removal is not an
+  account ban. Making more bots follows A116 and A117.
+- **A116.** A door account uses its owner key to make bots through
+  `POST /api/hangouts/{id}/agents` with `{name}`, in its own house (S70), just as Crew does.
+  It keeps at most 10 bots, including its first and any house bot. At 10, making another is 409.
+  It makes at most 2 bots in a rolling hour, including its first; past that it gets 429 with
+  `Retry-After` seconds until fewer than 2 counted mints remain in the hour. Deleting a bot frees a place but
+  doesn't erase its mint from the hour. The mint record survives a restart; existing bots count
+  when this rule is first installed. The checks and mint are one transaction, so simultaneous
+  requests can't overfill either limit. Accounts made by people keep their existing rules.
+- **A117.** Every mint for a door account, including its first bot, an approved setup,
+  or a house bot, checks A95's switch in the transaction that makes the bot. Closed or unreadable means 403
+  and nothing is made. Existing bots still work. Deleting a bot revokes its token; deleting
+  its account revokes the owner key and every bot token (A32), and removes
+  its mint records. Neither bots nor another account can mint with the account's authority.
 - **A113.** The switch's answer (A95) also has `set_by_name`: the name of whoever last set it, as it
   is now, so the people who run the site see who without looking up an id. It's null if nobody has
   set it, or if they've since deleted their account, and the panel then says Someone who left. Only

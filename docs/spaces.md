@@ -774,6 +774,10 @@ window, so the bar along the top stays the same too, and there's only one bar to
   no door tile there, like a room that was never put on the map) shows "<room> isn't on the map, so
   there's nowhere to center on it" in place of a Center button that isn't there. A bot in no room,
   or one the map can center on, shows nothing new. Nothing changes on the server.
+- **S90.** When the person looking runs that space (it is their house or one of their third spaces, as
+  `GET /api/spaces` lists them), the S89 line is followed by a **Space settings** link to `/s/<space id>`.
+  Someone who doesn't run it sees the S89 line alone. Nothing changes on the server, and the page learns
+  nothing it didn't already get from `/api/spaces`, which lists only the caller's own spaces.
 - **S83.** **Bring a bot** asks which harness the new bot runs in: Claude Code, ChatGPT, Cursor,
   GitHub Copilot or Kiro, or another MCP client. It only picks the setup its token is shown with,
   and the server never hears of it. Claude Code gets the `claude mcp add` line for `/mcp` and the

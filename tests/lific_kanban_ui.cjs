@@ -21,6 +21,7 @@ const c = {
   h, field: (label, input) => h('label', {}, label, input), formError: () => ({ hidden: true }),
   FormData: class { constructor(form) { return Object.entries(form.values); } }, confirm: () => confirmed,
   api: async (path, options) => { if (options) { calls.push(JSON.parse(JSON.stringify({ path, ...options }))); return { ok: true }; } return board; },
+  localStorage: { store: {}, getItem(k) { return k in this.store ? this.store[k] : null; }, setItem(k, v) { this.store[k] = String(v); } },
   panels: { add: (name, title, opts, ...content) => { panel = h('aside', {}, ...content); }, open: (name) => { opened = name; } },
 };
 vm.createContext(c);
@@ -110,11 +111,74 @@ const settle = () => new Promise((r) => setImmediate(r));
   await settle();
   assert.match(text(credit), /Star.*1,234/);
 
+  // I150: a busy Done shows its latest 5 and "Show all 12 done"; Hide done folds it to its title
+  // and count. Each is remembered for that board only, in this browser, and the page still draws
+  // when storage throws.
+  const doneCards = Array.from({ length: 12 }, (_, n) => ({ id: `RH1WY-D${n + 1}`, title: `Done ${n + 1}`, priority: 'none' }));
+  const todoCards = Array.from({ length: 7 }, (_, n) => ({ id: `RH1WY-T${n + 1}`, title: `Todo ${n + 1}`, priority: 'none' }));
+  board = { available: true, project: 'RH1WY', shown: 19, total: 19, truncated: false, you_can_link: false, can_change: false,
+    columns: [col('backlog'), col('todo', todoCards), col('active'), { status: 'done', done_count: 12, issues: doneCards }, col('cancelled')] };
+  const doneColumn = () => columns.children.find((s) => s['aria-label'] === 'Done');
+  const cardIds = (el) => find(el, 'lific-card').map((card) => text(card.children[0]));
+  const button = (el, words) => { const found = []; const walk = (k) => { if (k && typeof k === 'object') { if (k.tag === 'button' && words.test(text(k))) found.push(k); (k.children || []).forEach(walk); } }; walk(el); return found[0]; };
+  c.openLific({ id: 'board-a' });
+  await settle();
+  assert.deepEqual(cardIds(doneColumn()), doneCards.slice(0, 5).map((card) => card.id), 'the latest 5, as the server orders them');
+  assert.match(text(doneColumn()), /Done\s*12/, 'the header still counts all 12');
+  assert.equal(cardIds(columns.children.find((s) => s['aria-label'] === 'To do')).length, 7, 'other columns show every card');
+  const showAll = button(doneColumn(), /^Show all 12 done$/);
+  assert.ok(showAll, 'Show all 12 done');
+  await showAll.onclick(on(showAll));
+  assert.equal(cardIds(doneColumn()).length, 12, 'expanded, all 12 show');
+  assert.equal(c.localStorage.store['lific-done:board-a'], 'all');
+  c.openLific({ id: 'board-a' });
+  await settle();
+  assert.equal(cardIds(doneColumn()).length, 12, 'expanded is remembered for this board');
+  c.openLific({ id: 'board-b' });
+  await settle();
+  assert.equal(cardIds(doneColumn()).length, 5, 'another board keeps its own choice');
+  const hide = button(doneColumn(), /^Hide done$/);
+  assert.ok(hide, 'Hide done');
+  await hide.onclick(on(hide));
+  assert.equal(cardIds(doneColumn()).length, 0, 'hidden, no cards');
+  assert.match(text(doneColumn()), /Done\s*12/, 'but its title and count stay');
+  assert.equal(find(doneColumn(), 'lific-empty').length, 0, 'and it doesn\'t claim to be empty');
+  assert.equal(c.localStorage.store['lific-done:board-b'], 'hidden');
+  c.openLific({ id: 'board-b' });
+  await settle();
+  assert.equal(cardIds(doneColumn()).length, 0, 'hidden is remembered for this board');
+  c.openLific({ id: 'board-a' });
+  await settle();
+  assert.equal(cardIds(doneColumn()).length, 12, 'and board-a is still expanded');
+  c.openLific({ id: 'board-b' });
+  await settle();
+  const showDone = button(doneColumn(), /^Show done$/);
+  await showDone.onclick(on(showDone));
+  assert.equal(cardIds(doneColumn()).length, 5, 'shown again, the latest 5');
+  // A Done of 5 or fewer shows as before, with no Show all.
+  board = { ...board, columns: [col('backlog'), col('todo'), col('active'), { status: 'done', done_count: 3, issues: doneCards.slice(0, 3) }, col('cancelled')] };
+  c.openLific({ id: 'board-c' });
+  await settle();
+  assert.equal(cardIds(doneColumn()).length, 3);
+  assert.equal(button(doneColumn(), /^Show all/), undefined);
+  // Storage that throws, or is empty, still draws the board, folded to the latest 5.
+  const kept = c.localStorage;
+  c.localStorage = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+  board = { ...board, columns: [col('backlog'), col('todo'), col('active'), { status: 'done', done_count: 12, issues: doneCards }, col('cancelled')] };
+  c.openLific({ id: 'board-a' });
+  await settle();
+  ok();
+  assert.equal(cardIds(doneColumn()).length, 5, 'throwing storage starts folded');
+  const showAllAnyway = button(doneColumn(), /^Show all 12 done$/);
+  await showAllAnyway.onclick(on(showAllAnyway));
+  assert.equal(cardIds(doneColumn()).length, 12, 'and still expands for now');
+  c.localStorage = kept;
+
   // Unavailable says why, with no columns.
   board = { available: false, unavailable: 'Lific is busy', you_can_link: false, columns: [] };
   c.openLific({ id: 'item-1' });
   await settle();
   assert.equal(columns.children.length, 0);
   assert.equal(text(info), 'Lific is busy');
-  console.log('Lific kanban UI: four columns even when empty, cards as text, Cancelled when used, link form folded, sticky notes added, moved, dropped and removed with real events, Lific credited with its stars passed');
+  console.log('Lific kanban UI: four columns even when empty, cards as text, Cancelled when used, link form folded, sticky notes added, moved, dropped and removed with real events, Lific credited with its stars, a busy Done folded to its latest 5 with Show all and Hide done remembered per board passed');
 })().catch((e) => { console.error(e); process.exitCode = 1; });

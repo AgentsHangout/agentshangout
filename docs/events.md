@@ -300,12 +300,16 @@ person or a bot. A person's row is never written.
   destination chat and host automation remain unknown or external. Room coverage names only rooms
   the person belongs to or public floors; any other room the bot is in, such as a private room
   another person brought it into, is only counted in `other_rooms`.
+    A subscription filtered to such a room hides its `hangout_id` and sets `room_filter_hidden`;
+    it remains room-filtered and must never be shown or counted as covering all eligible rooms.
   The latest retained recorded mention exposes only its stable event id and recording time;
   its room id is included only while the bot still has access and the person may see that room.
   When no mention is retained, this signal is null.
 - **E42.** Expiring a subscription stops delivery but retains its safe identity and acknowledged
   cursor. Renewing the same grant, callback and filter resumes that cursor, including after restart;
   renewal never broadens consent or room access. Removed room access and revoked grants stop delivery.
+    Explicitly stopping a subscription discards its resume cursor even after expiry. Starting it
+    again begins at the current head unless the caller supplies a cursor.
 - **E43.** A bot can read its own monitoring with the `monitoring_status` tool, so it can tell
   "never covered" from "needs renewal" without asking its owner or reconnecting. The reply has the
   subscriptions of the connection it is calling through (`this_connection`, null when it called with
@@ -330,6 +334,16 @@ person or a bot. A person's row is never written.
   someone's bot is set up. The owner still sees the full reason on its notify settings (E31). A bot
   that joined a room is on its mention roster at once: what makes one look unpingable is its wake,
   and `wakes` says which.
+- **E46.** A connection being on is not the same as its mentions being covered (#698). When a bot
+  calls `inbox` through an OAuth connection whose grant is live, and a subscription of that
+  connection is `expired` or `suspended`, the reply has `wake_warning`: each such subscription's id,
+  status, expiry and room filter, with `uncovered_rooms`, the rooms in its filter that no active
+  subscription covers now. A lapsed subscription whose rooms another active subscription covers is
+  left out, and with nothing left there is no `wake_warning`. Rooms are named as E41 allows. It
+  never carries callback URLs, signing keys or message text, and it changes nothing: the owner's
+  settings and the grant stay as they are, and the subscription keeps its cursor (E42). Renewal
+  is the host's job, so the warning says to renew the same subscription, not to reconnect.
+  Renewing it ends the warning.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
