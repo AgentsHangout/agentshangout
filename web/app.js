@@ -8645,7 +8645,8 @@ function createPanels(root) {
       place(panel.el, panel.maximized ? area : panel.rect);
     }
     for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(!panels.get(name)?.el.hidden));
-    const size = dock.getBoundingClientRect(), w = Math.min(size.width || 240, full.w);
+    // #735: a hidden dock has no size, and asking for it after the writes above lays the page out again.
+    const size = dock.hidden ? { width: 0 } : dock.getBoundingClientRect(), w = Math.min(size.width || 240, full.w);
     dockPosition = { x: clamp(dockPosition?.x ?? full.x, full.x, full.x + full.w - w), y: barEdge === 'top' ? full.y : full.y + full.h - barHeight };
     dock.style.left = `${dockPosition.x}px`; dock.style.top = `${dockPosition.y}px`;
     dock.style.maxWidth = `${full.w}px`;
@@ -8666,7 +8667,9 @@ function createPanels(root) {
     dock.hidden = ![...panels.values()].some(p => p.state === 'minimized');
     layout();
   }
-  function activate(name) {
+  // #735: `later` is for a caller that lays the windows out itself once it's done, so opening one
+  // makes the browser work out the page's layout once, not twice.
+  function activate(name, later = false) {
     if (current === name) return;
     for (const [other, panel] of panels) if (other !== name) panel.maximized = false;
     current = name;
@@ -8675,7 +8678,8 @@ function createPanels(root) {
     sorted.forEach((panel, i) => { panel.order = i; });
     order = sorted.length;
     panels.get(name).order = ++order;
-    sync(); set.onChange();
+    if (!later) sync();
+    set.onChange();
   }
   function next() {
     return [...panels].filter(([, p]) => p.state === 'open').sort((a, b) => b[1].order - a[1].order)[0]?.[0] || null;
@@ -8847,7 +8851,7 @@ function createPanels(root) {
       if (!panel) return;
       const fresh = panel.state === 'closed';
       panel.state = 'open';
-      activate(name); sync();
+      activate(name, true); sync();
       if (fresh) panel.onOpen?.();
       panel.el.focus({ preventScroll: true });
     },
