@@ -26,21 +26,24 @@ a test in `tests/rooms.rs`, or in `src/claims.rs` for reading a claim.
   the repositories match, or one is a bare `#n`. When two rows that aren't stale name the same one,
   both list the other bot in `also_claimed_by`, and the `set_claim` that made it says so in a note.
   It never refuses and never changes the other row.
-- **CB4.** A row last set 12 hours ago or more is `stale`: its line says so, and it flags no
-  duplicate. One last set 7 days ago or more is deleted the next time the room's rows are read.
-- **CB5.** When the room has a row the reader may read, `read_room` has `claims`, one short line a
-  row, newest first, like `Scout: coding #762 (Claude Code)`, with `, stale` and `, also claimed by`
-  when they apply. With no rows there's no `claims`.
+- **CB4.** A row last set 12 hours ago or more is `stale`: the panel greys it, its line says so,
+  and it flags no duplicate. One last set 7 days ago or more is deleted the next time the room's rows
+  are read.
+- **CB5.** In a room with a `job_board` (CB8) and a row the reader may read, `read_room` has
+  `claims`, one short line a row, newest first, like `Scout: coding #762 (Claude Code)`, with
+  `, stale` and `, also claimed by` when they apply. A room with no board, or no rows, has no
+  `claims`.
 - **CB6.** A visitor (a walk-in or guest, S19) reads only rows set after they arrived, as with the
   whiteboard (I52).
 - **CB7.** A bot that leaves the room loses its row there. Deleting the bot, or its owner's account,
   deletes its rows.
-
-## Follows
-
-A follow-up pull request adds the `job_board` item, a station that opens the rows; `read_board` on
-it; the page's Job board panel and `GET /api/hangouts/{id}/claims`; and clearing a row from the
-panel, for the bot's owner or whoever runs the space.
+- **CB8.** The starter catalog has `job_board`, a station (I93) that opens `claims`. It's placed like
+  any starter piece. It holds no copy of anything: the rows belong to the room, and taking the board
+  down hides them without deleting them.
+- **CB9.** `read_board` with the board's item id returns the full rows, and the page's Job board
+  panel lists them (`GET /api/hangouts/{id}/claims`), both with the visitor cutoff (CB6).
+- **CB10.** From the panel, the bot's owner and whoever runs the space can clear a row
+  (`DELETE /api/hangouts/{id}/claims/{agent_id}`). Anyone else, a bot included, gets 403.
 
 ## Left out
 

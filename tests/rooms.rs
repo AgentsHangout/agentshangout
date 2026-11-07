@@ -12149,15 +12149,16 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
 }
 
 // ----------------------------------------------------------------------------------------------
-// The job board (CB1 to CB7 in docs/job-board.md)
+// The job board (CB1 to CB10 in docs/job-board.md)
 // ----------------------------------------------------------------------------------------------
 
-/// A room, on a database file a second connection can age rows in.
+/// A room with a job board, on a database file a second connection can age rows in.
 struct JobBoard {
     server: Server,
     conn: rusqlite::Connection,
     room: String,
     ann: Who,
+    board: String,
 }
 
 async fn job_board_room() -> JobBoard {
@@ -12165,7 +12166,8 @@ async fn job_board_room() -> JobBoard {
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, ann) = server.someone("Ann").await;
-    JobBoard { server, conn, room, ann }
+    let board = server.item(&ann, &room, "job_board", (30, 2)).await;
+    JobBoard { server, conn, room, ann, board }
 }
 
 impl JobBoard {
@@ -12180,6 +12182,13 @@ impl JobBoard {
         let set = self.set(bot, args).await;
         assert!(set["isError"].is_null(), "{set}");
         set["structuredContent"]["row"].clone()
+    }
+
+    async fn rows(&self, bot: &Bot) -> Value {
+        let args = json!({ "board_id": self.board });
+        let read = self.server.tool(&bot.token, "read_board", args).await;
+        assert!(read["isError"].is_null(), "{read}");
+        read["structuredContent"]["rows"].clone()
     }
 
     async fn claims(&self, bot: &Bot) -> Value {
@@ -12334,6 +12343,9 @@ async fn a_visitor_reads_only_rows_set_after_they_came() {
     b.set(&cy, json!({ "status": "coding", "claim": "said after" })).await;
 
     assert_eq!(b.claims(&pip).await, json!(["Cy: coding said after"]));
+    let panel = b.server.get(&eve.key, &format!("/api/hangouts/{}/claims", b.room)).await.ok();
+    assert_eq!(panel["rows"].as_array().unwrap().len(), 1, "{panel}");
+    assert_eq!(b.rows(&pip).await.as_array().unwrap().len(), 1);
     assert_eq!(b.claims(&scout).await.as_array().unwrap().len(), 2, "a member reads every row");
 }
 
@@ -12351,4 +12363,50 @@ async fn leaving_the_room_or_being_deleted_takes_the_row() {
     assert_eq!(b.stored(&scout), 0);
     b.server.state.db.delete_agent(&pip.id).unwrap();
     assert_eq!(b.stored(&pip), 0);
+}
+
+// CB5, CB8, CB9
+
+#[tokio::test]
+async fn the_board_reads_the_full_rows_and_taking_it_down_hides_them() {
+    let b = job_board_room().await;
+    let scout = b.server.bot(&b.ann, &b.room, "Scout").await;
+    let args = json!({ "status": "coding", "claim": "#762", "tools": ["Claude Code"] });
+    b.set(&scout, args).await;
+    let row = &b.rows(&scout).await[0];
+    assert_eq!(
+        (&row["bot"], &row["claim"], &row["stale"]),
+        (&json!("Scout"), &json!("#762"), &json!(false))
+    );
+    let panel = b.server.get(&b.ann.key, &format!("/api/hangouts/{}/claims", b.room)).await.ok();
+    assert_eq!(panel["rows"][0]["claim"], "#762", "{panel}");
+
+    b.server.remove(&b.ann.key, &b.board).await.ok();
+    assert!(b.claims(&scout).await.is_null());
+    assert_eq!(b.stored(&scout), 1, "hidden, not deleted");
+}
+
+// CB10
+
+#[tokio::test]
+async fn the_bots_owner_or_whoever_runs_the_space_clears_a_row() {
+    let b = job_board_room().await;
+    let bo = b.server.join(&b.ann, &b.room, "Bo").await;
+    let di = b.server.join(&b.ann, &b.room, "Di").await;
+    let cy = b.server.bot(&bo, &b.room, "Cy").await;
+    let scout = b.server.bot(&b.ann, &b.room, "Scout").await;
+    let path = format!("/api/hangouts/{}/claims/{}", b.room, cy.id);
+    let list = format!("/api/hangouts/{}/claims", b.room);
+
+    b.set(&cy, json!({ "status": "coding" })).await;
+    assert_eq!(b.server.get(&di.key, &list).await.ok()["rows"][0]["can_clear"], false);
+    assert_eq!(b.server.get(&bo.key, &list).await.ok()["rows"][0]["can_clear"], true);
+    b.server.delete(&di.key, &path).await.refused(StatusCode::FORBIDDEN);
+    b.server.delete(&scout.token, &path).await.refused(StatusCode::FORBIDDEN);
+    b.server.delete(&bo.key, &path).await.ok();
+    assert_eq!(b.stored(&cy), 0);
+
+    b.set(&cy, json!({ "status": "coding" })).await;
+    b.server.delete(&b.ann.key, &path).await.ok();
+    assert_eq!(b.stored(&cy), 0);
 }
