@@ -4632,3 +4632,130 @@ async fn an_owners_tag_brings_their_bot_to_the_room() {
     let snap = server.get(&ann.key, &format!("/api/hangouts/{beach}")).await.ok();
     assert_eq!(snap["summonable"], json!([]), "{snap}");
 }
+
+// GM1-GM6 (#727): the server rolls every score and records it within the caps, the room's board
+// names bots and shows a person only to themselves, and the cross-room board lists public floors
+// only, the week's and all time's.
+#[tokio::test]
+async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off() {
+    use agenthangout::db::{NewPlay, PlayOutcome};
+    use agenthangout::games;
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    let arcade = text(&server.third_space(&ann, "Arcade").await.ok()["hangout"]["id"]);
+    server.open(&ann, &arcade).await;
+    let den = text(&server.third_space(&bo, "Den").await.ok()["hangout"]["id"]);
+    let (scout, _) = server.bot(&ann, &arcade, "Scout").await;
+    let (rex, _) = server.bot(&bo, &den, "Rex").await;
+    let now = agenthangout::now();
+    let week = games::week_of(now);
+    let caps = games::CAPS;
+    let record = |room: &str, agent: Option<&str>, person: &str, score: i64, at: i64| {
+        server
+            .state
+            .db
+            .record_play(
+                &NewPlay {
+                    hangout_id: room,
+                    item_id: "cabinet",
+                    kind: "arcade_cabinet",
+                    agent_id: agent,
+                    person_id: person,
+                    score,
+                    week: games::week_of(at),
+                    now: at,
+                },
+                caps,
+            )
+            .unwrap()
+    };
+
+    // GM3: a cooldown between plays, then at most 6 an hour, by player, room and kind.
+    let start = now - 3000;
+    assert!(matches!(
+        record(&arcade, Some(&scout), &ann.id, 400, start),
+        PlayOutcome::Played { remaining: 5, .. }
+    ));
+    assert_eq!(
+        record(&arcade, Some(&scout), &ann.id, 999, start + 10),
+        PlayOutcome::Capped { next_at: start + 60 }
+    );
+    for n in 1..6 {
+        record(&arcade, Some(&scout), &ann.id, 100 + n, start + 100 * n);
+    }
+    assert_eq!(
+        record(&arcade, Some(&scout), &ann.id, 999, start + 700),
+        PlayOutcome::Capped { next_at: start + 3600 }
+    );
+    // Another kind, room or player has its own budget.
+    record(&den, Some(&rex), &bo.id, 900, start + 700);
+    record(&arcade, None, &ann.id, 300, start + 700);
+    record(&arcade, None, &bo.id, 350, start + 700);
+
+    // GM5: Arcade's board, as Ann sees it: Scout by name, her own line as you, Bo as a person.
+    let board = server.get(&ann.key, &format!("/api/hangouts/{arcade}/scores")).await.ok();
+    let kind = &board["kinds"][0];
+    assert_eq!(kind["kind"], "arcade_cabinet", "{board}");
+    assert_eq!(kind["best_week"], 400);
+    let names: Vec<&str> =
+        kind["top"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Scout", "a person", "you"], "{board}");
+    assert!(!board.to_string().contains(&bo.id), "no one else's id");
+
+    // GM6: the cross-room board lists the public Arcade, never the private Den, even though Rex
+    // scored higher there. Rex shows as a bot without a room.
+    let top = server.get("", "/api/scores/top?kind=arcade_cabinet").await.ok();
+    let rooms = top["week"]["rooms"].as_array().unwrap();
+    assert_eq!(rooms.len(), 1, "{top}");
+    assert_eq!(
+        (&rooms[0]["room"], &rooms[0]["best"], &rooms[0]["week"]),
+        (&json!("Arcade"), &json!(400), &json!(week))
+    );
+    assert!(!top.to_string().contains("Den") && !top.to_string().contains(&den), "{top}");
+    let bots = top["week"]["bots"].as_array().unwrap();
+    assert_eq!(bots[0]["bot"], "Rex");
+    assert_eq!(bots[0]["room"], Value::Null, "Rex's room is private");
+    assert_eq!(bots[1]["bot"], "Scout");
+    assert_eq!(bots[1]["room"], "Arcade");
+    assert_eq!(top["all_time"]["rooms"].as_array().unwrap().len(), 1);
+    assert!(top["week_starts"].is_string());
+
+    // GM2: a real cabinet in the Arcade: the server rolls in range, and a second play straight away
+    // is refused for the cooldown, with nothing written.
+    // (Placing one through Build waits on a friend unlock, so the item is put down directly.)
+    let put = |id: &str, kind: &str, x: i64| {
+        server
+            .state
+            .db
+            .place_item::<()>(
+                &agenthangout::db::NewFloorItem {
+                    id,
+                    hangout_id: &arcade,
+                    kind,
+                    x,
+                    y: 6,
+                    facing: 0,
+                    placed_by: &ann.id,
+                    now,
+                },
+                |_, _, _| Ok(()),
+            )
+            .unwrap()
+            .unwrap()
+    };
+    let item = "cabinet-1";
+    put(item, "arcade_cabinet", 10);
+    let caller =
+        server.state.authenticate(&agenthangout::auth::hash_secret(&bo.key)).unwrap().unwrap();
+    server.walk_in(&bo, &arcade).await.ok();
+    let played = games::play(&server.state, &caller, item).unwrap();
+    assert!((0..=1000).contains(&played["score"].as_i64().unwrap()), "{played}");
+    assert_eq!(played["remaining"], 4, "Bo's one earlier play counts: {played}");
+    let again = games::play(&server.state, &caller, item).unwrap_err();
+    assert_eq!(again.status, StatusCode::TOO_MANY_REQUESTS);
+    // Not a game: a stool can't be played.
+    put("stool-1", "stool", 14);
+    let err = games::play(&server.state, &caller, "stool-1").unwrap_err();
+    assert_eq!(err.status, StatusCode::BAD_REQUEST);
+}
