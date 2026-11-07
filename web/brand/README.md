@@ -78,24 +78,37 @@ dismissal, safe links and navigation during loading. `mobile_rust/tests/surfaces
 checks shared desktop/phone surfaces. These complement visual review; they do not
 prove that every possible overlay in the client is correct.
 
-## Interactive windows (W114)
+## Interactive windows (W114–W115)
 
-Map and room panels use `createPanels`: the same warm paper, bevelled frame and X,
-with Minimize (−) and Maximize (□) beside it. Restore returns to the previous geometry.
-Drag the title to move, or the bottom-right bracket to resize. Both handles support
-arrow keys (16 pixels, or one pixel with Shift). Keep title controls visible, with
-44-pixel touch targets on phones. Several windows may stay open; focus brings one forward.
+Map and room panels use `createPanels`: warm paper, bevelled frames and X, with
+Layout (▦), Minimize (−) and Maximize (□) beside it. Panels start in a right dock
+that reserves real scene space. Layout offers left, right, top and bottom zones,
+Right sidebar / Split sides / Bottom panel presets, and Reset layout. Windows in
+the same zone use tabs; switching tabs preserves drafts and loaded content.
 
-Minimize preserves drafts and scroll position in a compact bottom dock. Drag its grip
-to place it along a side or elsewhere inside the game; select a named window to restore
-it, or its X to close it. Do not add a separate pin state. This gives the same home to
-chat and other panels in rooms and on the world map. Geometry lasts until navigation.
+Drag a title to an edge to preview a dock, then release to apply it. Dragging over
+the room leaves a docked window docked. Only **Float over game** enables overlap;
+then title dragging moves it and the bottom-right bracket resizes it. Arrow keys
+on a docked title select its zone; on floating titles and brackets they move or
+resize by 16 pixels (one with Shift). Drag a zone boundary or focus it and use
+arrow keys to resize the dock and the scene together. Keep controls at least
+44 pixels on phones, including the central touch target on each divider.
 
-The game well bounds movement and expansion: navigation and status bars stay outside
-it. Viewport changes clamp geometry to the available area. A window has one scrolling
-body; nested content flows inside that body. Chat keeps its own message scroller and
-fixed composer. An expanded graph stays below the window title, never over its controls.
-Use the shared lifecycle and geometry rather than feature-specific fixed overlays.
+Small portrait screens combine docks into bottom tabs; short landscape screens
+combine them into a sidebar. Wider screens expose more zones. Saved zone choices
+and proportions return when space allows and survive reloads on the same route;
+blocked browser storage never prevents use. Floating geometry, drafts and open
+state are not stored by the layout controller.
+
+Minimize preserves drafts and scroll position in a compact bar that reserves its
+own strip. Drag its grip to the top or bottom, or use Up/Down; select a named window
+to restore it, or its X to close it. Maximize uses the available workspace and hides
+the scene until Restore. Do not add a separate pin state.
+
+Navigation and status bars remain outside the workspace. A window has one scrolling
+body; nested content flows inside it. Chat keeps its own message scroller and fixed
+composer. An expanded graph stays below the title. Use the shared layout and
+lifecycle rather than feature-specific fixed overlays.
 
 ## Reference controls: zoom and panels
 
@@ -106,7 +119,7 @@ are not a request to restore retired phone controls.
 | --- | --- | --- |
 | Map zoom | Desktop palette buttons and a separate rounded phone zoom/recenter capsule used different chrome and competed for map space. | Desktop uses `.game-view` and `.wd-btn.wd-view-btn`: Closer (+), Farther (−), Town (⌂), with accessible names Zoom in, Zoom out, Go back to the town. The two-column palette has 56px-wide cells, 48px-high buttons and a 4px gap. Native phones deliberately use pinch/pan and hide the capsule (M1); do not add another floating control. |
 | Room camera | Phone chrome could crowd or inset the scene twice in landscape. | The room fits the scene first; pinch enlarges it, drag pans the enlarged view, and double-tap restores the complete scene (M4). Reserve the landscape navigation rail once. |
-| Game panel | Opening a panel hid the previous one; oversized content and nested lists could make controls difficult to reach. | `createPanels` owns title dragging, corner resizing, X, minimize dock, maximize/restore, focus and bounds (W114). Phone controls are at least 44px. The body owns scrolling; Chat retains its message log and composer. |
+| Game panel | Opening a panel hid the previous one; oversized content and nested lists could make controls difficult to reach. | `createPanels` owns title dragging, corner resizing, X, minimize dock, maximize/restore, focus, dock zones and reserved scene space (W114–W115). Phone controls are at least 44px. The body owns scrolling; Chat retains its message log and composer. |
 | Action dialog / Build sheet | Scrolling could lose Close or scroll both the shell and its content. | Use `modal` or the shared Build sheet. M11 keeps the heading and Close reachable and gives the content one main scroller. Do not turn a confirmation into an independent floating window. |
 | Mayor, social links and contextual actions | Individual features could invent their own overlay, button colours or placement. | Mayor content belongs in its existing game panel; follow links use `.wd-btn.wide` inside More (W112); hover, click and right-click use `popupMenu` (W109). |
 
@@ -126,7 +139,9 @@ root and open these fixtures. They use production CSS and, where applicable, hel
   and landscape bounds.
 - [Game windows](../../tests/game_windows.html): drag, resize, maximize and minimize;
   use `?phone` for the phone treatment. Run `python tests/game_windows_browser.py`
-  for automated mouse, touch and keyboard checks.
+  for automated floating mouse, touch and keyboard checks. Run
+  `python tests/game_window_zones.py` for snapping, dock boundaries, saved layouts
+  and scene clearance across desktop and phone sizes.
 - Run `python mobile_rust/tests/modal_scroll.py` for Schedule, Whiteboard, Build and
   panel scrolling at 393×852, 852×393 and 320×568.
 

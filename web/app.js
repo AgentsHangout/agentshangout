@@ -6281,7 +6281,7 @@ async function roomView(id) {
   // it's left alone to close the list.
   const onKey = (event) => {
     // Window handles own their arrow keys, even while a build tool is in hand.
-    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock')) return;
+    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock, .window-zone-divider, .window-zone-tabs')) return;
     if (builder.key(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -8504,7 +8504,22 @@ function installSheetDrag(handle, sheet, dismiss) {
 function createPanels(root) {
   // W114: geometry and lifecycle belong to the shared game surface, never the page body.
   const panels = new Map(), toggles = new Map();
-  let current = null, order = 0, dockPosition = null;
+  let current = null, order = 0, dockPosition = null, barEdge = 'bottom';
+  const EDGES = ['left', 'right', 'top', 'bottom'];
+  const storageKey = `game-zones-v1:${typeof location === 'undefined' ? '/' : location.pathname}`;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch { /* local convenience only */ }
+  const ratios = Object.fromEntries(EDGES.map(edge => [edge, Math.max(.18, Math.min(.65, Number(saved.ratios?.[edge]) || .32))]));
+  const workspace = h('div', { class: 'window-workspace', 'aria-hidden': 'true' });
+  const preview = h('div', { class: 'window-snap-preview', hidden: true, 'aria-hidden': 'true' });
+  const announcement = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  root.append(workspace, preview, announcement);
+  const zones = new Map();
+  let zoneArea = null, pendingSnap = null;
+  function save() {
+    try { localStorage.setItem(storageKey, JSON.stringify({ ratios,
+      zones: Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) })); } catch { /* storage can be blocked */ }
+  }
   const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
     'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
   const dockItems = h('div', { class: 'window-dock-items' });
@@ -8514,7 +8529,7 @@ function createPanels(root) {
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, Math.max(lo, hi)));
   function bounds() {
     const r = root.getBoundingClientRect();
-    const well = root.querySelector('.wd-well')?.getBoundingClientRect() || r;
+    const well = workspace.getBoundingClientRect();
     let left = Math.max(r.left, well.left), right = Math.min(r.right, well.right);
     let top = Math.max(r.top, well.top), bottom = Math.min(r.bottom, well.bottom);
     for (const bar of root.querySelectorAll('.wd-title, .wd-stats, .wd-status, .apple-tab-bar, .build-dock')) {
@@ -8543,25 +8558,97 @@ function createPanels(root) {
     for (const [key, value] of Object.entries({ left: rect.x, top: rect.y, width: rect.w, height: rect.h }))
       el.style.setProperty(key, `${value}px`, 'important');
   }
+  // Responsive consolidation changes the presentation, never a saved zone preference.
+  function effective(edge, area) {
+    if (area.w < 620) return 'bottom';
+    if (area.h < 520) return 'right';
+    if (area.w < 900 && (edge === 'left' || edge === 'right')) return 'right';
+    if (area.h < 820 && edge === 'top') return 'bottom';
+    return edge;
+  }
+  function groupsFor(area, moving = null, destination = null) {
+    const groups = Object.fromEntries(EDGES.map(edge => [edge, []]));
+    for (const [name, panel] of panels) {
+      const edge = name === moving ? destination : panel.zone;
+      if (panel.state === 'open' && edge !== 'float') groups[effective(edge, area)].push([name, panel]);
+    }
+    return groups;
+  }
+  function geometry(area, groups) {
+    const gap = 8, sizes = {};
+    for (const edge of EDGES) {
+      const dimension = edge === 'left' || edge === 'right' ? area.w : area.h;
+      const minimum = 280;
+      sizes[edge] = groups[edge].length ? Math.max(Math.min(minimum, dimension * .6), dimension * ratios[edge]) : 0;
+    }
+    // The scene always retains usable space. Multiple windows in a zone use tabs, not stacking.
+    for (const [first, second, dimension, reserve] of [['left', 'right', area.w, Math.min(280, area.w * .4)], ['top', 'bottom', area.h, Math.min(240, area.h * .35)]]) {
+      const total = sizes[first] + sizes[second];
+      const budget = Math.max(0, dimension - reserve - gap * (Number(!!sizes[first]) + Number(!!sizes[second])));
+      if (total > budget) { sizes[first] *= budget / total; sizes[second] *= budget / total; }
+    }
+    const l = sizes.left ? sizes.left + gap : 0, r = sizes.right ? sizes.right + gap : 0;
+    const t = sizes.top ? sizes.top + gap : 0, b = sizes.bottom ? sizes.bottom + gap : 0;
+    return { center: { x: area.x + l, y: area.y + t, w: Math.max(1, area.w - l - r), h: Math.max(1, area.h - t - b) },
+      left: { x: area.x, y: area.y + t, w: sizes.left, h: area.h - t - b },
+      right: { x: area.x + area.w - sizes.right, y: area.y + t, w: sizes.right, h: area.h - t - b },
+      top: { x: area.x, y: area.y, w: area.w, h: sizes.top },
+      bottom: { x: area.x, y: area.y + area.h - sizes.bottom, w: area.w, h: sizes.bottom } };
+  }
   function layout() {
     if (!root.getBoundingClientRect().width) return;
-    const area = bounds();
+    const full = bounds(), area = { ...full };
+    const barHeight = dock.hidden ? 0 : Math.min(56, full.h * .2);
+    area.h -= barHeight;
+    if (barEdge === 'top') area.y += barHeight;
+    zoneArea = area;
+    const groups = groupsFor(area), boxes = geometry(area, groups);
+    const maximized = [...panels.values()].find(panel => panel.maximized && panel.state === 'open');
+    const well = root.querySelector('.wd-well');
+    if (well) { place(well, boxes.center); well.style.visibility = maximized ? 'hidden' : ''; }
+    for (const edge of EDGES) {
+      const members = groups[edge], zone = zones.get(edge), rect = boxes[edge];
+      const active = [...members].sort((a, b) => b[1].order - a[1].order)[0]?.[1];
+      const tabHeight = members.length > 1 ? 44 : 0;
+      zone.tabs.hidden = !!maximized || members.length < 2;
+      zone.divider.hidden = !!maximized || !members.length;
+      const buttons = members.map(([, panel]) => panel.tab);
+      if (buttons.length !== zone.tabs.children.length || buttons.some((button, i) => zone.tabs.children[i] !== button)) zone.tabs.replaceChildren(...buttons);
+      place(zone.tabs, { ...rect, h: tabHeight });
+      const vertical = edge === 'left' || edge === 'right';
+      place(zone.divider, vertical
+        ? { x: edge === 'left' ? rect.x + rect.w : rect.x - 8, y: rect.y, w: 8, h: rect.h }
+        : { x: rect.x, y: edge === 'top' ? rect.y + rect.h : rect.y - 8, w: rect.w, h: 8 });
+      zone.extent = vertical ? rect.w : rect.h;
+      zone.divider.setAttribute('aria-valuenow', String(Math.round(zone.extent / (vertical ? area.w : area.h) * 100)));
+      for (const [, panel] of members) {
+        panel.el.hidden = maximized ? panel !== maximized : panel !== active;
+        panel.tab.setAttribute('aria-selected', String(panel === active));
+        panel.tab.tabIndex = panel === active ? 0 : -1;
+        panel.allocated = { ...rect, y: rect.y + tabHeight, h: Math.max(1, rect.h - tabHeight) };
+        place(panel.el, panel === maximized ? area : panel.allocated);
+      }
+    }
     for (const [name, panel] of panels) {
-      if (!panel.rect && panel.state === 'open') {
+      panel.el.dataset.zone = panel.zone;
+      panel.grip.hidden = panel.maximized || panel.zone !== 'float';
+      panel.position.value = panel.zone;
+      if (panel.state !== 'open') { panel.el.hidden = true; continue; }
+      if (!panel.rect) {
         const wide = ['bots', 'crew', 'lific'].includes(name);
         panel.rect = { x: area.x + area.w - (wide ? 880 : 400), y: area.y + 12,
           w: wide ? 880 : 400, h: Math.min(600, area.h - 24) };
       }
-      if (!panel.rect) continue;
+      if (panel.zone !== 'float') continue;
+      panel.el.hidden = !!maximized && panel !== maximized;
       panel.rect = fit(panel.rect, area);
       place(panel.el, panel.maximized ? area : panel.rect);
     }
-    const size = dock.getBoundingClientRect();
-    const w = Math.min(size.width || 240, area.w), height = Math.min(size.height || 44, area.h);
-    const pos = dockPosition || { x: area.x, y: area.y + area.h - height };
-    dockPosition = { x: clamp(pos.x, area.x, area.x + area.w - w), y: clamp(pos.y, area.y, area.y + area.h - height) };
+    for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(!panels.get(name)?.el.hidden));
+    const size = dock.getBoundingClientRect(), w = Math.min(size.width || 240, full.w);
+    dockPosition = { x: clamp(dockPosition?.x ?? full.x, full.x, full.x + full.w - w), y: barEdge === 'top' ? full.y : full.y + full.h - barHeight };
     dock.style.left = `${dockPosition.x}px`; dock.style.top = `${dockPosition.y}px`;
-    dock.style.maxWidth = `${area.w}px`;
+    dock.style.maxWidth = `${full.w}px`;
   }
   function sync() {
     for (const [name, panel] of panels) {
@@ -8571,7 +8658,7 @@ function createPanels(root) {
       panel.maxButton.setAttribute('aria-label', `${panel.maximized ? 'Restore' : 'Maximize'} ${panel.title}`);
       panel.maxButton.title = panel.maximized ? 'Restore size' : 'Maximize';
       panel.maxButton.textContent = panel.maximized ? '❐' : '□';
-      panel.grip.hidden = panel.maximized;
+      panel.grip.hidden = panel.maximized || panel.zone !== 'float';
       panel.dockEntry.hidden = panel.state !== 'minimized';
     }
     for (const [name, list] of toggles) for (const button of list)
@@ -8581,6 +8668,7 @@ function createPanels(root) {
   }
   function activate(name) {
     if (current === name) return;
+    for (const [other, panel] of panels) if (other !== name) panel.maximized = false;
     current = name;
     // Keep stacking below contextual menus rather than accumulating unbounded z-index values.
     const sorted = [...panels.values()].sort((a, b) => a.order - b.order);
@@ -8597,20 +8685,26 @@ function createPanels(root) {
     else [...(toggles.get(name) || []), ...(toggles.get('more') || [])].find(b => b.offsetParent !== null)?.focus();
   }
   // Pointer capture keeps a drag alive beyond the handle; cancel never leaves listeners on window.
-  function movable(handle, read, write, enabled = () => true) {
+  function movable(handle, read, write, enabled = () => true, lifecycle = {}) {
     let drag = null;
     handle.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
+      if (drag || event.isPrimary === false || event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
       event.preventDefault(); event.stopPropagation();
       handle.focus({ preventScroll: true });
+      lifecycle.start?.(event);
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, rect: { ...read() } };
       handle.setPointerCapture(event.pointerId);
     });
     handle.addEventListener('pointermove', event => {
       if (!drag || event.pointerId !== drag.id) return;
-      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y);
+      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y, event);
     });
-    const end = () => { drag = null; };
+    const end = event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const original = drag.rect; drag = null;
+      if (event.type === 'pointerup') lifecycle.finish?.(event);
+      else lifecycle.cancel?.(original);
+    };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
     handle.addEventListener('lostpointercapture', end);
@@ -8619,14 +8713,33 @@ function createPanels(root) {
       const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
       if (!delta) return;
       event.preventDefault(); event.stopPropagation();
-      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16));
+      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16), event);
+      lifecycle.finish?.(event);
     });
   }
-  movable(dockHandle, () => dockPosition, (rect, x, y) => { dockPosition = { x: rect.x + x, y: rect.y + y }; layout(); });
+  movable(dockHandle, () => ({ ...dockPosition, edge: barEdge }), (rect, x, y, event) => {
+    const area = bounds();
+    barEdge = event.type === 'keydown' ? (y < 0 ? 'top' : y > 0 ? 'bottom' : barEdge)
+      : rect.y + y < area.y + area.h / 2 ? 'top' : 'bottom';
+    dockPosition = { x: rect.x + x, y: rect.y + y }; layout();
+  }, () => true, { cancel: rect => { barEdge = rect.edge; dockPosition = rect; layout(); } });
+  for (const edge of EDGES) {
+    const tabs = h('div', { class: 'window-zone-tabs', role: 'tablist', 'aria-label': `${edge} dock windows`, hidden: true });
+    const vertical = edge === 'left' || edge === 'right';
+    const divider = h('button', { type: 'button', class: `window-zone-divider ${vertical ? 'vertical' : 'horizontal'}`,
+      role: 'separator', 'aria-label': `Resize ${edge} dock`, 'aria-orientation': vertical ? 'vertical' : 'horizontal',
+      'aria-valuemin': '18', 'aria-valuemax': '65', hidden: true });
+    zones.set(edge, { tabs, divider }); root.append(tabs, divider);
+    movable(divider, () => ({ amount: zones.get(edge).extent / (vertical ? zoneArea.w : zoneArea.h), saved: ratios[edge] }), (rect, x, y) => {
+      const dimension = vertical ? zoneArea.w : zoneArea.h;
+      const delta = vertical ? x : y;
+      ratios[edge] = clamp(rect.amount + delta * (edge === 'right' || edge === 'bottom' ? -1 : 1) / dimension, .18, .65);
+      layout();
+    }, () => !!zoneArea, { finish: save, cancel: rect => { ratios[edge] = rect.saved; layout(); } });
+  }
   const observer = new ResizeObserver(layout);
   observer.observe(root);
-  const well = root.querySelector('.wd-well');
-  if (well) observer.observe(well);
+  observer.observe(workspace);
   observer.observe(dock);
   const set = {
     onChange: () => {},
@@ -8637,30 +8750,89 @@ function createPanels(root) {
       const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: closeThis });
       const body = h('div', { class: 'game-panel-body' }, ...content);
       const maxButton = h('button', { type: 'button', class: 'wd-tbtn', onclick: () => set.maximize(name) }, '□');
+      const position = h('select', { 'aria-label': `Position for ${title}`, onchange: event => {
+        set.dock(name, event.target.value); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus();
+      } }, ...[...EDGES.map(edge => [edge, `Dock ${edge}`]), ['float', 'Float over game']].map(([value, label]) => h('option', { value }, label)));
+      const controls = h('div', { class: 'window-layout-controls', hidden: true }, position,
+        ...[['right', 'Right sidebar'], ['split', 'Split sides'], ['bottom', 'Bottom panel']].map(([preset, label]) =>
+          h('button', { type: 'button', onclick: () => { set.preset(preset); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus(); } }, label)),
+        h('button', { type: 'button', onclick: () => { set.resetLayout(); controls.hidden = true; layoutButton.setAttribute('aria-expanded', 'false'); layoutButton.focus(); } }, 'Reset layout'));
+      const layoutButton = h('button', { type: 'button', class: 'wd-tbtn', title: 'Layout', 'aria-label': `Layout ${title}`, 'aria-expanded': 'false',
+        onclick: () => { controls.hidden = !controls.hidden; layoutButton.setAttribute('aria-expanded', String(!controls.hidden)); if (!controls.hidden) position.focus(); } }, '▦');
       const head = h('header', { class: 'game-panel-head', tabindex: 0,
         'aria-label': `Move ${title} with arrow keys or drag`, title: 'Drag to move; double-click to maximize' },
         h('h2', {}, title),
-        h('div', { class: 'window-actions' },
+        h('div', { class: 'window-actions' }, layoutButton,
           h('button', { type: 'button', class: 'wd-tbtn', title: 'Minimize', 'aria-label': `Minimize ${title}`, onclick: () => set.minimize(name) }, '−'),
           maxButton,
           h('button', { type: 'button', class: 'wd-tbtn sheet-close', title: 'Close', 'aria-label': `Close ${title}`, onclick: closeThis }, '✕')));
       const grip = h('button', { type: 'button', class: 'window-resize', title: 'Drag to resize; arrow keys also resize', 'aria-label': `Resize ${title} with arrow keys or drag` }, '◢');
-      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, body, grip);
+      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, controls, body, grip);
       const restore = h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Restore ${title}`, onclick: () => set.open(name) }, title);
       const dockEntry = h('div', { class: 'window-dock-entry', hidden: true }, restore,
         h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Close minimized ${title}`, onclick: closeThis }, '✕'));
       dockItems.append(dockEntry);
-      const panel = { el, body, title, maxButton, grip, dockEntry, state: 'closed', rect: null, maximized: false, order: 0,
+      const tab = h('button', { type: 'button', class: 'wd-tbtn', role: 'tab', 'aria-controls': `panel-${name}`, onclick: () => set.open(name) }, title);
+      const preferred = saved.zones?.[name];
+      const panel = { el, body, title, maxButton, grip, dockEntry, tab, position, zone: [...EDGES, 'float'].includes(preferred) ? preferred : 'right', allocated: null, state: 'closed', rect: null, maximized: false, order: 0,
         onOpen: options?.onOpen, onClose: options?.onClose };
       panels.set(name, panel);
       el.addEventListener('pointerdown', () => activate(name));
       el.addEventListener('focusin', () => activate(name));
       head.addEventListener('dblclick', event => { if (!event.target.closest('button')) set.maximize(name); });
-      movable(head, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }, () => !panel.maximized);
-      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); });
+      const clearPreview = () => { preview.hidden = true; pendingSnap = null; };
+      movable(head, () => panel.rect, (rect, x, y, event) => {
+        activate(name);
+        if (event.type === 'keydown' && panel.zone !== 'float') {
+          set.dock(name, x < 0 ? 'left' : x > 0 ? 'right' : y < 0 ? 'top' : 'bottom'); return;
+        }
+        if (panel.zone === 'float') { panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }
+        if (event.type === 'keydown') return;
+        const host = root.getBoundingClientRect(), area = zoneArea;
+        const px = event.clientX - host.left, py = event.clientY - host.top;
+        const distances = [['left', Math.abs(px - area.x)], ['right', Math.abs(px - area.x - area.w)],
+          ['top', Math.abs(py - area.y)], ['bottom', Math.abs(py - area.y - area.h)]].sort((a, b) => a[1] - b[1]);
+        clearPreview();
+        if (distances[0][1] > 64 || px < area.x - 24 || px > area.x + area.w + 24 || py < area.y - 24 || py > area.y + area.h + 24) return;
+        pendingSnap = distances[0][0];
+        const edge = effective(pendingSnap, area), boxes = geometry(area, groupsFor(area, name, pendingSnap));
+        place(preview, boxes[edge]); preview.textContent = `Dock ${pendingSnap}`; preview.hidden = false;
+      }, () => !panel.maximized, { start: clearPreview, finish: () => {
+        const edge = pendingSnap; clearPreview(); if (edge) set.dock(name, edge);
+      }, cancel: rect => { clearPreview(); if (panel.zone === 'float') panel.rect = rect; layout(); } });
+      tab.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const members = [...tab.parentElement.children], index = members.indexOf(tab);
+        const target = event.key === 'Home' ? 0 : event.key === 'End' ? members.length - 1 : (index + (event.key === 'ArrowLeft' ? -1 : 1) + members.length) % members.length;
+        event.preventDefault(); event.stopPropagation(); members[target].click(); members[target].focus();
+      });
+      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); }, () => panel.zone === 'float', { cancel: rect => { panel.rect = rect; layout(); } });
       installSheetDrag(grabber, el, closeThis);
       root.append(el);
       return body;
+    },
+    dock(name, edge) {
+      const panel = panels.get(name);
+      if (!panel || ![...EDGES, 'float'].includes(edge)) return;
+      if (edge === 'float' && panel.zone !== 'float' && panel.allocated) panel.rect = { ...panel.allocated };
+      panel.zone = edge; panel.maximized = false;
+      activate(name); sync(); save();
+      announcement.textContent = `${panel.title}: ${edge === 'float' ? 'floating over game' : `docked ${edge}`}`;
+    },
+    float(name) { set.dock(name, 'float'); },
+    preset(preset) {
+      if (!['right', 'split', 'bottom'].includes(preset)) return;
+      let index = 0;
+      for (const panel of panels.values()) {
+        panel.zone = preset === 'split' ? (index++ % 2 ? 'left' : 'right') : preset;
+        panel.maximized = false;
+      }
+      sync(); save(); announcement.textContent = 'Window layout updated';
+    },
+    resetLayout() {
+      for (const edge of EDGES) ratios[edge] = .32;
+      barEdge = 'bottom'; dockPosition = null;
+      set.preset('right');
     },
     toggle(name, label, { short, className = '', aria } = {}) {
       const button = h('button', { type: 'button', class: `wd-tbtn ${className}`.trim(),
