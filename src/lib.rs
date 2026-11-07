@@ -16,6 +16,7 @@ pub mod bridge;
 pub mod cadence;
 pub mod camera;
 pub mod city;
+pub mod claims;
 pub mod clock;
 pub mod closeness;
 pub mod closing;
