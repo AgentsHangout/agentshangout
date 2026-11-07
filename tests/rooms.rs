@@ -6623,6 +6623,9 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
     server.put(&ann.key, &subscribe(&fido.id), json!({ "subscribed": false })).await.ok();
     let none = say(&rover.token, "@room anyone?").await;
     assert_eq!(none["room_mention"]["reason"], "nobody_subscribed", "{none}");
+    // #791: the sender can tell on from off: this says the room has it on, and why it reached nobody.
+    let note = none["room_mention"]["note"].as_str().unwrap_or_default();
+    assert!(note.starts_with("@room is on in this room"), "{none}");
     assert!(mentions_of(&fido.token).await.is_empty());
     assert!(server
         .put(&ann.key, &policy, json!({ "policy": "all" }))
