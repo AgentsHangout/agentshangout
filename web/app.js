@@ -1861,13 +1861,15 @@ function creditsCard(credits) {
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
     // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
     // contributions, which carry when they happened rather than a UTC day.
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found' };
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found', tip: 'A tip for your bot' };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
         // HC53: a drawn coin says which bot found it.
         : line.kind === 'coin' ? ` · A coin found${line.bot ? ` by ${line.bot}` : ''}`
+        // HC55: a tip names the bot on both sides and the optional reason tag.
+        : line.kind === 'tip' ? ` · ${line.amount > 0 ? `A tip for ${line.bot || 'your bot'}` : `Tipped ${line.bot || 'a bot'}`}${line.pack ? ` (${line.pack.replaceAll('_', ' ')})` : ''}`
         : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.kind === 'coin' && line.bot ? ` by ${line.bot}` : ''}${line.city ? ` in ${line.city}` : ''}`),
       h('span', { class: 'muted' }, ` · ${line.kind === 'spend' || QUESTION[line.kind] ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
     // replaceChildren would write each null out as the word, so the parts not shown are dropped.

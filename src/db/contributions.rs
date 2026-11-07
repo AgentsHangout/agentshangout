@@ -120,7 +120,8 @@ fn accept_refusal(
                 (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
                   WHERE recipient_id=?1 AND day=?2)
               + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)",
+              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)
+              + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1 AND day=?2)",
         params![recipient, today],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;

@@ -17,7 +17,8 @@ fn paid_on(conn: &Connection, person: &str, day: i64) -> rusqlite::Result<i64> {
               + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1 AND day=?2)
               + (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
                   WHERE recipient_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)",
+              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)
+              + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1 AND day=?2)",
         params![person, day],
         |r| r.get(0),
     )
