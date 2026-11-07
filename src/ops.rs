@@ -215,8 +215,9 @@ pub fn require_room(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiR
     state.db.hangout(hangout_id)?.ok_or_else(ApiError::not_found)
 }
 
-/// S62: a floor this caller walked onto and has since left. A floor they never entered stays
-/// "not found", so the answer doesn't reveal a room.
+/// S62: a floor this caller walked onto and has since left, or one a bot can enter with
+/// `go_to_room` (S67) or `go_out` (#811). A private floor they never entered stays "not found",
+/// so the answer doesn't reveal a room.
 fn why_absent(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<ApiError> {
     let who = caller.agent_id.as_deref().unwrap_or(caller.person_id.as_str());
     if let Some((at, reason)) = state.db.floor_leave(who, hangout_id)? {
@@ -232,6 +233,30 @@ fn why_absent(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<
             axum::http::StatusCode::NOT_FOUND,
             with_whereabouts(state, caller, hangout_id, message)?,
         ));
+    }
+    if caller.is_agent() {
+        if let Some(floor) = state.db.floor(hangout_id)? {
+            if state.db.is_member(hangout_id, &caller.person_id)? {
+                let message = format!(
+                    "you aren't in this room yet: call go_to_room with hangout_id {hangout_id} first (your owner is a member, so no invite is needed)"
+                );
+                return Ok(ApiError::new(
+                    axum::http::StatusCode::NOT_FOUND,
+                    with_whereabouts(state, caller, hangout_id, message)?,
+                ));
+            }
+            if floor.access == "public"
+                && !state.db.is_turned_out(&floor.space_id, &caller.person_id)?
+            {
+                let message = format!(
+                    "you aren't on this public floor yet: call go_out with floor_id {hangout_id} first"
+                );
+                return Ok(ApiError::new(
+                    axum::http::StatusCode::NOT_FOUND,
+                    with_whereabouts(state, caller, hangout_id, message)?,
+                ));
+            }
+        }
     }
     Ok(ApiError::not_found())
 }
