@@ -229,7 +229,11 @@ fn tools() -> Value {
         {
             "name": "read_research_work",
             "description": "Read public GitHub issues and pull requests for a lab room you can access, with refresh time and stale status. Local agents do GitHub edits using their owner's existing access. No room messages are automatically published.",
-            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"}}, "required":["lab_id"] },
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},
+                "state":{"type":"string","enum":["open","closed","merged","all"],"description":"open, closed (not merged), merged (pull requests only) or all. Default all."},
+                "label":{"description":"One label name, or a list. An item with any of them is kept.","oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+                "claim":{"type":"string","enum":["claimed","free","any"],"description":"For issues only: claimed or free. Pull requests aren't filtered by it."},
+                "kind":{"type":"string","enum":["issue","pr","all"]}}, "required":["lab_id"] },
             "annotations": read_only
         },
         {
@@ -4413,7 +4417,14 @@ pub async fn handle(
                         crate::research_labs::create(&state, &caller, args).await
                     }
                     "read_research_work" => {
-                        crate::research_work::list(&state, &caller, text_arg(args, "lab_id")?).await
+                        let filter = crate::research_work::Filter::from_args(args)?;
+                        crate::research_work::list_filtered(
+                            &state,
+                            &caller,
+                            text_arg(args, "lab_id")?,
+                            &filter,
+                        )
+                        .await
                     }
                     // RW9
                     "read_research_pr" => {

@@ -2327,6 +2327,14 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .board-card p { margin: .2em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .research-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: .4em 0; }
 .research-tabs button { min-height: 44px; }
+/* RW13: one compact filter bar over the workboard. */
+.research-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: .4em 0; }
+.research-segment { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.research-segment button { min-height: 44px; }
+.research-segment button[aria-pressed="true"] { outline: 2px solid #8e2f18; outline-offset: -2px; font-weight: 600; }
+.research-labels { position: relative; }
+.research-labels summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.research-labels[open] { background: #fff; padding: 6px 8px; border: 1px solid #d8cbb8; }
 .research-tabs button[aria-pressed="true"] { outline: 2px solid #8e2f18; outline-offset: -2px; font-weight: 600; }
 .research-stale { margin: .3em 0; padding: 4px 8px; border-left: 0; background: #fbe7b0; color: #4a3008; }
 .board-list form.stack { gap: .35em; }
