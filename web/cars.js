@@ -39,7 +39,7 @@ const GLASS = ['#b4dbf0', '#3b5774'];
 const TYRE = '#14151c';
 const RIM = '#7c8290';
 const CHROME = '#eef3fa';
-const GOLD = ['#fff0a0', '#e0b02a', '#a8761a'];
+const GOLD = ['#ffe566', '#e8a800', '#9a6200'];
 
 // ---------------------------------------------------------------------------------------------
 // The bodies. A car lies along `s` (0 at the tail, L at the nose) and across `t` (0 to W). A part's
@@ -255,7 +255,7 @@ function paintPart(g, cx, part) {
   const tA = part.t ? part.t[0] : 0;
   const tB = part.t ? part.t[1] : cx.spec.W;
   const mat = part.mat || 'body';
-  const base = mat === 'body' && F.gold ? mix(look.color, '#b8860b', 0.22) : matColor(mat, look);
+  const base = mat === 'body' && F.gold ? mix(look.color, '#c88a00', 0.55) : mat === 'trim' && F.gold ? GOLD[0] : matColor(mat, look);
   const faces = [];
   const sideT = fr.sideT === cx.spec.W ? tB : tA;
   faces.push({ side: true, poly: part.pts.map((p) => fr.at(p[0], sideT, p[1])), n: [0, fr.sideSign, 0], t: sideT });
@@ -297,7 +297,7 @@ function paintPart(g, cx, part) {
       const [y0, y1] = spanY(f.poly);
       const gr = g.createLinearGradient(x0, y1, x1, y0);
       gr.addColorStop(0, 'rgba(255,250,210,0)');
-      gr.addColorStop(0.5, `rgba(255,250,210,${top ? 0.26 : 0.2})`);
+      gr.addColorStop(0.5, `rgba(255,250,210,${top ? 0.5 : 0.38})`);
       gr.addColorStop(1, 'rgba(255,250,210,0)');
       g.fillStyle = gr;
       g.fillRect(x0 - 1, y0 - 1, x1 - x0 + 2, y1 - y0 + 2);
@@ -576,7 +576,7 @@ export function paintCarSparkle(bg, X, Y, look0, t = 0) {
     const k = (a - 0.35) / 0.65;
     const r = 1 + 2.6 * k;
     bg.globalAlpha = k;
-    bg.strokeStyle = '#fffbe0';
+    bg.strokeStyle = '#ffe9a0';
     bg.lineWidth = 1.1;
     bg.beginPath();
     bg.moveTo(X + dx - r, Y + dy);

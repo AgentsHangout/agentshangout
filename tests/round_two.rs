@@ -2644,6 +2644,7 @@ fn no_page_script_can_turn_a_string_from_the_api_into_markup_script_or_a_link_th
         "outside-plant.js",
         "outside-square.js",
         "pets.js",
+        "cars.js",
     ] {
         let source = read_web(name);
         for banned in [
