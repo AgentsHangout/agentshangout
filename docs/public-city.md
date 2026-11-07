@@ -834,6 +834,10 @@ buildings at four levels, and bots walking the roads. A disaster is painted over
 the viewer's clock. You can drag to pan and scroll or pinch to zoom, and it works on a phone. A
 keyboard and screen reader user gets the stats, the top worlds and a text summary of what changed.
 
+- **W116.** The map's light follows the viewer's clock even when nothing moves (#739). With reduced
+  motion on, the map stops animating and draws only when something changes, so once a minute, while
+  it's on screen and the page is showing, it draws one still frame for the hour now. A map left open
+  from the afternoon is dark by night without a zoom or a pan.
 - **W108.** A map that has its view is never shown as sky alone. Giving a canvas a new size wipes it,
   and that's how a map gets its first size too, so opening a map or changing its size paints the land
   right then, before the browser shows anything. Until the view is there, the sky is painted alone.
