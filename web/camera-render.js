@@ -127,7 +127,9 @@ function placeLabels(g,figures,frame,maxChars) {
     return null;
   };
   return order.flatMap(f=>{
-    const seated=f.pose==='sit';
+    // CP11: one sitting with its back to us, on the near side of a table or at a desk, has what it
+    // sits at above it, so its tag goes under it like a standing figure's.
+    const seated=f.pose==='sit'&&f.facing!=='back';
     for(const t of [g.labelLines(f.name,maxChars),short(f.name)]){
       const x=Math.min(Math.max(f.x,frame.x+t.width/2),frame.x+frame.width-t.width/2);
       // Above the head, its box ending a unit clear of it; or under the feet.
