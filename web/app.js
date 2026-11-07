@@ -9996,7 +9996,8 @@ function researchLabsPanel({ panels, me, place, show, roomId, openBoards }) {
               labels = [...new Set((everything.items || []).flatMap((item) => item.labels || []))]
                 .sort((a, b) => a.localeCompare(b));
             }
-            const data = await api(`${base}?${workQuery(filter)}`);
+            // The lab id is encoded in base; the query comes from URLSearchParams, so it joins with plain concatenation.
+            const data = await api(base + '?' + workQuery(filter));
             if (ticket !== current || mine !== latest) return;
             const member = (data.items || []).every((item) => Array.isArray(item.watchers));
             work.replaceChildren(...[
