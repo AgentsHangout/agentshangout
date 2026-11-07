@@ -2059,7 +2059,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 }
 
 /* The outside of a place: a stage over the map's well with the same dock and Build panel a room has.
-   The map keeps going underneath. Its tools give way to the dock, which takes their row. */
+   The map keeps going underneath. Its tools give way to the dock, which takes their row. The well
+   already stops at a docked panel (W115), so the stage fills it right up to the panel. */
 .outside-stage { position: absolute; inset: 3px; z-index: 2; overflow: hidden; background: #79b7e0; }
 .outside-stage[hidden] { display: none; }
 .outside-canvas { display: block; touch-action: none; }
@@ -2068,13 +2069,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .wd.wd-game.has-dock { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
 .wd.wd-game.has-dock > .wd-status { grid-row: 5; }
 .wd-game.outside-open > .game-palette { display: none; }
-@media (min-width: 760px) {
-  .wd-game.outside-panel .outside-stage { right: 424px; }
-}
 @media (max-width: 759px) {
   .wd-game > .game-panel-outside { height: max(55%, calc(100% - 52.5vw - 18px)); }
   .game-panel-outside .game-panel-body { flex: 1; }
-  .wd-game.outside-panel .outside-stage { bottom: calc(max(55%, calc(100% - 52.5vw - 18px)) + 6px); }
   /* The dock says what the status bar would, and the town has no use here. */
   .wd-game.outside-open > .wd-status { display: none; }
 }

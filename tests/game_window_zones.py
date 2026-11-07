@@ -74,7 +74,12 @@ with sync_playwright() as pw:
         page.get_by_role('tab', name='Chat', exact=True).click()
         assert page.locator('#panel-room').is_visible() and page.locator('#panel-bots').is_hidden()
         assert page.get_by_role('textbox', name='Message').input_value() == 'Keep this draft'
+        chat_width = page.locator('#panel-room').bounding_box()['width']
         page.get_by_role('tab', name='My bots', exact=True).click()
+        if width >= 1000:
+            # The bots graph is wide: the same zone opens wider for it, and the scene follows.
+            assert page.locator('#panel-bots').bounding_box()['width'] > chat_width + 100, 'a wide window widens its zone'
+            clear_scene()
         page.locator('#panel-bots').get_by_role('button', name='Layout My bots', exact=True).click()
         page.get_by_label('Position for My bots', exact=True).select_option('left')
         clear_scene()
