@@ -1,4 +1,4 @@
-// Run with node tests/off_map_ui.cjs. Runs the shipped My bots row (S86, S89): a bot in a room with
+// Run with node tests/off_map_ui.cjs. Runs the shipped My bots row (S86, S89, S90): a bot in a room with
 // no spot on the map says so, and a bot the map can center on keeps its Center button.
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -43,6 +43,16 @@ assert.equal(off.length, 1, 'the row says it is off the map');
 assert.equal(text(off[0]), "Innovation Lab isn't on the map, so there's nowhere to center on it");
 assert.equal(find(row, (n) => n.tag === 'button' && n.kids.includes('Center')).length, 0, 'no Center');
 
+// S90: the person who runs that space also gets a link to its settings; nobody else does.
+const mine = c.yourBotRow(lab, { offMap: true, settingsPath: '/s/sp 1', reload: () => {} });
+const links = find(mine, (n) => n.tag === 'a' && text(n) === 'Space settings');
+assert.equal(links.length, 1);
+assert.equal(links[0].attrs.href, '/s/sp 1');
+assert.equal(text(links[0]), 'Space settings');
+assert.equal(find(row, (n) => n.tag === 'a' && text(n) === 'Space settings').length, 0, 'no link without settingsPath');
+const mineOnMap = c.yourBotRow(lab, { focusOn: () => {}, settingsPath: '/s/x', reload: () => {} });
+assert.equal(find(mineOnMap, (n) => n.tag === 'a' && text(n) === 'Space settings').length, 0, 'a link only rides on the off-map line');
+
 // A bot the map can center on keeps Center and says nothing about the map.
 const onMap = c.yourBotRow({ ...lab, room: { id: 'r2', name: 'Fairground' } }, { focusOn: () => {}, reload: () => {} });
 assert.equal(find(onMap, (n) => String(n.attrs.class || '').includes('off-map')).length, 0);
@@ -54,5 +64,8 @@ assert.equal(c.offMapText({}), "Its room isn't on the map, so there's nowhere to
 
 // The map's list marks a bot off the map only when it's in a room and has no tile.
 assert.ok(app.includes('const offMap = !tile && Boolean(bot.room);'));
-assert.ok(app.includes('return yourBotRow(bot, { focusOn, offMap, reload:'));
+assert.ok(app.includes('return yourBotRow(bot, { focusOn, offMap, settingsPath:'));
+// The owner's off-map floors come from /api/spaces, which lists only the caller's own spaces.
+assert.ok(app.includes("const owned = await api('/api/spaces').catch(() => null);"));
+assert.ok(app.includes('const spaceId = offMap ? offMapFloors.get(bot.room.id) : null;'));
 console.log('My bots: a bot in a room off the map says so; one on the map keeps Center.');

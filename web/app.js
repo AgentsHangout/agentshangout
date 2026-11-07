@@ -2315,9 +2315,10 @@ const where = (bot) => {
 };
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
 // Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
-// has no spot on the map (S89), so there's nothing to center on.
+// has no spot on the map (S89), so there's nothing to center on. `settingsPath`, only when you run
+// that space, links to its settings (S90).
 const offMapText = (bot) => `${bot.room?.name || 'Its room'} isn't on the map, so there's nowhere to center on it`;
-function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
+function yourBotRow(bot, { focusOn = null, offMap = false, settingsPath = null, reload }) {
   return h('div', { class: 'row' },
     // L44: its picture, in its own look, as the map and the wardrobe draw it.
     h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
@@ -2325,7 +2326,7 @@ function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
       h('small', {}, where(bot)),
-      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot)) : null,
+      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot), settingsPath ? [' ', link(settingsPath, 'Space settings')] : null) : null,
       h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
       h('small', { class: 'muted' }, bot.next
         ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
@@ -10208,6 +10209,8 @@ async function worldView(id, { home = false } = {}) {
 
   let botsTab = 'yours';
   let myBots = [];
+  // S90: the floors of your own spaces that have no building on the map, as the space each belongs to.
+  let offMapFloors = new Map();
   // #531: one full-screen My bots view: where each of your bots is and what it's doing, then each
   // bot's connections, monitoring and usage (what Trust & bots showed), in one place.
   const botsBody = h('div', { class: 'my-bots-list' });
@@ -10228,7 +10231,8 @@ async function worldView(id, { home = false } = {}) {
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
         // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
         const offMap = !tile && Boolean(bot.room);
-        return yourBotRow(bot, { focusOn, offMap, reload: async () => { await loadBots(true); trust?.load(); } });
+        const spaceId = offMap ? offMapFloors.get(bot.room.id) : null;
+        return yourBotRow(bot, { focusOn, offMap, settingsPath: spaceId ? `/s/${encodeURIComponent(spaceId)}` : null, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
@@ -10271,6 +10275,9 @@ async function worldView(id, { home = false } = {}) {
     botsLoad = (async () => {
       const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
       myBots = bots;
+      // S90: /api/spaces lists only your own spaces, so this says nothing about anyone else's.
+      const owned = await api('/api/spaces').catch(() => null);
+      offMapFloors = new Map(owned ? [owned.house, ...owned.third].filter((each) => !each.on_map).flatMap((each) => each.floors.map((floor) => [floor.id, each.space.id])) : []);
       // The count over a building turns gold for one of these.
       world.myBots = new Set(bots.map((bot) => bot.name));
       world.ownerName = me.name;
