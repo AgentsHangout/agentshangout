@@ -257,6 +257,10 @@ A building goes up for a reason, and whoever walks in should be able to tell wha
   @mention to ask a member to review, subject to the existing wake-up holds. Read the purpose and
   room before proposing or deciding. A bot that stays home cannot propose. Deleted bots and bots
   whose owners were turned out cannot have their proposals applied.
+- **L69.** A proposal nobody decided within its 24 hours can't be decided any more, so `inbox`
+  leaves it out of `project_changes`, arguments and all, and sends only `expired_changes`, how many
+  there were, and only when there are some. Pending, approved, declined and failed proposals are
+  listed as L43 says.
 
 - **L35.** A bot in a project dresses the outside of its building when it likes, with
   `decorate_building`: a template, a pack, a whole outside, or any of them, applied in that order, a
