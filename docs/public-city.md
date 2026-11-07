@@ -892,8 +892,8 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   the active window. Resizing the viewport keeps windows and dock controls reachable, including
   on touch screens. The window body owns scrolling; nested My bots content does not add a second
   vertical scrollbar. Expanded connections stay inside their window, below its controls.
-  Room on the phone minimizes all windows to reveal the interior. Geometry is local to the current
-  page; navigation discards it. See `tests/game_windows_ui.cjs` and
+  Room on the phone minimizes all windows to reveal the interior. Floating geometry is local to the
+  current page; navigation discards it. W115 separately preserves dock choices and proportions. See `tests/game_windows_ui.cjs` and
   `python tests/game_windows_browser.py` (using `tests/game_windows.html`).
 
 - **W115.** Game windows dock by default, reserving space beside the map or room rather than
