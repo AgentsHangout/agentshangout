@@ -1,4 +1,4 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29 and HC44 in docs/economy.md.
 //! Contributions on a board card (HC36 to HC43) are in db/contributions.rs and boards.rs.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
@@ -20,6 +20,8 @@ use crate::{
 pub const GATHERING_HC: i64 = 20;
 /// HC3 and HC4: a good trip pays the visiting owner and the resident who let the bot in.
 pub const GOOD_TRIP_HC: i64 = 5;
+/// HC44: the most new credits the whole site makes in one UTC week, from everything that mints them.
+pub const SITE_MINT_A_WEEK: i64 = 1000;
 /// HC6: the most anyone is credited for things that happened on one UTC day.
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
@@ -44,6 +46,8 @@ pub struct Credits {
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
+    /// HC35: how many merged pull requests have paid.
+    pub merged_prs: i64,
     /// Cities they're in that don't pay them anything new yet (HC5, HC13), by id.
     pub cities_not_earning: Vec<String>,
     /// HC14: every pack that costs credits, and whether they have it.
@@ -181,6 +185,7 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     out.gatherings = totals.gatherings;
     out.good_trips = totals.good_trips;
     out.hosted_trips = totals.hosted_trips;
+    out.merged_prs = totals.merged_prs;
     let bought = db.bought_packs(person_id)?;
     out.packs = PACKS
         .iter()

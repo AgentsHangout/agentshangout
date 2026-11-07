@@ -2105,9 +2105,15 @@ fn every_kind_of_credit_history_line_has_its_own_words() {
     let app = include_str!("../web/app.js").replace("\r\n", "\n");
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
-    for kind in
-        ["gathering", "good_trip", "hosted_trip", "question", "question_refund", "question_award"]
-    {
+    for kind in [
+        "gathering",
+        "good_trip",
+        "hosted_trip",
+        "question",
+        "question_refund",
+        "question_award",
+        "merged_pr",
+    ] {
         assert!(card.contains(&format!(" {kind}: '")), "the history has no words for {kind}");
     }
     assert!(card.contains("line.kind === 'spend'"), "the history has no words for a spend");
