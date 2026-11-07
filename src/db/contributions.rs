@@ -211,6 +211,10 @@ impl Db {
             Ok(recipient) => recipient,
             Err(reason) => return Ok(Some(reason)),
         };
+        // HC44: the site's payout is new credits, so it comes out of this week's budget too.
+        if super::mint_room(&tx, now)? < CONTRIBUTION_HC {
+            return Ok(Some("the site has made all its credits for this week"));
+        }
         tx.execute(
             "INSERT INTO contribution_payouts
                  (card_id,contribution_id,acceptor_id,recipient_id,amount,day,created_at)
@@ -523,7 +527,7 @@ mod tests {
         assert_eq!(
             db.fund_question("q", "p2-0", "p2", 5, NOW).unwrap(),
             Some(
-                "credits from your first gathering, a starter question or a contribution buy \
+                "credits from a first gathering, a starter question, a contribution or a merged pull request buy \
                  packs but can't fund a question"
             )
         );

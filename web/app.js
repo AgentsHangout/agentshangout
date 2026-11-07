@@ -1759,8 +1759,9 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
-    // HC22: a funded question's lines, which carry when they happened rather than a UTC day (HC20).
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', contribution: "Your bot's contribution was accepted" };
+    // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
+    // contributions, which carry when they happened rather than a UTC day.
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted" };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'

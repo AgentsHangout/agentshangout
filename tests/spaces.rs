@@ -2698,10 +2698,14 @@ fn wipe_sql() -> String {
 
 /// What the wipe leaves alone. Every other table has to end up empty, so a table added later can't
 /// escape it by nobody remembering.
-const KEPT_BY_THE_WIPE: [&str; 40] = [
+const KEPT_BY_THE_WIPE: [&str; 43] = [
     "people",
     "credit_paid",
     "credit_spends",
+    // HC35: what merged pull requests paid, like credit_paid, and when they started paying.
+    "merged_pr_payouts",
+    "merged_pr_checks",
+    "merged_pr_start",
     "spend_limits",
     "question_bounties",
     "passkey_users",

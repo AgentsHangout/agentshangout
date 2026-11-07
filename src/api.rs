@@ -519,6 +519,14 @@ async fn make_person(
 
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    // HC35: what's newly merged pays before the balance is read, within a few seconds.
+    if !caller.is_house {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::pr_credits::check(&state, &caller.person_id),
+        )
+        .await;
+    }
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
 }
 
