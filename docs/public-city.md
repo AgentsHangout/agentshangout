@@ -907,7 +907,9 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
 
 - **W115.** Game windows dock by default, reserving space beside the map or room rather than
   covering it. Left, right, top and bottom zones have adjustable boundaries; windows in the
-  same zone share tabs. Dragging a title to an edge previews the destination before release.
+  same zone share tabs. A side zone showing a window that needs room (the bots graph, a crew,
+  the Lific board) keeps its own, wider proportion, and the Build outside picture fills the scene
+  right up to the docked panel. Dragging a title to an edge previews the destination before release.
   A docked window dragged away from an edge stays docked; Float over game in Layout is the
   explicit way to overlap the scene. A floating window can snap back to an edge. Cancelling
   a drag restores its starting state. Layout also offers sidebar, split-sides and bottom

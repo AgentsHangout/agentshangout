@@ -8780,7 +8780,10 @@ function createPanels(root) {
   const storageKey = `game-zones-v1:${typeof location === 'undefined' ? '/' : location.pathname}`;
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch { /* local convenience only */ }
-  const ratios = Object.fromEntries(EDGES.map(edge => [edge, Math.max(.18, Math.min(.65, Number(saved.ratios?.[edge]) || .32))]));
+  // A graph or a board needs room, so a side zone showing one keeps its own, wider proportion.
+  const WIDE = new Set(['bots', 'crew', 'lific']);
+  const RATIOS = { ...Object.fromEntries(EDGES.map(edge => [edge, .32])), 'left-wide': .6, 'right-wide': .6 };
+  const ratios = Object.fromEntries(Object.entries(RATIOS).map(([key, fallback]) => [key, Math.max(.18, Math.min(.65, Number(saved.ratios?.[key]) || fallback))]));
   const workspace = h('div', { class: 'window-workspace', 'aria-hidden': 'true' });
   const preview = h('div', { class: 'window-snap-preview', hidden: true, 'aria-hidden': 'true' });
   const announcement = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
@@ -8848,9 +8851,12 @@ function createPanels(root) {
   function geometry(area, groups) {
     const gap = 8, sizes = {};
     for (const edge of EDGES) {
-      const dimension = edge === 'left' || edge === 'right' ? area.w : area.h;
+      const vertical = edge === 'left' || edge === 'right';
+      const dimension = vertical ? area.w : area.h;
       const minimum = 280;
-      sizes[edge] = groups[edge].length ? Math.max(Math.min(minimum, dimension * .6), dimension * ratios[edge]) : 0;
+      const shown = groups[edge].reduce((a, b) => (!a || b[1].order > a[1].order ? b : a), null)?.[0];
+      zones.get(edge).key = vertical && WIDE.has(shown) ? `${edge}-wide` : edge;
+      sizes[edge] = groups[edge].length ? Math.max(Math.min(minimum, dimension * .6), dimension * ratios[zones.get(edge).key]) : 0;
     }
     // The scene always retains usable space. Multiple windows in a zone use tabs, not stacking.
     for (const [first, second, dimension, reserve] of [['left', 'right', area.w, Math.min(280, area.w * .4)], ['top', 'bottom', area.h, Math.min(240, area.h * .35)]]) {
@@ -8906,7 +8912,7 @@ function createPanels(root) {
       panel.position.value = panel.zone;
       if (panel.state !== 'open') { panel.el.hidden = true; continue; }
       if (!panel.rect) {
-        const wide = ['bots', 'crew', 'lific'].includes(name);
+        const wide = WIDE.has(name);
         panel.rect = { x: area.x + area.w - (wide ? 880 : 400), y: area.y + 12,
           w: wide ? 880 : 400, h: Math.min(600, area.h - 24) };
       }
@@ -9005,12 +9011,12 @@ function createPanels(root) {
       role: 'separator', 'aria-label': `Resize ${edge} dock`, 'aria-orientation': vertical ? 'vertical' : 'horizontal',
       'aria-valuemin': '18', 'aria-valuemax': '65', hidden: true });
     zones.set(edge, { tabs, divider }); root.append(tabs, divider);
-    movable(divider, () => ({ amount: zones.get(edge).extent / (vertical ? zoneArea.w : zoneArea.h), saved: ratios[edge] }), (rect, x, y) => {
+    movable(divider, () => ({ amount: zones.get(edge).extent / (vertical ? zoneArea.w : zoneArea.h), key: zones.get(edge).key, saved: ratios[zones.get(edge).key] }), (rect, x, y) => {
       const dimension = vertical ? zoneArea.w : zoneArea.h;
       const delta = vertical ? x : y;
-      ratios[edge] = clamp(rect.amount + delta * (edge === 'right' || edge === 'bottom' ? -1 : 1) / dimension, .18, .65);
+      ratios[rect.key] = clamp(rect.amount + delta * (edge === 'right' || edge === 'bottom' ? -1 : 1) / dimension, .18, .65);
       layout();
-    }, () => !!zoneArea, { finish: save, cancel: rect => { ratios[edge] = rect.saved; layout(); } });
+    }, () => !!zoneArea, { finish: save, cancel: rect => { ratios[rect.key] = rect.saved; layout(); } });
   }
   const observer = new ResizeObserver(layout);
   observer.observe(root);
@@ -9105,7 +9111,7 @@ function createPanels(root) {
       sync(); save(); announcement.textContent = 'Window layout updated';
     },
     resetLayout() {
-      for (const edge of EDGES) ratios[edge] = .32;
+      Object.assign(ratios, RATIOS);
       barEdge = 'bottom'; dockPosition = null;
       set.preset('right');
     },

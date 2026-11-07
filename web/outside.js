@@ -201,12 +201,10 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     yardTab.setAttribute('aria-pressed', String(shows === yardEl));
   }
 
-  // Wide enough, the stage leaves room for the panel. Narrower, the panel covers it.
   beside.addEventListener('change', () => renderDock());
   const priorChange = panels.onChange;
   panels.onChange = () => {
     priorChange?.();
-    frame.root.classList.toggle('outside-panel', active && panels.current === 'outside');
     if (active) renderDock();
   };
 
@@ -1943,7 +1941,6 @@ export function outsideBuilder({ h, api, modal, popupMenu, formError, selectedBu
     stage.hidden = true;
     toggle.hidden = true;
     if (panels.current === 'outside') panels.close(false);
-    frame.root.classList.remove('outside-panel');
     renderDock();
     cancelAnimationFrame(raf);
     raf = 0;
