@@ -35,12 +35,12 @@ const REMOVABLE = {
   arcade: [428, 124, 50, 48],
   plants: [460, 224, 20, 28],
   couch: [12, 190, 96, 34],
-  desk: [24, 98, 92, 38],
+  desk: [24, 96, 92, 40],
 };
 
 // Where the things that come with a room are drawn, nearest first, so build mode can tell what a
 // click landed on. Plants are in two places.
-const FURNITURE = [
+export const FURNITURE = [
   ['couch', 12, 188, 96, 36],
   ['beanbags', 120, 230, 88, 14],
   ['plants', 460, 224, 20, 28],
@@ -82,7 +82,7 @@ const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 // I67: the table and its seats are drawn where it stood until tables could move, and shifted by
 // however far a floor's has been moved, in whole floor cells.
 const TABLE_HOME = { x: 12, y: 1 };
-const TABLE_BLOCK = [174, 124, 132, 46];
+const TABLE_BLOCK = [176, 124, 128, 48];
 const tableShift = (table) => [((table?.x ?? TABLE_HOME.x) - TABLE_HOME.x) * FLOOR_CELL, ((table?.y ?? TABLE_HOME.y) - TABLE_HOME.y) * FLOOR_CELL];
 const shiftedSeats = ([dx, dy]) => SEATS.map((seat) => ({ ...seat, x: seat.x + dx, y: seat.y + dy, ax: seat.ax + dx, ay: seat.ay + dy }));
 
@@ -119,7 +119,7 @@ const GRID = new Uint8Array(COLS * ROWS);
 
 // Bots and people walk where the furniture isn't, so this follows what a floor has left out and
 // what has been put on it.
-function fillGrid(hidden, items = [], [dx, dy] = [0, 0]) {
+export function fillGrid(hidden, items = [], [dx, dy] = [0, 0]) {
   const left = Object.entries(REMOVABLE).filter(([item]) => !hidden.includes(item));
   const blocks = [
     ...BLOCKED,
@@ -139,7 +139,7 @@ function fillGrid(hidden, items = [], [dx, dy] = [0, 0]) {
 fillGrid([]);
 
 const free = (col, row) => col >= 0 && row >= 0 && col < COLS && row < ROWS && !GRID[row * COLS + col];
-const clear = (x, y) => free(Math.floor(x / CELL), Math.floor(y / CELL));
+export const clear = (x, y) => free(Math.floor(x / CELL), Math.floor(y / CELL));
 
 function nearestFree(col, row) {
   for (let radius = 0; radius < 30; radius++) {
@@ -4646,12 +4646,18 @@ function paintBehind(g, hidden, t) {
 }
 
 // What comes with a room and stands among the people in it, with where each is sorted by height.
-function furnitureScene(g, hidden, t, lit, deskLit, table) {
+// #807: a piece of furniture sorts by its front edge, the bottom of the rect it's drawn in, as bots
+// sort by their feet. Couch and beanbags keep their old keys: the naps are drawn against them.
+export function furnitureScene(g, hidden, t, lit, deskLit, table) {
   const [, dy] = tableShift(table);
+  const front = (word, shift = 0) => {
+    const [, , top, , deep] = FURNITURE.find(([each]) => each === word);
+    return top + deep + shift;
+  };
   return [
-    hidden.includes('desk') ? null : { y: 136, draw: () => paintDesk(g, t, deskLit) },
-    { y: 150 + dy, draw: () => paintTable(g, lit, table) },
-    hidden.includes('arcade') ? null : { y: 172, draw: () => paintArcade(g, t) },
+    hidden.includes('desk') ? null : { y: front('desk'), draw: () => paintDesk(g, t, deskLit) },
+    { y: front('table', dy), draw: () => paintTable(g, lit, table) },
+    hidden.includes('arcade') ? null : { y: front('arcade'), draw: () => paintArcade(g, t) },
     hidden.includes('couch') ? null : { y: 200, draw: () => paintCouch(g) },
     hidden.includes('beanbags') ? null : { y: 232, draw: () => paintBeanbags(g) },
   ].filter(Boolean);
