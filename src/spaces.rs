@@ -1615,6 +1615,8 @@ pub fn require_public_conversations(state: &AppState, agent_id: &str, room: &str
 pub fn place_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResult<()> {
     require_public_conversations(state, agent_id, hangout_id)?;
     let now = now();
+    // CR8: put in a room at once, a bot is off the road.
+    state.db.end_drive(agent_id)?;
     let was = state.db.bot_place(agent_id, now)?;
     let dest = state
         .db
@@ -1637,6 +1639,21 @@ pub fn place_bot(state: &AppState, agent_id: &str, hangout_id: &str) -> ApiResul
     // L17: where it is shows on The Commons.
     state.worlds.mark_stale(COMMONS_ID);
     Ok(())
+}
+
+/// CR5, CR9: a bot going to a room it can be in drives there if both have a spot on the map, and is
+/// there once it arrives (CR6); otherwise it's there at once, as `place_bot`.
+pub fn move_bot(
+    state: &AppState,
+    agent_id: &str,
+    hangout_id: &str,
+) -> ApiResult<Option<crate::db::Drive>> {
+    require_public_conversations(state, agent_id, hangout_id)?;
+    if let Some(drive) = crate::travel::start_drive(state, agent_id, hangout_id, now())? {
+        return Ok(Some(drive));
+    }
+    place_bot(state, agent_id, hangout_id)?;
+    Ok(None)
 }
 
 #[derive(Deserialize)]
@@ -1951,6 +1968,12 @@ pub fn go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<(
     go_to_with(state, caller, hangout_id).map(|_| ())
 }
 
+/// What `go_to_with` came to: the bots that followed, and the drive it began, if it did.
+struct Went {
+    followers: Vec<Value>,
+    drive: Option<crate::db::Drive>,
+}
+
 /// #651, I139: what `go_to` checks, with nothing moved, for a write sent somewhere else first.
 pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<()> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
@@ -1958,6 +1981,12 @@ pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResu
     };
     require_public_conversations(state, agent_id, hangout_id)?;
     let now = now();
+    // CR6: nothing is done in the room it's driving to until it gets there.
+    if let Some(drive) = crate::travel::current_drive(state, agent_id, now)? {
+        if drive.hangout_id == hangout_id {
+            return Err(crate::travel::still_driving(state, &drive, now));
+        }
+    }
     if state.db.bot_place(agent_id, now)?.as_deref() != Some(hangout_id)
         && state.db.on_trip_away_from(hangout_id, agent_id, now)?
     {
@@ -1966,25 +1995,31 @@ pub fn may_go_to(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResu
     Ok(())
 }
 
-/// `go_to`, saying what became of the bots following this one (S74).
-fn go_to_with(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Vec<Value>> {
+/// `go_to`, saying what became of the bots following this one (S74), and the drive it began (CR5).
+fn go_to_with(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Went> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
-        return Ok(Vec::new());
+        return Ok(Went { followers: Vec::new(), drive: None });
     };
     require_public_conversations(state, agent_id, hangout_id)?;
     let now = now();
+    // CR6: a refused action starts no new drive.
+    let driving = crate::travel::current_drive(state, agent_id, now)?;
+    if let Some(drive) = driving.as_ref().filter(|drive| drive.hangout_id == hangout_id) {
+        return Err(crate::travel::still_driving(state, drive, now));
+    }
     let was = state.db.bot_place(agent_id, now)?;
-    if was.as_deref() == Some(hangout_id) {
+    if was.as_deref() == Some(hangout_id) && driving.is_none() {
         // S61: it's doing something here, so it stays. L45: out on a floor, for longer.
         state.db.note_bot_here(agent_id, hangout_id, now)?;
         crate::routines::stay_longer(state, agent_id, hangout_id)?;
-        return Ok(Vec::new());
+        return Ok(Went { followers: Vec::new(), drive: None });
     }
     if state.db.on_trip_away_from(hangout_id, agent_id, now)? {
         return Err(ApiError::conflict("you're on a trip: go home first"));
     }
-    place_bot(state, agent_id, hangout_id)?;
-    went_itself(state, agent_id, was.as_deref(), hangout_id)
+    let drive = move_bot(state, agent_id, hangout_id)?;
+    let followers = went_itself(state, agent_id, was.as_deref(), hangout_id)?;
+    Ok(Went { followers, drive })
 }
 
 /// S74, S75: a bot that took itself from `was` to `to` stops following anyone, and the bots
@@ -2017,8 +2052,13 @@ pub fn go_to_room(
     join_owners_floor(state, caller, hangout_id)?;
     let hangout = ops::require_room(state, caller, hangout_id)?;
     ops::note_agent_write(state, caller)?;
+    // CR6: a refusal comes first, so it says no goodbye either.
+    let driving = crate::travel::current_drive(state, agent_id, now())?;
+    if let Some(drive) = driving.as_ref().filter(|drive| drive.hangout_id == hangout.id) {
+        return Err(crate::travel::still_driving(state, drive, now()));
+    }
     let was = state.db.bot_place(agent_id, now())?;
-    let moving = was.as_deref() != Some(hangout.id.as_str());
+    let moving = was.as_deref() != Some(hangout.id.as_str()) || driving.is_some();
     // A move that will be refused says no goodbye.
     if moving && state.db.on_trip_away_from(&hangout.id, agent_id, now())? {
         return Err(ApiError::conflict("you're on a trip: go home first"));
@@ -2027,13 +2067,21 @@ pub fn go_to_room(
     let goodbye = parting
         .goodbye
         .map(|text| crate::travel::say_goodbye(state, caller, was.as_deref(), moving, text));
-    let followers = go_to_with(state, caller, &hangout.id)?;
+    let Went { followers, drive } = go_to_with(state, caller, &hangout.id)?;
     let mut reply = json!({ "hangout_id": hangout.id, "name": hangout.name });
+    if let Some(drive) = &drive {
+        // CR11: the car, and how long the road takes.
+        reply["driving"] = crate::travel::drive_json(drive);
+    }
     if let Some(goodbye) = goodbye {
         reply["goodbye"] = goodbye;
     }
     if let Some(text) = parting.hello {
-        reply["hello"] = crate::travel::say_hello(state, caller, &hangout.id, moving, text);
+        // CR6: a bot still on the road can't say hello in a room it hasn't reached.
+        reply["hello"] = match &drive {
+            Some(_) => crate::travel::skipped("you're still driving: say hello once you arrive"),
+            None => crate::travel::say_hello(state, caller, &hangout.id, moving, text),
+        };
     }
     if !followers.is_empty() {
         reply["followers"] = json!(followers);

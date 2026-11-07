@@ -1,7 +1,11 @@
 //! CR1 to CR4: the cars bots drive. The catalog is fixed data; who owns what is worked out from
 //! `credit_spends` (CR3), the same way packs are.
 
+use std::collections::{HashMap, VecDeque};
+
 use serde_json::{json, Value};
+
+use crate::world::{Kind, Pos, Tiles};
 
 /// One car in the catalog (CR1). `speed` is road tiles a second (CR5). The look is what the map
 /// paints (CR10): `body` is one of `BODIES`, `color` and `trim` are CSS colours, and `flair` lists
@@ -150,6 +154,106 @@ pub fn catalog() -> Value {
     json!({ "cars": CARS.iter().map(to_json).collect::<Vec<_>>() })
 }
 
+/// CR5: the least and the most a drive takes, in seconds.
+pub const MIN_DRIVE_SECS: i64 = 3;
+pub const MAX_DRIVE_SECS: i64 = 90;
+
+/// CR5: seconds to drive `length` road tiles in a car of this speed, rounded up and kept between
+/// the least and the most.
+pub fn drive_secs(length: f64, speed: f64) -> i64 {
+    let secs = if speed > 0.0 { (length / speed).ceil() } else { MAX_DRIVE_SECS as f64 };
+    (secs as i64).clamp(MIN_DRIVE_SECS, MAX_DRIVE_SECS)
+}
+
+/// CR5: how long a route is, in tiles, taken straight between its points.
+pub fn route_length(route: &[(u16, u16)]) -> f64 {
+    route
+        .windows(2)
+        .map(|pair| {
+            let (dx, dy) = (
+                f64::from(pair[1].0) - f64::from(pair[0].0),
+                f64::from(pair[1].1) - f64::from(pair[0].1),
+            );
+            dx.hypot(dy)
+        })
+        .sum()
+}
+
+/// CR5: the shortest way from one road tile to another over road tiles only, as every tile in
+/// between and both ends. `None` if either isn't road or no road joins them.
+pub fn road_route(tiles: &Tiles, from: Pos, to: Pos) -> Option<Vec<Pos>> {
+    let road = |pos: &Pos| tiles.get(pos).is_some_and(|tile| tile.kind == Kind::Road);
+    if !road(&from) || !road(&to) {
+        return None;
+    }
+    let mut came_from: HashMap<Pos, Pos> = HashMap::new();
+    let mut queue = VecDeque::from([from]);
+    came_from.insert(from, from);
+    while let Some(at) = queue.pop_front() {
+        if at == to {
+            let mut route = vec![at];
+            let mut back = at;
+            while back != from {
+                back = came_from[&back];
+                route.push(back);
+            }
+            route.reverse();
+            return Some(route);
+        }
+        let (x, y) = at;
+        let around = [
+            x.checked_add(1).map(|x| (x, y)),
+            x.checked_sub(1).map(|x| (x, y)),
+            y.checked_add(1).map(|y| (x, y)),
+            y.checked_sub(1).map(|y| (x, y)),
+        ];
+        for next in around.into_iter().flatten() {
+            if road(&next) && !came_from.contains_key(&next) {
+                came_from.insert(next, at);
+                queue.push_back(next);
+            }
+        }
+    }
+    None
+}
+
+/// CR10: a route cut down to where it turns, so a long drive is a few points on the wire.
+pub fn corners(route: &[Pos]) -> Vec<Pos> {
+    let mut out: Vec<Pos> = Vec::new();
+    for &pos in route {
+        if out.last() == Some(&pos) {
+            continue;
+        }
+        while out.len() >= 2 {
+            let (a, b) = (out[out.len() - 2], out[out.len() - 1]);
+            let straight = (a.0 == b.0 && b.0 == pos.0) || (a.1 == b.1 && b.1 == pos.1);
+            if !straight {
+                break;
+            }
+            out.pop();
+        }
+        out.push(pos);
+    }
+    out
+}
+
+/// CR5: where a car is on its route, as a tile, a fraction `f` of the way along it.
+pub fn tile_at(route: &[Pos], f: f64) -> Option<Pos> {
+    let total = route_length(route);
+    let mut left = f.clamp(0.0, 1.0) * total;
+    for pair in route.windows(2) {
+        let len = route_length(pair);
+        if left <= len && len > 0.0 {
+            let t = left / len;
+            let x = f64::from(pair[0].0) + (f64::from(pair[1].0) - f64::from(pair[0].0)) * t;
+            let y = f64::from(pair[0].1) + (f64::from(pair[1].1) - f64::from(pair[0].1)) * t;
+            return Some((x.round() as u16, y.round() as u16));
+        }
+        left -= len;
+    }
+    route.last().copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +281,34 @@ mod tests {
             assert!(BODIES.contains(&car.body), "{}", car.id);
             assert!(car.flair.iter().all(|flair| FLAIRS.contains(flair)), "{}", car.id);
         }
+    }
+
+    // CR5: drive time is length over speed, kept between 3 and 90 seconds; a faster car is sooner.
+    #[test]
+    fn drive_time_is_length_over_speed_and_clamped() {
+        assert_eq!(drive_secs(30.0, 3.0), 10);
+        assert_eq!(drive_secs(1.0, 3.0), MIN_DRIVE_SECS);
+        assert_eq!(drive_secs(10_000.0, 3.0), MAX_DRIVE_SECS);
+        assert!(drive_secs(60.0, 12.0) < drive_secs(60.0, 3.0));
+    }
+
+    // CR5, CR10: the route is over road tiles, and is sent as its corners.
+    #[test]
+    fn routes_follow_roads_and_keep_their_corners() {
+        use crate::world::Tile;
+        let mut tiles = Tiles::new();
+        let road = Tile { kind: Kind::Road, level: 0, player: None };
+        for x in 0..4 {
+            tiles.insert((x, 0), road);
+        }
+        for y in 1..3 {
+            tiles.insert((3, y), road);
+        }
+        let route = road_route(&tiles, (0, 0), (3, 2)).unwrap();
+        assert_eq!(route.len(), 6);
+        assert_eq!(corners(&route), vec![(0, 0), (3, 0), (3, 2)]);
+        assert_eq!(route_length(&corners(&route)), 5.0);
+        assert_eq!(tile_at(&corners(&route), 0.6), Some((3, 0)));
+        assert!(road_route(&tiles, (0, 0), (9, 9)).is_none());
     }
 }

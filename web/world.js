@@ -82,6 +82,34 @@ const STAGE_WORD = { hamlet: 'a hamlet', village: 'a village', town: 'a town', c
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const lerp = (a, b, t) => a + (b - a) * t;
+
+// CR10: where a car is a fraction `f` (0 to 1) of the way along a route of [x, y] tile corners, and the
+// way it's heading there. The server wrote the route, so every viewer puts the car at the same spot.
+function routePoint(route, f) {
+  const pts = Array.isArray(route) ? route.filter((pt) => Array.isArray(pt) && pt.length >= 2) : [];
+  if (!pts.length) return null;
+  const lens = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const len = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    lens.push(len);
+    total += len;
+  }
+  let left = Math.min(1, Math.max(0, Number(f) || 0)) * total;
+  for (let i = 0; i < lens.length; i++) {
+    if (lens[i] > 0 && left <= lens[i]) {
+      const t = left / lens[i];
+      const [a, b] = [pts[i], pts[i + 1]];
+      return { x: lerp(a[0], b[0], t), y: lerp(a[1], b[1], t), dx: b[0] - a[0], dy: b[1] - a[1] };
+    }
+    left -= lens[i];
+  }
+  const last = pts[pts.length - 1];
+  let k = pts.length - 2;
+  while (k > 0 && pts[k][0] === last[0] && pts[k][1] === last[1]) k--;
+  const prev = pts[k] || last;
+  return { x: last[0], y: last[1], dx: last[0] - prev[0], dy: last[1] - prev[1] };
+}
 const ease = (t) => t * t * (3 - 2 * t);
 const easeOut = (t) => 1 - (1 - t) * (1 - t) * (1 - t);
 
@@ -4782,6 +4810,8 @@ export class World {
     this.ownerRows = Array.isArray(view.owners) ? view.owners : [];
     // L17: bots at The Commons' places, by name, stroll by their door and walk or drive to the next.
     this.applyVisitors([...(Array.isArray(view.visitors) ? view.visitors : []), ...(Array.isArray(view.bots_out) ? view.bots_out : [])], animate);
+    // CR10: cars on the road, each at the spot the server's clock puts it.
+    this.applyDrives(view.drives, view.updated_at);
     this.applyDoom(view.disaster);
     this.describe(view);
     if (fresh) this.frameTown();
@@ -5412,7 +5442,7 @@ export class World {
       });
     }
     for (const [id, p] of map) {
-      if (seen.has(id)) continue;
+      if (seen.has(id) || p.trip) continue;
       if (!animate) {
         map.delete(id);
         continue;
@@ -5433,6 +5463,79 @@ export class World {
       this.walkTo(p, to[0], to[1]);
       if (!p.path.length) p.leaving = this.time;
     }
+  }
+
+  // CR10: a bot with a drive is drawn on its route by the server's clock, not by a route of the
+  // client's own. `serverNow` is when the view was built; the biggest gap seen between it and this
+  // page's clock is the nearest to the real one, since a view is never built after it was sent.
+  applyDrives(rows, serverNow) {
+    const stamp = Number(serverNow);
+    if (Number.isFinite(stamp) && stamp > 0) {
+      const gap = stamp * 1000 - Date.now();
+      this.clockGapMs = this.clockGapMs === undefined ? gap : Math.max(this.clockGapMs, gap);
+    }
+    const n = this.n;
+    const driving = new Set();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!Array.isArray(row) || !Array.isArray(row[1]) || !row[1].length) continue;
+      const name = String(row[0] ?? '');
+      const leave = Number(row[2]);
+      const arrive = Number(row[3]);
+      if (!name || !Number.isFinite(leave) || !Number.isFinite(arrive) || this.visitors.size >= 200) continue;
+      const route = row[1].map((pt) => [clamp(Math.round(Number(pt[0])) || 0, 0, n - 1), clamp(Math.round(Number(pt[1])) || 0, 0, n - 1)]);
+      const end = route[route.length - 1];
+      driving.add(name);
+      let p = this.visitors.get(name);
+      if (!p) {
+        p = makeVisitor(name, name, route[0][0], route[0][1], {});
+        p.born = -10;
+        this.visitors.set(name, p);
+      }
+      p.leaving = 0;
+      p.homeward = false;
+      p.inside = false;
+      p.area = null;
+      p.wander = 0;
+      p.path = [];
+      p.x = end[0];
+      p.y = end[1];
+      p.trip = { route, leave, arrive };
+      // The look is the catalog car's, for the car painter; `color` is the hashed car to fall back on.
+      const carLook = row[5] && typeof row[5] === 'object' ? row[5] : null;
+      p.carLook = carLook;
+      p.ride = { car: String(row[4] ?? ''), look: carLook, color: ih(p.h, 4, 9) % 8 };
+      this.driveStep(p);
+    }
+    for (const p of this.visitors.values()) {
+      if (p.trip && !driving.has(p.name)) {
+        // Its drive is over, and the view says where it is now.
+        p.trip = null;
+        p.driving = false;
+        p.ride = null;
+        p.carLook = null;
+      }
+    }
+  }
+
+  // CR10: puts a car where the server's clock says it is on its route. A calm map has no motion, so it
+  // draws the car where it is each time it's drawn at all.
+  driveStep(p) {
+    const { route, leave, arrive } = p.trip;
+    const now = (Date.now() + (this.clockGapMs || 0)) / 1000;
+    const f = arrive > leave ? (now - leave) / (arrive - leave) : 1;
+    const at = routePoint(route, f);
+    if (!at) return;
+    p.px = at.x + 0.5;
+    p.py = at.y + 0.5;
+    if (Math.abs(at.dx) > 0 || Math.abs(at.dy) > 0) {
+      if (Math.abs(at.dx) > Math.abs(at.dy)) p.face = at.dx > 0 ? 'fr' : 'bl';
+      else p.face = at.dy > 0 ? 'fl' : 'br';
+    }
+    const on = f < 1;
+    if (on !== Boolean(p.driving)) this.sparkle(p.px, p.py, 3);
+    p.driving = on;
+    p.walking = false;
+    if (!on) p.ride = null;
   }
 
   // #552: an owner's house on the map, from the owners list and the tiles: where their bot drives
@@ -6297,6 +6400,10 @@ export class World {
       for (const [id, p] of map) {
         if (p.leaving && this.time - p.leaving > 0.5) {
           map.delete(id);
+          continue;
+        }
+        if (p.trip) {
+          this.driveStep(p);
           continue;
         }
         if (p.path.length) {

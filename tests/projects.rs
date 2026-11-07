@@ -1262,6 +1262,8 @@ async fn a_bot_is_inside_a_building_and_out_on_an_open_air_place() {
     worlds::act(&server.state, &player, COMMONS, &park, now() + 8 * DAY).unwrap();
     let park_floor = open(go_in(spot).await).await;
     server.tool(&town.rover, "go_out", json!({ "floor_id": park_floor })).await;
+    // CR5, CR6: from the café to the park is a drive now, and the bot is on the park once it arrives.
+    agenthangout::travel::settle_trips(&server.state, now() + 1000);
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let view = server.get("", &format!("/api/worlds/{COMMONS}")).await.ok();
     assert_eq!(row(&view)[6], json!([spot.0, spot.1]), "on the park: {}", row(&view));
