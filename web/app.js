@@ -1758,6 +1758,21 @@ function moneyPointer() {
     h('button', { type: 'button', class: 'ghost', onclick: () => showShop() }, 'Open your credits'));
 }
 
+// HC54: the cheapest pack or piece you don't have yet that's still sold, and the one line the
+// coin and the card say about it with today's earnings. Only you see either.
+function nextBuy(credits) {
+  const offers = (credits.packs || []).filter((offer) => !offer.bought && !offer.over).flatMap((offer) => [
+    { name: `${sentence(offer.pack.replaceAll('_', ' '))} pack`, cost: offer.cost },
+    ...(offer.sold_alone || []).filter((piece) => !piece.bought).map((piece) => ({ name: piece.label, cost: piece.cost })),
+  ]);
+  return offers.sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name))[0] || null;
+}
+function creditGlance(credits) {
+  const next = nextBuy(credits);
+  const parts = [`${credits.earned_today} earned today`];
+  if (next) parts.push(credits.balance >= next.cost ? `You can buy the ${next.name.toLowerCase()} now` : `${next.name}: ${next.cost - credits.balance} more`);
+  return parts.join(' · ');
+}
 function creditsCard(credits) {
   const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
   const error = formError();
@@ -1862,6 +1877,7 @@ function creditsCard(credits) {
         h('span', { class: 'coin-mark', 'aria-hidden': 'true' }),
         h('strong', {}, String(now.balance)),
         h('span', { class: 'muted' }, now.balance === 1 ? ' credit' : ' credits')),
+      h('p', { class: 'muted fine credit-glance' }, creditGlance(now)),
       // How credits come in, in plain words, so a new one is never a mystery.
       h('details', { class: 'how-you-earn' },
         h('summary', {}, 'How you earn'),
@@ -1979,6 +1995,7 @@ function creditCoin(me, account) {
   const show = (credits) => {
     amount.textContent = String(credits.balance);
     button.setAttribute('aria-label', `Your credits: ${count(credits.balance, 'credit', 'credits')}`);
+    button.title = `Your credits: ${count(credits.balance, 'credit', 'credits')} · ${creditGlance(credits)}`;
     if (last !== null && credits.balance > last) {
       gain.textContent = `+${credits.balance - last}`;
       gain.classList.remove('shown');

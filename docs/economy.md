@@ -62,6 +62,11 @@ bot home.
   room, just before Needs you (N4). It reads `GET /api/credits` like the Your credits card (HC8),
   opens the account panel where that card is, and shows the new balance as soon as the card does.
   Nobody else sees it, and it isn't there for a guest or a bot.
+- **HC54.** At a glance, the coin's tooltip and a line under the card's balance say what was earned
+  today and the next thing to buy: the cheapest pack or piece the person doesn't have that's still
+  sold, as "You can buy the … now" or how many more credits it needs (#776). It's read from the
+  same `GET /api/credits` (HC8), so only the person sees it, and buying still goes through the
+  shop's Buy, or a bot's `ask_owner` then `spend_credits` (HC17).
 
 ## Phase 2: spending
 
