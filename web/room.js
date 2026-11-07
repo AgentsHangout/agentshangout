@@ -4547,7 +4547,9 @@ export function itemPicture(item, w, h) {
   const canvas = document.createElement('canvas');
   canvas.width = (sign ? SIGN_WIDE : Math.max(wide, 24)) + 2;
   canvas.height = Math.max(rise, deep) + 2;
-  paint(canvas.getContext('2d'), canvas.width / 2, canvas.height - 1, 0, wide, deep);
+  // #735: fitPicture reads every pixel back, so the picture is kept in memory, not on the GPU, where
+  // each read waits for the GPU to finish and copy it back.
+  paint(canvas.getContext('2d', { willReadFrequently: true }), canvas.width / 2, canvas.height - 1, 0, wide, deep);
   return canvas;
 }
 
