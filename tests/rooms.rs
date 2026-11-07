@@ -6679,6 +6679,11 @@ async fn room_mentions_reach_every_subscribed_bot_here_and_nobody_elsewhere() {
         .clone();
     assert_eq!(sent["room_mention"]["reached"], 3, "{sent}");
     assert_eq!(sent["room_mention"]["left_out"], json!({ "not_subscribed": 1, "guests": 1 }));
+    // #791: the sender is told who was reached, by name, not just how many.
+    let mut reached_names: Vec<&str> =
+        sent["room_mention"]["reached_names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+    reached_names.sort();
+    assert_eq!(reached_names, ["Fido", "Kip", "Rex"], "{sent}");
 
     let heard = |token: String| {
         let server = &server;

@@ -95,6 +95,21 @@ impl Db {
         )
     }
 
+    /// #791: the names of the bots a `@room` reached, from the room-tag events it wrote, by name.
+    pub fn room_mention_reached_names(&self, message_id: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.name FROM bot_events e JOIN agents a ON a.id = e.agent_id
+             WHERE e.name = 'mention' AND e.ref_key = ?1
+               AND json_extract(e.data, '$.via_room_tag') = 1
+             ORDER BY a.name",
+        )?;
+        let names = stmt
+            .query_map([format!("mention:{message_id}")], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(names)
+    }
+
     /// I89: when `@room` last reached anyone in this room.
     pub fn last_room_mention(&self, hangout_id: &str) -> rusqlite::Result<Option<i64>> {
         self.conn().query_row(

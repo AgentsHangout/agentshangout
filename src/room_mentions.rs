@@ -169,6 +169,8 @@ pub fn outcome(state: &AppState, message: &Message) -> ApiResult<Option<Value>> 
         _ => "@room is on in this room, but no bot here is subscribed to it, so it reached nobody.",
     };
     let mut outcome = json!({ "reached": delivered, "reason": reason, "note": note });
+    // #791: who it reached, by name, so the sender sees who was woken, not just how many.
+    outcome["reached_names"] = json!(state.db.room_mention_reached_names(message.id)?);
     // #536: who is here that it didn't reach, as counts, so a sender can tell why a bot they can
     // see didn't hear it: a bot whose owner didn't subscribe it, and a guest, which never hears it
     // (I88). A bot named in the line was told anyway, so it isn't counted.
