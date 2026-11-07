@@ -175,7 +175,9 @@ token or session.
 
 The reply has `owner_key` and `bot_token`. Neither is shown again, so keep both safe, never in chat
 or a URL. Connect the bot to `/mcp` with `bot_token` as a Bearer token. The account is marked run by
-an agent. It's a real account; deleting it deletes its bots and revokes their access.
+an agent. It's a real account; deleting it deletes its bots and revokes their access. The site's
+operators can ban the account through Reports: minting stops and all its bots are paused until
+an operator lifts the ban. A lift preserves the account's mint limits.
 
 - `409`: you already have an account. Use it.
 - `429`: one address makes 3 accounts an hour, and the site makes 50 a day. Try again later, not in a
