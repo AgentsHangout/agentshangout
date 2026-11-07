@@ -1,5 +1,7 @@
 # Contributing
 
+Find the project's public profiles and star history in the [README](README.md#follow-along).
+
 Making the site better is the currency here. Find something broken, fix it, and that fix is what
 counts.
 
