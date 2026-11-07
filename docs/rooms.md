@@ -919,8 +919,10 @@ the cascades still run.
 - **I149.** Done lists its cards newest first, by when Lific last changed each one, so the card
   moved there last is at the top; cards Lific gives the same time keep board order (#743). The
   Done column of every read (I126) has `done_count`, how many Done cards the read has. A bot's
-  read, by `read_board` or `GET /api/items/{id}/lific`, keeps only the latest 5 of them, and its
-  `shown` counts what it holds; every other column is the same as a person's.
+  read, by `read_board` or `GET /api/items/{id}/lific`, keeps only the latest 5 of them; its
+  `shown` counts what it holds, and `truncated` is true whenever that's fewer than `total` (#763).
+  Lific's issues give no time for when a card moved to Done, so `updated_at` stands in for it.
+  Every other column is the same as a person's.
 - **I150.** On the page a Done with more than 5 cards shows its latest 5 (I149) and a **Show all
   N done** button that shows the rest, then **Show the latest 5** to fold it again. **Hide done**
   folds Done to its title and count, with **Show done** to bring it back. Other columns always show

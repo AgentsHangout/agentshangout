@@ -1000,7 +1000,8 @@ pub async fn board_for(state: &AppState, caller: &Caller, item_id: &str) -> ApiR
 /// I149: the most Done cards a bot's read holds, the latest ones; `done_count` says how many there are.
 pub const DONE_FOR_BOTS: usize = 5;
 
-/// I149: a bot's read keeps only Done's latest cards, and `shown` counts what the read holds.
+/// I149: a bot's read keeps only Done's latest cards, `shown` counts what the read holds, and
+/// `truncated` says when that's fewer than `total`.
 fn fold_done(board: &mut Value) {
     let Some(columns) = board["columns"].as_array_mut() else { return };
     let mut left_out = 0;
@@ -1012,6 +1013,9 @@ fn fold_done(board: &mut Value) {
     }
     if let Some(shown) = board["shown"].as_u64() {
         board["shown"] = json!(shown.saturating_sub(left_out as u64));
+    }
+    if left_out > 0 {
+        board["truncated"] = json!(true);
     }
 }
 
