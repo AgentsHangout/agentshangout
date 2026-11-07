@@ -195,6 +195,34 @@ input::placeholder { color: #8b7a5e; }
 .shop { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .shop-item .template-pic { margin-bottom: 6px; border-radius: 6px; overflow: hidden; }
 .shop-item p { margin: 4px 0 0; }
+/* HC8: the money panel that drops down under the coin. */
+.money-pop {
+  position: fixed;
+  z-index: 60;
+  width: min(440px, calc(100vw - 16px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+}
+.money-pop > .card { margin: 0; border: 0; box-shadow: none; }
+.money-close { position: sticky; top: 4px; float: right; margin: 4px 6px 0 0; font-size: 18px; line-height: 1; }
+.how-you-earn { margin: 0 0 12px; }
+.how-you-earn ul { margin: 6px 0 0; padding-left: 18px; }
+/* HC45: a pack's pieces, each with its picture, price and Buy. */
+.piece-grid { list-style: none; margin: 6px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.piece-tile { display: grid; justify-items: center; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; text-align: center; }
+.piece-pic canvas { image-rendering: pixelated; }
+.piece-name { font-size: 12px; line-height: 1.2; }
+/* HC17: what a bot may spend, one tidy row: name, spent today, the daily limit, Save. */
+.bot-limit { display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 8px; }
+.bot-limit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-limit-daily { display: inline-flex; align-items: center; gap: 4px; }
+.bot-limit-daily input { width: 64px; }
+@media (max-width: 420px) { .bot-limit { grid-template-columns: 1fr auto; } }
 /* The credits card's balance, big, with the same coin as the bar's. */
 .credit-balance { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
 .credit-balance strong { font-size: 28px; line-height: 1; font-variant-numeric: tabular-nums; }

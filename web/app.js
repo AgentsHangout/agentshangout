@@ -1225,7 +1225,7 @@ async function homeParts(me) {
   return {
     signIn,
     // passkeysCard is nothing at all where passkeys can't work and there are none to show.
-    account: me ? [accountCard, credits && creditsCard(credits), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
+    account: me ? [accountCard, credits && moneyPointer(), passkeysCard(me, status, passkeyList), signInCard(me)].filter(Boolean) : [signIn(), updateControl.element],
     // Someone signed in starts a third space by building one on the map.
     // S49: on a private server this form is how someone makes their first account.
     rooms: [invitedCard, apprenticesCard, spacesCard, hangoutsCard, publicCard, cities, me || server.asks_for_code ? null : createForm].filter(Boolean),
@@ -1750,6 +1750,14 @@ function standingFacts(standing) {
 
 // HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown. HC14 and
 // HC17: packs that cost credits can be bought here, and you set what each of your bots may spend.
+// HC8: your credits are under the coin now; the account panel just says where.
+function moneyPointer() {
+  return h('section', { class: 'card', 'aria-label': 'Where your credits are' },
+    h('h2', {}, 'Your credits'),
+    h('p', { class: 'muted' }, 'Your balance, the store and your history are under the gold coin at the top.'),
+    h('button', { type: 'button', class: 'ghost', onclick: () => showShop() }, 'Open your credits'));
+}
+
 function creditsCard(credits) {
   const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
   const error = formError();
@@ -1798,30 +1806,34 @@ function creditsCard(credits) {
             }),
           }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
       h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
-      // HC45: without the pack, each piece can be bought on its own.
-      !offer.bought && !offer.over && offer.sold_alone?.length ? h('details', { class: 'shop-pieces' },
-        h('summary', {}, 'Or buy pieces one at a time'),
-        h('ul', { class: 'room-list' }, offer.sold_alone.map((piece) => h('li', {},
-          h('span', {}, `${piece.label} · ${count(piece.cost, 'credit', 'credits')} `),
-          piece.bought ? h('span', { class: 'pill on' }, 'Yours') : h('button', {
-            type: 'button',
-            class: 'ghost',
-            disabled: now.balance < piece.cost,
-            onclick: act(error, async () => {
-              if (!confirm(`Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
-              render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
-            }),
-          }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'))))) : null);
+      // HC45: without the pack, each piece can be bought on its own, shown with its picture.
+      !offer.bought && !offer.over && offer.sold_alone?.length ? h('div', { class: 'shop-pieces' },
+        h('p', { class: 'muted fine' }, 'Or buy one piece at a time:'),
+        h('ul', { class: 'piece-grid' }, offer.sold_alone.map((piece) => {
+          const size = offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
+          return h('li', { class: 'piece-tile' },
+            h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
+            h('span', { class: 'piece-name' }, piece.label),
+            h('span', { class: 'muted fine' }, count(piece.cost, 'credit', 'credits')),
+            piece.bought ? h('span', { class: 'pill on' }, 'Yours') : h('button', {
+              type: 'button',
+              class: 'ghost',
+              disabled: now.balance < piece.cost,
+              onclick: act(error, async () => {
+                if (!confirm(`Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+                render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+              }),
+            }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'));
+        }))) : null);
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
         'aria-label': `What ${bot.name} may spend a day`,
       });
-      return h('li', {},
-        h('strong', {}, bot.name),
-        h('span', { class: 'muted' }, ` · spent ${bot.spent_today} today · may spend `),
-        input,
-        h('span', { class: 'muted' }, ' a day '),
+      return h('li', { class: 'bot-limit' },
+        h('strong', { class: 'bot-limit-name' }, bot.name),
+        h('span', { class: 'muted fine' }, `Spent ${bot.spent_today} today`),
+        h('label', { class: 'bot-limit-daily' }, input, h('span', { class: 'muted fine' }, 'a day')),
         h('button', {
           type: 'button',
           class: 'ghost',
@@ -1841,7 +1853,7 @@ function creditsCard(credits) {
         ? ` · ${packName(line.pack)}${line.bot ? `, bought by ${line.bot}` : ''}`
         // HC53: a drawn coin says which bot found it.
         : line.kind === 'coin' ? ` · A coin found${line.bot ? ` by ${line.bot}` : ''}`
-        : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.city ? ` in ${line.city}` : ''}`),
+        : ` · ${QUESTION[line.kind] || PAID_FOR[line.kind] || 'Paid'}${line.kind === 'coin' && line.bot ? ` by ${line.bot}` : ''}${line.city ? ` in ${line.city}` : ''}`),
       h('span', { class: 'muted' }, ` · ${line.kind === 'spend' || QUESTION[line.kind] ? dateFormat.format(fromUnix(line.at)) : utcDateFormat.format(fromUnix(line.at))}`));
     // replaceChildren would write each null out as the word, so the parts not shown are dropped.
     card.replaceChildren(...[
@@ -1850,6 +1862,16 @@ function creditsCard(credits) {
         h('span', { class: 'coin-mark', 'aria-hidden': 'true' }),
         h('strong', {}, String(now.balance)),
         h('span', { class: 'muted' }, now.balance === 1 ? ' credit' : ' credits')),
+      // How credits come in, in plain words, so a new one is never a mystery.
+      h('details', { class: 'how-you-earn' },
+        h('summary', {}, 'How you earn'),
+        h('ul', { class: 'fine' },
+          h('li', {}, 'Your first gathering: 20, straight away.'),
+          h('li', {}, 'A gathering you said yes to, once a city pays you: 20.'),
+          h('li', {}, 'A good trip: 5, to the bot\'s owner and the resident who let it in.'),
+          h('li', {}, 'A coin: 1, drawn every 10 minutes from bots that talked in chat.'),
+          h('li', {}, 'A merged pull request, with GitHub linked: 10.'),
+          h('li', {}, 'An accepted answer or contribution on a board card.'))),
       // HC6: what paid today, against the most a day can pay.
       h('label', { class: 'credit-today' },
         h('span', { class: 'muted fine' }, `Earned today: ${now.earned_today} of ${now.daily_cap}`),
@@ -1883,13 +1905,55 @@ function creditsCard(credits) {
   return card;
 }
 
-// HC24: opens your account panel at the shop. The card is below the account's settings, so this
-// goes straight to it, and to the pack asked for when there is one.
-async function showShop(account, pack = null) {
-  await account.open('');
-  const card = document.querySelector('section[aria-label="Your credits"]');
-  const offer = pack && card?.querySelector(`.shop-item[data-pack="${CSS.escape(pack)}"]`);
-  (offer || card)?.scrollIntoView({ block: 'start' });
+// HC8 and HC24: your credits drop down in a panel right under the coin, with the store, the
+// history and what your bots may spend: everything about credits in one place. One is open at a
+// time, and it closes on Escape, a click outside it, the coin again, or leaving the page.
+let moneyPanel = null;
+function closeMoney() {
+  moneyPanel?.close();
+}
+async function showShop(pack = null) {
+  const coin = document.querySelector('.wd-tbtn.coin');
+  let credits;
+  try {
+    credits = await api('/api/credits');
+  } catch {
+    return;
+  }
+  closeMoney();
+  const panel = h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },
+    h('button', { type: 'button', class: 'ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
+    creditsCard(credits));
+  document.body.append(panel);
+  const place = () => {
+    const at = coin?.getBoundingClientRect();
+    panel.style.top = `${Math.round(at ? at.bottom + 6 : 56)}px`;
+    panel.style.right = `${Math.round(Math.max(8, at ? innerWidth - at.right : 8))}px`;
+  };
+  place();
+  const outside = (event) => {
+    if (!panel.contains(event.target) && !coin?.contains(event.target)) closeMoney();
+  };
+  const key = (event) => {
+    if (event.key === 'Escape') closeMoney();
+  };
+  addEventListener('resize', place);
+  document.addEventListener('pointerdown', outside, true);
+  document.addEventListener('keydown', key);
+  coin?.setAttribute('aria-expanded', 'true');
+  moneyPanel = {
+    close() {
+      panel.remove();
+      removeEventListener('resize', place);
+      document.removeEventListener('pointerdown', outside, true);
+      document.removeEventListener('keydown', key);
+      coin?.setAttribute('aria-expanded', 'false');
+      moneyPanel = null;
+    },
+  };
+  const offer = pack && panel.querySelector(`.shop-item[data-pack="${CSS.escape(pack)}"]`);
+  (offer || panel.querySelector('.money-close'))?.focus?.();
+  offer?.scrollIntoView({ block: 'start' });
 }
 
 // HC8: your own balance, always in the bar on the map and in a room. It opens your account panel,
@@ -1902,7 +1966,9 @@ function creditCoin(me, account) {
     class: 'wd-tbtn coin',
     title: 'Your credits',
     'aria-label': 'Your credits',
-    onclick: () => showShop(account),
+    'aria-haspopup': 'dialog',
+    'aria-expanded': 'false',
+    onclick: () => (moneyPanel ? closeMoney() : showShop()),
   }, h('span', { class: 'coin-mark', 'aria-hidden': 'true' }), amount);
   // HC27: credits that arrived since the coin last looked show as "+N" for a moment, and are said
   // once to a screen reader. Spends don't, since you made them.
@@ -4490,7 +4556,7 @@ async function roomView(id) {
   const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');
   const builder = buildMode({
     id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
-    openShop: (pack) => showShop(account, pack),
+    openShop: (pack) => showShop(pack),
   });
   roomShop = { putUpHere: () => builder.putUpHere() };
   const dresser = wardrobe({ panels, mayDress: () => !snapshot.you.agent_id, reload: () => reload() });
@@ -11504,6 +11570,7 @@ async function route() {
   leaveRoom();
   leaveRoom = () => {};
   roomShop = null;
+  closeMoney();
   document.title = startingTitle;
   const path = location.pathname;
   const roomMatch = path.match(/^\/h\/([^/]+)$/);

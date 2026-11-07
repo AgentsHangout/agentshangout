@@ -1888,10 +1888,27 @@ fn the_top_bar_shows_your_own_balance_as_a_coin() {
     let calls: Vec<&str> =
         coin.split("api(").skip(1).map(|call| call.split(')').next().unwrap()).collect();
     assert_eq!(calls, ["'/api/credits'"], "the coin calls something other than your own credits");
-    assert!(coin.contains("onclick: () => showShop(account),"), "the coin doesn't open the shop");
-    let shop = app.split_once("async function showShop(account, pack = null) {").unwrap().1;
+    assert!(
+        coin.contains("onclick: () => (moneyPanel ? closeMoney() : showShop()),"),
+        "the coin doesn't open and close your credits"
+    );
+    // HC8: your credits drop down under the coin, read from your own endpoint, and close again.
+    let shop = app.split_once("async function showShop(pack = null) {").unwrap().1;
     let shop = shop.split_once("\n}\n").unwrap().0;
-    assert!(shop.contains("await account.open('');"), "the shop isn't in the account panel");
+    let calls: Vec<&str> =
+        shop.split("api(").skip(1).map(|call| call.split(')').next().unwrap()).collect();
+    assert_eq!(calls, ["'/api/credits'"], "the panel reads something other than your own credits");
+    assert!(shop.contains("creditsCard(credits)"), "the panel doesn't hold the credits card");
+    assert!(shop.contains(
+        "h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },"
+    ));
+    assert!(
+        shop.contains("panel.style.top = `${Math.round(at ? at.bottom + 6 : 56)}px`;"),
+        "it isn't under the coin"
+    );
+    assert!(shop.contains("if (event.key === 'Escape') closeMoney();"), "Escape doesn't close it");
+    let route = app.split_once("async function route() {").unwrap().1;
+    assert!(route.split_once("\n}\n").unwrap().0.contains("closeMoney();"), "it outlives the page");
     // The card tells the coin about a spend, so the two never disagree.
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     assert!(card.contains("dispatchEvent(new CustomEvent('ah-credits'"));
@@ -1923,7 +1940,7 @@ fn a_tile_waiting_on_a_pack_opens_the_shop_at_it() {
     assert!(!app.contains("buy it in Account"), "a tile still sends you to find the shop yourself");
     assert!(build.contains("lines: locked ? [] : ["), "a locked pack says pressing puts it up");
     let room = app.split_once("async function roomView(").unwrap().1;
-    assert!(room.contains("openShop: (pack) => showShop(account, pack),"));
+    assert!(room.contains("openShop: (pack) => showShop(pack),"));
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     assert!(card.contains("h('li', { class: 'shop-item', 'data-pack': offer.pack },"));
 }
@@ -1976,9 +1993,10 @@ async fn the_account_panel_shows_your_own_credits() {
         parts.contains("me ? api('/api/credits').catch(() => null) : null"),
         "the panel doesn't read credits"
     );
+    // HC8: the account panel says where your credits are; the card itself drops down from the coin.
     assert!(
-        parts.contains("account: me ? [accountCard, credits && creditsCard(credits)"),
-        "the card isn't in the account panel"
+        parts.contains("account: me ? [accountCard, credits && moneyPointer()"),
+        "the account panel doesn't point to your credits"
     );
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
