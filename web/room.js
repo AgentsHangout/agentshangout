@@ -4476,6 +4476,9 @@ function paintPlaying(g, bot, t) {
 // `pose` is how they are there, `hands` keeps theirs moving, and `busy` is painted over them.
 const USES = {
   piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
+  // #790: a bot that's dreaming or asleep at home lies on a free bed (the server gives it one).
+  bed: { spots: 1, pose: 'sleep', on: true },
+  double_bed: { spots: 1, pose: 'sleep', on: true },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
   arcade_cabinet: { spots: 1, pose: 'stand', hands: true },
   billiards: { spots: 2, pose: 'stand', hands: true },
