@@ -11414,20 +11414,25 @@ async fn a_second_top_level_mention_carries_only_what_is_new() {
     assert!(what.contains(&format!("after message {first}")) && what.contains("read_room"));
 }
 
-// I151, #730: finding a bot's last top-level mention in a room uses an index, not a scan.
+// I151, #730: finding out whether a message's mention event was recorded is one probe of the
+// bot's unique (agent_id, ref_key) index, so it doesn't grow with the bot's other events.
 #[tokio::test]
-async fn the_last_top_level_mention_is_found_by_index() {
+async fn a_recorded_top_level_mention_is_found_by_one_index_probe() {
     let w = waiting_world().await;
     let plan: Vec<String> = w
         .conn
-        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::LAST_ROOM_MENTION_EVENT))
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::TOP_LEVEL_MENTION_EVENT))
         .unwrap()
-        .query_map(rusqlite::params!["room", 2, "bot", "x"], |r| r.get::<_, String>(3))
+        .query_map(rusqlite::params!["bot", 2, "x"], |r| r.get::<_, String>(3))
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
-    assert!(scans.is_empty(), "a full scan: {plan:?}");
+    assert_eq!(plan.len(), 1, "{plan:?}");
+    assert!(
+        plan[0].starts_with("SEARCH") && plan[0].contains("bot_events_once"),
+        "(agent_id, ref_key) is one probe: {plan:?}"
+    );
+    assert!(plan[0].contains("agent_id=? AND ref_key=?"), "{plan:?}");
 }
 
 // I86, I88, E5, #536: the room tag is not the display name of a bot called Room.

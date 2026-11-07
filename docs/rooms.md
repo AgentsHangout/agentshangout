@@ -1163,7 +1163,7 @@ the cascades still run.
   slice is cut this way the event has `context_after`, the message id it starts after, and its
   `what_to_do` says to call `read_thread` if the bot doesn't have what came before.
 - **I151.** The same goes for a mention that isn't in a thread (#730). Its `context` (E5) leaves out
-  everything up to and including the last earlier message in that room, outside a thread, whose
+  everything up to and including the last of those few lines, outside a thread, whose
   `mention` event was recorded for this bot, since that event carried it. A mention it wasn't sent,
   an expired event, a thread mention and a watched workboard change (RW11) don't count. Recorded isn't
   delivered, so when the context is cut this way the event has `context_after`, the message id it

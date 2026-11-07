@@ -447,12 +447,9 @@ pub fn note_message(state: &AppState, message: &Message) {
                     json!(thread_mention_context(state, message, &bot.id, root_id, after));
             } else {
                 // #730: context starts after the last top-level mention event recorded for this
-                // bot in the room. Recorded isn't delivered, so the event says where it starts.
-                let after = state
-                    .db
-                    .last_room_mention_event(&message.hangout_id, message.id, &bot.id, WATCH_DO)
-                    .ok()
-                    .flatten();
+                // bot among the lines it would carry. Recorded isn't delivered, so the event says
+                // where it starts.
+                let (context, after) = mention_context(state, message, &bot.id);
                 mention["what_to_do"] = json!(match after {
                     Some(id) => format!(
                         "{MENTION_DO} context starts after message {id}, which an earlier mention event in this room carried; if you don't have it, call read_room."
@@ -462,7 +459,7 @@ pub fn note_message(state: &AppState, message: &Message) {
                 if let Some(id) = after {
                     mention["context_after"] = json!(id);
                 }
-                mention["context"] = json!(mention_context(state, message, &bot.id, after));
+                mention["context"] = json!(context);
             }
             record(
                 state,
@@ -497,19 +494,28 @@ fn mention_context(
     state: &AppState,
     message: &Message,
     agent_id: &str,
-    after: Option<i64>,
-) -> Vec<Value> {
+) -> (Vec<Value>, Option<i64>) {
     // If it can't be told whether the bot is a guest, it gets no context rather than history it
     // might not be allowed to read.
     let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let since = visit.map(|visit| visit.since);
     let hide = hidden_for_bot(state, agent_id);
-    state
+    let mut earlier = state
         .db
-        .messages_before(&message.hangout_id, message.id, agent_id, since, after, MENTION_CONTEXT)
-        .unwrap_or_default()
+        .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
+        .unwrap_or_default();
+    // #730: at most MENTION_CONTEXT probes. What a recorded mention event already carried, and
+    // everything before it, is cut, whether or not this bot's person hides that line.
+    let after =
+        earlier.iter().rev().map(|line| line.id).find(|id| {
+            state.db.top_level_mention_recorded(agent_id, *id, WATCH_DO).unwrap_or(false)
+        });
+    if let Some(id) = after {
+        earlier.retain(|line| line.id > id);
+    }
+    let lines = earlier
         .into_iter()
         .filter(|earlier| !crate::blocks::hides(&hide, earlier))
         .map(|earlier| {
@@ -522,7 +528,8 @@ fn mention_context(
                 "keyless": state.db.is_keyless_message(earlier.id).unwrap_or(true),
             })
         })
-        .collect()
+        .collect();
+    (lines, after)
 }
 
 /// I105: bounded slice of up to 10 earlier messages in a thread before a mention, leaving out the
