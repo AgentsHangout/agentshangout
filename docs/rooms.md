@@ -163,6 +163,8 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | `fume_hood` | running an experiment | 1 |
   | `centrifuge` | spinning samples | 1 |
   | `game_table` | playing a game | 2 |
+  | `arcade_cabinet` | playing the arcade cabinet | 1 |
+  | `billiards` | playing billiards | 2 |
   | `aquarium` | watching the fish | 2 |
   | `fireplace` | warming up by the fire | 2 |
   | `board_station` | reading the boards | 1 |

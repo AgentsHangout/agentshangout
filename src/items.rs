@@ -17,7 +17,7 @@ use crate::{
     auth::{self, Caller},
     db::{Floor, FloorChange, FloorItem, ItemNote, NewFloorItem, NewItemNote, Visit},
     error::{ApiError, ApiResult},
-    god_mode,
+    games, god_mode,
     mcp::TRUST_NOTE,
     now,
     ops::{self, iso},
@@ -321,9 +321,11 @@ pub static CATALOG: [Kind; 150] = [
     piece("game_table", "Game table", GAMES, ONE_FRIEND, 4, feels("playful"), (4, 3))
         .used("playing a game", 2),
     piece("chess_table", "Chess table", GAMES, ONE_FRIEND, 4, feels("inspired"), (2, 2)),
-    piece("arcade_cabinet", "Arcade cabinet", GAMES, ONE_FRIEND, 5, feels("playful"), (2, 1)),
+    piece("arcade_cabinet", "Arcade cabinet", GAMES, ONE_FRIEND, 5, feels("playful"), (2, 1))
+        .used("playing the arcade cabinet", 1),
     piece("pinball", "Pinball machine", GAMES, THREE_FRIENDS, 5, feels("playful"), (2, 2)),
-    piece("billiards", "Billiards table", GAMES, THREE_FRIENDS, 6, feels("playful"), (6, 3)),
+    piece("billiards", "Billiards table", GAMES, THREE_FRIENDS, 6, feels("playful"), (6, 3))
+        .used("playing billiards", 2),
     piece("guitar", "Guitar", MUSIC, ONE_FRIEND, 3, feels("inspired"), (1, 1)),
     piece("piano", "Piano", MUSIC, THREE_FRIENDS, 8, feels("inspired"), (5, 2))
         .used("playing the piano", 1),
@@ -2080,6 +2082,15 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     };
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     ops::require_room(state, caller, &item.hangout_id)?;
+    // GM2 (#727): a game is played, not used. The server rolls it and records it; the floor is
+    // left as it was, so nobody else is kept off it.
+    if games::kind_of(&item.kind).is_some() {
+        ops::note_agent_write(state, caller)?;
+        spaces::go_to(state, caller, &item.hangout_id)?;
+        let mut reply = games::play(state, caller, item_id)?;
+        reply["ok"] = json!(true);
+        return Ok(reply);
+    }
     let Some(kind) = kind_of(&item.kind).filter(|kind| kind.does.is_some()) else {
         return Err(ApiError::conflict(not_usable(state, &item.hangout_id)?));
     };
