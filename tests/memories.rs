@@ -1104,6 +1104,65 @@ async fn mm17_going_home_is_bedtime_once_and_its_owner_sees_it_dreaming_then_asl
     assert_eq!(bedtimes(fern).len(), 2, "on again, and it's been 17 hours");
 }
 
+// #790: a bot dreaming or asleep at home lies in a free bed in its home, and gets up when the night
+// ends. No bed, or every bed taken, changes nothing.
+/// Who each bed or double bed in a room says is in it.
+async fn bed_uses(server: &Server, key: &str, room: &str) -> Vec<Value> {
+    let snapshot = server.get(key, &format!("/api/hangouts/{room}")).await.ok();
+    snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "bed" || item["kind"] == "double_bed")
+        .map(|item| item["used_by"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn bed_790_a_dreaming_bot_at_home_takes_a_free_bed_until_the_night_ends() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let ann = &town.ann.key;
+    let cafe = &town.cafe;
+    let path = format!("/api/floors/{cafe}/items");
+
+    // Two beds, but nothing sleeping yet: nobody lies in them.
+    server.post(ann, &path, json!({ "kind": "bed", "x": 30, "y": 0 })).await.ok();
+    server.post(ann, &path, json!({ "kind": "double_bed", "x": 34, "y": 0 })).await.ok();
+    assert_eq!(bed_uses(&server, ann, cafe).await, [json!([]), json!([])], "awake, so no bed");
+
+    // Dreaming, it takes the first free bed, and only that one.
+    server.tool(fern, "say", json!({ "hangout_id": cafe, "text": "Evening" })).await;
+    server
+        .sql()
+        .execute("UPDATE bot_places SET since = since - 11 * 60 WHERE agent_id = ?", [&fern.id])
+        .unwrap();
+    agenthangout::memories::bedtime_tick(&server.state, agenthangout::now()).unwrap();
+    assert_eq!(
+        bed_uses(&server, ann, cafe).await,
+        [json!([fern.id]), json!([])],
+        "dreaming, in the first bed"
+    );
+    // MM14: someone else in the same room sees the bed empty.
+    assert_eq!(
+        bed_uses(&server, &town.bo.key, cafe).await,
+        [json!([]), json!([])],
+        "only its owner sees the night"
+    );
+
+    // Asleep, it's still in the bed.
+    server.tool(fern, "sleep", json!({ "notes": [] })).await;
+    assert_eq!(bed_uses(&server, ann, cafe).await[0], json!([fern.id]));
+
+    // It does something, so the night is over and it gets up.
+    server
+        .sql()
+        .execute("UPDATE agents SET last_active_at = last_active_at + 120 WHERE id = ?", [&fern.id])
+        .unwrap();
+    assert_eq!(bed_uses(&server, ann, cafe).await, [json!([]), json!([])], "awake, out of bed");
+}
+
 // MM17: no bedtime while it's staying somewhere else, nor in the ten minutes after S61 takes it
 // home, then one.
 #[tokio::test]

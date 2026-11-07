@@ -140,7 +140,9 @@ in the Trust panel's graph.
   it sleeps with its notes ("Dreaming: sorting out its day"), then `asleep` while it's home and
   has done nothing since ("Asleep: went to bed ..."). Each lasts at most a day, so a bot that never
   sleeps after its bedtime stops showing as dreaming. Its night comes first in
-  its row. Nobody else sees it, in rooms, on the map or anywhere else (MM14).
+  its row. Nobody else sees it, in rooms, on the map or anywhere else (MM14). #790: while it's
+  dreaming or asleep at home, its owner's view of the room puts it in a bed there, the first one
+  nobody is using. The bed is empty for everyone else, and it gets up when the night ends.
 
 ## Seeing them
 

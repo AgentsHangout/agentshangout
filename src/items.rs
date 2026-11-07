@@ -1500,7 +1500,7 @@ pub fn furnishing(
     let room_beauty = room_beauty(&items);
     let counts = state.db.item_note_counts(hangout_id, notes_since(guest))?;
     let mut clocks = state.db.closing_clocks_on(hangout_id)?;
-    let mut users = users_on(state, hangout_id)?;
+    let mut users = users_on(state, caller, hangout_id)?;
     Ok(Furnishing {
         room_mood,
         room_mood_note: room_mood.and_then(mood_note),
@@ -1724,6 +1724,7 @@ struct ItemChange {
 /// I3: a move or a turn has to fit as a new item would, because turning changes what it stands on.
 fn change_item(
     state: &AppState,
+    caller: &Caller,
     place: &Place,
     item: &FloorItem,
     body: &ItemChange,
@@ -1743,7 +1744,7 @@ fn change_item(
     ops::refresh(state, &place.floor.id);
     let moved = state.db.floor_item(&item.id)?.ok_or_else(ApiError::not_found)?;
     let notes = state.db.item_notes(&item.id, i64::MIN)?.len() as i64;
-    let used_by = users_on(state, &place.floor.id)?.remove(&item.id).unwrap_or_default();
+    let used_by = users_on(state, caller, &place.floor.id)?.remove(&item.id).unwrap_or_default();
     Ok(placed(moved, kind, notes, used_by))
 }
 
@@ -2043,13 +2044,40 @@ fn bots_here(state: &AppState, floor_id: &str, now: i64) -> ApiResult<Vec<String
 }
 
 /// I35: the bots using each item on a floor now, by item.
-fn users_on(state: &AppState, floor_id: &str) -> ApiResult<HashMap<String, Vec<String>>> {
+fn users_on(
+    state: &AppState,
+    viewer: &Caller,
+    floor_id: &str,
+) -> ApiResult<HashMap<String, Vec<String>>> {
     let now = now();
     let here = bots_here(state, floor_id, now)?;
     let mut users: HashMap<String, Vec<String>> = HashMap::new();
     for (item_id, agent_id) in state.db.item_uses(floor_id, now)? {
         if here.contains(&agent_id) {
             users.entry(item_id).or_default().push(agent_id);
+        }
+    }
+    // #790: a bot at home that is dreaming or asleep lies in a bed nobody else has. Only a bot
+    // with no other item, and only while there's a free bed; the night ending frees it again.
+    // MM14: only its owner sees its night, so only its owner's view shows the bed.
+    let beds: Vec<String> = state
+        .db
+        .floor_items(floor_id)?
+        .into_iter()
+        .filter(|item| matches!(item.kind.as_str(), "bed" | "double_bed"))
+        .map(|item| item.id)
+        .collect();
+    for agent in state.db.agents_in(floor_id, now)? {
+        let mine = agent.owner_id == viewer.person_id;
+        if !mine || !here.contains(&agent.id) || users.values().any(|bots| bots.contains(&agent.id))
+        {
+            continue;
+        }
+        let Some(bed) = beds.iter().find(|bed| !users.contains_key(*bed)) else {
+            break;
+        };
+        if crate::memories::night(state, &agent.id, agent.last_active_at, now)?.is_some() {
+            users.insert(bed.clone(), vec![agent.id]);
         }
     }
     Ok(users)
@@ -2383,7 +2411,7 @@ async fn change(
 ) -> ApiResult<Json<PlacedItem>> {
     let (item, place) = item_of(&state, &caller, &id)?;
     may_change(&state, &caller, &place, &item)?;
-    Ok(Json(change_item(&state, &place, &item, &body_of(body)?)?))
+    Ok(Json(change_item(&state, &caller, &place, &item, &body_of(body)?)?))
 }
 
 /// I106: the farthest ahead a closing time can be set.
