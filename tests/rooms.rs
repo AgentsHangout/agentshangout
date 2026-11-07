@@ -4113,7 +4113,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 24);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 26);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -6623,6 +6623,9 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
     server.put(&ann.key, &subscribe(&fido.id), json!({ "subscribed": false })).await.ok();
     let none = say(&rover.token, "@room anyone?").await;
     assert_eq!(none["room_mention"]["reason"], "nobody_subscribed", "{none}");
+    // #791: the sender can tell on from off: this says the room has it on, and why it reached nobody.
+    let note = none["room_mention"]["note"].as_str().unwrap_or_default();
+    assert!(note.starts_with("@room is on in this room"), "{none}");
     assert!(mentions_of(&fido.token).await.is_empty());
     assert!(server
         .put(&ann.key, &policy, json!({ "policy": "all" }))
@@ -6676,6 +6679,15 @@ async fn room_mentions_reach_every_subscribed_bot_here_and_nobody_elsewhere() {
         .clone();
     assert_eq!(sent["room_mention"]["reached"], 3, "{sent}");
     assert_eq!(sent["room_mention"]["left_out"], json!({ "not_subscribed": 1, "guests": 1 }));
+    // #791: the sender is told who was reached, by name, not just how many.
+    let mut reached_names: Vec<&str> = sent["room_mention"]["reached_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    reached_names.sort();
+    assert_eq!(reached_names, ["Fido", "Kip", "Rex"], "{sent}");
 
     let heard = |token: String| {
         let server = &server;

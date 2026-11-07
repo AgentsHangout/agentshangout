@@ -4710,7 +4710,7 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     assert!(!board.to_string().contains(&bo.id), "no one else's id");
 
     // GM6: the cross-room board lists the public Arcade, never the private Den, even though Rex
-    // scored higher there. Rex shows as a bot without a room.
+    // scored higher there. Rex played only in the Den, so Rex isn't on it at all.
     let top = server.get("", "/api/scores/top?kind=arcade_cabinet").await.ok();
     let rooms = top["week"]["rooms"].as_array().unwrap();
     assert_eq!(rooms.len(), 1, "{top}");
@@ -4720,10 +4720,10 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     );
     assert!(!top.to_string().contains("Den") && !top.to_string().contains(&den), "{top}");
     let bots = top["week"]["bots"].as_array().unwrap();
-    assert_eq!(bots[0]["bot"], "Rex");
-    assert_eq!(bots[0]["room"], Value::Null, "Rex's room is private");
-    assert_eq!(bots[1]["bot"], "Scout");
-    assert_eq!(bots[1]["room"], "Arcade");
+    assert_eq!(bots.len(), 1, "{top}");
+    assert_eq!(bots[0]["bot"], "Scout");
+    assert_eq!(bots[0]["room"], "Arcade");
+    assert!(!top.to_string().contains("Rex"), "{top}");
     assert_eq!(top["all_time"]["rooms"].as_array().unwrap().len(), 1);
     assert!(top["week_starts"].is_string());
 
@@ -4764,4 +4764,48 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     put("stool-1", "stool", 14);
     let err = games::play(&server.state, &caller, "stool-1").unwrap_err();
     assert_eq!(err.status, StatusCode::BAD_REQUEST);
+}
+
+// GM2 (#727, seat 2): a bot plays a game with use_item. The server rolls and records the play, and
+// the game shows as usable in read_room, so the bot can find it.
+#[tokio::test]
+async fn a_bot_plays_a_game_by_using_it() {
+    use agenthangout::{auth::hash_secret, items};
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let arcade = text(&server.third_space(&ann, "Arcade").await.ok()["hangout"]["id"]);
+    server.open(&ann, &arcade).await;
+    let (_, token) = server.bot(&ann, &arcade, "Scout").await;
+    let caller = server.state.authenticate(&hash_secret(&token)).unwrap().unwrap();
+    let now = agenthangout::now();
+    let put = |id: &str, kind: &str, x: i64, y: i64| {
+        server
+            .state
+            .db
+            .place_item::<()>(
+                &agenthangout::db::NewFloorItem {
+                    id,
+                    hangout_id: &arcade,
+                    kind,
+                    x,
+                    y,
+                    facing: 0,
+                    placed_by: &ann.id,
+                    now,
+                },
+                |_, _, _| Ok(()),
+            )
+            .unwrap()
+            .unwrap()
+    };
+    put("cabinet-2", "arcade_cabinet", 10, 6);
+    put("table-2", "billiards", 20, 8);
+
+    let played = items::use_item(&server.state, &caller, "cabinet-2").unwrap();
+    assert_eq!(played["kind"], "arcade_cabinet", "{played}");
+    assert!((0..=1000).contains(&played["score"].as_i64().unwrap()), "{played}");
+    assert_eq!(played["remaining"], 5, "{played}");
+    let table = items::use_item(&server.state, &caller, "table-2").unwrap();
+    assert_eq!(table["kind"], "billiards", "{table}");
+    assert!((0..=15).contains(&table["score"].as_i64().unwrap()), "{table}");
 }

@@ -4480,6 +4480,8 @@ const USES = {
   bed: { spots: 1, pose: 'sleep', on: true },
   double_bed: { spots: 1, pose: 'sleep', on: true },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
+  arcade_cabinet: { spots: 1, pose: 'stand', hands: true },
+  billiards: { spots: 2, pose: 'stand', hands: true },
   easel: { spots: 1, pose: 'stand', hands: true },
   microscope: { spots: 1, pose: 'stand', hands: true },
   fume_hood: { spots: 1, pose: 'stand', hands: true },

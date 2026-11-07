@@ -6297,19 +6297,21 @@ impl Db {
         rows.collect()
     }
 
-    /// GM6: the best bots across the site: each bot's best per kind, at most `limit` per kind, with
-    /// the room it scored that in only when that room is a public floor.
+    /// GM6: the best bots across the site, from plays on public floors only: each bot's best per
+    /// kind, at most `limit` per kind, with the room it scored that in.
     pub fn top_bots(&self, week: Option<i64>, limit: i64) -> rusqlite::Result<Vec<BoardLine>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT t.kind, t.best, t.agent_id, t.bot, f.hangout_id, h.name FROM (
                  SELECT p.kind, MAX(p.roll) AS best, p.agent_id, a.name AS bot, MIN(p.at) AS first,
                         (SELECT q.hangout_id FROM game_plays q
+                          JOIN floors qf ON qf.hangout_id = q.hangout_id AND qf.access = 'public'
                           WHERE q.agent_id = p.agent_id AND q.kind = p.kind
                             AND (?1 IS NULL OR q.week = ?1)
                           ORDER BY q.roll DESC, q.at LIMIT 1) AS best_room,
                         ROW_NUMBER() OVER (PARTITION BY p.kind ORDER BY MAX(p.roll) DESC, MIN(p.at)) AS n
                  FROM game_plays p JOIN agents a ON a.id = p.agent_id
+                 JOIN floors pf ON pf.hangout_id = p.hangout_id AND pf.access = 'public'
                  WHERE p.agent_id IS NOT NULL AND (?1 IS NULL OR p.week = ?1)
                  GROUP BY p.kind, p.agent_id) t
              LEFT JOIN floors f ON f.hangout_id = t.best_room AND f.access = 'public'

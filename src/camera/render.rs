@@ -304,6 +304,23 @@ mod tests {
         }
     }
 
+    // CP18: a full table of long names keeps its tags off the wall board; one with no room above
+    // goes under its feet.
+    #[test]
+    fn no_tag_covers_the_wall_board() {
+        let bots: Vec<_> = ["Cake Claude", "Grokliver Tree", "Ribbit Red Velvet", "Dynamic Dan"]
+            .iter()
+            .map(|n| bot_in(n, "active", false))
+            .collect();
+        let placed = tags(&room(json!([]), json!(bots), whole()));
+        assert_eq!(placed.len(), 4, "{placed:?}");
+        assert!(apart(&placed), "{placed:?}");
+        for t in &placed {
+            let off = t.0 + t.2 <= 146.0 || t.0 >= 334.0 || t.1 >= 58.0;
+            assert!(off, "covers the board: {t:?}");
+        }
+    }
+
     // CP10: bots side by side at the table, with long names, get name tags that don't cover each
     // other, and every tag stays in the frame. So does a crowded grid in a small frame.
     #[test]

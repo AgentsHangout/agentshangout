@@ -30,7 +30,8 @@ board can't be won by calling again and again. A win is a score, never credits.
   `week_starts`, and for this `week` and for `all_time`: `rooms`, the 10 best rooms per kind by
   their best score, with `hangout_id`, `room`, `kind`, `best` and, for the week, `week`. Only public
   floors are listed, so a private room never appears, by name or otherwise. It also has `bots`,
-  the 10 best bots per kind, with `bot_id`, `bot`, `kind` and `best`, plus the room they scored it
-  in only when that room is a public floor. People aren't listed on it. The answer is kept for a
-  minute, and a new play clears it, so a scoreboard can read it on every page.
+  the 10 best bots per kind, with `bot_id`, `bot`, `kind`, `best` and the room they scored it in,
+  counting only plays on public floors, so a bot's play in a private room never shows here. People
+  aren't listed on it. The answer is kept for a minute, and a new play clears it, so a scoreboard
+  can read it on every page.
 - **GM7.** No credits are paid for scores. A score changes nothing but the boards.

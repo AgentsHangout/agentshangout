@@ -2613,3 +2613,74 @@ async fn a_mention_context_leaves_out_notes_and_reaches_webhooks_the_same() {
     .await;
     assert_eq!(hit.body["data"]["context"], context, "{:?}", hit.body);
 }
+
+// #791: @room wakes each subscribed bot here through the same wake a direct @mention gets, once,
+// and nobody else: not an unsubscribed bot here.
+#[tokio::test]
+async fn room_tag_wakes_each_subscribed_bot_here_and_no_one_else() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (_, kit_id) = server.bot(&justin, &room, "Kit").await;
+    let (scout_url, scout_hook) = start_hook("echo").await;
+    let (kit_url, kit_hook) = start_hook("echo").await;
+    server
+        .put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url }))
+        .await;
+    server.put(&justin, &format!("/api/agents/{kit_id}/notify"), json!({ "url": kit_url })).await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&justin, &policy, json!({ "policy": "members" })).await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
+
+    server.say(&kevin, &room, "@room standup now").await;
+
+    wait_for(&scout_hook, |hit| hit.body["event"] == "mention").await;
+    let sent = wait_decision(&server, &justin, &scout_id, "sent").await;
+    assert_eq!(sent["reason"], "accepted", "{sent}");
+    settle().await;
+    assert_eq!(rings(&scout_hook), 1, "one wake per bot");
+    assert_eq!(rings(&kit_hook), 0, "an unsubscribed bot here isn't woken");
+    assert!(decisions(&server, &justin, &kit_id).await.is_empty(), "nor is it asked");
+}
+
+// #791: a bot named in the same @room line as well is woken once, not twice.
+#[tokio::test]
+async fn room_tag_and_a_name_in_one_line_wake_a_bot_once() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (scout_url, scout_hook) = start_hook("echo").await;
+    server
+        .put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url }))
+        .await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&justin, &policy, json!({ "policy": "members" })).await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
+
+    server.say(&kevin, &room, "@room and @Scout lunch?").await;
+
+    wait_for(&scout_hook, |hit| hit.body["event"] == "mention").await;
+    settle().await;
+    assert_eq!(rings(&scout_hook), 1, "one wake when it's both named and @room-tagged");
+}
+
+// #791: a subscribed bot with no wake-up URL is still reached, in its inbox.
+#[tokio::test]
+async fn room_tag_reaches_a_subscribed_bot_with_no_wake_url_in_its_inbox() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&justin, &policy, json!({ "policy": "members" })).await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
+
+    server.say(&kevin, &room, "@room hi").await;
+    let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"].clone();
+    let texts: Vec<&str> = inbox["mentions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["text"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(texts, ["@room hi"], "{inbox}");
+}
