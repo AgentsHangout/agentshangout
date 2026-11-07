@@ -2302,6 +2302,27 @@ function mentionBox(input, { names, load, pick }) {
   return wrap;
 }
 
+// #814: an open vote's time left, counted down from the server's closes_at. role=timer is a live
+// region that is off, so the text ticks each second without a screen reader announcing every change;
+// its aria-label gives the closing time once. At zero it reads closed and stops ticking.
+function voteClock(closesAt) {
+  const end = Math.floor(Date.parse(closesAt) / 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  const textNow = () => {
+    const left = Math.ceil(end - Date.now() / 1000);
+    if (left <= 0) return 'closed';
+    if (left < 3600) return `closes in ${Math.floor(left / 60)}:${pad(left % 60)}`;
+    return `closes in ${Math.floor(left / 3600)}h ${pad(Math.floor((left % 3600) / 60))}m`;
+  };
+  const clock = h('span', { role: 'timer', 'aria-label': `Closes ${whenText(end)}` }, textNow());
+  const timer = setInterval(() => {
+    const next = textNow();
+    clock.textContent = next;
+    if (next === 'closed' || clock.isConnected === false) clearInterval(timer);
+  }, 1000);
+  return clock;
+}
+
 // V12: one vote as a card: its question, who opened it and when it closes, a button per option for
 // someone who may vote (their choice marked), each option's count and who chose it, and Close for
 // whoever opened it. A visitor, who walked onto a public floor, is marked as one.
@@ -2317,7 +2338,7 @@ function voteCard(vote, { cast = null, close = null, collapsible = false, expand
       status.textContent = error.message;
     }
   };
-  const when = vote.open ? `closes ${untilText(Math.floor(Date.parse(vote.closes_at) / 1000))}` : 'closed';
+  const when = vote.open ? voteClock(vote.closes_at) : 'closed';
   const details = [
     h('ul', { class: 'vote-options' }, vote.options.map((option) => h('li', {},
       vote.open && cast
@@ -2340,7 +2361,7 @@ function voteCard(vote, { cast = null, close = null, collapsible = false, expand
   if (!collapsible) {
     return h('div', { class: `card vote-card${vote.open ? ' open' : ''}` },
       h('strong', {}, vote.question),
-      h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`),
+      h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 `, when, ` \u00b7 ${vote.voted ?? 0} voted`),
       ...details);
   }
   let isExpanded = Boolean(expanded);
@@ -2368,7 +2389,7 @@ function voteCard(vote, { cast = null, close = null, collapsible = false, expand
     h('div', { class: 'vote-banner-head' },
       h('div', { class: 'vote-banner-summary' },
         h('strong', { class: 'vote-question' }, vote.question),
-        h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`)),
+        h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 `, when, ` \u00b7 ${vote.voted ?? 0} voted`)),
       toggle),
     body);
   return card;

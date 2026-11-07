@@ -8,6 +8,7 @@ const slice = (from, end) => {
   assert.ok(start >= 0, from);
   return app.slice(start, app.indexOf(end, start) + end.length);
 };
+const clockCode = slice('function voteClock(closesAt) {', '\n}\n');
 const cardCode = slice('function voteCard(vote,', '\n}\n');
 const untilCode = slice('function untilText(unix) {', '\n}\n');
 
@@ -22,9 +23,17 @@ const h = (tag, props, ...children) => new Node(tag, props || {}, children);
 const all = (n) => (n instanceof Node ? [n, ...n.children.flatMap(all)] : []);
 const text = (n) => (n instanceof Node ? (n.textContent || '') + n.children.map(text).join('') : String(n));
 
-const context = { h };
+// #814: the countdown runs on a fake timer, so a test can tick it without waiting.
+const ticks = [];
+const cleared = [];
+const context = {
+  h,
+  whenText: () => 'Sat, 4:00 PM',
+  setInterval: (fn) => { ticks.push(fn); return ticks.length; },
+  clearInterval: (id) => { cleared.push(id); },
+};
 vm.createContext(context);
-vm.runInContext(`${untilCode}\n${cardCode}\nthis.voteCard = voteCard;`, context);
+vm.runInContext(`${untilCode}\n${clockCode}\n${cardCode}\nthis.voteCard = voteCard;`, context);
 
 const soon = new Date(Date.now() + 20 * 60 * 1000).toISOString();
 const vote = {
@@ -42,7 +51,10 @@ const vote = {
   const card = context.voteCard(vote, { cast: async (option) => { cast.push(option); }, close: async () => { closed += 1; } });
   const shown = text(card);
   assert.ok(shown.includes('Lunch?') && shown.includes("Ann's vote") && shown.includes('3 voted'), shown);
-  assert.ok(/closes in \d+ min/.test(shown), shown);
+  assert.ok(/closes in \d+:\d\d/.test(shown), shown);
+  const timerEl = all(card).find((n) => n.props.role === 'timer');
+  assert.ok(timerEl && timerEl.props['aria-label'] === 'Closes Sat, 4:00 PM', 'compact live timer with a one-time label');
+  assert.ok(!all(card).some((n) => n.props['aria-live'] && n.props['aria-live'] !== 'off'), 'no live region spams the screen reader');
   assert.ok(shown.includes("Scout (Ann's bot)") && shown.includes('Eve, visiting'), 'who chose what, visitors marked');
   const buttons = all(card).filter((n) => n.tag === 'button');
   const tacos = buttons.find((b) => text(b) === 'Tacos');
@@ -53,6 +65,19 @@ const vote = {
   assert.equal(JSON.stringify(cast), '["Tacos"]');
   await buttons.find((b) => text(b) === 'Close it now').props.onclick();
   assert.equal(closed, 1);
+
+  // The countdown ticks once a second; a past closes_at reads closed, and its timer stops.
+  assert.ok(ticks.length >= 1, 'a one-second tick is set');
+  const clockNow = all(card).find((n) => n.props.role === 'timer');
+  ticks[0]();
+  assert.ok(/^closes in/.test(clockNow.textContent), clockNow.textContent);
+  const past = new Date(Date.now() - 5000).toISOString();
+  const expired = context.voteCard({ ...vote, closes_at: past }, { cast: async () => {}, close: async () => {} });
+  const expiredClock = all(expired).find((n) => n.props.role === 'timer');
+  assert.equal(text(expiredClock), 'closed', 'a past closes_at shows closed');
+  const before = cleared.length;
+  ticks[ticks.length - 1]();
+  assert.equal(cleared.length, before + 1, 'the timer stops once closed');
 
   // A refusal shows on the card.
   const refused = context.voteCard(vote, { cast: async () => { throw new Error('guests can\'t vote'); } });
