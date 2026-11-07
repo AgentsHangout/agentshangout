@@ -65,7 +65,55 @@ assert.equal(c.offMapText({}), "Its room isn't on the map, so there's nowhere to
 // The map's list marks a bot off the map only when it's in a room and has no tile.
 assert.ok(app.includes('const offMap = !tile && Boolean(bot.room);'));
 assert.ok(app.includes('return yourBotRow(bot, { focusOn, offMap, settingsPath:'));
-// The owner's off-map floors come from /api/spaces, which lists only the caller's own spaces.
-assert.ok(app.includes("const owned = await api('/api/spaces').catch(() => null);"));
-assert.ok(app.includes('const spaceId = offMap ? offMapFloors.get(bot.room.id) : null;'));
-console.log('My bots: a bot in a room off the map says so; one on the map keeps Center.');
+// loadBots (S90): runs the shipped code with a stubbed api, asking /api/spaces only when a bot is off the map.
+const slice = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)));
+const loader = [
+  'let myBots = [];\nlet offMapFloors = new Map();',
+  slice('  // Where the map can center on a bot', '  function renderBots()'),
+  slice('  let botsAt = 0;', '\n  const aboutBody'),
+].join('\n');
+async function run({ bots, spaces, latest = { bots_out: [] } }) {
+  const calls = [];
+  const seen = {};
+  const ctx = {
+    me: { kind: 'person', name: 'justin' },
+    latest,
+    world: {},
+    renderBots: () => { seen.bots = JSON.parse(ctx.snapshot()); },
+    api: async (path) => {
+      calls.push(path);
+      if (path === '/api/me/bots') return { bots };
+      if (path === '/api/spaces') return spaces();
+      throw new Error(`unexpected ${path}`);
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(`${loader}\nthis.snapshot = () => JSON.stringify({ myBots, floors: [...offMapFloors] }); this.loadBots = loadBots;`, ctx);
+  await ctx.loadBots(true);
+  return { calls, seen: seen.bots, world: ctx.world };
+}
+const spaceList = () => ({
+  house: { on_map: false, space: { id: 'sp1' }, floors: [{ id: 'r1' }] },
+  third: [{ on_map: true, space: { id: 'sp2' }, floors: [{ id: 'r2' }] }],
+});
+(async () => {
+  // No bot is in a room off the map (one has a tile, one has no room): no /api/spaces request.
+  const quiet = await run({ bots: [{ name: 'a', room: { id: 'r2' }, place: { x: 1, y: 2 } }, { name: 'b', room: null }], spaces: () => { throw new Error('asked'); } });
+  assert.deepEqual(quiet.calls, ['/api/me/bots']);
+  assert.equal(quiet.seen.myBots.length, 2);
+  assert.deepEqual(quiet.seen.floors, []);
+  // A bot out on the map by the live feed counts as on the map too.
+  const live = await run({ bots: [{ name: 'a', room: { id: 'r2' } }], latest: { bots_out: [['a', 3, 4]] }, spaces: () => { throw new Error('asked'); } });
+  assert.deepEqual(live.calls, ['/api/me/bots']);
+  // An off-map bot gets its space from /api/spaces, so the row can link to the settings.
+  const off = await run({ bots: [{ name: 'a', room: { id: 'r1' } }], spaces: spaceList });
+  assert.deepEqual(off.calls, ['/api/me/bots', '/api/spaces']);
+  assert.deepEqual(off.seen.floors, [['r1', 'sp1']]);
+  assert.ok(off.world.myBots.has('a'));
+  // /api/spaces failing still draws the rows, without the link.
+  const failed = await run({ bots: [{ name: 'a', room: { id: 'r1' } }], spaces: () => { throw new Error('down'); } });
+  assert.deepEqual(failed.calls, ['/api/me/bots', '/api/spaces']);
+  assert.equal(failed.seen.myBots.length, 1);
+  assert.deepEqual(failed.seen.floors, []);
+  console.log('My bots: a bot in a room off the map says so; one on the map keeps Center.');
+})().catch((failure) => { console.error(failure); process.exit(1); });

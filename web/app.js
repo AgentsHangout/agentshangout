@@ -10218,6 +10218,11 @@ async function worldView(id, { home = false } = {}) {
   panels.add('bots', 'My bots', { onOpen: () => { loadBots(true); trust?.load(); } }, botsBody, trustHost);
   const trust = me?.kind === 'person' ? trustPanel({ h, api, panels, me, host: trustHost, hostPanel: 'bots', figure: figurePicture, dress: (id) => dresser.dress(id), schedule: (bot) => routineDialog(bot, () => loadBots(true)).catch((failure) => alert(failure.message)), crew: (bot) => bot?.configuration_room
     ? go(`/h/${encodeURIComponent(bot.configuration_room.id)}#crew`) : makeBot() }) : null;
+  // Where the map can center on a bot, or null when it has no tile.
+  function botTile(bot) {
+    const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
+    return bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
+  }
   function renderBots() {
     const tabs = h('div', { class: 'row-actions', role: 'tablist' },
       ...[['yours', 'My bots'], ['everyone', 'Everyone out']].map(([tab, label]) =>
@@ -10226,8 +10231,7 @@ async function worldView(id, { home = false } = {}) {
     if (botsTab === 'yours') {
       const sorted = [...myBots].sort((a, b) => (STATUS_ORDER[a.status?.state] ?? 1) - (STATUS_ORDER[b.status?.state] ?? 1));
       rows = sorted.length ? sorted.map((bot) => {
-        const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
-        const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
+        const tile = botTile(bot);
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
         // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
         const offMap = !tile && Boolean(bot.room);
@@ -10275,8 +10279,10 @@ async function worldView(id, { home = false } = {}) {
     botsLoad = (async () => {
       const { bots = [] } = await api('/api/me/bots').catch(() => ({}));
       myBots = bots;
-      // S90: /api/spaces lists only your own spaces, so this says nothing about anyone else's.
-      const owned = await api('/api/spaces').catch(() => null);
+      // S90: /api/spaces lists only your own spaces, so this says nothing about anyone else's. It's
+      // asked only when some bot is in a room with no tile (S89), the one case that has a use for it.
+      const offMap = bots.some((bot) => bot.room && !botTile(bot));
+      const owned = offMap ? await api('/api/spaces').catch(() => null) : null;
       offMapFloors = new Map(owned ? [owned.house, ...owned.third].filter((each) => !each.on_map).flatMap((each) => each.floors.map((floor) => [floor.id, each.space.id])) : []);
       // The count over a building turns gold for one of these.
       world.myBots = new Set(bots.map((bot) => bot.name));
