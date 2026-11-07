@@ -10657,6 +10657,46 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     assert!(changed["trust_note"].is_string(), "always there");
 }
 
+// #804: a bot's last_posted_at moves every time a bot speaks, so an incremental read (with
+// after_message_id) must not count it in the bots tag. Nothing changed about who is here, so the
+// bots section is left out; the new messages already show who spoke.
+#[tokio::test]
+async fn an_incremental_read_ignores_last_posted_at_in_the_bots_tag() {
+    let w = waiting_world().await;
+    let read = |args: Value| {
+        let server = &w.server;
+        let token = w.scout.token.clone();
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    // Pip has spoken already, so its state is settled; the next line only moves last_posted_at.
+    w.mention("hello").await;
+    let first = read(json!({ "hangout_id": w.room, "brief": true })).await;
+    let tags = first["section_tags"].clone();
+    let after = first["last_message_id"].clone();
+
+    // Pip speaks again: its last_posted_at changes, but who is here does not.
+    w.mention("again").await;
+
+    let next = read(json!({
+        "hangout_id": w.room,
+        "brief": true,
+        "after_message_id": after,
+        "known": tags.clone(),
+    }))
+    .await;
+    assert!(next.get("bots").is_none(), "bots unchanged, so left out: {next}");
+    assert_eq!(next["section_tags"]["bots"], tags["bots"], "{next}");
+    assert!(
+        next["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["text"].as_str().unwrap_or("").contains("again")),
+        "{next}"
+    );
+    assert!(next["trust_note"].is_string(), "always there");
+}
+
 // I115: read_room says, on each item that holds notes, whether this caller could add one: not a
 // bot that walked in, and not a bot on a floor with a quiet sign. Other items don't carry it.
 #[tokio::test]

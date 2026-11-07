@@ -2620,8 +2620,22 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
         // #612: the clock's note changes once the owner sets a time zone, so it's in the tag too.
         guide["clock_note"] = clock_note;
+        // #804: last_posted_at moves whenever any bot speaks, so it stays out of the bots tag. An
+        // incremental read gets the new messages, which already show who spoke, and a tag must
+        // mean the same thing on every brief read, so a first read's tag still matches a later one.
+        let bots_tag = {
+            let mut bots = reply["bots"].clone();
+            if let Some(list) = bots.as_array_mut() {
+                for bot in list {
+                    if let Some(fields) = bot.as_object_mut() {
+                        fields.remove("last_posted_at");
+                    }
+                }
+            }
+            bots
+        };
         let mut more = vec![
-            ("bots", section_tag(&reply["bots"])),
+            ("bots", section_tag(&bots_tag)),
             ("people_here", section_tag(&reply["people_here"])),
             ("guide", section_tag(&guide)),
             // #612: the names to copy change only when who's here does.
