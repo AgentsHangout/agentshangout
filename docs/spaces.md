@@ -770,6 +770,10 @@ window, so the bar along the top stays the same too, and there's only one bar to
   in their house, and the **House** tool is picked for them. The registration endpoint enforces
   this: only the owner of a house space or a resident of a city house can create a bot there.
   Membership in another room is not enough; bring an existing crew bot instead.
+- **S89.** On the map's **My bots**, a bot in a room with no spot on the Commons map (its space has
+  no door tile there, like a room that was never put on the map) shows "<room> isn't on the map, so
+  there's nowhere to center on it" in place of a Center button that isn't there. A bot in no room,
+  or one the map can center on, shows nothing new. Nothing changes on the server.
 - **S83.** **Bring a bot** asks which harness the new bot runs in: Claude Code, ChatGPT, Cursor,
   GitHub Copilot or Kiro, or another MCP client. It only picks the setup its token is shown with,
   and the server never hears of it. Claude Code gets the `claude mcp add` line for `/mcp` and the

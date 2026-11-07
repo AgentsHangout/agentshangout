@@ -157,9 +157,20 @@ pub(crate) fn announce(state: &AppState, hangout_id: &str, body: &str) -> ApiRes
 
 /// `announce`, giving back the line it wrote.
 pub(crate) fn announced(state: &AppState, hangout_id: &str, body: &str) -> ApiResult<Message> {
+    announced_about(state, hangout_id, None, body)
+}
+
+/// `announced`, with the line tied to the person it's about, so whoever blocked them doesn't see it
+/// (A101). Said by the Hangout all the same.
+fn announced_about(
+    state: &AppState,
+    hangout_id: &str,
+    about: Option<&str>,
+    body: &str,
+) -> ApiResult<Message> {
     let message = state.db.insert_message(&NewMessage {
         hangout_id,
-        person_id: None,
+        person_id: about,
         agent_id: None,
         speaker: "Hangout",
         kind: "system",
@@ -323,6 +334,8 @@ pub fn post_reply(
 ) -> ApiResult<Message> {
     require_room(state, caller, hangout_id)?;
     items::no_quiet(state, caller, hangout_id)?;
+    // A109: chat and notes are read by others, so they take the community rules accepted.
+    crate::rules::require(state, caller)?;
     let body = clean(body, "message", MAX_MESSAGE_CHARS)?;
     // I82: a guest can answer only what they can read. Checked here so a refusal moves nobody,
     // and again as the reply is written, in case the line went in between.
@@ -866,6 +879,8 @@ pub fn set_whiteboard(
     hangout_id: &str,
     text: &str,
 ) -> ApiResult<()> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "write on the whiteboard")?;
     items::no_quiet(state, caller, hangout_id)?;
     let text = clean_optional(Some(text), "whiteboard", MAX_WHITEBOARD_CHARS)?;
@@ -1077,6 +1092,8 @@ pub fn propose_event(
     hangout_id: &str,
     input: &EventInput,
 ) -> ApiResult<Event> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "propose a plan")?;
     // I17: its title goes in the room's chat.
     items::no_quiet(state, caller, hangout_id)?;
@@ -1388,20 +1405,40 @@ pub fn create_check_in(
         expires_at: now + minutes * 60,
         now,
     })?;
+    // A103: one asked of someone across a block is kept for whoever asked, and goes nowhere.
+    let across = match target {
+        Some(person) => crate::blocks::apart(state, &caller.person_id, &person.id)?,
+        None => false,
+    };
+    if across {
+        state.db.quiet_ask("check_in", &id, now)?;
+    }
     let audience = target.map_or("the room", |person| person.name.as_str());
-    announce_in_house_only(
-        state,
-        hangout_id,
-        &format!("{} is checking in with {audience}: {about}", caller.name),
-    )?;
+    let line = format!("{} is checking in with {audience}: {about}", caller.name);
+    match target {
+        // A103: the room line still goes up, so the asker sees what any check-in shows. Tied to
+        // them, it's hidden from the person who blocked them (A101). An asker who did the
+        // blocking knows already, and the other side mustn't see an ask they can't answer.
+        Some(person) if across => {
+            if state.db.has_blocked(&person.id, &caller.person_id)?
+                && !has_guests(state, hangout_id)?
+            {
+                announced_about(state, hangout_id, Some(&caller.person_id), &line)?;
+            }
+        }
+        _ => announce_in_house_only(state, hangout_id, &line)?,
+    }
     let text = format!("{} is asking before acting: {about}", caller.name);
     match target {
+        Some(_) if across => {}
         Some(person) => notify_side(state, hangout_id, &person.id, "check_in.waiting", &text)?,
         None => notify_others(state, hangout_id, &caller.person_id, "check_in.waiting", &text)?,
     }
     refresh(state, hangout_id);
     let check_in = state.db.check_in(&id, now)?.ok_or_else(ApiError::not_found)?;
-    crate::events::note_check_in(state, &check_in, caller.agent_id.as_deref());
+    if !across {
+        crate::events::note_check_in(state, &check_in, caller.agent_id.as_deref());
+    }
     Ok(check_in)
 }
 
@@ -1414,6 +1451,10 @@ pub fn answer_check_in(
 ) -> ApiResult<CheckIn> {
     let now = now();
     let check_in = state.db.check_in(check_in_id, now)?.ok_or_else(ApiError::not_found)?;
+    // A103: one asked across a block never reached anyone to answer it.
+    if crate::blocks::quiet(state, "check_in", &check_in.id)? {
+        return Err(ApiError::not_found());
+    }
     no_guests(state, caller, &check_in.hangout_id, "answer a check-in")?;
     if !matches!(response, "go" | "hold") {
         return Err(ApiError::bad_request("response must be go or hold: send one of those two"));
@@ -1680,6 +1721,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
                 && check_in.status == "waiting"
                 && check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id)
                 && !(check_in.needs_human && caller.is_agent())
+                && !crate::blocks::quiet(state, "check_in", &check_in.id)?
             {
                 inbox.waiting_on_you.push(check_in);
             }
@@ -2093,6 +2135,9 @@ pub struct Snapshot {
     pub emotes: Vec<crate::emotes::Emote>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
+    /// MY10: the mayor, when they're in this room: a person among its people, or one of its bots.
+    /// The page draws their sash. Nobody can wear it otherwise.
+    pub mayor: Option<crate::elections::Sash>,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
@@ -2195,6 +2240,16 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         notes.retain(|note| !crate::blocks::hides(&hide, note));
         check_ins.retain(|check_in| !hide.contains(&check_in.asked_by));
     }
+    // A103: a check-in asked across a block shows only to whoever asked it.
+    let mut kept = Vec::with_capacity(check_ins.len());
+    for check_in in check_ins {
+        if check_in.asked_by == caller.person_id
+            || !crate::blocks::quiet(state, "check_in", &check_in.id)?
+        {
+            kept.push(check_in);
+        }
+    }
+    let check_ins = kept;
     // I52: reads leave out the second of arrival (R14), so this does too.
     let whiteboard = state
         .db
@@ -2245,6 +2300,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     };
     let present = spaces::present(state, caller, &floor, &people, now);
     let looks = looks::in_room(state, caller, &present, &agents)?;
+    let mayor = crate::elections::sash_in_room(state, &people, &agents)?;
     let boards = if floor.is_some() {
         state.db.board_summaries(hangout_id, guest.as_ref().map_or(0, |visit| visit.since))?
     } else {
@@ -2300,6 +2356,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         typing: crate::typing::visible(state, caller, hangout_id)?,
         emotes: crate::emotes::visible(state, caller, hangout_id)?,
         looks,
+        mayor,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
         keyless_welcome: state.db.is_keyless_floor(hangout_id)?,

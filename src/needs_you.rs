@@ -59,7 +59,12 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         // Only waiting ones come back for a moment as old as now.
         for check_in in state.db.recent_check_ins(&room.id, now + 1, now)? {
             let addressed = check_in.to_person.as_ref().is_none_or(|to| *to == caller.person_id);
-            if check_in.status == "waiting" && check_in.asked_by != caller.person_id && addressed {
+            // A103: none from the other side of a block.
+            if check_in.status == "waiting"
+                && check_in.asked_by != caller.person_id
+                && addressed
+                && !crate::blocks::quiet(&state, "check_in", &check_in.id)?
+            {
                 check_ins.push((check_in, room.name.clone()));
             }
         }
@@ -148,7 +153,21 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
     let job_reports = crate::jobs::reports_for(&state, &caller.person_id, now)?;
     // #647 B: bots an agent drafted for this person, waiting for their approval.
     let bot_setups = crate::bot_setup::for_needs_you(&state, &caller.person_id)?;
-    let count = questions.len()
+    // A111: once a bot of theirs was refused for the community rules, until they accept them.
+    let refused = state.rules_refused.bots_of(&caller.person_id);
+    let rules = if refused.is_empty()
+        || crate::rules::standing(&state, &caller.person_id, now)? != crate::rules::Standing::Needed
+    {
+        Value::Null
+    } else {
+        json!({
+            "version": crate::rules::version(),
+            "url": crate::rules::RULES_PATH,
+            "bots": refused,
+        })
+    };
+    let count = usize::from(!rules.is_null())
+        + questions.len()
         + bot_setups.len()
         + job_reports.len()
         + check_ins.len()
@@ -163,6 +182,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         + passes.len()
         + mentions.len();
     Ok(Json(json!({
+        "rules": rules,
         "job_reports": job_reports,
         "bot_setups": bot_setups,
         "questions": questions,

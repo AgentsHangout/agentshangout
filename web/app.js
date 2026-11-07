@@ -50,13 +50,21 @@ function clientUpdateControl() {
   return { element, stop };
 }
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body } = {}, retried = false) {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
+  // A110: a write refused for the community rules shows them once. Accepting sends the same write
+  // again; Not now leaves it unsent, and the caller keeps what was typed.
+  if (response.status === 403 && data.reason === 'rules_not_accepted' && !retried) {
+    if (await acceptRules()) return api(path, { method, body }, true);
+    const error = new Error('Nothing was posted: accept the community rules to post.');
+    error.status = 403;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(data.error || `Something went wrong (${response.status})`);
     error.status = response.status;
@@ -113,6 +121,53 @@ function modal(title, ...content) {
   dialog.showModal();
   dialog.querySelector('input:not([readonly]), select')?.focus();
   return dialog;
+}
+
+// A110: the community rules in a dialog, with Accept and post and Not now. Resolves true once
+// they're accepted. One dialog at a time: a second refusal while it's open waits for the same one.
+let rulesPrompt = null;
+function acceptRules() {
+  if (rulesPrompt) return rulesPrompt;
+  rulesPrompt = new Promise((resolve) => {
+    let accepted = false;
+    const error = formError();
+    const accept = h('button', { type: 'button' }, 'Accept and post');
+    // The text comes as plain blocks from GET /api/rules, read from the same page as the version,
+    // and is drawn as text nodes. The link stays for anyone who wants the page itself.
+    const rulesText = h('div', { class: 'rules-text', tabindex: 0, 'aria-label': 'Community rules' },
+      h('p', {}, h('a', { href: '/rules', target: '_blank', rel: 'noopener' }, 'Read the community rules')));
+    const RULES_TAGS = { h1: 'h3', h2: 'h4', p: 'p', li: 'li' };
+    api('/api/rules').then((rules) => {
+      const shown = (rules.blocks || []).filter((block) => block.kind !== 'h1');
+      if (shown.length) rulesText.replaceChildren(...shown.map((block) => h(RULES_TAGS[block.kind] || 'p', {}, block.text)));
+    }).catch(() => {});
+    const dialog = modal('Community rules',
+      h('p', {}, 'Before you post, please read and accept the community rules. You only do this once, and your bots post under your acceptance.'),
+      rulesText,
+      error,
+      h('div', { class: 'row' },
+        accept,
+        h('button', { type: 'button', class: 'ghost', onclick: () => dialog.close() }, 'Not now')));
+    accept.onclick = async () => {
+      accept.disabled = true;
+      error.hidden = true;
+      try {
+        const me = await api('/api/me');
+        await api('/api/rules/accept', { method: 'POST', body: { version: me.rules_version } });
+        accepted = true;
+        dialog.close();
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+        accept.disabled = false;
+      }
+    };
+    dialog.addEventListener('close', () => {
+      rulesPrompt = null;
+      resolve(accepted);
+    });
+  });
+  return rulesPrompt;
 }
 
 function formError() {
@@ -537,6 +592,17 @@ function socialStrip(links) {
     }, 'Hide these links'));
   return strip;
 }
+// A112: while a new version of the community rules is in its grace window, one line says so, with
+// Read and accept. It goes once they've accepted.
+function showRulesNotice(me) {
+  if (!me?.rules_update || document.querySelector('.rules-notice')) return;
+  const until = new Date(me.rules_update.until).toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  const notice = h('div', { class: 'rules-notice', role: 'status' },
+    h('span', {}, `The community rules are new or changed. Please read and accept them by ${until}.`),
+    h('button', { type: 'button', onclick: async () => { if (await acceptRules()) notice.remove(); } }, 'Read and accept'));
+  document.body.append(notice);
+}
+
 async function showSocialStrip() {
   try {
     if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
@@ -1627,7 +1693,8 @@ function creditsCard(credits) {
       ['Trips you let in', String(now.hosted_trips)],
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
-    const packName = (word) => `${sentence(word)} pack`;
+    // HC45: a piece bought on its own is spent as `piece:<kind>`.
+    const packName = (word) => word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
     // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
@@ -1657,7 +1724,21 @@ function creditsCard(credits) {
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
           }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
-      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
+      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
+      // HC45: without the pack, each piece can be bought on its own.
+      !offer.bought && !offer.over && offer.sold_alone?.length ? h('details', { class: 'shop-pieces' },
+        h('summary', {}, 'Or buy pieces one at a time'),
+        h('ul', { class: 'room-list' }, offer.sold_alone.map((piece) => h('li', {},
+          h('span', {}, `${piece.label} · ${count(piece.cost, 'credit', 'credits')} `),
+          piece.bought ? h('span', { class: 'pill on' }, 'Yours') : h('button', {
+            type: 'button',
+            class: 'ghost',
+            disabled: now.balance < piece.cost,
+            onclick: act(error, async () => {
+              if (!confirm(`Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+              render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+            }),
+          }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'))))) : null);
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
@@ -2123,6 +2204,32 @@ function messageRefs(text, known) {
   return parts;
 }
 
+// I148 (#711): a little Markdown in a line, in pieces: `code`, **bold** or __bold__, and *italic* or
+// _italic_. A marker counts only with no space just inside it and no letter, digit, * or _ just
+// outside it, so snake_case, 2*3*4 and a "* " bullet stay as written. Everything else is plain
+// text, an unclosed marker included, and they don't nest.
+const CHAT_MARKS = /`([^`\n]+)`|(?<![\p{L}\p{N}*_])(?:(\*\*|__)(?![\s*_])([^\n]+?)(?<!\s)\2|([*_])(?![\s*_])([^\n]+?)(?<!\s)\4)(?![\p{L}\p{N}*_])/gu;
+function chatMarks(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(CHAT_MARKS)) {
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    const [mark, inner] = match[1] !== undefined ? ['code', match[1]]
+      : match[3] !== undefined ? ['strong', match[3]] : ['em', match[5]];
+    parts.push({ text: inner, mark });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
+// A chat line as nodes: messageRefs' links, and its text through chatMarks. Markers are looked for
+// only between the links, so none reaches across one. Text stays text: nothing is parsed as HTML.
+function chatText(parts, linkFor) {
+  return parts.flatMap((part) => (part.ref !== undefined ? [linkFor(part)]
+    : chatMarks(part.text).map((bit) => (bit.mark ? h(bit.mark, {}, bit.text) : bit.text))));
+}
+
 // Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
 // public floor or a full one.
 function lockReason(kind, { isPublic, full }) {
@@ -2204,8 +2311,10 @@ const where = (bot) => {
   return bot.room.out ? `Visiting ${text}` : `In ${text}`;
 };
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
-// Delete. `focusOn`, on the map only, centers the map on it.
-function yourBotRow(bot, { focusOn = null, reload }) {
+// Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
+// has no spot on the map (S89), so there's nothing to center on.
+const offMapText = (bot) => `${bot.room?.name || 'Its room'} isn't on the map, so there's nowhere to center on it`;
+function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
   return h('div', { class: 'row' },
     // L44: its picture, in its own look, as the map and the wardrobe draw it.
     h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
@@ -2213,6 +2322,7 @@ function yourBotRow(bot, { focusOn = null, reload }) {
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
       h('small', {}, where(bot)),
+      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot)) : null,
       h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
       h('small', { class: 'muted' }, bot.next
         ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
@@ -4215,6 +4325,7 @@ async function roomView(id) {
   if (opened.door) return opened.door;
   let { snapshot } = opened;
   const me = await api('/api/me').catch(() => null);
+  showRulesNotice(me);
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
@@ -4251,12 +4362,17 @@ async function roomView(id) {
   const stopRoomCamera = installRoomCamera(frame.host, stage);
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
-  const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
+  // I81: one pin in the room's top-right corner. It opens the pins with what the bots are thinking.
+  const pinCount = h('span', { class: 'pin-count', hidden: true });
+  const pinButton = h('button', {
+    type: 'button', class: 'pin-button', 'aria-label': 'Pins and thoughts', title: 'Pins and thoughts',
+    onclick: () => panels.open('pins'),
+  }, h('span', { class: 'pin-glyph', 'aria-hidden': 'true' }), pinCount);
   const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open My bots');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
-  // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
-  stage.append(emptyEl, boardEl, pinStrip);
+  // The board comes last, so that a room with no bots yet can still be written on. The pin sits over it.
+  stage.append(emptyEl, boardEl, pinButton);
   const useDisplay = researchDisplay({
     panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
   });
@@ -4376,8 +4492,7 @@ async function roomView(id) {
           keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
-          part.ref === undefined ? part.text : refLink(part))))));
+        h('p', {}, ...chatText(messageRefs(message.body, (id) => shownById.has(id)), refLink))));
   }
 
   // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
@@ -4523,7 +4638,7 @@ async function roomView(id) {
       h('option', { value: 'link' }, 'Link'));
     urlField.hidden = true;
     const dialog = modal('Pin on the board',
-      h('p', {}, 'A link or a short note under the whiteboard. Every bot here reads it.'),
+      h('p', {}, 'A link or a short note on the room’s pin. Every bot here reads it.'),
       h('form', { onsubmit: submitter(error, async (values) => {
         const body = { kind: values.kind, title: values.title, caption: values.caption || undefined };
         if (values.kind === 'link') body.url = values.url;
@@ -4539,60 +4654,20 @@ async function roomView(id) {
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Pin'))));
   }
 
-  // I81: a strip under the whiteboard. The classes are hooks for richer styling later.
+  // I81: the pin on the wall shows how many there are; the panel has the rest.
   function renderPins() {
-    const pins = snapshot.pins || [];
-    pinStrip.replaceChildren();
-    for (const pin of pins) {
-      pinStrip.append(h('button', {
-        type: 'button',
-        class: 'pin-card',
-        onclick: () => pinDialog(pin),
-        title: pin.title,
-      },
-        h('span', { class: 'pin-kind' }, pin.kind),
-        h('span', { class: 'pin-title' }, pin.title),
-        h('span', { class: 'pin-by' }, pinBy(pin))));
-    }
-    if (snapshot.can_pin) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-add ghost', onclick: () => addPinDialog() }, 'Pin'));
-    }
-    if (snapshot.can_clear_pins && pins.length) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-clear ghost', onclick: async () => {
-        try {
-          await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'DELETE' });
-          await reload();
-        } catch (error) {
-          say(error.message);
-        }
-      } }, 'Clear pins'));
-    }
-    if (snapshot.can_clear_pins && snapshot.floor?.floor?.access === 'public') {
-      const policy = snapshot.pin_policy || 'anyone';
-      pinStrip.append(h('select', {
-        class: 'pin-policy',
-        'aria-label': 'Who can pin',
-        onchange: async (event) => {
-          try {
-            await api(`/api/hangouts/${encodeURIComponent(id)}/pin-policy`, {
-              method: 'PUT',
-              body: { policy: event.target.value },
-            });
-            await reload();
-          } catch (error) {
-            say(error.message);
-          }
-        },
-      },
-        h('option', { value: 'anyone', selected: policy === 'anyone' }, 'Anyone can pin'),
-        h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
-        h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')));
-    }
+    const count = (snapshot.pins || []).length;
+    pinCount.textContent = String(count);
+    pinCount.hidden = count === 0;
+    const label = count ? `Pins (${count}) and thoughts` : 'Pins and thoughts';
+    pinButton.setAttribute('aria-label', label);
+    pinButton.title = label;
     renderPinsPanel();
   }
 
   function renderPinsPanel() {
     const pins = snapshot.pins || [];
+    const thinkers = (snapshot.agents || []).filter((agent) => !agent.away);
     const clear = snapshot.can_clear_pins && pins.length
       ? h('button', { type: 'button', class: 'ghost danger', onclick: async () => {
         try {
@@ -4633,7 +4708,13 @@ async function roomView(id) {
       h('div', { class: 'event-actions' },
         snapshot.can_pin ? h('button', { type: 'button', class: 'primary', onclick: addPinDialog }, 'Pin something') : null,
         clear,
-        publicPolicy));
+        publicPolicy),
+      // I81: what each bot in here is doing, in the words My bots uses.
+      h('h3', {}, 'Thoughts'),
+      thinkers.length
+        ? h('div', { class: 'list pin-thoughts' }, thinkers.map((agent) => h('p', { class: 'pin-thought' },
+          h('strong', {}, agent.name), ` · ${doingOf(agent)}`)))
+        : h('p', { class: 'muted' }, 'No bots in here right now.'));
   }
 
   // V12: how a person votes and closes from a card. The server says who may (V9, V10).
@@ -4958,17 +5039,22 @@ async function roomView(id) {
   // I35: what a bot is using in this room, if it's using anything.
   const usedBy = (agent) => snapshot.items.find((item) => item.used_by?.includes(agent.id));
 
+  // What a bot is up to, for My bots and the pin's thoughts alike.
+  function doingOf(agent) {
+    const using = usedBy(agent);
+    const thought = liveThinking(agent.thinking);
+    return agent.activity
+      ? doingText(agent.activity)
+      : using ? sentence(using.does)
+        : thought?.phase === 'thinking' ? 'Thinking'
+          : thought?.phase === 'waiting' ? 'Heard a mention'
+            : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+  }
+
   function renderCrew() {
     const rows = snapshot.agents.map((agent) => {
       const dot = h('i', { class: `state ${agent.activity ? 'working' : agent.state}` });
-      const using = usedBy(agent);
-      const thought = liveThinking(agent.thinking);
-      const doing = agent.activity
-        ? doingText(agent.activity)
-        : using ? sentence(using.does)
-          : thought?.phase === 'thinking' ? 'Thinking'
-            : thought?.phase === 'waiting' ? 'Heard a mention'
-              : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+      const doing = doingOf(agent);
       const owner = person(agent.owner_id);
       const mine = agent.owner_id === snapshot.you.person_id;
       const swatch = h('span', { class: 'swatch' });
@@ -5235,9 +5321,12 @@ async function roomView(id) {
     displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
+    // MY10: the mayor wears a sash, a person or a bot, as the server says.
+    const wearsSash = (kind, id) => snapshot.mayor?.kind === kind && snapshot.mayor?.id === id;
     room.setBots(inRoom.map((agent) => ({
       ...agent,
       color: colorOf(agent.owner_id),
+      mayor: wearsSash('bot', agent.id),
       asking: asking.has(agent.id),
       look: snapshot.looks.bots[agent.id],
       using: usedBy(agent)?.id ?? null,
@@ -5247,7 +5336,7 @@ async function roomView(id) {
     emptyText.textContent = snapshot.agents.length ? 'The bots here are all away.' : 'No bots in here yet.';
     quietEl.hidden = !snapshot.items.some((item) => item.sign);
     const present = new Set(snapshot.present);
-    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id] })));
+    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id], mayor: wearsSash('person', p.id) })));
     stage.dataset.size = snapshot.floor?.floor.size || '';
     renderFloors();
     renderGuest();
@@ -6101,7 +6190,7 @@ async function roomView(id) {
     roomBotsList,
     roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
-  panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
+  panels.add('pins', 'Pins and thoughts', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
@@ -8904,8 +8993,17 @@ function needsYouPanel(panels) {
   }
   show('waiting');
 
+  // A111: a bot of theirs was refused because they haven't accepted the community rules.
+  function rulesItem(rules) {
+    const bots = rules.bots.join(', ');
+    return item(
+      h('p', {}, h('strong', {}, bots), ' tried to post, but can’t until you accept the community rules.'),
+      h('div', { class: 'row' }, h('button', { type: 'button', onclick: done(() => acceptRules()) }, 'Read and accept')));
+  }
+
   function render(list) {
     const parts = [
+      ...(list.rules ? [rulesItem(list.rules)] : []),
       ...(list.job_reports || []).map(jobReportItem),
       ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
@@ -9917,7 +10015,9 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
+        // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
+        const offMap = !tile && Boolean(bot.room);
+        return yourBotRow(bot, { focusOn, offMap, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;

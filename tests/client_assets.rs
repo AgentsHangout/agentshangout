@@ -29,6 +29,7 @@ async fn shared_client_assets_are_complete_immutable_and_never_substituted() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     let task = tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });

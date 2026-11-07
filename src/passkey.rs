@@ -594,6 +594,7 @@ mod tests {
                 allow_private_webhooks: false,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         )
     }

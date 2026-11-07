@@ -2305,6 +2305,27 @@ CREATE TABLE IF NOT EXISTS contribution_payouts (
 );
 CREATE INDEX IF NOT EXISTS contribution_payouts_by_recipient ON contribution_payouts (recipient_id, day);
 CREATE INDEX IF NOT EXISTS contribution_payouts_at ON contribution_payouts (created_at);
+-- A103 (#685): an ask made across a block. It's stored like any other, so it shows to whoever made it
+-- as waiting, and this marks it so the other side never sees it, then or later, even if the block
+-- is taken back. `kind` and `ask_id` name it; nothing here says who blocked whom.
+CREATE TABLE IF NOT EXISTS quiet_asks (
+    kind        TEXT NOT NULL,
+    ask_id      TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (kind, ask_id)
+);
+-- A108: each version of the community rules a person accepted, and when.
+CREATE TABLE IF NOT EXISTS rules_acceptances (
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    version     TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, version)
+);
+-- A112: the first time this server ran with each version of the rules, where its grace starts.
+CREATE TABLE IF NOT EXISTS rules_versions (
+    version     TEXT PRIMARY KEY,
+    first_seen  INTEGER NOT NULL
+);
 -- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
 -- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
 -- except on a minor_safety report, which keeps everything (RE6). The review queue (RV6 to RV14)
@@ -4194,7 +4215,9 @@ fn floors_seen_by(
             OR EXISTS (SELECT 1 FROM messages l
                        WHERE l.hangout_id = f.hangout_id AND l.kind = 'system' AND l.body = ?3)
             OR EXISTS (SELECT 1 FROM friend_invites i
-                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2))",
+                       WHERE i.kind = 'room' AND i.place_id = f.hangout_id AND i.to_person = ?2
+                         AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                         WHERE q.kind = 'friend_invite' AND q.ask_id = i.id)))",
         params![space_id, person_id, left],
     )
 }
@@ -5781,6 +5804,7 @@ impl Db {
              WHERE f.kind = 'room' AND f.place_id = ?1 AND f.to_person = ?2
                AND f.declined_at IS NULL AND f.created_at > ?3
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = ?1 AND t.person_id = ?2)
                AND EXISTS (SELECT 1 FROM members m
@@ -10384,6 +10408,8 @@ impl Db {
                 &format!(
                     "SELECT {TRIP_COLS} FROM {TRIPS}
                      WHERE t.agent_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+                       AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                                       WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)
                      ORDER BY t.created_at DESC LIMIT 1"
                 ),
                 params![agent_id, house_id, now],
@@ -10401,7 +10427,9 @@ impl Db {
     ) -> rusqlite::Result<i64> {
         self.conn().query_row(
             "SELECT COUNT(*) FROM trips t JOIN agents a ON a.id = t.agent_id
-             WHERE a.owner_id = ? AND t.house_id = ? AND t.status = 'asking' AND t.expires_at > ?",
+             WHERE a.owner_id = ?1 AND t.house_id = ?2 AND t.status = 'asking' AND t.expires_at > ?3
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'trip_from_house' AND q.ask_id = t.id)",
             params![owner_id, house_id, now],
             |row| row.get(0),
         )
@@ -11419,7 +11447,9 @@ impl Db {
     pub fn is_plan_invitee(&self, event_id: &str, person_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
-            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2",
+            "SELECT 1 FROM plan_invitees WHERE event_id = ?1 AND person_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = ?1 || '|' || ?2)",
             params![event_id, person_id],
         )
     }
@@ -11439,6 +11469,8 @@ impl Db {
              JOIN plan_invitees i ON i.event_id = b.event_id AND i.person_id = b.person_id
              WHERE b.person_id = ?1 AND e.status != 'cancelled' AND e.ends_at >= ?2
                AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.person_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q
+                               WHERE q.kind = 'plan_invite' AND q.ask_id = e.id || '|' || ?1)
              ORDER BY e.starts_at, e.id"
         ))?;
         let rows = stmt.query_map(params![person_id, now], |row| {
@@ -15646,6 +15678,7 @@ impl Db {
              LEFT JOIN cities c ON f.kind = 'city' AND c.id = f.place_id
              WHERE f.to_person = ?1 AND f.declined_at IS NULL AND f.created_at > ?2
                AND NOT EXISTS (SELECT 1 FROM friend_invite_ends e WHERE e.invite_id = f.id)
+               AND NOT EXISTS (SELECT 1 FROM quiet_asks q WHERE q.kind = 'friend_invite' AND q.ask_id = f.id)
                AND NOT EXISTS (SELECT 1 FROM floors fl JOIN turned_out t ON t.space_id = fl.space_id
                                WHERE fl.hangout_id = f.place_id AND t.person_id = ?1)
                AND (h.id IS NOT NULL OR c.id IS NOT NULL)
@@ -16501,6 +16534,52 @@ impl Db {
         rows.collect()
     }
 
+    /// A108, A112: whether `person_id` accepted `version`, whether they accepted any other
+    /// version, and when their account was made.
+    pub fn rules_accepted(
+        &self,
+        person_id: &str,
+        version: &str,
+    ) -> rusqlite::Result<(bool, bool, Option<i64>)> {
+        self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version = ?2),
+                    EXISTS (SELECT 1 FROM rules_acceptances WHERE person_id = ?1 AND version <> ?2),
+                    (SELECT created_at FROM people WHERE id = ?1)",
+            params![person_id, version],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+    }
+
+    /// A112: notes that this server is running with rules `version`, the first time only.
+    pub fn note_rules_version(&self, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_versions (version, first_seen) VALUES (?, ?)",
+            params![version, now],
+        )?;
+        Ok(())
+    }
+
+    /// A112: when this server first ran with rules `version`.
+    pub fn rules_version_first_seen(&self, version: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "SELECT first_seen FROM rules_versions WHERE version = ?",
+                [version],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    /// A108: records that `person_id` accepted `version`. Accepting it again keeps the first time.
+    pub fn accept_rules(&self, person_id: &str, version: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO rules_acceptances (person_id, version, accepted_at)
+             VALUES (?, ?, ?)",
+            params![person_id, version, now],
+        )?;
+        Ok(())
+    }
+
     // Deleting an account
 
     /// A27 to A45: everything `people` holds of someone. Their row goes, so every cascade runs, and
@@ -16515,6 +16594,20 @@ impl Db {
             "INSERT OR IGNORE INTO people (id, name, color, key_hash, feed_token, created_at)
              VALUES (?, ?, '#8a8f98', lower(hex(randomblob(32))), lower(hex(randomblob(32))), 0)",
             params![SOMEONE_WHO_LEFT_ID, SOMEONE_WHO_LEFT],
+        )?;
+        // A103: marks on this person's asks, either side, go with them: those keyed by a row's id
+        // or one of their bots', looked up while the rows are still here. Pair keys are below.
+        tx.execute(
+            "DELETE FROM quiet_asks WHERE ask_id IN (
+                SELECT id FROM friend_invites WHERE from_person = ?1 OR to_person = ?1
+                UNION SELECT id FROM check_ins WHERE asked_by = ?1 OR to_person = ?1
+                UNION SELECT t.id FROM trips t JOIN agents a ON a.id = t.agent_id
+                      WHERE a.owner_id = ?1 OR t.asked_by = ?1
+                UNION SELECT id FROM apprentice_proposals
+                      WHERE proposer_owner = ?1 OR partner_owner = ?1)
+             OR EXISTS (SELECT 1 FROM agents a
+                        WHERE a.owner_id = ?1 AND quiet_asks.ask_id LIKE '%' || a.id || '%')",
+            [person_id],
         )?;
         pass_on_house_bots(&tx, person_id, &mut gone)?;
         // A house bot that goes with its house still has a name to take off the rest.
@@ -16578,6 +16671,8 @@ impl Db {
             "UPDATE world_place_removals SET person_id = NULL WHERE person_id = ?",
             [person_id],
         )?;
+        // A103: marks on asks keyed by this person's id go with them.
+        tx.execute("DELETE FROM quiet_asks WHERE ask_id LIKE '%' || ?1 || '%'", [person_id])?;
         tx.execute("DELETE FROM players WHERE person_id = ?", [person_id])?;
         tx.execute("DELETE FROM worlds WHERE owner_id = ?", [person_id])?;
         // This table holds a person's address or a bot's, with no foreign key to either.
@@ -18762,6 +18857,40 @@ mod tests {
 
     fn a_pack_for_sale() -> &'static crate::items::Pack {
         crate::items::PACKS.iter().find(|pack| pack.cost > 0 && !pack.over).unwrap()
+    }
+
+    // HC45: a piece bought on its own costs 2 to 10, all of a pack's pieces cost more than the pack,
+    // and buying one unlocks only that piece
+    #[test]
+    fn a_piece_is_bought_on_its_own_and_unlocks_only_itself() {
+        use crate::items::{piece_price, PACKS, PIECE};
+        for pack in PACKS.iter().filter(|pack| pack.cost > 0) {
+            let mut kinds: Vec<&str> = pack.items.iter().map(|item| item.kind).collect();
+            kinds.sort();
+            kinds.dedup();
+            let all: i64 = kinds.iter().map(|kind| piece_price(kind).unwrap()).sum();
+            assert!(all > pack.cost, "{}'s pieces cost {all}, no more than the pack", pack.pack);
+            assert!(kinds.iter().all(|kind| (2..=10).contains(&piece_price(kind).unwrap())));
+            assert_eq!(piece_price(pack.paint), None, "a paint comes only with its pack");
+        }
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 1);
+        let pack = a_pack_for_sale();
+        let piece = pack.items[0].kind;
+        let price = piece_price(piece).unwrap();
+        let after =
+            crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now).unwrap();
+        assert_eq!(after.balance, 20 - price);
+        let offer = after.packs.iter().find(|offer| offer.pack == pack.pack).unwrap();
+        assert!(!offer.bought, "a piece isn't the pack");
+        assert!(offer.sold_alone.iter().any(|alone| alone.kind == piece && alone.bought));
+        assert!(db.has_bought("p1", &format!("{PIECE}{piece}")).unwrap());
+        // Once is enough, and a piece of a pack you have can't be bought again.
+        assert!(crate::economy::spend(&db, &ann(None), &format!("{PIECE}{piece}"), None, now + 1)
+            .is_err());
+        assert!(
+            crate::economy::spend(&db, &ann(None), "piece:nothing_at_all", None, now + 1).is_err()
+        );
     }
 
     // HC14, HC15, HC16
