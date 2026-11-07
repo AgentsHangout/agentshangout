@@ -28,6 +28,8 @@ pub const BOT_STAY_SECS: i64 = 30 * 60;
 
 mod blocks;
 pub use blocks::Added as TieAdded;
+mod claims;
+pub use claims::RoomClaim;
 mod bot_profile;
 mod bot_setup;
 mod coin_drops;
@@ -2471,6 +2473,20 @@ CREATE TABLE IF NOT EXISTS report_actions (
     at           INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS report_actions_by_report ON report_actions (report_id);
+-- CB2 (docs/job-board.md): one row per member bot per room on its job board. `tools` is a JSON
+-- list. It goes with the room, the bot, or the bot leaving the room (CB8).
+CREATE TABLE IF NOT EXISTS room_claims (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    claim       TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    tools       TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, agent_id)
+);
+CREATE TRIGGER IF NOT EXISTS room_claims_leave AFTER DELETE ON room_agents BEGIN
+    DELETE FROM room_claims WHERE hangout_id = OLD.hangout_id AND agent_id = OLD.agent_id;
+END;
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.

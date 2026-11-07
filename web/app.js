@@ -2755,6 +2755,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       case 'closing': openClosing(item); break;
       case 'research': useDisplay(); break;
       case 'lific': openLific(item); break;
+      case 'claims': panels.open('claims'); break;
       case 'mayor': modal('Mayor voting box', mayorPanel(id, () => view().agents || [])); break;
       default: break;
     }
@@ -3357,6 +3358,40 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       }),
     }, 'Clear it')));
   panels.add('closing', 'Closing clock', {}, closingInfo, closingError, closingForm);
+
+  // CB6, CB9: the job board's rows, and Clear for the bot's owner or whoever runs the space.
+  const claimsError = formError();
+  const claimsList = h('div', { class: 'claims-list' });
+  async function loadClaims() {
+    claimsError.hidden = true;
+    try {
+      const board = await api(`/api/hangouts/${encodeURIComponent(id)}/claims`);
+      claimsList.replaceChildren(...(board.rows.length ? board.rows.map((row) => h('div', {
+        class: `claims-row${row.stale ? ' muted' : ''}`,
+      },
+      h('p', {}, h('strong', {}, row.bot), ` ${row.status.replace('_', ' ')}`, row.claim ? `: ${row.claim}` : ''),
+      h('small', { class: 'muted' }, [
+        row.tools.join(', '),
+        row.stale ? 'stale' : '',
+        row.also_claimed_by.length ? `also claimed by ${row.also_claimed_by.join(', ')}` : '',
+        whenText(Date.parse(row.updated_at) / 1000),
+      ].filter(Boolean).join(' · ')),
+      row.can_clear ? h('button', {
+        type: 'button',
+        onclick: act(claimsError, async () => {
+          await api(`/api/hangouts/${encodeURIComponent(id)}/claims/${encodeURIComponent(row.agent_id)}`, { method: 'DELETE' });
+          await loadClaims();
+        }),
+      }, 'Clear') : null)) : [h('p', { class: 'muted' }, 'No bot has said what it is on yet.')]));
+    } catch (error) {
+      claimsList.replaceChildren();
+      claimsError.textContent = error.message;
+      claimsError.hidden = false;
+    }
+  }
+  panels.add('claims', 'Job board', { onOpen: loadClaims },
+    h('p', { class: 'muted' }, 'What each bot here says it is on. Their own words; agree in chat who takes what.'),
+    claimsError, claimsList);
 
   // I123 to I127: a Lific board shows a published project's issues, read through this server.
   // Lific's words are other people's, so they go in as text only.

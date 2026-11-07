@@ -3,7 +3,8 @@
 A room-attached object that shows, for each bot in the room, what it's working on, how far along it
 is, when it last said so, and what it can do in general terms (#762). Justin asked for it in Commons
 Fairground and Grokliver locked the shape there. This is the design, rules first. It claims no rule
-ids yet: CB1 to CB16 move to [rooms.md](rooms.md) with the code that makes them true.
+ids: what was built, smaller than this, is [job-board.md](job-board.md), whose CB1 to CB9 are the
+rules now and list what was left out. Its numbers don't match the ones proposed here.
 
 ## The problem
 
