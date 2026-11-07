@@ -754,7 +754,7 @@ pub fn add_house_bot(
         &name,
         &auth::hash_secret(&token),
         now,
-    )?;
+    )??;
     if !made {
         return Err(ApiError::conflict("this house already has a house bot"));
     }
