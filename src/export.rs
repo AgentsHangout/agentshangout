@@ -101,13 +101,33 @@ impl Rooms<'_> {
     }
 
     /// Swaps every row's `hangout_id` for its `room`.
-    fn name_rows(&mut self, rows: &mut [Value]) {
+    fn name_rows(&mut self, list: &str, rows: &mut [Value]) {
+        // RE19: someone else can change these words after the person wrote them (a space's runner
+        // rewrites a card), so they're only exported while the person can still see the room, as
+        // the page would show them. Out of sight, the row keeps its id, status and dates.
         for row in rows {
             let Some(object) = row.as_object_mut() else { continue };
             if let Some(id) = object.remove("hangout_id") {
                 let room = id.as_str().map_or(Value::Null, |id| self.name(id));
+                if room.is_null() {
+                    forget_shared_words(list, object);
+                }
                 object.insert("room".into(), room);
             }
+        }
+    }
+}
+
+/// RE19: lists whose words someone else can change, and those words.
+const SHARED_WORDS: &[(&str, &[&str])] =
+    &[("board_cards", &["board", "title", "text"]), ("whiteboards", &["text"])];
+
+/// RE19: a row from a room the person can no longer see keeps no words someone else could have
+/// written since; its id, status and dates stay.
+fn forget_shared_words(list: &str, object: &mut Map<String, Value>) {
+    if let Some((_, words)) = SHARED_WORDS.iter().find(|(name, _)| *name == list) {
+        for word in *words {
+            object.remove(*word);
         }
     }
 }
@@ -124,7 +144,7 @@ fn shape(state: &AppState, caller: &Caller, rows: ExportRows) -> ApiResult<Value
     let mut out = Map::new();
     let mut methods = vec![json!({ "method": "owner_key" })];
     for (name, mut listed) in lists {
-        rooms.name_rows(&mut listed.rows);
+        rooms.name_rows(name, &mut listed.rows);
         if listed.truncated {
             cut.push(name);
         }
@@ -142,10 +162,10 @@ fn shape(state: &AppState, caller: &Caller, rows: ExportRows) -> ApiResult<Value
         }
     }
     account["sign_in_methods"] = Value::Array(methods);
-    rooms.name_rows(&mut bots);
+    rooms.name_rows("bots", &mut bots);
     for bot in &mut bots {
         if let Some(job) = bot.get_mut("job").filter(|job| job.is_object()) {
-            rooms.name_rows(std::slice::from_mut(job));
+            rooms.name_rows("job", std::slice::from_mut(job));
         }
     }
     let credits_cut = credits.len() > EXPORT_ROWS;
@@ -169,4 +189,25 @@ fn shape(state: &AppState, caller: &Caller, rows: ExportRows) -> ApiResult<Value
     data.insert("bots".into(), Value::Array(bots));
     data.extend(out);
     Ok(Value::Object(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RE19: a card out of sight loses its words and its board's name, which its room's runner may
+    // have rewritten since; a message, which only its writer's words fill, keeps its text.
+    #[test]
+    fn an_unseen_rooms_shared_words_are_left_out() {
+        let mut card = json!({ "id": "c1", "board": "Ann's board", "title": "Ann rewrote this",
+                               "text": "and this", "status": "open", "created_at": 1 });
+        forget_shared_words("board_cards", card.as_object_mut().unwrap());
+        assert_eq!(card, json!({ "id": "c1", "status": "open", "created_at": 1 }));
+        let mut board = json!({ "text": "whiteboard words", "updated_at": 2 });
+        forget_shared_words("whiteboards", board.as_object_mut().unwrap());
+        assert_eq!(board, json!({ "updated_at": 2 }));
+        let mut line = json!({ "id": "m1", "text": "my own words" });
+        forget_shared_words("messages", line.as_object_mut().unwrap());
+        assert_eq!(line["text"], "my own words");
+    }
 }

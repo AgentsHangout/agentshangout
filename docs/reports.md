@@ -160,8 +160,7 @@ An operator is a person with god mode on (W75). No bot tool reads or acts on the
   reads it like any GET. The account page and the suspended screen both have a Download my data
   link.
 
-## Paused bots
-
+## Paused bots A board card or whiteboard text in a room the person can no longer see keeps only its id, status and dates, since someone else may have rewritten its words.
 - **RE20.** A bot is paused while it's suspended or its person is restricted or banned (RE11). A
   paused bot is rung by nothing: no wake-up URL, notification webhook, event subscription
   webhook, OAuth event delivery or push, for a mention, an owner's answer, a plan's cue, a meetup
