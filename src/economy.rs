@@ -13,7 +13,7 @@ use crate::{
     auth::Caller,
     db::{CreditKind, CreditLine, CreditSource, Db, Spend, FIRST_GATHERING},
     error::{ApiError, ApiResult},
-    items::{kind_of, pack_of, paid_pack_with, piece_price, PACKS, PIECE},
+    items::{kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds, PACKS, PIECE},
     ops::DAY_SECS,
 };
 
@@ -231,21 +231,21 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
                 .collect(),
             sold_alone: {
                 let mut seen: Vec<&str> = Vec::new();
-                pack.items
-                    .iter()
-                    .filter(|item| {
-                        let new = !seen.contains(&item.kind);
-                        seen.push(item.kind);
+                sold_alone_kinds(pack)
+                    .into_iter()
+                    .filter(|kind| {
+                        let new = !seen.contains(kind);
+                        seen.push(kind);
                         new
                     })
-                    .filter_map(|item| {
+                    .filter_map(|kind| {
                         Some(PieceOffer {
-                            kind: item.kind,
-                            label: kind_of(item.kind)?.label,
-                            cost: piece_price(item.kind)?,
-                            bought: bought.iter().any(|word| {
-                                word == pack.pack || *word == format!("{PIECE}{}", item.kind)
-                            }),
+                            kind,
+                            label: kind_of(kind)?.label,
+                            cost: piece_price(kind)?,
+                            bought: bought
+                                .iter()
+                                .any(|word| word == pack.pack || *word == format!("{PIECE}{kind}")),
                         })
                     })
                     .collect()

@@ -133,13 +133,14 @@ const WORK: &str = "work";
 const FALL: &str = "fall";
 const WINTER: &str = "winter";
 const STARGAZER: &str = "stargazer";
+const COINS: &str = "coins";
 const SPOOKY: &str = "spooky";
 const SIGNS: &str = "signs";
 
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 19] = [
+pub const CATEGORIES: [(&str, &str); 20] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -157,6 +158,7 @@ pub const CATEGORIES: [(&str, &str); 19] = [
     (FALL, "Fall"),
     (WINTER, "Winter"),
     (STARGAZER, "Stargazer"),
+    (COINS, "Coin sinks"),
     (SPOOKY, "Spooky"),
     (SIGNS, "Signs"),
 ];
@@ -426,10 +428,11 @@ pub static CATALOG: [Kind; 153] = [
     piece("meteorite", "Meteorite", STARGAZER, STARTER, 2, None, (1, 1)),
     piece("star_projector", "Star projector", STARGAZER, STARTER, 4, feels("calm"), (1, 1)),
     piece("comet_rug", "Comet rug", STARGAZER, STARTER, 3, feels("calm"), (4, 2)).flat(),
-    // #774: coin sinks. Bought one at a time with coins (HC53), like the rest of the pack.
-    piece("comet_jar", "Comet tip jar", STARGAZER, STARTER, 2, feels("playful"), (1, 1)),
-    piece("astronaut", "Astronaut", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
-    piece("lunar_rover", "Lunar rover", STARGAZER, STARTER, 3, feels("playful"), (2, 1)),
+    // #774: coin sinks. Bought one at a time with coins (HC53), like the rest of the pack, but not
+    // placed in it, so owning the pack doesn't give them away. See SOLD_ALONE.
+    piece("comet_jar", "Comet tip jar", COINS, STARTER, 2, feels("playful"), (1, 1)),
+    piece("astronaut", "Astronaut", COINS, STARTER, 3, feels("playful"), (1, 1)),
+    piece("lunar_rover", "Lunar rover", COINS, STARTER, 3, feels("playful"), (2, 1)),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -588,10 +591,6 @@ pub const PACKS: [Pack; 4] = [
             at("orrery", 31, 4),
             at("rocket_model", 34, 9),
             at("meteorite", 25, 12),
-            // #774: a tip jar by the door and an astronaut on the open side.
-            at("comet_jar", 19, 0),
-            at("astronaut", 36, 2),
-            at("lunar_rover", 30, 12),
         ],
     },
 ];
@@ -603,12 +602,33 @@ pub fn pack_of(word: &str) -> Option<&'static Pack> {
 /// HC14: the pack that costs credits which this kind, paint or flooring belongs to, if any. Every
 /// kind in a pack is in that pack alone (I29), so there's at most one.
 pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
-    PACKS.iter().find(|pack| {
-        pack.cost > 0
-            && (pack.paint == word
-                || pack.flooring == word
-                || pack.items.iter().any(|part| part.kind == word))
-    })
+    PACKS
+        .iter()
+        .find(|pack| {
+            pack.cost > 0
+                && (pack.paint == word
+                    || pack.flooring == word
+                    || pack.items.iter().any(|part| part.kind == word))
+        })
+        .or_else(|| sold_in(word).filter(|pack| pack.cost > 0))
+}
+
+/// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
+/// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
+/// category, so these have a category of their own.
+pub const SOLD_ALONE: [(&str, &str); 3] =
+    [("comet_jar", "stargazer"), ("astronaut", "stargazer"), ("lunar_rover", "stargazer")];
+
+/// The pack that sells `word` one at a time without placing it, if any.
+fn sold_in(word: &str) -> Option<&'static Pack> {
+    SOLD_ALONE.iter().find(|(kind, _)| *kind == word).and_then(|(_, pack)| pack_of(pack))
+}
+
+/// Every kind a pack sells one at a time: the ones it places, then the ones it only sells.
+pub fn sold_alone_kinds(pack: &Pack) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> = pack.items.iter().map(|part| part.kind).collect();
+    kinds.extend(SOLD_ALONE.iter().filter(|(_, p)| *p == pack.pack).map(|(kind, _)| *kind));
+    kinds
 }
 
 /// HC45: how a piece bought on its own is written in `credit_spends.pack`.
@@ -618,7 +638,8 @@ pub const PIECE: &str = "piece:";
 /// and is more beautiful. Paints and floorings come only with their pack, so they have no price.
 pub fn piece_price(word: &str) -> Option<i64> {
     let kind = kind_of(word)?;
-    paid_pack_with(word)?.items.iter().any(|part| part.kind == word).then_some(())?;
+    let pack = paid_pack_with(word)?;
+    (pack.items.iter().any(|part| part.kind == word) || sold_in(word).is_some()).then_some(())?;
     Some((1 + kind.w * kind.h + kind.beauty / 4).clamp(2, 10))
 }
 
