@@ -30,7 +30,9 @@ mod blocks;
 pub use blocks::Added as TieAdded;
 mod bot_profile;
 mod bot_setup;
+mod coin_drops;
 mod contributions;
+pub use coin_drops::{CoinDrop, COIN_DROP_HC, COIN_DROP_SECS};
 pub use contributions::{
     CONTRIBUTIONS_A_DAY, CONTRIBUTION_BUDGET_A_WEEK, CONTRIBUTION_HC, CONTRIBUTION_KINDS,
     PAIR_CONTRIBUTIONS_A_WEEK,
@@ -2356,6 +2358,22 @@ CREATE TABLE IF NOT EXISTS merged_pr_start (
     id    INTEGER PRIMARY KEY CHECK (id = 1),
     since INTEGER NOT NULL
 );
+-- HC50: each 10 minutes' draw, keyed by which 10 minutes it was, so it's drawn once. An empty draw
+-- (HC52) has no bot, no person and 0. The bot and person go when they do, and the row stays, so
+-- the week's budget (HC44) still counts it.
+CREATE TABLE IF NOT EXISTS coin_drops (
+    slot        INTEGER PRIMARY KEY,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    person_id   TEXT REFERENCES people(id) ON DELETE SET NULL,
+    amount      INTEGER NOT NULL CHECK (amount >= 0),
+    -- The UTC day it paid, which HC6's daily cap counts.
+    day         INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS coin_drops_person ON coin_drops(person_id, day);
+CREATE INDEX IF NOT EXISTS coin_drops_at ON coin_drops(created_at);
+-- HC50: the draw reads the last 10 minutes of chat.
+CREATE INDEX IF NOT EXISTS messages_at ON messages(created_at);
 -- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
 -- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
 -- target_id too when the target is that person, except on a minor_safety report, which keeps
@@ -3564,6 +3582,8 @@ pub struct CreditTotals {
     pub hosted_trips: i64,
     /// HC35: how many merged pull requests paid.
     pub merged_prs: i64,
+    /// HC50: how many drawn coins paid.
+    pub coins: i64,
 }
 
 /// HC20: the open bounty on `card` that `bot` may answer, or why it can't. One answer per bot, so
@@ -3616,8 +3636,8 @@ pub fn week_start(now: i64) -> i64 {
 }
 
 /// HC44: how many new credits the site can still make this UTC week, out of `SITE_MINT_A_WEEK`:
-/// less everything that paid this week from gatherings, trips, merged pull requests and accepted
-/// contributions, and every
+/// less everything that paid this week from gatherings, trips, merged pull requests, accepted
+/// contributions and drawn coins (HC50), and every
 /// starter question funded this week that hasn't been refunded. Read inside the transaction that
 /// pays, so two payouts at once can't both take the last of it.
 pub fn mint_room(conn: &Connection, now: i64) -> rusqlite::Result<i64> {
@@ -3626,6 +3646,7 @@ pub fn mint_room(conn: &Connection, now: i64) -> rusqlite::Result<i64> {
         "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE created_at >= ?1)
               + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE created_at >= ?1)
               + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE created_at >= ?1)
+              + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops WHERE created_at >= ?1)
               + (SELECT COALESCE(SUM(q.amount), 0) FROM question_bounties q
                    JOIN starter_questions s ON s.bounty_id = q.id
                   WHERE s.created_at >= ?1 AND q.status <> 'refunded')",
@@ -12612,11 +12633,14 @@ impl Db {
         tx.execute("INSERT OR IGNORE INTO merged_pr_start(id, since) VALUES(1, ?)", [now])?;
         let start: i64 =
             tx.query_row("SELECT since FROM merged_pr_start WHERE id = 1", [], |row| row.get(0))?;
-        // HC6: everything that paid this person today, from gatherings, trips and pull requests.
+        // HC6: everything that paid this person today, from gatherings, trips, pull requests and
+        // drawn coins.
         let mut paid_today: i64 = tx.query_row(
             "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid
                       WHERE person_id = ?1 AND day = ?2)
                   + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts
+                      WHERE person_id = ?1 AND day = ?2)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops
                       WHERE person_id = ?1 AND day = ?2)",
             params![person, day],
             |row| row.get(0),
@@ -12737,15 +12761,17 @@ impl Db {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut day_paid: HashMap<i64, i64> = HashMap::new();
         {
-            // HC6, HC35 and HC39: what merged pull requests and accepted contributions paid count
-            // toward the same day's cap.
+            // HC6, HC35, HC39 and HC50: what merged pull requests, accepted contributions and drawn
+            // coins paid count toward the same day's cap.
             let mut stmt = tx.prepare(
                 "SELECT day, SUM(amount) FROM (
                      SELECT day, amount FROM credit_paid WHERE person_id = ?1
                      UNION ALL
                      SELECT day, amount FROM merged_pr_payouts WHERE person_id = ?1
                      UNION ALL
-                     SELECT day, amount FROM contribution_payouts WHERE recipient_id = ?1)
+                     SELECT day, amount FROM contribution_payouts WHERE recipient_id = ?1
+                     UNION ALL
+                     SELECT day, amount FROM coin_drops WHERE person_id = ?1)
                   GROUP BY day",
             )?;
             let rows = stmt.query_map([person_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -12843,6 +12869,7 @@ impl Db {
                     hosted_trips: row.get(4)?,
                     spent: 0,
                     merged_prs: 0,
+                    coins: 0,
                 })
             },
         )?;
@@ -12870,6 +12897,17 @@ impl Db {
         )?;
         totals.paid += contributed;
         totals.paid_today += contributed_today;
+        // HC50: what drawn coins paid.
+        let (coins, coins_today, coin_count): (i64, i64, i64) = conn.query_row(
+            "SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(CASE WHEN day = ?2 THEN amount END), 0),
+                    COUNT(*)
+               FROM coin_drops WHERE person_id = ?1",
+            params![person_id, today],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        totals.paid += coins;
+        totals.paid_today += coins_today;
+        totals.coins = coin_count;
         totals.spent = conn.query_row(
             "SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?",
             [person_id],
@@ -12906,6 +12944,10 @@ impl Db {
              SELECT 'contribution', x.amount, x.created_at, x.created_at, NULL, NULL, NULL
                FROM contribution_payouts x
               WHERE x.recipient_id = ?1
+             UNION ALL
+             SELECT 'coin', d.amount, d.created_at, d.created_at, NULL, NULL, a.name
+               FROM coin_drops d LEFT JOIN agents a ON a.id = d.agent_id
+              WHERE d.person_id = ?1
              ORDER BY 3 DESC, 4 DESC, 1, 2
              LIMIT ?3",
         )?;
@@ -12962,12 +13004,13 @@ impl Db {
         if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
             return Ok(Some("already funded"));
         }
-        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + {}", contributions::CONTRIBUTIONS_PAID), [sponsor], |r| r.get(0))?;
+        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + {} + {}", contributions::CONTRIBUTIONS_PAID, coin_drops::COIN_DROPS_PAID), [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
-        // HC25, HC28, HC35 and HC42: a first gathering's credits, a starter question's award, what
-        // merged pull requests paid and what accepted contributions paid never fund a question, or
+        // HC25, HC28, HC35, HC42 and HC53: a first gathering's credits, a starter question's award,
+        // and what merged pull requests, accepted contributions and drawn coins paid never fund a
+        // question, or
         // throwaway accounts could each collect some and pass it all to one person. Packs are paid
         // for from them first, so only what packs haven't used is held back.
         let held: i64 = tx.query_row(
@@ -12980,16 +13023,18 @@ impl Db {
                              + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts
                                 WHERE person_id=?1)
                              + {}
+                             + {}
                              - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
                                 WHERE person_id=?1 AND pack NOT LIKE 'question:%'))",
-                contributions::CONTRIBUTIONS_PAID
+                contributions::CONTRIBUTIONS_PAID,
+                coin_drops::COIN_DROPS_PAID
             ),
             params![sponsor, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
         if balance - held < amount {
             return Ok(Some(
-                "credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question",
+                "credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question",
             ));
         }
         tx.execute("INSERT INTO question_bounties(id,card_id,sponsor_id,amount,status) VALUES(?1,?2,?3,?4,'open')", params![id,card,sponsor,amount])?;
@@ -13161,7 +13206,7 @@ impl Db {
                   + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
                   - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
                   + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))
-                  + {}", contributions::CONTRIBUTIONS_PAID),
+                  + {} + {}", contributions::CONTRIBUTIONS_PAID, coin_drops::COIN_DROPS_PAID),
             [person_id],
             |row| row.get(0),
         )?;
@@ -18641,7 +18686,7 @@ mod tests {
         assert_eq!(paid.balance, 20);
         assert_eq!(
             db.fund_question("b1", "q1", "p1", 5, 3 * CREDIT_DAY).unwrap(),
-            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question")
         );
         assert!(db.open_questions("p1").unwrap().is_empty());
 
@@ -18650,7 +18695,7 @@ mod tests {
         assert_eq!(credits_of(&db, "p1", GATE + CREDIT_DAY).balance, 40);
         assert_eq!(
             db.fund_question("b2", "q1", "p1", 25, GATE + CREDIT_DAY).unwrap(),
-            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question")
         );
         assert_eq!(db.fund_question("b3", "q1", "p1", 20, GATE + CREDIT_DAY).unwrap(), None);
 
@@ -18816,6 +18861,154 @@ mod tests {
         db.resolve_question("q1", "p2", None).unwrap();
         assert_eq!(room(monday + 50), SITE_MINT_A_WEEK - 40);
         assert_eq!(room(monday + 7 * CREDIT_DAY), SITE_MINT_A_WEEK);
+    }
+
+    /// A chat line in `room` at `at`, from a bot or a person.
+    fn chat_at(db: &Db, room: &str, agent: Option<&str>, person: Option<&str>, at: i64) {
+        db.insert_message(&NewMessage {
+            hangout_id: room,
+            person_id: person,
+            agent_id: agent,
+            speaker: "someone",
+            kind: "chat",
+            body: "hello",
+            now: at,
+        })
+        .unwrap();
+    }
+
+    // HC50: every 10 minutes one bot that spoke in those 10 minutes is drawn, and its owner is paid
+    // 1. A bot that said more is still one ticket, and each 10 minutes is drawn once.
+    #[test]
+    fn a_coin_is_drawn_for_one_bot_that_spoke_each_ten_minutes() {
+        assert_eq!((COIN_DROP_SECS, COIN_DROP_HC), (600, 1));
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        let monday = 1_793_577_600;
+        let draw = monday + 5 * COIN_DROP_SECS;
+        for at in [draw - 500, draw - 400, draw - 300] {
+            chat_at(&db, "hz-lr", Some("b1"), None, at);
+        }
+        chat_at(&db, "ha-lr", Some("b2"), None, draw - 1);
+        // Said at the draw itself: that's the next 10 minutes.
+        chat_at(&db, "ha-lr", Some("b2"), None, draw);
+        let mut tickets = 0;
+        let drop = db
+            .draw_coin(draw + 30, |n| {
+                tickets = n;
+                1
+            })
+            .unwrap();
+        assert_eq!(tickets, 2, "b1 spoke three times and is one ticket");
+        assert_eq!(drop, CoinDrop::Paid { agent_id: "b2".into(), person_id: "p2".into() });
+        assert_eq!(db.draw_coin(draw + 300, |_| 0).unwrap(), CoinDrop::AlreadyDrawn);
+        let bo = credits_of(&db, "p2", draw + 60);
+        assert_eq!((bo.balance, bo.earned_today, bo.coins), (1, 1, 1));
+        let line = bo.history.iter().find(|line| line.kind == "coin").expect("a coin line");
+        assert_eq!((line.amount, line.at), (1, draw));
+        assert!(line.bot.is_some(), "the history names the bot that found it");
+        assert_eq!(credits_of(&db, "p1", draw + 60).balance, 0);
+        // The next 10 minutes: only b2 spoke, at the draw before.
+        assert_eq!(
+            db.draw_coin(draw + COIN_DROP_SECS, |_| 0).unwrap(),
+            CoinDrop::Paid { agent_id: "b2".into(), person_id: "p2".into() }
+        );
+    }
+
+    // HC51 and HC52: a person's own line, a keyless agent's, a house bot's and one from before the
+    // 10 minutes draw nobody, and a 10 minutes that's missed isn't made up later.
+    #[test]
+    fn only_a_keyed_bot_that_spoke_in_the_ten_minutes_is_drawn() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        bot(&db, "hb", "p1");
+        db.set_bot_home("hb", "hz", false, true).unwrap();
+        let draw = 1_793_577_600 + 5 * COIN_DROP_SECS;
+        chat_at(&db, "hz-lr", None, Some("p1"), draw - 10);
+        // A keyless agent's line has no person and no bot (KA10).
+        chat_at(&db, "hz-lr", None, None, draw - 10);
+        chat_at(&db, "hz-lr", Some("hb"), None, draw - 10);
+        chat_at(&db, "hz-lr", Some("b1"), None, draw - COIN_DROP_SECS - 1);
+        assert_eq!(db.draw_coin(draw, |_| 0).unwrap(), CoinDrop::Nothing);
+        assert_eq!(db.draw_coin(draw, |_| 0).unwrap(), CoinDrop::AlreadyDrawn);
+        // A note isn't chat.
+        db.insert_message(&NewMessage {
+            hangout_id: "hz-lr",
+            person_id: None,
+            agent_id: Some("b1"),
+            speaker: "Zed",
+            kind: "note",
+            body: "a note",
+            now: draw + 10,
+        })
+        .unwrap();
+        // b1 spoke in the 10 minutes after, but the server was down for that draw: only the one
+        // after is drawn, and b1 didn't speak in it.
+        chat_at(&db, "hz-lr", Some("b1"), None, draw + 20);
+        assert_eq!(db.draw_coin(draw + 2 * COIN_DROP_SECS, |_| 0).unwrap(), CoinDrop::Nothing);
+        assert_eq!(credits_of(&db, "p1", draw + 3 * COIN_DROP_SECS).balance, 0);
+    }
+
+    // HC51, HC52 and HC44: an owner who has had the day's 100 isn't drawn for, and once the week's
+    // budget is made nobody is. Coins count toward that budget.
+    #[test]
+    fn coins_stop_at_the_daily_cap_and_the_weekly_budget() {
+        use crate::economy::SITE_MINT_A_WEEK;
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        let monday = 1_793_577_600;
+        let draw = monday + 5 * COIN_DROP_SECS;
+        let today = draw.div_euclid(CREDIT_DAY);
+        db.conn().execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p1','gathering','full','c1',100,?1,?2)", params![today, monday]).unwrap();
+        chat_at(&db, "hz-lr", Some("b1"), None, draw - 10);
+        chat_at(&db, "ha-lr", Some("b2"), None, draw - 10);
+        let mut tickets = 0;
+        let drop = db
+            .draw_coin(draw, |n| {
+                tickets = n;
+                0
+            })
+            .unwrap();
+        assert_eq!(tickets, 1, "Ann has had the day's 100");
+        assert_eq!(drop, CoinDrop::Paid { agent_id: "b2".into(), person_id: "p2".into() });
+        assert_eq!(mint_room(&db.conn(), draw).unwrap(), SITE_MINT_A_WEEK - 100 - 1);
+        // Everyone else makes the rest of the week's budget.
+        db.conn().execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p2','gathering','rest','c1',?1,0,?2)", params![SITE_MINT_A_WEEK - 101, monday]).unwrap();
+        let next = draw + COIN_DROP_SECS;
+        chat_at(&db, "ha-lr", Some("b2"), None, next - 10);
+        assert_eq!(db.draw_coin(next, |_| 0).unwrap(), CoinDrop::Nothing);
+        // Next week there's room again.
+        let week = monday + 7 * CREDIT_DAY;
+        chat_at(&db, "ha-lr", Some("b2"), None, week - 10);
+        assert_eq!(
+            db.draw_coin(week, |_| 0).unwrap(),
+            CoinDrop::Paid { agent_id: "b2".into(), person_id: "p2".into() }
+        );
+    }
+
+    // HC53: a drawn coin buys packs but can't fund a question, and it stays drawn, and counted in
+    // the week's budget, when its bot and owner are gone.
+    #[test]
+    fn a_drawn_coin_cant_fund_a_question_and_outlives_its_bot() {
+        let db = funded_question_fixture();
+        let draw = 1_793_577_600 + 5 * COIN_DROP_SECS;
+        chat_at(&db, "ha-lr", Some("b2"), None, draw - 10);
+        assert!(matches!(db.draw_coin(draw, |_| 0).unwrap(), CoinDrop::Paid { .. }));
+        assert_eq!(credits_of(&db, "p2", draw).balance, 1);
+        assert_eq!(
+            db.fund_question("f1", "q1", "p2", 1, draw).unwrap(),
+            Some("credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question")
+        );
+        let room = mint_room(&db.conn(), draw).unwrap();
+        db.delete_person("p2", "Bo").unwrap();
+        let kept: (Option<String>, Option<String>, i64) = db
+            .conn()
+            .query_row("SELECT agent_id, person_id, amount FROM coin_drops", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(kept, (None, None, 1));
+        assert_eq!(mint_room(&db.conn(), draw).unwrap(), room);
     }
 
     // HC44: once the week's budget is made, nothing more pays: not a gathering, a merged pull
@@ -19006,7 +19199,7 @@ mod tests {
         db.conn().execute("INSERT OR IGNORE INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES('q1','board','Q','','p1',0,0)", []).unwrap();
         assert_eq!(
             db.fund_question("b1", "q1", "p1", 5, day + CREDIT_DAY).unwrap(),
-            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question")
         );
     }
 
@@ -20618,7 +20811,7 @@ mod tests {
         // Bo can't pass the award on through a question of his own.
         assert_eq!(
             db.fund_question("b4", "q4", "p2", 5, 3).unwrap(),
-            Some("credits from a first gathering, a starter question, a contribution or a merged pull request buy packs but can't fund a question")
+            Some("credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin buy packs but can't fund a question")
         );
     }
 

@@ -119,7 +119,8 @@ fn accept_refusal(
         "SELECT (SELECT COUNT(*) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2),
                 (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
                   WHERE recipient_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)",
+              + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
+              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)",
         params![recipient, today],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -527,8 +528,8 @@ mod tests {
         assert_eq!(
             db.fund_question("q", "p2-0", "p2", 5, NOW).unwrap(),
             Some(
-                "credits from a first gathering, a starter question, a contribution or a merged pull request buy \
-                 packs but can't fund a question"
+                "credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin \
+                 buy packs but can't fund a question"
             )
         );
         assert!(matches!(

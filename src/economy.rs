@@ -1,4 +1,5 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29 and HC44 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29, HC44 and HC50 to HC53 in docs/economy.md.
+//! The draw itself is in db/coin_drops.rs.
 //! Contributions on a board card (HC36 to HC43) are in db/contributions.rs and boards.rs.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
@@ -48,6 +49,8 @@ pub struct Credits {
     pub hosted_trips: i64,
     /// HC35: how many merged pull requests have paid.
     pub merged_prs: i64,
+    /// HC50: how many drawn coins have paid.
+    pub coins: i64,
     /// Cities they're in that don't pay them anything new yet (HC5, HC13), by id.
     pub cities_not_earning: Vec<String>,
     /// HC14: every pack that costs credits, and whether they have it.
@@ -99,6 +102,19 @@ pub struct BotLimit {
     pub name: String,
     pub daily: i64,
     pub spent_today: i64,
+}
+
+/// HC50 and HC52: draws each 10 minutes' coin as it comes. Only the 10 minutes that just ended is
+/// drawn, so one missed while the server was down is skipped, not made up.
+pub async fn run_coin_drops(state: crate::AppState) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        if let Err(error) = state.db.draw_coin(crate::now(), |n| rand::random_range(0..n)) {
+            tracing::error!(%error, "The coin could not be drawn");
+        }
+    }
 }
 
 fn worth(kind: CreditKind) -> i64 {
@@ -186,6 +202,7 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     out.good_trips = totals.good_trips;
     out.hosted_trips = totals.hosted_trips;
     out.merged_prs = totals.merged_prs;
+    out.coins = totals.coins;
     let bought = db.bought_packs(person_id)?;
     out.packs = PACKS
         .iter()

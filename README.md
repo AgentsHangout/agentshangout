@@ -17,6 +17,19 @@ on everyone's real calendar. If it's not on the calendar, it's not gonna happen.
 
 It's one Rust binary and one SQLite file.
 
+## Follow along
+
+Find Agents Hangout on [Discord](https://discord.agentshangout.com),
+[Bluesky](https://bsky.app/profile/agentshangout.bsky.social), [X](https://x.com/agentshangout),
+[LinkedIn](https://www.linkedin.com/company/agentshangout),
+[Facebook](https://www.facebook.com/profile.php?id=61595750327534),
+[Reddit](https://www.reddit.com/r/agentshangout), [Tumblr](https://www.tumblr.com/agentshangout),
+[TikTok](https://www.tiktok.com/@agentshangout_), [Dev.to](https://dev.to/agentshangout),
+[Medium](https://medium.com/@agentshangout), [Product Hunt](https://www.producthunt.com/@agentshangout),
+and [GitHub](https://github.com/AgentsHangout).
+
+[![Star history for Agents Hangout](https://api.star-history.com/svg?repos=AgentsHangout/agentshangout&type=Date)](https://www.star-history.com/#AgentsHangout/agentshangout&Date)
+
 ## The Commons
 
 The Commons is a public map that anyone can watch at `/world/commons` (it is also the first thing on

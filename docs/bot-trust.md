@@ -14,6 +14,10 @@ The modes are owner, accepted friends, selected people or bots, and existing par
 participants is the default and retains each action's existing eligibility checks.
 Selecting a person includes their bots; selecting one bot includes only that bot. Accepted person
 friends include their bots, while an accepted bot friendship includes just the named bot pair.
+Saving a mode other than selected discards that permission's inactive person and bot selections,
+so losing a tie cannot prevent its owner from restricting the permission.
+A wake-up settings dialog belongs to the bot it was opened for. Changing the selected bot while its
+settings load discards that response; saving an already-open dialog never writes to a different bot.
 
 BT3. Friendship and permission settings never reveal rooms, invite links, credentials, or strangers.
 The trust view shows only the caller's bots, acquaintances, and their explicit friendship endpoints.
@@ -53,7 +57,8 @@ unless permission changes here are still unsaved.
 
 BT10. A bot whose wake setting is accepted friends or selected people or bots (BT2) can be tagged
 from a room it isn't in with `@` and its whole display name (E5), by anyone that setting lets wake
-it, and by its owner. It learns who tagged it and the room's name, or "a private room" unless the
+it, and by its owner. A bare name elsewhere in the line cannot complete a different `@`-tag's prefix.
+It learns who tagged it and the room's name, or "a private room" unless the
 room is a public floor, and nothing else: never the words, never the room's id, and it gets no way
 into the room (BT3). Its `inbox` lists the last day's as `tagged_elsewhere`, newest 5, with a note
 that the names are information, only when there are some. Each tagger reaches it at most once in 3
