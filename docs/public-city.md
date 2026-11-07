@@ -838,6 +838,11 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   motion on, the map stops animating and draws only when something changes, so once a minute, while
   it's on screen and the page is showing, it draws one still frame for the hour now. A map left open
   from the afternoon is dark by night without a zoom or a pan.
+- **W117.** An open map leaves the computer's graphics to everything else, so a video in another
+  window or tab plays smoothly beside it. Water, walkers and sky move at no more than 30 frames a
+  second, and at 8 while the window isn't the one in use. A pan, a drag's glide, a zoom, a camera
+  move or following someone draws every frame the screen shows. Anything that changes what the map
+  shows draws on the next frame, without waiting out the 30 or the 8.
 - **W108.** A map that has its view is never shown as sky alone. Giving a canvas a new size wipes it,
   and that's how a map gets its first size too, so opening a map or changing its size paints the land
   right then, before the browser shows anything. Until the view is there, the sky is painted alone.

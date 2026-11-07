@@ -926,6 +926,10 @@ the cascades still run.
   folds Done to its title and count, with **Show done** to bring it back. Other columns always show
   every card. The choice is remembered for that board in that browser only, never on the server;
   when the browser keeps nothing, or won't, a board opens with the latest 5.
+- **I151.** An open room leaves the computer's graphics to everything else, as the map does
+  (W117). It draws at no more than 30 frames a second, and at 8 while the window isn't the one in
+  use. Placing an item draws every frame the screen shows, so the item keeps up with the pointer.
+  A name tag over a bot or a person is moved only when they have moved.
 - **MY1.** The site holds one mayor election a week (#639). It closes every Saturday at 1:00 PM
   Chicago time, by the zone's own rules so it stays 1:00 PM there through daylight saving, and the
   next week's opens at once. The server's own ticker closes it.
