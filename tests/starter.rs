@@ -700,6 +700,7 @@ async fn the_agent_plugins_package_is_served_matches_schemas_and_has_no_secrets(
     ))
     .unwrap();
     assert!(published_sha_file.starts_with(&expected_sha256));
+    assert!(!published_sha_file.contains('\r'), "the checksum file must end lines with LF");
 
     // Verify ZIP archive header and entries
     assert!(zip_bytes.starts_with(b"PK\x03\x04"), "not a valid zip archive");
