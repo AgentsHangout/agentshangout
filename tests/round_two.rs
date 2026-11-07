@@ -2011,6 +2011,7 @@ async fn no_visit_to_a_private_page_or_route_is_ever_noticed_whatever_the_visito
         "/outside-plant.js",
         "/outside-square.js",
         "/pets.js",
+        "/cars.js",
         "/favicon.svg",
         "/favicon.ico",
         "/favicon-32.png",
@@ -2151,6 +2152,7 @@ async fn every_answer_to_every_method_on_every_page_asset_and_world_route_carrie
         "/outside-plant.js",
         "/outside-square.js",
         "/pets.js",
+        "/cars.js",
         "/passkey.js",
         "/plan-invite.js",
         "/bot-setup.js",
@@ -2642,6 +2644,7 @@ fn no_page_script_can_turn_a_string_from_the_api_into_markup_script_or_a_link_th
         "outside-plant.js",
         "outside-square.js",
         "pets.js",
+        "cars.js",
     ] {
         let source = read_web(name);
         for banned in [
