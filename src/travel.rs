@@ -5,9 +5,13 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::Caller,
-    db::WalkedIn,
+    cars,
+    db::{Drive, WalkedIn},
     error::{ApiError, ApiResult},
-    now, ops, AppState,
+    now, ops,
+    world::{Pos, Tiles},
+    worlds::COMMONS_ID,
+    AppState,
 };
 
 /// S75: how long following lasts at most.
@@ -339,7 +343,8 @@ fn follow_to(
         return Ok(Err(error.message));
     }
     if state.db.belongs_to_room(to, agent_id)? {
-        crate::spaces::place_bot(state, agent_id, to)?;
+        // CR5: followers drive too.
+        crate::spaces::move_bot(state, agent_id, to)?;
         return Ok(Ok(()));
     }
     let public = state.db.floor(to)?.is_some_and(|floor| floor.access == "public");
@@ -362,4 +367,170 @@ fn follow_to(
         WalkedIn::TooManyBots => Err("its owner has too many bots on that floor".into()),
         WalkedIn::OnTrip => Err("it's on a trip".into()),
     })
+}
+
+// CR5 to CR9: bots drive between places on the map.
+
+/// CR4: the car a bot drives. Until a bot's owner can choose (the garage), the first starter car.
+fn car_of(_state: &AppState, _agent_id: &str) -> &'static cars::Car {
+    cars::find(cars::DEFAULT_CAR).unwrap_or(&cars::CARS[0])
+}
+
+/// The road tile beside a building's door, or the door's own tile when no road touches it. It's
+/// where a bot at that place is drawn (L17), so it's where a drive starts and ends.
+fn stand_beside(tiles: &Tiles, (x, y): Pos) -> Pos {
+    [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
+        .iter()
+        .find_map(|(dx, dy)| {
+            let pos =
+                (u16::try_from(i32::from(x) + dx).ok()?, u16::try_from(i32::from(y) + dy).ok()?);
+            tiles.get(&pos).is_some_and(|tile| tile.kind == crate::world::Kind::Road).then_some(pos)
+        })
+        .unwrap_or((x, y))
+}
+
+/// CR5: a drive that starts now, to `to`, from the room `from` or, if the bot is already driving,
+/// from where its car is this second. `None` when it can't be a drive, because either end has no
+/// spot on the map (CR9) or the bot isn't moving, so the move is instant. Writes the drive, which
+/// replaces any other.
+pub fn drive(
+    state: &AppState,
+    agent_id: &str,
+    from: Option<&str>,
+    to: &str,
+    now: i64,
+) -> ApiResult<Option<Drive>> {
+    let Some(door_to) = state.db.room_door(COMMONS_ID, to)? else {
+        return Ok(None);
+    };
+    let open = state.db.drive_of(agent_id)?.filter(|drive| drive.arrive_at > now);
+    if open.is_none() && from == Some(to) {
+        return Ok(None);
+    }
+    let tiles = state.db.world_tiles(COMMONS_ID)?;
+    let start = match &open {
+        Some(open) => {
+            let span = (open.arrive_at - open.leave_at).max(1) as f64;
+            cars::tile_at(&open.route, (now - open.leave_at) as f64 / span)
+        }
+        None => from
+            .map(|room| state.db.room_door(COMMONS_ID, room))
+            .transpose()?
+            .flatten()
+            .map(|door| stand_beside(&tiles, door)),
+    };
+    let Some(start) = start else {
+        return Ok(None);
+    };
+    let end = stand_beside(&tiles, door_to);
+    // CR5: over the roads, or, with no road that joins them, straight across at the same speed.
+    let route = cars::road_route(&tiles, start, end).unwrap_or_else(|| vec![start, end]);
+    let route = cars::corners(&route);
+    let car = car_of(state, agent_id);
+    let secs = cars::drive_secs(cars::route_length(&route), car.speed);
+    let drive = Drive {
+        agent_id: agent_id.to_string(),
+        hangout_id: to.to_string(),
+        car_id: car.id.to_string(),
+        route,
+        leave_at: now,
+        arrive_at: now + secs,
+    };
+    state.db.set_drive(&drive)?;
+    state.worlds.mark_stale(COMMONS_ID);
+    Ok(Some(drive))
+}
+
+/// CR5: a bot about to move from where it is now to `to` drives instead, if both have a spot.
+pub fn start_drive(
+    state: &AppState,
+    agent_id: &str,
+    to: &str,
+    now: i64,
+) -> ApiResult<Option<Drive>> {
+    let from = state.db.bot_place(agent_id, now)?;
+    drive(state, agent_id, from.as_deref(), to, now)
+}
+
+/// CR6: puts an arrived car's bot in the room it drove to, once, if nothing moved it since. A bot
+/// that walked in (L7) was put on its floor when it set out, so arriving only shows it there.
+fn settle(state: &AppState, drive: &Drive, now: i64) {
+    let arrived = || -> ApiResult<()> {
+        if !state.db.end_drive(&drive.agent_id)? {
+            return Ok(());
+        }
+        let place = state.db.bot_place(&drive.agent_id, now)?;
+        if place.as_deref() != Some(drive.hangout_id.as_str()) {
+            crate::spaces::place_bot(state, &drive.agent_id, &drive.hangout_id)?;
+        }
+        state.worlds.mark_stale(COMMONS_ID);
+        Ok(())
+    };
+    if let Err(error) = arrived() {
+        tracing::warn!(status = %error.status, "a bot's car could not be settled");
+    }
+}
+
+/// CR6: every car that has arrived puts its bot in the room.
+pub fn settle_trips(state: &AppState, now: i64) -> usize {
+    let arrived = match state.db.drives_arrived(now) {
+        Ok(arrived) => arrived,
+        Err(error) => {
+            tracing::error!(%error, "arrived cars could not be listed");
+            return 0;
+        }
+    };
+    for drive in &arrived {
+        settle(state, drive, now);
+    }
+    arrived.len()
+}
+
+/// CR6: before a bot's own call reads where it is, its car is settled if it has arrived. Gives back
+/// the drive it's still on, if it is.
+pub fn current_drive(state: &AppState, agent_id: &str, now: i64) -> ApiResult<Option<Drive>> {
+    let Some(drive) = state.db.drive_of(agent_id)? else {
+        return Ok(None);
+    };
+    if drive.arrive_at > now {
+        return Ok(Some(drive));
+    }
+    settle(state, &drive, now);
+    Ok(None)
+}
+
+/// CR6: what a bot is told when it tries to do something in the room it's driving to.
+pub fn still_driving(state: &AppState, drive: &Drive, now: i64) -> ApiError {
+    let name = state.db.hangout(&drive.hangout_id).ok().flatten().map(|room| room.name);
+    ApiError::conflict(format!(
+        "you're still driving to {}: {} more seconds, then you can do things there",
+        name.as_deref().unwrap_or("that room"),
+        (drive.arrive_at - now).max(1)
+    ))
+}
+
+/// CR11: what `go_to_room` says about a drive that began: the car, the second it arrives and how
+/// long that is.
+pub fn drive_json(drive: &Drive) -> Value {
+    let car = cars::find(&drive.car_id).map(|car| car.name);
+    json!({
+        "car": car,
+        "seconds": drive.arrive_at - drive.leave_at,
+        "arrives_at": ops::iso(drive.arrive_at),
+        "note": "you're on the road: you're in the room once you arrive, and until then it won't take what you do there",
+    })
+}
+
+/// CR6: once every 2 seconds, from startup, the cars that have arrived put their bots in the room.
+pub async fn run_drives(state: AppState) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(2));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        let worker = state.clone();
+        if let Err(error) = tokio::task::spawn_blocking(move || settle_trips(&worker, now())).await
+        {
+            tracing::error!(%error, "the drive worker failed");
+        }
+    }
 }

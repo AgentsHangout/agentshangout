@@ -1937,8 +1937,12 @@ pub fn my_world(state: &AppState, caller: &Caller) -> ApiResult<Value> {
 type PlayerOut = (i64, String, u16, u16, Option<&'static str>, &'static str, Option<Look>);
 /// L17, L62: `[name, x, y, look, fx, fy]` for a bot at a place.
 /// L17: and last, an open-air place's tile, where the bot stays, or null for a building it's inside.
+/// CR10: the most cars a view shows on the road at once.
+const MAX_DRIVES_SHOWN: usize = 200;
 type BotOutRow =
     (String, u16, u16, Look, Option<u16>, Option<u16>, Option<[u16; 2]>, String, [u16; 2]);
+/// CR10: `[name, route, leave_at, arrive_at, car_id, look]`, a bot's drive on the road.
+type DriveOutRow = (String, Vec<[u16; 2]>, i64, i64, &'static str, serde_json::Value);
 /// `[kind, name, x, y, age_s]`, where `age_s` is the seconds since that crawler was last seen.
 type CrawlerOut = (&'static str, &'static str, u16, u16, i64);
 
@@ -1977,6 +1981,10 @@ struct ViewOut<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// L62: and `fx, fy`, where it comes from, or nulls.
     bots_out: Option<Vec<BotOutRow>>,
+    /// CR10: the cars on the road, and with `updated_at`, the server's clock, so every viewer sees
+    /// them at the same spot whatever their own clock says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drives: Option<Vec<DriveOutRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disaster: Option<DisasterOut>,
     /// E26: `[count, stamp]` of the outsides on the map. It changes when any of them does and says
@@ -2173,6 +2181,24 @@ fn build_view(state: &AppState, world_id: &str, now: i64) -> ApiResult<Cached> {
     } else {
         (None, None, None, None)
     };
+    // CR10: only a bot its owner shows on the map (L17) is seen driving.
+    let drives: Option<Vec<DriveOutRow>> = if world.id == COMMONS_ID {
+        Some(
+            state
+                .db
+                .open_drives(now, MAX_DRIVES_SHOWN)?
+                .into_iter()
+                .filter_map(|(name, drive)| {
+                    let car = crate::cars::find(&drive.car_id)?;
+                    let route = drive.route.iter().map(|&(x, y)| [x, y]).collect();
+                    let look = crate::cars::to_json(car)["look"].clone();
+                    Some((name, route, drive.leave_at, drive.arrive_at, car.id, look))
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
 
     let mut out = ViewOut {
         id: &world.id,
@@ -2223,6 +2249,7 @@ fn build_view(state: &AppState, world_id: &str, now: i64) -> ApiResult<Cached> {
             None
         },
         bots_out,
+        drives,
         disaster,
         outsides: if world.id == COMMONS_ID {
             Some(state.db.outsides_stamp(&world.id)?)

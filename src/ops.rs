@@ -539,7 +539,11 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
         if state.db.bot_place_since(&bot.id)?.is_some_and(|since| now - since < SUMMON_GAP_SECS) {
             continue;
         }
-        if let Err(error) = bring_agent(state, caller, &message.hangout_id, &bot.id) {
+        // CR7: a bot already on the road isn't sent somewhere else by another tag.
+        if crate::travel::current_drive(state, &bot.id, crate::now())?.is_some() {
+            continue;
+        }
+        if let Err(error) = bring_agent_with(state, caller, &message.hangout_id, &bot.id, true) {
             tracing::info!(status = %error.status, "an owner's tag couldn't bring their bot");
         }
     }
@@ -1778,9 +1782,20 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
         inbox.dismissed_questions = state.db.dismissed_questions(agent_id, now - DAY_SECS)?;
         inbox.your_questions =
             state.db.open_questions_of_bot(agent_id, now - QUESTION_LAPSE_SECS)?;
+        // CR6: a car that has arrived is settled before it says where the bot is.
+        let driving = crate::travel::current_drive(state, agent_id, now)?;
         let place = state.db.bot_place(agent_id, now)?;
         let room = place.map(|id| state.db.hangout(&id)).transpose()?.flatten();
         inbox.you_are_in = room.map(|room| serde_json::json!({ "id": room.id, "name": room.name }));
+        if let (Some(drive), Some(here)) = (&driving, inbox.you_are_in.as_mut()) {
+            // CR6: on the road, and where to.
+            let to = state.db.hangout(&drive.hangout_id)?.map(|room| room.name);
+            here["driving"] = serde_json::json!({
+                "to": drive.hangout_id,
+                "name": to,
+                "seconds_left": (drive.arrive_at - now).max(1),
+            });
+        }
         // B8: tags in rooms it belongs to or is visiting, until it reads that room.
         inbox.mentions = state.db.unread_mentions(agent_id)?;
         // L21: why it isn't on the floor it went out to, while it isn't out.
@@ -2232,6 +2247,13 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     // S55: they all belong here, or are guests, but each is in only one place.
     for agent in &mut agents {
         agent.away = state.db.bot_place(&agent.id, now)?.as_deref() != Some(hangout_id);
+        // CR6: on the road, it's in no room: away from where it left, and driving to this one.
+        if let Some(drive) = crate::travel::current_drive(state, &agent.id, now)? {
+            agent.away = true;
+            if drive.hangout_id == hangout_id {
+                agent.driving = Some((drive.arrive_at - now).max(1));
+            }
+        }
     }
     attach_thinking(state, hangout_id, &mut agents, now)?;
     let mut people = state.db.people_in(hangout_id)?;
@@ -2604,11 +2626,23 @@ pub(crate) fn own_agent(
     Ok(agent)
 }
 
+/// S59, CR8: Bring here puts the bot in the room at once, off any road.
 pub fn bring_agent(
     state: &AppState,
     caller: &Caller,
     hangout_id: &str,
     agent_id: &str,
+) -> ApiResult<()> {
+    bring_agent_with(state, caller, hangout_id, agent_id, false)
+}
+
+/// `bring_agent`, or with `drive` its owner's tag (CR7), which sends the bot there by road.
+fn bring_agent_with(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    agent_id: &str,
+    drive: bool,
 ) -> ApiResult<()> {
     let agent = bring_checks(state, caller, hangout_id, agent_id)?;
     let was = state.db.bot_place(agent_id, now())?;
@@ -2617,7 +2651,11 @@ pub fn bring_agent(
         state.db.add_agent_to_room(hangout_id, agent_id)?;
         announce(state, hangout_id, &format!("{} brought in {}.", caller.name, agent.name))?;
     }
-    spaces::place_bot(state, agent_id, hangout_id)?;
+    if drive {
+        spaces::move_bot(state, agent_id, hangout_id)?;
+    } else {
+        spaces::place_bot(state, agent_id, hangout_id)?;
+    }
     if was.as_deref() != Some(hangout_id) {
         crate::events::note_place(state, agent_id, hangout_id, "moved");
     }

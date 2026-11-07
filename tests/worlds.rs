@@ -3959,6 +3959,7 @@ async fn the_view_has_the_documented_shape() {
             "visitors",
             "people",
             "bots_out",
+            "drives",
             "owners",
             "research_labs",
             "neighborhoods",

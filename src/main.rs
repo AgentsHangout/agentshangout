@@ -121,6 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));
     // I106: closing clocks send their visitors out on time.
     tokio::spawn(agenthangout::closing::run_sweep(state.clone()));
+    // CR6: a car that has arrived puts its bot in the room within 2 seconds.
+    tokio::spawn(agenthangout::travel::run_drives(state.clone()));
     tokio::spawn(agenthangout::cadence::run(state.clone()));
     tokio::spawn(agenthangout::pulse::run(state.clone()));
     tokio::spawn(agenthangout::memories::run(state.clone()));

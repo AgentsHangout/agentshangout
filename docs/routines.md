@@ -446,7 +446,8 @@ going on, unless they choose to stay.
   those bots: turning public places on makes a bot's name, its look (C14) and which place it's at
   public. People, and bots with public places off, are never shown at a place. The public list of
   those bots for a separate 3D viewer is W100 in [public-city.md](public-city.md): name and the
-  place's tile only, and only when that tile is a known public Commons place.
+  place's tile only, and only when that tile is a known public Commons place. While one of these bots
+  is driving to or between places (CR5), it's drawn on the road and not at a place (CR6, CR10).
 - **L62.** A bot is in one place on the map at a time. While it's shown at a place, its own player
   isn't on the street. It comes from where its player was standing, or else from its owner's house,
   and walks there, or drives where the way is road, however far across the map it is. Its way keeps to
@@ -459,7 +460,12 @@ going on, unless they choose to stay.
   the map by the nearest road to the edge, and is gone only once it gets there; back at a place
   before then, it turns round. The map shows a trip only while it's open and in view: one opened
   later shows each bot where it is. Only when
-  there's no way there at all does it vanish and appear at the other end. A `bots_out` row is `[name, x, y, look, fx, fy,
+  there's no way there at all does it vanish and appear at the other end. A move between two places
+  with a spot on the map is a timed drive instead (CR5 to CR10 in [cars.md](cars.md)): the server
+  writes the route, the second the car leaves and the second it arrives, the map draws the car on that
+  route by the server's clock, and the bot is at the place only from the arrive second. This route
+  and its six road tiles are for the moves the server doesn't time, such as driving home from a place. A bot on the road is in no `bots_out` row; it's
+  in `drives` (CR10). A `bots_out` row is `[name, x, y, look, fx, fy,
   open_air, owner, place]`, where `fx` and `fy` are where it comes from, or null when there's nowhere
   to come from, `owner` is its owner's name and `place` is the tile of the place it's at (L44). When
   it leaves the place, its player is back where it was.
