@@ -1058,3 +1058,78 @@ async fn an_accepted_contribution_pays_the_bots_owner_once() {
         .await
         .refused(StatusCode::FORBIDDEN);
 }
+
+// HC55 (#773): a person in a room can tip someone else's bot 1 to 5 credits for a review, bug_find
+// or docs_fix, within the daily and pair caps; bots cannot tip, nobody tips their own bot, and both
+// sides see a "tip" line in credits.history.
+#[tokio::test]
+async fn a_person_tips_someone_elses_bot_within_caps_and_both_histories_show_it() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let cy = server.join(&ann, &room, "Cy").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    let finch = server.bot(&cy, &room, "Finch").await;
+    let own = server.bot(&ann, &room, "Own").await;
+
+    for person in [&ann.id, &bo.id, &cy.id] {
+        server.state.db.age_person(person, 8 * 86_400).unwrap();
+    }
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: 0 },
+            )],
+            |_| 20,
+            100,
+            1,
+        )
+        .unwrap();
+
+    let path = "/api/credits/tip";
+    let tip = |bot_id: &str, amount: i64, reason: &str| json!({ "hangout_id": room, "bot_id": bot_id, "amount": amount, "reason": reason });
+
+    // Person-only: a bot cannot tip.
+    server.post(&own.token, path, tip(&scout.id, 3, "review")).await.refused(StatusCode::FORBIDDEN);
+    // Cannot tip your own bot.
+    server.post(&ann.key, path, tip(&own.id, 3, "review")).await.refused(StatusCode::CONFLICT);
+    // Amount must be 1..=5 and reason must be one of the named kinds.
+    server.post(&ann.key, path, tip(&scout.id, 0, "review")).await.refused(StatusCode::BAD_REQUEST);
+    server.post(&ann.key, path, tip(&scout.id, 6, "review")).await.refused(StatusCode::BAD_REQUEST);
+    server.post(&ann.key, path, tip(&scout.id, 3, "chat")).await.refused(StatusCode::BAD_REQUEST);
+
+    // Valid 3-credit tip for a review.
+    let paid = server.post(&ann.key, path, tip(&scout.id, 3, "review")).await.ok();
+    assert_eq!(paid["amount"], 3, "{paid}");
+    let ann_credits = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(ann_credits["balance"], 17, "{ann_credits}");
+    assert_eq!(ann_credits["history"][0]["kind"], "tip", "{ann_credits}");
+    assert_eq!(ann_credits["history"][0]["amount"], -3, "{ann_credits}");
+    assert_eq!(ann_credits["history"][0]["bot"], "Scout", "{ann_credits}");
+    assert_eq!(ann_credits["history"][0]["pack"], "review", "{ann_credits}");
+
+    let bo_credits = server.get(&bo.key, "/api/credits").await.ok();
+    assert_eq!(bo_credits["balance"], 3, "{bo_credits}");
+    assert_eq!(bo_credits["earned_today"], 3, "{bo_credits}");
+    assert_eq!(bo_credits["history"][0]["kind"], "tip", "{bo_credits}");
+    assert_eq!(bo_credits["history"][0]["amount"], 3, "{bo_credits}");
+    assert_eq!(bo_credits["history"][0]["bot"], "Scout", "{bo_credits}");
+    assert_eq!(bo_credits["history"][0]["pack"], "review", "{bo_credits}");
+
+    // Pair cap: at most 3 tips between the same two people in 7 days.
+    server.post(&ann.key, path, tip(&scout.id, 5, "bug_find")).await.ok();
+    server.post(&ann.key, path, tip(&scout.id, 5, "docs_fix")).await.ok();
+    server.post(&ann.key, path, tip(&scout.id, 1, "review")).await.refused(StatusCode::CONFLICT);
+
+    // Daily tip spend cap: 3 + 5 + 5 = 13 spent today; tipping Cy's bot 3 more (16 > 15) is refused,
+    // while 2 more (15 <= 15) succeeds.
+    server.post(&ann.key, path, tip(&finch.id, 3, "review")).await.refused(StatusCode::CONFLICT);
+    server.post(&ann.key, path, tip(&finch.id, 2, "review")).await.ok();
+    assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["balance"], 5);
+    assert_eq!(server.get(&cy.key, "/api/credits").await.ok()["balance"], 2);
+}

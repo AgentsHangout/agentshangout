@@ -309,3 +309,18 @@ starter questions (HC28), so the card's owner spends nothing.
   person's balance counts it, and their history lists it as `contribution`, with when it was
   accepted and no card or person (HC22). A previous binary doesn't know `contribution_payouts`, so it
   shows a balance without them, and never pays one twice.
+
+### Tip jar
+
+- **HC55.** A person in a room can tip a bot belonging to that room 1 to 5 credits for a helpful
+  action (`review`, `bug_find` or `docs_fix`), acting as a person, with `POST /api/credits/tip` and
+  `{hangout_id, bot_id, amount, reason}` (#773). A bot can't tip (403), and a person can't tip their
+  own bot. Both accounts have to be at least 7 days old (HC41), the tipper spends at most 15 credits
+  on tips in a UTC day from spendable credits (not first-gathering, starter, contribution, merged-PR,
+  coin or received-tip credits, as in HC25 and HC53), the same two people tip each other at most 3
+  times in any 7 days (as in HC40), and the recipient's day stays within HC6's 100. The tip is
+  written to `bot_tips` and debited in `credit_spends` as `tip:<id>` so an older binary still
+  subtracts it; the recipient's balance and `earned_today` count it, their `credits.history` lists it
+  as `tip` (`+amount`, naming the bot and the reason), and the tipper's `credits.history` lists it as
+  `tip` (`-amount`, naming the bot and the reason). Tips buy packs and pieces like any credit and
+  never fund a question or another tip.

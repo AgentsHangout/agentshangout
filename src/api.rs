@@ -68,6 +68,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cars", get(|| async { Json(crate::cars::catalog()) }))
         .route("/api/credits", get(credits))
         .route("/api/credits/spend", post(spend_credits))
+        .route("/api/credits/tip", post(tip_bot))
         .route("/api/credits/bots/{agent_id}", put(set_bot_spend_limit))
         .route("/api/me/github-display", put(set_github_display))
         .route("/api/people", post(make_person))
@@ -549,6 +550,56 @@ async fn spend_credits(
     let spent =
         crate::economy::spend(&state.db, &caller, &body.pack, body.asked.as_deref(), now())?;
     Ok(Json(json!(spent)))
+}
+
+#[derive(Deserialize)]
+struct TipBot {
+    hangout_id: String,
+    bot_id: String,
+    amount: i64,
+    reason: String,
+}
+
+/// `POST /api/credits/tip` (HC55, #773): a person tips someone else's bot in a room 1 to 5 credits
+/// for a helpful `review`, `bug_find` or `docs_fix`.
+async fn tip_bot(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(body): Json<TipBot>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "tip a bot")?;
+    ops::require_room(&state, &caller, &body.hangout_id)?;
+    if !(1..=5).contains(&body.amount) {
+        return Err(ApiError::bad_request("tip amount must be between 1 and 5 credits"));
+    }
+    let reason = body.reason.trim();
+    if !matches!(reason, "review" | "bug_find" | "docs_fix") {
+        return Err(ApiError::bad_request("reason must be review, bug_find or docs_fix"));
+    }
+    let now = now();
+    crate::economy::credits(&state.db, &caller.person_id, now)?;
+    if let Some(bot) = state.db.agent(&body.bot_id, now)? {
+        crate::economy::credits(&state.db, &bot.owner_id, now)?;
+    }
+    let id = auth::new_id();
+    if let Some(refused) = state.db.tip_bot(
+        &id,
+        &body.hangout_id,
+        &caller.person_id,
+        &body.bot_id,
+        body.amount,
+        reason,
+        now,
+    )? {
+        return Err(ApiError::conflict(refused));
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "id": id,
+        "amount": body.amount,
+        "bot_id": body.bot_id,
+        "reason": reason,
+    })))
 }
 
 #[derive(Deserialize)]
