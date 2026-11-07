@@ -3920,6 +3920,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "fall",
             "winter",
             "stargazer",
+            "coins",
             "spooky",
             "signs"
         ]

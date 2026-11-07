@@ -4087,6 +4087,29 @@ function paintSpaceHelmet(g, x, y) {
   r(g, '#5d8fd0', x - 6, y - 11, 1, 1);
 }
 
+// #774: coin sinks in the stargazer pack.
+function paintCometJar(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#1b2030', x - 4, y - 12, 8, 1);
+  r(g, '#8fd3ff', x - 4, y - 11, 8, 10);
+  r(g, '#ffd24d', x - 2, y - 6, 4, 4);
+  r(g, '#cfe9ff', x - 3, y - 10, 1, 6);
+}
+function paintAstronaut(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#f2f4f8', x - 3, y - 12, 6, 6);
+  r(g, '#3a6fb0', x - 2, y - 10, 4, 2);
+  r(g, '#f2f4f8', x - 3, y - 6, 6, 5);
+  r(g, '#c9ced8', x - 3, y - 1, 2, 1);
+  r(g, '#c9ced8', x + 1, y - 1, 2, 1);
+}
+function paintLunarRover(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#8a8f9e', x - 8, y - 6, 16, 3);
+  r(g, '#c9ced8', x - 5, y - 9, 10, 3);
+  r(g, '#1b2030', x - 7, y - 2, 4, 2);
+  r(g, '#1b2030', x + 3, y - 2, 4, 2);
+}
 // A dark pitted rock on a stone plinth, a glint of iron in it and a brass plate on the front.
 function paintMeteorite(g, x, y) {
   r(g, SHADOW, x - 8, y - 2, 16, 2);
@@ -4440,6 +4463,9 @@ const ITEMS = {
   meteorite: { paint: paintMeteorite, rise: 17 },
   star_projector: { paint: paintStarProjector, rise: 28 },
   comet_rug: { paint: paintCometRug, rise: 0, flat: true },
+  comet_jar: { paint: paintCometJar, rise: 14 },
+  astronaut: { paint: paintAstronaut, rise: 14 },
+  lunar_rover: { paint: paintLunarRover, side: paintLunarRover, rise: 12 },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.
