@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 150] = [
+pub static CATALOG: [Kind; 153] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -426,6 +426,10 @@ pub static CATALOG: [Kind; 150] = [
     piece("meteorite", "Meteorite", STARGAZER, STARTER, 2, None, (1, 1)),
     piece("star_projector", "Star projector", STARGAZER, STARTER, 4, feels("calm"), (1, 1)),
     piece("comet_rug", "Comet rug", STARGAZER, STARTER, 3, feels("calm"), (4, 2)).flat(),
+    // #774: coin sinks. Bought one at a time with coins (HC53), like the rest of the pack.
+    piece("comet_jar", "Comet tip jar", STARGAZER, STARTER, 2, feels("playful"), (1, 1)),
+    piece("astronaut", "Astronaut", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
+    piece("lunar_rover", "Lunar rover", STARGAZER, STARTER, 3, feels("playful"), (2, 1)),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -584,6 +588,10 @@ pub const PACKS: [Pack; 4] = [
             at("orrery", 31, 4),
             at("rocket_model", 34, 9),
             at("meteorite", 25, 12),
+            // #774: a tip jar by the door and an astronaut on the open side.
+            at("comet_jar", 19, 0),
+            at("astronaut", 36, 2),
+            at("lunar_rover", 30, 12),
         ],
     },
 ];
