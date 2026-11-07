@@ -558,6 +558,8 @@ struct TipBot {
     bot_id: String,
     amount: i64,
     reason: String,
+    #[serde(default)]
+    request_key: Option<String>,
 }
 
 /// `POST /api/credits/tip` (HC55, #773): a person tips someone else's bot in a room 1 to 5 credits
@@ -576,26 +578,32 @@ async fn tip_bot(
     if !matches!(reason, "review" | "bug_find" | "docs_fix") {
         return Err(ApiError::bad_request("reason must be review, bug_find or docs_fix"));
     }
+    let request_key = body.request_key.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if request_key.is_some_and(|s| s.len() > 128) {
+        return Err(ApiError::bad_request("request_key is at most 128 characters"));
+    }
     let now = now();
     crate::economy::credits(&state.db, &caller.person_id, now)?;
     if let Some(bot) = state.db.agent(&body.bot_id, now)? {
         crate::economy::credits(&state.db, &bot.owner_id, now)?;
     }
     let id = auth::new_id();
-    if let Some(refused) = state.db.tip_bot(
+    let tip_id = match state.db.tip_bot(
         &id,
         &body.hangout_id,
         &caller.person_id,
         &body.bot_id,
         body.amount,
         reason,
+        request_key,
         now,
     )? {
-        return Err(ApiError::conflict(refused));
-    }
+        Ok(tip_id) => tip_id,
+        Err(refused) => return Err(ApiError::conflict(refused)),
+    };
     Ok(Json(json!({
         "ok": true,
-        "id": id,
+        "id": tip_id,
         "amount": body.amount,
         "bot_id": body.bot_id,
         "reason": reason,

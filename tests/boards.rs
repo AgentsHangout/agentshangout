@@ -1103,9 +1103,25 @@ async fn a_person_tips_someone_elses_bot_within_caps_and_both_histories_show_it(
     server.post(&ann.key, path, tip(&scout.id, 6, "review")).await.refused(StatusCode::BAD_REQUEST);
     server.post(&ann.key, path, tip(&scout.id, 3, "chat")).await.refused(StatusCode::BAD_REQUEST);
 
-    // Valid 3-credit tip for a review.
-    let paid = server.post(&ann.key, path, tip(&scout.id, 3, "review")).await.ok();
+    // Valid 3-credit tip for a review, with an optional request_key that makes retries idempotent.
+    let paid = server
+        .post(
+            &ann.key,
+            path,
+            json!({ "hangout_id": room, "bot_id": &scout.id, "amount": 3, "reason": "review", "request_key": "tip-scout-1" }),
+        )
+        .await
+        .ok();
     assert_eq!(paid["amount"], 3, "{paid}");
+    let replayed = server
+        .post(
+            &ann.key,
+            path,
+            json!({ "hangout_id": room, "bot_id": &scout.id, "amount": 3, "reason": "review", "request_key": "tip-scout-1" }),
+        )
+        .await
+        .ok();
+    assert_eq!(replayed["id"], paid["id"], "{replayed}");
     let ann_credits = server.get(&ann.key, "/api/credits").await.ok();
     assert_eq!(ann_credits["balance"], 17, "{ann_credits}");
     assert_eq!(ann_credits["history"][0]["kind"], "tip", "{ann_credits}");
@@ -1127,9 +1143,34 @@ async fn a_person_tips_someone_elses_bot_within_caps_and_both_histories_show_it(
     server.post(&ann.key, path, tip(&scout.id, 1, "review")).await.refused(StatusCode::CONFLICT);
 
     // Daily tip spend cap: 3 + 5 + 5 = 13 spent today; tipping Cy's bot 3 more (16 > 15) is refused,
-    // while 2 more (15 <= 15) succeeds.
+    // and two concurrent 2-credit tips serialize under IMMEDIATE so exactly one succeeds (15 <= 15).
     server.post(&ann.key, path, tip(&finch.id, 3, "review")).await.refused(StatusCode::CONFLICT);
-    server.post(&ann.key, path, tip(&finch.id, 2, "review")).await.ok();
+    let (r1, r2) = tokio::join!(
+        server.post(&ann.key, path, tip(&finch.id, 2, "review")),
+        server.post(&ann.key, path, tip(&finch.id, 2, "docs_fix")),
+    );
+    assert_eq!(
+        usize::from(r1.status == StatusCode::OK) + usize::from(r2.status == StatusCode::OK),
+        1,
+        "one concurrent tip must succeed: {} vs {}",
+        r1.body,
+        r2.body
+    );
+    assert_eq!(
+        usize::from(r1.status == StatusCode::CONFLICT)
+            + usize::from(r2.status == StatusCode::CONFLICT),
+        1,
+        "the second concurrent tip must hit the daily cap: {} vs {}",
+        r1.body,
+        r2.body
+    );
     assert_eq!(server.get(&ann.key, "/api/credits").await.ok()["balance"], 5);
     assert_eq!(server.get(&cy.key, "/api/credits").await.ok()["balance"], 2);
+
+    // Deleting one side clears its id; deleting both removes their orphan tip rows.
+    server.state.db.delete_person(&bo.id, "Bo").unwrap();
+    server.state.db.delete_person(&cy.id, "Cy").unwrap();
+    assert_eq!(server.state.db.bot_tip_count().unwrap(), 4);
+    server.state.db.delete_person(&ann.id, "Ann").unwrap();
+    assert_eq!(server.state.db.bot_tip_count().unwrap(), 0);
 }

@@ -2530,8 +2530,10 @@ CREATE TABLE IF NOT EXISTS bot_tips (
     bot_id       TEXT REFERENCES agents(id) ON DELETE SET NULL,
     amount       INTEGER NOT NULL CHECK (amount BETWEEN 1 AND 5),
     reason       TEXT NOT NULL CHECK (reason IN ('review', 'bug_find', 'docs_fix')),
+    request_key  TEXT,
     day          INTEGER NOT NULL,
-    created_at   INTEGER NOT NULL
+    created_at   INTEGER NOT NULL,
+    UNIQUE (tipper_id, request_key)
 );
 CREATE INDEX IF NOT EXISTS bot_tips_by_recipient ON bot_tips (recipient_id, day);
 CREATE INDEX IF NOT EXISTS bot_tips_by_tipper ON bot_tips (tipper_id, day);
@@ -13655,7 +13657,8 @@ impl Db {
 
     /// HC55 (#773): a person tips someone else's bot in `hangout_id` 1 to 5 credits for `reason`
     /// (`review`, `bug_find` or `docs_fix`), within the 15-credit daily tip spend cap, 3-per-week
-    /// pair cap, 7-day account age, and the recipient's 100-credit daily cap.
+    /// pair cap, 7-day account age, and the recipient's 100-credit daily cap. Repeating the same
+    /// `request_key` returns the original tip id without charging or crediting twice.
     #[allow(clippy::too_many_arguments)]
     pub fn tip_bot(
         &self,
@@ -13665,10 +13668,23 @@ impl Db {
         bot_id: &str,
         amount: i64,
         reason: &str,
+        request_key: Option<&str>,
         now: i64,
-    ) -> rusqlite::Result<Option<&'static str>> {
+    ) -> rusqlite::Result<Result<String, &'static str>> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(key) = request_key {
+            if let Some(existing) = tx
+                .query_row(
+                    "SELECT id FROM bot_tips WHERE tipper_id = ?1 AND request_key = ?2",
+                    params![tipper_id, key],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()?
+            {
+                return Ok(Ok(existing));
+            }
+        }
         let day_secs = crate::ops::DAY_SECS;
         let recipient: Option<String> = tx
             .query_row(
@@ -13681,10 +13697,10 @@ impl Db {
             )
             .optional()?;
         let Some(recipient) = recipient else {
-            return Ok(Some("that bot isn't in this room"));
+            return Ok(Err("that bot isn't in this room"));
         };
         if recipient == tipper_id {
-            return Ok(Some("you can't tip your own bot"));
+            return Ok(Err("you can't tip your own bot"));
         }
         let old_enough: i64 = tx.query_row(
             "SELECT COUNT(*) FROM people WHERE id IN (?1, ?2) AND created_at <= ?3",
@@ -13692,7 +13708,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if old_enough < 2 {
-            return Ok(Some("both accounts have to be at least 7 days old to tip"));
+            return Ok(Err("both accounts have to be at least 7 days old to tip"));
         }
         let balance: i64 = tx.query_row(
             &format!(
@@ -13709,7 +13725,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if balance < amount {
-            return Ok(Some("not enough credits"));
+            return Ok(Err("not enough credits"));
         }
         let held: i64 = tx.query_row(
             &format!(
@@ -13734,7 +13750,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if balance - held < amount {
-            return Ok(Some(
+            return Ok(Err(
                 "credits from a first gathering, a starter question, a contribution, a merged pull request, a drawn coin or a tip buy packs but can't fund a tip",
             ));
         }
@@ -13745,7 +13761,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if tipped_today + amount > 15 {
-            return Ok(Some("you can tip at most 15 credits a day"));
+            return Ok(Err("you can tip at most 15 credits a day"));
         }
         let pair: i64 = tx.query_row(
             "SELECT COUNT(*) FROM bot_tips
@@ -13755,7 +13771,7 @@ impl Db {
             |r| r.get(0),
         )?;
         if pair >= 3 {
-            return Ok(Some("you two have tipped each other 3 times this week"));
+            return Ok(Err("you two have tipped each other 3 times this week"));
         }
         let paid_today: i64 = tx.query_row(
             "SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
@@ -13767,19 +13783,23 @@ impl Db {
             |r| r.get(0),
         )?;
         if paid_today + amount > crate::economy::DAILY_CAP_HC {
-            return Ok(Some("that bot's owner has been paid all a day can pay"));
+            return Ok(Err("that bot's owner has been paid all a day can pay"));
         }
         tx.execute(
-            "INSERT INTO bot_tips (id, hangout_id, tipper_id, recipient_id, bot_id, amount, reason, day, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![id, hangout_id, tipper_id, recipient, bot_id, amount, reason, today, now],
+            "INSERT INTO bot_tips (id, hangout_id, tipper_id, recipient_id, bot_id, amount, reason, request_key, day, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![id, hangout_id, tipper_id, recipient, bot_id, amount, reason, request_key, today, now],
         )?;
         tx.execute(
             "INSERT INTO credit_spends (person_id, pack, amount, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![tipper_id, format!("tip:{id}"), amount, now],
         )?;
         tx.commit()?;
-        Ok(None)
+        Ok(Ok(id.to_string()))
+    }
+
+    pub fn bot_tip_count(&self) -> rusqlite::Result<i64> {
+        self.conn().query_row("SELECT COUNT(*) FROM bot_tips", [], |r| r.get(0))
     }
 
     pub fn answer_question(
@@ -17729,6 +17749,8 @@ impl Db {
         // RE17: and the log of what operators did keeps rows, with the same ids blanked.
         review::blank_person(&tx, person_id)?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;
+        // HC55: once both the tipper and the recipient have deleted their accounts, the tip row goes.
+        tx.execute("DELETE FROM bot_tips WHERE tipper_id IS NULL AND recipient_id IS NULL", [])?;
         tx.commit()?;
         Ok(gone)
     }

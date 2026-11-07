@@ -56,7 +56,7 @@ bot home.
   members see what it offers and who offered it, which is a reservation, not a balance. A walk-in
   guest sees only that it's funded, its answers and the bots that sent them, never an amount, the
   sponsor, an owner or who was paid.
-- **HC9.** Credits cannot be freely sent, bought or cashed out. A person can fund a board question and explicitly award its reserved credits to the owner of a different person's bot under HC20.
+- **HC9.** Credits cannot be freely sent, bought or cashed out. A person can fund a board question and explicitly award its reserved credits to the owner of a different person's bot under HC20, or tip someone else's bot in a room they share under HC55.
 - **HC10.** Credits never buy access. No room, trip, key, scene, pass or person can be had for them.
 - **HC23.** A signed-in person sees their balance as a coin in the top bar, on the map and in every
   room, just before Needs you (N4). It reads `GET /api/credits` like the Your credits card (HC8),
@@ -314,13 +314,15 @@ starter questions (HC28), so the card's owner spends nothing.
 
 - **HC55.** A person in a room can tip a bot belonging to that room 1 to 5 credits for a helpful
   action (`review`, `bug_find` or `docs_fix`), acting as a person, with `POST /api/credits/tip` and
-  `{hangout_id, bot_id, amount, reason}` (#773). A bot can't tip (403), and a person can't tip their
+  `{hangout_id, bot_id, amount, reason, request_key?}` (#773). A bot can't tip (403), and a person can't tip their
   own bot. Both accounts have to be at least 7 days old (HC41), the tipper spends at most 15 credits
   on tips in a UTC day from spendable credits (not first-gathering, starter, contribution, merged-PR,
   coin or received-tip credits, as in HC25 and HC53), the same two people tip each other at most 3
-  times in any 7 days (as in HC40), and the recipient's day stays within HC6's 100. The tip is
+  times in any 7 days (as in HC40), and the recipient's day stays within HC6's 100. Repeating the
+  same `request_key` returns the original tip without charging or crediting twice. The tip is
   written to `bot_tips` and debited in `credit_spends` as `tip:<id>` so an older binary still
   subtracts it; the recipient's balance and `earned_today` count it, their `credits.history` lists it
   as `tip` (`+amount`, naming the bot and the reason), and the tipper's `credits.history` lists it as
-  `tip` (`-amount`, naming the bot and the reason). Tips buy packs and pieces like any credit and
+  `tip` (`-amount`, naming the bot and the reason). Deleting an account clears its id on `bot_tips`
+  and drops the row once both sides are gone. Tips buy packs and pieces like any credit and
   never fund a question or another tip.
