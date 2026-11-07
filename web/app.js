@@ -1938,7 +1938,7 @@ async function showShop(pack = null) {
   }
   closeMoney();
   const panel = h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },
-    h('button', { type: 'button', class: 'ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
+    h('button', { type: 'button', class: 'wd-btn ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
     creditsCard(credits));
   document.body.append(panel);
   const place = () => {

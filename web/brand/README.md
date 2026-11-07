@@ -122,6 +122,16 @@ are not a request to restore retired phone controls.
 | Game panel | Opening a panel hid the previous one; oversized content and nested lists could make controls difficult to reach. | `createPanels` owns title dragging, corner resizing, X, minimize dock, maximize/restore, focus, dock zones and reserved scene space (W114–W115). Phone controls are at least 44px. The body owns scrolling; Chat retains its message log and composer. |
 | Action dialog / Build sheet | Scrolling could lose Close or scroll both the shell and its content. | Use `modal` or the shared Build sheet. M11 keeps the heading and Close reachable and gives the content one main scroller. Do not turn a confirmation into an independent floating window. |
 | Mayor, social links and contextual actions | Individual features could invent their own overlay, button colours or placement. | Mayor content belongs in its existing game panel; follow links use `.wd-btn.wide` inside More (W112); hover, click and right-click use `popupMenu` (W109). |
+| Money panel (`showShop` / `creditsCard`) | `.money-pop` mounted on `document.body` inherited the dark `:root` `--panel` with an 8px radius and 6px shop tiles. | `.money-pop` sets the warm-paper `.wd`/`.card` tokens, 3px bevelled frame, `.wd-btn` close button, 2px shop/piece tiles, and a narrow-screen (`<=640px`) bottom sheet with 44px Close (#784). |
+
+### Money panel RSI branding loop (#784)
+
+Each RSI branding round cleans one money/credits surface that drifted from the kit, ships a thin PR with a regression test, and advances the checklist below:
+
+- [x] **Round 1 (`#784` v1):** `.money-pop` warm-paper tokens (`--panel: #efe2be`, `--text: #2c1e11`), square bevels (`border-radius: 3px`, `inset 1px 1px 0 #fff7dc`), `.wd-btn` on `.money-close`, 2px bevelled `.shop-item .template-pic` and `.piece-tile` frames, and `@media (max-width: 640px)` phone bottom-sheet layout (`44px` close target).
+- [ ] **Leftover 2:** Replace browser `confirm(...)` in pack/piece purchases (`creditsCard` `packRow`) with an inline `.wd-btn` confirmation row inside the shop item so confirmation stays inside the panel scroller (M11).
+- [ ] **Leftover 3:** Align `.bot-limit` daily spend inputs/buttons and `questionEscrowRows` cancel buttons with `.wd-btn` compact row tokens and 44px phone targets.
+- [ ] **Leftover 4:** Route the account panel's `Open your credits` button and `.credit-today progress` bar through shared `.wd` button and progress track tokens.
 
 The same action and visual family matter across devices; identical placement does not.
 Gestures are appropriate for the phone camera, while buttons and keyboard controls stay
