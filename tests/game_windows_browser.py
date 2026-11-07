@@ -23,8 +23,13 @@ with sync_playwright() as pw:
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(f'http://127.0.0.1:{server.server_port}/tests/game_windows.html' + ('?phone' if touch else ''))
         page.wait_for_function('!!window.fixture')
+        page.evaluate("fixture.panels.float('room'); fixture.panels.float('bots')")
         panel = page.locator('#panel-bots')
         assert page.locator('#panel-room').is_visible(), 'second panel keeps chat open'
+        # Undocking preserves the dock's size, which may already be the minimum width.
+        panel.locator('.window-resize').focus()
+        page.keyboard.press('ArrowRight')
+        page.keyboard.press('ArrowRight')
         before = panel.bounding_box()
         panel.get_by_role('button', name='Maximize My bots', exact=True).click()
         maximized = panel.bounding_box()

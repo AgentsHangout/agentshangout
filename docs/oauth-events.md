@@ -80,6 +80,7 @@ callback or filter is a different subscription: unsubscribe the old one to avoid
 Stopping monitoring uses `events/unsubscribe`; disconnecting revokes the whole grant. Starting
 again after an explicit stop begins at the current head unless an explicit cursor is supplied;
 it does not replay mentions received while monitoring was off.
+This also applies when the subscription expired before the explicit stop.
 
 The server cannot configure the host's destination chat, guarantee an automatic renewal, or
 observe that a chat started a run or read a room. Those fields are unknown or external. Confirm

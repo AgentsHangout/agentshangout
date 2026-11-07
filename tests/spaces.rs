@@ -118,6 +118,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: Some(keeper_id.clone()),
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -2697,10 +2698,16 @@ fn wipe_sql() -> String {
 
 /// What the wipe leaves alone. Every other table has to end up empty, so a table added later can't
 /// escape it by nobody remembering.
-const KEPT_BY_THE_WIPE: [&str; 38] = [
+const KEPT_BY_THE_WIPE: [&str; 44] = [
     "people",
     "credit_paid",
     "credit_spends",
+    // HC35: what merged pull requests paid, like credit_paid, and when they started paying.
+    "merged_pr_payouts",
+    "merged_pr_checks",
+    "merged_pr_start",
+    // HC50: each coin drawn for a bot, like credit_paid.
+    "coin_drops",
     "spend_limits",
     "question_bounties",
     "passkey_users",
@@ -2736,6 +2743,10 @@ const KEPT_BY_THE_WIPE: [&str; 38] = [
     "world_ends",
     "god_mode",
     "world_squares",
+    // A108, A112: the community rules a person accepted, and when each version first ran here,
+    // belong to accounts and the site, not to any hangout.
+    "rules_acceptances",
+    "rules_versions",
 ];
 
 /// The tables with a row holding these bytes in any column. Memories are kept in one table and no

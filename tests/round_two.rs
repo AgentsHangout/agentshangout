@@ -218,6 +218,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -1878,6 +1879,7 @@ fn measure_how_many_networks_it_takes_to_get_honest_addresses_refused_views() {
             allow_private_webhooks: false,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         },
     );
     let at = now();
@@ -2005,6 +2007,9 @@ async fn no_visit_to_a_private_page_or_route_is_ever_noticed_whatever_the_visito
         "/outside-building.js",
         "/outside-yard.js",
         "/outside-decor.js",
+        "/outside-lab.js",
+        "/outside-plant.js",
+        "/outside-square.js",
         "/pets.js",
         "/favicon.svg",
         "/favicon.ico",
@@ -2142,6 +2147,9 @@ async fn every_answer_to_every_method_on_every_page_asset_and_world_route_carrie
         "/outside-building.js",
         "/outside-yard.js",
         "/outside-decor.js",
+        "/outside-lab.js",
+        "/outside-plant.js",
+        "/outside-square.js",
         "/pets.js",
         "/passkey.js",
         "/plan-invite.js",
@@ -2630,6 +2638,9 @@ fn no_page_script_can_turn_a_string_from_the_api_into_markup_script_or_a_link_th
         "outside-building.js",
         "outside-yard.js",
         "outside-decor.js",
+        "outside-lab.js",
+        "outside-plant.js",
+        "outside-square.js",
         "pets.js",
     ] {
         let source = read_web(name);

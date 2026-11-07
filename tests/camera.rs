@@ -1,6 +1,8 @@
-//! CP1–CP7: real HTTP/MCP camera access, photo settings, images and revocation.
+//! CP1–CP7, CP15–CP17: real HTTP/MCP camera access, photo settings, images, revocation, quotas
+//! and deleting.
 mod support;
 
+use agenthangout::camera::{PhotoStore, StoredPhoto};
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -26,6 +28,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: vec![],
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -184,7 +187,7 @@ async fn camera_owner_gate_private_floor_and_public_url_revocation_hold() {
 }
 
 #[tokio::test]
-async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
+async fn an_owner_keeps_ten_photos_and_expiry_frees_them() {
     let s = Server::start().await;
     let ann = s.owner("Ann").await;
     s.public(&ann, true).await;
@@ -206,20 +209,28 @@ async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
                 std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
                 at
             )
-            .unwrap());
+            .unwrap()
+            .is_stored());
     }
+    // CP16: an eleventh rotates one out rather than keeping eleven.
     photo.id = "over-quota".into();
-    assert!(!s
+    let stored = s
         .state
         .db
         .store_room_photo(
             &photo,
             &ann.id,
             std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
-            at
+            at,
         )
-        .unwrap());
-    assert!(s.state.db.room_photo(original, at).unwrap().is_some());
+        .unwrap();
+    assert!(matches!(stored, PhotoStore::Stored { rotated: Some(_) }), "{stored:?}");
+    let live = std::iter::once(original.to_string())
+        .chain((0..9).map(|n| format!("quota-{n}")))
+        .chain(["over-quota".to_string()])
+        .filter(|id| s.state.db.room_photo(id, at).unwrap().is_some())
+        .count();
+    assert_eq!(live, 10);
     let expired = photo.expires_at;
     photo.id = "after-expiry".into();
     photo.created_at = expired;
@@ -233,7 +244,8 @@ async fn quota_and_expiry_are_enforced_without_deleting_live_photos() {
             std::slice::from_ref(&s.state.db.camera_subject("bot", &id).unwrap().unwrap()),
             expired
         )
-        .unwrap());
+        .unwrap()
+        .is_stored());
     assert!(s.state.db.room_photo(original, expired).unwrap().is_none());
 }
 
@@ -366,4 +378,215 @@ async fn photos_draw_a_bot_at_what_it_uses_until_it_stops_or_the_use_runs_out() 
         .unwrap();
     let photo = s.capture(&token, &ann.room, "room").await;
     assert_eq!(doing(&photo), at_table(), "{photo}");
+}
+
+impl Server {
+    async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
+        self.ok(token,Method::POST,"/mcp",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}})).await["result"].clone()
+    }
+    /// Stores a copy of `like` for `owner` straight into the database, so a test isn't held up by
+    /// the three captures a minute.
+    fn seed(&self, like: &StoredPhoto, id: &str, owner: &str, bot: &str, expires_at: i64) {
+        let photo = StoredPhoto {
+            id: id.into(),
+            room_epoch: like.room_epoch.clone(),
+            room_id: like.room_id.clone(),
+            created_at: like.created_at,
+            expires_at,
+            png: like.png.clone(),
+            metadata: like.metadata.clone(),
+        };
+        let subject = self.state.db.camera_subject("bot", bot).unwrap().unwrap();
+        assert!(self
+            .state
+            .db
+            .store_room_photo(&photo, owner, std::slice::from_ref(&subject), agenthangout::now())
+            .unwrap()
+            .is_stored());
+    }
+    async fn image_status(&self, id: &str) -> StatusCode {
+        self.client.get(format!("{}/photos/{id}.png", self.base)).send().await.unwrap().status()
+    }
+}
+
+/// CP15: a refusal says which it is, so a bot can stop retrying.
+#[tokio::test]
+async fn a_photo_refused_for_settings_says_photo_access_changed() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (id, token) = s.bot(&ann, "Fern").await;
+    s.consent(&ann, &id, false).await;
+    let refused = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let text = refused["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("photo_access_changed: "), "{text}");
+    assert_eq!(refused["structuredContent"]["code"], "photo_access_changed", "{refused}");
+    s.consent(&ann, &id, true).await;
+    let path = format!("/api/floors/{}/camera", ann.room);
+    s.ok(&ann.key, Method::PUT, &path, json!({"allowed":false})).await;
+    let refused = s.capture(&token, &ann.room, "room").await;
+    let text = refused["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("photo_access_changed: "), "{refused}");
+    assert_eq!(refused["structuredContent"]["code"], "photo_access_changed", "{refused}");
+}
+
+/// CP16: an owner's eleventh photo takes the place of their oldest, whose URL stops working. The
+/// ten are shared by every bot of that owner.
+#[tokio::test]
+async fn an_eleventh_photo_rotates_out_the_owners_oldest() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (fern, fern_token) = s.bot(&ann, "Fern").await;
+    let (_, moss_token) = s.bot(&ann, "Moss").await;
+    let first = s.capture(&fern_token, &ann.room, "room").await;
+    assert!(first["isError"].is_null(), "{first}");
+    let oldest = first["structuredContent"]["id"].as_str().unwrap().to_string();
+    assert!(first["structuredContent"]["rotated"].is_null(), "{first}");
+    let like = s.state.db.room_photo(&oldest, agenthangout::now()).unwrap().unwrap();
+    for n in 0..9 {
+        s.seed(&like, &format!("kept-{n}"), &ann.id, &fern, like.expires_at + 1 + n);
+    }
+    let eleventh = s.capture(&moss_token, &ann.room, "room").await;
+    assert!(eleventh["isError"].is_null(), "{eleventh}");
+    assert_eq!(eleventh["structuredContent"]["rotated"], oldest.as_str(), "{eleventh}");
+    assert_eq!(s.image_status(&oldest).await, StatusCode::NOT_FOUND);
+    for n in 0..9 {
+        assert_eq!(s.image_status(&format!("kept-{n}")).await, StatusCode::OK, "kept-{n}");
+    }
+    assert_eq!(s.photo_status(&eleventh["structuredContent"]).await, StatusCode::OK);
+}
+
+/// CP16: two hundred photos on the site refuse with photo_quota_full and say when the next frees,
+/// rather than taking down someone else's photo.
+#[tokio::test]
+async fn a_full_site_refuses_with_photo_quota_full_and_when_the_next_frees() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (fern, token) = s.bot(&ann, "Fern").await;
+    let first = s.capture(&token, &ann.room, "room").await;
+    let first_id = first["structuredContent"]["id"].as_str().unwrap().to_string();
+    let like = s.state.db.room_photo(&first_id, agenthangout::now()).unwrap().unwrap();
+    // Ann keeps the one she took; nineteen others keep ten each, and one keeps nine.
+    let mut soonest = like.expires_at;
+    for p in 0..20 {
+        let person = format!("other-{p}");
+        s.state.db.create_person(&person, &person, &person, &person, 1).unwrap();
+        for n in 0..if p == 19 { 9 } else { 10 } {
+            let expires = like.expires_at + 500 - p * 10 - n;
+            soonest = soonest.min(expires);
+            s.seed(&like, &format!("{person}-{n}"), &person, &fern, expires);
+        }
+    }
+    let refused = s.capture(&token, &ann.room, "room").await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let text = refused["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("photo_quota_full: "), "{text}");
+    let next = agenthangout::ops::iso(soonest);
+    assert!(text.contains(&next), "{text}");
+    let details = &refused["structuredContent"];
+    assert_eq!(details["code"], "photo_quota_full", "{refused}");
+    assert_eq!(details["kept"], 200, "{refused}");
+    assert_eq!(details["next_frees_at"], next.as_str(), "{refused}");
+    assert_eq!(s.image_status("other-0-0").await, StatusCode::OK);
+    assert_eq!(s.image_status(&first_id).await, StatusCode::OK);
+}
+
+/// CP17: the owner, or any of the owner's bots, can take one of the owner's photos down early.
+/// Anyone else is told it isn't there.
+#[tokio::test]
+async fn delete_photo_is_for_the_owner_and_their_bots_and_not_found_for_anyone_else() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    let bo = s.owner("Bo").await;
+    s.public(&ann, true).await;
+    let (fern, fern_token) = s.bot(&ann, "Fern").await;
+    let (_, moss_token) = s.bot(&ann, "Moss").await;
+    let (_, stranger_token) = s.bot(&bo, "Stranger").await;
+    let taken = s.capture(&fern_token, &ann.room, "room").await;
+    let id = taken["structuredContent"]["id"].as_str().unwrap().to_string();
+    let like = s.state.db.room_photo(&id, agenthangout::now()).unwrap().unwrap();
+    s.seed(&like, "second", &ann.id, &fern, like.expires_at);
+    // Another person's bot, and another person, get what a missing photo gets.
+    let refused = s.tool(&stranger_token, "delete_photo", json!({"photo_id":id})).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(refused["content"][0]["text"], "not found", "{refused}");
+    let missing = s.tool(&stranger_token, "delete_photo", json!({"photo_id":"nope"})).await;
+    assert_eq!(missing["content"][0]["text"], "not found", "{missing}");
+    let path = format!("/api/photos/{id}");
+    let (status, body) = s.request(&bo.key, Method::DELETE, &path, json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(s.image_status(&id).await, StatusCode::OK);
+    // The owner's other bot can.
+    let deleted = s.tool(&moss_token, "delete_photo", json!({"photo_id":id})).await;
+    assert!(deleted["isError"].is_null(), "{deleted}");
+    assert_eq!(deleted["structuredContent"]["deleted"], id.as_str(), "{deleted}");
+    assert_eq!(s.image_status(&id).await, StatusCode::NOT_FOUND);
+    let again = s.tool(&moss_token, "delete_photo", json!({"photo_id":id})).await;
+    assert_eq!(again["content"][0]["text"], "not found", "{again}");
+    // So can the owner, as a person.
+    s.ok(&ann.key, Method::DELETE, "/api/photos/second", json!({})).await;
+    assert_eq!(s.image_status("second").await, StatusCode::NOT_FOUND);
+    assert_eq!(
+        s.request(&ann.key, Method::DELETE, "/api/photos/second", json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// CP16: captures that store at once still leave the owner exactly ten, each rotating out a
+/// different photo.
+#[tokio::test]
+async fn parallel_photos_for_one_owner_leave_exactly_ten() {
+    let s = Server::start().await;
+    let ann = s.owner("Ann").await;
+    s.public(&ann, true).await;
+    let (fern, token) = s.bot(&ann, "Fern").await;
+    let first = s.capture(&token, &ann.room, "room").await;
+    let first_id = first["structuredContent"]["id"].as_str().unwrap().to_string();
+    let like = s.state.db.room_photo(&first_id, agenthangout::now()).unwrap().unwrap();
+    for n in 0..9 {
+        s.seed(&like, &format!("seed-{n}"), &ann.id, &fern, like.expires_at + 1 + n);
+    }
+    let subject = s.state.db.camera_subject("bot", &fern).unwrap().unwrap();
+    let at = agenthangout::now();
+    let rotated: Vec<String> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|n| {
+                let (db, like, subject, owner) = (&s.state.db, &like, &subject, &ann.id);
+                scope.spawn(move || {
+                    let photo = StoredPhoto {
+                        id: format!("race-{n}"),
+                        room_epoch: like.room_epoch.clone(),
+                        room_id: like.room_id.clone(),
+                        created_at: at,
+                        expires_at: like.expires_at + 100 + n,
+                        png: like.png.clone(),
+                        metadata: like.metadata.clone(),
+                    };
+                    let subjects = std::slice::from_ref(subject);
+                    match db.store_room_photo(&photo, owner, subjects, at).unwrap() {
+                        PhotoStore::Stored { rotated: Some(old) } => old,
+                        other => panic!("race-{n} was not stored by rotating: {other:?}"),
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().unwrap()).collect()
+    });
+    let mut distinct = rotated.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 8, "{rotated:?}");
+    let all = std::iter::once(first_id.clone())
+        .chain((0..9).map(|n| format!("seed-{n}")))
+        .chain((0..8).map(|n| format!("race-{n}")));
+    let live = all.filter(|id| s.state.db.room_photo(id, at).unwrap().is_some()).count();
+    assert_eq!(live, 10);
+    // The oldest eight went: the first photo and seed-0 to seed-6.
+    assert!(rotated.contains(&first_id), "{rotated:?}");
+    for id in ["seed-7", "seed-8"] {
+        assert!(s.state.db.room_photo(id, at).unwrap().is_some(), "{id}");
+    }
 }

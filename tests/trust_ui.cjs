@@ -29,18 +29,25 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const policy = () => Object.fromEntries(['wake','invite_public','invite_private'].map(k => [k,{mode:'participants',people:[],bots:[]} ]));
 const data = {owner_id:'owner', people:[{id:'owner',name:'You'},{id:'friend',name:'<img src=x onerror=alert(1)>'}], bots:[{id:'one',name:'Fern',owner_id:'owner'},{id:'two',name:'Moss',owner_id:'owner'},{id:'other',name:'Pine',owner_id:'friend'}], agents:[{id:'one',name:'Fern',doorbell:{paused:false},trust:policy()},{id:'two',name:'Moss',trust:policy()}], friendships:[{kind:'person',from_id:'friend',to_id:'owner',status:'pending'}],looks:{people:{owner:{skin:'peach',hair:'red'}},bots:{one:{head:'twin'},two:{head:'wide'}}}};
 let crowd = false, gods = false;
+let delayNotify = false, delayedNotify;
+let delayNotifySave = false, delayedNotifySave;
 let body, options, requests = [], rejectSave = false, deferred = [];
 const api = async (path, options = {}) => {
   requests.push({path,...options});
   if (path === '/api/trust') return JSON.parse(JSON.stringify(data));
-  if (path.endsWith('/trust')) { if (rejectSave) throw Error('Save failed. Your changes are still here.'); return {}; }
+  if (path.endsWith('/trust')) {
+    if (rejectSave) throw Error('Save failed. Your changes are still here.');
+    const trust = JSON.parse(JSON.stringify(options.body));
+    for (const rule of Object.values(trust)) if (rule.mode !== 'selected') { rule.people = []; rule.bots = []; }
+    return {trust};
+  }
   if (path.includes('/friendships')) return {};
   if (path === '/api/usage') { if (!gods) throw Error('Not found'); return {by_tool:[{name:'/api/me',calls:3,refused:0,errors:0,avg_ms:4,p50_ms:5,p90_ms:10,slow:0,top_refusal:null}],by_day:[{day:'2026-11-03',active_people:2,active_bots:1,calls:3,refused:0,p50_ms:5,p90_ms:10,lines:{events_delivered:7,long_polls:2,webhooks_sent:4,webhooks_failed:1}}],by_hour:[{hour:'2026-11-03T04:00Z',active_people:1,active_bots:1,calls:3,refused:0,p50_ms:5,p90_ms:10}],by_version:[{version:'local',calls:3,refused:0,errors:0,avg_ms:4,p50_ms:5,p90_ms:10}],lines:{events_delivered:7,long_polls:2,webhooks_sent:4,webhooks_failed:1}}; }
   if (path.startsWith('/api/agents/') && path.endsWith('/usage')) return {days:[{day:'2026-11-03',calls:5,refused:1,errors:0,events_delivered:3,reply_chars:700,reported_cost_cents:null},{day:'2026-11-04',calls:2,refused:0,errors:0,events_delivered:9,reply_chars:41779,reported_cost_cents:1234}],refusals:{forbidden:1},last_activity_at:null,reported_cost_cents_30d:1234,cost_note:'Cost and tokens are reported by the bot itself.'};
   if (path.endsWith('/monitoring')) return new Promise((resolve,reject) => deferred.push({path,resolve,reject}));
   if (path.endsWith('/doorbell')) return {};
   if (path.endsWith('/bonds')) return {bonds: crowd === 'long' ? Array.from({length:16},(_,i)=>({agent:{id:`l${i}`,name:`Wandering Correspondent ${i}`},strength:i+1,built:0})) : crowd ? ['Mac','Chainy','Victor Sausage','Axiom','Ron','Morgkorg','A very long bot name indeed','Aionoro','Kyle’s Agent'].map((name,i)=>({agent:{id:`x${i}`,name},strength:i+1,built:0})) : []};
-  if (path.endsWith('/notify')) { if (options.method === 'PUT') return {}; if (path.includes('/two/')) throw Error('Notify temporarily unavailable'); return {only_me:false,url:null}; }
+  if (path.endsWith('/notify')) { if (options.method === 'PUT') return delayNotifySave ? new Promise(resolve => { delayedNotifySave = resolve; }) : {}; if (delayNotify && path.includes('/one/')) return new Promise(resolve => { delayedNotify = resolve; }); if (path.includes('/two/')) throw Error('Notify temporarily unavailable'); return {only_me:false,url:null}; }
   if (path.endsWith('/routine')) return options.method === 'PUT' ? {} : {days:['mon'],starts:'09:00',ends:'24:00',public_places:true};
   throw Error(`Unexpected ${path}`);
 };
@@ -57,10 +64,32 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
 (async () => {
   const panel = build(); await panel.open(); await tick();
   assert.ok(text(body).includes('Fern')); assert.ok(findButton(body,'Wake-up settings'));
+  // A slow settings read for one bot must not open a dialog for another bot.
+  const dialogsBefore = context.document.body.children.length;
+  delayNotify = true;
+  const opening = findButton(body,'Wake-up settings').props.onclick(); await tick();
+  await body.querySelector('[aria-label="Bot to manage"]').props.onchange({target:{value:'two'}}); await tick();
+  delayedNotify({only_me:false,url:'https://fern.example/wake',trusted_bots:[]}); await opening;
+  assert.equal(context.document.body.children.length,dialogsBefore,'stale settings must not open under another bot’s name');
+  delayNotify = false;
+  await body.querySelector('[aria-label="Bot to manage"]').props.onchange({target:{value:'one'}}); await tick();
+  await findButton(body,'Wake-up settings').props.onclick();
+  const boundDialog = context.document.body.children.at(-1);
+  delayNotifySave = true;
+  const saving = all(boundDialog).find(n=>n.tag==='form').props.onsubmit({preventDefault(){}}); await tick();
+  assert.equal(requests.findLast(r=>r.method==='PUT').path,'/api/agents/one/notify');
+  boundDialog.close();
+  await body.querySelector('[aria-label="Bot to manage"]').props.onchange({target:{value:'two'}}); await tick();
+  const healthReads = requests.filter(r=>r.path.endsWith('/monitoring')).length;
+  delayedNotifySave({}); await saving;
+  assert.equal(requests.filter(r=>r.path.endsWith('/monitoring')).length,healthReads,'an old save must not refresh another bot’s health');
+  delayNotifySave = false;
+  await body.querySelector('[aria-label="Bot to manage"]').props.onchange({target:{value:'one'}}); await tick();
+  const initialHealth = deferred.at(-1);
   // Confirmed settings updates refresh health and invalidate an older in-flight snapshot.
   const pause = findButton(body,'Pause bot').props.onclick(); await tick();
   deferred.at(-1).resolve({latest_mention:null,connections:[{client_name:'Host',status:'active',scope:'agent:read',subscriptions:[{status:'active',hangout_id:null,cursor:1,last_delivery:{reason:'http_accepted',at:'2026-11-03T04:00:00Z',http_status:202}}]}],eligible_rooms:[],wake_paused:true}); await pause;
-  deferred[0].resolve({connections:[],eligible_rooms:[],wake_paused:false}); await tick();
+  initialHealth.resolve({connections:[],eligible_rooms:[],wake_paused:false}); await tick();
   findButton(body,'Monitoring').props.onclick(); assert.ok(text(body).includes('This bot is paused.'));
   assert.ok(text(body).includes('This does not mean the bot has never been mentioned.'));
   assert.ok(text(body).includes('Accepted by the host callback'));
@@ -82,10 +111,13 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   const chooser = body.querySelector('[aria-label="Bot to manage"]');
   await chooser.props.onchange({target:{value:'two'}}); await tick();
   deferred.find(r=>r.path.includes('/one/')).resolve({connections:[],eligible_rooms:[{id:'old',name:'STALE ROOM',covered:true}]});
-  deferred.find(r=>r.path.includes('/two/')).resolve({latest_mention:{event_id:'evt_42',recorded_at:'2026-11-03T05:00:00Z',hangout_id:'room'},connections:[{client_name:'Host',status:'active',scope:'agent:read',subscriptions:[{status:'expired',hangout_id:'room',cursor:42,last_delivery:{reason:'callback_failed',at:'2026-11-03',http_status:503}},{status:'expired',hangout_id:null,cursor:0},{status:'stopped',hangout_id:'hidden',cursor:7}]}],eligible_rooms:[{id:'room',name:'Moss room',covered:false}]}); await tick();
+  deferred.findLast(r=>r.path.includes('/two/')).resolve({latest_mention:{event_id:'evt_42',recorded_at:'2026-11-03T05:00:00Z',hangout_id:'room'},connections:[{client_name:'Host',status:'active',scope:'agent:read',subscriptions:[{status:'expired',hangout_id:'room',cursor:42,last_delivery:{reason:'callback_failed',at:'2026-11-03',http_status:503}},{status:'expired',hangout_id:null,cursor:0},{status:'stopped',hangout_id:'hidden',cursor:7},{status:'expired',hangout_id:null,room_filter_hidden:true,cursor:8}]}],eligible_rooms:[{id:'room',name:'Moss room',covered:false}]}); await tick();
   findButton(body,'Monitoring').props.onclick();
   assert.ok(text(body).includes('Moss room')); assert.ok(!text(body).includes('STALE ROOM'));
   assert.ok(text(body).includes('Unknown to this server')); assert.ok(text(body).includes('No active subscription'));
+  const hiddenSubscription = all(body).find(n=>n.className==='trust-subscription'&&text(n).includes('Cursor: 8'));
+  assert.ok(text(hiddenSubscription).includes('Room filter: Private room (details hidden)'));
+  assert.ok(!text(hiddenSubscription).includes('All eligible rooms'));
   for (const stage of ['1 · Mention recorded','2 · Eligible room / subscription','3 · Webhook outcome','4 · Host run','5 · Room read','evt_42 · 2026-11-03T05:00:00Z · Moss room','Bot conversation setting','separate from room-wide @room preferences']) assert.ok(text(body).includes(stage),stage);
   assert.equal(all(body).filter(n=>n.tag==='span'&&text(n)==='Unknown to this server').length,2);
   for (const expected of ['Room filter: Moss room','All eligible rooms this bot belongs to','Inaccessible room (hidden)','Cursor: 42','Cursor: 0','Host callback failed','Legacy webhook status is unknown']) assert.ok(text(body).includes(expected),expected);
@@ -96,6 +128,9 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   findButton(body,'Connections').props.onclick();
   assert.ok(text(body).includes('plans, check-ins and owner-scheduled routines keep their own rules.'));
   const permissionSelect = all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Wake it by mention');
+  permissionSelect.props.onchange({target:{value:'selected'}});
+  const wakePermission = all(body).find(n=>n.className==='trust-permission');
+  all(wakePermission).find(n=>n.tag==='input').props.onchange({target:{checked:true}});
   permissionSelect.props.onchange({target:{value:'owner'}});
   assert.equal(body.querySelector('[aria-label="Bot to manage"]').disabled,true);
   assert.equal(findButton(body,'Save permissions').disabled,false);
@@ -110,6 +145,12 @@ function build(extra = {}) { return context.trustPanel({h,api,panels,me:{name:'Y
   rejectSave = false; await findButton(body,'Save permissions').props.onclick();
   assert.equal(requests.findLast(r=>r.path.endsWith('/trust')&&r.method==='PUT').body.wake.mode,'owner');
   assert.ok(text(body).includes('All changes saved'));
+  // The server removes inactive named grants; both the saved baseline and draft adopt that reply.
+  const canonicalSelect = all(body).find(n=>n.tag==='select'&&n.props['aria-label']==='Wake it by mention');
+  canonicalSelect.props.onchange({target:{value:'selected'}});
+  assert.ok(all(all(body).find(n=>n.className==='trust-permission')).filter(n=>n.tag==='input').every(n=>!n.checked),'discarded grants must not reappear after saving Only me');
+  canonicalSelect.props.onchange({target:{value:'owner'}});
+  assert.equal(findButton(body,'Save permissions').disabled,true,'canonical policy is the saved baseline');
   // Schedule opens the same day plan dialog as the room's Crew, for the bot being edited.
   findButton(body,'Connections').props.onclick(); findButton(body,'Schedule').props.onclick();
   assert.deepEqual(scheduled,['Moss']);

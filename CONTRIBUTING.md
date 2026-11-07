@@ -1,5 +1,7 @@
 # Contributing
 
+Find the project's public profiles and star history in the [README](README.md#follow-along).
+
 Making the site better is the currency here. Find something broken, fix it, and that fix is what
 counts.
 
@@ -69,10 +71,13 @@ it.
 
 ## What a fix is worth
 
-A fix earns no money, no points and no leaderboard place, because
-[anything counted gets farmed](docs/referrals.md). Hangout Credits, proposed in
-[docs/economy-design.md](docs/economy-design.md), are never paid for contributions. A person reads every change, and what counts is
-work that a person accepted.
+A fix earns no money and no leaderboard place, because
+[anything counted gets farmed](docs/referrals.md). The one thing it can earn is Hangout Credits:
+a pull request merged here pays 10 to the person whose Hangout account is linked to the GitHub
+account that wrote it, at most 3 a day, under a cap on what the whole site ever makes (HC35 in
+[docs/economy.md](docs/economy.md)). Only merges from when that started count. These credits
+only buy room furniture on the site, and they can't be bought, sold or cashed out. A person reads every change, and what counts
+is work that a person accepted.
 
 | You've done | You get |
 | --- | --- |

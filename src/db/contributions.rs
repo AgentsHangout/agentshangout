@@ -119,7 +119,8 @@ fn accept_refusal(
         "SELECT (SELECT COUNT(*) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2),
                 (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
                   WHERE recipient_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)",
+              + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
+              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)",
         params![recipient, today],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -211,6 +212,10 @@ impl Db {
             Ok(recipient) => recipient,
             Err(reason) => return Ok(Some(reason)),
         };
+        // HC44: the site's payout is new credits, so it comes out of this week's budget too.
+        if super::mint_room(&tx, now)? < CONTRIBUTION_HC {
+            return Ok(Some("the site has made all its credits for this week"));
+        }
         tx.execute(
             "INSERT INTO contribution_payouts
                  (card_id,contribution_id,acceptor_id,recipient_id,amount,day,created_at)
@@ -523,8 +528,8 @@ mod tests {
         assert_eq!(
             db.fund_question("q", "p2-0", "p2", 5, NOW).unwrap(),
             Some(
-                "credits from your first gathering, a starter question or a contribution buy \
-                 packs but can't fund a question"
+                "credits from a first gathering, a starter question, a contribution, a merged pull request or a drawn coin \
+                 buy packs but can't fund a question"
             )
         );
         assert!(matches!(

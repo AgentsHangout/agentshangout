@@ -701,6 +701,8 @@ pub fn pin(
     hangout_id: &str,
     args: &Value,
 ) -> ApiResult<RoomPin> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     may_pin(state, caller, hangout_id)?;
     let kind = kind_of(text_kind(args)?, caller.is_agent())?;
     let caption = match optional_text(args, "caption")? {
@@ -983,6 +985,7 @@ mod tests {
                 allow_private_webhooks: false,
                 keeper_id: None,
                 god_ids: vec![],
+                require_rules: false,
             },
         );
         let calls = std::sync::atomic::AtomicUsize::new(0);

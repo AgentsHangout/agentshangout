@@ -16,6 +16,28 @@ struct Fixture {
     client: Client,
 }
 impl Fixture {
+    fn keyless_message(&self, text: &str) -> (agenthangout::db::Message, i64) {
+        let player = self
+            .state
+            .db
+            .create_anonymous_guest(&auth::hash_secret(&auth::new_id()), now())
+            .unwrap();
+        let message = self
+            .state
+            .db
+            .insert_message(&agenthangout::db::NewMessage {
+                hangout_id: "shared",
+                person_id: None,
+                agent_id: None,
+                speaker: "Visitor",
+                kind: "chat",
+                body: text,
+                now: now(),
+            })
+            .unwrap();
+        self.state.db.mark_keyless_message(message.id, player.id).unwrap();
+        (message, player.id)
+    }
     async fn new() -> Self {
         let state = AppState::new(
             Db::open(":memory:").unwrap(),
@@ -25,6 +47,7 @@ impl Fixture {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: vec![],
+                require_rules: false,
             },
         );
         for name in ["alice", "bob", "eve"] {
@@ -93,6 +116,125 @@ impl Fixture {
             )
             .unwrap();
     }
+}
+
+// KA11, BT4: polling cannot reconstruct mentions that the owner's opt-out or caps withheld.
+#[tokio::test]
+async fn keyless_polling_wakes_only_for_server_recorded_recipients() {
+    let f = Fixture::new().await;
+    let bell = agenthangout::doorbell::Doorbell::new(&f.base, "a");
+    let seen = bell.look(&agenthangout::doorbell::Seen::default()).await.unwrap().next;
+    f.state.db.set_keyless_mentions_heard("a", false).unwrap();
+    let (blocked, _) = f.keyless_message("@a, hello");
+    let (_, response) = f
+        .call(
+            "a",
+            Method::POST,
+            "/api/agents/a/trust/wake-check",
+            json!({"message_ids":[blocked.id]}),
+        )
+        .await;
+    assert_eq!(
+        response["allowed"],
+        json!([]),
+        "an unreached keyless mention must not wake polling"
+    );
+    let look = bell.look(&seen).await.unwrap();
+    assert!(look.wake.from_others.is_empty());
+    f.state.db.set_keyless_mentions_heard("a", true).unwrap();
+    let (reached, player) = f.keyless_message("@a, a permitted mention");
+    f.state.db.note_keyless_mention(reached.id, "a", player, "shared", now()).unwrap();
+    let (_, response) = f
+        .call(
+            "a",
+            Method::POST,
+            "/api/agents/a/trust/wake-check",
+            json!({"message_ids":[blocked.id,reached.id]}),
+        )
+        .await;
+    assert_eq!(response["allowed"], json!([reached.id]));
+}
+
+// KA11, L10: an anonymous keyless line is not a person's interruption of a bot wake chain.
+#[tokio::test]
+async fn keyless_chat_does_not_release_the_polling_bot_chain_hold() {
+    let f = Fixture::new().await;
+    let pending = f
+        .state
+        .db
+        .insert_message(&agenthangout::db::NewMessage {
+            hangout_id: "shared",
+            person_id: Some("bob"),
+            agent_id: Some("b"),
+            speaker: "b",
+            kind: "chat",
+            body: "@a",
+            now: now(),
+        })
+        .unwrap();
+    let until = now() + 3600;
+    let seen = serde_json::from_value(json!({"items":[],"rooms":{"shared":pending.id},"bot_runs":{"shared":5},"bot_pending":{"shared":[pending.id]},"bot_hold_until":{"shared":until}})).unwrap();
+    f.keyless_message("Just visiting");
+    let bell = agenthangout::doorbell::Doorbell::new(&f.base, "a");
+    let look = bell.look(&seen).await.unwrap();
+    assert!(look.wake.from_bots.is_empty(), "keyless chat released a held bot wake");
+    let next = serde_json::to_value(look.next).unwrap();
+    assert_eq!(next["bot_hold_until"]["shared"], until);
+    assert_eq!(next["bot_pending"]["shared"], json!([pending.id]));
+}
+
+// BT2: switching away from selected remains possible after the selected people or bots leave.
+#[tokio::test]
+async fn inactive_selections_are_discarded_when_the_owner_changes_mode() {
+    let f = Fixture::new().await;
+    let mut trust = Trust {
+        wake: Permission {
+            mode: "selected".into(),
+            people: vec!["bob".into()],
+            bots: vec!["b".into()],
+        },
+        ..Trust::default()
+    };
+    assert_eq!(
+        f.call("alice", Method::PUT, "/api/agents/a/trust", serde_json::to_value(&trust).unwrap())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    f.state.db.remove_member("shared", "bob").unwrap();
+    f.state.db.remove_agent_from_room("shared", "b").unwrap();
+    // The panel retains these hidden selections when its mode is changed.
+    trust.wake.mode = "owner".into();
+    let (status, body) = f
+        .call("alice", Method::PUT, "/api/agents/a/trust", serde_json::to_value(&trust).unwrap())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["trust"]["wake"], json!({"mode":"owner","people":[],"bots":[]}));
+    assert!(f.state.db.bot_trust("a").unwrap().wake.people.is_empty());
+    trust.wake.mode = "selected".into();
+    assert_eq!(
+        f.call("alice", Method::PUT, "/api/agents/a/trust", serde_json::to_value(&trust).unwrap())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+// BT10: a prefix of another @tag plus a bare name is not a whole @tag of this absent bot.
+#[tokio::test]
+async fn absent_tags_require_the_tagged_name_itself() {
+    let f = Fixture::new().await;
+    f.state.db.create_hangout("den", "Den", "den-code", "bob", now()).unwrap();
+    f.config("friends");
+    f.state.db.request_explicit_friend("person", "alice", "bob", now()).unwrap();
+    f.state.db.accept_explicit_friend("person", "alice", "bob").unwrap();
+    let bob = f.state.authenticate(&auth::hash_secret("bob")).unwrap().unwrap();
+    for text in ["@alpha, please ask a", "@a.org is a domain"] {
+        ops::post_message(&f.state, &bob, "den", "chat", text).unwrap();
+        assert!(f.state.db.absent_tags_since("a", now() - 60, 10).unwrap().is_empty(), "{text}");
+    }
+    ops::post_message(&f.state, &bob, "den", "chat", "@a, are you there?").unwrap();
+    assert_eq!(f.state.db.absent_tags_since("a", now() - 60, 10).unwrap().len(), 1);
 }
 
 // BT1: only the recipient's person consents, for people and bots; crossed requests do not accept.

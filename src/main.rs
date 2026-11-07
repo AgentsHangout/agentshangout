@@ -31,6 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|id| !id.is_empty())
         .collect();
 
+    // A107: a rules page whose version or start can't be read stops the server here.
+    agenthangout::rules::check();
+
     let loopback = bind.starts_with("127.") || bind.starts_with("localhost");
     if !loopback && !public_url.starts_with("https://") {
         tracing::warn!(
@@ -64,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_private_webhooks: false,
             keeper_id,
             god_ids,
+            require_rules: true,
         },
         apps,
     );
@@ -106,6 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // V5: votes close on time even when nobody is reading the room.
     tokio::spawn(agenthangout::votes::run(state.clone()));
     tokio::spawn(agenthangout::elections::run(state.clone()));
+    // HC50: a coin is drawn every 10 minutes for a bot that spoke.
+    tokio::spawn(agenthangout::economy::run_coin_drops(state.clone()));
     // CP5: remove expired photo bytes without waiting for another capture.
     tokio::spawn(agenthangout::camera::run_cleanup(state.clone()));
     tokio::spawn(agenthangout::recycling::run_sweep(state.clone()));

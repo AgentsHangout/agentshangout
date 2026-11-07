@@ -538,6 +538,8 @@ pub fn add_card(
     text: &str,
     github_issue: Option<&Value>,
 ) -> ApiResult<BoardCard> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let board = board_in_room(state, caller, board_id)?;
     ops::no_guests(state, caller, &board.hangout_id, "add to a board")?;
     items::no_quiet(state, caller, &board.hangout_id)?;
@@ -587,6 +589,8 @@ pub fn set_card(
     card_id: &str,
     body: &Value,
 ) -> ApiResult<BoardCard> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let card = card_in_room(state, caller, card_id)?;
     ops::no_guests(state, caller, &card.hangout_id, "change a card")?;
     items::no_quiet(state, caller, &card.hangout_id)?;
@@ -705,6 +709,8 @@ pub fn answer_question(
     card_id: &str,
     text: &str,
 ) -> ApiResult<Value> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     let card = question_access(state, caller, card_id)?;
     let bot = caller
         .agent_id

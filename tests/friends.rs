@@ -63,6 +63,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -810,4 +811,27 @@ async fn a_resent_invite_across_a_block_stays_quiet_and_a_real_one_takes_over() 
     let invited = server.invited(&cy).await;
     assert_eq!(invited.len(), 1, "{invited:?}");
     assert_eq!(invited[0]["from"], "Ann", "{invited:?}");
+}
+
+// A103 with FR6: an invite the person turned down stays turned down. A quiet re-send across a
+// block, then a real invite to the same place, doesn't bring it back.
+#[tokio::test]
+async fn a_declined_invite_stays_declined_through_a_quiet_resend() {
+    let server = Server::start().await;
+    let (room, code, ann) = server.room("Ann").await;
+    let bo = server.join(&code, "Bo").await;
+    let (_, dee_code, _dee) = server.room("Dee").await;
+    let cy = server.join(&dee_code, "Cy").await;
+    for who in [&ann, &bo] {
+        let joined =
+            server.post(&who.key, &format!("/api/invites/{dee_code}/join"), json!({})).await;
+        assert_eq!(joined.status, StatusCode::OK, "{}", joined.body);
+    }
+    server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    let id = text(&server.invited(&cy).await[0]["id"]);
+    server.post(&cy.key, &format!("/api/friend-invites/{id}/decline"), json!({})).await.ok();
+    server.post(&cy.key, "/api/blocks", json!({ "person_id": bo.id })).await.ok();
+    server.invite_to_room(&bo, &room, &cy.id).await.ok();
+    server.invite_to_room(&ann, &room, &cy.id).await.ok();
+    assert!(server.invited(&cy).await.is_empty(), "{:?}", server.invited(&cy).await);
 }

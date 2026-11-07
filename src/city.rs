@@ -1819,6 +1819,7 @@ mod tests {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let (ann_person, ann) = person(&state, "Ann");

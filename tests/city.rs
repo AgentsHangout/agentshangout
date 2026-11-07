@@ -104,6 +104,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -4632,6 +4633,10 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "question_bounties",
         "question_answers",
         "starter_questions",
+        "merged_pr_payouts",
+        "merged_pr_checks",
+        "merged_pr_start",
+        "coin_drops",
         "bot_trust_settings",
         "explicit_friendships",
         "oauth_event_health",
@@ -4808,6 +4813,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "keyless_turns",
         "lific_card_adds",
         "world_place_removals",
+        "rules_acceptances",
+        "rules_versions",
         "person_blocks",
         "person_mutes",
         "card_contributions",
@@ -4847,6 +4854,10 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "credit_spends",
             "question_answers",
             "starter_questions",
+            "merged_pr_payouts",
+            "merged_pr_checks",
+            "merged_pr_start",
+            "coin_drops",
             "question_bounties",
             "credit_paid",
             "spend_limits",
@@ -5055,6 +5066,8 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "mcp_setup_tokens",
             "mcp_setup_codes",
             "mcp_setup_grants",
+            "rules_acceptances",
+            "rules_versions",
             "quiet_asks",
             "contribution_payouts",
             "card_contributions",
@@ -8073,4 +8086,21 @@ async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
     let own = server.ask_trip(&pixel.token, None, &w.ann_home.id, "call", "", None).await;
     assert_ok(&own);
     assert_eq!(own.body["status"], "asking", "{}", own.body);
+}
+
+// A103: a resident's ask across a block for someone's bot is none of theirs to know of, so it
+// doesn't stop them moving in.
+#[tokio::test]
+async fn a_residents_quiet_trip_doesnt_keep_the_bots_person_from_moving_in() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let cal = server.join_city(&w.city_code, "Cal").await;
+    let rook = server.bot(&cal, &w.square, "Rook").await;
+    assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": cal.id })).await);
+    let asked = server.ask_trip(&w.ann.key, Some(&rook.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    assert_eq!(asked.body["status"], "asking", "{}", asked.body);
+    let code = server.house_code(&w.ann_home);
+    let moved = server.post(&cal.key, &format!("/api/house-invites/{code}/join"), json!({})).await;
+    assert_ok(&moved);
 }

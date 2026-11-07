@@ -57,6 +57,7 @@ async fn oauth_research_tools_revalidate_the_grant_after_github_requests() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec!["research-owner".into()],
+            require_rules: false,
         },
         Apps { github: Some(github_app), discord: None },
     );
@@ -118,6 +119,7 @@ impl Server {
                 allow_private_webhooks,
                 keeper_id: None,
                 god_ids: vec![],
+                require_rules: false,
             },
         );
         let served = state.clone();

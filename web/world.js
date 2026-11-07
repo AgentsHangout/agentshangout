@@ -2823,7 +2823,9 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
   const key = `b:${kind}:${level}:${variant}:${door}:${pal}${outside ? `:${outside.key}` : ''}${research ? ':research_lab' : ''}`;
   let s = sprites.get(`${LOD}|${key}`);
   if (s) return s;
-  const build = research ? placedResearchLab : outside ? (S, c) => paintOutsideStanding(S, KIND_NAME[kind], outside.outside, c) : BUILDERS[kind][level];
+  // E41: a lab its owner has dressed is drawn with the lab's own parts, and otherwise as it always was.
+  const looks = research ? 'research_lab' : KIND_NAME[kind];
+  const build = outside ? (S, c) => paintOutsideStanding(S, looks, outside.outside, c) : research ? placedResearchLab : BUILDERS[kind][level];
   // E36: a big place spreads one yard over its four tiles, so its picture is twice the size.
   const big = Boolean(outside) && isBig(kind);
   const stand = big ? (k, draw) => sprite(k, OW * 2, OH * 2, OAX * 2, OAY * 2, draw, true) : object;
@@ -2844,7 +2846,8 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
     if (big) g.scale(2, 2);
     const scene = { g, day, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: day ? info : null };
     build(scene, colors);
-    if (research) researchEmblem(scene);
+    // RL7: the science emblem floats over the lab, above whatever its owner put on its roof (E41).
+    if (research) researchEmblem(scene, outside ? 46 + 11 * (Math.min(3, Math.max(1, outside.outside?.body?.floors | 0 || 1)) - 1) : 33);
     g.restore();
   };
   s = stand(key, run(true));
@@ -2856,7 +2859,7 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
   if (outside) {
     s.ground = () => yard || (yard = sprite(`${key}:gr`, big ? 144 : 72, big ? 76 : 40, big ? 72 : 36, big ? 6 : 4, (g) => {
       if (big) g.scale(2, 2);
-      paintOutsideGround({ g, day: true, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: null }, KIND_NAME[kind], outside.outside);
+      paintOutsideGround({ g, day: true, v: variant, pal, door, seed: ih(kind, level, variant * 11 + pal), n: 0, info: null }, looks, outside.outside);
     }));
   }
   s.lit = () => lit || (lit = stand(`${key}:lit`, (g) => {
@@ -2895,7 +2898,8 @@ function buildingObject(kind, level, variant, door, pal, outside = null, researc
 // E29: one tile painted straight onto `g`, whose origin is the tile's top vertex, for the outside view
 // and the catalog's pictures. `day` false is what shines at night: add it over a darkened picture.
 export function paintPlace(g, { kind, outside = null, door = 'L', pal = 0, variant = 0, day = true, layer = 'all' }) {
-  const k = Object.hasOwn(KIND_ID, kind) ? KIND_ID[kind] : 0;
+  // E41: a research lab's look stands on a studio's numbers.
+  const k = kind === 'research_lab' ? KIND_ID.studio : Object.hasOwn(KIND_ID, kind) ? KIND_ID[kind] : 0;
   if (!k) return;
   const seed = ih(k, 0, variant * 11 + pal);
   const S = { g, day, v: variant, pal, door, seed, n: 0, info: null };
@@ -4517,6 +4521,10 @@ export class World {
       this.kick();
     };
     document.addEventListener('visibilitychange', this.onVisible);
+    // #739: a calm map (reduced motion) draws only when something changes, so its light would stay at
+    // the hour it last drew until the next zoom. Once a minute it draws one still frame, so the sky,
+    // the dusk and the night follow the clock as they do on a map that moves.
+    this.clock = setInterval(() => this.clockTick(), 60000);
     if (typeof ResizeObserver !== 'undefined') {
       this.resizer = new ResizeObserver(() => this.resize());
       this.resizer.observe(container);
@@ -4545,6 +4553,7 @@ export class World {
   destroy() {
     this.destroyed = true;
     clearTimeout(this.pressTimer);
+    clearInterval(this.clock);
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
     if (this.mq && this.mq.removeEventListener) this.mq.removeEventListener('change', this.onMq);
@@ -4795,10 +4804,15 @@ export class World {
     if (this.ready) this.applyOutsides();
   }
 
+  // E41: what the outside on tile `i` looks like: a research lab's while it's one.
+  looksOf(i) {
+    return this.researchLabs.has(i) ? 'research_lab' : KIND_NAME[this.kind[i]];
+  }
+
   // E19: where a pet on guard stands: the door, on the side its place has it.
   doorOf(x, y, i, outside) {
     const side = doorSideOf(outside) || this.placeLook(x, y).door;
-    return { side, at: doorPoint(KIND_NAME[this.kind[i]], outside, side) };
+    return { side, at: doorPoint(this.looksOf(i), outside, side) };
   }
 
   applyOutsides() {
@@ -4838,7 +4852,7 @@ export class World {
           p.door = Array.isArray(door.at) ? door.at : null;
           p.doorSide = door.side || 'L';
         } else if (!p) {
-          p = makePet(id, x, y, pet, outside, key, KIND_NAME[this.kind[i]], this.doorOf(x, y, i, outside));
+          p = makePet(id, x, y, pet, outside, key, this.looksOf(i), this.doorOf(x, y, i, outside));
           p.same = same;
         }
         pets.set(id, p);
@@ -6102,6 +6116,13 @@ export class World {
   kick() {
     this.dirty = true;
     this.schedule();
+  }
+
+  // #739: a calm map that's on screen draws one frame for the time now. A moving map already does.
+  clockTick() {
+    if (!this.calm || this.destroyed || document.hidden || !this.inView) return;
+    this.skyDirty = true;
+    this.kick();
   }
 
   live() {

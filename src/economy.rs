@@ -1,4 +1,5 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25 and HC29 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29, HC44 and HC50 to HC53 in docs/economy.md.
+//! The draw itself is in db/coin_drops.rs.
 //! Contributions on a board card (HC36 to HC43) are in db/contributions.rs and boards.rs.
 //!
 //! What could pay is worked out from plans and trips, the same way standing and a city's growth
@@ -12,7 +13,7 @@ use crate::{
     auth::Caller,
     db::{CreditKind, CreditLine, CreditSource, Db, Spend, FIRST_GATHERING},
     error::{ApiError, ApiResult},
-    items::{kind_of, pack_of, PACKS},
+    items::{kind_of, pack_of, paid_pack_with, piece_price, PACKS, PIECE},
     ops::DAY_SECS,
 };
 
@@ -20,6 +21,8 @@ use crate::{
 pub const GATHERING_HC: i64 = 20;
 /// HC3 and HC4: a good trip pays the visiting owner and the resident who let the bot in.
 pub const GOOD_TRIP_HC: i64 = 5;
+/// HC44: the most new credits the whole site makes in one UTC week, from everything that mints them.
+pub const SITE_MINT_A_WEEK: i64 = 1000;
 /// HC6: the most anyone is credited for things that happened on one UTC day.
 pub const DAILY_CAP_HC: i64 = 100;
 /// HC5: how long someone has been in a city before it pays them anything.
@@ -44,6 +47,10 @@ pub struct Credits {
     pub gatherings: i64,
     pub good_trips: i64,
     pub hosted_trips: i64,
+    /// HC35: how many merged pull requests have paid.
+    pub merged_prs: i64,
+    /// HC50: how many drawn coins have paid.
+    pub coins: i64,
     /// Cities they're in that don't pay them anything new yet (HC5, HC13), by id.
     pub cities_not_earning: Vec<String>,
     /// HC14: every pack that costs credits, and whether they have it.
@@ -65,6 +72,17 @@ pub struct PackOffer {
     pub paint: &'static str,
     pub flooring: &'static str,
     pub pieces: Vec<PackPiece>,
+    /// HC45: each kind of piece in it, on its own, with what it costs and whether it's yours.
+    pub sold_alone: Vec<PieceOffer>,
+}
+
+/// HC45: one piece of a paid pack, sold on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PieceOffer {
+    pub kind: &'static str,
+    pub label: &'static str,
+    pub cost: i64,
+    pub bought: bool,
 }
 
 /// HC24: one piece of a pack, where the pack puts it, and how much floor it takes.
@@ -84,6 +102,19 @@ pub struct BotLimit {
     pub name: String,
     pub daily: i64,
     pub spent_today: i64,
+}
+
+/// HC50 and HC52: draws each 10 minutes' coin as it comes. Only the 10 minutes that just ended is
+/// drawn, so one missed while the server was down is skipped, not made up.
+pub async fn run_coin_drops(state: crate::AppState) {
+    let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        if let Err(error) = state.db.draw_coin(crate::now(), |n| rand::random_range(0..n)) {
+            tracing::error!(%error, "The coin could not be drawn");
+        }
+    }
 }
 
 fn worth(kind: CreditKind) -> i64 {
@@ -170,6 +201,8 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
     out.gatherings = totals.gatherings;
     out.good_trips = totals.good_trips;
     out.hosted_trips = totals.hosted_trips;
+    out.merged_prs = totals.merged_prs;
+    out.coins = totals.coins;
     let bought = db.bought_packs(person_id)?;
     out.packs = PACKS
         .iter()
@@ -196,6 +229,27 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
                     })
                 })
                 .collect(),
+            sold_alone: {
+                let mut seen: Vec<&str> = Vec::new();
+                pack.items
+                    .iter()
+                    .filter(|item| {
+                        let new = !seen.contains(&item.kind);
+                        seen.push(item.kind);
+                        new
+                    })
+                    .filter_map(|item| {
+                        Some(PieceOffer {
+                            kind: item.kind,
+                            label: kind_of(item.kind)?.label,
+                            cost: piece_price(item.kind)?,
+                            bought: bought.iter().any(|word| {
+                                word == pack.pack || *word == format!("{PIECE}{}", item.kind)
+                            }),
+                        })
+                    })
+                    .collect()
+            },
         })
         .collect();
     out.bots = db
@@ -229,29 +283,48 @@ pub fn spend(
     if caller.is_house {
         return Err(ApiError::not_found());
     }
+    // HC45: a piece on its own is bought as `piece:<kind>`, at its own price.
+    if let Some(kind) = word.strip_prefix(PIECE) {
+        let cost = piece_price(kind)
+            .ok_or_else(|| ApiError::bad_request("that isn't a piece you can buy: see credits"))?;
+        let pack = paid_pack_with(kind).ok_or_else(ApiError::not_found)?;
+        if pack.over {
+            return Err(ApiError::conflict("that piece's pack is over, so it can't be bought"));
+        }
+        if db.has_bought(&caller.person_id, pack.pack)? {
+            return Err(ApiError::conflict("you already have that piece in its pack"));
+        }
+        return buy(db, caller, word, cost, asked, now, "piece");
+    }
     let pack = pack_of(word)
         .filter(|pack| pack.cost > 0)
         .ok_or_else(|| ApiError::bad_request("that isn't a pack you can buy: see credits"))?;
     if pack.over {
         return Err(ApiError::conflict("that pack's season is over, so it can't be bought"));
     }
+    buy(db, caller, pack.pack, pack.cost, asked, now, "pack")
+}
+
+/// HC15 and HC17: spends `cost` on `word`, a pack or a piece, for the caller or their owner.
+fn buy(
+    db: &Db,
+    caller: &Caller,
+    word: &str,
+    cost: i64,
+    asked: Option<&str>,
+    now: i64,
+    what: &str,
+) -> ApiResult<Credits> {
     if let Some(agent_id) = &caller.agent_id {
-        owner_said_yes(db, caller, agent_id, pack.pack, asked, now)?;
+        owner_said_yes(db, caller, agent_id, word, asked, now)?;
     }
     // What's paid but not written down yet counts, so work it out first.
     credits(db, &caller.person_id, now)?;
-    match db.spend_credits(
-        &caller.person_id,
-        pack.pack,
-        pack.cost,
-        caller.agent_id.as_deref(),
-        now,
-    )? {
+    match db.spend_credits(&caller.person_id, word, cost, caller.agent_id.as_deref(), now)? {
         Spend::Spent { .. } => Ok(credits(db, &caller.person_id, now)?),
-        Spend::AlreadyHave => Err(ApiError::conflict("you already have that pack")),
+        Spend::AlreadyHave => Err(ApiError::conflict(format!("you already have that {what}"))),
         Spend::TooFew { balance } => Err(ApiError::conflict(format!(
-            "that pack costs {} credits and the balance is {balance}",
-            pack.cost
+            "that {what} costs {cost} credits and the balance is {balance}"
         ))),
         Spend::OverBotLimit { left_today } => Err(ApiError::forbidden(format!(
             "that's more than this bot may spend today ({left_today} left). Its owner sets the \

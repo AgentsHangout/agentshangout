@@ -151,6 +151,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
         .merge(crate::votes::routes())
+        .merge(crate::rules::routes())
         .merge(crate::jobs::routes())
         .merge(outside::routes())
         .merge(looks::routes())
@@ -518,6 +519,14 @@ async fn make_person(
 
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    // HC35: what's newly merged pays before the balance is read, within a few seconds.
+    if !caller.is_house {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::pr_credits::check(&state, &caller.person_id),
+        )
+        .await;
+    }
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
 }
 
@@ -651,6 +660,12 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     // W75: someone with the God mode switch is told where it's set. Nobody else hears it exists.
     if god_mode::may_use(&state, &caller.person_id) {
         me["god_mode"] = json!(state.db.god_mode_on(&caller.person_id)?);
+    }
+    // A108, A112: where they stand with the community rules.
+    if let (Some(map), Value::Object(rules)) =
+        (me.as_object_mut(), crate::rules::view(&state, &caller.person_id, now())?)
+    {
+        map.extend(rules);
     }
     Ok(Json(me))
 }
@@ -2705,6 +2720,7 @@ mod tests {
                     allow_private_webhooks: true,
                     keeper_id: None,
                     god_ids: Vec::new(),
+                    require_rules: false,
                 },
             );
             tokio::spawn(async move { axum::serve(listener, app(state)).await });

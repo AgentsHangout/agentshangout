@@ -34,6 +34,7 @@ async fn research_tools_are_discoverable_and_share_room_authorization() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: vec![],
+            require_rules: false,
         },
     );
     tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });

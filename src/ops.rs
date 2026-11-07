@@ -334,6 +334,8 @@ pub fn post_reply(
 ) -> ApiResult<Message> {
     require_room(state, caller, hangout_id)?;
     items::no_quiet(state, caller, hangout_id)?;
+    // A109: chat and notes are read by others, so they take the community rules accepted.
+    crate::rules::require(state, caller)?;
     let body = clean(body, "message", MAX_MESSAGE_CHARS)?;
     // I82: a guest can answer only what they can read. Checked here so a refusal moves nobody,
     // and again as the reply is written, in case the line went in between.
@@ -522,7 +524,7 @@ fn summon_own_bots(state: &AppState, caller: &Caller, message: &Message) -> ApiR
 /// S88: whether `body` tags `name` itself: `@` right before the whole name, in any case, not inside
 /// an email address or a longer word, and not the start of a longer known bot name written there,
 /// so "@Fern Two" tags Fern Two, not Fern, and "@Fernando" or "x@fern.org" tag nobody.
-fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
+pub(crate) fn tags_name(body: &str, name: &str, known: &[String]) -> bool {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let text = body.to_lowercase();
     let name = name.to_lowercase();
@@ -877,6 +879,8 @@ pub fn set_whiteboard(
     hangout_id: &str,
     text: &str,
 ) -> ApiResult<()> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "write on the whiteboard")?;
     items::no_quiet(state, caller, hangout_id)?;
     let text = clean_optional(Some(text), "whiteboard", MAX_WHITEBOARD_CHARS)?;
@@ -1088,6 +1092,8 @@ pub fn propose_event(
     hangout_id: &str,
     input: &EventInput,
 ) -> ApiResult<Event> {
+    // A109: other people read this, so it takes the community rules accepted.
+    crate::rules::require(state, caller)?;
     no_guests(state, caller, hangout_id, "propose a plan")?;
     // I17: its title goes in the room's chat.
     items::no_quiet(state, caller, hangout_id)?;
@@ -1649,6 +1655,9 @@ fn close_question(state: &AppState, question: &OwnerQuestion, how: &str) -> ApiR
 #[derive(Debug, Default, Serialize)]
 pub struct Inbox {
     pub project_changes: Vec<serde_json::Value>,
+    /// L69: how many of its project changes expired undecided, left out of project_changes.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub expired_changes: usize,
     pub waiting_on_you: Vec<CheckIn>,
     pub your_check_ins: Vec<CheckIn>,
     pub plans_to_answer: Vec<Event>,
@@ -1755,7 +1764,12 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
             .filter(|call| call.event != "meet");
         inbox.plan_starts = crate::cadence::recent_for_bot(state, agent_id, now)?;
     }
-    inbox.project_changes = crate::projects::changes_of(state, caller)?;
+    // L69: an expired proposal can't be decided, so only its count is sent.
+    let (expired, open): (Vec<_>, Vec<_>) = crate::projects::changes_of(state, caller)?
+        .into_iter()
+        .partition(|change| change["status"] == "expired");
+    inbox.expired_changes = expired.len();
+    inbox.project_changes = open;
     Ok(inbox)
 }
 
@@ -2129,6 +2143,9 @@ pub struct Snapshot {
     pub emotes: Vec<crate::emotes::Emote>,
     /// What's chosen for those drawn here (C11). Empty for a bot.
     pub looks: looks::Looks,
+    /// MY10: the mayor, when they're in this room: a person among its people, or one of its bots.
+    /// The page draws their sash. Nobody can wear it otherwise.
+    pub mayor: Option<crate::elections::Sash>,
     /// A25: whether this caller can link a bot to Discord from here.
     pub discord_linking: bool,
     /// S84: whether people who walk in here see earlier chat.
@@ -2291,6 +2308,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     };
     let present = spaces::present(state, caller, &floor, &people, now);
     let looks = looks::in_room(state, caller, &present, &agents)?;
+    let mayor = crate::elections::sash_in_room(state, &people, &agents)?;
     let boards = if floor.is_some() {
         state.db.board_summaries(hangout_id, guest.as_ref().map_or(0, |visit| visit.since))?
     } else {
@@ -2346,6 +2364,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
         typing: crate::typing::visible(state, caller, hangout_id)?,
         emotes: crate::emotes::visible(state, caller, hangout_id)?,
         looks,
+        mayor,
         discord_linking: shown_links && state.discord.is_some(),
         visitor_history: state.db.visitor_history(hangout_id)?.is_some(),
         keyless_welcome: state.db.is_keyless_floor(hangout_id)?,
