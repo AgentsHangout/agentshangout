@@ -4820,6 +4820,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "card_contributions",
         "contribution_payouts",
         "quiet_asks",
+        "reports",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -5069,6 +5070,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "rules_acceptances",
             "rules_versions",
             "quiet_asks",
+            "reports",
             "contribution_payouts",
             "card_contributions",
             "person_mutes",

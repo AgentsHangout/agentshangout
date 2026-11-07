@@ -129,17 +129,24 @@ async fn block(
     caller: Caller,
     Json(body): Json<Person>,
 ) -> ApiResult<Json<Value>> {
-    check(&state, &caller, &body.person_id, "block someone")?;
-    added(state.db.block_person(&caller.person_id, &body.person_id, MOST, now())?, "blocks")?;
+    block_person(&state, &caller, &body.person_id)?;
+    lists(&state, &caller).map(Json)
+}
+
+/// A100, A106: the one block. `POST /api/blocks` and "report and block" (RE7) both come here, so
+/// there is one kind of block.
+pub fn block_person(state: &AppState, caller: &Caller, person_id: &str) -> ApiResult<()> {
+    check(state, caller, person_id, "block someone")?;
+    added(state.db.block_person(&caller.person_id, person_id, MOST, now())?, "blocks")?;
     // A106: what was between them ends. Run on every block, so one that failed part way is finished
     // by asking again. Trips end the ordinary way, as the blocker, which says nothing of why.
-    for trip in state.db.trips_between(&caller.person_id, &body.person_id, now())? {
-        if let Err(error) = crate::city::end_trip(&state, &caller, &trip) {
+    for trip in state.db.trips_between(&caller.person_id, person_id, now())? {
+        if let Err(error) = crate::city::end_trip(state, caller, &trip) {
             tracing::warn!(status = %error.status, "a trip across a new block could not be ended");
         }
     }
-    state.db.end_ties(&caller.person_id, &body.person_id, now())?;
-    lists(&state, &caller).map(Json)
+    state.db.end_ties(&caller.person_id, person_id, now())?;
+    Ok(())
 }
 
 async fn unblock(

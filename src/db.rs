@@ -52,6 +52,8 @@ mod oauth;
 pub(crate) mod oauth_events;
 mod pulses;
 mod recycling;
+mod reports;
+pub use reports::{Filed, MyReport, NewReport};
 mod research_labs;
 mod research_work;
 mod room_mentions;
@@ -2372,6 +2374,36 @@ CREATE INDEX IF NOT EXISTS coin_drops_person ON coin_drops(person_id, day);
 CREATE INDEX IF NOT EXISTS coin_drops_at ON coin_drops(created_at);
 -- HC50: the draw reads the last 10 minutes of chat.
 CREATE INDEX IF NOT EXISTS messages_at ON messages(created_at);
+-- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
+-- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
+-- target_id too when the target is that person, except on a minor_safety report, which keeps
+-- everything (RE6). The review queue (RV6 to RV14) reads and closes these, and sets closed_at when
+-- it does, minor_safety first and then oldest first (reports_queue).
+CREATE TABLE IF NOT EXISTS reports (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id       TEXT,
+    via_bot_id        TEXT,
+    by_bot            INTEGER NOT NULL,
+    target_kind       TEXT NOT NULL CHECK (target_kind IN
+                          ('message', 'person', 'bot', 'place', 'card', 'note', 'pin')),
+    target_id         TEXT,
+    target_person_id  TEXT,
+    hangout_id        TEXT,
+    reason            TEXT NOT NULL CHECK (reason IN ('harassment', 'hate', 'sexual',
+                          'minor_safety', 'spam', 'impersonation', 'other')),
+    details           TEXT CHECK (details IS NULL OR length(details) <= 1000),
+    snapshot          TEXT,
+    status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'actioned', 'dismissed')),
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    closed_at         INTEGER,
+    day               INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS reports_one_open
+    ON reports (reporter_id, target_kind, target_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS reports_by_reporter_day ON reports (reporter_id, day);
+CREATE INDEX IF NOT EXISTS reports_by_target ON reports (target_kind, target_id);
+CREATE INDEX IF NOT EXISTS reports_queue ON reports (status, reason, created_at);
 "#;
 
 /// MY1: a week's mayor election.
@@ -16954,6 +16986,9 @@ impl Db {
             "UPDATE merged_pr_payouts SET github_user_id = NULL WHERE person_id = ?",
             [person_id],
         )?;
+        // RE6: reports they filed or that name them stay, with their id blanked, unless the
+        // report is about a minor's safety: that one keeps everything.
+        reports::blank_person(&tx, person_id)?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;
         tx.commit()?;
         Ok(gone)
