@@ -39,7 +39,8 @@ pub struct MyReport {
 }
 
 /// RE6: a deleted account's id comes off the reports it filed and the ones about it, in the
-/// deletion's own transaction, except on a minor_safety report, which keeps everything.
+/// deletion's own transaction, except on a minor_safety report, which keeps everything. On a report
+/// about the person themselves, `target_id` is their id, so it goes too.
 pub(super) fn blank_person(conn: &Connection, person_id: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE reports SET reporter_id = NULL, via_bot_id = NULL
@@ -51,13 +52,19 @@ pub(super) fn blank_person(conn: &Connection, person_id: &str) -> rusqlite::Resu
          WHERE target_person_id = ?1 AND reason <> 'minor_safety'",
         [person_id],
     )?;
+    conn.execute(
+        "UPDATE reports SET target_id = NULL
+         WHERE target_kind = 'person' AND target_id = ?1 AND reason <> 'minor_safety'",
+        [person_id],
+    )?;
     Ok(())
 }
 
 impl Db {
     /// RE3, RE4: files a report, or updates the reporter's open one on the same target. The caps
     /// are counted in the same immediate transaction as the insert, so requests at once can't pass
-    /// them together.
+    /// them together. An update never changes who filed it (`by_bot`, `via_bot_id`), never lowers a
+    /// minor_safety reason, and a bot's never changes what its person filed themselves.
     pub fn file_report(
         &self,
         report: &NewReport,
@@ -68,20 +75,25 @@ impl Db {
         let day = now.div_euclid(86_400);
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let open: Option<i64> = tx
+        let open: Option<(i64, bool)> = tx
             .query_row(
-                "SELECT id FROM reports WHERE reporter_id = ?1 AND target_kind = ?2
+                "SELECT id, by_bot FROM reports WHERE reporter_id = ?1 AND target_kind = ?2
                    AND target_id = ?3 AND status = 'open'",
                 params![report.reporter_id, report.target_kind, report.target_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some(id) = open {
-            tx.execute(
-                "UPDATE reports SET reason = ?2, details = ?3, snapshot = ?4, updated_at = ?5
-                 WHERE id = ?1",
-                params![id, report.reason, report.details, report.snapshot, now],
-            )?;
+        if let Some((id, filed_by_bot)) = open {
+            // RE3: a bot doesn't speak over its person. What they filed themselves stays theirs.
+            if report.via_bot_id.is_none() || filed_by_bot {
+                tx.execute(
+                    "UPDATE reports SET
+                         reason = CASE WHEN reason = 'minor_safety' THEN reason ELSE ?2 END,
+                         details = ?3, snapshot = ?4, updated_at = ?5
+                     WHERE id = ?1",
+                    params![id, report.reason, report.details, report.snapshot, now],
+                )?;
+            }
             tx.commit()?;
             return Ok(Filed::Updated(id));
         }
@@ -218,6 +230,49 @@ mod tests {
         let row = db.report_row(first).unwrap().unwrap();
         assert_eq!(row["status"], "dismissed");
         assert_eq!(row["closed_at"], "1002");
+    }
+
+    // RE3: an update keeps who filed it, never lowers minor_safety, and a bot's update leaves
+    // what its person filed alone.
+    #[test]
+    fn an_update_keeps_who_filed_it_and_never_lowers_minor_safety() {
+        let db = Db::open(":memory:").unwrap();
+        let mut by_person = report("p1", "p2", None);
+        by_person.reason = "minor_safety";
+        by_person.details = Some("a child was asked for photos");
+        let id = match db.file_report(&by_person, 1_000, 20, 5).unwrap() {
+            Filed::New(id) => id,
+            other => panic!("{other:?}"),
+        };
+        // Their bot reports the same person as spam: nothing the person filed changes.
+        let mut by_bot = report("p1", "p2", Some("b1"));
+        by_bot.details = Some("spam");
+        assert_eq!(db.file_report(&by_bot, 1_001, 20, 5).unwrap(), Filed::Updated(id));
+        let row = db.report_row(id).unwrap().unwrap();
+        assert_eq!(row["reason"], "minor_safety");
+        assert_eq!(row["details"], "a child was asked for photos");
+        assert_eq!(row["by_bot"], "0");
+        assert!(!row.contains_key("via_bot_id"), "{row:?}");
+        // The person themselves can add details, but spam doesn't lower minor_safety.
+        let mut again = report("p1", "p2", None);
+        again.details = Some("and again today");
+        assert_eq!(db.file_report(&again, 1_002, 20, 5).unwrap(), Filed::Updated(id));
+        let row = db.report_row(id).unwrap().unwrap();
+        assert_eq!(row["reason"], "minor_safety");
+        assert_eq!(row["details"], "and again today");
+
+        // A bot's report stays the bot's when its person files on it again.
+        let bots = match db.file_report(&report("p1", "p3", Some("b1")), 1_003, 20, 5).unwrap() {
+            Filed::New(id) => id,
+            other => panic!("{other:?}"),
+        };
+        let mut over = report("p1", "p3", None);
+        over.reason = "hate";
+        assert_eq!(db.file_report(&over, 1_004, 20, 5).unwrap(), Filed::Updated(bots));
+        let row = db.report_row(bots).unwrap().unwrap();
+        assert_eq!(row["reason"], "hate");
+        assert_eq!(row["by_bot"], "1");
+        assert_eq!(row["via_bot_id"], "b1");
     }
 
     // RE4: the caps, counted per UTC day.

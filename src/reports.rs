@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::{self, Caller, MaybeCaller},
-    db::{Filed, NewReport},
+    db::{Filed, Floor, NewReport, RoomPin},
     error::{ApiError, ApiResult},
     now,
     ops::{self, iso},
@@ -30,10 +30,16 @@ pub const BOTS_PER_DAY: i64 = 5;
 
 const DAY: i64 = 24 * 60 * 60;
 
+/// RE7: what a block on a bot, or on what a bot wrote, says it did.
+pub const BLOCKED_BOTS_PERSON: &str =
+    "Blocked the bot's person: a block is between people, so it covers all of their bots.";
+
 /// What a report is about, as the reporter could see it.
 struct Target {
     /// Whose it is: the person, the bot's person, or who wrote it. None for a keyless author.
     person_id: Option<String>,
+    /// RE7: whether it's a bot, or a bot wrote it, so a block lands on the bot's person.
+    through_bot: bool,
     hangout_id: Option<String>,
     /// RE2: the copy, holding only what the reporter could see.
     snapshot: Value,
@@ -64,6 +70,27 @@ fn room_name(state: &AppState, hangout_id: &str) -> ApiResult<String> {
     Ok(state.db.hangout(hangout_id)?.map(|h| h.name).unwrap_or_default())
 }
 
+/// RE1: a floor the caller can see: a public one, or a room they're in or belong to.
+fn sees_floor(state: &AppState, caller: &Caller, floor: &Floor) -> ApiResult<bool> {
+    Ok(floor.access == "public" || state.in_room(caller, &floor.id)?)
+}
+
+/// RE2: a pin's copy, with the image it showed if it was one.
+fn pin_copy(pin: &RoomPin, room: &str) -> Value {
+    json!({
+        "pinned_by": pin.pinned_by,
+        "via_bot": pin.via_bot,
+        "kind": pin.kind,
+        "title": pin.title,
+        "url": pin.url,
+        "image_asset_id": pin.image_asset_id,
+        "image_alt": pin.image_alt,
+        "caption": pin.caption,
+        "pinned_at": iso(pin.pinned_at),
+        "room": room,
+    })
+}
+
 /// RE1, RE2: the target, if it exists and the caller can see it right now.
 fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Target> {
     let at = now();
@@ -83,6 +110,7 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             }
             Ok(Target {
                 person_id: message.person_id.clone(),
+                through_bot: message.agent_id.is_some(),
                 hangout_id: Some(message.hangout_id.clone()),
                 snapshot: json!({
                     "speaker": message.speaker,
@@ -101,6 +129,7 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             after_arrival(since, note.created_at)?;
             Ok(Target {
                 person_id: Some(note.person_id.clone()),
+                through_bot: note.via_agent.is_some(),
                 hangout_id: Some(item.hangout_id.clone()),
                 snapshot: json!({
                     "writer": note.writer,
@@ -121,17 +150,9 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             after_arrival(since, pin.pinned_at)?;
             Ok(Target {
                 person_id: Some(pin.person_id.clone()),
+                through_bot: pin.bot_origin,
                 hangout_id: Some(pin.hangout_id.clone()),
-                snapshot: json!({
-                    "pinned_by": pin.pinned_by,
-                    "via_bot": pin.via_bot,
-                    "kind": pin.kind,
-                    "title": pin.title,
-                    "url": pin.url,
-                    "caption": pin.caption,
-                    "pinned_at": iso(pin.pinned_at),
-                    "room": room_name(state, &pin.hangout_id)?,
-                }),
+                snapshot: pin_copy(&pin, &room_name(state, &pin.hangout_id)?),
             })
         }
         "card" => {
@@ -140,6 +161,7 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
             after_arrival(since, card.created_at)?;
             Ok(Target {
                 person_id: Some(card.person_id.clone()),
+                through_bot: card.by_bot,
                 hangout_id: Some(card.hangout_id.clone()),
                 snapshot: json!({
                     "written_by": card.written_by,
@@ -153,32 +175,59 @@ fn find(state: &AppState, caller: &Caller, kind: &str, id: &str) -> ApiResult<Ta
         }
         "person" => {
             let person = state.db.person(id)?.ok_or_else(unseen)?;
+            // RE2: their name and profile as anyone is shown them: their colour, and the GitHub
+            // and Discord details they chose to show.
             Ok(Target {
                 person_id: Some(person.id.clone()),
+                through_bot: false,
                 hangout_id: None,
-                snapshot: json!({ "name": person.name }),
+                snapshot: json!({
+                    "name": person.name,
+                    "color": person.color,
+                    "profile": state.db.github_public_snapshot(&person.id)?,
+                }),
             })
         }
         "bot" => {
             let bot = state.db.agent(id, at)?.ok_or_else(unseen)?;
             Ok(Target {
                 person_id: Some(bot.owner_id.clone()),
+                through_bot: true,
                 hangout_id: None,
                 snapshot: json!({ "name": bot.name }),
             })
         }
         "place" => {
-            // A building or a project by its space id, or one of its floors by the room's id.
+            // A building or a project by its space id, or one of its floors by the room's id. Only
+            // one the caller can see: a public floor or a room they're in, or a space with one.
+            // Anything else is the same 404 as a place that doesn't exist, so a private room's
+            // name and its space's description never get copied, and its existence never shows.
             let (space, floor) = match state.db.space(id)? {
-                Some(space) => (space, None),
+                Some(space) => {
+                    let mut seen = false;
+                    for floor in state.db.floors_of(&space.id)? {
+                        if sees_floor(state, caller, &floor)? {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if !seen {
+                        return Err(unseen());
+                    }
+                    (space, None)
+                }
                 None => {
                     let floor = state.db.floor(id)?.ok_or_else(unseen)?;
+                    if !sees_floor(state, caller, &floor)? {
+                        return Err(unseen());
+                    }
                     let space = state.db.space(&floor.space_id)?.ok_or_else(unseen)?;
                     (space, Some(room_name(state, id)?))
                 }
             };
             Ok(Target {
                 person_id: Some(space.owner_id.clone()),
+                through_bot: false,
                 hangout_id: None,
                 snapshot: json!({
                     "name": space.name,
@@ -207,6 +256,8 @@ pub struct Ask<'a> {
 pub struct Done {
     pub report_id: i64,
     pub target_person_id: Option<String>,
+    /// RE7: the target is a bot or a bot wrote it, so a block is on the bot's person.
+    pub through_bot: bool,
 }
 
 /// RE1 to RE4: files a report for this caller, a person or one of their bots.
@@ -267,7 +318,7 @@ pub fn file(state: &AppState, caller: &Caller, ask: &Ask) -> ApiResult<Done> {
             return Err(ApiError::too_many_requests(message).retry_after(wait as u64));
         }
     };
-    Ok(Done { report_id, target_person_id: target.person_id })
+    Ok(Done { report_id, target_person_id: target.person_id, through_bot: target.through_bot })
 }
 
 #[derive(Deserialize)]
@@ -316,23 +367,40 @@ async fn report(
     };
     let done = file(&state, &caller, &ask)?;
     // RE7: the same block as POST /api/blocks, on the target's person. Someone with no person (a
-    // keyless author) can't be blocked, and a place has nobody to block.
+    // keyless author) can't be blocked, and a place has nobody to block. The report is filed
+    // either way, so a block that can't be made says why rather than failing the report.
     let mut blocked = false;
-    if body.block && body.target_kind != "place" {
-        if let Some(person_id) = &done.target_person_id {
-            match crate::blocks::block_person(&state, &caller, person_id) {
-                Ok(()) => blocked = true,
-                Err(error) if error.status == axum::http::StatusCode::CONFLICT => {}
+    let mut block_note = None;
+    if body.block {
+        let person = done.target_person_id.as_ref().filter(|_| body.target_kind != "place");
+        block_note = Some(match person {
+            None => "Not blocked: there's nobody behind this to block.".to_string(),
+            Some(person_id) => match crate::blocks::block_person(&state, &caller, person_id) {
+                Ok(()) => {
+                    blocked = true;
+                    if done.through_bot {
+                        BLOCKED_BOTS_PERSON.to_string()
+                    } else {
+                        "Blocked.".to_string()
+                    }
+                }
+                Err(error) if error.status == axum::http::StatusCode::CONFLICT => {
+                    format!("Not blocked: {}.", error.message)
+                }
                 Err(error) => return Err(error),
-            }
-        }
+            },
+        });
     }
     // RE5: received, and nothing about who was reported.
-    Ok(Json(json!({
+    let mut reply = json!({
         "report_id": done.report_id,
         "status": "received",
         "blocked_person": blocked,
-    })))
+    });
+    if let Some(note) = block_note {
+        reply["block_note"] = json!(note);
+    }
+    Ok(Json(reply))
 }
 
 /// RE5: what this person reported, with their bots': received, then reviewed, and nothing more.
@@ -357,4 +425,40 @@ async fn mine(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<V
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/reports", post(report)).route("/api/reports/mine", get(mine))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RE2: an image pin's copy keeps the image it showed.
+    #[test]
+    fn an_image_pins_copy_keeps_its_image() {
+        let pin = RoomPin {
+            id: "pin1".into(),
+            bot_origin: false,
+            hangout_id: "room1".into(),
+            kind: "image".into(),
+            title: "pic".into(),
+            url: None,
+            image_asset_id: Some("asset1".into()),
+            image_alt: Some("a cat".into()),
+            caption: Some("look".into()),
+            preview_site: None,
+            preview_title: None,
+            preview_description: None,
+            preview_status: None,
+            preview_fetched_at: None,
+            person_id: "p1".into(),
+            pinned_by: "Bo".into(),
+            agent_id: None,
+            via_bot: None,
+            pinned_at: 1_000,
+            expires_at: None,
+        };
+        let copy = pin_copy(&pin, "Bo's room");
+        assert_eq!(copy["image_asset_id"], "asset1");
+        assert_eq!(copy["image_alt"], "a cat");
+        assert_eq!(copy["room"], "Bo's room");
+    }
 }

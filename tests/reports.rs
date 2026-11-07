@@ -61,6 +61,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -147,6 +148,37 @@ impl Server {
 
     async fn report(&self, token: &str, body: Value) -> Reply {
         self.post(token, "/api/reports", body).await
+    }
+
+    /// A new private floor in this person's space, as the space's owner adds one.
+    async fn add_floor(&self, owner: &Who, space: &str, name: &str) -> String {
+        let path = format!("/api/spaces/{space}/floors");
+        text(&self.post(&owner.key, &path, json!({ "name": name })).await.ok()["id"])
+    }
+
+    async fn open_floor(&self, owner: &Who, floor: &str) {
+        let body = json!({ "access": "public", "create_code": CODE });
+        self.send(&owner.key, Method::PUT, &format!("/api/floors/{floor}"), Some(body)).await.ok();
+    }
+
+    /// A card, a note on an item and a pin, all written by `writer` in `room`.
+    async fn card_note_and_pin(&self, owner: &Who, writer: &Who, room: &str) -> [String; 3] {
+        let path = format!("/api/hangouts/{room}/boards");
+        let board = self.post(&owner.key, &path, json!({ "kind": "discussion", "name": "Talk" }));
+        let board = text(&board.await.ok()["id"]);
+        let path = format!("/api/boards/{board}/cards");
+        let card = self.post(&writer.key, &path, json!({ "title": "Buy now", "text": "cheap" }));
+        let card = text(&card.await.ok()["id"]);
+        let path = format!("/api/floors/{room}/items");
+        let shelf = self.post(&owner.key, &path, json!({ "kind": "bookshelf", "x": 30, "y": 3 }));
+        let shelf = text(&shelf.await.ok()["id"]);
+        let path = format!("/api/items/{shelf}/notes");
+        let note = self.post(&writer.key, &path, json!({ "text": "a cruel note" }));
+        let note = text(&note.await.ok()["note_id"]);
+        let path = format!("/api/hangouts/{room}/pins");
+        let pin = self.post(&writer.key, &path, json!({ "kind": "note", "title": "a cruel pin" }));
+        let pin = text(&pin.await.ok()["pin"]["id"]);
+        [card, note, pin]
     }
 
     fn row(&self, id: &Value) -> std::collections::BTreeMap<String, String> {
@@ -386,10 +418,12 @@ async fn report_and_block_blocks_the_person_behind_it() {
     let mut body = about("message", &server.line_with(&room, "buy now"), "spam");
     body["block"] = json!(true);
     assert_eq!(server.report(&ann.key, body).await.ok()["blocked_person"], true);
-    // A bot blocks its person.
+    // A bot blocks its person, and the reply says so.
     let mut body = about("bot", &rex.id, "impersonation");
     body["block"] = json!(true);
-    assert_eq!(server.report(&ann.key, body).await.ok()["blocked_person"], true);
+    let on_bot = server.report(&ann.key, body).await.ok();
+    assert_eq!(on_bot["blocked_person"], true);
+    assert_eq!(on_bot["block_note"], agenthangout::reports::BLOCKED_BOTS_PERSON, "{on_bot}");
 
     let listed = server.get(&ann.key, "/api/blocks").await.ok();
     let mut blocked: Vec<String> =
@@ -457,4 +491,112 @@ async fn a_deleted_account_comes_off_reports_except_minor_safety_ones() {
     assert_eq!(server.row(&about_ann)["reporter_id"], cy.id);
     assert_eq!(server.row(&safety_line)["target_person_id"], ann_too.id);
     assert!(!server.row(&plain_line).contains_key("target_person_id"));
+    // A report about the person names them by id in target_id too: that goes the same way.
+    assert_eq!(server.row(&about_ann)["target_id"], ann.id);
+    assert!(!server.row(&plain_line).contains_key("target_id"), "{:?}", server.row(&plain_line));
+    // Someone else's id stays.
+    assert_eq!(server.row(&plain)["target_id"], bo.id);
+}
+
+// RE7: a block that can't be made, because the block list is full, says why, and the report is
+// still filed.
+#[tokio::test]
+async fn a_full_block_list_says_why_nothing_was_blocked() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let dee = server.join(&ann, &room, "Dee").await;
+    let rex = server.bot(&dee, &room, "Rex");
+    for n in 0..agenthangout::blocks::MOST {
+        let id = format!("blocked{n:04}");
+        let key = format!("hash-of-blocked{n:04}");
+        let db = &server.state.db;
+        db.create_person(&id, &format!("Blocked {n}"), &key, &auth::new_feed_token(), now())
+            .unwrap();
+        db.block_person(&ann.id, &id, agenthangout::blocks::MOST, now()).unwrap();
+    }
+    let mut body = about("bot", &rex.id, "spam");
+    body["block"] = json!(true);
+    let reply = server.report(&ann.key, body).await.ok();
+    assert_eq!(reply["blocked_person"], false, "{reply}");
+    let note = text(&reply["block_note"]);
+    assert!(note.starts_with("Not blocked:") && note.contains("at most"), "{note}");
+    assert!(server.row(&reply["report_id"]).contains_key("snapshot"));
+}
+
+// RE1, RE2: a place is reported only if the caller can see it: a public floor, a room they're in,
+// or a space with one. A private house or a private floor reads as missing, and copies nothing.
+#[tokio::test]
+async fn a_private_place_reads_as_missing_from_outside() {
+    let server = Server::start().await;
+    let (house, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &house, "Bo").await;
+    let attic = server.add_floor(&ann, &house, "Secret attic").await;
+    let (_, zed) = server.someone("Zed").await;
+    let missing = server.report(&zed.key, about("place", "no-such-place", "hate")).await;
+    let missing = missing.refused(StatusCode::NOT_FOUND);
+
+    // From outside: the private house by its space id, and its private floor by its room's id.
+    for id in [&house, &attic] {
+        let reply = server.report(&zed.key, about("place", id, "hate")).await;
+        assert_eq!(reply.refused(StatusCode::NOT_FOUND), missing, "{id}");
+    }
+    // Bo belongs to the house's first floor, so he sees the house, but not the attic.
+    let reply = server.report(&bo.key, about("place", &house, "hate")).await.ok();
+    let copy: Value = serde_json::from_str(&server.row(&reply["report_id"])["snapshot"]).unwrap();
+    assert_eq!(copy["name"], "Ann's room", "{copy}");
+    let reply = server.report(&bo.key, about("place", &attic, "hate")).await;
+    assert_eq!(reply.refused(StatusCode::NOT_FOUND), missing);
+
+    // Once the attic is public, anyone can report it, and the house it's in.
+    server.open_floor(&ann, &attic).await;
+    let reply = server.report(&zed.key, about("place", &attic, "hate")).await.ok();
+    let copy: Value = serde_json::from_str(&server.row(&reply["report_id"])["snapshot"]).unwrap();
+    assert_eq!(copy["floor"], "Secret attic", "{copy}");
+    server.report(&zed.key, about("place", &house, "hate")).await.ok();
+}
+
+// RE1, RE2: a card, a note and a pin are reported from the room they're in, with a copy of their
+// words; from another room, or from outside a private one, each reads as missing.
+#[tokio::test]
+async fn a_card_a_note_and_a_pin_are_reported_only_from_their_room() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let [card, note, pin] = server.card_note_and_pin(&ann, &bo, &room).await;
+    // Cy is in another room of the same house; Zed has a house of his own.
+    let other = server.add_floor(&ann, &room, "Other room").await;
+    let cy = server.join(&ann, &other, "Cy").await;
+    let (_, zed) = server.someone("Zed").await;
+
+    let targets = [("card", &card, "text", "cheap"), ("note", &note, "text", "a cruel note")];
+    let targets = targets.into_iter().chain([("pin", &pin, "title", "a cruel pin")]);
+    for (kind, id, field, words) in targets {
+        let missing = server.report(&zed.key, about(kind, "no-such-thing", "spam")).await;
+        let missing = missing.refused(StatusCode::NOT_FOUND);
+        for outsider in [&cy, &zed] {
+            let reply = server.report(&outsider.key, about(kind, id, "spam")).await;
+            assert_eq!(reply.refused(StatusCode::NOT_FOUND), missing, "{kind}");
+        }
+        let reply = server.report(&ann.key, about(kind, id, "spam")).await.ok();
+        let row = server.row(&reply["report_id"]);
+        assert_eq!(row["target_person_id"], bo.id, "{kind}");
+        assert_eq!(row["hangout_id"], room, "{kind}");
+        let copy: Value = serde_json::from_str(&row["snapshot"]).unwrap();
+        assert_eq!(copy[field], words, "{kind}: {copy}");
+        assert_eq!(copy["room"], "Ann's room", "{kind}: {copy}");
+    }
+}
+
+// RE2: a person's copy keeps their name and profile as anyone is shown them.
+#[tokio::test]
+async fn a_persons_copy_keeps_their_name_and_profile() {
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    let reply = server.report(&ann.key, about("person", &bo.id, "impersonation")).await.ok();
+    let copy: Value = serde_json::from_str(&server.row(&reply["report_id"])["snapshot"]).unwrap();
+    assert_eq!(copy["name"], "Bo", "{copy}");
+    assert!(copy["color"].is_string(), "{copy}");
+    let shown = server.state.db.github_public_snapshot(&bo.id).unwrap();
+    assert_eq!(copy["profile"], shown, "{copy}");
 }

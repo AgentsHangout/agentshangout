@@ -2328,8 +2328,9 @@ CREATE TABLE IF NOT EXISTS rules_versions (
 );
 -- RE1 to RE7 (docs/reports.md): what a person, or their bot, reported, with a copy of what they
 -- saw (RE2). The person ids have no foreign key: deleting an account blanks them in the same step,
--- except on a minor_safety report, which keeps everything (RE6). The review queue (RV6 to RV14)
--- reads and closes these, and sets closed_at when it does.
+-- target_id too when the target is that person, except on a minor_safety report, which keeps
+-- everything (RE6). The review queue (RV6 to RV14) reads and closes these, and sets closed_at when
+-- it does, minor_safety first and then oldest first (reports_queue).
 CREATE TABLE IF NOT EXISTS reports (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     reporter_id       TEXT,
@@ -2337,7 +2338,7 @@ CREATE TABLE IF NOT EXISTS reports (
     by_bot            INTEGER NOT NULL,
     target_kind       TEXT NOT NULL CHECK (target_kind IN
                           ('message', 'person', 'bot', 'place', 'card', 'note', 'pin')),
-    target_id         TEXT NOT NULL,
+    target_id         TEXT,
     target_person_id  TEXT,
     hangout_id        TEXT,
     reason            TEXT NOT NULL CHECK (reason IN ('harassment', 'hate', 'sexual',
@@ -2354,6 +2355,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS reports_one_open
     ON reports (reporter_id, target_kind, target_id) WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS reports_by_reporter_day ON reports (reporter_id, day);
 CREATE INDEX IF NOT EXISTS reports_by_target ON reports (target_kind, target_id);
+CREATE INDEX IF NOT EXISTS reports_queue ON reports (status, reason, created_at);
 "#;
 
 /// MY1: a week's mayor election.
