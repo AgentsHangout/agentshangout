@@ -6153,6 +6153,8 @@ impl Db {
             params![id, owner_id, now],
         )?;
         Ok(Ok(()))
+    }
+
     /// GM2, GM3: records a play within its caps, in one transaction: at most `per_hour` plays by
     /// this player in this room for this kind in the last hour, and none within `cooldown_secs` of
     /// the last. Counted by player, room and kind, so moving or copying the object keeps the budget.
