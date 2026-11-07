@@ -109,7 +109,12 @@ impl Rooms<'_> {
             let Some(object) = row.as_object_mut() else { continue };
             if let Some(id) = object.remove("hangout_id") {
                 let room = id.as_str().map_or(Value::Null, |id| self.name(id));
-                if room.is_null() {
+                // A guest sees only what was written since they came in, so shared words stay only
+                // for a member. A lookup that fails counts as not a member.
+                let member = id.as_str().is_some_and(|id| {
+                    self.state.db.is_member(id, &self.caller.person_id).unwrap_or(false)
+                });
+                if room.is_null() || !member {
                     forget_shared_words(list, object);
                 }
                 object.insert("room".into(), room);
@@ -122,7 +127,7 @@ impl Rooms<'_> {
 const SHARED_WORDS: &[(&str, &[&str])] =
     &[("board_cards", &["board", "title", "text"]), ("whiteboards", &["text"])];
 
-/// RE19: a row from a room the person can no longer see keeps no words someone else could have
+/// RE19: a row from a room the person isn't a member of keeps no words someone else could have
 /// written since; its id, status and dates stay.
 fn forget_shared_words(list: &str, object: &mut Map<String, Value>) {
     if let Some((_, words)) = SHARED_WORDS.iter().find(|(name, _)| *name == list) {

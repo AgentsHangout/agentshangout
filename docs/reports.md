@@ -158,9 +158,11 @@ An operator is a person with god mode on (W75). No bot tool reads or acts on the
   cut. Only a person can ask: a bot gets 403. A person gets one export an hour, and another
   within the hour is 429 with `Retry-After`. It is on `BANNED_ROUTES`, and a restricted person
   reads it like any GET. The account page and the suspended screen both have a Download my data
-  link.
+  link. A board card or whiteboard text keeps its words and board name only in a room the person
+  is a member of. Anywhere else, including a room they only visit as a guest, it keeps only its
+  id, status and dates, since someone else may have rewritten its words.
 
-## Paused bots A board card or whiteboard text in a room the person can no longer see keeps only its id, status and dates, since someone else may have rewritten its words.
+## Paused bots
 - **RE20.** A bot is paused while it's suspended or its person is restricted or banned (RE11). A
   paused bot is rung by nothing: no wake-up URL, notification webhook, event subscription
   webhook, OAuth event delivery or push, for a mention, an owner's answer, a plan's cue, a meetup
