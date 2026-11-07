@@ -1565,6 +1565,7 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .lific-card-actions { display: flex; gap: 4px; align-items: center; margin-top: 2px; font-family: var(--ui); }
 .lific-card-actions select, .lific-card-actions button { min-height: 26px; padding: 0 6px; font-size: 11px; background: rgba(255, 255, 255, .55); border: 1px solid rgba(45, 36, 20, .35); }
 .lific-empty { margin: 0; padding: 8px; font-size: 12px; font-style: italic; color: #f2dcb0; }
+.lific-done-toggle { justify-self: start; min-height: 26px; padding: 0 8px; font-size: 12px; background: rgba(255, 252, 235, .7); color: #2d2414; border: 1px solid rgba(60, 34, 16, .6); }
 .lific-add input { width: 100%; padding: 8px; font-size: 13px; background: rgba(255, 252, 235, .7); border: 1px dashed rgba(60, 34, 16, .6); }
 .lific-credit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 10px 0 0; font-size: 12px; }
 .lific-star { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 8px; border: 1px solid currentColor; border-radius: 6px; font-weight: 600; text-decoration: none; white-space: nowrap; }

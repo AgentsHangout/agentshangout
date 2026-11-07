@@ -6932,6 +6932,23 @@ async fn fake_lific() -> (FakeLific, String) {
                     .collect();
                 axum::Json(json!({ "cursor": 1, "issues": issues, "pages": [] })).into_response()
             }
+            // I149: two open cards and twelve done ones, the done ones last changed out of board order.
+            "busy_done" => {
+                let open = (1..=2).map(|n| {
+                    json!({ "identifier": format!("DEMO-T{n}"), "title": format!("Open {n}"),
+                            "status": "todo", "priority": "low", "module_id": null,
+                            "sort_order": n as f64, "deleted": false,
+                            "updated_at": "2026-11-01T01:00:00Z" })
+                });
+                let done = (1..=12).map(|n| {
+                    json!({ "identifier": format!("DEMO-D{n}"), "title": format!("Finished task number {n}"),
+                            "status": "done", "priority": "medium", "module_id": 1,
+                            "sort_order": n as f64, "deleted": false,
+                            "updated_at": format!("2026-11-01T00:{:02}:00Z", (n * 5) % 12) })
+                });
+                let issues: Vec<Value> = open.chain(done).collect();
+                axum::Json(json!({ "cursor": 1, "issues": issues, "pages": [] })).into_response()
+            }
             _ => axum::Json(json!({
                 "cursor": 9,
                 "issues": [
@@ -7105,6 +7122,57 @@ async fn a_lific_board_fails_soft_and_keeps_nothing() {
     assert_eq!(
         (board["available"].clone(), board["reason"].clone()),
         (json!(false), json!("down"))
+    );
+}
+
+// I149: Done lists its newest first with done_count; a bot's read keeps only the latest 5 of it,
+// whichever way it asks, and every other column is the same as a person's.
+#[tokio::test]
+async fn a_bots_lific_read_folds_done_to_its_latest_five() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let (fake, origin) = fake_lific().await;
+    allow_lific(&server, "", &origin);
+    fake.set("busy_done");
+    let id = server.lific_board(&ann, &room);
+    let path = format!("/api/items/{id}/lific");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    let ids = |column: &Value| -> Vec<String> {
+        column["issues"].as_array().unwrap().iter().map(|i| text(&i["id"]).to_string()).collect()
+    };
+    let newest = ["DEMO-D7", "DEMO-D2", "DEMO-D9", "DEMO-D4", "DEMO-D11"];
+
+    // A person gets all twelve, newest first.
+    let board = server.get(&ann.key, &path).await.ok();
+    let done = &board["columns"][3];
+    assert_eq!(
+        (done["status"].as_str(), done["done_count"].as_i64()),
+        (Some("done"), Some(12)),
+        "{board}"
+    );
+    assert_eq!(ids(done).len(), 12);
+    assert_eq!(ids(done)[..5], newest, "{done}");
+    assert_eq!(board["shown"], 14);
+
+    // A bot gets the count and the latest 5, by read_board or the route.
+    let read = server.tool(&scout.token, "read_board", json!({ "board_id": id })).await;
+    let read = &read["structuredContent"];
+    let route = server.get(&scout.token, &path).await.ok();
+    for bot in [read, &route] {
+        let done = &bot["columns"][3];
+        assert_eq!(done["done_count"], 12, "{bot}");
+        assert_eq!(ids(done), newest, "{bot}");
+        assert_eq!(bot["shown"], 7, "shown counts what the read holds");
+        assert_eq!(bot["total"], 14);
+        for open in [0, 1, 2, 4] {
+            assert_eq!(bot["columns"][open], board["columns"][open], "column {open} is unchanged");
+        }
+    }
+    println!(
+        "read_board with 12 done cards: {} characters in full, {} folded",
+        board["columns"].to_string().len(),
+        read["columns"].to_string().len()
     );
 }
 

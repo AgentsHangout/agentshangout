@@ -3336,18 +3336,48 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   }
   const lificMove = (card, status) => lificSend(`/${encodeURIComponent(card)}`, { method: 'PUT', body: { status } });
 
+  // I150: a busy Done shows its latest few (the server sends it newest first), and a viewer may
+  // show all of it or hide it to its title and count. The choice is this browser's, per board.
+  const LIFIC_DONE_SHOWN = 5;
+  let lificBoard = null;
+  const lificDoneKey = (board) => `lific-done:${board}`;
+  function lificDoneView(board) {
+    try { return localStorage.getItem(lificDoneKey(board)) || 'latest'; } catch { return 'latest'; }
+  }
+  function setLificDoneView(view) {
+    if (!lificBoard) return;
+    try { localStorage.setItem(lificDoneKey(lificBoard.of), view); } catch { /* only for now, then */ }
+    lificBoard.done = view;
+    drawLific();
+  }
+  function drawLific() {
+    const { board } = lificBoard;
+    lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change, lificBoard.done) : []));
+  }
+
   // I140: anyone who may change the board adds at the top of a column, drags cards between
   // columns or uses Move to, and Remove shows only to whoever may take a card down.
-  function lificKanban(columns, canChange = false) {
+  function lificKanban(columns, canChange = false, doneView = 'latest') {
     return (columns || []).filter((column) => column.status !== 'cancelled' || column.issues.length).map((column) => {
       const name = LIFIC_STATUS[column.status] || column.status;
+      const isDone = column.status === 'done';
+      const count = isDone && Number.isFinite(column.done_count) ? column.done_count : column.issues.length;
+      const hidden = isDone && count > 0 && doneView === 'hidden';
+      const folded = isDone && !hidden && doneView !== 'all' && column.issues.length > LIFIC_DONE_SHOWN;
+      const issues = hidden ? [] : folded ? column.issues.slice(0, LIFIC_DONE_SHOWN) : column.issues;
+      const doneButton = (words, view) => h('button', { type: 'button', class: 'lific-done-toggle', onclick: () => setLificDoneView(view) }, words);
+      const doneToggles = !isDone || !count ? [] : hidden ? [doneButton('Show done', 'latest')] : [
+        folded ? doneButton(`Show all ${count} done`, 'all') : null,
+        doneView === 'all' && column.issues.length > LIFIC_DONE_SHOWN ? doneButton(`Show the latest ${LIFIC_DONE_SHOWN}`, 'latest') : null,
+        doneButton('Hide done', 'hidden'),
+      ];
       const adder = canChange && column.status !== 'cancelled' ? h('form', {
         class: 'lific-add',
         onsubmit: submitter(lificError, async (data) => {
           await lificSend('', { method: 'POST', body: { title: data.title, status: column.status } });
         }),
       }, h('input', { type: 'text', name: 'title', placeholder: 'Add a card', 'aria-label': `Add a card to ${name}`, maxlength: 120, required: true })) : null;
-      const cards = column.issues.map((issue) => h('div', {
+      const cards = issues.map((issue) => h('div', {
         class: 'lific-card',
         'data-priority': issue.priority || 'none',
         draggable: canChange && Boolean(issue.id),
@@ -3383,9 +3413,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
           if (card && !column.issues.some((issue) => issue.id === card)) await lificMove(card, column.status);
         }) : null,
       },
-      h('h3', {}, name, ' ', h('small', {}, String(column.issues.length))),
-      adder,
-      ...(cards.length ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]));
+      h('h3', {}, name, ' ', h('small', {}, String(count))),
+      hidden ? null : adder,
+      ...(cards.length || hidden ? cards : [h('p', { class: 'muted lific-empty' }, 'Nothing here')]),
+      ...doneToggles);
     });
   }
 
@@ -3402,7 +3433,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
-      lificColumns.replaceChildren(...(board.available ? lificKanban(board.columns, board.can_change) : []));
+      lificBoard = { of: asked, board, done: lificDoneView(asked) };
+      drawLific();
     } catch (error) {
       if (asked !== lificOf) return;
       lificColumns.replaceChildren();
