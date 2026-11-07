@@ -446,8 +446,23 @@ pub fn note_message(state: &AppState, message: &Message) {
                 mention["context"] =
                     json!(thread_mention_context(state, message, &bot.id, root_id, after));
             } else {
-                mention["what_to_do"] = json!(MENTION_DO);
-                mention["context"] = json!(mention_context(state, message, &bot.id));
+                // #730: context starts after the last top-level mention event recorded for this
+                // bot in the room. Recorded isn't delivered, so the event says where it starts.
+                let after = state
+                    .db
+                    .last_room_mention_event(&message.hangout_id, message.id, &bot.id, WATCH_DO)
+                    .ok()
+                    .flatten();
+                mention["what_to_do"] = json!(match after {
+                    Some(id) => format!(
+                        "{MENTION_DO} context starts after message {id}, which an earlier mention event in this room carried; if you don't have it, call read_room."
+                    ),
+                    None => MENTION_DO.to_string(),
+                });
+                if let Some(id) = after {
+                    mention["context_after"] = json!(id);
+                }
+                mention["context"] = json!(mention_context(state, message, &bot.id, after));
             }
             record(
                 state,
@@ -478,7 +493,12 @@ fn hidden_for_bot(state: &AppState, agent_id: &str) -> std::collections::HashSet
         .unwrap_or_default()
 }
 
-fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<Value> {
+fn mention_context(
+    state: &AppState,
+    message: &Message,
+    agent_id: &str,
+    after: Option<i64>,
+) -> Vec<Value> {
     // If it can't be told whether the bot is a guest, it gets no context rather than history it
     // might not be allowed to read.
     let Ok(visit) = state.db.bot_visit(&message.hangout_id, agent_id, now()) else {
@@ -488,7 +508,7 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
     let hide = hidden_for_bot(state, agent_id);
     state
         .db
-        .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
+        .messages_before(&message.hangout_id, message.id, agent_id, since, after, MENTION_CONTEXT)
         .unwrap_or_default()
         .into_iter()
         .filter(|earlier| !crate::blocks::hides(&hide, earlier))

@@ -11373,6 +11373,63 @@ async fn the_last_mention_in_a_thread_is_found_by_index() {
     assert!(scans.is_empty(), "a full scan: {plan:?}");
 }
 
+// I151, #730: a second top-level mention carries only what came after the first one's event.
+#[tokio::test]
+async fn a_second_top_level_mention_carries_only_what_is_new() {
+    let w = waiting_world().await;
+    let say = |text: &str| {
+        let args = json!({ "hangout_id": w.room, "text": text });
+        let token = w.pip.token.clone();
+        let server = &w.server;
+        async move {
+            let said = server.tool(&token, "say", args).await;
+            said["structuredContent"]["message_id"].as_i64().expect("posted")
+        }
+    };
+    let early = say("an early line").await;
+    let first = say("@Scout what do you think?").await;
+    let after = say("a line after the first mention").await;
+    let second = say("@Scout and now?").await;
+
+    let res = w.server.tool(&w.scout.token, "events_since", json!({})).await;
+    let events = res["structuredContent"]["events"].as_array().unwrap().clone();
+    let event_for = |id: i64| -> Value {
+        events
+            .iter()
+            .find(|e| e["name"] == "mention" && e["data"]["message_id"] == id)
+            .unwrap_or_else(|| panic!("a mention event for {id}"))["data"]
+            .clone()
+    };
+    let ids = |data: &Value| -> Vec<i64> {
+        let lines = data["context"].as_array().unwrap();
+        lines.iter().map(|line| line["message_id"].as_i64().unwrap()).collect()
+    };
+    let first_event = event_for(first);
+    assert_eq!(ids(&first_event), [early]);
+    assert!(first_event.get("context_after").is_none(), "{first_event}");
+    let second_event = event_for(second);
+    assert_eq!(ids(&second_event), [after], "not the first mention or what it carried");
+    assert_eq!(second_event["context_after"], first, "{second_event}");
+    let what = second_event["what_to_do"].as_str().unwrap();
+    assert!(what.contains(&format!("after message {first}")) && what.contains("read_room"));
+}
+
+// I151, #730: finding a bot's last top-level mention in a room uses an index, not a scan.
+#[tokio::test]
+async fn the_last_top_level_mention_is_found_by_index() {
+    let w = waiting_world().await;
+    let plan: Vec<String> = w
+        .conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", agenthangout::db::LAST_ROOM_MENTION_EVENT))
+        .unwrap()
+        .query_map(rusqlite::params!["room", 2, "bot", "x"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let scans: Vec<&String> = plan.iter().filter(|line| line.starts_with("SCAN")).collect();
+    assert!(scans.is_empty(), "a full scan: {plan:?}");
+}
+
 // I86, I88, E5, #536: the room tag is not the display name of a bot called Room.
 #[tokio::test]
 async fn room_tag_cannot_name_an_unsubscribed_bot_in_another_room() {
