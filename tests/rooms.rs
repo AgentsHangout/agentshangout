@@ -7154,8 +7154,9 @@ async fn a_bots_lific_read_folds_done_to_its_latest_five() {
     assert_eq!(ids(done).len(), 12);
     assert_eq!(ids(done)[..5], newest, "{done}");
     assert_eq!(board["shown"], 14);
+    assert_eq!(board["truncated"], false, "a person's read holds every card");
 
-    // A bot gets the count and the latest 5, by read_board or the route.
+    // A bot gets the count and the latest 5, by read_board or the route, and is told some are out.
     let read = server.tool(&scout.token, "read_board", json!({ "board_id": id })).await;
     let read = &read["structuredContent"];
     let route = server.get(&scout.token, &path).await.ok();
@@ -7165,6 +7166,7 @@ async fn a_bots_lific_read_folds_done_to_its_latest_five() {
         assert_eq!(ids(done), newest, "{bot}");
         assert_eq!(bot["shown"], 7, "shown counts what the read holds");
         assert_eq!(bot["total"], 14);
+        assert_eq!(bot["truncated"], true, "the read says it doesn't hold every card");
         for open in [0, 1, 2, 4] {
             assert_eq!(bot["columns"][open], board["columns"][open], "column {open} is unchanged");
         }
@@ -7174,6 +7176,13 @@ async fn a_bots_lific_read_folds_done_to_its_latest_five() {
         board["columns"].to_string().len(),
         read["columns"].to_string().len()
     );
+
+    // A board a bot sees whole isn't truncated.
+    fake.set("small");
+    server.put(&ann.key, &path, json!({ "base": origin, "project": "DEMO" })).await.ok();
+    let route = server.get(&scout.token, &path).await.ok();
+    assert_eq!((&route["shown"], &route["total"]), (&json!(2), &json!(2)), "{route}");
+    assert_eq!(route["truncated"], false, "{route}");
 }
 
 // I126: a board read is shown again for a few seconds, so a room of readers, or a bot in a loop,
