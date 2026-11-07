@@ -5414,7 +5414,8 @@ async function roomView(id) {
     const thought = liveThinking(agent.thinking);
     return agent.activity
       ? doingText(agent.activity)
-      : using ? sentence(using.does)
+      // #831: a bed a dreaming bot lies in (#800) has no `does`, so it falls through to the status.
+      : using?.does ? sentence(using.does)
         : thought?.phase === 'thinking' ? 'Thinking'
           : thought?.phase === 'waiting' ? 'Heard a mention'
             : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);

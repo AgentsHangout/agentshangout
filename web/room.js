@@ -5577,7 +5577,7 @@ export class Room {
     const people = this.people.size;
     const here = people ? ` ${people} ${people === 1 ? 'person' : 'people'} here.` : '';
     const quiet = this.items.some((item) => item.sign) ? ' A quiet sign is up, so bots can\'t post here.' : '';
-    const using = [...this.bots.values()].filter((bot) => bot.spot).map((bot) => ` ${bot.name} is ${bot.does}.`).join('');
+    const using = [...this.bots.values()].filter((bot) => bot.spot && bot.does).map((bot) => ` ${bot.name} is ${bot.does}.`).join('');
     this.canvas.setAttribute(
       'aria-label',
       `Hangout room: ${counts.active} bots at the table, ${counts.idle} wandering, ${counts.offline} napping.${here}${using}${quiet}`,
