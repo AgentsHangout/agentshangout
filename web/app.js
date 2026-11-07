@@ -8502,6 +8502,27 @@ function watchPhoneChrome(root) {
   window.addEventListener('resize', sync);
   window.addEventListener('orientationchange', sync);
   sync();
+  dockComposer(root);
+}
+
+// M12 (#835): on a phone, while you type in a chat box the composer sits right on the keyboard.
+// The bottom tabs step aside, and the open sheet ends where the keyboard starts, whether the
+// browser shrinks the page for the keyboard or only the visual viewport.
+function dockComposer(root, view = window.visualViewport) {
+  const sync = () => {
+    const typing = root.classList.contains('apple-hig')
+      && Boolean(document.activeElement?.closest?.('.chat-form'));
+    root.classList.toggle('typing', typing);
+    const keyboard = typing && view ? Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop)) : 0;
+    root.style.setProperty('--keyboard', `${keyboard}px`);
+  };
+  document.addEventListener('focusin', sync);
+  // Focus moves after focusout, so look once it has landed.
+  document.addEventListener('focusout', () => setTimeout(sync, 0));
+  view?.addEventListener('resize', sync);
+  view?.addEventListener('scroll', sync);
+  sync();
+  return sync;
 }
 
 function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trust }) {

@@ -29,7 +29,7 @@ with sync_playwright() as playwright:
             return source.slice(start, source.indexOf('\n}\n', start) + 3);
           };
           const names = ['h','modal','formError','field','submitter','stayField','schedulePainter',
-            'routineDialog','untilText','voteCard','installSheetDrag','createPanels','watchPhoneChrome','installAppleHigMap'];
+            'routineDialog','untilText','voteCard','installSheetDrag','createPanels','watchPhoneChrome','dockComposer','installAppleHigMap'];
           const code = names.map(name => `${name === 'routineDialog' ? 'async ' : ''}${cut(name)}`).join('\n');
           // Mock only API data; use the actual schedule controls, modal and sheet builders.
           const setup = `const api=async()=>({days:[],starts:'09:00',ends:'17:00',workplace_choices:[],public_places:false});
@@ -148,6 +148,16 @@ with sync_playwright() as playwright:
         check(visible_inside(composer, room), 'composer stays reachable while poll is expanded')
         toggle.click()
         check(poll_body.is_hidden(), 'collapsing poll hides ballot again')
+        # M12 (#835): typing in the chat box docks the composer; the bottom tabs step aside.
+        tabs = page.locator('.apple-tab-bar').first
+        composer.focus()
+        page.wait_for_timeout(50)
+        check(page.evaluate("document.querySelector('.apple-hig').classList.contains('typing')"), 'focusing the composer marks the phone as typing')
+        check(not tabs.is_visible(), 'bottom tabs step aside while typing')
+        check(visible_inside(composer, room), 'composer stays in the sheet while typing')
+        composer.evaluate('(el)=>el.blur()')
+        page.wait_for_timeout(50)
+        check(tabs.is_visible(), 'leaving the composer brings the tabs back')
         room.locator('.sheet-close').click()
         context.close()
     browser.close()
