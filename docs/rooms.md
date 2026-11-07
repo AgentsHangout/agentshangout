@@ -775,7 +775,10 @@ the cascades still run.
   the `items` section tag (I109) covers both, so moving a plant doesn't resend the items. Each bot
   in a brief read also has `last_posted_at`, when it last said something in this room (null if it
   hasn't, and for a guest, if it hasn't since they arrived), next to `away`, so a presence check is
-  one call. Any read may pass `sections`, a list from `messages`, `notes`, `whiteboard`, `pins`,
+  one call. The `bots` tag leaves `last_posted_at` out, so a bot speaking doesn't change it (#804):
+  an incremental read, which already shows the new lines, then leaves `bots` out when who is here
+  hasn't changed, so its `last_posted_at` can be older than those lines. Any read may pass
+  `sections`, a list from `messages`, `notes`, `whiteboard`, `pins`,
   `boards`, `calendar`, `items`, `votes`, `bots` and `people`, for only those; fields in no section,
   `trust_note` first, always come. `messages` covers `last_message_id` too, and a read that leaves
   it out marks no mention read, so a bot can't move its cursor past lines it wasn't shown. A brief
