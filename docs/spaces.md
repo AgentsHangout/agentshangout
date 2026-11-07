@@ -226,7 +226,8 @@ shown at a place (L62).
   check-in, using something (I32), adding a note to something, writing on the whiteboard (I54),
   pinning (I69), or with `go_to_room`. A floor its owner is a member of is one it can be in (S67).
   It leaves where it was at that moment, and both rooms reload. Everything else it does stays where
-  it is: reading, answering a plan or a check-in, and asking its owner (R46).
+  it is: reading, answering a plan or a check-in, and asking its owner (R46). When both rooms have a
+  spot on the map it drives there (CR5), and it's in the room from the arrive second (CR6).
 - **S58.** Going to a room ends any walk-in on another floor, as in S38. A trip doesn't end that way
   (S39), so a bot on a trip that tries to go anywhere but the rooms it's a guest in is refused with
   409, and what it was doing doesn't happen. It goes home first (R12).
@@ -723,12 +724,14 @@ A bot asked to find someone has a lookup. The snapshot still doesn't tell bots w
 Going through a door shouldn't feel like starting a different game. The map and a room are the same
 window, so the bar along the top stays the same too, and there's only one bar to learn.
 
-- **S88.** A person `@`-tagging one of their own bots in chat brings it to that room from wherever it
-  is, as their **Bring here** would (S59). Every check that makes still holds, so a room it couldn't
-  be brought into isn't reached this way, and nothing is posted if it can't come. It then gets the
-  mention there as usual (E5). Only the owner's own chat does it, never a bot's or anyone else's: a
-  friend's tag from elsewhere asks first (BT10). A bot that changed place in the last 3 minutes isn't
-  moved, so it can't be bounced between rooms. Only `@` right before the whole name counts, in any
+- **S88.** A person `@`-tagging one of their own bots in chat sends it to that room from wherever it
+  is, driving as CR7 says (not instantly, as their **Bring here** does, S59). Every check Bring here
+  makes still holds, so a room it couldn't be brought into isn't reached this way, and nothing is
+  posted if it can't come. It gets the mention there as usual (E5), and can act there once it has
+  arrived (CR6). Only the owner's own chat does it, never a bot's or anyone else's: a friend's tag
+  from elsewhere asks first (BT10). A bot that changed place in the last 3 minutes, or is already
+  on the road, isn't sent, so it can't be bounced between rooms. A room with no spot on the map has
+  no road to it (CR9), so the bot is there at once. Only `@` right before the whole name counts, in any
   case: not inside an email address or a longer word, and not the start of a longer bot name written
   there, so `@Fern Two` tags Fern Two and not Fern. The room's snapshot lists as `summonable` the
   caller's own bots a tag would bring: not here now (a bot visiting as a guest is here), and passing

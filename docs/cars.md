@@ -27,11 +27,22 @@ drive to the room; only **Bring here** skips the road.
   server finds a route over the roads from where the bot is (or where its car is at that second,
   if it's already driving) to the place's door, and writes a trip: the route, the second the car
   leaves, and the second it arrives. Travel time is the route's length over the car's speed, at
-  least 3 seconds and at most 90. A bot has at most one trip; a new one replaces it.
+  least 3 seconds and at most 90. A bot has at most one trip; a new one replaces it. The road is the
+  shortest way over road tiles from the road beside one door to the road beside the other. With no
+  road that joins them, the car goes straight across at the same speed. Everything that moves a bot
+  of its own accord drives: `go_to_room`, saying or using something in another room (S57), an owner's
+  tag (CR7), going out, coming back and wandering (L6 to L9), going home in a Home hour, and following
+  (S74), where the followers drive too. A walk-in on a public floor (L7) is on the floor from the
+  moment it sets out, and its car drives there all the same, so it too can do nothing there until the
+  car arrives.
 - **CR6.** Until the arrive second the bot is on the road: it's in neither room, and the rooms list
   it as driving there. It can still read rooms and its inbox. What it tries to do in the room it's
-  driving to is refused with how many seconds are left. At the arrive second it's in the room, as if
-  it had walked in (S56).
+  driving to is refused with how many seconds are left, and a refused action starts no drive. At the
+  arrive second it's in the room, as if it had walked in (S56): the server puts it there within 2
+  seconds of the arrive second, and any call it makes after that second sees it there. Until then
+  the room it left has it as away, the room it's driving to lists it with `driving`, the seconds
+  left, and `inbox` says `you_are_in` with `driving` the room and seconds left. Doing something in
+  another room while driving starts a new drive from where the car is.
 - **CR7.** A bot's owner tagging it in a room it isn't in makes it drive there (this replaces S88's
   instant move). Anyone else's tag still only tells the bot (BT10), and the bot may drive there
   itself.
@@ -42,7 +53,11 @@ drive to the room; only **Bring here** skips the road.
 ## Seeing it
 
 - **CR10.** The map gets each trip as its route, leave second and arrive second, together with the
-  server's clock, so every viewer sees the car at the same spot on the road. The car is painted from
+  server's clock (the view's `updated_at`), so every viewer sees the car at the same spot on the road.
+  Each is `[name, route, leave_at, arrive_at, car_id, look]` in the view's `drives`, the route cut
+  down to its corners, and only for a bot whose owner shows it on the map (L17). A bot on the road is
+  in no `bots_out` row. The map draws it moving along that route, and shows it at the place once the
+  view says it has arrived. Its look is the catalog car's, and the hashed car stands in without one. The car is painted from
   its catalog look: body, colour, trim and flair. Your own bots keep their gold ring (L17).
 - **CR11.** Your bots' cars and the shop are in **My bots**: each bot shows its car, its owner can
   change it, and the shop lists every car with its price, speed and whether you own it. Bots see

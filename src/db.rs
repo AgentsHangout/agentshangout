@@ -2785,6 +2785,9 @@ pub struct Agent {
     pub visitor_until_why: Option<&'static str>,
     /// It belongs to this room but it's somewhere else (S55). Set only in a room's snapshot.
     pub away: bool,
+    /// CR6: seconds left on its drive here. Set only in a room's snapshot, and only while it's on its way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driving: Option<i64>,
     /// Set only where a person is shown a room's own bots (A21, A22).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discord: Option<DiscordLink>,
@@ -4015,6 +4018,7 @@ fn agent_from_row(row: &Row, now: i64) -> rusqlite::Result<Agent> {
         visitor_until: None,
         visitor_until_why: None,
         away: false,
+        driving: None,
         discord: None,
         apprenticed_by: None,
         thinking: None,
@@ -4301,6 +4305,37 @@ fn scene_request_from_row(row: &Row, now: i64) -> rusqlite::Result<SceneRequest>
         answered_by: row.get(6)?,
         expires_at,
         created_at: row.get(8)?,
+    })
+}
+
+/// CR5, CR6: a bot's drive to a room: the route over the map in tiles, from the second the car
+/// leaves to the second it arrives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drive {
+    pub agent_id: String,
+    pub hangout_id: String,
+    pub car_id: String,
+    pub route: Vec<(u16, u16)>,
+    pub leave_at: i64,
+    pub arrive_at: i64,
+}
+
+const DRIVE_COLS: &str = "agent_id, hangout_id, car_id, route, leave_at, arrive_at";
+
+fn drive_from_row(row: &Row) -> rusqlite::Result<Drive> {
+    drive_from_row_at(row, 0)
+}
+
+fn drive_from_row_at(row: &Row, at: usize) -> rusqlite::Result<Drive> {
+    let route: String = row.get(at + 3)?;
+    let route: Vec<[u16; 2]> = serde_json::from_str(&route).unwrap_or_default();
+    Ok(Drive {
+        agent_id: row.get(at)?,
+        hangout_id: row.get(at + 1)?,
+        car_id: row.get(at + 2)?,
+        route: route.into_iter().map(|[x, y]| (x, y)).collect(),
+        leave_at: row.get(at + 4)?,
+        arrive_at: row.get(at + 5)?,
     })
 }
 
@@ -9204,6 +9239,103 @@ impl Db {
             params![agent_id, hangout_id, now],
         )?;
         Ok(())
+    }
+
+    /// CR5, CR6: a bot's drive, if it has one: open until `arrive_at`, and settled after.
+    pub fn drive_of(&self, agent_id: &str) -> rusqlite::Result<Option<Drive>> {
+        self.conn()
+            .query_row(
+                &format!("SELECT {DRIVE_COLS} FROM bot_trips WHERE agent_id = ?"),
+                [agent_id],
+                drive_from_row,
+            )
+            .optional()
+    }
+
+    /// CR5: a bot has at most one drive, so a new one replaces it.
+    pub fn set_drive(&self, drive: &Drive) -> rusqlite::Result<()> {
+        let route: Vec<[u16; 2]> = drive.route.iter().map(|&(x, y)| [x, y]).collect();
+        self.conn().execute(
+            "INSERT INTO bot_trips (agent_id, hangout_id, car_id, route, leave_at, arrive_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (agent_id) DO UPDATE SET hangout_id = excluded.hangout_id,
+                 car_id = excluded.car_id, route = excluded.route,
+                 leave_at = excluded.leave_at, arrive_at = excluded.arrive_at",
+            params![
+                drive.agent_id,
+                drive.hangout_id,
+                drive.car_id,
+                serde_json::to_string(&route).unwrap_or_else(|_| "[]".into()),
+                drive.leave_at,
+                drive.arrive_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// CR6: the bots on the road now, who are at no place until they arrive.
+    pub fn driving_bots(&self, now: i64) -> rusqlite::Result<std::collections::HashSet<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT agent_id FROM bot_trips WHERE arrive_at > ?")?;
+        let rows = stmt.query_map([now], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// CR8: true if there was a drive to end.
+    pub fn end_drive(&self, agent_id: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute("DELETE FROM bot_trips WHERE agent_id = ?", [agent_id])? > 0)
+    }
+
+    /// CR6: the drives whose cars have arrived, oldest first.
+    pub fn drives_arrived(&self, now: i64) -> rusqlite::Result<Vec<Drive>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DRIVE_COLS} FROM bot_trips WHERE arrive_at <= ? ORDER BY arrive_at, agent_id"
+        ))?;
+        let rows = stmt.query_map([now], drive_from_row)?;
+        rows.collect()
+    }
+
+    /// CR10: the drives under way for bots whose owners show them on the map (L17), with the bot's
+    /// name, and the nearest to arriving first.
+    pub fn open_drives(&self, now: i64, limit: usize) -> rusqlite::Result<Vec<(String, Drive)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT a.name, t.agent_id, t.hangout_id, t.car_id, t.route, t.leave_at, t.arrive_at
+             FROM bot_trips t JOIN agents a ON a.id = t.agent_id
+             JOIN bot_routines r ON r.agent_id = a.id AND r.public_places = 1
+             WHERE t.arrive_at > ?1 ORDER BY t.arrive_at, t.agent_id LIMIT ?2",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt
+            .query_map(params![now, limit], |row| Ok((row.get(0)?, drive_from_row_at(row, 1)?)))?;
+        rows.collect()
+    }
+
+    /// CR5, CR9: the tile of the building standing as a public room's door on a world's map, if the
+    /// room has one. A room with no spot on the map has no road to it.
+    pub fn room_door(
+        &self,
+        world_id: &str,
+        hangout_id: &str,
+    ) -> rusqlite::Result<Option<(u16, u16)>> {
+        let found: Option<(i64, i64)> = self
+            .conn()
+            .query_row(
+                "SELECT d.x, d.y FROM floors f
+                 JOIN spaces s ON s.id = f.space_id
+                 JOIN space_plots d ON d.space_id = s.id AND d.world_id = ?1
+                 JOIN world_every_place b ON b.world_id = d.world_id AND b.x = d.x AND b.y = d.y
+                 JOIN players pl ON pl.id = b.player_id AND pl.person_id = s.owner_id
+                                AND pl.agent_id IS NULL AND pl.token_hash IS NULL
+                 WHERE f.hangout_id = ?2 AND f.access = 'public'
+                   AND (b.kind = 'house') = (s.kind = 'house')
+                 LIMIT 1",
+                params![world_id, hangout_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(found.and_then(|(x, y)| Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?))))
     }
 
     /// S61: a bot doing something in a room it belongs to starts its half hour there again. A room

@@ -1138,7 +1138,8 @@ pub(crate) fn walk_bot_in(
     }
     crate::spaces::require_public_conversations(state, agent_id, floor_id)?;
     let mut left = state.db.bot_visits(agent_id, now)?;
-    left.extend(state.db.bot_place(agent_id, now)?);
+    let was = state.db.bot_place(agent_id, now)?;
+    left.extend(was.clone());
     let walked = state.db.walk_in(
         &NewVisit {
             hangout_id: &floor.id,
@@ -1160,6 +1161,9 @@ pub(crate) fn walk_bot_in(
         ops::refresh(state, &floor.id);
         // L17: where it is shows on The Commons.
         state.worlds.mark_stale(crate::worlds::COMMONS_ID);
+        // CR5: it's on the floor from here, and it drives there, so it can't do anything there until
+        // its car arrives.
+        crate::travel::drive(state, agent_id, was.as_deref(), &floor.id, now)?;
     }
     Ok(walked)
 }
@@ -1304,6 +1308,10 @@ pub fn come_back(state: &AppState, caller: &Caller, parting: &Parting) -> ApiRes
         crate::travel::note_told(state, agent_id);
         // S75: going somewhere itself ends following.
         state.db.unfollow(agent_id, now)?;
+        // CR5: coming back is a drive home.
+        if let Some(home) = place.as_deref().filter(|home| was.as_deref() != Some(*home)) {
+            crate::travel::drive(state, agent_id, was.as_deref(), home, now)?;
+        }
     }
     let you_are_in = room_json(state, place.as_deref())?;
     let mut reply = json!({ "ok": true, "was_out": !left.is_empty(), "you_are_in": you_are_in });
@@ -1431,7 +1439,12 @@ pub fn bots_at_places_and_cut(
     let mut looks = worn(state, Wearer::Bot, &ids)?;
     let mut shown = std::collections::HashSet::new();
     let mut list = Vec::new();
+    // CR6: a bot on the road is at no place until it arrives (CR10 draws it driving).
+    let driving = state.db.driving_bots(now)?;
     for (agent_id, name, owner_id, x, y, walked, room) in rows {
+        if driving.contains(&agent_id) {
+            continue;
+        }
         // S56: belonging somewhere doesn't put it there.
         if state.db.bot_place(&agent_id, now)?.as_deref() != Some(room.as_str()) {
             continue;
@@ -1789,6 +1802,10 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     if state.db.recycled_at(agent_id)?.is_some() {
         return Ok(());
     }
+    // CR5: a bot on the road isn't sent somewhere else until it has arrived.
+    if crate::travel::current_drive(state, agent_id, now)?.is_some() {
+        return Ok(());
+    }
     if let Some(schedule) = schedule_of(state, agent_id)? {
         if schedule.block_at(offset_of(state, owner_id)?, now) == Block::Home {
             return go_home(state, agent_id, now);
@@ -1825,7 +1842,7 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
     };
     if work {
         if state.db.bot_place(agent_id, now)?.as_deref() != Some(room.as_str()) {
-            crate::spaces::place_bot(state, agent_id, &room)?;
+            crate::spaces::move_bot(state, agent_id, &room)?;
             crate::events::note_place(state, agent_id, &room, "moved");
         }
     } else {
@@ -1862,7 +1879,7 @@ fn go_home(state: &AppState, agent_id: &str, now: i64) -> ApiResult<()> {
     {
         return Ok(());
     }
-    crate::spaces::place_bot(state, agent_id, &house.living_room_id)?;
+    crate::spaces::move_bot(state, agent_id, &house.living_room_id)?;
     crate::events::note_place(state, agent_id, &house.living_room_id, "moved");
     Ok(())
 }

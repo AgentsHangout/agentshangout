@@ -2219,3 +2219,37 @@ async fn cars_are_bought_from_credits_and_picked_by_their_owner() {
     let rows = server.get(&room.justin, "/api/me/bots").await.body;
     assert_eq!(rows["bots"][0]["car"]["id"], "toaster", "{rows}");
 }
+
+// HC8 / HC24 (#784): the money panel (.money-pop) inherits the brand kit's warm paper tokens,
+// square bevels, shared .wd-btn controls, and phone bottom-sheet layout under 640px.
+#[test]
+fn the_money_panel_uses_the_brand_kits_warm_paper_bevels_and_phone_sheet() {
+    let app = include_str!("../web/app.js").replace("\r\n", "\n");
+    let css = include_str!("../web/style.css").replace("\r\n", "\n");
+    let brand = include_str!("../web/brand/README.md").replace("\r\n", "\n");
+
+    let shop = app.split_once("async function showShop(pack = null) {").unwrap().1;
+    let shop = shop.split_once("\n}\n").unwrap().0;
+    assert!(
+        shop.contains("class: 'wd-btn ghost money-close'"),
+        "money-close must use the shared .wd-btn control"
+    );
+
+    let pop = css.split_once(".money-pop {").unwrap().1.split_once("\n}").unwrap().0;
+    assert!(
+        pop.contains("--panel: #efe2be;") && pop.contains("--text: #2c1e11;"),
+        ".money-pop must set the warm-paper panel tokens when mounted on document.body: {pop}"
+    );
+    assert!(
+        pop.contains("border-radius: 3px;") && pop.contains("inset 1px 1px 0 #fff7dc"),
+        ".money-pop must use the brand kit's square paper bevels instead of an 8px dark capsule: {pop}"
+    );
+    assert!(
+        css.contains("@media (max-width: 640px) {\n  .money-pop {"),
+        ".money-pop must adapt to a bottom sheet on narrow/phone viewports"
+    );
+    assert!(
+        brand.contains("### Money panel RSI branding loop (#784)"),
+        "web/brand/README.md must record the money panel audit and RSI branding loop checklist"
+    );
+}
