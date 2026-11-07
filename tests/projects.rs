@@ -2032,3 +2032,37 @@ async fn a_walk_in_on_a_public_project_floor_can_be_brought_in_but_a_private_one
     server.tool(&town.fern, "invite_to_project", bring_in).await;
     server.tool(&town.rover, "read_room", json!({ "hangout_id": floor })).await;
 }
+
+// L12, S26
+#[tokio::test]
+async fn a_walk_in_ends_with_a_public_floor_and_a_bot_elsewhere_cant_bring_one_in() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+    let bring_in = json!({ "project_id": project, "bot": "Rover" });
+    let access = |value: &str| json!({ "access": value, "create_code": CODE });
+    let walk_in = format!("/api/floors/{floor}/walk-in");
+    let rover = json!({ "agent_id": town.rover_id });
+
+    // (a) Rover walks in, then the floor goes private, which ends the walk-in: refused.
+    server.put(&town.ann.key, &format!("/api/floors/{floor}"), access("public")).await.ok();
+    server.post(&town.bo.key, &walk_in, rover.clone()).await.ok();
+    server
+        .put(&town.ann.key, &format!("/api/floors/{floor}"), json!({ "access": "private" }))
+        .await
+        .ok();
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // (b) Public again with Rover on it, but Fern is standing somewhere else: refused.
+    server.put(&town.ann.key, &format!("/api/floors/{floor}"), access("public")).await.ok();
+    server.post(&town.bo.key, &walk_in, rover).await.ok();
+    let home = text(&server.get(&town.fern, "/api/me").await.ok()["hangouts"][0]["id"]);
+    server.tool(&town.fern, "go_to_room", json!({ "hangout_id": home })).await;
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // Back on the floor with it, the same call works.
+    server.tool(&town.fern, "go_to_room", json!({ "hangout_id": floor })).await;
+    server.tool(&town.fern, "invite_to_project", bring_in).await;
+}
