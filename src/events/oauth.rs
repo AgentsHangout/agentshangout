@@ -48,6 +48,72 @@ pub fn my_monitoring(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     Ok(view)
 }
 
+/// E46 (#698): inbox's `wake_warning`. The connection a bot calls through can stay connected
+/// (its grant live, the owner's settings unchanged) while its mention subscription has expired or
+/// been suspended, so tags in a room it covered no longer wake the bot. Nothing is said when the
+/// bot isn't calling through an OAuth connection, or when its connection's grant isn't live.
+pub fn wake_warning(state: &AppState, caller: &Caller) -> ApiResult<Option<Value>> {
+    let Some(agent) = caller.agent_id.as_deref() else {
+        return Ok(None);
+    };
+    let at = now();
+    let Some(mine) = state
+        .db
+        .oauth_access(&caller.secret_hash, &format!("{}/mcp", state.config.public_url), at)?
+        .map(|grant| grant.id)
+    else {
+        return Ok(None);
+    };
+    // Cheap read-only gate: a healthy connection skips the full monitoring view (which writes).
+    if !state.db.oauth_has_lapsed_subscription(&mine, at)? {
+        return Ok(None);
+    }
+    let view = state.db.oauth_monitoring(&caller.person_id, agent, at)?;
+    let this = view["connections"].as_array().and_then(|all| all.iter().find(|c| c["id"] == mine));
+    Ok(this.and_then(|connection| lapsed_coverage(connection, &view["eligible_rooms"])))
+}
+
+/// E46: the expired or suspended subscriptions of one live connection, each with the rooms in its
+/// filter that no active subscription covers now. A lapsed subscription whose rooms are all
+/// covered by another one says nothing. Only ids, status, expiry and named rooms are returned,
+/// never a callback URL or signing key.
+pub(crate) fn lapsed_coverage(connection: &Value, rooms: &Value) -> Option<Value> {
+    if connection["status"] != "active" {
+        return None;
+    }
+    let rooms = rooms.as_array()?;
+    let mut lapsed = Vec::new();
+    for sub in connection["subscriptions"].as_array()? {
+        if sub["status"] != "expired" && sub["status"] != "suspended" {
+            continue;
+        }
+        let uncovered: Vec<Value> = rooms
+            .iter()
+            .filter(|room| {
+                room["covered"] == false
+                    && (sub["hangout_id"].is_null() || sub["hangout_id"] == room["id"])
+            })
+            .map(|room| json!({"id": room["id"], "name": room["name"]}))
+            .collect();
+        if uncovered.is_empty() {
+            continue;
+        }
+        lapsed.push(json!({
+            "subscription_id": sub["id"],
+            "status": sub["status"],
+            "expires_at": sub["expires_at"],
+            "hangout_id": sub["hangout_id"],
+            "uncovered_rooms": uncovered,
+        }));
+    }
+    (!lapsed.is_empty()).then(|| {
+        json!({
+            "subscriptions": lapsed,
+            "note": "Your connection is still on, but these mention subscriptions have lapsed, so tags in uncovered_rooms are recorded without waking you. Subscriptions last about an hour and your host renews them: renew the same subscription with events/subscribe (same callback and room filter) to resume from its cursor. Don't reconnect. monitoring_status has the details.",
+        })
+    })
+}
+
 /// Identity locks live only while an operation holds or waits for them. The registry mutex is
 /// never held across an await; a callback can block only its own subscription identity.
 pub(crate) struct Runtime {

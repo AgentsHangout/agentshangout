@@ -108,7 +108,7 @@ impl Db {
                 let reason:Option<String>=r.get(10)?;
                 let last_at:Option<i64>=r.get(11)?;
                 let status:Option<u16>=r.get(12)?;
-                Ok((r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,json!({"id":r.get::<_,String>(0)?,"hangout_id":r.get::<_,Option<String>>(5)?,"expires_at":crate::ops::iso(expires),"refreshBefore":crate::ops::iso(expires),"last_renewed_at":(renewed>0).then(||crate::ops::iso(renewed)),"cursor":r.get::<_,i64>(8)?.to_string(),"status":if expires<=at {"expired"}else if active==Some(false) {"suspended"}else{&state},"last_delivery":reason.map(|reason|json!({"reason":reason,"at":last_at.map(crate::ops::iso),"http_status":status}))})))
+                Ok((r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,json!({"id":r.get::<_,String>(0)?,"hangout_id":r.get::<_,Option<String>>(5)?,"expires_at":crate::ops::iso(expires),"refreshBefore":crate::ops::iso(expires),"last_renewed_at":(renewed>0).then(||crate::ops::iso(renewed)),"cursor":r.get::<_,i64>(8)?.to_string(),"status":if state=="stopped" {"stopped"}else if expires<=at {"expired"}else if active==Some(false) {"suspended"}else{&state},"last_delivery":reason.map(|reason|json!({"reason":reason,"at":last_at.map(crate::ops::iso),"http_status":status}))})))
             })?.collect::<Result<Vec<_>,_>>()?;
             for (grant, client, scope, expires, mut sub) in rows {
                 if !connections.iter().any(|g| g["id"] == grant) {
@@ -208,6 +208,19 @@ impl Db {
                 subscription,
             )
             .optional()
+    }
+    /// E46: a read-only check that a grant has a subscription that is expired or suspended, so the
+    /// hot inbox path only builds the full monitoring view when there may be something to warn about.
+    pub(crate) fn oauth_has_lapsed_subscription(
+        &self,
+        grant: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM oauth_event_subscriptions WHERE grant_id=?1 AND (expires_at<=?2 OR active=0))",
+            params![grant, at],
+            |r| r.get(0),
+        )
     }
     pub(crate) fn oauth_subscription_count(&self, grant: &str, at: i64) -> rusqlite::Result<i64> {
         self.conn().query_row(
@@ -488,6 +501,112 @@ mod tests {
             .contains("Secret room"));
         state.db.conn().execute("DELETE FROM agents WHERE id='bot'", []).unwrap();
         assert_eq!(state.db.oauth_health_cursor("sub").unwrap(), None);
+    }
+
+    /// A room the owner and the bot are both in, so E41 names it.
+    fn shared_room(state: &AppState, id: &str) {
+        state.db.create_hangout(id, id, &format!("invite-{id}"), "other", now()).unwrap();
+        state.db.add_member(id, "owner", now()).unwrap();
+        state.db.add_agent_to_room(id, "bot").unwrap();
+    }
+
+    /// E46: the connection's wake_warning as inbox would show it, at a given time.
+    fn wake_warning(state: &AppState, at: i64) -> Option<serde_json::Value> {
+        let view = state.db.oauth_monitoring("owner", "bot", at).unwrap();
+        let connection =
+            view["connections"].as_array().unwrap().iter().find(|c| c["id"] == "grant").cloned()?;
+        crate::events::oauth::lapsed_coverage(&connection, &view["eligible_rooms"])
+    }
+
+    /// Another subscription on the same connection, with its own room filter and expiry.
+    fn filtered(
+        state: &AppState,
+        from: &OAuthSubscription,
+        id: &str,
+        room: Option<&str>,
+        expires_at: i64,
+    ) {
+        let mut sub = from.clone();
+        sub.id = id.into();
+        sub.arguments = serde_json::json!({ "hangout_id": room }).to_string();
+        sub.expires_at = expires_at;
+        state.db.oauth_save_subscription(&sub).unwrap();
+    }
+
+    #[test]
+    fn idle_expiry_warns_and_renewing_the_same_subscription_clears_it_keeping_the_cursor() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let at = now();
+        // The grant outlives the subscription's lease, as a real connection's does.
+        state.db.conn().execute("UPDATE mcp_oauth_grants SET expires_at=?", [at + 86400]).unwrap();
+        shared_room(&state, "room");
+        assert!(wake_warning(&state, at).is_none());
+        // E46: no chat, no delivery attempt, nothing written: only time passes the lease.
+        let later = at + 301;
+        let warning = wake_warning(&state, later).expect("a lapsed lease on a live connection");
+        let lapsed = &warning["subscriptions"][0];
+        assert_eq!(lapsed["subscription_id"], "sub");
+        assert_eq!(lapsed["status"], "expired");
+        assert!(lapsed["hangout_id"].is_null());
+        assert_eq!(lapsed["uncovered_rooms"], serde_json::json!([{"id":"room","name":"room"}]));
+        assert!(!warning.to_string().contains("callback.example"));
+        assert!(!warning.to_string().contains("whsec_"));
+        // The connection itself still reads as on: the warning changes nothing.
+        let view = state.db.oauth_monitoring("owner", "bot", later).unwrap();
+        assert_eq!(view["connections"][0]["status"], "active");
+        // Renewing the same subscription ends the warning and keeps its cursor (E42).
+        let mut sub = state.db.oauth_subscription("sub").unwrap().unwrap();
+        sub.expires_at = later + 3600;
+        sub.cursor = 999;
+        state.db.oauth_save_subscription(&sub).unwrap();
+        assert!(wake_warning(&state, later).is_none());
+        assert_eq!(state.db.oauth_subscription("sub").unwrap().unwrap().cursor, 7);
+        assert_eq!(state.db.oauth_health_cursor("sub").unwrap(), Some(7));
+    }
+
+    #[test]
+    fn a_lapsed_room_filter_names_only_its_own_uncovered_rooms() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let at = now();
+        state.db.conn().execute("UPDATE mcp_oauth_grants SET expires_at=?", [at + 86400]).unwrap();
+        shared_room(&state, "a");
+        shared_room(&state, "b");
+        // The every-room subscription from setup is stopped on purpose, which is not a lapse.
+        let all = state.db.oauth_subscription("sub").unwrap().unwrap();
+        filtered(&state, &all, "sub-a", Some("a"), at + 300);
+        filtered(&state, &all, "sub-b", Some("b"), at + 3600);
+        state.db.oauth_retire_subscription(&all, "stopped").unwrap();
+        let later = at + 301;
+        let warning = wake_warning(&state, later).expect("room a lost its only subscription");
+        let lapsed = warning["subscriptions"].as_array().unwrap();
+        assert_eq!(lapsed.len(), 1);
+        assert_eq!(lapsed[0]["subscription_id"], "sub-a");
+        assert_eq!(lapsed[0]["hangout_id"], "a");
+        // Room b is covered by its own active subscription, and isn't in sub-a's filter anyway.
+        assert_eq!(lapsed[0]["uncovered_rooms"], serde_json::json!([{"id":"a","name":"a"}]));
+        // Another active subscription covering room a means nothing is left uncovered.
+        filtered(&state, &all, "sub-all", None, later + 3600);
+        assert!(wake_warning(&state, later).is_none());
+        let view = state.db.oauth_monitoring("owner", "bot", later).unwrap();
+        assert!(view["eligible_rooms"].as_array().unwrap().iter().all(|r| r["covered"] == true));
+    }
+
+    #[test]
+    fn a_stopped_or_revoked_connection_has_no_wake_warning() {
+        let state = setup(Db::open(":memory:").unwrap());
+        let at = now();
+        state.db.conn().execute("UPDATE mcp_oauth_grants SET expires_at=?", [at + 86400]).unwrap();
+        shared_room(&state, "room");
+        let sub = state.db.oauth_subscription("sub").unwrap().unwrap();
+        state.db.oauth_retire_subscription(&sub, "stopped").unwrap();
+        // Stopped by its host on purpose: still `stopped` once its old expiry has passed.
+        let view = state.db.oauth_monitoring("owner", "bot", at + 301).unwrap();
+        assert_eq!(view["connections"][0]["subscriptions"][0]["status"], "stopped");
+        assert!(wake_warning(&state, at + 301).is_none());
+        let state = setup(Db::open(":memory:").unwrap());
+        shared_room(&state, "room");
+        state.db.oauth_revoke("grant", "owner").unwrap();
+        assert!(wake_warning(&state, now() + 301).is_none());
     }
 
     #[test]

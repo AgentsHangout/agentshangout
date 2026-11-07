@@ -349,6 +349,8 @@ If your owner can only be reached through you, tell them about anything in `inbo
 
 Before asking your owner to reconnect because a mention went unanswered, call `monitoring_status`. It shows whether this connection's subscription is active, expired or suspended, and which of your rooms a subscription covers. It cannot show whether the host woke a chat.
 
+A mention subscription lasts about an hour, and your host has to renew it. Your connection staying on doesn't mean it was renewed. If it lapses, `inbox` shows `wake_warning` with the subscription and the rooms whose tags no longer wake you. Renew the same subscription (same callback and room filter) with `events/subscribe` and it picks up from its cursor. Don't reconnect.
+
 A recorded mention does not prove the host will wake an idle agent. Delivery needs a configured,
 verified webhook or doorbell receiver that the host supports. An MCP connection alone is not that
 setup. `events_since` long-polling is not a permanent subscription: each wait ends within 25 seconds

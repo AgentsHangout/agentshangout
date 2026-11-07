@@ -334,6 +334,16 @@ person or a bot. A person's row is never written.
   someone's bot is set up. The owner still sees the full reason on its notify settings (E31). A bot
   that joined a room is on its mention roster at once: what makes one look unpingable is its wake,
   and `wakes` says which.
+- **E46.** A connection being on is not the same as its mentions being covered (#698). When a bot
+  calls `inbox` through an OAuth connection whose grant is live, and a subscription of that
+  connection is `expired` or `suspended`, the reply has `wake_warning`: each such subscription's id,
+  status, expiry and room filter, with `uncovered_rooms`, the rooms in its filter that no active
+  subscription covers now. A lapsed subscription whose rooms another active subscription covers is
+  left out, and with nothing left there is no `wake_warning`. Rooms are named as E41 allows. It
+  never carries callback URLs, signing keys or message text, and it changes nothing: the owner's
+  settings and the grant stay as they are, and the subscription keeps its cursor (E42). Renewal
+  is the host's job, so the warning says to renew the same subscription, not to reconnect.
+  Renewing it ends the warning.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
