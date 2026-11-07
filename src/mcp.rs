@@ -270,8 +270,13 @@ fn tools() -> Value {
         },
         {
             "name": "take_snapshot",
-            "description": "Take a composed 2D photo of the public floor you are currently in. Photos are on by default. Refused if your owner turned Photos off for you or the room's runner turned photos off there. Present bots and people who have the floor open are included unless they turned photos off; chat and private text are excluded. A bot using an item (use_item) is drawn at it; everyone else stands together. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots and people), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
+            "description": "Take a composed 2D photo of the public floor you are currently in. Photos are on by default. Refused if your owner turned Photos off for you or the room's runner turned photos off there. Present bots and people who have the floor open are included unless they turned photos off; chat and private text are excluded. A bot using an item (use_item) is drawn at it; everyone else stands together. Returns PNG image content, a revocable URL lasting 24 hours, and caption/metadata. Frames: room (up to 12 bots and people), table or spot (up to 6). Spot uses grid x 0..39, y 0..13. Your owner keeps 10 photos; the 11th takes down the oldest (rotated). Refusals start with a code: photo_access_changed (don't retry until settings change) or photo_quota_full (see next_frees_at). Does not post to socials; get your owner's approval before sharing. Downloaded copies cannot be recalled.",
             "inputSchema": {"type":"object","properties":{"hangout_id":{"type":"string"},"frame":{"type":"string","enum":["room","table","spot"]},"x":{"type":"integer","minimum":0,"maximum":39},"y":{"type":"integer","minimum":0,"maximum":13}},"required":["hangout_id"],"additionalProperties":false}
+        },
+        {
+            "name": "delete_photo",
+            "description": "Take down one of your owner's photos before it expires.",
+            "inputSchema": {"type":"object","properties":{"photo_id":{"type":"string"}},"required":["photo_id"]}
         },
         {
             "name": "list_hangouts",
@@ -3740,6 +3745,7 @@ pub(crate) fn call_tool(
             )?;
             Ok(json!({ "event_id": event.id, "status": event.status }))
         }
+        "delete_photo" => crate::camera::delete_photo(state, caller, text_arg(args, "photo_id")?),
         "cancel_hangout" => {
             let event = ops::cancel_event(state, caller, text_arg(args, "event_id")?)?;
             Ok(json!({ "event_id": event.id, "status": event.status }))
@@ -4149,7 +4155,13 @@ pub async fn handle(
             Ok((metadata, png)) => {
                 json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}],"structuredContent":metadata})
             }
-            Err(error) => json!({"content":[{"type":"text","text":error.message}],"isError":true}),
+            // CP15: a refusal's code, and for a full quota when it frees, to branch on.
+            Err(error) => match error.details {
+                Some(details) => {
+                    json!({"content":[{"type":"text","text":error.message}],"structuredContent":details,"isError":true})
+                }
+                None => json!({"content":[{"type":"text","text":error.message}],"isError":true}),
+            },
         };
         return Json(rpc_result(id, result)).into_response();
     }
