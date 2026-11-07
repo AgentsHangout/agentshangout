@@ -35,6 +35,10 @@ const SLAB = 22; // how thick the island's edge is
 const WATER_Z = -5; // water sits a little below the land
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 3;
+// W117: how often a map that's only idling draws, in milliseconds, while its window is in use and
+// while it isn't, so a video in another window keeps the graphics it needs.
+const IDLE_FRAME_MS = 1000 / 30;
+const AWAY_FRAME_MS = 1000 / 8;
 const ZOOM_STEPS = [0.5, 0.65, 0.8, 1, 1.25, 1.5, 2, 2.5, 3];
 
 const LAND = { g: 0, f: 1, w: 2, s: 3, h: 4 };
@@ -4554,6 +4558,8 @@ export class World {
     this.destroyed = true;
     clearTimeout(this.pressTimer);
     clearInterval(this.clock);
+    clearTimeout(this.waiting);
+    this.waiting = 0;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
     if (this.mq && this.mq.removeEventListener) this.mq.removeEventListener('change', this.onMq);
@@ -6129,10 +6135,27 @@ export class World {
     return !this.calm && !document.hidden && this.inView && this.ready;
   }
 
+  // W117: a pan, a glide, a zoom, a camera move or following someone, which draw every frame the screen shows.
+  steering() {
+    const cam = this.cam;
+    return Boolean(this.panning || this.pinch || this.following || cam.move || cam.anchor || cam.vx || cam.vy || Math.abs(cam.tz - cam.zoom) > 0.002);
+  }
+
   schedule() {
     if (this.raf || this.destroyed || !this.ready || !this.cssW) return;
     if (!this.live() && !this.dirty) return;
     if (document.hidden) return;
+    // W117: a map that's only idling waits out its frame gap first. A change or a steer draws now.
+    if (!this.dirty && !this.pendingWork && !this.steering() && this.drawnAt) {
+      const gap = document.hasFocus && !document.hasFocus() ? AWAY_FRAME_MS : IDLE_FRAME_MS;
+      const wait = gap - (performance.now() - this.drawnAt);
+      if (wait > 4) {
+        if (!this.waiting) this.waiting = setTimeout(() => { this.waiting = 0; this.schedule(); }, wait);
+        return;
+      }
+    }
+    clearTimeout(this.waiting);
+    this.waiting = 0;
     this.raf = requestAnimationFrame(this.tick);
   }
 
@@ -6140,6 +6163,7 @@ export class World {
     this.raf = 0;
     if (this.destroyed) return;
     const t0 = performance.now();
+    this.drawnAt = t0;
     let dt = this.last ? Math.min(0.1, (now - this.last) / 1000) : 0;
     this.last = now;
     if (this.calm) dt = 0;
