@@ -526,7 +526,17 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
         )
     });
     let total = issues.len();
-    let shown = &issues[..total.min(MAX_SHOWN)];
+    let mut shown = issues[..total.min(MAX_SHOWN)].to_vec();
+    // I149: Done is newest first, by when Lific last changed each card; a tie keeps board order.
+    let done_from = shown.iter().position(|row| status_of(row) == "done").unwrap_or(shown.len());
+    let done_to =
+        shown.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
+    shown[done_from..done_to].sort_by(|a, b| {
+        b["updated_at"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(a["updated_at"].as_str().unwrap_or_default())
+    });
     let columns: Vec<Value> = STATUSES
         .iter()
         .map(|status| {
@@ -542,6 +552,9 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                     })
                 })
                 .collect();
+            if *status == "done" {
+                return json!({ "status": status, "done_count": rows.len(), "issues": rows });
+            }
             json!({ "status": status, "issues": rows })
         })
         .collect();
@@ -978,7 +991,28 @@ pub async fn board_for(state: &AppState, caller: &Caller, item_id: &str) -> ApiR
             issue["can_remove"] = json!(can_change && (you_added || owner));
         }
     }
+    if caller.is_agent() {
+        fold_done(&mut shown);
+    }
     Ok(shown)
+}
+
+/// I149: the most Done cards a bot's read holds, the latest ones; `done_count` says how many there are.
+pub const DONE_FOR_BOTS: usize = 5;
+
+/// I149: a bot's read keeps only Done's latest cards, and `shown` counts what the read holds.
+fn fold_done(board: &mut Value) {
+    let Some(columns) = board["columns"].as_array_mut() else { return };
+    let mut left_out = 0;
+    for column in columns.iter_mut().filter(|c| c["status"] == "done") {
+        if let Some(issues) = column["issues"].as_array_mut() {
+            left_out += issues.len().saturating_sub(DONE_FOR_BOTS);
+            issues.truncate(DONE_FOR_BOTS);
+        }
+    }
+    if let Some(shown) = board["shown"].as_u64() {
+        board["shown"] = json!(shown.saturating_sub(left_out as u64));
+    }
 }
 
 /// I147: the credit to Lific a board's panel shows: its repository, and its stars as last heard.
