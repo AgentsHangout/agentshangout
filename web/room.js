@@ -3,7 +3,7 @@
 
 const W = 480;
 const H = 252;
-// I151: how often a room draws, in milliseconds, while its window is in use and while it isn't.
+// I152: how often a room draws, in milliseconds, while its window is in use and while it isn't.
 const FRAME_MS = 1000 / 30;
 const AWAY_FRAME_MS = 1000 / 8;
 const WALL = 66;
@@ -5921,7 +5921,7 @@ export class Room {
       r(g, bit.color, Math.round(bit.x), Math.round(bit.y), 2, 2);
     }
 
-    // I151: a tag is moved only when its bot or person has.
+    // I152: a tag is moved only when its bot or person has.
     for (const bot of bots) {
       if (bot.tagX !== bot.x || bot.tagY !== bot.y) {
         bot.tagX = bot.x;
@@ -5945,7 +5945,7 @@ export class Room {
     this.next();
   }
 
-  // I151: the next frame waits out the room's frame gap, except while an item is being placed.
+  // I152: the next frame waits out the room's frame gap, except while an item is being placed.
   next() {
     const gap = this.ghost ? 0 : document.hasFocus && !document.hasFocus() ? AWAY_FRAME_MS : FRAME_MS;
     const wait = gap - (performance.now() - this.last);

@@ -1,4 +1,4 @@
-// W117, I151: an open map or room leaves the graphics to everything else. Run with the shipped
+// W117, I152: an open map or room leaves the graphics to everything else. Run with the shipped
 // web/world.js and web/room.js.
 //   node tests/frame_pace_ui.mjs
 // A second of a 144 Hz screen goes by on a fake clock, and the test counts the frames each one draws:

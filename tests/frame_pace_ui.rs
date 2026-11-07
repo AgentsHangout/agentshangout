@@ -1,4 +1,4 @@
-//! W117, I151: an open map or room leaves the graphics to everything else, run from
+//! W117, I152: an open map or room leaves the graphics to everything else, run from
 //! tests/frame_pace_ui.mjs against the shipped web/world.js and web/room.js.
 #[test]
 fn an_idle_map_and_room_cap_their_frames() {
