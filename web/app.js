@@ -1717,7 +1717,7 @@ const REQUIREMENTS = [
     hint: 'From people in the city.',
   },
 ];
-const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+const sentence = (text) => (typeof text === 'string' && text.length > 0 ? text.charAt(0).toUpperCase() + text.slice(1) : (text ? String(text) : ''));
 // CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name.
 let carNames = {};
 async function loadCarNames() {
@@ -5414,10 +5414,11 @@ async function roomView(id) {
     const thought = liveThinking(agent.thinking);
     return agent.activity
       ? doingText(agent.activity)
-      : using ? sentence(using.does)
-        : thought?.phase === 'thinking' ? 'Thinking'
-          : thought?.phase === 'waiting' ? 'Heard a mention'
-            : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+      : using?.does ? sentence(using.does)
+        : using ? (using.kind ? `Using ${using.kind.replaceAll('_', ' ')}` : 'Using it')
+          : thought?.phase === 'thinking' ? 'Thinking'
+            : thought?.phase === 'waiting' ? 'Heard a mention'
+              : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
   }
 
   function renderCrew() {
@@ -8593,7 +8594,7 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
 
   const updatePlacement = (currentTool) => {
     if (currentTool && frame.root.classList.contains('apple-hig')) {
-      const toolName = currentTool === 'research_lab' ? 'research lab' : currentTool.charAt(0).toUpperCase() + currentTool.slice(1);
+      const toolName = currentTool === 'research_lab' ? 'research lab' : sentence(currentTool);
       placementBanner.querySelector('.apple-tool-msg').textContent = `Tap tile to place ${toolName}`;
       placementBanner.hidden = false;
     } else {

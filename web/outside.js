@@ -58,7 +58,7 @@ const P = (u, v) => [u - v, (u + v) / 2];
 const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const clone = (doc) => JSON.parse(JSON.stringify(doc || {}));
-const wordName = (word) => String(word).charAt(0).toUpperCase() + String(word).slice(1).replaceAll('_', ' ');
+const wordName = (word) => (!word ? '' : String(word).charAt(0).toUpperCase() + String(word).slice(1).replaceAll('_', ' '));
 const hexText = (value) => `#${value.toString(16).padStart(6, '0')}`;
 const colorName = (value) => SWATCH_NAMES.get(value) || hexText(value);
 const isWhole = (value) => Number.isInteger(value);
