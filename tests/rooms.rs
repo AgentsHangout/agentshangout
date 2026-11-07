@@ -4113,7 +4113,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 24);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 26);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.

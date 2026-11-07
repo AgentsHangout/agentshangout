@@ -4477,6 +4477,8 @@ function paintPlaying(g, bot, t) {
 const USES = {
   piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
+  arcade_cabinet: { spots: 1, pose: 'stand', hands: true },
+  billiards: { spots: 2, pose: 'stand', hands: true },
   easel: { spots: 1, pose: 'stand', hands: true },
   microscope: { spots: 1, pose: 'stand', hands: true },
   fume_hood: { spots: 1, pose: 'stand', hands: true },

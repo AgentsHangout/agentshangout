@@ -4765,3 +4765,47 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     let err = games::play(&server.state, &caller, "stool-1").unwrap_err();
     assert_eq!(err.status, StatusCode::BAD_REQUEST);
 }
+
+// GM2 (#727, seat 2): a bot plays a game with use_item. The server rolls and records the play, and
+// the game shows as usable in read_room, so the bot can find it.
+#[tokio::test]
+async fn a_bot_plays_a_game_by_using_it() {
+    use agenthangout::{auth::hash_secret, items};
+    let server = Server::start().await;
+    let (_, ann) = server.someone("Ann").await;
+    let arcade = text(&server.third_space(&ann, "Arcade").await.ok()["hangout"]["id"]);
+    server.open(&ann, &arcade).await;
+    let (_, token) = server.bot(&ann, &arcade, "Scout").await;
+    let caller = server.state.authenticate(&hash_secret(&token)).unwrap().unwrap();
+    let now = agenthangout::now();
+    let put = |id: &str, kind: &str, x: i64, y: i64| {
+        server
+            .state
+            .db
+            .place_item::<()>(
+                &agenthangout::db::NewFloorItem {
+                    id,
+                    hangout_id: &arcade,
+                    kind,
+                    x,
+                    y,
+                    facing: 0,
+                    placed_by: &ann.id,
+                    now,
+                },
+                |_, _, _| Ok(()),
+            )
+            .unwrap()
+            .unwrap()
+    };
+    put("cabinet-2", "arcade_cabinet", 10, 6);
+    put("table-2", "billiards", 20, 8);
+
+    let played = items::use_item(&server.state, &caller, "cabinet-2").unwrap();
+    assert_eq!(played["kind"], "arcade_cabinet", "{played}");
+    assert!((0..=1000).contains(&played["score"].as_i64().unwrap()), "{played}");
+    assert_eq!(played["remaining"], 5, "{played}");
+    let table = items::use_item(&server.state, &caller, "table-2").unwrap();
+    assert_eq!(table["kind"], "billiards", "{table}");
+    assert!((0..=15).contains(&table["score"].as_i64().unwrap()), "{table}");
+}
