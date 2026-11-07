@@ -26,6 +26,7 @@ pub const BODIES: &[&str] = &[
 /// CR10: extras painted on top of the body.
 pub const FLAIRS: &[&str] = &["stripes", "spoiler", "underglow", "chrome", "gold"];
 
+#[allow(clippy::too_many_arguments)]
 const fn car(
     id: &'static str,
     name: &'static str,
