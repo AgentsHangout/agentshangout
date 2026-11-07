@@ -651,13 +651,28 @@ input::placeholder { color: #8b7a5e; }
 /* JB6: a job's write-up in Needs you keeps its lines. */
 .job-writeup { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* V12: open votes over the chat, and every vote in the Votes panel. */
-.vote-cards { display: grid; gap: 6px; }
+/* V12: open votes over the chat (#777 compact banner), and every vote in the Votes panel. */
+.vote-cards { flex: 0 0 auto; display: grid; gap: 6px; max-height: min(44%, 220px); overflow-y: auto; overscroll-behavior-y: contain; }
 .vote-cards:empty { display: none; }
 .vote-card { display: grid; gap: 4px; }
-.vote-card.open { border-left: 3px solid var(--accent); }
+.vote-card.open, .game-panel .vote-card.open { border-left: 3px solid var(--accent); }
+.game-panel .vote-card.vote-banner { padding: 6px 10px; background: var(--panel-2); border-radius: 6px; gap: 6px; }
+.vote-banner-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.vote-banner-summary { min-width: 0; flex: 1 1 auto; display: grid; gap: 2px; }
+.vote-banner-summary > * { overflow-wrap: anywhere; }
+.vote-banner.collapsed .vote-banner-summary > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vote-toggle { flex: none; white-space: nowrap; padding: 4px 10px; min-height: 32px; font-size: 12px; }
+.vote-banner-body { display: grid; gap: 4px; max-height: min(24dvh, 140px); overflow-y: auto; overscroll-behavior-y: contain; padding-right: 2px; }
+.vote-banner-body[hidden] { display: none !important; }
 .vote-options { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.vote-options li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.vote-options li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.vote-options button, .vote-options strong, .vote-options small { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+@media (max-height: 600px) {
+  .vote-banner-body { max-height: 76px; }
+}
+@media (max-width: 759px), (pointer: coarse) {
+  .vote-toggle { min-height: 36px; }
+}
 
 .crew-row { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 .crew-main { min-width: 0; flex: 1 1 auto; display: grid; gap: 1px; }
@@ -1849,7 +1864,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
    the sheet leaves the room in view above it, and takes the whole well once someone is typing. */
 .wd-game > .game-panel-room { height: calc(100% - 24px); }
 .game-panel-room .game-panel-body { flex: 1; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.game-panel-room .chat-log { flex: 1; min-height: 0; }
+.game-panel-room .chat-log { flex: 1 1 48px; min-height: 44px; }
+.game-panel-room .chat-form { flex: 0 0 auto; }
 .game-panel .mention-list { max-height: min(320px, 50vh); }
 @media (max-width: 759px) {
   .wd-game > .game-panel-room { height: max(55%, calc(100% - 52.5vw - 18px)); }
@@ -2916,7 +2932,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .apple-hig .apple-placement-banner[hidden],
 .apple-hig .sheet-scrim[hidden],
 .apple-hig > .game-panel[hidden],
-.apple-hig .apple-build-sheet[hidden] {
+.apple-hig .apple-build-sheet[hidden],
+.apple-hig:has(> .game-panel:not([hidden])) .apple-fab-hud {
   display: none !important;
 }
 

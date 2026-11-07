@@ -72,5 +72,56 @@ const vote = {
   assert.ok(!text(hidden).includes('Scout'));
   const readOnly = context.voteCard(vote, {});
   assert.equal(all(readOnly).filter((n) => n.tag === 'button').length, 0);
-  console.log('Vote card: question, status, buttons, who voted, Close (run, not just read).');
+
+  // V12 (#777): above chat, an open vote defaults to a compact expandable banner so long options
+  // and voter lists never crowd out the messages or composer.
+  const longOption = 'Keep the compact poll summary banner above chat and scroll long ballots inside';
+  const manyVoters = Array.from({ length: 18 }, (_, i) => ({ bot: `Bot ${i + 1}`, owner: `Owner ${i + 1}` }));
+  const longVote = {
+    ...vote,
+    id: 'v-long',
+    question: 'How should a long room poll with many options and voters sit above the chat on a small phone screen?',
+    options: [
+      { option: longOption, votes: manyVoters.length, voters: manyVoters },
+      { option: 'Pizza', votes: 1, voters: [{ person: 'Ann' }] },
+    ],
+  };
+  const toggled = [];
+  const banner = context.voteCard(longVote, {
+    cast: async (option) => { cast.push(option); },
+    close: async () => { closed += 1; },
+    collapsible: true,
+    onToggle: (openState) => { toggled.push(openState); },
+  });
+  assert.ok(banner.props.class.includes('vote-banner') && banner.props.class.includes('collapsed'), banner.props.class);
+  const body = all(banner).find((n) => (n.props.class || '').includes('vote-banner-body'));
+  assert.ok(body && body.hidden === true, 'poll details start collapsed');
+  const toggle = all(banner).find((n) => n.tag === 'button' && (n.props.class || '').includes('vote-toggle'));
+  assert.ok(toggle, 'explicit expand control');
+  assert.equal(text(toggle), 'Show poll');
+  assert.equal(toggle.props['aria-expanded'], 'false');
+
+  toggle.props.onclick();
+  assert.deepEqual(toggled, [true]);
+  assert.equal(body.hidden, false, 'expanding shows the options and voter list');
+  assert.ok(banner.props.class.includes('expanded') && !banner.props.class.includes('collapsed'), banner.props.class);
+  assert.equal(text(toggle), 'Hide poll');
+  assert.equal(toggle.props['aria-expanded'], 'true');
+  assert.ok(text(body).includes(longOption) && text(body).includes("Bot 18 (Owner 18's bot)"), 'long options and voter list are inside the expandable body');
+  const longBtn = all(body).find((n) => n.tag === 'button' && text(n) === longOption);
+  await longBtn.props.onclick();
+  assert.equal(cast.at(-1), longOption, 'voting works from the expanded banner');
+  await all(body).find((n) => n.tag === 'button' && text(n) === 'Close it now').props.onclick();
+  assert.equal(closed, 2, 'closing works from the expanded banner');
+
+  toggle.props.onclick();
+  assert.deepEqual(toggled, [true, false]);
+  assert.equal(body.hidden, true, 'collapsing hides the ballot again');
+  assert.equal(text(toggle), 'Show poll');
+  assert.equal(toggle.props['aria-expanded'], 'false');
+
+  const css = fs.readFileSync('web/style.css', 'utf8');
+  assert.match(css, /\.vote-banner-body\s*\{[^}]*max-height:/, 'expanded poll body has bounded height');
+  assert.match(css, /\.vote-banner-body\s*\{[^}]*overflow-y:\s*auto/, 'expanded poll body scrolls independently');
+  console.log('Vote card: question, status, buttons, who voted, Close, and compact expandable banner (#777).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
