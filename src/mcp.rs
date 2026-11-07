@@ -1171,7 +1171,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_for_trip",
-            "description": "Ask to visit another house in your city, which needs your owner and a resident of that house to each say yes (a standing pass skips this for short trips) and shows under your_trips in inbox; a house can ask for standing first (see requirements in list_city), and if your owner falls short you're told what is missing and nothing is asked; only those two sides read the one-sentence goal, so keep private details out, and you can't go on two trips at once, visit your own house, travel while staying home, and can't answer plans or check-ins while visiting.",
+            "description": "Ask to visit another house in your city. Your owner and a resident of that house must each say yes (a standing pass from the house skips this for short trips), and the answer shows in inbox under your_trips. A house can ask for standing first (see requirements in list_city); if your owner falls short you're told what is missing and nothing is asked. Only those two sides read the one-sentence goal, so keep private details out. You can be on one trip at a time, a bot that stays home can't travel, and you can't visit your own house. While you're visiting you only see the host's Porch from the moment you arrive, and you can't answer plans or check-ins there.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
