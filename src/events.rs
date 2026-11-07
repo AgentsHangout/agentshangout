@@ -336,6 +336,18 @@ pub fn note_message(state: &AppState, message: &Message) {
         if message.agent_id.as_deref() == Some(bot.id.as_str()) {
             continue;
         }
+        // KA11: message subscriptions must not bypass mention caps or the owner's opt-out.
+        // Unaddressed lines remain available when a bot deliberately reads the room.
+        if keyless && !state.db.keyless_reached(message.id, &bot.id).unwrap_or(false) {
+            continue;
+        }
+        // A101: nothing from someone this bot's person blocked.
+        let blocked = message.person_id.as_deref().is_some_and(|speaker| {
+            state.db.blocked_ids(&bot.owner_id).is_ok_and(|ids| ids.contains(speaker))
+        });
+        if blocked {
+            continue;
+        }
         let from_owner = message.agent_id.is_none()
             && message.person_id.as_deref() == Some(bot.owner_id.as_str());
         let mut shared = json!({
@@ -414,6 +426,7 @@ pub fn note_message(state: &AppState, message: &Message) {
                             "kind": root.kind,
                             "body": root.body,
                             "is_bot": root.agent_id.is_some(),
+                            "keyless": state.db.is_keyless_message(root.id).unwrap_or(true),
                         });
                     }
                 }
@@ -454,6 +467,17 @@ const MENTION_CONTEXT: i64 = 3;
 /// #354, E5: the few messages just before a mention, so a bot can often answer from the event
 /// alone. Its own lines aren't in it (E4), and a guest sees only what was said after it walked
 /// in, as `read_room` shows it (S19).
+/// A101: whose lines this bot's person blocked, for the context a mention carries.
+fn hidden_for_bot(state: &AppState, agent_id: &str) -> std::collections::HashSet<String> {
+    state
+        .db
+        .agent(agent_id, now())
+        .ok()
+        .flatten()
+        .and_then(|bot| state.db.blocked_ids(&bot.owner_id).ok())
+        .unwrap_or_default()
+}
+
 fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<Value> {
     // If it can't be told whether the bot is a guest, it gets no context rather than history it
     // might not be allowed to read.
@@ -461,11 +485,13 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
         return Vec::new();
     };
     let since = visit.map(|visit| visit.since);
+    let hide = hidden_for_bot(state, agent_id);
     state
         .db
         .messages_before(&message.hangout_id, message.id, agent_id, since, MENTION_CONTEXT)
         .unwrap_or_default()
         .into_iter()
+        .filter(|earlier| !crate::blocks::hides(&hide, earlier))
         .map(|earlier| {
             json!({
                 "message_id": earlier.id,
@@ -473,6 +499,7 @@ fn mention_context(state: &AppState, message: &Message, agent_id: &str) -> Vec<V
                 "kind": earlier.kind,
                 "body": earlier.body,
                 "is_bot": earlier.agent_id.is_some(),
+                "keyless": state.db.is_keyless_message(earlier.id).unwrap_or(true),
             })
         })
         .collect()
@@ -493,11 +520,13 @@ fn thread_mention_context(
         return Vec::new();
     };
     let since = visit.map(|visit| visit.since);
+    let hide = hidden_for_bot(state, agent_id);
     state
         .db
         .thread_messages_before(root_id, message.id, after, agent_id, since, THREAD_MENTION_CONTEXT)
         .unwrap_or_default()
         .into_iter()
+        .filter(|earlier| !crate::blocks::hides(&hide, earlier))
         .map(|earlier| {
             let mut line = json!({
                 "message_id": earlier.id,
@@ -505,6 +534,7 @@ fn thread_mention_context(
                 "kind": earlier.kind,
                 "body": earlier.body,
                 "is_bot": earlier.agent_id.is_some(),
+                "keyless": state.db.is_keyless_message(earlier.id).unwrap_or(true),
             });
             if let Some(to) = earlier.reply_to {
                 line["reply_to"] = json!(to);
@@ -706,6 +736,10 @@ pub fn note_meetup(
 
 pub fn note_trip(state: &AppState, trip: &Trip) {
     if !matches!(trip.status.as_str(), "here" | "declined" | "ended" | "expired" | "over") {
+        return;
+    }
+    // A103: a resident's ask made across a block is never news to the bot.
+    if crate::blocks::quiet(state, "trip_from_house", &trip.id).unwrap_or(true) {
         return;
     }
     record(

@@ -234,6 +234,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
             Apps {
                 discord: None,

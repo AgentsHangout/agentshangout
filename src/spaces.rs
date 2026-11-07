@@ -1183,6 +1183,7 @@ async fn change_floor(
     Path(id): Path<String>,
     Json(body): Json<ChangeFloor>,
 ) -> ApiResult<Json<Floor>> {
+    let _guard = state.keyless_actions.lock().unwrap_or_else(|e| e.into_inner());
     let (space, floor) = run_floor(&state, &caller, &id, "change it")?;
     let name =
         body.name.as_deref().map(|name| ops::clean(name, "name", MAX_NAME_CHARS)).transpose()?;

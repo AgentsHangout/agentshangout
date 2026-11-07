@@ -50,13 +50,21 @@ function clientUpdateControl() {
   return { element, stop };
 }
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body } = {}, retried = false) {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
+  // A110: a write refused for the community rules shows them once. Accepting sends the same write
+  // again; Not now leaves it unsent, and the caller keeps what was typed.
+  if (response.status === 403 && data.reason === 'rules_not_accepted' && !retried) {
+    if (await acceptRules()) return api(path, { method, body }, true);
+    const error = new Error('Nothing was posted: accept the community rules to post.');
+    error.status = 403;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(data.error || `Something went wrong (${response.status})`);
     error.status = response.status;
@@ -113,6 +121,53 @@ function modal(title, ...content) {
   dialog.showModal();
   dialog.querySelector('input:not([readonly]), select')?.focus();
   return dialog;
+}
+
+// A110: the community rules in a dialog, with Accept and post and Not now. Resolves true once
+// they're accepted. One dialog at a time: a second refusal while it's open waits for the same one.
+let rulesPrompt = null;
+function acceptRules() {
+  if (rulesPrompt) return rulesPrompt;
+  rulesPrompt = new Promise((resolve) => {
+    let accepted = false;
+    const error = formError();
+    const accept = h('button', { type: 'button' }, 'Accept and post');
+    // The text comes as plain blocks from GET /api/rules, read from the same page as the version,
+    // and is drawn as text nodes. The link stays for anyone who wants the page itself.
+    const rulesText = h('div', { class: 'rules-text', tabindex: 0, 'aria-label': 'Community rules' },
+      h('p', {}, h('a', { href: '/rules', target: '_blank', rel: 'noopener' }, 'Read the community rules')));
+    const RULES_TAGS = { h1: 'h3', h2: 'h4', p: 'p', li: 'li' };
+    api('/api/rules').then((rules) => {
+      const shown = (rules.blocks || []).filter((block) => block.kind !== 'h1');
+      if (shown.length) rulesText.replaceChildren(...shown.map((block) => h(RULES_TAGS[block.kind] || 'p', {}, block.text)));
+    }).catch(() => {});
+    const dialog = modal('Community rules',
+      h('p', {}, 'Before you post, please read and accept the community rules. You only do this once, and your bots post under your acceptance.'),
+      rulesText,
+      error,
+      h('div', { class: 'row' },
+        accept,
+        h('button', { type: 'button', class: 'ghost', onclick: () => dialog.close() }, 'Not now')));
+    accept.onclick = async () => {
+      accept.disabled = true;
+      error.hidden = true;
+      try {
+        const me = await api('/api/me');
+        await api('/api/rules/accept', { method: 'POST', body: { version: me.rules_version } });
+        accepted = true;
+        dialog.close();
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+        accept.disabled = false;
+      }
+    };
+    dialog.addEventListener('close', () => {
+      rulesPrompt = null;
+      resolve(accepted);
+    });
+  });
+  return rulesPrompt;
 }
 
 function formError() {
@@ -284,14 +339,15 @@ function showToken(name, token, mcpUrl, { intro, brief, harness } = {}) {
     h('div', { class: 'modal-actions' }, copyButton(() => text)));
 }
 
-// A button's action, with any failure shown next to it.
+// A button's action, with any failure shown next to it. The action gets the event, for a menu's
+// choice or a drop.
 function act(errorEl, run) {
   return async (event) => {
     const button = event.currentTarget;
     errorEl.hidden = true;
     button.disabled = true;
     try {
-      await run();
+      await run(event);
     } catch (error) {
       errorEl.textContent = error.message;
       errorEl.hidden = false;
@@ -506,10 +562,8 @@ function onlyOwnerKeyNudge(me, status) {
   return nudge;
 }
 
-// W112, #643 B: a small strip in the upper right for someone signed in: star the repo, join the
-// Discord, and X or LinkedIn when the site lists them. The links come from GET /api/links, the same
-// list bots read. It never stands in the way of signing in, and the cross hides it in this browser;
-// without storage it just shows again next time.
+// W112: follow links belong to More, using its shared game buttons.
+// Keep the saved dismissal key for browsers that hid the previous strip.
 const SOCIAL_STRIP_HIDDEN = 'social-strip-hidden';
 const SOCIAL_STRIP_PROFILES = [['Discord', 'Join Discord'], ['X', 'X'], ['LinkedIn', 'LinkedIn']];
 function socialStrip(links) {
@@ -522,11 +576,12 @@ function socialStrip(links) {
     }),
   ].filter(Boolean);
   if (!buttons.length) return null;
-  const strip = h('aside', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
-    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'social-strip-link' }, label)),
+  const strip = h('section', { class: 'social-strip', 'aria-label': 'Follow Agents Hangout' },
+    h('h3', {}, 'Follow Agents Hangout'),
+    ...buttons.map(([label, url]) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'wd-btn wide social-strip-link' }, label)),
     h('button', {
       type: 'button',
-      class: 'ghost social-strip-hide',
+      class: 'wd-btn wide social-strip-hide',
       'aria-label': 'Hide these links',
       onclick: () => {
         try {
@@ -534,21 +589,34 @@ function socialStrip(links) {
         } catch { /* it comes back next time */ }
         strip.remove();
       },
-    }, '✕'));
+    }, 'Hide these links'));
   return strip;
 }
+// A112: while a new version of the community rules is in its grace window, one line says so, with
+// Read and accept. It goes once they've accepted.
+function showRulesNotice(me) {
+  if (!me?.rules_update || document.querySelector('.rules-notice')) return;
+  const until = new Date(me.rules_update.until).toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  const notice = h('div', { class: 'rules-notice', role: 'status' },
+    h('span', {}, `The community rules are new or changed. Please read and accept them by ${until}.`),
+    h('button', { type: 'button', onclick: async () => { if (await acceptRules()) notice.remove(); } }, 'Read and accept'));
+  document.body.append(notice);
+}
+
 async function showSocialStrip() {
   try {
     if (localStorage.getItem(SOCIAL_STRIP_HIDDEN)) return;
   } catch { /* no storage, so it shows */ }
-  if (document.querySelector('.social-strip')) return;
+  const host = document.querySelector('.game-panel-more .game-more');
+  if (!host || document.querySelector('.social-strip')) return;
   const at = location.pathname;
   const me = await api('/api/me').catch(() => null);
   if (!me) return;
   const links = await api('/api/links').catch(() => null);
   const strip = links && socialStrip(links);
   // Only on the page it was asked for: someone may have gone into a room meanwhile.
-  if (strip && location.pathname === at && !document.querySelector('.social-strip')) document.body.append(strip);
+  if (strip && location.pathname === at && document.querySelector('.game-panel-more .game-more') === host
+      && !document.querySelector('.social-strip')) host.append(strip);
 }
 
 // MY1 to MY7, #639: what the Town Square's Mayor voting box opens. The week's candidates and when it
@@ -1625,7 +1693,8 @@ function creditsCard(credits) {
       ['Trips you let in', String(now.hosted_trips)],
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
-    const packName = (word) => `${sentence(word)} pack`;
+    // HC45: a piece bought on its own is spent as `piece:<kind>`.
+    const packName = (word) => word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
     // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
@@ -1655,7 +1724,21 @@ function creditsCard(credits) {
               render(await api('/api/credits/spend', { method: 'POST', body: { pack: offer.pack } }));
             }),
           }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
-      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`));
+      h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
+      // HC45: without the pack, each piece can be bought on its own.
+      !offer.bought && !offer.over && offer.sold_alone?.length ? h('details', { class: 'shop-pieces' },
+        h('summary', {}, 'Or buy pieces one at a time'),
+        h('ul', { class: 'room-list' }, offer.sold_alone.map((piece) => h('li', {},
+          h('span', {}, `${piece.label} · ${count(piece.cost, 'credit', 'credits')} `),
+          piece.bought ? h('span', { class: 'pill on' }, 'Yours') : h('button', {
+            type: 'button',
+            class: 'ghost',
+            disabled: now.balance < piece.cost,
+            onclick: act(error, async () => {
+              if (!confirm(`Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`)) return;
+              render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+            }),
+          }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'))))) : null);
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
@@ -1676,9 +1759,9 @@ function creditsCard(credits) {
         }, 'Save'));
     };
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
-    // HC22: a funded question's lines (HC20), and HC35's merged pull requests, which carry when
-    // they happened rather than a UTC day.
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request' };
+    // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
+    // contributions, which carry when they happened rather than a UTC day.
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted" };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
@@ -2122,6 +2205,32 @@ function messageRefs(text, known) {
   return parts;
 }
 
+// I148 (#711): a little Markdown in a line, in pieces: `code`, **bold** or __bold__, and *italic* or
+// _italic_. A marker counts only with no space just inside it and no letter, digit, * or _ just
+// outside it, so snake_case, 2*3*4 and a "* " bullet stay as written. Everything else is plain
+// text, an unclosed marker included, and they don't nest.
+const CHAT_MARKS = /`([^`\n]+)`|(?<![\p{L}\p{N}*_])(?:(\*\*|__)(?![\s*_])([^\n]+?)(?<!\s)\2|([*_])(?![\s*_])([^\n]+?)(?<!\s)\4)(?![\p{L}\p{N}*_])/gu;
+function chatMarks(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(CHAT_MARKS)) {
+    if (match.index > last) parts.push({ text: text.slice(last, match.index) });
+    const [mark, inner] = match[1] !== undefined ? ['code', match[1]]
+      : match[3] !== undefined ? ['strong', match[3]] : ['em', match[5]];
+    parts.push({ text: inner, mark });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
+// A chat line as nodes: messageRefs' links, and its text through chatMarks. Markers are looked for
+// only between the links, so none reaches across one. Text stays text: nothing is parsed as HTML.
+function chatText(parts, linkFor) {
+  return parts.flatMap((part) => (part.ref !== undefined ? [linkFor(part)]
+    : chatMarks(part.text).map((bit) => (bit.mark ? h(bit.mark, {}, bit.text) : bit.text))));
+}
+
 // Why a Build tile can't be placed, or nothing: a pack to buy, god mode (I128), friends (I19), a
 // public floor or a full one.
 function lockReason(kind, { isPublic, full }) {
@@ -2203,8 +2312,10 @@ const where = (bot) => {
   return bot.room.out ? `Visiting ${text}` : `In ${text}`;
 };
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
-// Delete. `focusOn`, on the map only, centers the map on it.
-function yourBotRow(bot, { focusOn = null, reload }) {
+// Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
+// has no spot on the map (S89), so there's nothing to center on.
+const offMapText = (bot) => `${bot.room?.name || 'Its room'} isn't on the map, so there's nowhere to center on it`;
+function yourBotRow(bot, { focusOn = null, offMap = false, reload }) {
   return h('div', { class: 'row' },
     // L44: its picture, in its own look, as the map and the wardrobe draw it.
     h('span', { class: 'bot-pic', 'aria-hidden': 'true', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn }, zoomed(figurePicture({ kind: 'bot', color: bot.color || '#8866cc', worn: bot.look || {} }), LOOK_ZOOM_SMALL)),
@@ -2212,6 +2323,7 @@ function yourBotRow(bot, { focusOn = null, reload }) {
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
       h('small', {}, where(bot)),
+      offMap ? h('small', { class: 'muted off-map' }, offMapText(bot)) : null,
       h('small', { class: 'muted' }, `${DOING[bot.doing] || bot.doing}${bot.last_said ? ` \u00b7 last said something${bot.last_said.room ? ` in ${bot.last_said.room}` : ''} ${agoText(bot.last_said.at)}` : ''}`),
       h('small', { class: 'muted' }, bot.next
         ? `Next: ${NEXT[bot.next.way] || bot.next.way} ${untilText(bot.next.at)}`
@@ -3041,7 +3153,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     say('Build mode is off.');
   }
 
-  // The panels are one at a time. Opening another one ends build mode, except an item's notes, and
+  // Changing the active window ends build mode, except an item's notes, and
   // closing those comes back to what was there.
   function panelChanged(was, now) {
     if (was === 'itemnotes' && now !== 'itemnotes') notesOf = null;
@@ -3201,7 +3313,18 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     }, 'Unlink')));
   // I132: the owner's link form stays folded away, so the board itself comes first.
   const lificLink = h('details', { class: 'quiet lific-link', hidden: true }, h('summary', {}, 'Link a different project'), lificForm);
-  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink);
+  // I147: credit to Lific, and its stars as the server last heard them from GitHub.
+  const LIFIC_REPO = 'https://github.com/VoidNullable/lific';
+  const repoLink = (props, ...children) => h('a', { href: LIFIC_REPO, target: '_blank', rel: 'noopener noreferrer', ...props }, ...children);
+  const lificStars = h('span', { class: 'lific-star-count', hidden: true });
+  const lificCredit = h('p', { class: 'muted lific-credit' },
+    'Boards by ', repoLink({}, 'Lific'), ', open source by VoidNullable. ',
+    repoLink({ class: 'lific-star', title: 'Star Lific on GitHub' }, h('span', { 'aria-hidden': 'true' }, '★'), ' Star', lificStars));
+  panels.add('lific', 'Lific board', {}, lificInfo, lificError, lificColumns, lificLink, lificCredit);
+  function showLificStars(stars) {
+    lificStars.hidden = !Number.isFinite(stars);
+    lificStars.textContent = lificStars.hidden ? '' : stars.toLocaleString('en-US');
+  }
 
   // I132: the working columns always show, so an empty project still looks like a board.
   const LIFIC_STATUS = { backlog: 'Backlog', todo: 'To do', active: 'Active', done: 'Done', cancelled: 'Cancelled' };
@@ -3276,6 +3399,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       if (asked !== lificOf) return;
       lificLink.hidden = !board.you_can_link;
       lificForm.hidden = false;
+      showLificStars(board.credit?.stars);
       lificInfo.textContent = board.available
         ? `${board.project}: ${board.shown} of ${board.total} issues${board.truncated ? ' (the rest are left out)' : ''}. From Lific: other people's words.`
         : board.unavailable;
@@ -4202,6 +4326,7 @@ async function roomView(id) {
   if (opened.door) return opened.door;
   let { snapshot } = opened;
   const me = await api('/api/me').catch(() => null);
+  showRulesNotice(me);
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
@@ -4238,12 +4363,17 @@ async function roomView(id) {
   const stopRoomCamera = installRoomCamera(frame.host, stage);
   const room = new Room(stage);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
-  const pinStrip = h('div', { class: 'pin-strip', 'aria-label': 'Pins' });
+  // I81: one pin in the room's top-right corner. It opens the pins with what the bots are thinking.
+  const pinCount = h('span', { class: 'pin-count', hidden: true });
+  const pinButton = h('button', {
+    type: 'button', class: 'pin-button', 'aria-label': 'Pins and thoughts', title: 'Pins and thoughts',
+    onclick: () => panels.open('pins'),
+  }, h('span', { class: 'pin-glyph', 'aria-hidden': 'true' }), pinCount);
   const emptyBring = h('button', { type: 'button', class: 'primary', onclick: () => panels.open('crew') }, 'Open My bots');
   const emptyText = h('p', {}, 'No bots in here yet.');
   const emptyEl = h('div', { class: 'stage-empty', hidden: true }, emptyText, emptyBring);
-  // The board comes last, so that a room with no bots yet can still be written on. Pins sit under it.
-  stage.append(emptyEl, boardEl, pinStrip);
+  // The board comes last, so that a room with no bots yet can still be written on. The pin sits over it.
+  stage.append(emptyEl, boardEl, pinButton);
   const useDisplay = researchDisplay({
     panels, say, research, state: researchState, lookup: async () => (await researchLabLookup(id)).state,
   });
@@ -4363,8 +4493,7 @@ async function roomView(id) {
           keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
           h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
         replyLine,
-        h('p', {}, ...messageRefs(message.body, (id) => shownById.has(id)).map((part) => (
-          part.ref === undefined ? part.text : refLink(part))))));
+        h('p', {}, ...chatText(messageRefs(message.body, (id) => shownById.has(id)), refLink))));
   }
 
   // I131: a link to an earlier message in this room: it says whose it was, and a click shows it.
@@ -4510,7 +4639,7 @@ async function roomView(id) {
       h('option', { value: 'link' }, 'Link'));
     urlField.hidden = true;
     const dialog = modal('Pin on the board',
-      h('p', {}, 'A link or a short note under the whiteboard. Every bot here reads it.'),
+      h('p', {}, 'A link or a short note on the room’s pin. Every bot here reads it.'),
       h('form', { onsubmit: submitter(error, async (values) => {
         const body = { kind: values.kind, title: values.title, caption: values.caption || undefined };
         if (values.kind === 'link') body.url = values.url;
@@ -4526,60 +4655,20 @@ async function roomView(id) {
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Pin'))));
   }
 
-  // I81: a strip under the whiteboard. The classes are hooks for richer styling later.
+  // I81: the pin on the wall shows how many there are; the panel has the rest.
   function renderPins() {
-    const pins = snapshot.pins || [];
-    pinStrip.replaceChildren();
-    for (const pin of pins) {
-      pinStrip.append(h('button', {
-        type: 'button',
-        class: 'pin-card',
-        onclick: () => pinDialog(pin),
-        title: pin.title,
-      },
-        h('span', { class: 'pin-kind' }, pin.kind),
-        h('span', { class: 'pin-title' }, pin.title),
-        h('span', { class: 'pin-by' }, pinBy(pin))));
-    }
-    if (snapshot.can_pin) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-add ghost', onclick: () => addPinDialog() }, 'Pin'));
-    }
-    if (snapshot.can_clear_pins && pins.length) {
-      pinStrip.append(h('button', { type: 'button', class: 'pin-clear ghost', onclick: async () => {
-        try {
-          await api(`/api/hangouts/${encodeURIComponent(id)}/pins`, { method: 'DELETE' });
-          await reload();
-        } catch (error) {
-          say(error.message);
-        }
-      } }, 'Clear pins'));
-    }
-    if (snapshot.can_clear_pins && snapshot.floor?.floor?.access === 'public') {
-      const policy = snapshot.pin_policy || 'anyone';
-      pinStrip.append(h('select', {
-        class: 'pin-policy',
-        'aria-label': 'Who can pin',
-        onchange: async (event) => {
-          try {
-            await api(`/api/hangouts/${encodeURIComponent(id)}/pin-policy`, {
-              method: 'PUT',
-              body: { policy: event.target.value },
-            });
-            await reload();
-          } catch (error) {
-            say(error.message);
-          }
-        },
-      },
-        h('option', { value: 'anyone', selected: policy === 'anyone' }, 'Anyone can pin'),
-        h('option', { value: 'owners', selected: policy === 'owners' }, 'Owners can pin'),
-        h('option', { value: 'off', selected: policy === 'off' }, 'Pins off')));
-    }
+    const count = (snapshot.pins || []).length;
+    pinCount.textContent = String(count);
+    pinCount.hidden = count === 0;
+    const label = count ? `Pins (${count}) and thoughts` : 'Pins and thoughts';
+    pinButton.setAttribute('aria-label', label);
+    pinButton.title = label;
     renderPinsPanel();
   }
 
   function renderPinsPanel() {
     const pins = snapshot.pins || [];
+    const thinkers = (snapshot.agents || []).filter((agent) => !agent.away);
     const clear = snapshot.can_clear_pins && pins.length
       ? h('button', { type: 'button', class: 'ghost danger', onclick: async () => {
         try {
@@ -4620,7 +4709,13 @@ async function roomView(id) {
       h('div', { class: 'event-actions' },
         snapshot.can_pin ? h('button', { type: 'button', class: 'primary', onclick: addPinDialog }, 'Pin something') : null,
         clear,
-        publicPolicy));
+        publicPolicy),
+      // I81: what each bot in here is doing, in the words My bots uses.
+      h('h3', {}, 'Thoughts'),
+      thinkers.length
+        ? h('div', { class: 'list pin-thoughts' }, thinkers.map((agent) => h('p', { class: 'pin-thought' },
+          h('strong', {}, agent.name), ` · ${doingOf(agent)}`)))
+        : h('p', { class: 'muted' }, 'No bots in here right now.'));
   }
 
   // V12: how a person votes and closes from a card. The server says who may (V9, V10).
@@ -4945,17 +5040,22 @@ async function roomView(id) {
   // I35: what a bot is using in this room, if it's using anything.
   const usedBy = (agent) => snapshot.items.find((item) => item.used_by?.includes(agent.id));
 
+  // What a bot is up to, for My bots and the pin's thoughts alike.
+  function doingOf(agent) {
+    const using = usedBy(agent);
+    const thought = liveThinking(agent.thinking);
+    return agent.activity
+      ? doingText(agent.activity)
+      : using ? sentence(using.does)
+        : thought?.phase === 'thinking' ? 'Thinking'
+          : thought?.phase === 'waiting' ? 'Heard a mention'
+            : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+  }
+
   function renderCrew() {
     const rows = snapshot.agents.map((agent) => {
       const dot = h('i', { class: `state ${agent.activity ? 'working' : agent.state}` });
-      const using = usedBy(agent);
-      const thought = liveThinking(agent.thinking);
-      const doing = agent.activity
-        ? doingText(agent.activity)
-        : using ? sentence(using.does)
-          : thought?.phase === 'thinking' ? 'Thinking'
-            : thought?.phase === 'waiting' ? 'Heard a mention'
-              : agent.status || (agent.away ? 'Somewhere else' : STATE_TEXT[agent.state]);
+      const doing = doingOf(agent);
       const owner = person(agent.owner_id);
       const mine = agent.owner_id === snapshot.you.person_id;
       const swatch = h('span', { class: 'swatch' });
@@ -5222,9 +5322,12 @@ async function roomView(id) {
     displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
+    // MY10: the mayor wears a sash, a person or a bot, as the server says.
+    const wearsSash = (kind, id) => snapshot.mayor?.kind === kind && snapshot.mayor?.id === id;
     room.setBots(inRoom.map((agent) => ({
       ...agent,
       color: colorOf(agent.owner_id),
+      mayor: wearsSash('bot', agent.id),
       asking: asking.has(agent.id),
       look: snapshot.looks.bots[agent.id],
       using: usedBy(agent)?.id ?? null,
@@ -5234,7 +5337,7 @@ async function roomView(id) {
     emptyText.textContent = snapshot.agents.length ? 'The bots here are all away.' : 'No bots in here yet.';
     quietEl.hidden = !snapshot.items.some((item) => item.sign);
     const present = new Set(snapshot.present);
-    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id] })));
+    room.setPeople(snapshot.people.filter((p) => present.has(p.id)).map((p) => ({ id: p.id, name: p.name, color: p.color, look: snapshot.looks.people[p.id], mayor: wearsSash('person', p.id) })));
     stage.dataset.size = snapshot.floor?.floor.size || '';
     renderFloors();
     renderGuest();
@@ -5813,6 +5916,28 @@ async function roomView(id) {
       }),
     }, 'Use a starter bounty: the site pays 10') : null);
   }
+  // HC36, HC37: what bots offered on a card. Only its owner gets Accept, which the site pays for.
+  function contributionsCardUi(card) {
+    const contributions = card.contributions || [];
+    if (!contributions.length) return null;
+    const KIND = { review: 'Review', correction: 'Correction', source: 'Source', summary: 'Summary' };
+    return h('section', { class: 'bounty-block' },
+      h('h5', {}, 'Contributions'),
+      ...contributions.map((contribution) => h('article', { class: 'board-card' },
+        h('p', {}, h('strong', {}, `${KIND[contribution.kind] || 'Contribution'}: `), contribution.text),
+        h('p', { class: 'muted' }, contribution.owner_name ? `${contribution.bot_name}, for ${contribution.owner_name}` : contribution.bot_name),
+        contribution.accepted ? h('p', { class: 'muted' }, 'Accepted · the site paid 5 credits') : null,
+        contribution.can_accept ? h('button', {
+          type: 'button', class: 'primary',
+          onclick: act(boardsError, async () => {
+            if (!confirm(`Accept this and have the site pay ${contribution.owner_name} 5 credits? A card accepts one contribution.`)) return;
+            await api(`/api/cards/${encodeURIComponent(card.id)}/contributions/accept`, {
+              method: 'POST', body: { contribution_id: contribution.id },
+            });
+            await loadBoards(true);
+          }),
+        }, 'Accept') : null)));
+  }
   const githubLink = (name, issue) => {
     if (!name || !name.includes('/')) return null;
     const href = issue ? `https://github.com/${name}/issues/${issue}` : `https://github.com/${name}`;
@@ -5913,6 +6038,7 @@ async function roomView(id) {
               whenText(card.updated_at)),
             board.github && card.github_issue ? h('p', {}, githubLink(board.github, card.github_issue)) : null,
             bountyUi,
+            contributionsCardUi(card),
             canWriteCards() && statuses.length ? h('div', { class: 'event-actions' },
               statuses.filter((status) => status !== card.status).map((status) => h('button', {
                 type: 'button',
@@ -6065,7 +6191,7 @@ async function roomView(id) {
     roomBotsList,
     roomTrustHost);
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
-  panels.add('pins', 'Pins', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
+  panels.add('pins', 'Pins and thoughts', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
@@ -6091,10 +6217,8 @@ async function roomView(id) {
       backPath === '/' ? null : link('/', 'The Commons', { class: 'wd-btn wide' }),
     ].filter(Boolean)));
 
-  // One panel at a time, as on the map. Beside the room the chat is what the others cover, so closing
-  // one that took its place brings the chat back, and closing the chat itself leaves it shut.
+  // W114: chat stays open behind other windows; minimizing must not reopen it implicitly.
   let showing = null;
-  let chatBehind = false;
   const syncRoomTabs = panels.onChange;
   panels.onChange = () => {
     syncRoomTabs();
@@ -6103,15 +6227,6 @@ async function roomView(id) {
     if (was === 'room' && showing !== 'room') typingComposer.stop();
     frame.root.classList.toggle('has-panel', Boolean(showing));
     builder.panelChanged(was, showing);
-    if (was === 'room' && showing) {
-      chatBehind = true;
-    } else if (!showing && builder.backToCatalog(was)) {
-      panels.open('build');
-    } else if (!showing) {
-      const reopen = chatBehind && was !== 'room' && beside.matches;
-      chatBehind = false;
-      if (reopen) panels.open('room');
-    }
   };
 
   say('The buttons along the top open the chat, the crew and everything else here.');
@@ -6166,6 +6281,8 @@ async function roomView(id) {
   // Escape closes the panel. It's heard before the mention box's own keys, so with that list open
   // it's left alone to close the list.
   const onKey = (event) => {
+    // Window handles own their arrow keys, even while a build tool is in hand.
+    if (event.key.startsWith('Arrow') && event.target.closest?.('.game-panel-head, .window-resize, .window-dock')) return;
     if (builder.key(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -6196,6 +6313,7 @@ async function roomView(id) {
   leaveRoom = () => {
     removeEventListener('pagehide', goAway);
     goAway();
+    panels.destroy();
     typingComposer.destroy();
     typingHints.destroy();
     stream.close();
@@ -8003,7 +8121,7 @@ const EMOTE_MENU = [['wave', 'Wave'], ['cheer', 'Cheer'], ['think', 'Think'], ['
 // A narrow screen gets sheets instead of side panels, and a dock along the bottom.
 const COMPACT = '(max-width: 759px)';
 
-// The panels that open over a game window from buttons in its title bar, one at a time. Each has a
+// The panels that open over a game window from buttons in its title bar. Each has a
 // close button of its own, and Escape closes it. `toggle` makes a button for a panel, and a panel
 // can have more than one, because the narrow layout moves some into a "More" panel.
 // The phone chrome is for a touch screen. A mouse window keeps the desktop game, even when it is
@@ -8050,7 +8168,8 @@ function installAppleHigMap({ frame, panels, choose, movesCount, viewGroup, trus
   const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': 'Dismiss building tools', onclick: () => closeBuildSheet() });
   const sheetHead = h('div', { class: 'apple-build-sheet-head' },
     h('h3', {}, 'Build on The Commons'),
-    h('span', { class: 'apple-moves-pill' }, `Moves: ${movesCount() ?? '-'}`)
+    h('span', { class: 'apple-moves-pill' }, `Moves: ${movesCount() ?? '-'}`),
+    h('button', { type: 'button', class: 'sheet-close', 'aria-label': 'Close building tools', onclick: () => closeBuildSheet() }, '✕')
   );
   const toolsGrid = h('div', { class: 'apple-tools-grid' });
   buildSheet.append(grabber, sheetHead, toolsGrid);
@@ -8282,7 +8401,7 @@ function installAppleHigRoom({ frame, panels }) {
   const tabBar = h('nav', { class: 'apple-tab-bar', 'aria-label': 'Room Navigation' });
   const tabs = [
     { id: 'world', label: 'World', icon: '🗺️', action: () => go('/world/commons') },
-    { id: 'room', label: 'Room', icon: '🏠', action: () => panels.close(false) },
+    { id: 'room', label: 'Room', icon: '🏠', action: () => panels.minimizeAll() },
     { id: 'chat', label: 'Chat', icon: '💬', action: () => panels.open('room') },
     { id: 'guests', label: 'My bots', icon: '👥', action: () => panels.open('crew') },
     { id: 'more', label: 'More', icon: '⋯', action: () => panels.open('more') },
@@ -8384,53 +8503,169 @@ function installSheetDrag(handle, sheet, dismiss) {
 }
 
 function createPanels(root) {
-  const panels = new Map();
-  const toggles = new Map();
-  let current = null;
-  const scrim = h('div', { class: 'sheet-scrim', hidden: true, onclick: () => set.close() });
-  root.append(scrim);
-
-  const sync = () => {
-    for (const [name, panel] of panels) panel.el.hidden = name !== current;
-    for (const [name, list] of toggles) for (const button of list) button.setAttribute('aria-expanded', String(name === current));
-    scrim.hidden = !current;
-    if (current) {
-      scrim.classList.add('visible');
-      try { navigator.vibrate?.(10); } catch (_) {}
-    } else {
-      scrim.classList.remove('visible');
+  // W114: geometry and lifecycle belong to the shared game surface, never the page body.
+  const panels = new Map(), toggles = new Map();
+  let current = null, order = 0, dockPosition = null;
+  const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
+    'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
+  const dockItems = h('div', { class: 'window-dock-items' });
+  const dock = h('nav', { class: 'window-dock', 'aria-label': 'Minimized windows', hidden: true }, dockHandle, dockItems);
+  root.append(dock);
+  root.classList.add('window-desktop');
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(n, Math.max(lo, hi)));
+  function bounds() {
+    const r = root.getBoundingClientRect();
+    const well = root.querySelector('.wd-well')?.getBoundingClientRect() || r;
+    let left = Math.max(r.left, well.left), right = Math.min(r.right, well.right);
+    let top = Math.max(r.top, well.top), bottom = Math.min(r.bottom, well.bottom);
+    for (const bar of root.querySelectorAll('.wd-title, .wd-stats, .wd-status, .apple-tab-bar, .build-dock')) {
+      const box = bar.getBoundingClientRect();
+      if (!box.height || getComputedStyle(bar).display === 'none') continue;
+      // Landscape navigation is a vertical rail, not a header that consumes all height.
+      if (box.height > box.width && box.top <= top + 2 && box.bottom >= bottom - 2) {
+        if (box.left <= left + 2) left = Math.max(left, box.right);
+        else if (box.right >= right - 2) right = Math.min(right, box.left);
+      } else if (box.width > (right - left) / 2) {
+        if (box.top <= top + 2) top = Math.max(top, box.bottom);
+        else if (box.bottom >= bottom - 2) bottom = Math.min(bottom, box.top);
+      }
     }
-  };
-  const shown = (button) => button.offsetParent !== null;
+    return { x: left - r.left + 6, y: top - r.top + 6,
+      w: Math.max(1, right - left - 12), h: Math.max(1, bottom - top - 12) };
+  }
 
+  function fit(rect, area) {
+    const w = clamp(rect.w, Math.min(280, area.w), area.w);
+    // Leave room for phone title controls, the dismiss handle and a chat composer.
+    const h = clamp(rect.h, Math.min(240, area.h), area.h);
+    return { x: clamp(rect.x, area.x, area.x + area.w - w), y: clamp(rect.y, area.y, area.y + area.h - h), w, h };
+  }
+  function place(el, rect) {
+    for (const [key, value] of Object.entries({ left: rect.x, top: rect.y, width: rect.w, height: rect.h }))
+      el.style.setProperty(key, `${value}px`, 'important');
+  }
+  function layout() {
+    if (!root.getBoundingClientRect().width) return;
+    const area = bounds();
+    for (const [name, panel] of panels) {
+      if (!panel.rect && panel.state === 'open') {
+        const wide = ['bots', 'crew', 'lific'].includes(name);
+        panel.rect = { x: area.x + area.w - (wide ? 880 : 400), y: area.y + 12,
+          w: wide ? 880 : 400, h: Math.min(600, area.h - 24) };
+      }
+      if (!panel.rect) continue;
+      panel.rect = fit(panel.rect, area);
+      place(panel.el, panel.maximized ? area : panel.rect);
+    }
+    const size = dock.getBoundingClientRect();
+    const w = Math.min(size.width || 240, area.w), height = Math.min(size.height || 44, area.h);
+    const pos = dockPosition || { x: area.x, y: area.y + area.h - height };
+    dockPosition = { x: clamp(pos.x, area.x, area.x + area.w - w), y: clamp(pos.y, area.y, area.y + area.h - height) };
+    dock.style.left = `${dockPosition.x}px`; dock.style.top = `${dockPosition.y}px`;
+    dock.style.maxWidth = `${area.w}px`;
+  }
+  function sync() {
+    for (const [name, panel] of panels) {
+      panel.el.hidden = panel.state !== 'open';
+      panel.el.style.setProperty('z-index', String(4 + panel.order), 'important');
+      panel.el.classList.toggle('window-active', name === current);
+      panel.maxButton.setAttribute('aria-label', `${panel.maximized ? 'Restore' : 'Maximize'} ${panel.title}`);
+      panel.maxButton.title = panel.maximized ? 'Restore size' : 'Maximize';
+      panel.maxButton.textContent = panel.maximized ? '❐' : '□';
+      panel.grip.hidden = panel.maximized;
+      panel.dockEntry.hidden = panel.state !== 'minimized';
+    }
+    for (const [name, list] of toggles) for (const button of list)
+      button.setAttribute('aria-expanded', String(panels.get(name)?.state === 'open'));
+    dock.hidden = ![...panels.values()].some(p => p.state === 'minimized');
+    layout();
+  }
+  function activate(name) {
+    if (current === name) return;
+    current = name;
+    // Keep stacking below contextual menus rather than accumulating unbounded z-index values.
+    const sorted = [...panels.values()].sort((a, b) => a.order - b.order);
+    sorted.forEach((panel, i) => { panel.order = i; });
+    order = sorted.length;
+    panels.get(name).order = ++order;
+    sync(); set.onChange();
+  }
+  function next() {
+    return [...panels].filter(([, p]) => p.state === 'open').sort((a, b) => b[1].order - a[1].order)[0]?.[0] || null;
+  }
+  function back(name) {
+    if (current) panels.get(current).el.focus({ preventScroll: true });
+    else [...(toggles.get(name) || []), ...(toggles.get('more') || [])].find(b => b.offsetParent !== null)?.focus();
+  }
+  // Pointer capture keeps a drag alive beyond the handle; cancel never leaves listeners on window.
+  function movable(handle, read, write, enabled = () => true) {
+    let drag = null;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || !enabled() || (event.target.closest?.('button') && event.target.closest('button') !== handle)) return;
+      event.preventDefault(); event.stopPropagation();
+      handle.focus({ preventScroll: true });
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, rect: { ...read() } };
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.id) return;
+      write(drag.rect, event.clientX - drag.x, event.clientY - drag.y);
+    });
+    const end = () => { drag = null; };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('lostpointercapture', end);
+    handle.addEventListener('keydown', event => {
+      if (event.target !== handle || !enabled()) return;
+      const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+      if (!delta) return;
+      event.preventDefault(); event.stopPropagation();
+      write(read(), delta[0] * (event.shiftKey ? 1 : 16), delta[1] * (event.shiftKey ? 1 : 16));
+    });
+  }
+  movable(dockHandle, () => dockPosition, (rect, x, y) => { dockPosition = { x: rect.x + x, y: rect.y + y }; layout(); });
+  const observer = new ResizeObserver(layout);
+  observer.observe(root);
+  const well = root.querySelector('.wd-well');
+  if (well) observer.observe(well);
+  observer.observe(dock);
   const set = {
     onChange: () => {},
-    get current() {
-      return current;
-    },
-    // `options.onOpen` runs each time the panel opens, and `options.onClose` each time it's closed,
-    // but not when another panel takes its place.
+    get current() { return current; },
+    destroy() { observer.disconnect(); },
     add(name, title, options, ...content) {
-      const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: () => set.close() });
+      const closeThis = () => { current = name; set.close(); };
+      const grabber = h('button', { type: 'button', class: 'sheet-grabber', 'aria-label': `Dismiss ${title}`, onclick: closeThis });
       const body = h('div', { class: 'game-panel-body' }, ...content);
-      const el = h('aside', { class: `game-panel game-panel-${name}`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true },
-        grabber,
-        h('header', { class: 'game-panel-head' },
-          h('h2', {}, title),
-          h('button', { type: 'button', class: 'wd-tbtn sheet-close', 'aria-label': `Close ${title}`, onclick: () => set.close() }, '✕')),
-        body);
-      installSheetDrag(grabber, el, () => set.close());
+      const maxButton = h('button', { type: 'button', class: 'wd-tbtn', onclick: () => set.maximize(name) }, '□');
+      const head = h('header', { class: 'game-panel-head', tabindex: 0,
+        'aria-label': `Move ${title} with arrow keys or drag`, title: 'Drag to move; double-click to maximize' },
+        h('h2', {}, title),
+        h('div', { class: 'window-actions' },
+          h('button', { type: 'button', class: 'wd-tbtn', title: 'Minimize', 'aria-label': `Minimize ${title}`, onclick: () => set.minimize(name) }, '−'),
+          maxButton,
+          h('button', { type: 'button', class: 'wd-tbtn sheet-close', title: 'Close', 'aria-label': `Close ${title}`, onclick: closeThis }, '✕')));
+      const grip = h('button', { type: 'button', class: 'window-resize', title: 'Drag to resize; arrow keys also resize', 'aria-label': `Resize ${title} with arrow keys or drag` }, '◢');
+      const el = h('aside', { class: `game-panel game-panel-${name} game-window`, id: `panel-${name}`, 'aria-label': title, tabindex: -1, hidden: true }, grabber, head, body, grip);
+      const restore = h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Restore ${title}`, onclick: () => set.open(name) }, title);
+      const dockEntry = h('div', { class: 'window-dock-entry', hidden: true }, restore,
+        h('button', { type: 'button', class: 'wd-tbtn', 'aria-label': `Close minimized ${title}`, onclick: closeThis }, '✕'));
+      dockItems.append(dockEntry);
+      const panel = { el, body, title, maxButton, grip, dockEntry, state: 'closed', rect: null, maximized: false, order: 0,
+        onOpen: options?.onOpen, onClose: options?.onClose };
+      panels.set(name, panel);
+      el.addEventListener('pointerdown', () => activate(name));
+      el.addEventListener('focusin', () => activate(name));
+      head.addEventListener('dblclick', event => { if (!event.target.closest('button')) set.maximize(name); });
+      movable(head, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, x: rect.x + x, y: rect.y + y }; layout(); }, () => !panel.maximized);
+      movable(grip, () => panel.rect, (rect, x, y) => { activate(name); panel.rect = { ...rect, w: rect.w + x, h: rect.h + y }; layout(); });
+      installSheetDrag(grabber, el, closeThis);
       root.append(el);
-      panels.set(name, { el, body, onOpen: options?.onOpen, onClose: options?.onClose });
       return body;
     },
     toggle(name, label, { short, className = '', aria } = {}) {
-      const button = h('button', {
-        type: 'button',
-        class: `wd-tbtn ${className}`.trim(),
-        'aria-expanded': 'false',
-        'aria-controls': `panel-${name}`,
-        'aria-label': aria || label,
+      const button = h('button', { type: 'button', class: `wd-tbtn ${className}`.trim(),
+        'aria-expanded': 'false', 'aria-controls': `panel-${name}`, 'aria-label': aria || label,
         onclick: () => (current === name ? set.close() : set.open(name)),
       }, h('span', { class: 'long' }, label), short ? h('span', { class: 'short', 'aria-hidden': 'true' }, short) : null);
       toggles.set(name, [...(toggles.get(name) || []), button]);
@@ -8439,22 +8674,40 @@ function createPanels(root) {
     open(name) {
       const panel = panels.get(name);
       if (!panel) return;
-      current = name;
-      sync();
-      set.onChange();
-      panel.onOpen?.();
+      const fresh = panel.state === 'closed';
+      panel.state = 'open';
+      activate(name); sync();
+      if (fresh) panel.onOpen?.();
       panel.el.focus({ preventScroll: true });
+    },
+    minimize(name = current) {
+      const panel = panels.get(name);
+      if (!panel || panel.state !== 'open') return;
+      panel.state = 'minimized';
+      if (current === name) current = next();
+      sync(); set.onChange();
+      panel.dockEntry.children[0].focus({ preventScroll: true });
+    },
+    minimizeAll() {
+      for (const panel of panels.values()) if (panel.state === 'open') panel.state = 'minimized';
+      current = null;
+      sync(); set.onChange();
+    },
+    maximize(name = current) {
+      const panel = panels.get(name);
+      if (!panel) return;
+      panel.maximized = !panel.maximized;
+      activate(name); sync();
     },
     close(focus = true) {
       const was = current;
       if (!was) return;
-      current = null;
+      panels.get(was).state = 'closed';
+      current = next();
       sync();
       panels.get(was).onClose?.();
       set.onChange();
-      if (!focus) return;
-      const back = [...(toggles.get(was) || []), ...(toggles.get('more') || [])].find(shown);
-      back?.focus();
+      if (focus) back(was);
     },
   };
   return set;
@@ -8741,8 +8994,17 @@ function needsYouPanel(panels) {
   }
   show('waiting');
 
+  // A111: a bot of theirs was refused because they haven't accepted the community rules.
+  function rulesItem(rules) {
+    const bots = rules.bots.join(', ');
+    return item(
+      h('p', {}, h('strong', {}, bots), ' tried to post, but can’t until you accept the community rules.'),
+      h('div', { class: 'row' }, h('button', { type: 'button', onclick: done(() => acceptRules()) }, 'Read and accept')));
+  }
+
   function render(list) {
     const parts = [
+      ...(list.rules ? [rulesItem(list.rules)] : []),
       ...(list.job_reports || []).map(jobReportItem),
       ...(list.bot_setups || []).map(botSetupItem),
       ...list.waiting.map(waitingItem),
@@ -9484,6 +9746,58 @@ function researchParticipation(labId, bots) {
     }), error);
 }
 
+// A114: the bot sign-up switch (A95), for someone on the god list and only while their god mode is
+// on. It says whether agents can sign up through the door (A96), who last set it and when, and how
+// many accounts the door made in the last day. `show` is told each time god mode changes.
+function botSignupsPanel(panels) {
+  const body = panels.add('signups', 'Bot sign-ups', { onOpen: () => load() });
+  const error = formError();
+  const row = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: () => panels.open('signups') }, 'Bot sign-ups');
+  let ticket = 0;
+  async function load() {
+    const asked = ++ticket;
+    body.replaceChildren(h('p', { class: 'muted' }, 'Checking bot sign-ups…'));
+    try {
+      const data = await api('/api/god-mode/bot-signups');
+      if (asked === ticket) render(data);
+    } catch (failure) {
+      if (asked !== ticket) return;
+      body.replaceChildren(h('p', { class: 'error', role: 'alert' }, failure.message),
+        h('button', { type: 'button', onclick: load }, 'Try again'));
+    }
+  }
+  function render(data) {
+    const who = data.set_at
+      ? `${data.open ? 'Opened' : 'Closed'} by ${data.set_by_name || 'Someone who left'}, ${whenText(data.set_at)}.`
+      : 'Nobody has changed it yet.';
+    const flip = act(error, async () => {
+      const ask = data.open
+        ? 'Close bot sign-ups? Agents can\'t make accounts through the door until it\'s opened again. Accounts and bots already made stay.'
+        : 'Open bot sign-ups? Agents can make accounts and bots through the door again, with no person approving each one.';
+      if (!confirm(ask)) return;
+      ticket++;
+      render(await api('/api/god-mode/bot-signups', { method: 'PUT', body: { open: !data.open } }));
+    });
+    body.replaceChildren(
+      h('p', { role: 'status' }, data.open
+        ? 'Bot sign-ups are open. Agents can make their own account and first bot.'
+        : 'Bot sign-ups are closed. Agents get a 403 at the door until you open them.'),
+      h('p', { class: 'muted' }, who),
+      h('p', {}, `Accounts made through the door in the last day: ${data.today} of ${data.per_day}.`),
+      h('button', { type: 'button', class: data.open ? 'ghost' : 'primary', onclick: flip }, data.open ? 'Close bot sign-ups' : 'Open bot sign-ups'),
+      error,
+      h('p', { class: 'muted fine' }, 'Only the people who run this site see this.'));
+  }
+  return {
+    row,
+    // Turning god mode off takes the panel away, even while it's open.
+    show(on) {
+      row.hidden = !on;
+      if (!on && panels.current === 'signups') panels.close(false);
+    },
+  };
+}
+
 // "/" is The Commons, and "/world/{id}" is any world.
 async function worldView(id, { home = false } = {}) {
   const path = encodeURIComponent(id);
@@ -9603,6 +9917,7 @@ async function worldView(id, { home = false } = {}) {
       button.querySelector('.wd-lock')?.replaceChildren(lock);
     }
     godButton?.setAttribute('aria-pressed', String(godOn));
+    signups?.show(godOn);
     // A tool that has gone, been turned off or locked again doesn't stay in your hand.
     // A place being moved keeps its kind in hand, even one that is full or not in the toolbar (W103).
     if (tool && !pendingMove && (!toolShown(tool) || placesFull.has(tool) || lockOf(tool))) choose(null);
@@ -9647,6 +9962,8 @@ async function worldView(id, { home = false } = {}) {
   const account = accountPanel(panels, me, parts);
   // N4: for a person, what's waiting on them from every room.
   const needs = me?.kind === 'person' ? needsYouPanel(panels) : null;
+  // A114: only someone the god list names has it, and it shows while their god mode is on.
+  const signups = typeof me?.god_mode === 'boolean' ? botSignupsPanel(panels) : null;
 
   let pendingResearchLab = null;
   let placingResearchLab = false;
@@ -9699,7 +10016,9 @@ async function worldView(id, { home = false } = {}) {
         const outRow = (latest?.bots_out || []).find((r) => r[0] === bot.name);
         const tile = bot.place ? [bot.place.x, bot.place.y] : outRow ? (Array.isArray(outRow[8]) ? outRow[8] : [outRow[1], outRow[2]]) : null;
         const focusOn = tile ? () => { world.focus(tile[0], tile[1], { zoom: 1.5 }); panels.close(false); } : null;
-        return yourBotRow(bot, { focusOn, reload: async () => { await loadBots(true); trust?.load(); } });
+        // S89: in a room with no spot on the map, it says so rather than leaving Center out unexplained.
+        const offMap = !tile && Boolean(bot.room);
+        return yourBotRow(bot, { focusOn, offMap, reload: async () => { await loadBots(true); trust?.load(); } });
       })
       : [h('p', { class: 'muted' }, 'You have no bots yet. A bot is an AI you already use, like Claude or ChatGPT, with a name and a home here.')];
       const count = (state) => myBots.filter((bot) => bot.status?.state === state).length;
@@ -9869,6 +10188,7 @@ async function worldView(id, { home = false } = {}) {
     moreRow('around', 'Who\'s around'),
     ...notificationActions(me),
     moreRow('about', 'About'),
+    signups?.row,
     repoLink('wd-btn wide'),
     link('/docs', 'Docs', { class: 'wd-btn wide' }),
     link('/worlds', 'Worlds', { class: 'wd-btn wide' }),
@@ -10660,6 +10980,7 @@ async function worldView(id, { home = false } = {}) {
   if (guide) setTimeout(guide.arrive);
   document.documentElement.classList.add('in-game');
   leaveRoom = () => {
+    panels.destroy();
     watch.stop();
     clearTimeout(placeCardTimer);
     clearTimeout(outsidesTimer);

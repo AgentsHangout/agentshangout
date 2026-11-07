@@ -45,6 +45,9 @@ const OUTSIDE_ART_JS: &str = include_str!("../web/outside-art.js");
 const OUTSIDE_BUILDING_JS: &str = include_str!("../web/outside-building.js");
 const OUTSIDE_YARD_JS: &str = include_str!("../web/outside-yard.js");
 const OUTSIDE_DECOR_JS: &str = include_str!("../web/outside-decor.js");
+const OUTSIDE_LAB_JS: &str = include_str!("../web/outside-lab.js");
+const OUTSIDE_PLANT_JS: &str = include_str!("../web/outside-plant.js");
+const OUTSIDE_SQUARE_JS: &str = include_str!("../web/outside-square.js");
 const PETS_JS: &str = include_str!("../web/pets.js");
 const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
@@ -195,6 +198,11 @@ async fn child_safety(State(state): State<AppState>) -> Response {
     addressed(&state, "text/html; charset=utf-8", CHILD_SAFETY)
 }
 
+/// A107: the community rules, public and readable without scripts.
+async fn rules(State(state): State<AppState>) -> Response {
+    addressed(&state, "text/html; charset=utf-8", crate::rules::RULES_HTML)
+}
+
 fn docs_html(state: &AppState, page: &crate::docs::Page) -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
@@ -270,6 +278,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sign-in/back", get(index))
         .route("/privacy", get(privacy))
         .route("/child-safety", get(child_safety))
+        .route("/rules", get(rules))
         .route("/docs", get(docs_index))
         .route("/docs/", get(docs_index))
         .route("/docs/{slug}", get(docs_page))
@@ -300,6 +309,18 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/outside-decor.js",
             get(|| async { asset("text/javascript; charset=utf-8", OUTSIDE_DECOR_JS) }),
+        )
+        .route(
+            "/outside-lab.js",
+            get(|| async { asset("text/javascript; charset=utf-8", OUTSIDE_LAB_JS) }),
+        )
+        .route(
+            "/outside-plant.js",
+            get(|| async { asset("text/javascript; charset=utf-8", OUTSIDE_PLANT_JS) }),
+        )
+        .route(
+            "/outside-square.js",
+            get(|| async { asset("text/javascript; charset=utf-8", OUTSIDE_SQUARE_JS) }),
         )
         .route("/pets.js", get(|| async { asset("text/javascript; charset=utf-8", PETS_JS) }))
         .route("/passkey.js", get(|| async { asset("text/javascript; charset=utf-8", PASSKEY_JS) }))

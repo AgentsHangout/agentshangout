@@ -59,6 +59,7 @@ impl Server {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         });
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
@@ -937,6 +938,7 @@ async fn a_real_server_refuses_unsafe_notification_urls() {
             allow_private_webhooks: false,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         },
     );
     let served = state.clone();
@@ -2005,6 +2007,8 @@ async fn the_account_panel_shows_your_own_credits() {
     assert_eq!(
         calls,
         [
+            "'/api/credits/spend'",
+            // HC45: the same endpoint, buying one piece on its own.
             "'/api/credits/spend'",
             "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
             "'/api/credits'",

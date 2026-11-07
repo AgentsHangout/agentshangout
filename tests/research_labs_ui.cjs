@@ -280,7 +280,8 @@ async function check() {
   assert.ok(source.includes("['research_lab', 'Research lab',"), 'the lab is a regular build-menu choice');
   // RL7: renderer class changes invalidate only affected standing buildings, including removal.
   const world = fs.readFileSync('web/world.js', 'utf8').replace(/\r\n/g, '\n');
-  // A saved studio exterior must not hide a lab's dedicated building (day or night).
+  // A saved studio exterior must not hide a lab's dedicated building (day or night): a lab with an
+  // outside is drawn with the lab's own look (E41), and one without as the lab always was.
   const buildingStart = world.indexOf('function buildingObject(');
   const building = world.slice(buildingStart, world.indexOf('\n}\n', buildingStart) + 2);
   const painted = [];
@@ -290,8 +291,8 @@ async function check() {
     KIND_NAME: { 10: 'studio' }, BUILDERS: { 10: [() => painted.push('studio')] },
     isBig: () => false, ih: () => 0, clamp: (n, a, b) => Math.max(a, Math.min(b, n)),
     placedResearchLab: () => painted.push('lab'), researchEmblem: () => painted.push('emblem'),
-    paintOutsideStanding: () => painted.push('custom studio'),
-    paintOutsideGround: () => painted.push('yard'),
+    paintOutsideStanding: (S, kind) => painted.push(kind === 'research_lab' ? 'lab look' : 'custom studio'),
+    paintOutsideGround: (S, kind) => painted.push(kind === 'research_lab' ? 'lab yard' : 'yard'),
     object(key, draw) { draw(graphics); return {}; },
     sprite(key, w, h, ax, ay, draw) { draw(graphics); return {}; },
   });
@@ -300,7 +301,10 @@ async function check() {
   const labSprite = renderContext.buildingObject(10, 0, 0, 0, 0, exterior, true);
   labSprite.lit();
   labSprite.ground();
-  assert.deepEqual(painted, ['lab', 'emblem', 'lab', 'emblem', 'yard']);
+  assert.deepEqual(painted, ['lab look', 'emblem', 'lab look', 'emblem', 'lab yard']);
+  painted.length = 0;
+  renderContext.buildingObject(10, 0, 0, 1, 0, null, true);
+  assert.deepEqual(painted, ['lab', 'emblem'], 'a lab with no outside is the lab it always was');
   painted.length = 0;
   renderContext.buildingObject(10, 0, 0, 0, 0, exterior, false);
   assert.deepEqual(painted, ['custom studio'], 'non-lab outside customizations still render');

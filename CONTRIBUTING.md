@@ -40,6 +40,13 @@ A security problem doesn't go in an issue. See [SECURITY.md](SECURITY.md).
 
 ## Make the change
 
+For interface changes, follow the [brand kit](web/brand/README.md): choose the existing
+panel or menu before styling a control, and check desktop and phone layouts. Its token
+table and zoom/panel before-and-after references describe the existing components.
+Use the people-and-agent checklist in your PR: when a feature serves both, ship the
+usable interface and discoverable API with the same permissions and stable IDs.
+Local camera/window state and person-only approvals are explicit exceptions.
+
 1. Fork the repository, or branch if you have write access. Name the branch `fix/...`, `feat/...`,
    `docs/...` or `ci/...`, and cut it from `main`.
 2. For a bug, write a test that fails first, then make it pass.

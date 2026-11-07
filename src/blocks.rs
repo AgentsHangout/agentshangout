@@ -1,7 +1,7 @@
-//! A100 to A105 (#685): a person blocks another, or mutes their mentions. A block cuts contact both
-//! ways (A102); a mute only stops the muted person's mentions of the muter. Nobody is told, and a
-//! bot never says (A105). Hiding lines (A101), the quiet sink (A103) and what a block ends (A106)
-//! come in the next part.
+//! A100 to A106 (#685): a person blocks another, or mutes their mentions. A block hides the blocked
+//! person's lines from the blocker (A101), cuts contact both ways (A102) and ends what was between
+//! them (A106); a mute only stops the muted person's mentions of the muter. Their asks to each other
+//! go nowhere, quietly (A103). Nobody is told, and a bot never says (A105).
 
 use axum::{
     extract::{Path, State},
@@ -30,6 +30,38 @@ pub fn cut(state: &AppState, listener: &str, message: &Message) -> ApiResult<boo
         return Ok(false);
     }
     Ok(state.db.contact_cut(listener, speaker)?)
+}
+
+/// A103: whether two people have a block between them, either way. An ask from one to the other
+/// then looks sent and goes nowhere.
+pub fn apart(state: &AppState, a: &str, b: &str) -> ApiResult<bool> {
+    if a == b {
+        return Ok(false);
+    }
+    Ok(state.db.blocked_either_way(a, b)?)
+}
+
+/// A103: an ask's id for `quiet_asks`, for one keyed by more than one thing.
+pub fn ask_key(parts: &[&str]) -> String {
+    parts.join("|")
+}
+
+/// A103: whether the other side should never see this ask.
+pub fn quiet(state: &AppState, kind: &str, ask_id: &str) -> ApiResult<bool> {
+    Ok(state.db.is_quiet(kind, ask_id)?)
+}
+
+/// A101: the people whose lines this caller, a person or one of their bots, doesn't see.
+pub fn hidden_speakers(
+    state: &AppState,
+    caller: &Caller,
+) -> ApiResult<std::collections::HashSet<String>> {
+    Ok(state.db.blocked_ids(&caller.person_id)?)
+}
+
+/// A101: whether this line is one the caller doesn't see.
+pub fn hides(hidden: &std::collections::HashSet<String>, message: &Message) -> bool {
+    message.person_id.as_ref().is_some_and(|speaker| hidden.contains(speaker))
 }
 
 /// A105: the person ids a bot's person has blocked and muted, for its inbox. Empty for a person.
@@ -99,6 +131,14 @@ async fn block(
 ) -> ApiResult<Json<Value>> {
     check(&state, &caller, &body.person_id, "block someone")?;
     added(state.db.block_person(&caller.person_id, &body.person_id, MOST, now())?, "blocks")?;
+    // A106: what was between them ends. Run on every block, so one that failed part way is finished
+    // by asking again. Trips end the ordinary way, as the blocker, which says nothing of why.
+    for trip in state.db.trips_between(&caller.person_id, &body.person_id, now())? {
+        if let Err(error) = crate::city::end_trip(&state, &caller, &trip) {
+            tracing::warn!(status = %error.status, "a trip across a new block could not be ended");
+        }
+    }
+    state.db.end_ties(&caller.person_id, &body.person_id, now())?;
     lists(&state, &caller).map(Json)
 }
 

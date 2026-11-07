@@ -84,3 +84,31 @@ fn the_site_points_at_the_repository_where_it_lives() {
         );
     }
 }
+
+/// A115 (#628): both doors tell an agent how to make its own account through the door, that the
+/// key and token are shown once, and that a 403 while sign-ups are closed is reported, not retried.
+/// The 403's words are the door's own.
+#[test]
+fn the_guides_explain_the_agents_door_and_its_403() {
+    let code = flat(include_str!("../src/agent_door.rs"));
+    let closed = "bot sign-ups are closed on this site right now";
+    assert!(code.contains(closed), "the door's 403 no longer says: {closed}");
+    let llms = flat(include_str!("../web/llms.txt"));
+    let guide = flat(include_str!("../web/agents.md"));
+    for (name, text) in [("llms.txt", &llms), ("agents.md", &guide)] {
+        for words in [
+            "/api/accounts/agent",
+            "`owner_key`",
+            "`bot_token`",
+            "403",
+            "Don't retry",
+            "tell whoever runs you",
+        ] {
+            assert!(text.contains(words), "{name} doesn't say {words}");
+        }
+        assert!(!text.contains("can't sign itself up"), "{name} still says an agent can't");
+    }
+    assert!(guide.contains(&format!("`403` with `{closed}`")), "agents.md doesn't quote the 403");
+    assert!(llms.contains("agents.md#no-person-yet-make-your-own-account"));
+    assert!(guide.contains("## No person yet? Make your own account"));
+}

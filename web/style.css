@@ -329,26 +329,45 @@ input::placeholder { color: #8b7a5e; }
 .board-text.cut { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.6em), transparent); mask-image: linear-gradient(#000 calc(100% - 1.6em), transparent); }
 .board-read { max-height: 60vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* I81: a simple strip under the whiteboard. Classes on the cards are hooks for richer styling. */
-.pin-strip {
+/* I81: one pin on the wall, right of the whiteboard, drawn in the room's own pixels. Like the
+   board it is part of the wall, not a layer over the room, and it opens the Pins panel. */
+.pin-button {
   position: absolute;
-  left: 31.9%;
-  top: 21.4%;
-  width: 36.2%;
-  height: 8%;
+  left: 94.2%;
+  top: 5%;
+  width: 4%;
+  aspect-ratio: 1;
   min-height: 0;
   display: flex;
-  align-items: stretch;
-  gap: .35em;
+  align-items: flex-end;
+  justify-content: flex-end;
   padding: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  color: #20283e;
   background: none;
   border: 0;
-  z-index: 2;
-  pointer-events: auto;
+  border-radius: 0;
+  box-shadow: none;
+  text-shadow: none;
+  font: inherit;
 }
-.pin-strip:empty { display: none; }
+.pin-button:hover:enabled { filter: none; box-shadow: inset 0 0 0 1px rgba(32, 40, 62, .35); }
+.pin-button:active { filter: none; transform: none; }
+.pin-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The pin stays small on the wall, but a finger gets 44px to press, as docs/mobile.md asks. */
+.pin-button::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+.pin-glyph {
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' shape-rendering='crispEdges'><path fill='%2320283e' d='M4 0h4v1H4zM3 1h1v3H3zM8 1h1v3H8zM2 4h8v1H2zM2 5h1v1H2zM9 5h1v1H9zM2 6h8v1H2z'/><path fill='%23c8402f' d='M4 1h4v3H4z'/><path fill='%23ef8a6a' d='M4 1h1v1H4z'/><path fill='%238e2a1f' d='M3 5h6v1H3z'/><path fill='%235a6176' d='M5 7h2v3H5zM5 10h1v2H5z'/></svg>") center / contain no-repeat;
+  image-rendering: pixelated;
+}
+.pin-count {
+  position: relative;
+  font: 700 clamp(7px, .9cqw, 11px) ui-monospace, Consolas, monospace;
+  color: #9a5b16;
+}
+.pin-list .pin-card { width: auto; max-width: none; }
+.pin-thought { margin: 0; }
 .pin-card {
   flex: 0 0 auto;
   width: 7.2em;
@@ -392,26 +411,6 @@ input::placeholder { color: #8b7a5e; }
   color: #5a6176;
   font-size: .85em;
 }
-/* The strip sits on the room's wall, so its controls take the card's paper look. Scoped to the strip
-   so it beats button.ghost (transparent, only showing on hover) and the page-wide select rule (full
-   width on the dark page color, which left one black box across the strip). */
-.pin-strip .pin-add, .pin-strip .pin-clear, .pin-strip .pin-policy {
-  flex: 0 0 auto;
-  align-self: center;
-  width: auto;
-  min-height: 0;
-  padding: .2em .45em;
-  font: inherit;
-  font-size: clamp(8px, 1cqw, 12px);
-  color: #20283e;
-  background: #f4ead2;
-  border: 1px solid rgba(32, 40, 62, .28);
-  border-radius: 3px;
-  box-shadow: none;
-  text-shadow: none;
-}
-.pin-strip .pin-add:hover, .pin-strip .pin-clear:hover, .pin-strip .pin-policy:hover { background: #fbf4e2; filter: none; }
-
 .bot-tag {
   position: absolute;
   width: 0;
@@ -579,6 +578,8 @@ input::placeholder { color: #8b7a5e; }
 /* I131: an earlier message named in a line, as a link that shows it. */
 .msg-ref { all: unset; color: var(--accent, #4f8cff); text-decoration: underline; cursor: pointer; }
 .msg-ref:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+/* I148: `code` in a line. */
+.msg-body p code { padding: 0 3px; border-radius: 3px; background: color-mix(in srgb, currentColor 12%, transparent); font-size: .92em; }
 .msg-flash { background: color-mix(in srgb, var(--accent, #4f8cff) 18%, transparent); transition: background 0.4s; }
 
 .event { display: flex; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
@@ -1565,6 +1566,12 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 .lific-card-actions select, .lific-card-actions button { min-height: 26px; padding: 0 6px; font-size: 11px; background: rgba(255, 255, 255, .55); border: 1px solid rgba(45, 36, 20, .35); }
 .lific-empty { margin: 0; padding: 8px; font-size: 12px; font-style: italic; color: #f2dcb0; }
 .lific-add input { width: 100%; padding: 8px; font-size: 13px; background: rgba(255, 252, 235, .7); border: 1px dashed rgba(60, 34, 16, .6); }
+.lific-credit { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 10px 0 0; font-size: 12px; }
+.lific-star { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 2px 8px; border: 1px solid currentColor; border-radius: 6px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.lific-star:hover, .lific-star:focus-visible { text-decoration: underline; }
+.lific-star span[aria-hidden] { color: #c98a00; }
+.lific-star-count { padding-left: 6px; border-left: 1px solid currentColor; font-variant-numeric: tabular-nums; }
+.lific-star-count[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .lific-card { transition: none; } }
 
 .game-panel:focus { outline: none; }
@@ -2573,8 +2580,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   border-radius: 24px 24px 0 0 !important;
   border-top: 0.5px solid var(--apple-border) !important;
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.22) !important;
-  max-height: 75vh !important;
-  overflow-y: auto !important;
+  max-height: 75dvh !important;
+  overflow: hidden !important;
   transform: translateY(100%);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1) !important;
   padding: 8px 16px calc(24px + env(safe-area-inset-bottom)) !important;
@@ -2588,12 +2595,16 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 .apple-build-sheet-head {
   display: flex;
+  flex: none;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   padding: 0 4px;
 }
 
 .apple-build-sheet-head h3 {
+  flex: 1;
+  min-width: 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--apple-text);
@@ -2611,6 +2622,9 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 .apple-tools-grid {
   display: grid;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   padding-bottom: 8px;
@@ -2765,7 +2779,8 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   border: none !important;
   border-top: 0.5px solid var(--apple-border) !important;
   box-shadow: 0 -8px 36px rgba(0, 0, 0, 0.25) !important;
-  max-height: 85vh !important;
+  max-height: min(85dvh, calc(100dvh - max(12px, env(safe-area-inset-top)))) !important;
+  overflow: hidden;
   z-index: 20 !important;
   transform: translateY(0);
   animation: apple-sheet-slide-up 0.32s cubic-bezier(0.32, 0.72, 0, 1) !important;
@@ -2787,6 +2802,12 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
   background: none;
   box-shadow: none;
   overscroll-behavior-y: contain;
+}
+/* M11: the panel body owns scrolling, rather than a list inside that body. */
+.apple-hig .game-panel-body :is(.around, .board-read) {
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
 }
 .apple-hig .chat-form input {
   min-height: 44px;
@@ -2853,11 +2874,13 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 /* Native dialogs are attached to the document, outside the phone's game window. */
 @media (max-width: 759px), (pointer: coarse) {
   .modal { background: #eee2c8; border-radius: 16px; border: 1px solid #bba57e; box-shadow: 0 12px 32px rgba(0, 0, 0, .3); padding: 12px; }
-  .modal-head { min-height: 48px; padding: 0 0 10px; color: #2c1e11; background: none; box-shadow: none; text-shadow: none; }
+  .modal { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); scroll-padding-top: 76px; overscroll-behavior-y: contain; }
+  .modal-head { position: sticky; top: -12px; z-index: 2; min-height: 60px; padding: 12px 0 10px; color: #2c1e11; background: #eee2c8; box-shadow: none; text-shadow: none; }
   .modal-head h2 { font: 700 18px/1.3 system-ui, sans-serif; }
   .modal-head button { min-width: 44px; min-height: 44px; padding: 0 8px; border: none; border-radius: 50%; background: rgba(60, 40, 10, .12); box-shadow: none; }
   .modal > :not(.modal-head) { margin-left: 0; margin-right: 0; }
   .modal > textarea { width: 100%; }
+  .modal :is(.around, .board-read) { max-height: none; overflow: visible; scrollbar-gutter: auto; }
 }
 
 
@@ -2877,6 +2900,10 @@ html.in-game, html.in-game body { height: 100%; overflow: hidden; overscroll-beh
 
 /* A phone on its side: the tab bar takes the left edge, so the map keeps the height. */
 @media (orientation: landscape) {
+  .apple-hig > .game-panel {
+    left: calc(76px + env(safe-area-inset-left)) !important;
+    width: calc(100% - 76px - env(safe-area-inset-left)) !important;
+  }
   .apple-hig .wd-well {
     left: calc(76px + env(safe-area-inset-left)) !important;
     right: 0 !important;
@@ -3007,28 +3034,75 @@ input.switch-input:indeterminate { background: repeating-linear-gradient(45deg, 
 .person-card-foot .person-card-note { padding: 3px 6px; }
 .stage.over-person { cursor: pointer; }
 
-/* W112, #643 B: the follow links, upper right, out of the way of the page. */
+/* W112: normal flow inside More; shared game panels/buttons own the colours and bevels.
+   See web/brand/README.md before adding a control surface. */
 .social-strip {
-  position: fixed;
-  top: 8px;
-  right: 8px;
-  /* Under the map's menus and person cards (40, 41), so a click's menu always covers it. */
-  z-index: 30;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  max-width: calc(100vw - 16px);
-  padding: 6px 8px 6px 12px;
-  background: var(--panel);
-  border: 1px solid var(--panel-2);
-  border-radius: 8px;
-  font-size: 0.85rem;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: var(--surface-gap);
+  border-top: 1px solid var(--line);
 }
-.social-strip-link { white-space: nowrap; }
-.social-strip-hide { padding: 2px 6px; }
+.social-strip .social-strip-link { white-space: normal; overflow-wrap: anywhere; }
 
 /* MY1 to MY7, #639: the Mayor voting box's panel. */
 .mayor-choices { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
 .mayor-choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mayor-choice.chosen strong { color: var(--accent, inherit); }
+
+/* W114: shared movable windows. Geometry is constrained to the game well by createPanels. */
+.wd-game.window-desktop { position: relative; isolation: isolate; }
+.wd-room.window-desktop:not(.apple-hig).has-panel .room-host { right: 8px; }
+.wd-game.window-desktop > .game-window {
+  position: absolute !important; grid-area: auto !important; inset: auto !important; margin: 0 !important;
+  min-width: 0 !important; max-width: none !important; min-height: 0 !important; max-height: none !important;
+  box-sizing: border-box; overflow: hidden; transform: translateY(0) !important;
+  animation: none !important; transition: none !important;
+  border-radius: 0 !important; padding: 3px !important;
+}
+.wd-game.window-desktop > .game-window[hidden] { display: none !important; }
+.game-window > .game-panel-head { flex: none; cursor: move; touch-action: none; user-select: none; gap: 6px; }
+.game-window > .game-panel-head h2 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-window .window-actions { display: flex; flex: none; gap: 3px; }
+.game-window .window-actions .wd-tbtn { border-radius: 0; display: inline-flex !important; align-items: center; justify-content: center; }
+.game-window > .game-panel-head:focus-visible { outline: 2px solid #cf7a34; outline-offset: -2px; }
+.game-window > .game-panel-body { flex: 1; min-height: 0; min-width: 0; overscroll-behavior: contain; padding-bottom: 30px; }
+/* Only the outer body scrolls. A nested My bots body otherwise gets a second scrollbar. */
+.game-window .game-panel-body :is(.game-panel-body, .around, .board-read) { overflow: visible; max-height: none; scrollbar-gutter: auto; }
+.game-window.window-active { outline: 2px solid #cf7a34; outline-offset: -2px; }
+.game-window .window-resize {
+  position: absolute; right: 3px; bottom: 3px; width: 28px; height: 28px;
+  min-height: 0; padding: 0; cursor: nwse-resize; touch-action: none;
+  color: var(--wd-dk); background: var(--wd-face); border: 0; z-index: 6;
+}
+.game-window .window-resize[hidden] { display: none; }
+.window-dock {
+  position: absolute; z-index: 90; display: flex; align-items: stretch; gap: 4px;
+  box-sizing: border-box; padding: 3px; background: var(--wd-face); border: 1px solid #4d3620;
+  box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c;
+}
+.window-dock[hidden], .window-dock-entry[hidden] { display: none; }
+.window-dock-handle { cursor: move; touch-action: none; flex: none; }
+.window-dock-items { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+.window-dock-entry { display: flex; flex: none; }
+.window-dock-entry > :first-child { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.window-desktop > .game-menu { z-index: 100; }
+.window-desktop .sheet-scrim { display: none !important; }
+.apple-hig.window-desktop > .game-window { background: #eee2c8 !important; }
+.apple-hig.window-desktop .game-panel-head { padding: 4px; min-height: 44px; }
+.apple-hig.window-desktop .game-panel-head h2 { font-size: 14px; }
+.apple-hig.window-desktop .game-window .game-panel-head { background: #914021; color: #fff3d2; }
+.apple-hig.window-desktop .game-window .window-actions .wd-tbtn {
+  border-radius: 0 !important; color: #2b1d10 !important;
+  background: linear-gradient(#f6ecce, #dfcd9f) !important;
+  border: 1px solid #4d3620 !important;
+  box-shadow: inset 1px 1px #fff7dc, inset -1px -1px #a98d5c !important;
+}
+@media (pointer: coarse), (max-width: 759px) {
+  .game-window .window-actions .wd-tbtn, .window-dock .wd-tbtn { min-width: 44px; min-height: 44px; }
+  .game-window .window-resize { width: 44px; height: 44px; }
+  .game-window > .game-panel-body { padding-bottom: 46px; }
+}
+/* A110: the community rules, read in place before accepting. */
+.rules-text { max-width: 42rem; max-height: min(28rem, 55vh); overflow-y: auto; padding: .25rem .75rem; border: 1px solid var(--line, #d0d4dc); border-radius: 8px; }
+.rules-notice { position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 20; display: flex; gap: .75rem; align-items: center; max-width: min(40rem, 92vw); padding: .5rem .75rem; border-radius: 8px; background: rgba(20, 23, 34, .92); color: #fff; }

@@ -64,7 +64,7 @@ const TOPICS: [(&str, &str); 10] = [
     ),
     (
         "pins",
-        "Pins are links and notes stuck under the whiteboard, each with who pinned it. pin adds \
+        "Pins are links and notes on the room's pin board, each with who pinned it. pin adds \
          one, unpin removes one. The room's pin policy says who may. Pin what the room will need \
          again, not chat.",
     ),

@@ -37,7 +37,8 @@ hand, with the plant's building on The Commons map (RC7, RC8).
   beside a road. Nobody goes into it, its builder included: its door is a 409, its details (W72)
   say `can_go_in` is false, list no bots and give `waiting`, how many bots wait there, and asking to
   let a bot in is a 409 too. Its card says how many are waiting and that nobody goes inside, and its
-  menu shows who's waiting, as RC6 does. Taking it down changes nothing about the bots waiting.
+  menu shows who's waiting, as RC6 does, and for whoever put it up, Build outside, with the plant's
+  own parts (E43 in [outside.md](outside.md)). Taking it down changes nothing about the bots waiting.
 - **RC8.** While it stands, the bots waiting at the plant are drawn at it on The Commons map, by
   name and look, with no owner, no player and nowhere they came from (RC6). Nothing else on the map
   shows them.

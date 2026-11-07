@@ -721,14 +721,16 @@ fn check_bot_may_play(state: &AppState, agent_id: &str) -> ApiResult<()> {
     }
 }
 
-/// A player that may be used right now. A guest nobody claimed stops working after a week (W10),
+/// A player that may be used right now. An unclaimed guest expires a week after creation (W10),
 /// and one that was removed (W18) has no token any more. Every use of a token passes through here,
 /// so a bot that is set to stay home after it joined stops at once (W3).
 fn usable(state: &AppState, mut player: PlayerRow, now: i64) -> ApiResult<PlayerRow> {
     if player.removed {
         return Err(ApiError::unauthorized());
     }
-    if player.kind() == PlayerKind::Guest && now - player.seen_at > GUEST_IDLE_SECS {
+    if player.kind() == PlayerKind::Guest
+        && (now - player.seen_at > GUEST_IDLE_SECS || now - player.created_at >= GUEST_IDLE_SECS)
+    {
         return Err(ApiError::unauthorized());
     }
     if let Some(agent_id) = &player.agent_id {
