@@ -2038,6 +2038,8 @@ async fn a_walk_in_on_a_public_project_floor_can_be_brought_in_but_a_private_one
 async fn a_walk_in_ends_with_a_public_floor_and_a_bot_elsewhere_cant_bring_one_in() {
     let server = Server::start().await;
     let town = server.town().await;
+    // Fern's home, read before she has a second room.
+    let home = text(&server.get(&town.fern, "/api/me").await.ok()["hangouts"][0]["id"]);
     let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
     let project = text(&started["project_id"]);
     let floor = text(&started["floor_id"]);
@@ -2058,7 +2060,6 @@ async fn a_walk_in_ends_with_a_public_floor_and_a_bot_elsewhere_cant_bring_one_i
     // (b) Public again with Rover on it, but Fern is standing somewhere else: refused.
     server.put(&town.ann.key, &format!("/api/floors/{floor}"), access("public")).await.ok();
     server.post(&town.bo.key, &walk_in, rover).await.ok();
-    let home = text(&server.get(&town.fern, "/api/me").await.ok()["hangouts"][0]["id"]);
     server.tool(&town.fern, "go_to_room", json!({ "hangout_id": home })).await;
     server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
 
