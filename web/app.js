@@ -2581,6 +2581,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
   // The catalog as of the last time the panel opened, because who's unlocked what can change.
   let catalog = null;
+  let catalogFresh = false;
+  let catalogSpent = null;
   let catalogKey = null;
   let collectionId = '';
   let placedKey = null;
@@ -3035,13 +3037,32 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   // The Build panel
 
+  // #748: toggling See the room / Catalog within one build session reuses the fetched catalog unless
+  // credits were spent in the shop (`ah-credits`).
+  function onCredits(event) {
+    const spent = event?.detail?.spent;
+    if (typeof spent !== 'number') return;
+    const changed = (catalogSpent !== null && spent !== catalogSpent) || (catalogSpent === null && spent > 0);
+    catalogSpent = spent;
+    if (changed) {
+      catalogFresh = false;
+      if (panels.current === 'build') openCatalog();
+    }
+  }
+  addEventListener('ah-credits', onCredits);
+
   async function openCatalog() {
     buildError.hidden = true;
+    if (catalog && catalogFresh) {
+      render();
+      return;
+    }
     try {
       const fresh = await api('/api/items');
       // #529: the same catalog as last time keeps its tiles; only a change draws them again.
       const same = catalog && JSON.stringify(fresh) === JSON.stringify(catalog);
       catalog = fresh;
+      catalogFresh = true;
       if (!same) {
         // The list of what's placed takes its names from the catalog too.
         catalogKey = null;
@@ -3342,6 +3363,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
 
   function end() {
     building = false;
+    catalogFresh = false;
     hand = null;
     menu.close();
     choose(null);
@@ -3767,7 +3789,10 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     labelOf,
     // Closing an item's notes beside the room goes back to the catalog they were opened from.
     backToCatalog: (was) => building && was === 'itemnotes' && beside.matches,
-    leave: () => menu.close(),
+    leave: () => {
+      removeEventListener('ah-credits', onCredits);
+      menu.close();
+    },
     // Whether the room is being built in or has something in hand: person cards stay out of the way.
     get active() { return building || Boolean(hand); },
     // HC26: puts a pack up on this floor, the same as pressing its tile, for whoever may build here.
