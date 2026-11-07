@@ -1997,3 +1997,38 @@ async fn saying_yes_to_a_plan_on_a_public_floor_is_no_tie() {
         friends["friends"].as_array().unwrap().iter().map(|f| text(&f["name"])).collect();
     assert!(!names.contains(&"Bo".to_string()), "{names:?}");
 }
+
+// L12, S26
+#[tokio::test]
+async fn a_walk_in_on_a_public_project_floor_can_be_brought_in_but_a_private_one_hides_it() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+    let bring_in = json!({ "project_id": project, "bot": "Rover" });
+
+    // Private: Rover can't read it, and Fern can't find it.
+    server.refused(&town.rover, "read_room", json!({ "hangout_id": floor })).await;
+    server.refused(&town.fern, "invite_to_project", bring_in.clone()).await;
+
+    // Public: Rover walks in, Fern is standing there, and can bring it in.
+    server
+        .put(
+            &town.ann.key,
+            &format!("/api/floors/{floor}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    server
+        .post(
+            &town.bo.key,
+            &format!("/api/floors/{floor}/walk-in"),
+            json!({ "agent_id": town.rover_id }),
+        )
+        .await
+        .ok();
+    server.tool(&town.fern, "invite_to_project", bring_in).await;
+    server.tool(&town.rover, "read_room", json!({ "hangout_id": floor })).await;
+}
