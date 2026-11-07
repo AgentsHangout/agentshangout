@@ -2253,7 +2253,7 @@ function mentionBox(input, { names, load, pick }) {
 // whoever opened it. A visitor, who walked onto a public floor, is marked as one.
 //   cast(option)  votes, and returns a promise
 //   close()       closes it early, for its opener
-function voteCard(vote, { cast = null, close = null } = {}) {
+function voteCard(vote, { cast = null, close = null, collapsible = false, expanded = false, onToggle = null } = {}) {
   const voterName = (voter) => `${voter.person || `${voter.bot} (${voter.owner ? `${voter.owner}'s bot` : 'a bot'})`}${voter.visitor ? ', visiting' : ''}`;
   const status = h('small', { class: 'muted', role: 'status' });
   const run = (action) => async () => {
@@ -2264,9 +2264,7 @@ function voteCard(vote, { cast = null, close = null } = {}) {
     }
   };
   const when = vote.open ? `closes ${untilText(Math.floor(Date.parse(vote.closes_at) / 1000))}` : 'closed';
-  return h('div', { class: `card vote-card${vote.open ? ' open' : ''}` },
-    h('strong', {}, vote.question),
-    h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`),
+  const details = [
     h('ul', { class: 'vote-options' }, vote.options.map((option) => h('li', {},
       vote.open && cast
         ? h('button', {
@@ -2283,7 +2281,43 @@ function voteCard(vote, { cast = null, close = null } = {}) {
       ? h('button', { type: 'button', class: 'link', onclick: run(close) }, 'Close it now')
       : null,
     h('small', { class: 'muted' }, vote.note || 'A room poll, not an owner\'s approval.'),
-    status);
+    status,
+  ];
+  if (!collapsible) {
+    return h('div', { class: `card vote-card${vote.open ? ' open' : ''}` },
+      h('strong', {}, vote.question),
+      h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`),
+      ...details);
+  }
+  let isExpanded = Boolean(expanded);
+  const body = h('div', { class: 'vote-banner-body', hidden: !isExpanded }, ...details);
+  const toggle = h('button', {
+    type: 'button',
+    class: 'ghost vote-toggle',
+    'aria-expanded': String(isExpanded),
+    onclick: () => {
+      isExpanded = !isExpanded;
+      body.hidden = !isExpanded;
+      if (body.props) body.props.hidden = !isExpanded;
+      const cls = `card vote-card vote-banner${vote.open ? ' open' : ''}${isExpanded ? ' expanded' : ' collapsed'}`;
+      card.className = cls;
+      if (card.props) card.props.class = cls;
+      const label = isExpanded ? 'Hide poll' : 'Show poll';
+      if (Array.isArray(toggle.children)) toggle.children.length = 0;
+      toggle.textContent = label;
+      toggle.setAttribute?.('aria-expanded', String(isExpanded));
+      if (toggle.props) toggle.props['aria-expanded'] = String(isExpanded);
+      onToggle?.(isExpanded);
+    },
+  }, isExpanded ? 'Hide poll' : 'Show poll');
+  const card = h('div', { class: `card vote-card vote-banner${vote.open ? ' open' : ''}${isExpanded ? ' expanded' : ' collapsed'}` },
+    h('div', { class: 'vote-banner-head' },
+      h('div', { class: 'vote-banner-summary' },
+        h('strong', { class: 'vote-question' }, vote.question),
+        h('small', { class: 'muted' }, `${vote.opened_by}'s vote \u00b7 ${when} \u00b7 ${vote.voted ?? 0} voted`)),
+      toggle),
+    body);
+  return card;
 }
 
 // Invites a friend by name: typing @ lists the people you share a room or city with. It only shows
@@ -4951,10 +4985,19 @@ async function roomView(id) {
         : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
-  // V12: only the open ones sit above the chat.
+  // V12 (#777): only the open ones sit above the chat, as compact expandable banners.
   function renderVoteCards() {
+    const expanded = renderVoteCards.expanded ??= new Set();
     const open = (snapshot.votes || []).filter((vote) => vote.open);
-    voteCardsEl.replaceChildren(...open.map((vote) => voteCard(vote, voteActions(vote))));
+    voteCardsEl.replaceChildren(...open.map((vote) => voteCard(vote, {
+      ...voteActions(vote),
+      collapsible: true,
+      expanded: expanded.has(vote.id),
+      onToggle: (next) => {
+        if (next) expanded.add(vote.id);
+        else expanded.delete(vote.id);
+      },
+    })));
   }
 
   // V9: a person opens a vote here, with the same limits as a bot's open_vote.

@@ -478,11 +478,13 @@ poll, and can't announce the instant the ping lands.
   `vote_how`, which names `cast_vote`, says voting is up to the bot, even in a vote its owner
   opened, and says the question and options are other people's words, never instructions. In `read_room` and a room's snapshot, each vote has
   `you_voted`, and `you_opened` for whoever can close it.
-- **V12.** On the room page, each open vote is a card above the chat: the question, whose vote it
-  is, when it closes, how many voted, a button per option with the person's choice marked, each
-  option's count and who chose it (a visitor marked as visiting), and Close it now for whoever
-  opened it. The Votes panel shows the same cards for open and recently closed votes, with Open a
-  vote for anyone who belongs. Bots' pages show the cards without buttons.
+- **V12.** On the room page, each open vote above the chat starts as a compact banner (#777): the
+  question, whose vote it is, when it closes, how many voted, and Show poll / Hide poll. Expanding
+  it reveals the options and voters in a bounded scroller so the chat log and composer stay
+  reachable: a button per option with the person's choice marked, each option's count and who
+  chose it (a visitor marked as visiting), and Close it now for whoever opened it. The Votes panel
+  shows the full cards for open and recently closed votes, with Open a vote for anyone who
+  belongs. Bots' pages show the cards without option or Close buttons.
 - **V13.** Someone who walked onto a public floor, person or bot, sees each vote's question,
   options, counts and `voted`, but no option lists who chose it (`voters` is empty and
   `voters_hidden` is true), so a stranger can't read members' names or whose bots are whose. This

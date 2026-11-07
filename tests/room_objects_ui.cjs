@@ -44,14 +44,15 @@ assert.ok(!buttons.some(x => x.children.includes('Clear pins')), 'ordinary pinne
 // itself), and a person who isn't a guest can open one. A bot's page or a guest's has no Open.
 context.votesPanelEl = {replaceChildren(...children) {this.children = children;}};
 context.voteCardsEl = {replaceChildren(...children) {this.children = children;}};
-context.voteCard = (vote) => node('div', {class:'vote-card'}, vote.question, ...vote.options.map(o => `${o.option}: ${o.votes}`));
+context.voteCard = (vote, opts = {}) => node('div', {class:'vote-card', opts}, vote.question, ...vote.options.map(o => `${o.option}: ${o.votes}`));
 context.voteActions = () => ({});
 context.openVoteDialog = () => opened.push('open-vote');
-context.snapshot = {you:{agent_id:'b1'},votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
+context.snapshot = {you:{agent_id:'b1'},votes:[{id:'v1',question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
 vm.runInContext(`${extract('renderVotesPanel')}\n${extract('renderVoteCards')}`, context);
 context.renderVotesPanel();
 assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'a bot opens votes with its tool');
 assert.ok(JSON.stringify(context.votesPanelEl.children).includes('apples: 2'));
+assert.ok(!all(context.votesPanelEl).find(x => x.class === 'vote-card').opts.collapsible, 'Votes panel renders full cards');
 context.snapshot = {you:{agent_id:null},guest:null,votes:context.snapshot.votes};
 context.renderVotesPanel();
 const openButton = all(context.votesPanelEl).find(x => x.tag === 'button');
@@ -61,10 +62,18 @@ assert.equal(opened.at(-1), 'open-vote');
 context.snapshot = {you:{agent_id:null},guest:{since:1},votes:[]};
 context.renderVotesPanel();
 assert.equal(all(context.votesPanelEl).filter(x => x.tag === 'button').length, 0, 'a guest cannot open one');
-// The open ones sit above the chat; a closed one doesn't.
-context.snapshot = {you:{agent_id:null},votes:[{question:'Open?',open:true,options:[]},{question:'Done?',open:false,options:[]}]};
+// The open ones sit above the chat as compact collapsible banners; a closed one doesn't.
+context.snapshot = {you:{agent_id:null},votes:[{id:'v-open',question:'Open?',open:true,options:[]},{id:'v-done',question:'Done?',open:false,options:[]}]};
 context.renderVoteCards();
 assert.ok(JSON.stringify(context.voteCardsEl.children).includes('Open?') && !JSON.stringify(context.voteCardsEl.children).includes('Done?'));
+assert.equal(context.voteCardsEl.children[0].opts.collapsible, true, 'chat poll banner is collapsible');
+assert.equal(context.voteCardsEl.children[0].opts.expanded, false, 'chat poll banner starts collapsed');
+context.voteCardsEl.children[0].opts.onToggle(true);
+context.renderVoteCards();
+assert.equal(context.voteCardsEl.children[0].opts.expanded, true, 'expanded poll stays open across snapshot redraws');
+context.voteCardsEl.children[0].opts.onToggle(false);
+context.renderVoteCards();
+assert.equal(context.voteCardsEl.children[0].opts.expanded, false, 'collapsing poll resets expanded state');
 context.snapshot = {you:{agent_id:'b1'},votes:[{question:'Snack?',open:true,options:[{option:'apples',votes:2}]}]};
 // A fresh snapshot redraws the panel only while it is open, including a guest's empty list.
 vm.runInContext(extract('refreshVotes'), context);

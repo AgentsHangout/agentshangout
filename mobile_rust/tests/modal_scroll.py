@@ -29,13 +29,13 @@ with sync_playwright() as playwright:
             return source.slice(start, source.indexOf('\n}\n', start) + 3);
           };
           const names = ['h','modal','formError','field','submitter','stayField','schedulePainter',
-            'routineDialog','installSheetDrag','createPanels','watchPhoneChrome','installAppleHigMap'];
+            'routineDialog','untilText','voteCard','installSheetDrag','createPanels','watchPhoneChrome','installAppleHigMap'];
           const code = names.map(name => `${name === 'routineDialog' ? 'async ' : ''}${cut(name)}`).join('\n');
           // Mock only API data; use the actual schedule controls, modal and sheet builders.
           const setup = `const api=async()=>({days:[],starts:'09:00',ends:'17:00',workplace_choices:[],public_places:false});
             const STRANGERS_TEXT='Public room warning';`;
-          const {h, modal, routineDialog, createPanels, installAppleHigMap} = new Function(
-            `${setup}\n${code}\nreturn {h,modal,routineDialog,createPanels,installAppleHigMap};`)();
+          const {h, modal, routineDialog, voteCard, createPanels, installAppleHigMap} = new Function(
+            `${setup}\n${code}\nreturn {h,modal,routineDialog,voteCard,createPanels,installAppleHigMap};`)();
           const {windowFrame} = await import('/web/city.js');
           const frame = windowFrame({label:'Test town',stats:[],tools:true});
           frame.root.classList.add('wd-game','apple-hig'); document.body.append(frame.root);
@@ -44,6 +44,22 @@ with sync_playwright() as playwright:
           for(const name of ['more','bots','around']) panels.add(name, name, {},
             h('ul',{class:name === 'around' ? 'around' : 'stack'},
               ...Array.from({length:50},(_,i)=>h('li',{},h('button',{},`${name} entry ${i}`)))));
+          const soon = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+          const voters = Array.from({length:20}, (_,i) => ({bot:`Bot ${i+1}`, owner:`Owner ${i+1}`}));
+          const longPoll = voteCard({
+            id:'v1',
+            question:'How should a long room poll with many long options and voters sit above the chat on a small phone screen?',
+            opened_by:'Justin', open:true, closes_at:soon, voted:20, you_voted:'Option 1', you_opened:true,
+            options:Array.from({length:6}, (_,i) => ({
+              option:`Option ${i+1}: keep a compact summary banner above chat and scroll long options and voter lists inside`,
+              votes:i === 0 ? 20 : 0,
+              voters:i === 0 ? voters : [],
+            })),
+          }, {cast:async()=>{}, close:async()=>{}, collapsible:true});
+          panels.add('room', 'Chat', {},
+            h('div',{class:'vote-cards'}, longPoll),
+            h('div',{class:'chat-log'}, ...Array.from({length:12}, (_,i) => h('p',{},`Chat message ${i+1}`))),
+            h('form',{class:'chat-form'}, h('input',{placeholder:'Say something'}), h('button',{type:'submit'},'Send')));
           const build = installAppleHigMap({frame,panels,choose:()=>{},movesCount:()=>300,trust:true});
           window.fixture={panels,build,whiteboard:()=>modal('Whiteboard',
             h('div',{class:'board-read'},Array.from({length:100},(_,i)=>`Note ${i}\n`).join('')))};
@@ -109,6 +125,30 @@ with sync_playwright() as playwright:
                 check(box['x'] >= rail['x']+rail['width']-1, f'{name} clears landscape navigation rail')
             panel.locator('.sheet-close').click()
             check(panel.is_hidden(), f'{name} Close dismisses panel')
+
+        page.evaluate("fixture.panels.open('room')")
+        room = page.locator('.game-panel-room')
+        page.wait_for_timeout(200)
+        toggle = room.locator('.vote-toggle')
+        poll_body = room.locator('.vote-banner-body')
+        chat_log = room.locator('.chat-log')
+        composer = room.locator('.chat-form input')
+        check(poll_body.is_hidden(), 'poll starts collapsed above chat')
+        check(visible_inside(toggle, room), 'collapsed poll expand button is visible')
+        check(visible_inside(chat_log, room) and (chat_log.bounding_box() or {}).get('height', 0) >= 36, 'chat messages are visible with collapsed poll')
+        check(visible_inside(composer, room), 'composer is visible with collapsed poll')
+        toggle.click()
+        check(poll_body.is_visible(), 'expanding poll reveals options and voters')
+        check(visible_inside(toggle, room), 'expanded poll collapse button remains reachable')
+        check(poll_body.evaluate('(el)=>el.scrollHeight > el.clientHeight+1'), 'long expanded poll has bounded height and its own scroller')
+        poll_body.evaluate('(el)=>{el.scrollTop=el.scrollHeight}')
+        check(poll_body.evaluate('(el)=>el.scrollTop > 0'), 'expanded poll scrolls through long options and voters')
+        check(visible_inside(toggle, room), 'collapse button stays reachable after scrolling poll')
+        check(visible_inside(chat_log, room) and (chat_log.bounding_box() or {}).get('height', 0) >= 36, 'chat messages stay reachable while poll is expanded')
+        check(visible_inside(composer, room), 'composer stays reachable while poll is expanded')
+        toggle.click()
+        check(poll_body.is_hidden(), 'collapsing poll hides ballot again')
+        room.locator('.sheet-close').click()
         context.close()
     browser.close()
 server.shutdown()
