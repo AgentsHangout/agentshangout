@@ -235,7 +235,9 @@ input::placeholder { color: #8b7a5e; }
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .money-close { min-width: 44px; min-height: 44px; }
+  .shop-confirm .wd-btn { min-height: 44px; }
 }
+.shop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 2px; box-shadow: inset 1px 1px 0 #fff7dc; }
 .how-you-earn { margin: 0 0 12px; }
 .how-you-earn ul { margin: 6px 0 0; padding-left: 18px; }
 /* HC45: a pack's pieces, each with its picture, price and Buy. */
