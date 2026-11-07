@@ -4505,6 +4505,8 @@ const USES = {
   // #790: a bot that's dreaming or asleep at home lies on a free bed (the server gives it one).
   bed: { spots: 1, pose: 'sleep', on: true },
   double_bed: { spots: 1, pose: 'sleep', on: true },
+  // #837: two sleepers, the bottom bunk and then the top one, which sits higher.
+  bunk_bed: { spots: 2, pose: 'sleep', on: true, bunks: [0, -22] },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
   arcade_cabinet: { spots: 1, pose: 'stand', hands: true },
   billiards: { spots: 2, pose: 'stand', hands: true },
@@ -4555,20 +4557,22 @@ function standing({ id, item, x, y, w = 1, h = 1, facing = 0 }) {
 // or for one drawn from its end, the side it was turned to: right at facing 1, and left at 3.
 function spotsOf({ use, side, facing, left, top, wide, deep, y }) {
   if (!use) return [];
-  const { spots, pose, on, hands, busy } = use;
+  const { spots, pose, on, hands, busy, bunks } = use;
   const turned = Boolean(side) && facing % 2 === 1;
   const right = facing === 1;
   return Array.from({ length: spots }, (_, i) => {
-    const along = (i + 0.5) / spots;
+    // #837: a bunk bed's sleepers lie one above the other, so they share the middle and differ in height.
+    const along = bunks ? 0.5 : (i + 0.5) / spots;
+    const lift = bunks?.[i] ?? 0;
     const [ax, ay] = turned
-      ? clearOf(right ? left + wide + 6 : left - 6, top + deep * along + 4)
-      : clearOf(left + wide * along, y + 3);
+      ? clearOf(right ? left + wide + 6 : left - 6, top + deep * along + 4 + lift)
+      : clearOf(left + wide * along, y + 3 + lift);
     const drop = i % 2;
     if (!on) return { x: ax, y: ay, ax, ay, pose, drop, hands, busy, facing: turned ? (right ? 'left' : 'right') : 'back' };
     // Someone on a seat has their feet behind its front edge, and `over` keeps them painted on it.
     const seat = turned
-      ? { x: left + wide / 2 + (right ? 3 : -3), y: top - 3 + (deep - 8) * along, facing: right ? 'right' : 'left' }
-      : { x: left + 7 + (wide - 14) * along, y: y - 7, facing: 'front' };
+      ? { x: left + wide / 2 + (right ? 3 : -3), y: top - 3 + (deep - 8) * along + lift, facing: right ? 'right' : 'left' }
+      : { x: left + 7 + (wide - 14) * along, y: y - 7 + lift, facing: 'front' };
     return { ...seat, ax, ay, pose, drop, over: y + 1 };
   });
 }

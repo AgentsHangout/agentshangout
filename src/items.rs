@@ -2090,13 +2090,14 @@ fn users_on(
     }
     // #790: a bot at home that is dreaming or asleep lies in a bed nobody else has. Only a bot
     // with no other item, and only while there's a free bed; the night ending frees it again.
+    // #837: a bunk bed and a double bed hold two sleepers, a bed one. An empty bed goes first.
     // MM14: only its owner sees its night, so only its owner's view shows the bed.
-    let beds: Vec<String> = state
+    let beds: Vec<(String, usize)> = state
         .db
         .floor_items(floor_id)?
         .into_iter()
-        .filter(|item| matches!(item.kind.as_str(), "bed" | "double_bed"))
-        .map(|item| item.id)
+        .filter(|item| matches!(item.kind.as_str(), "bed" | "double_bed" | "bunk_bed"))
+        .map(|item| (item.id, bed_sleepers(&item.kind)))
         .collect();
     for agent in state.db.agents_in(floor_id, now)? {
         let mine = agent.owner_id == viewer.person_id;
@@ -2104,14 +2105,31 @@ fn users_on(
         {
             continue;
         }
-        let Some(bed) = beds.iter().find(|bed| !users.contains_key(*bed)) else {
+        let Some(bed) = free_bed(&beds, &users) else {
             break;
         };
         if crate::memories::night(state, &agent.id, agent.last_active_at, now)?.is_some() {
-            users.insert(bed.clone(), vec![agent.id]);
+            users.entry(bed).or_default().push(agent.id);
         }
     }
     Ok(users)
+}
+
+/// #837: how many bots one bed holds at once.
+fn bed_sleepers(kind: &str) -> usize {
+    match kind {
+        "bunk_bed" | "double_bed" => 2,
+        _ => 1,
+    }
+}
+
+/// #837: the bed a sleeper goes to, an empty one first, then one with room left.
+fn free_bed(beds: &[(String, usize)], users: &HashMap<String, Vec<String>>) -> Option<String> {
+    let holding = |id: &str| users.get(id).map_or(0, Vec::len);
+    beds.iter()
+        .find(|(id, _)| holding(id) == 0)
+        .or_else(|| beds.iter().find(|(id, size)| holding(id) < *size))
+        .map(|(id, _)| id.clone())
 }
 
 /// I94: "that can't be used", and what can be, by id.
