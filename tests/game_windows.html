@@ -22,12 +22,18 @@ if (new URLSearchParams(location.search).has('phone')) {
   root.classList.add('apple-hig');
   root.append(h('nav', {class:'apple-tab-bar'}, h('button', {}, 'World'), h('button', {}, 'Room')));
 }
+frame.host.classList.add('room-host');
+const {Room} = await import('../web/room.js');
+const stage = h('section', {class:'stage'});
+frame.host.append(stage);
+const room = new Room(stage);
+room.setBots([{id:'demo', name:'Workshop bot', color:'#cf7a34', state:'active'}]);
 frame.host.style.cssText = 'position:absolute;inset:0;background:repeating-linear-gradient(45deg,#627a43,#627a43 40px,#5c733e 40px,#5c733e 80px)';
 frame.message.textContent = 'Drag a title, resize a corner, or minimize a window.';
 const panels = createPanels(root);
 const log = h('div', {class:'chat-log'}, ...Array.from({length:30}, (_,i) => h('p', {}, `Message ${i+1}: planning the next room.`)));
 panels.add('room', 'Chat', {}, log, h('form', {class:'chat-form'}, h('input', {'aria-label':'Message', value:'Keep this draft'})));
-const nested = h('div', {class:'game-panel-body'}, ...Array.from({length:18}, (_,i) => h('p', {}, `Bot ${i+1} · Connections, monitoring and permissions`)));
+const nested = h('div', {class:'game-panel-body'}, ...Array.from({length:40}, (_,i) => h('p', {}, `Bot ${i+1} · Connections, monitoring and permissions`)));
 panels.add('bots', 'My bots', {}, h('h3', {}, 'Connections'), nested);
 frame.actions.append(panels.toggle('room', 'Chat'), panels.toggle('bots', 'My bots'));
 // Real routes can open panels before attaching the game frame.
@@ -35,7 +41,7 @@ panels.open('room');
 document.body.append(root);
 panels.open('bots');
 root.addEventListener('keydown', event => { if (event.key === 'Escape') panels.close(); });
-window.fixture = {panels, root, frame, nested};
+window.fixture = {panels, root, frame, nested, h};
 </script>
 </body>
 </html>

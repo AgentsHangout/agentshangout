@@ -892,9 +892,24 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   the active window. Resizing the viewport keeps windows and dock controls reachable, including
   on touch screens. The window body owns scrolling; nested My bots content does not add a second
   vertical scrollbar. Expanded connections stay inside their window, below its controls.
-  Room on the phone minimizes all windows to reveal the interior. Geometry is local to the current
-  page; navigation discards it. See `tests/game_windows_ui.cjs` and
+  Room on the phone minimizes all windows to reveal the interior. Floating geometry is local to the
+  current page; navigation discards it. W115 separately preserves dock choices and proportions. See `tests/game_windows_ui.cjs` and
   `python tests/game_windows_browser.py` (using `tests/game_windows.html`).
+
+- **W115.** Game windows dock by default, reserving space beside the map or room rather than
+  covering it. Left, right, top and bottom zones have adjustable boundaries; windows in the
+  same zone share tabs. Dragging a title to an edge previews the destination before release.
+  A docked window dragged away from an edge stays docked; Float over game in Layout is the
+  explicit way to overlap the scene. A floating window can snap back to an edge. Cancelling
+  a drag restores its starting state. Layout also offers sidebar, split-sides and bottom
+  presets and Reset. Keyboard and touch users can choose zones without dragging; arrow keys
+  resize focused boundaries. Layout choices and proportions are saved per page in this browser,
+  with a working fallback if storage is blocked. Small screens consolidate zones into tabs
+  beside or below the scene without discarding the saved wide-screen arrangement. Minimized
+  windows occupy a reserved top or bottom bar that snaps between those edges. Maximize is an
+  explicit full-workspace view; Restore brings back the scene and the previous arrangement.
+  This refines W114's default floating behavior. `tests/game_window_zones.py` exercises the
+  production layout, including scene bounds, tab state, snapping, cancellation and persistence.
 
 ## What this can't do
 
