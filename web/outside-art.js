@@ -5,6 +5,9 @@
 import { itemsOf, rectOf } from './outside-spec.js';
 import { paintBuilding } from './outside-building.js';
 import { DECOR_ART } from './outside-decor.js';
+import { LAB_YARD_ART } from './outside-lab.js';
+import { PLANT_YARD_ART } from './outside-plant.js';
+import { SQUARE_YARD_ART } from './outside-square.js';
 import { YARD_ART, paintCenterpiece, paintFence, paintGroundCover, paintPath, paintStringLights } from './outside-yard.js';
 
 // A town square has no building, so its centrepiece stands in for one when things are sorted.
@@ -15,9 +18,12 @@ export function paintOutsideGround(S, kind, outside) {
   paintPath(S, kind, outside);
 }
 
+// Whichever table draws a kind, the shared yard's or one building's own (E42 to E44).
+const ART = () => [YARD_ART, DECOR_ART, LAB_YARD_ART, PLANT_YARD_ART, SQUARE_YARD_ART];
+
 // An item of a kind that has no art yet shows nothing, as any word this page doesn't know (E4).
 function paintItem(S, item) {
-  (YARD_ART[item.kind] || DECOR_ART[item.kind])?.(S, item);
+  ART().find((table) => Object.hasOwn(table, item.kind))?.[item.kind](S, item);
 }
 
 // Whether `a` ends before `b` begins, along u or along v, so `b` stands in front of it.

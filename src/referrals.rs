@@ -320,23 +320,35 @@ pub fn invite_people(
             }
             Invited::Already => {
                 state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)?;
-                already.push(person);
+                // A103: one kept quiet across a block, asked again with no block between them, is
+                // real now, and they're told as if it were new.
+                let key = crate::blocks::ask_key(&[&event.id, &person.id]);
+                if !crate::blocks::apart(state, &caller.person_id, &person.id)?
+                    && crate::blocks::quiet(state, "plan_invite", &key)?
+                {
+                    state.db.retell_plan_invite(&event.id, &person.id, &caller.person_id, now)?;
+                    state.db.unquiet_ask("plan_invite", &key)?;
+                    tell_invited(state, caller, &event, &person);
+                    added.push(person);
+                } else {
+                    already.push(person);
+                }
                 continue;
             }
             Invited::New => {}
         }
-        if state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)? {
-            // F58: told once, by name, with no room in it, so the link goes to their home page.
-            // The title is the proposer's words, so it carries the trust note (F55).
-            let notice = crate::notify::Notice {
-                event: "plan.invited",
-                hangout_id: String::new(),
-                text: format!(
-                    "{} invited you to a plan titled \"{}\". Answer it in Needs you. {}",
-                    caller.name, event.title, INVITED_TRUST
-                ),
-            };
-            crate::notify::send(state, std::slice::from_ref(&person.id), &notice);
+        // A103: across a block it's kept as sent, and goes nowhere.
+        let across = crate::blocks::apart(state, &caller.person_id, &person.id)?;
+        let fresh = state.db.note_invited_by(&event.id, &person.id, &caller.person_id, now)?;
+        let key = crate::blocks::ask_key(&[&event.id, &person.id]);
+        if across {
+            state.db.quiet_ask("plan_invite", &key, now)?;
+        } else {
+            // Asked with no block between them, it's real, whatever an older ask was.
+            state.db.unquiet_ask("plan_invite", &key)?;
+        }
+        if fresh && !across {
+            tell_invited(state, caller, &event, &person);
         }
         added.push(person);
     }
@@ -354,6 +366,20 @@ pub fn invite_people(
         reply["full"] = serde_json::json!(full);
     }
     Ok(reply)
+}
+
+/// F58: told once, by name, with no room in it, so the link goes to their home page. The title is
+/// the proposer's words, so it carries the trust note (F55).
+fn tell_invited(state: &AppState, caller: &Caller, event: &Event, person: &Person) {
+    let notice = crate::notify::Notice {
+        event: "plan.invited",
+        hangout_id: String::new(),
+        text: format!(
+            "{} invited you to a plan titled \"{}\". Answer it in Needs you. {}",
+            caller.name, event.title, INVITED_TRUST
+        ),
+    };
+    crate::notify::send(state, std::slice::from_ref(&person.id), &notice);
 }
 
 /// F58: a plan someone was invited to by name, as Needs you shows it: what a link shows (F11) and

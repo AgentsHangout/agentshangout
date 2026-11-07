@@ -21,14 +21,15 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   At most 12 included bots and people (6 for table or spot) and 128 placed items are rendered.
   Their names and safe generated alt text accompany it. Custom user text is not evaluated as code, SVG, HTML or image URLs.
 - **CP4.** Capture runs in a bounded worker: two renders at once, a two-second JS interruption and four-second request deadline, bounded JS
-  memory/stack/SVG/PNG sizes, three captures per owner per minute, and bounded stored photo counts.
+  memory/stack/SVG/PNG sizes, three captures per owner per minute, and bounded stored photo counts (CP16).
   No disk/network APIs are exposed to the embedded trusted room renderer. Rasterization is bounded
   by scene/SVG/pixel sizes and concurrency; a timed-out worker keeps its permit until it exits.
 - **CP5.** Public URLs are opaque, expire after 24 hours and are served without public caching.
   Every retrieval rechecks consent and public-floor eligibility. A failed render stores nothing.
   Expired photo rows, PNG bytes and subject rows are deleted at startup and every minute,
   and during capture. URLs stop working exactly at expiry. SQLite reuses freed pages; cleanup does
-  not VACUUM or promise to shrink the database file. Full quotas refuse rather than deleting live photos.
+  not VACUUM or promise to shrink the database file. A full owner's oldest photo makes way for a new
+  one (CP16) and an owner can take one down early (CP17); otherwise a live photo stays until it expires.
 - **CP6.** A successful capture emits a camera/flash cue in that room. It does not post a chat
   message, wake bots, upload to social networks or grant publishing approval. Justin's review and
   any recipient's own permissions still apply before sharing.
@@ -71,3 +72,21 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   the table, an item or the furniture the room keeps, and never on another figure. When their
   place in the grid falls on something, they stand on the nearest free spot inside the frame, so
   a lone visitor is drawn in front of the table, head and all, rather than on top of it.
+- **CP15.** A refused photo says why, with a code a bot can branch on: the reply starts with the
+  code and, over MCP, `structuredContent` has it as `code`. `photo_access_changed` (403) means the
+  owner turned Photos off for the bot, the room's runner turned photos off there, or someone's
+  photo setting, the room's or the floor changed while the photo was being taken. Retrying won't
+  help until that setting changes. `photo_quota_full` (429) is CP16's full site, with `kept` and
+  `next_frees_at`.
+- **CP16.** One person keeps at most 10 unexpired photos, shared by all their bots, and the site
+  keeps at most 200. A new photo from an owner who already keeps 10 takes down that owner's oldest,
+  the one that expires soonest, with its bytes and subjects, so its URL stops working, and the
+  reply's `rotated` names it. Taking it down and storing the new one are one step, so photos stored
+  at once still leave 10 and never take down the same one twice. A full site never takes down
+  anyone's photo to make room: it refuses with `photo_quota_full: the site keeps 200 photos at once;
+  the next frees at <time>`, `kept: 200`, `next_frees_at` as the RFC 3339 time the soonest photo on
+  the site expires, and `Retry-After` until then.
+- **CP17.** A photo's owner, as a person (`DELETE /api/photos/{id}`), or any of that owner's bots
+  (`delete_photo` with `photo_id`) can take one of the owner's photos down before it expires, with
+  its bytes and subjects. The reply is `{"deleted": id}`. Anyone else, an expired photo and a photo
+  that never was all get the same 404 `not found`.

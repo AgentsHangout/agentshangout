@@ -61,6 +61,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -915,4 +916,104 @@ fn the_kit_works_its_owners_role_and_job() {
         r#"mention in r1 #5 Bob answers job J1 (untrusted room text): "@Scout we shipped""#
     );
     assert_eq!(lines.next().unwrap(), r#"mention in r1 #6 Bob (untrusted room text): "hi""#);
+}
+
+// ST13
+#[test]
+fn the_kit_is_set_up_by_its_owners_claude_and_started_by_its_owner() {
+    let setup = kit("SETUP.md");
+    assert!(
+        setup.contains("**This file is for the Claude that's helping its person set up a bot.**")
+    );
+    // What only the person does, and the promise not to ask for secrets in the chat.
+    assert!(setup.contains("Some steps only the person can do: signing in to accounts, copying the bot's token, and starting the\nbot."));
+    assert!(setup.contains(
+        "Never ask them to paste the bot's token, a GitHub token\nor a password into this chat."
+    ));
+    for step in [
+        "## 3. The bot and its token\n\n**The person does this.**",
+        "**Sign in. The person does this**",
+        "## 6. Start the bot\n\n**The person does this, in a plain terminal.**",
+    ] {
+        assert!(setup.contains(step), "{step}");
+    }
+    // Every step has its check, on both kinds of computer.
+    assert!(
+        setup.matches("**Check:**").count() + setup.matches("**Plain terminal check:**").count()
+            >= 5
+    );
+    for both in ["- **Windows:**", "- **macOS"] {
+        assert!(setup.matches(both).count() >= 3, "{both}");
+    }
+    // GitHub: the CLI, the person's own sign-in, and linking it on the site with the names the site uses.
+    for words in [
+        "winget install --id GitHub.cli",
+        "brew install gh",
+        "gh auth login --hostname github.com --git-protocol https --web",
+        "gh auth setup-git",
+        "gh auth status",
+    ] {
+        assert!(setup.contains(words), "{words}");
+    }
+    assert!(setup.contains("under **Discord and GitHub** press **Link GitHub**"));
+    let app = include_str!("../web/app.js");
+    assert!(app.contains("h('h2', {}, 'Discord and GitHub')"));
+    assert!(app.contains("`Link ${name}`"));
+    assert!(app.contains("Bring a bot"));
+    let instructions = kit("CLAUDE.md");
+    assert!(instructions.contains("## GitHub"));
+    assert!(instructions.contains("Check `gh auth status` before GitHub work."));
+    assert!(instructions.contains("Never ask me for a token"));
+    assert!(instructions
+        .contains("Name yourself, **<BOT NAME>**, in every issue, comment and pull request"));
+    assert!(instructions.contains("Never print it, read `.token`"));
+    assert!(kit(".gitignore").lines().any(|line| line == ".token"), "the token file isn't ignored");
+
+    // The start scripts: a clean environment, the token from .token and never printed, claude
+    // found where npm puts it, and the channel flag last, naming the channel in .mcp.json.
+    let config: Value = serde_json::from_str(&kit(".mcp.json")).unwrap();
+    assert!(config["mcpServers"]["agentshangout-channel"].is_object());
+    let flag = "--dangerously-load-development-channels";
+    let channel = "server:agentshangout-channel";
+    let windows = kit("start-bot.ps1");
+    assert!(windows.contains("$_.Name -like 'CLAUDE*' -or $_.Name -like 'ANTHROPIC_*'"));
+    assert!(windows.contains("$tokenFile = Join-Path $kit '.token'"));
+    assert!(windows.contains("Join-Path $env:APPDATA 'npm\\claude.cmd'"));
+    assert!(windows.contains(&format!(
+        "$claudeArgs += @('{flag}', '{channel}')\n\nSet-Location $kit\n& $claude @claudeArgs"
+    )));
+    let unix = kit("start-bot.sh");
+    assert!(unix.starts_with("#!/usr/bin/env bash\n"));
+    assert!(unix.contains("case \"$name\" in CLAUDE*|ANTHROPIC_*) unset \"$name\" ;; esac"));
+    assert!(unix.contains("if [ -f \"$kit/.token\" ]; then"));
+    assert!(unix.contains(&format!("args+=({flag} {channel})\n")));
+    assert!(unix.ends_with("cd \"$kit\"\nexec claude \"${args[@]}\"\n"));
+    for script in [&windows, &unix] {
+        // The flag is added after everything else.
+        let at = script.find(flag).unwrap();
+        assert!(!script[at..].contains("--permission-mode") && !script[at..].contains("--resume"));
+        // The token is never echoed.
+        for line in script.lines().filter(|l| l.contains("echo") || l.contains("Write-Host")) {
+            assert!(
+                !line.contains("AGENTSHANGOUT_TOKEN\"")
+                    && !line.contains("$token\"")
+                    && !line.contains("$env:AGENTSHANGOUT_TOKEN"),
+                "{line}"
+            );
+        }
+    }
+}
+
+// ST14
+#[test]
+fn the_kit_rereads_inbox_after_a_summary_before_saying_anything_is_pending() {
+    // Line breaks in the file don't matter, only the words.
+    let instructions = kit("CLAUDE.md").split_whitespace().collect::<Vec<_>>().join(" ");
+    for words in [
+        "After your context is summarized or compacted, call `inbox` again",
+        "before telling me anything is still pending",
+        "check `your_questions` and `owner_answers`",
+    ] {
+        assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
+    }
 }

@@ -104,6 +104,7 @@ impl Server {
                 allow_private_webhooks: true,
                 keeper_id: None,
                 god_ids: Vec::new(),
+                require_rules: false,
             },
         );
         let served = state.clone();
@@ -4632,6 +4633,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "question_bounties",
         "question_answers",
         "starter_questions",
+        "merged_pr_payouts",
+        "merged_pr_checks",
+        "merged_pr_start",
         "bot_trust_settings",
         "explicit_friendships",
         "oauth_event_health",
@@ -4808,6 +4812,13 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "keyless_turns",
         "lific_card_adds",
         "world_place_removals",
+        "rules_acceptances",
+        "rules_versions",
+        "person_blocks",
+        "person_mutes",
+        "card_contributions",
+        "contribution_payouts",
+        "quiet_asks",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -4842,6 +4853,9 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "credit_spends",
             "question_answers",
             "starter_questions",
+            "merged_pr_payouts",
+            "merged_pr_checks",
+            "merged_pr_start",
             "question_bounties",
             "credit_paid",
             "spend_limits",
@@ -5050,6 +5064,13 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "mcp_setup_tokens",
             "mcp_setup_codes",
             "mcp_setup_grants",
+            "rules_acceptances",
+            "rules_versions",
+            "quiet_asks",
+            "contribution_payouts",
+            "card_contributions",
+            "person_mutes",
+            "person_blocks",
             "world_place_removals",
             "lific_card_adds",
             "lific_cards",
@@ -7971,4 +7992,113 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
         .await;
     assert_eq!(note_th["isError"], true, "pre-arrival note returns error: {note_th}");
     assert!(note_th["content"][0]["text"].as_str().unwrap().contains("not found"), "{note_th}");
+}
+
+// A106 (#685): a block ends trips either way, the ordinary way and as the blocker, so nothing says
+// why, and takes back the keys either way.
+#[tokio::test]
+async fn a_block_ends_trips_and_keys_between_them_the_ordinary_way() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+    let pixel = server.bot(&w.bo, &w.bo_home.living, "Pixel").await;
+    let here = server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "call", "").await;
+    let asked = text(
+        &server.ask_trip(&pixel.token, None, &w.ann_home.id, "call", "", None).await.body["id"],
+    );
+    let pass = server
+        .post(
+            &w.ann.key,
+            &format!("/api/houses/{}/passes", w.ann_home.id),
+            json!({ "agent_id": scout.id }),
+        )
+        .await;
+    assert_ok(&pass);
+
+    let blocked = server.post(&w.ann.key, "/api/blocks", json!({ "person_id": w.bo.id })).await;
+    assert_ok(&blocked);
+    let ended = server.get(&w.bo.key, &format!("/api/trips/{here}")).await;
+    assert_eq!(ended.body["status"], "ended", "{}", ended.body);
+    assert_ne!(ended.body["ended_by"], "block", "nothing says why: {}", ended.body);
+    let declined = server.get(&w.bo.key, &format!("/api/trips/{asked}")).await;
+    assert_eq!(declined.body["status"], "declined", "{}", declined.body);
+    assert!(!declined.body.to_string().contains("block"), "{}", declined.body);
+    let passes = server.get(&w.ann.key, &format!("/api/houses/{}/passes", w.ann_home.id)).await;
+    assert!(!passes.body.to_string().contains(&scout.id), "the key is taken back: {}", passes.body);
+}
+
+// A103: a trip asked across a block stays with the side that asked. Asked by the bot's side, the
+// house never sees it; asked by a resident, the bot and its person never see it.
+#[tokio::test]
+async fn a_trip_across_a_block_stays_with_the_side_that_asked() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let scout = server.bot(&w.bo, &w.bo_home.living, "Scout").await;
+    let pixel = server.bot(&w.bo, &w.bo_home.living, "Pixel").await;
+    let ann2 = server.move_in(&w.ann_home, "Ann2").await;
+    let bo_heard = server.notify_to(&w.bo).await;
+    assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": w.bo.id })).await);
+
+    let trip_ids = |body: &Value, key: &str| -> Vec<String> {
+        body[key].as_array().unwrap().iter().map(|trip| text(&trip["id"])).collect()
+    };
+
+    // The bot's side asks: it waits for them, and Ann's house never sees it.
+    let asked = server.ask_trip(&scout.token, None, &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    assert_eq!(asked.body["status"], "asking", "{}", asked.body);
+    let id = text(&asked.body["id"]);
+    let bos = server.get(&w.bo.key, "/api/needs-you").await.body;
+    assert!(trip_ids(&bos, "trips").contains(&id), "Bo can still say yes: {bos}");
+    let anns = server.get(&w.ann.key, "/api/needs-you").await.body;
+    assert!(!trip_ids(&anns, "trips").contains(&id), "{anns}");
+    assert_not_found(&server.get(&w.ann.key, &format!("/api/trips/{id}")).await);
+    assert_not_found(&server.answer_trip(&w.ann.key, &id, "yes").await);
+    // Nor does the house's page list it, as asking or anywhere else.
+    let page = server.get(&w.ann.key, &format!("/api/houses/{}", w.ann_home.id)).await;
+    assert_ok(&page);
+    assert!(!has(&page.body, &id), "{}", page.body);
+
+    // A resident asks for the bot: it waits for Ann, and Bo and Pixel never see it.
+    let asked =
+        server.ask_trip(&w.ann.key, Some(&pixel.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    let id = text(&asked.body["id"]);
+    assert_ok(&server.get(&w.ann.key, &format!("/api/trips/{id}")).await);
+    let bos = server.get(&w.bo.key, "/api/needs-you").await.body;
+    assert!(!trip_ids(&bos, "trips").contains(&id), "{bos}");
+    assert_not_found(&server.get(&w.bo.key, &format!("/api/trips/{id}")).await);
+    assert_not_found(&server.answer_trip(&w.bo.key, &id, "yes").await);
+    let inbox = server.tool(&pixel.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(!inbox.to_string().contains(&id), "Pixel never hears of it: {inbox}");
+    // Another resident says no: Bo isn't told, and Pixel gets no event for it.
+    let no = server.answer_trip(&ann2.key, &id, "no").await;
+    assert_ok(&no);
+    assert!(notices_of(&bo_heard, "trip.ended").await.is_empty());
+    let heard = server.tool(&pixel.token, "events_since", json!({ "since": "0" })).await;
+    assert!(!has(&heard, &id), "{heard}");
+    // A resident asking again leaves Pixel's own asks free: it isn't "already open" for Pixel.
+    let again =
+        server.ask_trip(&w.ann.key, Some(&pixel.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&again);
+    let own = server.ask_trip(&pixel.token, None, &w.ann_home.id, "call", "", None).await;
+    assert_ok(&own);
+    assert_eq!(own.body["status"], "asking", "{}", own.body);
+}
+
+// A103: a resident's ask across a block for someone's bot is none of theirs to know of, so it
+// doesn't stop them moving in.
+#[tokio::test]
+async fn a_residents_quiet_trip_doesnt_keep_the_bots_person_from_moving_in() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let cal = server.join_city(&w.city_code, "Cal").await;
+    let rook = server.bot(&cal, &w.square, "Rook").await;
+    assert_ok(&server.post(&w.ann.key, "/api/blocks", json!({ "person_id": cal.id })).await);
+    let asked = server.ask_trip(&w.ann.key, Some(&rook.id), &w.ann_home.id, "call", "", None).await;
+    assert_ok(&asked);
+    assert_eq!(asked.body["status"], "asking", "{}", asked.body);
+    let code = server.house_code(&w.ann_home);
+    let moved = server.post(&cal.key, &format!("/api/house-invites/{code}/join"), json!({})).await;
+    assert_ok(&moved);
 }

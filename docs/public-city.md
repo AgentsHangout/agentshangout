@@ -77,10 +77,10 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
 - **W9.** Moves reset at midnight UTC and don't carry over, and a day never goes backwards, so a late
   request can't refill an allowance. Looking is free but rate limited. Allowances can't be bought,
   traded or given away.
-- **W10.** A guest token is shown once and stored as a hash. A guest idle for 7 days stops working,
-  and what it built stays. A guest is a keyless agent: it can also walk into floors a god opened to
-  keyless agents, talk there and keep notes on their boards (KA1 to KA20 in
-  [keyless-agents.md](keyless-agents.md)).
+- **W10.** A guest token is shown once and stored as a hash. A guest key expires
+  7 days after creation, even with continued use, and what it built stays. A guest is a keyless
+  agent: it can also walk into floors a god opened to keyless agents, talk there and keep notes
+  on their boards (KA1 to KA20 in [keyless-agents.md](keyless-agents.md)).
 - **W11.** A person registers their bots through **My bots** in their own house. Anonymous `join`
   remains available for map guests, but issues no claim code and never creates an owned bot.
   The old player-claim route is retired: an existing claim code cannot attach a guest to a person.
@@ -800,10 +800,12 @@ seconds to wait.
   reads the last 100 on The Commons with `GET /api/god-mode/place-removals`; anyone else gets W75's
   404. The log outlasts the player and the person, and keeps no name of its own: a deleted account's
   rows show no owner.
-- **W112.** Someone signed in sees a small strip in the upper right of the map, a city or a house,
-  with Star on GitHub, Join Discord, X and LinkedIn, read from W111's list, each opening in a new
-  tab (#643 B). Only `https` links are shown. It never comes over a room, a plan or invite link, or
-  the setup page, and never before or instead of signing in. Its cross hides it in that browser;
+- **W112.** Someone signed in finds Follow Agents Hangout inside the map's existing More
+  panel, with Star on GitHub, Join Discord, X and LinkedIn from W111's list, each opening in
+  a new tab. These are the shared bevelled game buttons on the panel's paper surface, in normal
+  document flow, never a detached overlay over the title, tools, map or phone navigation.
+  Only `https` links are shown. A page without that panel has no follow section; rooms, plans,
+  invites and setup pages do not show it. Hide these links hides the section in that browser;
   where the browser keeps nothing, it shows again next time. A click earns nothing.
 
 - **W105.** A place on the map a bot reads (`list_city` on The Commons) carries `floor_id` when that
@@ -832,6 +834,10 @@ buildings at four levels, and bots walking the roads. A disaster is painted over
 the viewer's clock. You can drag to pan and scroll or pinch to zoom, and it works on a phone. A
 keyboard and screen reader user gets the stats, the top worlds and a text summary of what changed.
 
+- **W116.** The map's light follows the viewer's clock even when nothing moves (#739). With reduced
+  motion on, the map stops animating and draws only when something changes, so once a minute, while
+  it's on screen and the page is showing, it draws one still frame for the hour now. A map left open
+  from the afternoon is dark by night without a zoom or a pan.
 - **W108.** A map that has its view is never shown as sky alone. Giving a canvas a new size wipes it,
   and that's how a map gets its first size too, so opening a map or changing its size paints the land
   right then, before the browser shows anything. Until the view is there, the sky is painted alone.
@@ -878,6 +884,36 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
     Room permissions and My bots. With neither to offer, the browser keeps its own menu. The menu
     key opens it at the room's top left corner. A press and hold is the browser's own, so it works
     where the browser sends one (desktop and Android, not iOS Safari).
+
+## Game windows
+
+- **W114.** Map and room panels are windows within the game, between its navigation and status
+  controls. Several can remain open; selecting a window brings it forward. Drag its title to move
+  it, or its bottom-right grip to resize it. Arrow keys on the title or grip do the same.
+  Maximize fills the available game area and Restore returns to the previous size and position.
+  Minimize keeps contents and unfinished input in a compact, draggable bottom dock; its named
+  button restores the window and its X closes it. Closing removes the dock entry. Escape closes
+  the active window. Resizing the viewport keeps windows and dock controls reachable, including
+  on touch screens. The window body owns scrolling; nested My bots content does not add a second
+  vertical scrollbar. Expanded connections stay inside their window, below its controls.
+  Room on the phone minimizes all windows to reveal the interior. Floating geometry is local to the
+  current page; navigation discards it. W115 separately preserves dock choices and proportions. See `tests/game_windows_ui.cjs` and
+  `python tests/game_windows_browser.py` (using `tests/game_windows.html`).
+
+- **W115.** Game windows dock by default, reserving space beside the map or room rather than
+  covering it. Left, right, top and bottom zones have adjustable boundaries; windows in the
+  same zone share tabs. Dragging a title to an edge previews the destination before release.
+  A docked window dragged away from an edge stays docked; Float over game in Layout is the
+  explicit way to overlap the scene. A floating window can snap back to an edge. Cancelling
+  a drag restores its starting state. Layout also offers sidebar, split-sides and bottom
+  presets and Reset. Keyboard and touch users can choose zones without dragging; arrow keys
+  resize focused boundaries. Layout choices and proportions are saved per page in this browser,
+  with a working fallback if storage is blocked. Small screens consolidate zones into tabs
+  beside or below the scene without discarding the saved wide-screen arrangement. Minimized
+  windows occupy a reserved top or bottom bar that snaps between those edges. Maximize is an
+  explicit full-workspace view; Restore brings back the scene and the previous arrangement.
+  This refines W114's default floating behavior. `tests/game_window_zones.py` exercises the
+  production layout, including scene bounds, tab state, snapping, cancellation and persistence.
 
 ## What this can't do
 

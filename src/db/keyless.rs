@@ -1,10 +1,9 @@
 //! KA1 to KA20: keyless agents' floors, presence, lines, mentions, cards and turns
-//! (docs/keyless-agents-design.md). A keyless agent is an unclaimed guest player: nothing here links
+//! (docs/keyless-agents.md). A keyless agent is an unclaimed guest player: nothing here links
 //! it to a person or a bot.
 use super::*;
 
-/// KA8: how long a keyless agent's played turns are remembered: as long as an idle key works
-/// (W10), and a day more.
+/// KA8: played turns outlive the seven-day maximum key lifetime (W10) by one day.
 pub const KEYLESS_TURN_SECS: i64 = 8 * 24 * 60 * 60;
 
 /// A card a keyless agent wrote (KA15).
@@ -354,7 +353,16 @@ impl Db {
         now: i64,
     ) -> rusqlite::Result<bool> {
         Ok(self.conn().execute(
-            "UPDATE keyless_cards SET title = ?3, body = ?4, updated_at = ?5 WHERE id = ?1 AND player_id = ?2",
+            "UPDATE keyless_cards SET title = ?3, body = ?4, updated_at = ?5
+             WHERE id = ?1 AND player_id = ?2 AND EXISTS (
+                 SELECT 1 FROM boards b
+                 JOIN keyless_boards kb ON kb.board_id = b.id
+                 JOIN floors f ON f.hangout_id = b.hangout_id AND f.access = 'public'
+                 JOIN keyless_floors kf ON kf.hangout_id = f.hangout_id
+                 JOIN keyless_presence kp ON kp.hangout_id = f.hangout_id AND kp.player_id = ?2
+                 JOIN players p ON p.id = kp.player_id AND p.removed = 0
+                 WHERE b.id = keyless_cards.board_id AND b.kind = 'discussion'
+             )",
             params![id, player_id, title, body, now],
         )? == 1)
     }
@@ -442,5 +450,61 @@ impl Db {
             "INSERT OR IGNORE INTO keyless_turns (player_id, turn, at) VALUES (?, ?, ?)",
             params![player_id, turn, now],
         )? == 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // KA7: an upgrade may start with stale admission left on an already-private floor.
+    #[test]
+    fn reopening_a_legacy_private_floor_discards_stale_admission() {
+        let db = Db::open(":memory:").unwrap();
+        let conn = db.conn();
+        conn.execute_batch("INSERT INTO people VALUES ('p','Owner','blue','hash','feed',0);
+            INSERT INTO hangouts VALUES ('h','Room','invite','p',0);
+            INSERT INTO spaces (id,owner_id,kind,name,created_at) VALUES ('h','p','third','Lab',0);
+            INSERT INTO floors (hangout_id,space_id,level,access) VALUES ('h','h',0,'private');
+            INSERT INTO players (name_seed,token_hash,seen_at,created_at) VALUES (123,'hash-guest',0,0);
+            INSERT INTO keyless_floors VALUES ('h','p',0);
+            INSERT INTO keyless_presence VALUES (1,'h',0,0);
+            UPDATE floors SET access = 'public' WHERE hangout_id = 'h';").unwrap();
+        assert!(!exists(&conn, "SELECT 1 FROM keyless_floors", []).unwrap());
+        assert!(!exists(&conn, "SELECT 1 FROM keyless_presence", []).unwrap());
+    }
+
+    // KA5: run the pre-keyless binary's pruning SQL on the upgraded database.
+    #[test]
+    fn old_guest_prune_preserves_research_and_provenance() {
+        let db = Db::open(":memory:").unwrap();
+        let conn = db.conn();
+        conn.execute_batch("INSERT INTO people VALUES ('p','Owner','blue','hash','feed',0);
+            INSERT INTO hangouts VALUES ('h','Room','invite','p',0);
+            INSERT INTO players (name_seed,token_hash,seen_at,created_at) VALUES (123,'hash-guest',0,0);
+            INSERT INTO players (name_seed,token_hash,seen_at,created_at) VALUES (456,'hash-empty',0,0);
+            INSERT INTO messages (hangout_id,speaker,kind,body,created_at) VALUES ('h','Guest','chat','unverified',0);
+            INSERT INTO keyless_messages VALUES (1,1);
+            INSERT INTO boards (id,hangout_id,kind,name,created_by,created_at) VALUES ('b','h','discussion','Notes','p',0);
+            INSERT INTO keyless_cards VALUES ('c','b',1,NULL,'Note','research',0,0);").unwrap();
+        conn.execute(
+            "DELETE FROM players WHERE token_hash IS NOT NULL AND person_id IS NULL
+               AND agent_id IS NULL AND seen_at < ?",
+            [1],
+        )
+        .unwrap();
+        let count = |table: &str| {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        assert_eq!(count("players"), 1, "empty guests still prune");
+        assert_eq!(count("messages"), 1);
+        assert_eq!(count("keyless_messages"), 1);
+        assert_eq!(count("keyless_cards"), 1);
+        assert!(conn
+            .query_row("SELECT token_hash FROM players WHERE id = 1", [], |row| row
+                .get::<_, Option<String>>(0))
+            .unwrap()
+            .is_none());
     }
 }

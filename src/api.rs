@@ -146,10 +146,12 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::brand::routes())
         .merge(crate::elections::routes())
         .merge(crate::bot_setup::routes())
+        .merge(crate::blocks::routes())
         .merge(boards::routes())
         .merge(crate::pins::routes())
         .merge(crate::room_mentions::routes())
         .merge(crate::votes::routes())
+        .merge(crate::rules::routes())
         .merge(crate::jobs::routes())
         .merge(outside::routes())
         .merge(looks::routes())
@@ -517,6 +519,14 @@ async fn make_person(
 
 /// `GET /api/credits` (HC8): the caller's own credits, or their owner's for a bot.
 async fn credits(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+    // HC35: what's newly merged pays before the balance is read, within a few seconds.
+    if !caller.is_house {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::pr_credits::check(&state, &caller.person_id),
+        )
+        .await;
+    }
     Ok(Json(json!(crate::economy::credits_of(&state.db, &caller, now())?)))
 }
 
@@ -650,6 +660,12 @@ async fn me(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Val
     // W75: someone with the God mode switch is told where it's set. Nobody else hears it exists.
     if god_mode::may_use(&state, &caller.person_id) {
         me["god_mode"] = json!(state.db.god_mode_on(&caller.person_id)?);
+    }
+    // A108, A112: where they stand with the community rules.
+    if let (Some(map), Value::Object(rules)) =
+        (me.as_object_mut(), crate::rules::view(&state, &caller.person_id, now())?)
+    {
+        map.extend(rules);
     }
     Ok(Json(me))
 }
@@ -1258,10 +1274,17 @@ fn live_events(
             let (hub, state, secret_hash, topic) = &mut context;
             let mut human_typing = false;
             let mut emotes = false;
+            let mut speaker: Option<String> = None;
             let event = match hub.recv().await {
                 Ok(event) if event.hangout_id == *topic => {
                     human_typing = event.kind == "typing";
                     emotes = event.kind == "emotes";
+                    // A101: who wrote a new line, so a blocker's page doesn't get it.
+                    if event.kind == "message" {
+                        speaker = serde_json::from_str::<serde_json::Value>(&event.data)
+                            .ok()
+                            .and_then(|line| line["person_id"].as_str().map(str::to_string));
+                    }
                     SseEvent::default().event(event.kind).data(event.data)
                 }
                 Ok(_) => continue,
@@ -1275,6 +1298,14 @@ fn live_events(
                         return None;
                     }
                     if human_typing && caller.is_agent() {
+                        continue;
+                    }
+                    if speaker.as_ref().is_some_and(|speaker| {
+                        state
+                            .db
+                            .blocked_ids(&caller.person_id)
+                            .is_ok_and(|ids| ids.contains(speaker))
+                    }) {
                         continue;
                     }
                     // I146: a guest on a Porch sees no emotes.
@@ -2689,6 +2720,7 @@ mod tests {
                     allow_private_webhooks: true,
                     keeper_id: None,
                     god_ids: Vec::new(),
+                    require_rules: false,
                 },
             );
             tokio::spawn(async move { axum::serve(listener, app(state)).await });

@@ -1,4 +1,4 @@
-//! BT7, BT8, BT11: the connections graph, run from tests/trust_ui.cjs.
+//! BT7, BT8, BT11, BT12: the connections graph, run from tests/trust_ui.cjs.
 #[test]
 fn trust_panel_and_graph() {
     let output =

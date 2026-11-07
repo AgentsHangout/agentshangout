@@ -10,6 +10,16 @@ import {
   shadeFace, shadow, sign as mapSign, slope as mapSlope, topFace,
 } from './world.js';
 import { bodyOf, hexOf, isOn, numberOf, partOf, rectOf, styleOf } from './outside-spec.js';
+import { LAB_DEFAULTS, LAB_ROOFTOP_DEFAULT, paintLab } from './outside-lab.js';
+import { PLANT_DEFAULTS, PLANT_ROOFTOP_DEFAULT, paintPlantBuilding } from './outside-plant.js';
+
+// E41, E43: the buildings with a look of their own, which draw themselves and put their door in the
+// middle of the side it's on.
+const OWN_BUILDINGS = {
+  research_lab: { paint: paintLab, defaults: () => ({ ...LAB_DEFAULTS, lab_rooftop: LAB_ROOFTOP_DEFAULT }) },
+  plant: { paint: paintPlantBuilding, defaults: () => ({ ...PLANT_DEFAULTS, plant_rooftop: PLANT_ROOFTOP_DEFAULT }) },
+};
+const ownBuilding = (kind) => (Object.hasOwn(OWN_BUILDINGS, kind) ? OWN_BUILDINGS[kind] : null);
 
 const TAU = 6.2832;
 
@@ -3054,6 +3064,10 @@ function doorSteps(B) {
 // Where a building's door meets the ground, as `[u, v]` in units, on the side `S.door` would put it. The
 // path, the gate and a pet on guard all go by this, so they meet the door wherever a kind puts it.
 export function doorPoint(kind, outside, side) {
+  if (ownBuilding(kind)) {
+    const [u0, v0, u1, v1] = rectOf(kind, outside);
+    return side === 'R' ? [u1, (v0 + v1) / 2] : [(u0 + u1) / 2, v1];
+  }
   const S = { g: null, day: true, v: 0, pal: 0, door: side, seed: 0, n: 0, info: null };
   const B = look(S, kind, outside, { wall: '#ffffff', roof: '#ffffff', door: '#ffffff', awn: ['#ffffff', '#ffffff'], hue: 0 });
   if (!B) return null;
@@ -3094,6 +3108,11 @@ function lampPool(B) {
 }
 
 export function paintBuilding(S, kind, outside, c) {
+  const own = ownBuilding(kind);
+  if (own) {
+    own.paint(S, outside, rectOf(kind, outside), c);
+    return;
+  }
   const B = look(S, kind, outside, c);
   if (!B) return;
   const shaped = SHAPE_ART[B.shape](B);
@@ -3193,6 +3212,8 @@ function glowSkylights(B, info) {
 // What a place with no outside has, so the builder can show which tile is pressed (E4).
 
 export function defaultStyles(kind, variant = 0) {
+  const own = ownBuilding(kind);
+  if (own) return own.defaults();
   const k = Object.hasOwn(KINDS, kind) ? KINDS[kind] : undefined;
   if (!k) return {};
   const base = {

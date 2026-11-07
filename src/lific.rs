@@ -46,6 +46,11 @@ const STATUSES: [&str; 5] = ["backlog", "todo", "active", "done", "cancelled"];
 pub const REUSE: Duration = Duration::from_secs(5);
 /// I126: the most reads of Lific under way at once, across every board.
 const SLOTS: usize = 4;
+/// I147: Lific's own repository, credited on every board.
+pub const REPO: &str = "https://github.com/VoidNullable/lific";
+/// I147: how long a star count from GitHub is kept, and how long to wait after GitHub fails.
+const STARS_KEPT: Duration = Duration::from_secs(60 * 60);
+const STARS_RETRY: Duration = Duration::from_secs(10 * 60);
 
 /// I124: where a Lific board may point. `origins` are `https` origins from
 /// `AGENTHANGOUT_LIFIC_ORIGINS`; `local` is the one instance beside this server, from
@@ -78,6 +83,14 @@ impl std::fmt::Debug for Settings {
 /// One board's last read: when, for which link, and what it showed.
 type Recent = HashMap<String, (Instant, String, Value)>;
 
+/// I147: where to ask GitHub for Lific's stars, the last count, and when it may be asked again.
+#[derive(Default)]
+struct Stars {
+    from: Option<String>,
+    count: Option<u64>,
+    next: Option<Instant>,
+}
+
 /// I124, I126: the settings, the read slots, and each board's last read for `REUSE`.
 pub struct Shared {
     settings: RwLock<Settings>,
@@ -85,6 +98,7 @@ pub struct Shared {
     recent: Mutex<Recent>,
     /// I129: one room's project made at a time, so two first reads at once make only one.
     making: tokio::sync::Mutex<()>,
+    stars: Mutex<Stars>,
 }
 
 impl Default for Shared {
@@ -94,6 +108,7 @@ impl Default for Shared {
             slots: Semaphore::new(SLOTS),
             recent: Mutex::new(HashMap::new()),
             making: tokio::sync::Mutex::new(()),
+            stars: Mutex::new(Stars::default()),
         }
     }
 }
@@ -106,6 +121,16 @@ impl Shared {
         }
         if let Ok(mut recent) = self.recent.lock() {
             recent.clear();
+        }
+    }
+
+    /// I147: the GitHub API to ask for Lific's stars, or none to show no count. Forgets the last.
+    pub fn count_stars_from(&self, api: Option<&str>) {
+        if let Ok(mut stars) = self.stars.lock() {
+            *stars = Stars {
+                from: api.map(|api| api.trim_end_matches('/').to_string()),
+                ..Stars::default()
+            };
         }
     }
 
@@ -400,7 +425,15 @@ async fn room_project(
 async fn answer_json(
     sent: Result<reqwest::Response, reqwest::Error>,
 ) -> Result<Value, &'static str> {
-    let mut response = sent.map_err(|error| if error.is_timeout() { "slow" } else { "down" })?;
+    let mut response = sent.map_err(|error| {
+        if error.is_timeout() {
+            return "slow";
+        }
+        // "Lific didn't answer" covers a lot, so the log says which: only the kind, never a
+        // request's address or anything Lific sent.
+        tracing::warn!(connect = error.is_connect(), "a request to Lific failed");
+        "down"
+    })?;
     let status = response.status();
     if status.is_redirection() {
         return Err("redirected");
@@ -418,6 +451,7 @@ async fn answer_json(
         return Err("taken");
     }
     if !status.is_success() {
+        tracing::warn!(status = status.as_u16(), "Lific answered with an error");
         return Err("down");
     }
     if response.content_length().is_some_and(|length| length > MAX_BYTES as u64) {
@@ -492,7 +526,17 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
         )
     });
     let total = issues.len();
-    let shown = &issues[..total.min(MAX_SHOWN)];
+    let mut shown = issues[..total.min(MAX_SHOWN)].to_vec();
+    // I149: Done is newest first, by when Lific last changed each card; a tie keeps board order.
+    let done_from = shown.iter().position(|row| status_of(row) == "done").unwrap_or(shown.len());
+    let done_to =
+        shown.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
+    shown[done_from..done_to].sort_by(|a, b| {
+        b["updated_at"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(a["updated_at"].as_str().unwrap_or_default())
+    });
     let columns: Vec<Value> = STATUSES
         .iter()
         .map(|status| {
@@ -508,6 +552,9 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                     })
                 })
                 .collect();
+            if *status == "done" {
+                return json!({ "status": status, "done_count": rows.len(), "issues": rows });
+            }
             json!({ "status": status, "issues": rows })
         })
         .collect();
@@ -781,7 +828,8 @@ pub async fn add_card(
         "title": title,
         "status": status,
         "priority": priority,
-        "source": "agentshangout",
+        // Lific keeps a source unique among live issues, so each card names its own add.
+        "source": format!("agentshangout:{add}"),
     });
     let made = match keyed(&settings, reqwest::Method::POST, "/api/issues", Some(body)).await {
         Ok(made) => made,
@@ -943,7 +991,73 @@ pub async fn board_for(state: &AppState, caller: &Caller, item_id: &str) -> ApiR
             issue["can_remove"] = json!(can_change && (you_added || owner));
         }
     }
+    if caller.is_agent() {
+        fold_done(&mut shown);
+    }
     Ok(shown)
+}
+
+/// I149: the most Done cards a bot's read holds, the latest ones; `done_count` says how many there are.
+pub const DONE_FOR_BOTS: usize = 5;
+
+/// I149: a bot's read keeps only Done's latest cards, and `shown` counts what the read holds.
+fn fold_done(board: &mut Value) {
+    let Some(columns) = board["columns"].as_array_mut() else { return };
+    let mut left_out = 0;
+    for column in columns.iter_mut().filter(|c| c["status"] == "done") {
+        if let Some(issues) = column["issues"].as_array_mut() {
+            left_out += issues.len().saturating_sub(DONE_FOR_BOTS);
+            issues.truncate(DONE_FOR_BOTS);
+        }
+    }
+    if let Some(shown) = board["shown"].as_u64() {
+        board["shown"] = json!(shown.saturating_sub(left_out as u64));
+    }
+}
+
+/// I147: the credit to Lific a board's panel shows: its repository, and its stars as last heard.
+/// An old or missing count is asked for in the background, so the board never waits on GitHub.
+fn credit(state: &AppState) -> Value {
+    let (count, ask) = match state.lific.stars.lock() {
+        Ok(mut stars) => {
+            let due = stars.next.is_none_or(|next| Instant::now() >= next);
+            let ask = stars.from.clone().filter(|_| due);
+            if ask.is_some() {
+                // Also stops a second ask while this one is under way.
+                stars.next = Some(Instant::now() + STARS_RETRY);
+            }
+            (stars.count, ask)
+        }
+        Err(_) => (None, None),
+    };
+    if let Some(api) = ask {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let count = count_stars(&api).await;
+            if let Ok(mut stars) = state.lific.stars.lock() {
+                if stars.from.as_deref() == Some(api.as_str()) && count.is_some() {
+                    stars.count = count;
+                    stars.next = Some(Instant::now() + STARS_KEPT);
+                }
+            }
+        });
+    }
+    json!({ "url": REPO, "stars": count })
+}
+
+/// I147: Lific's stars from GitHub's public API, with no key.
+async fn count_stars(api: &str) -> Option<u64> {
+    let client = Client::builder()
+        .redirect(redirect::Policy::none())
+        .timeout(TIMEOUT)
+        .user_agent("AgentsHangout-LificBoard/1.0")
+        .build()
+        .ok()?;
+    let request = client
+        .get(format!("{api}/repos/VoidNullable/lific"))
+        .header("Accept", "application/vnd.github+json");
+    let repo = tokio::time::timeout(TIMEOUT, answer_json(request.send().await)).await.ok()?.ok()?;
+    repo["stargazers_count"].as_u64()
 }
 
 // Routes
@@ -962,9 +1076,13 @@ async fn read(
 ) -> ApiResult<Json<Value>> {
     let mut board = board_for(&state, &caller, &id).await?;
     let item = board_item(&state, &caller, &id)?;
+    // I132: a board showing its room's own project offers no other.
+    let own = own_project(&state, &settings(&state), &item)?.is_some();
     board["you_can_link"] = json!(
-        !caller.is_agent() && pins::owns_room(&state, &caller, &item.hangout_id).unwrap_or(false)
+        !own && !caller.is_agent()
+            && pins::owns_room(&state, &caller, &item.hangout_id).unwrap_or(false)
     );
+    board["credit"] = credit(&state);
     Ok(Json(board))
 }
 

@@ -79,3 +79,10 @@ zoom out returns to the same scale, and the middle of the graph can't be panned 
 Picking another bot, or a different set of people and bots shown, fits it again; with the same ones, a
 view you zoomed or panned yourself stays where you left it. Drawing the graph again ends a drag or pan
 that was going on. The hover, click and menu behaviour of a node is unchanged (BT7).
+
+BT12. A name in the connections graph stays readable when the graph is zoomed out (#627). Below a
+scale of one it is drawn larger, up to 15 / 11 of its size, so it keeps its size on screen as far as
+that allows, and on a narrow screen it starts at 13 instead of 11. trust.js sets that size and the
+stylesheet sets none, since a size there would win over it. Fit works out the scale at the size the
+names will be drawn, so at Fit every name, a long one shortened with … included, is whole inside the
+picture.

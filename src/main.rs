@@ -31,6 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|id| !id.is_empty())
         .collect();
 
+    // A107: a rules page whose version or start can't be read stops the server here.
+    agenthangout::rules::check();
+
     let loopback = bind.starts_with("127.") || bind.starts_with("localhost");
     if !loopback && !public_url.starts_with("https://") {
         tracing::warn!(
@@ -64,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_private_webhooks: false,
             keeper_id,
             god_ids,
+            require_rules: true,
         },
         apps,
     );
@@ -80,6 +84,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_key(env::var("AGENTHANGOUT_LIFIC_KEY").ok().as_deref()),
     );
+    // I147: Lific's stars, from the same GitHub API sign-in uses.
+    state.lific.count_stars_from(Some(
+        state.github.as_ref().map(|g| g.api_url.as_str()).unwrap_or("https://api.github.com"),
+    ));
     // W100: who may read the public Commons bots list from another site.
     state.worlds.set_viewer_origins(worlds::parse_viewer_origins(
         env::var("AGENTHANGOUT_COMMONS_VIEWER_ORIGINS").ok().as_deref(),

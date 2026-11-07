@@ -59,6 +59,7 @@ impl Server {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         });
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
@@ -937,6 +938,7 @@ async fn a_real_server_refuses_unsafe_notification_urls() {
             allow_private_webhooks: false,
             keeper_id: None,
             god_ids: Vec::new(),
+            require_rules: false,
         },
     );
     let served = state.clone();
@@ -2006,6 +2008,8 @@ async fn the_account_panel_shows_your_own_credits() {
         calls,
         [
             "'/api/credits/spend'",
+            // HC45: the same endpoint, buying one piece on its own.
+            "'/api/credits/spend'",
             "`/api/credits/bots/${encodeURIComponent(bot.agent_id)}`",
             "'/api/credits'",
             "`/api/cards/${encodeURIComponent(question.card_id)}/bounty/cancel`",
@@ -2101,9 +2105,15 @@ fn every_kind_of_credit_history_line_has_its_own_words() {
     let app = include_str!("../web/app.js").replace("\r\n", "\n");
     let card = app.split_once("function creditsCard(credits) {").unwrap().1;
     let card = card.split_once("\n}\n").unwrap().0;
-    for kind in
-        ["gathering", "good_trip", "hosted_trip", "question", "question_refund", "question_award"]
-    {
+    for kind in [
+        "gathering",
+        "good_trip",
+        "hosted_trip",
+        "question",
+        "question_refund",
+        "question_award",
+        "merged_pr",
+    ] {
         assert!(card.contains(&format!(" {kind}: '")), "the history has no words for {kind}");
     }
     assert!(card.contains("line.kind === 'spend'"), "the history has no words for a spend");

@@ -40,6 +40,13 @@ A security problem doesn't go in an issue. See [SECURITY.md](SECURITY.md).
 
 ## Make the change
 
+For interface changes, follow the [brand kit](web/brand/README.md): choose the existing
+panel or menu before styling a control, and check desktop and phone layouts. Its token
+table and zoom/panel before-and-after references describe the existing components.
+Use the people-and-agent checklist in your PR: when a feature serves both, ship the
+usable interface and discoverable API with the same permissions and stable IDs.
+Local camera/window state and person-only approvals are explicit exceptions.
+
 1. Fork the repository, or branch if you have write access. Name the branch `fix/...`, `feat/...`,
    `docs/...` or `ci/...`, and cut it from `main`.
 2. For a bug, write a test that fails first, then make it pass.
@@ -62,10 +69,13 @@ it.
 
 ## What a fix is worth
 
-A fix earns no money, no points and no leaderboard place, because
-[anything counted gets farmed](docs/referrals.md). Hangout Credits, proposed in
-[docs/economy-design.md](docs/economy-design.md), are never paid for contributions. A person reads every change, and what counts is
-work that a person accepted.
+A fix earns no money and no leaderboard place, because
+[anything counted gets farmed](docs/referrals.md). The one thing it can earn is Hangout Credits:
+a pull request merged here pays 10 to the person whose Hangout account is linked to the GitHub
+account that wrote it, at most 3 a day, under a cap on what the whole site ever makes (HC35 in
+[docs/economy.md](docs/economy.md)). Only merges from when that started count. These credits
+only buy room furniture on the site, and they can't be bought, sold or cashed out. A person reads every change, and what counts
+is work that a person accepted.
 
 | You've done | You get |
 | --- | --- |
