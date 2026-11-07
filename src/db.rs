@@ -2404,7 +2404,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS reports_one_open
 CREATE INDEX IF NOT EXISTS reports_by_reporter_day ON reports (reporter_id, day);
 CREATE INDEX IF NOT EXISTS reports_by_target ON reports (target_kind, target_id);
 CREATE INDEX IF NOT EXISTS reports_queue ON reports (status, reason, created_at);
+-- A116: deleting a bot frees a place, but not its mint in the rolling hour. Account deletion
+-- removes the ledger. No agent foreign key: the mint must outlive the bot.
+CREATE TABLE IF NOT EXISTS agent_mints (
+    agent_id    TEXT PRIMARY KEY,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_mints_by_owner_age ON agent_mints (person_id, created_at);
+-- Count bots made by an older binary too, including when returning from a rollback.
+INSERT OR IGNORE INTO agent_mints (agent_id, person_id, created_at)
+    SELECT a.id, a.owner_id, a.created_at FROM agents a
+    JOIN agent_accounts d ON d.person_id = a.owner_id
+    WHERE a.created_at > unixepoch() - 3600;
 "#;
+
+/// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DoorMintRefusal {
+    Closed,
+    Full,
+    Hourly(u64),
+}
 
 /// MY1: a week's mayor election.
 #[derive(Debug, Clone)]
@@ -5945,6 +5966,74 @@ impl Db {
             params![id, owner_id, name, token_hash, now],
         )?;
         Ok(())
+    }
+
+    /// A116/A117: serialize the switch, both limits, and the insert even across connections.
+    pub fn create_door_agent(
+        &self,
+        id: &str,
+        owner_id: &str,
+        name: &str,
+        token_hash: &str,
+        now: i64,
+    ) -> rusqlite::Result<Result<(), DoorMintRefusal>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Err(refused) = Self::mint_door_agent_in(&tx, id, owner_id, name, token_hash, now)? {
+            return Ok(Err(refused));
+        }
+        tx.commit()?;
+        Ok(Ok(()))
+    }
+
+    fn mint_door_agent_in(
+        tx: &Connection,
+        id: &str,
+        owner_id: &str,
+        name: &str,
+        token_hash: &str,
+        now: i64,
+    ) -> rusqlite::Result<Result<(), DoorMintRefusal>> {
+        let open = tx
+            .query_row("SELECT open FROM bot_signups WHERE id = 1", [], |r| r.get::<_, i64>(0))
+            .optional();
+        if !matches!(open, Ok(None) | Ok(Some(1))) {
+            return Ok(Err(DoorMintRefusal::Closed));
+        }
+        let kept: i64 =
+            tx.query_row("SELECT COUNT(*) FROM agents WHERE owner_id = ?", [owner_id], |r| {
+                r.get(0)
+            })?;
+        if kept >= 10 {
+            return Ok(Err(DoorMintRefusal::Full));
+        }
+        // The second newest must leave the hour before another mint fits. This also gives the
+        // right wait to accounts imported from the uncapped binary with more than two recent bots.
+        let second_newest: Option<i64> = tx
+            .query_row(
+                "SELECT created_at FROM agent_mints WHERE person_id = ? AND created_at > ?
+             ORDER BY created_at DESC LIMIT 1 OFFSET 1",
+                params![owner_id, now - 3600],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(at) = second_newest {
+            return Ok(Err(DoorMintRefusal::Hourly((at + 3600 - now).max(1) as u64)));
+        }
+        tx.execute(
+            "INSERT INTO agents (id, owner_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+            params![id, owner_id, name, token_hash, now],
+        )?;
+        // Only recent mints are needed; keep the ledger bounded even for a long-running swarm.
+        tx.execute(
+            "DELETE FROM agent_mints WHERE person_id = ? AND created_at <= ?",
+            params![owner_id, now - 3600],
+        )?;
+        tx.execute(
+            "INSERT INTO agent_mints (agent_id, person_id, created_at) VALUES (?, ?, ?)",
+            params![id, owner_id, now],
+        )?;
+        Ok(Ok(()))
     }
 
     pub fn agent_by_token(&self, token_hash: &str, now: i64) -> rusqlite::Result<Option<Agent>> {
@@ -10393,22 +10482,30 @@ impl Db {
         name: &str,
         token_hash: &str,
         now: i64,
-    ) -> rusqlite::Result<bool> {
+    ) -> rusqlite::Result<Result<bool, DoorMintRefusal>> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if exists(&tx, "SELECT 1 FROM bot_homes WHERE house_id = ? AND is_house = 1", [house_id])? {
-            return Ok(false);
+            return Ok(Ok(false));
         }
-        tx.execute(
-            "INSERT INTO agents (id, owner_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-            params![agent_id, owner_id, name, token_hash, now],
-        )?;
+        if exists(&tx, "SELECT 1 FROM agent_accounts WHERE person_id = ?", [owner_id])? {
+            if let Err(refused) =
+                Self::mint_door_agent_in(&tx, agent_id, owner_id, name, token_hash, now)?
+            {
+                return Ok(Err(refused));
+            }
+        } else {
+            tx.execute(
+                "INSERT INTO agents (id, owner_id, name, token_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                params![agent_id, owner_id, name, token_hash, now],
+            )?;
+        }
         tx.execute(
             "INSERT INTO bot_homes (agent_id, house_id, stays_home, is_house) VALUES (?, ?, 0, 1)",
             params![agent_id, house_id],
         )?;
         tx.commit()?;
-        Ok(true)
+        Ok(Ok(true))
     }
 
     // Trips
@@ -20080,8 +20177,11 @@ mod tests {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
 
-        assert!(db.create_house_bot("hz", "hb1", "p1", "Home", "token-hb1", 100).unwrap());
-        assert!(!db.create_house_bot("hz", "hb2", "p1", "Again", "token-hb2", 101).unwrap());
+        assert!(db.create_house_bot("hz", "hb1", "p1", "Home", "token-hb1", 100).unwrap().unwrap());
+        assert!(!db
+            .create_house_bot("hz", "hb2", "p1", "Again", "token-hb2", 101)
+            .unwrap()
+            .unwrap());
         assert!(db.agent("hb2", 101).unwrap().is_none());
         assert_eq!(db.house_bot("hz", 102).unwrap().unwrap().id, "hb1");
         assert!(db.house_bot("ha", 102).unwrap().is_none());
@@ -20099,12 +20199,42 @@ mod tests {
         assert_eq!(db.house_bot("hz", 102).unwrap().unwrap().id, "hb1");
     }
 
+    // A116/A117: the separate house-bot path cannot bypass the door's switch or mint ledger.
+    #[test]
+    fn door_house_bots_share_the_mint_limits_and_switch() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        db.mark_agent_account("p1", 100).unwrap();
+        db.set_bot_signups(false, "p1", 100).unwrap();
+        assert_eq!(
+            db.create_house_bot("hz", "hb", "p1", "Home", "hb-token", 100).unwrap(),
+            Err(DoorMintRefusal::Closed)
+        );
+        assert!(db.house_bot("hz", 100).unwrap().is_none());
+        db.set_bot_signups(true, "p1", 100).unwrap();
+        assert_eq!(db.create_door_agent("new", "p1", "New", "new-token", 100).unwrap(), Ok(()));
+        assert_eq!(
+            db.create_house_bot("hz", "hb", "p1", "Home", "hb-token", 100).unwrap(),
+            Ok(true)
+        );
+        assert_eq!(
+            db.create_door_agent("extra", "p1", "Extra", "extra-token", 100).unwrap(),
+            Err(DoorMintRefusal::Hourly(3600))
+        );
+        db.delete_agent("hb").unwrap();
+        assert_eq!(
+            db.create_house_bot("hz", "replacement", "p1", "Home", "replacement-token", 100)
+                .unwrap(),
+            Err(DoorMintRefusal::Hourly(3600))
+        );
+    }
+
     #[test]
     fn the_maps_show_where_bots_live_and_where_they_are() {
         let db = Db::open(":memory:").unwrap();
         two_houses(&db);
         db.touch_agent_active("b2", 1000).unwrap();
-        assert!(db.create_house_bot("hz", "hb1", "p1", "Home", "token-hb1", 100).unwrap());
+        assert!(db.create_house_bot("hz", "hb1", "p1", "Home", "token-hb1", 100).unwrap().unwrap());
         start_trip(&db, "t1", "b2", "hz", 60, 1000);
 
         let city_map = db.bots_in_city("c1", 1500).unwrap();

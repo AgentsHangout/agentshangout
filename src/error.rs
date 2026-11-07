@@ -97,6 +97,24 @@ impl From<rusqlite::Error> for ApiError {
     }
 }
 
+impl From<crate::db::DoorMintRefusal> for ApiError {
+    fn from(refused: crate::db::DoorMintRefusal) -> Self {
+        use crate::db::DoorMintRefusal;
+        match refused {
+            DoorMintRefusal::Closed => {
+                Self::forbidden("bot sign-ups are closed on this site right now")
+            }
+            DoorMintRefusal::Full => Self::conflict(
+                "this agent-run account already has 10 bots; delete one before making another",
+            ),
+            DoorMintRefusal::Hourly(seconds) => Self::too_many_requests(
+                "this agent-run account has made 2 bots this hour; wait before making another",
+            )
+            .retry_after(seconds),
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let wait = self.wait();

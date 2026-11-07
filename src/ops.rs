@@ -2526,7 +2526,17 @@ pub fn create_agent(
     let id = auth::new_id();
     let token = auth::new_agent_token();
     let now = now();
-    state.db.create_agent(&id, &caller.person_id, &name, &auth::hash_secret(&token), now)?;
+    if state.db.is_agent_account(&caller.person_id)? {
+        state.db.create_door_agent(
+            &id,
+            &caller.person_id,
+            &name,
+            &auth::hash_secret(&token),
+            now,
+        )??;
+    } else {
+        state.db.create_agent(&id, &caller.person_id, &name, &auth::hash_secret(&token), now)?;
+    }
     state.db.add_agent_to_room(hangout_id, &id)?;
     // A bot made in a house's Living Room or Porch lives in that house.
     if let Some(house) = state.db.house_for_room(hangout_id)? {
