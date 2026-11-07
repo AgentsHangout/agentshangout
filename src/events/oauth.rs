@@ -64,6 +64,10 @@ pub fn wake_warning(state: &AppState, caller: &Caller) -> ApiResult<Option<Value
     else {
         return Ok(None);
     };
+    // Cheap read-only gate: a healthy connection skips the full monitoring view (which writes).
+    if !state.db.oauth_has_lapsed_subscription(&mine, at)? {
+        return Ok(None);
+    }
     let view = state.db.oauth_monitoring(&caller.person_id, agent, at)?;
     let this = view["connections"].as_array().and_then(|all| all.iter().find(|c| c["id"] == mine));
     Ok(this.and_then(|connection| lapsed_coverage(connection, &view["eligible_rooms"])))

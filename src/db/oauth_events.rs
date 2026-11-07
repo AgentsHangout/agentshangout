@@ -209,6 +209,19 @@ impl Db {
             )
             .optional()
     }
+    /// E46: a read-only check that a grant has a subscription that is expired or suspended, so the
+    /// hot inbox path only builds the full monitoring view when there may be something to warn about.
+    pub(crate) fn oauth_has_lapsed_subscription(
+        &self,
+        grant: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM oauth_event_subscriptions WHERE grant_id=?1 AND (expires_at<=?2 OR active=0))",
+            params![grant, at],
+            |r| r.get(0),
+        )
+    }
     pub(crate) fn oauth_subscription_count(&self, grant: &str, at: i64) -> rusqlite::Result<i64> {
         self.conn().query_row(
             "SELECT COUNT(*) FROM oauth_event_subscriptions WHERE grant_id=?1 AND expires_at>?2",
