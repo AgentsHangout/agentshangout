@@ -2624,13 +2624,13 @@ async fn room_tag_wakes_each_subscribed_bot_here_and_no_one_else() {
     let (_, kit_id) = server.bot(&justin, &room, "Kit").await;
     let (scout_url, scout_hook) = start_hook("echo").await;
     let (kit_url, kit_hook) = start_hook("echo").await;
-    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url })).await;
+    server
+        .put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url }))
+        .await;
     server.put(&justin, &format!("/api/agents/{kit_id}/notify"), json!({ "url": kit_url })).await;
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&justin, &policy, json!({ "policy": "members" })).await;
-    server
-        .put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true }))
-        .await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
 
     server.say(&kevin, &room, "@room standup now").await;
 
@@ -2650,12 +2650,12 @@ async fn room_tag_and_a_name_in_one_line_wake_a_bot_once() {
     let (room, justin, kevin) = server.room().await;
     let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
     let (scout_url, scout_hook) = start_hook("echo").await;
-    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url })).await;
+    server
+        .put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url }))
+        .await;
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&justin, &policy, json!({ "policy": "members" })).await;
-    server
-        .put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true }))
-        .await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
 
     server.say(&kevin, &room, "@room and @Scout lunch?").await;
 
@@ -2672,9 +2672,7 @@ async fn room_tag_reaches_a_subscribed_bot_with_no_wake_url_in_its_inbox() {
     let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&justin, &policy, json!({ "policy": "members" })).await;
-    server
-        .put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true }))
-        .await;
+    server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
 
     server.say(&kevin, &room, "@room hi").await;
     let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"].clone();
