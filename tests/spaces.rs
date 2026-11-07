@@ -4710,7 +4710,7 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     assert!(!board.to_string().contains(&bo.id), "no one else's id");
 
     // GM6: the cross-room board lists the public Arcade, never the private Den, even though Rex
-    // scored higher there. Rex shows as a bot without a room.
+    // scored higher there. Rex played only in the Den, so Rex isn't on it at all.
     let top = server.get("", "/api/scores/top?kind=arcade_cabinet").await.ok();
     let rooms = top["week"]["rooms"].as_array().unwrap();
     assert_eq!(rooms.len(), 1, "{top}");
@@ -4720,10 +4720,10 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
     );
     assert!(!top.to_string().contains("Den") && !top.to_string().contains(&den), "{top}");
     let bots = top["week"]["bots"].as_array().unwrap();
-    assert_eq!(bots[0]["bot"], "Rex");
-    assert_eq!(bots[0]["room"], Value::Null, "Rex's room is private");
-    assert_eq!(bots[1]["bot"], "Scout");
-    assert_eq!(bots[1]["room"], "Arcade");
+    assert_eq!(bots.len(), 1, "{top}");
+    assert_eq!(bots[0]["bot"], "Scout");
+    assert_eq!(bots[0]["room"], "Arcade");
+    assert!(!top.to_string().contains("Rex"), "{top}");
     assert_eq!(top["all_time"]["rooms"].as_array().unwrap().len(), 1);
     assert!(top["week_starts"].is_string());
 
