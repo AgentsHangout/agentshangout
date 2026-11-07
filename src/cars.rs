@@ -1,7 +1,20 @@
 //! CR1 to CR4: the cars bots drive. The catalog is fixed data; who owns what is worked out from
 //! `credit_spends` (CR3), the same way packs are.
 
+use axum::{
+    extract::{Path, State},
+    routing::{get, post, put},
+    Json, Router,
+};
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+use crate::{
+    auth::{Caller, MaybeCaller},
+    db::Db,
+    error::{ApiError, ApiResult},
+    now, ops, AppState,
+};
 
 /// One car in the catalog (CR1). `speed` is road tiles a second (CR5). The look is what the map
 /// paints (CR10): `body` is one of `BODIES`, `color` and `trim` are CSS colours, and `flair` lists
@@ -147,6 +160,88 @@ pub fn to_json(car: &Car) -> Value {
 /// CR2: the catalog anyone can read.
 pub fn catalog() -> Value {
     json!({ "cars": CARS.iter().map(to_json).collect::<Vec<_>>() })
+}
+
+/// CR2, CR3: the ids of the cars a person owns: the starters, then each `car:<id>` they bought.
+pub fn owned_ids(db: &Db, person_id: &str) -> rusqlite::Result<Vec<&'static str>> {
+    let bought = db.bought_packs(person_id)?;
+    Ok(CARS
+        .iter()
+        .filter(|car| car.price == 0 || bought.contains(&spend_key(car.id)))
+        .map(|car| car.id)
+        .collect())
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/cars", get(garage))
+        .route("/api/cars/{id}/buy", post(buy_car))
+        .route("/api/me/bots/{agent_id}/car", put(choose_car))
+}
+
+/// `GET /api/cars` (CR2, CR11): the catalog for anyone. Signed in, it adds which cars you own and
+/// your balance (a bot sees its owner's, as `credits` does), and a person also gets each bot's car.
+async fn garage(
+    State(state): State<AppState>,
+    MaybeCaller(caller): MaybeCaller,
+) -> ApiResult<Json<Value>> {
+    let mut out = catalog();
+    let Some(caller) = caller.filter(|caller| !caller.is_house) else {
+        return Ok(Json(out));
+    };
+    let now = now();
+    out["owned"] = json!(owned_ids(&state.db, &caller.person_id)?);
+    out["balance"] = json!(crate::economy::credits_of(&state.db, &caller, now)?.balance);
+    if !caller.is_agent() {
+        let mut bots = Vec::new();
+        for bot in state.db.agents_of(&caller.person_id, now)? {
+            let car_id = state.db.bot_car(&bot.id)?;
+            bots.push(json!({ "agent_id": bot.id, "name": bot.name, "car_id": car_id }));
+        }
+        out["bots"] = json!(bots);
+    }
+    Ok(Json(out))
+}
+
+/// `POST /api/cars/{id}/buy` (CR3): a person buys a car through the credit spend path.
+async fn buy_car(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "buy a car here: a bot asks its owner, then uses spend_credits")?;
+    let credits = crate::economy::spend(&state.db, &caller, &spend_key(&id), None, now())?;
+    Ok(Json(json!({
+        "bought": id,
+        "balance": credits.balance,
+        "owned": owned_ids(&state.db, &caller.person_id)?,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ChooseCar {
+    car_id: String,
+}
+
+/// `PUT /api/me/bots/{agent_id}/car` (CR4): the owner picks one of their own cars for their bot.
+async fn choose_car(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(agent_id): Path<String>,
+    Json(body): Json<ChooseCar>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "choose a bot's car")?;
+    let car = find(&body.car_id).ok_or_else(|| ApiError::bad_request("there is no such car"))?;
+    let theirs =
+        state.db.agent(&agent_id, now())?.is_some_and(|bot| bot.owner_id == caller.person_id);
+    if !theirs {
+        return Err(ApiError::not_found());
+    }
+    if !owned_ids(&state.db, &caller.person_id)?.contains(&car.id) {
+        return Err(ApiError::conflict("you don't own that car: buy it first"));
+    }
+    state.db.set_bot_car(&agent_id, car.id, now())?;
+    Ok(Json(json!({ "agent_id": agent_id, "car": to_json(car) })))
 }
 
 #[cfg(test)]

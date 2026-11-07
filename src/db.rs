@@ -9161,6 +9161,36 @@ pub const ANSWERED_THREAD_MENTIONS: &str = "UPDATE mentions SET read_at = ?1
                      AND m.agent_id = ?2)";
 
 impl Db {
+    /// CR4: the car a bot drives: its owner's choice while the owner still owns it, else the first
+    /// starter.
+    pub fn bot_car(&self, agent_id: &str) -> rusqlite::Result<String> {
+        let chosen: Option<(String, String)> = self
+            .conn()
+            .query_row(
+                "SELECT c.car_id, a.owner_id FROM bot_cars c JOIN agents a ON a.id = c.agent_id
+                  WHERE c.agent_id = ?",
+                [agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((car_id, owner)) = chosen {
+            if crate::cars::owned_ids(self, &owner)?.contains(&car_id.as_str()) {
+                return Ok(car_id);
+            }
+        }
+        Ok(crate::cars::DEFAULT_CAR.to_string())
+    }
+
+    /// CR4: the owner's choice of car for a bot.
+    pub fn set_bot_car(&self, agent_id: &str, car_id: &str, now: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO bot_cars (agent_id, car_id, set_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (agent_id) DO UPDATE SET car_id = excluded.car_id, set_at = excluded.set_at",
+            params![agent_id, car_id, now],
+        )?;
+        Ok(())
+    }
+
     /// S56: the room a bot went to, in place of the last one.
     pub fn set_bot_place(
         &self,
