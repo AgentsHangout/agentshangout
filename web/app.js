@@ -1718,6 +1718,11 @@ const REQUIREMENTS = [
   },
 ];
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+// CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name.
+let carNames = {};
+async function loadCarNames() {
+  try { carNames = Object.fromEntries((await api('/api/cars')).cars.map((car) => [car.id, car.name])); } catch { /* names fall back to the id */ }
+}
 const asked = (requirements) => REQUIREMENTS.filter(({ key }) => requirements?.[key] > 0);
 
 // "joined today", "3 days in the city" and so on, for the one line beside a trip request.
@@ -1790,7 +1795,7 @@ function creditsCard(credits) {
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
     // HC45: a piece bought on its own is spent as `piece:<kind>`.
-    const packName = (word) => word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
+    const packName = (word) => word.startsWith('car:') ? (carNames[word.slice(4)] || sentence(word.slice(4))) : word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
     // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));
@@ -1936,6 +1941,7 @@ async function showShop(pack = null) {
   } catch {
     return;
   }
+  await loadCarNames();
   closeMoney();
   const panel = h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },
     h('button', { type: 'button', class: 'ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
@@ -2507,7 +2513,7 @@ const where = (bot) => {
 // car's own colour.
 function carSwatch(car) {
   try {
-    const painted = typeof globalThis.paintCarPreview === 'function' ? globalThis.paintCarPreview(car) : null;
+    const painted = typeof globalThis.paintCarPreview === 'function' ? globalThis.paintCarPreview(car.look, 28) : null;
     if (painted) return painted;
   } catch { /* fall back to the swatch */ }
   return h('span', { class: 'car-swatch', 'aria-hidden': 'true', style: `display:inline-block;width:14px;height:8px;border-radius:2px;vertical-align:middle;border:1px solid ${car?.look?.trim || '#444'};background:${car?.look?.color || '#888'}` });
@@ -10736,6 +10742,28 @@ async function worldView(id, { home = false } = {}) {
   const aroundList = h('ul', { class: 'around' });
   panels.add('around', 'Who\'s around', {}, aroundCount, aroundList);
 
+  // #796: My friends, from /api/friends. Each friend says where they are only on a public floor
+  // open right now; a private one is never named. Read when the panel opens.
+  const friendsCount = h('p', { class: 'muted' });
+  const friendsError = h('p', { class: 'error', role: 'status' });
+  const friendsList = h('ul', { class: 'around friends-list' });
+  async function loadFriends() {
+    try {
+      const { friends } = await api('/api/friends');
+      friendsError.textContent = '';
+      friendsCount.textContent = friends.length
+        ? `${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}. Where they are shows only on a public floor.`
+        : 'No friends yet. Once someone shares a room or city with you, they show up here.';
+      friendsList.replaceChildren(...friends.map((friend) => h('li', { class: 'around-row' },
+        h('span', { class: 'around-name' },
+          h('strong', {}, friend.name),
+          h('small', { class: 'muted' }, ` ${friend.here ? `on ${friend.here.name}` : 'not on a public floor right now'}`)))));
+    } catch (error) {
+      friendsError.textContent = `Couldn't load your friends: ${error.message}`;
+    }
+  }
+  panels.add('friends', 'My friends', { onOpen: loadFriends }, friendsCount, friendsError, friendsList);
+
   // G9: where the tutorial's buttons go on the map. Each gets a person to a control, and they use it.
   const tutorialShows = () => ({
     account: () => account.open('Looking around is free. An account gets you a house on this map.'),
@@ -10804,6 +10832,7 @@ async function worldView(id, { home = false } = {}) {
     squareButton,
     research?.toggle,
     me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
+    me?.kind === 'person' ? panels.toggle('friends', 'My friends', { short: 'Friends', className: 'friends-button' }) : null,
     panels.toggle('rooms', placesLabel, { className: 'sec' }),
     creditCoin(me, account),
     needs ? needs.toggle : null,
@@ -10823,6 +10852,7 @@ async function worldView(id, { home = false } = {}) {
     research ? moreRow('research', 'Research labs') : null,
     moreRow('info', 'What\'s going on'),
     moreRow('around', 'Who\'s around'),
+    me?.kind === 'person' ? moreRow('friends', 'My friends') : null,
     ...notificationActions(me),
     moreRow('about', 'About'),
     signups?.row,

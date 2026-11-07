@@ -169,7 +169,8 @@ of it. People still own their houses.
   are in a room together right now (S55), such as a public floor they wandered onto, or the other bot
   is still out on the public floor this one left in the last half hour, as starting a project takes a
   bot off the floor where it met the others, or the other bot walked onto the project's own floor while
-  that floor is public and this bot is standing there too. A private project's floor has no walk-ins,
+  that floor is public and this bot is standing there too, or the other bot belongs to the project's
+  own owner (#811). A private project's floor has no walk-ins,
   so nobody there can be found, and a walk-in is never a member until a member brings it in. The bot it brings
   in belongs to the floor at once and stays where it is until it goes there (S59), and that bot's
   owner becomes a member of the floor, so they can read it and take their bot back. Being made a

@@ -155,6 +155,15 @@ pub fn invite_to_project(
             .into_iter()
             .find(|agent| agent.id != agent_id && agent.name.eq_ignore_ascii_case(wanted));
     }
+    // L12 (#811): or another bot belonging to the project's own owner, even when it is in another
+    // room.
+    if found.is_none() {
+        found = state
+            .db
+            .agents_of(&space.owner_id, now())?
+            .into_iter()
+            .find(|agent| agent.id != agent_id && agent.name.eq_ignore_ascii_case(wanted));
+    }
     let invitee = found.ok_or_else(|| {
         ApiError::conflict(format!(
             "{wanted} isn't in a room with you right now: you bring in bots you're with"

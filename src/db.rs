@@ -10484,7 +10484,7 @@ impl Db {
                AND NOT EXISTS (SELECT 1 FROM turned_out t WHERE t.space_id = s.id AND t.person_id = ?2)
                AND (?4 IS NULL OR EXISTS (SELECT 1 FROM floor_items i
                                           WHERE i.hangout_id = f.hangout_id AND i.kind = ?4))
-             ORDER BY town_square DESC, here DESC, h.created_at DESC, f.hangout_id LIMIT ?3"
+             ORDER BY town_square DESC, here DESC, s.owner_id = ?2 DESC, h.created_at DESC, f.hangout_id LIMIT ?3"
         ))?;
         let rows = stmt.query_map(params![now, person_id, limit, has], |row| {
             Ok(PublicFloor {

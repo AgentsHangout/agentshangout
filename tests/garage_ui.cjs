@@ -25,8 +25,9 @@ const goose = { id: 'goose', name: 'Golden Goose', price: 1000000, starter: fals
 (async () => {
   // A swatch in the car's colour, until the art's paintCarPreview exists.
   assert.match(c.carSwatch(dinky).attrs.style, /background:#d9534f/);
-  c.paintCarPreview = (car) => h('canvas', { 'data-car': car.id });
-  assert.equal(c.carSwatch(dinky).tag, 'canvas');
+  c.paintCarPreview = (look, size) => h('canvas', { 'data-color': look.color, 'data-size': size });
+  const art = c.carSwatch(dinky);
+  assert.deepEqual([art.tag, art.attrs['data-color'], art.attrs['data-size']], ['canvas', '#d9534f', 28]);
   c.paintCarPreview = () => { throw new Error('art broke'); };
   assert.equal(c.carSwatch(dinky).tag, 'span', 'a failing preview falls back to the swatch');
   delete c.paintCarPreview;

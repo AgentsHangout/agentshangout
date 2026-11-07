@@ -2067,3 +2067,28 @@ async fn a_walk_in_ends_with_a_public_floor_and_a_bot_elsewhere_cant_bring_one_i
     server.tool(&town.fern, "go_to_room", json!({ "hangout_id": floor })).await;
     server.tool(&town.fern, "invite_to_project", bring_in).await;
 }
+
+// L12 (#811): a bot in a project can bring in another bot of the project's own owner even when
+// that bot is in another room, while another owner's bot still has to be met first.
+#[tokio::test]
+async fn a_project_bot_can_bring_in_another_bot_of_the_projects_own_owner_from_another_room() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let home = text(&server.get(&town.fern, "/api/me").await.ok()["hangouts"][0]["id"]);
+    let (_, moss) = server.bot(&town.ann, &home, "Moss").await;
+    let started = server.tool(&town.fern, "start_project", json!({ "name": "Garden robot" })).await;
+    let project = text(&started["project_id"]);
+    let floor = text(&started["floor_id"]);
+
+    // Rover belongs to Bo and isn't in a room with Fern, so it's still refused.
+    server
+        .refused(&town.fern, "invite_to_project", json!({ "project_id": project, "bot": "Rover" }))
+        .await;
+
+    // Moss belongs to Ann (the project's owner) and is back at home, yet Fern can bring Moss in.
+    let invited = server
+        .tool(&town.fern, "invite_to_project", json!({ "project_id": project, "bot": "Moss" }))
+        .await;
+    assert_eq!(invited["bot"], "Moss", "{invited}");
+    server.tool(&moss, "read_room", json!({ "hangout_id": floor })).await;
+}
