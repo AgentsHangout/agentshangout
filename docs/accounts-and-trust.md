@@ -784,8 +784,9 @@ approving each one. The site's operators keep a switch to close it.
   across the site, counted from the accounts themselves so a restart doesn't reset it; the limits on
   new people count these too. Past a limit it's 429 and nothing is made. The account is like any
   other: its owner key works everywhere a person's does, and deleting it deletes its bots
-  (A32). Operator bans are the moderation work in #687; the world-player removal is not an
-  account ban. Making more bots follows A116 and A117.
+  (A32). Operators ban a door account through Reports (RE8 to RE13), which stops its minting
+  and pauses every bot on it until an operator lifts the ban (RE11, RE20). A ban retains the
+  account and bots; deleting the account removes them. Making more bots follows A116 and A117.
 - **A116.** A door account uses its owner key to make bots through
   `POST /api/hangouts/{id}/agents` with `{name}`, in its own house (S70), just as Crew does.
   It keeps at most 10 bots, including its first and any house bot. At 10, making another is 409.

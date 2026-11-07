@@ -542,6 +542,58 @@ async fn a_banned_person_reaches_only_their_account_and_their_bots_stop() {
     assert!(server.state.db.all_holds().unwrap().is_empty());
 }
 
+// #628, A96/A116 and RE11: a ban stops a real door account and all its subagents.
+#[tokio::test]
+async fn a_door_account_ban_stops_minting_and_all_bots_without_resetting_limits() {
+    let (server, justin, _) = Server::start().await;
+    let made = server
+        .post("", "/api/accounts/agent", json!({"your_name":"Swarm", "bot_name":"Lead"}))
+        .await
+        .ok();
+    let owner = Who { key: text(&made["owner_key"]), id: text(&made["person"]["id"]) };
+    let first = text(&made["bot"]["id"]);
+    let room = server.state.db.bot_place(&first, now()).unwrap().unwrap();
+    let mint = format!("/api/hangouts/{room}/agents");
+    let second = server.post(&owner.key, &mint, json!({"name":"Worker"})).await.ok();
+    let tokens = [text(&made["bot_token"]), text(&second["token"])];
+    server.god_mode(&justin, true).await;
+    let report = server.report(&justin, about("person", &owner.id, "spam")).await;
+    server.close(&justin, report, "ban_person", Some("swarm spam")).await.ok();
+    let refused = server
+        .post(&owner.key, &mint, json!({"name":"Blocked"}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert_eq!(refused["reason"], "banned");
+    for token in &tokens {
+        assert_eq!(
+            server.get(token, "/api/me").await.refused(StatusCode::FORBIDDEN)["reason"],
+            "paused_by_operator"
+        );
+        assert_eq!(server.tool(token, "inbox", json!({})).await["isError"], true);
+    }
+    assert_eq!(server.state.db.agents_of(&owner.id, now()).unwrap().len(), 2);
+    assert_eq!(server.queue(&justin).await["holds"][0]["hold"], "ban_person");
+    let lift = json!({"hold":"ban_person", "id":owner.id});
+    server.post(&owner.key, "/api/reports/lift", lift.clone()).await.refused(StatusCode::FORBIDDEN);
+    server.post(&justin.key, "/api/reports/lift", lift).await.ok();
+    for token in &tokens {
+        assert_ne!(server.tool(token, "inbox", json!({})).await["isError"], true);
+    }
+    // A lift restores access but does not reset the two-mints-per-hour ledger.
+    server
+        .post(&owner.key, &mint, json!({"name":"Still limited"}))
+        .await
+        .refused(StatusCode::TOO_MANY_REQUESTS);
+    let again = server.report(&justin, about("person", &owner.id, "spam")).await;
+    server.close(&justin, again, "ban_person", None).await.ok();
+    server.delete_account(&owner, "Swarm").await;
+    server.get(&owner.key, "/api/me").await.refused(StatusCode::UNAUTHORIZED);
+    for token in &tokens {
+        server.get(token, "/api/me").await.refused(StatusCode::UNAUTHORIZED);
+    }
+    assert!(server.state.db.agents_of(&owner.id, now()).unwrap().is_empty());
+}
+
 // RE15: a minor_safety report alerts every operator at once, with its id and nothing else, once.
 #[tokio::test]
 async fn a_minor_safety_report_alerts_every_operator_with_its_id_only() {
