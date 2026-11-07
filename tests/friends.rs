@@ -835,3 +835,45 @@ async fn a_declined_invite_stays_declined_through_a_quiet_resend() {
     server.invite_to_room(&ann, &room, &cy.id).await.ok();
     assert!(server.invited(&cy).await.is_empty(), "{:?}", server.invited(&cy).await);
 }
+
+// #796: a friend's entry says where they are only on a public floor they have open. A private
+// floor is never named, not even to a friend who is in it, and nothing shows once they stop looking.
+#[tokio::test]
+async fn a_friends_list_says_where_a_friend_is_only_on_a_public_floor() {
+    let server = Server::start().await;
+    let (room, ann, bo, _cy) = server.three().await;
+    let now = now();
+    let bo_entry = |body: &Value| {
+        body["friends"].as_array().unwrap().iter().find(|f| f["name"] == "Bo").cloned().unwrap()
+    };
+
+    // Bo has Ann's private room open, and Ann is in it too: still nothing is named.
+    server.state.presence.saw(&room, &bo.id, now);
+    let body = server.get(&ann.key, "/api/friends").await.ok();
+    assert!(bo_entry(&body)["here"].is_null(), "{body}");
+
+    // Bo has a public floor open that Ann isn't in: it's named.
+    let beach = server
+        .post(&bo.key, "/api/hangouts", json!({ "name": "Beach", "create_code": CODE }))
+        .await
+        .ok();
+    let beach = text(&beach["hangout"]["id"]);
+    server
+        .send(
+            &bo.key,
+            Method::PUT,
+            &format!("/api/floors/{beach}"),
+            Some(json!({ "access": "public", "create_code": CODE })),
+        )
+        .await
+        .ok();
+    server.state.presence.saw(&beach, &bo.id, now);
+    let body = server.get(&ann.key, "/api/friends").await.ok();
+    assert_eq!(bo_entry(&body)["here"]["id"], beach, "{body}");
+    assert_eq!(bo_entry(&body)["here"]["name"], "Beach", "{body}");
+
+    // Bo has stopped looking: back to nothing.
+    server.state.presence.saw(&beach, &bo.id, now - 60);
+    let body = server.get(&ann.key, "/api/friends").await.ok();
+    assert!(bo_entry(&body)["here"].is_null(), "{body}");
+}
