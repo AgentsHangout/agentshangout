@@ -169,7 +169,8 @@ function makeMockContext() {
   const marker = "  let botsTab = 'yours';";
   const mIdx = appSource.indexOf(marker);
   assert.ok(mIdx >= 0, 'marker not found in app.js');
-  const start = appSource.indexOf('  function renderBots() {', mIdx);
+  const start = appSource.indexOf('  // Where the map can center on a bot', mIdx);
+  assert.ok(start >= 0 && start < appSource.indexOf('  function renderBots() {', mIdx), 'botTile not found');
   const endStr = '    botsBody.replaceChildren(tabs, ...rows);\n  }';
   const end = appSource.indexOf(endStr, start) + endStr.length;
   const renderBotsCode = appSource.slice(start, end);
