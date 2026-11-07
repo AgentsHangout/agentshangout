@@ -588,10 +588,6 @@ pub const PACKS: [Pack; 4] = [
             at("orrery", 31, 4),
             at("rocket_model", 34, 9),
             at("meteorite", 25, 12),
-            // #774: a tip jar by the door and an astronaut on the open side.
-            at("comet_jar", 19, 0),
-            at("astronaut", 36, 2),
-            at("lunar_rover", 30, 12),
         ],
     },
 ];
