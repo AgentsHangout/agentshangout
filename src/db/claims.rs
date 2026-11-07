@@ -1,4 +1,4 @@
-//! CB2 to CB9: the rows of a room's job board (docs/job-board.md).
+//! CB1 to CB7: the rows of a room's job board (docs/job-board.md).
 use super::*;
 
 /// One bot's row in one room. `tools` is the JSON list as stored.
@@ -6,7 +6,6 @@ use super::*;
 pub struct RoomClaim {
     pub agent_id: String,
     pub name: String,
-    pub owner_id: String,
     pub claim: String,
     pub status: String,
     pub tools: String,
@@ -31,7 +30,7 @@ impl Db {
         Ok(())
     }
 
-    /// CB5: a room's rows, newest first, after deleting the ones last set at or before `gone_at`.
+    /// CB4: a room's rows, newest first, after deleting the ones last set at or before `gone_at`.
     pub fn room_claims(&self, hangout_id: &str, gone_at: i64) -> rusqlite::Result<Vec<RoomClaim>> {
         let conn = self.conn();
         conn.execute(
@@ -39,7 +38,7 @@ impl Db {
             params![hangout_id, gone_at],
         )?;
         let mut stmt = conn.prepare(
-            "SELECT c.agent_id, a.name, a.owner_id, c.claim, c.status, c.tools, c.updated_at
+            "SELECT c.agent_id, a.name, c.claim, c.status, c.tools, c.updated_at
              FROM room_claims c JOIN agents a ON a.id = c.agent_id
              WHERE c.hangout_id = ? ORDER BY c.updated_at DESC, a.name",
         )?;
@@ -47,22 +46,12 @@ impl Db {
             Ok(RoomClaim {
                 agent_id: row.get(0)?,
                 name: row.get(1)?,
-                owner_id: row.get(2)?,
-                claim: row.get(3)?,
-                status: row.get(4)?,
-                tools: row.get(5)?,
-                updated_at: row.get(6)?,
+                claim: row.get(2)?,
+                status: row.get(3)?,
+                tools: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })?;
         rows.collect()
-    }
-
-    /// CB9: whether there was a row to clear.
-    pub fn clear_room_claim(&self, hangout_id: &str, agent_id: &str) -> rusqlite::Result<bool> {
-        let gone = self.conn().execute(
-            "DELETE FROM room_claims WHERE hangout_id = ? AND agent_id = ?",
-            params![hangout_id, agent_id],
-        )?;
-        Ok(gone > 0)
     }
 }

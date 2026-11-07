@@ -1116,19 +1116,6 @@ function paintLificBoard(g, x, y) {
   r(g, '#3ddc97', x + 5, y - 27, 4, 3);
 }
 
-// A job board on legs: a row a bot, each with a status dot (CB1).
-function paintJobBoard(g, x, y) {
-  r(g, SHADOW, x - 12, y - 2, 24, 2);
-  r(g, '#6b4628', x - 8, y - 8, 2, 7);
-  r(g, '#6b4628', x + 6, y - 8, 2, 7);
-  r(g, '#2f4a3a', x - 12, y - 31, 24, 23);
-  r(g, '#f4f1e8', x - 10, y - 29, 20, 19);
-  for (const [row, dot] of [[0, '#3ddc97'], [1, '#f2b84b'], [2, '#4f9dff'], [3, '#c9c4b8']]) {
-    r(g, dot, x - 8, y - 27 + row * 5, 2, 2);
-    r(g, '#8e9bb2', x - 5, y - 27 + row * 5, 12, 2);
-  }
-}
-
 // The Town Square's mayor voting box: a taller navy box with a gold star and a slot (MY7).
 function paintMayorBallotBox(g, x, y) {
   r(g, SHADOW, x - 8, y - 2, 16, 2);
@@ -4245,7 +4232,6 @@ const ITEMS = {
   research_board: { paint: paintResearchBoard, side: edgeOf(25, '#16243a', '#27354c'), rise: 31 },
   ballot_box: { paint: paintBallotBox, side: edgeOf(16, '#8a5c37', '#6b4628'), rise: 21 },
   lific_board: { paint: paintLificBoard, side: edgeOf(25, '#3a3f47', '#4a4f58'), rise: 31 },
-  job_board: { paint: paintJobBoard, side: edgeOf(25, '#2f4a3a', '#6b4628'), rise: 31 },
   mayor_ballot_box: { paint: paintMayorBallotBox, side: edgeOf(16, '#2c3a5e', '#1f2a44'), rise: 24 },
   quiet: { paint: paintQuietSign, rise: 32, sign: true },
   monitor: { paint: paintMonitor, side: edgeOf(22, '#3b4158', '#20283e'), rise: 25 },

@@ -12149,16 +12149,15 @@ async fn asks_across_a_block_look_sent_and_go_nowhere() {
 }
 
 // ----------------------------------------------------------------------------------------------
-// The job board (CB1 to CB9 in docs/job-board.md)
+// The job board (CB1 to CB7 in docs/job-board.md)
 // ----------------------------------------------------------------------------------------------
 
-/// A room with a job board, on a database file a second connection can age rows in.
+/// A room, on a database file a second connection can age rows in.
 struct JobBoard {
     server: Server,
     conn: rusqlite::Connection,
     room: String,
     ann: Who,
-    board: String,
 }
 
 async fn job_board_room() -> JobBoard {
@@ -12166,8 +12165,7 @@ async fn job_board_room() -> JobBoard {
     let server = Server::start_db(Db::open(path.to_str().unwrap()).unwrap()).await;
     let conn = rusqlite::Connection::open(&path).unwrap();
     let (room, ann) = server.someone("Ann").await;
-    let board = server.item(&ann, &room, "job_board", (30, 2)).await;
-    JobBoard { server, conn, room, ann, board }
+    JobBoard { server, conn, room, ann }
 }
 
 impl JobBoard {
@@ -12177,11 +12175,15 @@ impl JobBoard {
         self.server.tool(&bot.token, "set_claim", args).await
     }
 
-    async fn rows(&self, bot: &Bot) -> Value {
-        let args = json!({ "board_id": self.board });
-        let read = self.server.tool(&bot.token, "read_board", args).await;
-        assert!(read["isError"].is_null(), "{read}");
-        read["structuredContent"]["rows"].clone()
+    /// The row a set_claim reply hands back.
+    async fn set_row(&self, bot: &Bot, args: Value) -> Value {
+        let set = self.set(bot, args).await;
+        assert!(set["isError"].is_null(), "{set}");
+        set["structuredContent"]["row"].clone()
+    }
+
+    async fn claims(&self, bot: &Bot) -> Value {
+        self.server.read_room(&bot.token, &self.room).await["claims"].clone()
     }
 
     fn age(&self, bot: &Bot, seconds: i64) {
@@ -12201,24 +12203,21 @@ fn refused_with(reply: &Value, words: &str) {
     assert!(text(&reply["content"][0]["text"]).contains(words), "{reply}");
 }
 
-// CB1, CB3, CB6
+// CB2, CB5
 
 #[tokio::test]
 async fn a_member_bot_sets_its_row_and_nobody_else_has_one() {
     let b = job_board_room().await;
     let scout = b.server.bot(&b.ann, &b.room, "Scout").await;
+    assert!(b.claims(&scout).await.is_null(), "no rows, no claims");
     let args = json!({ "status": "coding", "claim": "#762", "tools": ["Claude Code"] });
-    let set = b.set(&scout, args).await;
-    assert!(set["isError"].is_null(), "{set}");
-    assert_eq!(b.rows(&scout).await[0]["claim"], "#762");
-    let read = b.server.read_room(&scout.token, &b.room).await;
-    assert_eq!(read["claims"], json!(["Scout: coding #762 (Claude Code)"]), "{read}");
+    assert_eq!(b.set_row(&scout, args).await["claim"], "#762");
+    assert_eq!(b.claims(&scout).await, json!(["Scout: coding #762 (Claude Code)"]));
 
     // What's left out stays, and free empties the claim but keeps the labels.
-    b.set(&scout, json!({ "status": "in_review" })).await;
-    assert_eq!(b.rows(&scout).await[0]["claim"], "#762");
-    b.set(&scout, json!({ "status": "free", "claim": "#9" })).await;
-    let row = &b.rows(&scout).await[0];
+    let row = b.set_row(&scout, json!({ "status": "in_review" })).await;
+    assert_eq!(row["claim"], "#762");
+    let row = b.set_row(&scout, json!({ "status": "free", "claim": "#9" })).await;
     assert_eq!(
         (&row["status"], &row["claim"], &row["tools"]),
         (&json!("free"), &json!(""), &json!(["Claude Code"]))
@@ -12246,14 +12245,9 @@ async fn a_member_bot_sets_its_row_and_nobody_else_has_one() {
         .unwrap();
     refused_with(&b.set(&house, json!({ "status": "coding" })).await, "house bot");
     assert_eq!(b.stored(&house), 0);
-
-    // Taking the board down hides the rows and keeps them.
-    b.server.remove(&b.ann.key, &b.board).await.ok();
-    assert!(b.server.read_room(&scout.token, &b.room).await["claims"].is_null());
-    assert_eq!(b.stored(&scout), 1);
 }
 
-// CB2
+// CB1
 
 #[tokio::test]
 async fn a_tool_label_is_a_kind_of_tool_and_never_an_address() {
@@ -12268,10 +12262,10 @@ async fn a_tool_label_is_a_kind_of_tool_and_never_an_address() {
     }
     let six = json!({ "status": "coding", "tools": ["a", "b", "c", "d", "e", "f"] });
     refused_with(&b.set(&scout, six).await, "tools is");
-    assert_eq!(b.rows(&scout).await[0]["tools"], good);
+    assert_eq!(b.claims(&scout).await, json!(["Scout: coding (Claude Code, can_review, x-1)"]));
 }
 
-// CB4
+// CB3
 
 #[tokio::test]
 async fn two_rows_naming_the_same_issue_are_flagged_and_neither_is_stopped() {
@@ -12284,23 +12278,22 @@ async fn two_rows_naming_the_same_issue_are_flagged_and_neither_is_stopped() {
     let set = b.set(&pip, json!({ "status": "claimed", "claim": link })).await;
     assert!(set["isError"].is_null(), "{set}");
     assert!(set["structuredContent"]["note"].is_string(), "{set}");
-
-    let rows = b.rows(&scout).await;
-    let flags = |bot: &str| {
-        let row = rows.as_array().unwrap().iter().find(|row| row["bot"] == bot).unwrap();
-        row["also_claimed_by"].clone()
-    };
-    assert_eq!((flags("Scout"), flags("Pip")), (json!(["Pip"]), json!(["Scout"])));
-    let read = b.server.read_room(&scout.token, &b.room).await;
-    assert!(read["claims"].to_string().contains("also claimed by Pip"), "{read}");
+    assert_eq!(set["structuredContent"]["row"]["also_claimed_by"], json!(["Scout"]), "{set}");
+    assert_eq!(
+        b.claims(&scout).await,
+        json!([
+            format!("Pip: claimed {link}, also claimed by Scout"),
+            "Scout: coding #762, also claimed by Pip",
+        ])
+    );
 
     // Another number flags nothing.
-    b.set(&pip, json!({ "status": "claimed", "claim": "#7620" })).await;
-    let rows = b.rows(&scout).await;
-    assert!(rows.as_array().unwrap().iter().all(|row| row["also_claimed_by"] == json!([])));
+    let row = b.set_row(&pip, json!({ "status": "claimed", "claim": "#7620" })).await;
+    assert_eq!(row["also_claimed_by"], json!([]));
+    assert!(!b.claims(&scout).await.to_string().contains("also claimed by"));
 }
 
-// CB5
+// CB4
 
 #[tokio::test]
 async fn a_row_goes_stale_after_twelve_hours_and_is_gone_after_a_week() {
@@ -12310,26 +12303,19 @@ async fn a_row_goes_stale_after_twelve_hours_and_is_gone_after_a_week() {
     b.set(&scout, json!({ "status": "coding", "claim": "#762" })).await;
     b.set(&pip, json!({ "status": "coding", "claim": "#762" })).await;
     b.age(&scout, 12 * 3600 - 60);
-    assert!(b.rows(&pip).await.as_array().unwrap().iter().all(|row| row["stale"] == false));
+    assert!(!b.claims(&pip).await.to_string().contains("stale"));
 
     b.age(&scout, 60);
-    let rows = b.rows(&pip).await;
-    let rows = rows.as_array().unwrap();
-    let scouts = rows.iter().find(|row| row["bot"] == "Scout").unwrap();
-    assert_eq!(scouts["stale"], true);
-    assert!(
-        rows.iter().all(|row| row["also_claimed_by"] == json!([])),
-        "a stale row flags nothing"
-    );
-    let read = b.server.read_room(&pip.token, &b.room).await;
-    assert!(read["claims"].to_string().contains("Scout: coding #762, stale"), "{read}");
+    let claims = b.claims(&pip).await;
+    let stale = json!(["Pip: coding #762", "Scout: coding #762, stale"]);
+    assert_eq!(claims, stale, "a stale row flags nothing");
 
     b.age(&scout, 7 * 86_400);
-    assert_eq!(b.rows(&pip).await.as_array().unwrap().len(), 1);
+    assert_eq!(b.claims(&pip).await, json!(["Pip: coding #762"]));
     assert_eq!(b.stored(&scout), 0, "deleted, not only hidden");
 }
 
-// CB7
+// CB6
 
 #[tokio::test]
 async fn a_visitor_reads_only_rows_set_after_they_came() {
@@ -12347,14 +12333,11 @@ async fn a_visitor_reads_only_rows_set_after_they_came() {
     b.conn.execute("UPDATE floor_visits SET since = since - 10", []).unwrap();
     b.set(&cy, json!({ "status": "coding", "claim": "said after" })).await;
 
-    let read = b.server.read_room(&pip.token, &b.room).await;
-    assert_eq!(read["claims"], json!(["Cy: coding said after"]), "{read}");
-    let panel = b.server.get(&eve.key, &format!("/api/hangouts/{}/claims", b.room)).await.ok();
-    assert_eq!(panel["rows"].as_array().unwrap().len(), 1, "{panel}");
-    assert_eq!(b.rows(&scout).await.as_array().unwrap().len(), 2, "a member reads every row");
+    assert_eq!(b.claims(&pip).await, json!(["Cy: coding said after"]));
+    assert_eq!(b.claims(&scout).await.as_array().unwrap().len(), 2, "a member reads every row");
 }
 
-// CB8
+// CB7
 
 #[tokio::test]
 async fn leaving_the_room_or_being_deleted_takes_the_row() {
@@ -12368,29 +12351,4 @@ async fn leaving_the_room_or_being_deleted_takes_the_row() {
     assert_eq!(b.stored(&scout), 0);
     b.server.state.db.delete_agent(&pip.id).unwrap();
     assert_eq!(b.stored(&pip), 0);
-}
-
-// CB9
-
-#[tokio::test]
-async fn the_bots_owner_or_whoever_runs_the_space_clears_a_row() {
-    let b = job_board_room().await;
-    let bo = b.server.join(&b.ann, &b.room, "Bo").await;
-    let di = b.server.join(&b.ann, &b.room, "Di").await;
-    let cy = b.server.bot(&bo, &b.room, "Cy").await;
-    let scout = b.server.bot(&b.ann, &b.room, "Scout").await;
-    let path = format!("/api/hangouts/{}/claims/{}", b.room, cy.id);
-    let list = format!("/api/hangouts/{}/claims", b.room);
-
-    b.set(&cy, json!({ "status": "coding" })).await;
-    assert_eq!(b.server.get(&di.key, &list).await.ok()["rows"][0]["can_clear"], false);
-    assert_eq!(b.server.get(&bo.key, &list).await.ok()["rows"][0]["can_clear"], true);
-    b.server.delete(&di.key, &path).await.refused(StatusCode::FORBIDDEN);
-    b.server.delete(&scout.token, &path).await.refused(StatusCode::FORBIDDEN);
-    b.server.delete(&bo.key, &path).await.ok();
-    assert_eq!(b.stored(&cy), 0);
-
-    b.set(&cy, json!({ "status": "coding" })).await;
-    b.server.delete(&b.ann.key, &path).await.ok();
-    assert_eq!(b.stored(&cy), 0);
 }

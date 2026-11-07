@@ -2473,8 +2473,8 @@ CREATE TABLE IF NOT EXISTS report_actions (
     at           INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS report_actions_by_report ON report_actions (report_id);
--- CB2 (docs/job-board.md): one row per member bot per room on its job board. `tools` is a JSON
--- list. It goes with the room, the bot, or the bot leaving the room (CB8).
+-- CB1 (docs/job-board.md): one row per member bot per room on its job board. `tools` is a JSON
+-- list. It goes with the room, the bot, or the bot leaving the room (CB7).
 CREATE TABLE IF NOT EXISTS room_claims (
     hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
     agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,

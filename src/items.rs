@@ -252,7 +252,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 150] = [
+pub static CATALOG: [Kind; 149] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -368,8 +368,6 @@ pub static CATALOG: [Kind; 150] = [
     // MY7: the Town Square's mayor voting box, which the server puts up there and nobody places.
     piece("mayor_ballot_box", "Mayor voting box", WORK, STARTER, 2, feels("drive"), (1, 1))
         .used("voting for mayor", 1),
-    // CB1: which bot is on what, read with read_board and set with set_claim.
-    piece("job_board", "Job board", WORK, STARTER, 2, feels("drive"), (2, 1)),
     piece("workbench", "Workbench", WORK, STARTER, 2, feels("drive"), (4, 2)),
     piece("tool_chest", "Tool chest", WORK, STARTER, 2, None, (2, 1)),
     piece("anvil", "Anvil", WORK, ONE_FRIEND, 3, feels("drive"), (2, 1)),
@@ -1437,7 +1435,6 @@ fn opens(kind: &str) -> Option<&'static str> {
         "ballot_box" => Some("votes"),
         "lific_board" => Some("lific"),
         "mayor_ballot_box" => Some("mayor"),
-        "job_board" => Some("claims"),
         _ => None,
     }
 }
