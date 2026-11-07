@@ -35,4 +35,77 @@ for (const call of ['buildPicture(`item:', 'buildPicture(`room:', 'buildPicture(
   assert.ok(source.includes(call), `${call} is cached`);
 }
 assert.ok(source.includes("const same = catalog && JSON.stringify(fresh) === JSON.stringify(catalog);"));
-console.log('Build pictures: painted once, copied per tile, bounded, and an unchanged catalog keeps its tiles.');
+
+// #748: toggling See the room / Catalog within one build session skips redundant /api/items fetches
+// unless ah-credits spent changed; ending build mode or spending credits fetches again.
+function extractInner(name) {
+  const start = source.indexOf(`  async function ${name}(`) >= 0
+    ? source.indexOf(`  async function ${name}(`)
+    : source.indexOf(`  function ${name}(`);
+  assert.ok(start >= 0, name);
+  const end = source.indexOf('\n  }\n', start);
+  assert.ok(end >= 0, `${name} end`);
+  return source.slice(start, end + 4);
+}
+const onCreditsStart = source.indexOf('  function onCredits(');
+assert.ok(onCreditsStart >= 0, 'onCredits is defined in buildMode');
+const onCreditsCode = extractInner('onCredits');
+const openCatalogCode = extractInner('openCatalog');
+
+(async () => {
+  let fetches = 0;
+  let renders = 0;
+  let catalogPayload = { items: [{ kind: 'stool' }], look: { packs_bought: [] } };
+  const catalogCtx = {
+    catalog: null,
+    catalogFresh: false,
+    catalogSpent: null,
+     catalogKey: 'k1',
+    placedKey: 'p1',
+    buildError: { hidden: true, textContent: '' },
+    panels: { current: null },
+    api: async (path) => {
+      assert.equal(path, '/api/items');
+      fetches += 1;
+      return JSON.parse(JSON.stringify(catalogPayload));
+    },
+    render: () => { renders += 1; },
+  };
+  vm.createContext(catalogCtx);
+  vm.runInContext(`${onCreditsCode}\n${openCatalogCode}\nthis.onCredits = onCredits; this.openCatalog = openCatalog;`, catalogCtx);
+
+  // 1. Opening Build the first time fetches /api/items once.
+  await catalogCtx.openCatalog();
+  assert.equal(fetches, 1);
+  assert.equal(renders, 1);
+  assert.equal(catalogCtx.catalogFresh, true);
+
+  // 2. Toggling See the room / Catalog within the same build session (no spend) makes no fetch.
+  await catalogCtx.openCatalog();
+  assert.equal(fetches, 1, 'toggle with no spend makes no /api/items fetch');
+  assert.equal(renders, 2, 'toggle still renders the catalog panel');
+
+  // 3. Initial ah-credits with spent: 0 (or unchanged spent) does not invalidate the session catalog.
+  catalogCtx.onCredits({ detail: { spent: 0 } });
+  await catalogCtx.openCatalog();
+  assert.equal(fetches, 1, 'unchanged spent makes no fetch');
+
+  // 4. Spending credits invalidates catalogFresh so the next Catalog toggle fetches /api/items.
+  catalogPayload = { items: [{ kind: 'stool' }], look: { packs_bought: ['stargazer'] } };
+  catalogCtx.onCredits({ detail: { spent: 10 } });
+  assert.equal(catalogCtx.catalogFresh, false);
+  await catalogCtx.openCatalog();
+  assert.equal(fetches, 2, 'spending credits triggers a fresh /api/items fetch');
+  assert.equal(catalogCtx.catalogKey, null, 'changed catalog clears catalogKey so tiles redraw');
+
+  // 5. Spending credits while the Build panel is open refreshes openCatalog immediately.
+  catalogCtx.panels.current = 'build';
+  catalogCtx.onCredits({ detail: { spent: 15 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetches, 3, 'spending while Build is open refreshes the catalog');
+
+  console.log('Build pictures: painted once, copied per tile, bounded, and openCatalog skips redundant session fetches unless credits are spent.');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
