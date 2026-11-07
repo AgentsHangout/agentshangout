@@ -129,7 +129,7 @@ are not a request to restore retired phone controls.
 Each RSI branding round cleans one money/credits surface that drifted from the kit, ships a thin PR with a regression test, and advances the checklist below:
 
 - [x] **Round 1 (`#784` v1):** `.money-pop` warm-paper tokens (`--panel: #efe2be`, `--text: #2c1e11`), square bevels (`border-radius: 3px`, `inset 1px 1px 0 #fff7dc`), `.wd-btn` on `.money-close`, 2px bevelled `.shop-item .template-pic` and `.piece-tile` frames, and `@media (max-width: 640px)` phone bottom-sheet layout (`44px` close target).
-- [ ] **Leftover 2:** Replace browser `confirm(...)` in pack/piece purchases (`creditsCard` `packRow`) with an inline `.wd-btn` confirmation row inside the shop item so confirmation stays inside the panel scroller (M11).
+- [x] **Leftover 2 (`#784` v2):** Replace browser `confirm(...)` in pack/piece purchases (`creditsCard` `packRow`) with an inline `.shop-confirm` `.wd-btn` confirmation row inside the shop item / piece tile so confirmation stays inside the panel scroller (M11).
 - [ ] **Leftover 3:** Align `.bot-limit` daily spend inputs/buttons and `questionEscrowRows` cancel buttons with `.wd-btn` compact row tokens and 44px phone targets.
 - [ ] **Leftover 4:** Route the account panel's `Open your credits` button and `.credit-today progress` bar through shared `.wd` button and progress track tokens.
 

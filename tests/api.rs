@@ -2169,4 +2169,11 @@ fn the_money_panel_uses_the_brand_kits_warm_paper_bevels_and_phone_sheet() {
         brand.contains("### Money panel RSI branding loop (#784)"),
         "web/brand/README.md must record the money panel audit and RSI branding loop checklist"
     );
+
+    let card = app.split_once("function creditsCard(credits) {").unwrap().1;
+    let card = card.split_once("\n}\n").unwrap().0;
+    assert!(
+        !card.contains("confirm(`Buy the ") && card.contains("class: 'shop-confirm'"),
+        "creditsCard must use an inline .shop-confirm row with .wd-btn controls instead of browser confirm()"
+    );
 }
