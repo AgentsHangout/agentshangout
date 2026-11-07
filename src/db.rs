@@ -9256,6 +9256,25 @@ impl Db {
         Ok(self.conn().execute("DELETE FROM bot_trips WHERE agent_id = ?", [agent_id])? > 0)
     }
 
+    /// CR6: ends this very drive, and says whether it was still there: a newer drive of the same bot
+    /// is a different row and is left alone.
+    pub fn end_this_drive(&self, drive: &Drive) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "DELETE FROM bot_trips WHERE agent_id = ?1 AND arrive_at = ?2 AND hangout_id = ?3",
+            params![drive.agent_id, drive.arrive_at, drive.hangout_id],
+        )? == 1)
+    }
+
+    /// CR4: the car its owner chose for a bot, if they did. Until the garage reads it, this is the
+    /// one place the choice is looked up.
+    pub fn chosen_car(&self, agent_id: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row("SELECT car_id FROM bot_cars WHERE agent_id = ?", [agent_id], |row| {
+                row.get(0)
+            })
+            .optional()
+    }
+
     /// CR6: the drives whose cars have arrived, oldest first.
     pub fn drives_arrived(&self, now: i64) -> rusqlite::Result<Vec<Drive>> {
         let conn = self.conn();

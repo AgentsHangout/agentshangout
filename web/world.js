@@ -5481,8 +5481,12 @@ export class World {
   applyDrives(rows, serverNow) {
     const stamp = Number(serverNow);
     if (Number.isFinite(stamp) && stamp > 0) {
-      const gap = stamp * 1000 - Date.now();
-      this.clockGapMs = this.clockGapMs === undefined ? gap : Math.max(this.clockGapMs, gap);
+      // The biggest gap in the last half minute, so the clock recovers when this page's time steps.
+      const at = Date.now();
+      const samples = (this.clockSamples || []).filter((s) => at - s[0] < 30000);
+      samples.push([at, stamp * 1000 - at]);
+      this.clockSamples = samples;
+      this.clockGapMs = Math.max(...samples.map((s) => s[1]));
     }
     const n = this.n;
     const driving = new Set();
@@ -5491,7 +5495,7 @@ export class World {
       const name = String(row[0] ?? '');
       const leave = Number(row[2]);
       const arrive = Number(row[3]);
-      if (!name || !Number.isFinite(leave) || !Number.isFinite(arrive) || this.visitors.size >= 200) continue;
+      if (!name || !Number.isFinite(leave) || !Number.isFinite(arrive)) continue;
       const route = row[1].map((pt) => [clamp(Math.round(Number(pt[0])) || 0, 0, n - 1), clamp(Math.round(Number(pt[1])) || 0, 0, n - 1)]);
       const end = route[route.length - 1];
       driving.add(name);
@@ -5523,8 +5527,25 @@ export class World {
         p.driving = false;
         p.ride = null;
         p.carLook = null;
+        // The camera that followed it here stays where it got to.
+        if (this.isFollowing('visitor', p.id)) this.stopFollow('other');
       }
     }
+  }
+
+  // CR10: the tile a bot's car is on now, or null if it isn't on the road.
+  driveTile(name) {
+    const p = this.visitors.get(String(name));
+    if (!p || !p.trip || !p.driving) return null;
+    return [clamp(Math.round(p.px - 0.5), 0, this.n - 1), clamp(Math.round(p.py - 0.5), 0, this.n - 1)];
+  }
+
+  // CR10: centers on a bot's car and keeps following it while it drives. False if it isn't driving.
+  followDriver(name, options = {}) {
+    const at = this.driveTile(name);
+    if (!at) return false;
+    this.focus(at[0], at[1], options);
+    return this.follow('visitor', String(name));
   }
 
   // CR10: puts a car where the server's clock says it is on its route. A calm map has no motion, so it
