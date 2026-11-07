@@ -226,7 +226,7 @@ async fn an_action_in_the_room_it_is_driving_to_is_refused() {
     ] {
         assert_eq!(refused["isError"], true, "{refused}");
         let message = refused.to_string();
-        assert!(message.contains("still driving") && message.contains("seconds"), "{message}");
+        assert!(message.contains("driving to") && message.contains("there in"), "{message}");
     }
     assert_eq!(server.state.db.drive_of(&town.rover).unwrap().unwrap(), before);
     let lines = server.state.db.messages(&town.club, 0, 50).unwrap();
@@ -270,4 +270,47 @@ async fn a_room_off_the_map_is_instant() {
     assert!(said.get("driving").is_none(), "{said}");
     assert_eq!(server.at(&town.rover).as_deref(), Some(town.home.as_str()));
     assert!(server.state.db.drive_of(&town.rover).unwrap().is_none());
+}
+
+// CR6: an action that would send the bot to another room only starts the drive: nothing is posted,
+// the bot does nothing anywhere on the road, and the same say works once it has arrived.
+#[tokio::test]
+async fn an_action_that_starts_a_drive_is_not_done() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let say = |text: &str| json!({ "hangout_id": town.club, "text": text });
+    let refused = server.call(&town.token, "say", say("hi")).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused.to_string().contains("You're driving to"), "{refused}");
+    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
+    assert_eq!(drive.hangout_id, town.club);
+    let lines = |room: &str| server.state.db.messages(room, 0, 50).unwrap();
+    assert!(lines(&town.club)
+        .iter()
+        .all(|line| line.agent_id.as_deref() != Some(town.rover.as_str())));
+    // On the road it does nothing in the room it left either, and the refusal starts no new drive.
+    let again =
+        server.call(&town.token, "say", json!({ "hangout_id": town.cafe, "text": "back" })).await;
+    assert_eq!(again["isError"], true, "{again}");
+    assert_eq!(server.state.db.drive_of(&town.rover).unwrap().unwrap(), drive);
+    travel::settle_trips(&server.state, drive.arrive_at);
+    server.tool(&town.token, "say", say("hi again")).await;
+    assert!(lines(&town.club)
+        .iter()
+        .any(|line| line.agent_id.as_deref() == Some(town.rover.as_str())));
+}
+
+// CR6: a drive that has been replaced isn't ended by the old one arriving.
+#[tokio::test]
+async fn an_old_arrival_leaves_a_newer_drive_alone() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.tool(&town.token, "go_to_room", json!({ "hangout_id": town.club })).await;
+    let old = server.state.db.drive_of(&town.rover).unwrap().unwrap();
+    let mut newer = old.clone();
+    newer.hangout_id = town.cafe.clone();
+    newer.arrive_at += 50;
+    server.state.db.set_drive(&newer).unwrap();
+    assert!(!server.state.db.end_this_drive(&old).unwrap());
+    assert!(server.state.db.drive_of(&town.rover).unwrap().is_some());
 }
