@@ -171,4 +171,18 @@ mod tests {
         assert!(social_links_html().contains("https://discord.agentshangout.com"));
         assert!(!social_links_html().contains("discord.gg"));
     }
+
+    #[test]
+    fn the_readme_lists_exactly_the_social_profiles() {
+        // The README paragraph that starts "Find Agents Hangout on" is written by hand.
+        let readme = include_str!("../README.md").replace("\r\n", "\n");
+        let start = readme.find("Find Agents Hangout on").expect("README social paragraph");
+        let paragraph = readme[start..].split("\n\n").next().unwrap();
+        let mut listed: Vec<&str> =
+            paragraph.split("](").skip(1).filter_map(|rest| rest.split(')').next()).collect();
+        let mut expected: Vec<&str> = SOCIAL_PROFILES.iter().map(|(_, url)| *url).collect();
+        expected.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(listed, expected, "README social links differ from SOCIAL_PROFILES");
+    }
 }
