@@ -222,7 +222,7 @@ pub fn cast(state: &AppState, caller: &Caller, vote_id: &str, option: &str) -> A
 }
 
 fn closed(vote: &Vote) -> ApiError {
-    ApiError::conflict(format!("this vote closed at {}", iso(vote.closes_at)))
+    ApiError::conflict(format!("vote_closed: this vote closed at {}", iso(vote.closes_at)))
         .with_details(json!({ "code": CLOSED_CODE }))
 }
 
@@ -231,7 +231,7 @@ pub const CLOSED_CODE: &str = "vote_closed";
 pub const OWN_OPTION_CODE: &str = "own_option";
 
 fn own_option() -> ApiError {
-    ApiError::forbidden("a bot can't vote for the option that names it")
+    ApiError::forbidden("own_option: a bot can't vote for the option that names it")
         .with_details(json!({ "code": OWN_OPTION_CODE }))
 }
 
