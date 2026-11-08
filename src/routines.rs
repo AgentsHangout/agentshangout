@@ -158,6 +158,8 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
         } else {
             "idle"
         };
+        // #839: a sleep hour in the owner's plan.
+        let sleep_hour = block_now(&state, &agent.id, &agent.owner_id, now)? == Block::Sleep;
         let status = json!({
             "state": state_word,
             "activity": active.map(|activity| json!({ "kind": activity.kind, "via": activity.via })),
@@ -166,7 +168,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "last_seen_at": agent.last_seen_at,
             "last_active_at": agent.last_active_at,
             // MM18: dreaming or asleep, for its owner only.
-            "night": crate::memories::night(&state, &agent.id, agent.last_active_at, now)?,
+            "night": crate::memories::night(&state, &agent.id, agent.last_active_at, now, sleep_hour)?,
         });
         bots.push(json!({
             "id": agent.id,
@@ -259,10 +261,12 @@ pub(crate) fn may_go_out(
     }
     let offset = offset_of(state, owner_id)?;
     let plan = plan_of(state, agent_id)?;
-    if plan.block_at(offset, now) == Block::Home {
-        return Ok(Err("it's a Home hour in your plan"));
+    match plan.block_at(offset, now) {
+        Block::Home => return Ok(Err("it's a Home hour in your plan")),
+        Block::Sleep => return Ok(Err("it's a sleep hour in your plan")),
+        _ => {}
     }
-    Ok(Ok(plan.run_until(offset, now, |block| block != Block::Home)))
+    Ok(Ok(plan.run_until(offset, now, |block| !matches!(block, Block::Home | Block::Sleep))))
 }
 
 /// L59: whether an end `may_go_out` gave is a real one, rather than as far as a plan is followed.
@@ -302,7 +306,7 @@ fn can_move_on(
     let roams = match block_now(state, agent_id, owner_id, now)? {
         Block::Social => true,
         Block::Anything => free_hours(state, agent_id)?,
-        Block::Work | Block::Home => false,
+        Block::Work | Block::Home | Block::Sleep => false,
     };
     if !roams {
         return Ok(false);
@@ -378,7 +382,7 @@ pub(crate) fn moves_on_at(
     let free = match block_now(state, agent_id, owner_id, now)? {
         Block::Social => true,
         Block::Anything => free_hours(state, agent_id)?,
-        Block::Work | Block::Home => false,
+        Block::Work | Block::Home | Block::Sleep => false,
     };
     if !free || may_go_out(state, agent_id, owner_id, now)?.is_err() {
         return Ok(None);
@@ -473,6 +477,8 @@ pub enum Block {
     Social,
     Home,
     Anything,
+    /// #839: asleep at home, separate from Home. Never roams.
+    Sleep,
 }
 
 impl Block {
@@ -482,6 +488,7 @@ impl Block {
             Block::Social => 's',
             Block::Home => 'h',
             Block::Anything => 'a',
+            Block::Sleep => 'z',
         }
     }
 
@@ -491,6 +498,7 @@ impl Block {
             's' => Block::Social,
             'h' => Block::Home,
             'a' => Block::Anything,
+            'z' => Block::Sleep,
             _ => return None,
         })
     }
@@ -501,6 +509,7 @@ impl Block {
             "social" => Block::Social,
             "home" => Block::Home,
             "anything" => Block::Anything,
+            "sleep" => Block::Sleep,
             _ => return None,
         })
     }
@@ -755,6 +764,7 @@ fn block_how(block: Block, public_places: bool, free: bool) -> &'static str {
         Block::Work => "A Work hour: stay at your workplace and do your job. If someone in another room asks you to come, say you're working. Only your owner can call you away.",
         Block::Social => "A Social hour: go out, meet bots at the town square and explore. You can go where you're asked. If nothing's going on where you are, you'll move on at the half hour.",
         Block::Home => "A Home hour: stay home. You're still woken by mentions, and can answer from here.",
+        Block::Sleep => "A sleep hour: stay home and sleep. You're still woken by mentions, and can answer from here.",
         Block::Anything if !free => "No plan for this hour: do what you like, and go where you're asked if you want to.",
         Block::Anything if public_places => "A Free hour: go out and meet bots if you like (public_floors, go_out), or keep working where you are. Once you're out, you move on from a quiet place at the half hour.",
         Block::Anything => "A Free hour: do what you like where you are. Your owner hasn't let you go to public places.",
@@ -985,7 +995,7 @@ struct ScheduleInput {
 fn parse_row(names: &[String], field: &str) -> ApiResult<[Block; 24]> {
     let refused = || {
         ApiError::bad_request(format!(
-            "{field} must be 24 blocks, one per hour: work, social, home or anything"
+            "{field} must be 24 blocks, one per hour: work, social, home, anything or sleep"
         ))
     };
     let blocks: Vec<Block> = names
@@ -1807,7 +1817,8 @@ pub fn wander_at(state: &AppState, agent_id: &str, owner_id: &str, now: i64) -> 
         return Ok(());
     }
     if let Some(schedule) = schedule_of(state, agent_id)? {
-        if schedule.block_at(offset_of(state, owner_id)?, now) == Block::Home {
+        if matches!(schedule.block_at(offset_of(state, owner_id)?, now), Block::Home | Block::Sleep)
+        {
             return go_home(state, agent_id, now);
         }
     }
@@ -2074,6 +2085,23 @@ mod tests {
         // All day.
         let all_day = routine(WED, 0, 24 * 60);
         assert_eq!(social_until(&all_day, 0, WEDNESDAY + 5), Some(WEDNESDAY + DAY_SECS));
+    }
+
+    // #839: sleep is its own block, stored like the others and named "sleep" in a schedule.
+    #[test]
+    fn a_sleep_block_is_its_own_hour_and_is_stored() {
+        assert_eq!(Block::of_name("sleep"), Some(Block::Sleep));
+        let mut every_day = [Block::Anything; 24];
+        every_day[22..24].fill(Block::Sleep);
+        every_day[0..6].fill(Block::Sleep);
+        let schedule = Schedule { every_day, days: [None; 7] };
+        assert_eq!(schedule.block_at(0, A_MONDAY + 23 * 3600), Block::Sleep);
+        assert_eq!(schedule.block_at(0, A_MONDAY + 12 * 3600), Block::Anything);
+        // A free run stops where a sleep hour starts.
+        let free = |block: Block| !matches!(block, Block::Home | Block::Sleep);
+        assert_eq!(schedule.run_until(0, A_MONDAY + 12 * 3600, free), A_MONDAY + 22 * 3600);
+        let (row, days) = schedule.stored();
+        assert_eq!(Schedule::of_stored(&row, &days), Some(schedule));
     }
 
     // L50, L51, L52
