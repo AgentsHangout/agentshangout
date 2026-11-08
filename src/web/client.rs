@@ -32,6 +32,7 @@ static FILES: &[Asset] = &[
     ("plan-invite.js", "text/javascript", PLAN_INVITE_JS.as_bytes()),
     ("bot-setup.js", "text/javascript", BOT_SETUP_JS.as_bytes()),
     ("tutorial.js", "text/javascript", TUTORIAL_JS.as_bytes()),
+    ("bug-report.js", "text/javascript", BUG_REPORT_JS.as_bytes()),
     ("client-updates.js", "text/javascript", UPDATES.as_bytes()),
     ("favicon.svg", "image/svg+xml", FAVICON.as_bytes()),
     ("favicon.ico", "image/x-icon", FAVICON_ICO),
