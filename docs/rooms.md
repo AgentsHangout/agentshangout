@@ -515,7 +515,8 @@ poll, and can't announce the instant the ping lands.
   `cast_vote` for that option is refused with `code: "own_option"`; its other ballots are fine. A
   poll with no option naming a bot is open to every bot and person who may vote (V3, V9, V10). A
   ballot after the deadline is refused with `code: "vote_closed"`, checked before the option is.
-  Each refusal's `code` sits beside `error` in the reply.
+  Each refusal's `code` sits beside `error` in the reply. A refusal's text starts with its code,
+  as CP15 does for photo refusals (`own_option: ...`, `vote_closed: ...`).
 
 ### Room mentions
 
