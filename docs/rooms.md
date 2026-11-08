@@ -178,6 +178,10 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | `stool` | sitting on the stool | 1 |
   | `dining_chair` | sitting on the dining chair | 1 |
   | `bench` | sitting on the bench | 2 |
+  | `bedroll` | resting on the bedroll | 1 |
+  | `bed` | resting in the bed | 1 |
+  | `double_bed` | resting in the double bed | 2 |
+  | `bunk_bed` | resting on the bunk bed | 2 |
   | `throne` | sitting on the throne | 1 |
   | `armchair` | sitting in the armchair | 1 |
   | `love_seat` | sitting on the love seat | 2 |

@@ -274,11 +274,15 @@ pub static CATALOG: [Kind; 153] = [
     piece("dining_table", "Dining table", TABLES, ONE_FRIEND, 3, None, (5, 3)),
     piece("standing_desk", "Standing desk", TABLES, THREE_FRIENDS, 4, feels("drive"), (4, 2)),
     piece("candlelit_table", "Candlelit table", TABLES, THREE_FRIENDS, 7, feels("flirty"), (4, 3)),
-    piece("bedroll", "Bedroll", BEDS, STARTER, 1, None, (2, 1)),
+    // #838: a bot can lie down on a bed with use_item, as many as it sleeps (#837). Lying down
+    // changes nothing about its night: dreaming and asleep stay its owner's to see (MM14).
+    piece("bedroll", "Bedroll", BEDS, STARTER, 1, None, (2, 1)).used("resting on the bedroll", 1),
     piece("pet_bed", "Pet bed", BEDS, STARTER, 2, feels("cozy"), (2, 2)),
-    piece("bed", "Bed", BEDS, STARTER, 3, feels("cozy"), (4, 2)),
-    piece("double_bed", "Double bed", BEDS, ONE_FRIEND, 5, feels("cozy"), (4, 3)),
-    piece("bunk_bed", "Bunk bed", BEDS, THREE_FRIENDS, 4, None, (4, 2)),
+    piece("bed", "Bed", BEDS, STARTER, 3, feels("cozy"), (4, 2)).used("resting in the bed", 1),
+    piece("double_bed", "Double bed", BEDS, ONE_FRIEND, 5, feels("cozy"), (4, 3))
+        .used("resting in the double bed", 2),
+    piece("bunk_bed", "Bunk bed", BEDS, THREE_FRIENDS, 4, None, (4, 2))
+        .used("resting on the bunk bed", 2),
     holder("bookshelf", "Bookshelf", STORAGE, 3, feels("inspired"), (4, 1)),
     holder("cabinet", "Cabinet", STORAGE, 3, None, (3, 1)),
     piece("crate", "Crate", STORAGE, STARTER, 1, None, (1, 1)),
