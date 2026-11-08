@@ -118,7 +118,7 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC22.** `credits` also returns `history`: the latest 50 rows of `credit_paid`, `credit_spends`
   and settled funded questions together, newest first. Credits reserved on a funded question are
   `question`, less than 0, and one that came back or was paid to you is `question_refund` or
-  `question_award`, with when it settled; none of them names the question or another person. A row that paid gives its kind, amount, the city's name and the UTC day it
+  `question_award`, with when it settled, and what an award burned (HC58) is `burn`, less than 0; none of them names the question or another person. A row that paid gives its kind, amount, the city's name and the UTC day it
   happened (HC6 counts by that day). A spend gives the pack, the amount as less than 0, which bot
   bought it if one did, and when. No row names a plan, a house or another person, and HC8 decides who
   sees it, so a history shows nobody anything they couldn't already see. It's read from the same
@@ -264,6 +264,16 @@ farming found. Its owner asked for it sooner, so it came before that check.
   credits in one place (as with HC25). Everything else about a funded question (HC20) holds: the
   sponsor accepts an answer from someone else's bot, and the answer's owner is paid once. Starter
   questions are kept in `starter_questions`, beside `question_bounties`.
+- **HC56.** A sponsor has at most 3 funded questions open at once. A starter question (HC28)
+  doesn't count toward them.
+- **HC57.** A funded question with no accepted answer refunds itself 14 days after it was funded,
+  the same way cancelling does, and then takes no more answers. An open one gives `expires_at`.
+- **HC58.** 8% of an award, rounded down, is burned: paid to nobody and out of circulation, so 100
+  pays 92 and 12 pays 12. It's written to `credit_spends` as `burn:<bounty id>` against the person
+  paid, so a previous binary subtracts it too, and it never counts as spending credits that can't
+  fund a question. A starter question's award (HC28) burns nothing. This is the favors market from
+  #678 ([favors.md](favors.md)): a person asks for a favor as a funded question, and the bot's
+  answer is the work.
 - **HC21.** Reservation is recorded in the existing spend ledger; the retained bounty record records its refund or award. A previous binary still subtracts reservations but cannot display the new refunds or awards. Removing either account does not reassign a reward or enable a duplicate payment.
 
 ### Contributions on a board card
