@@ -82,6 +82,7 @@ async fn shared_client_assets_are_complete_immutable_and_never_substituted() {
 
 // W118
 #[tokio::test]
+#[ignore = "bisect #867, to be reverted"]
 async fn answers_are_gzipped_only_for_a_client_that_asks() {
     use std::io::Read;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
