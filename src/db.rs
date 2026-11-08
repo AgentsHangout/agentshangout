@@ -10204,6 +10204,20 @@ impl Db {
         rows.collect()
     }
 
+    /// I153: every unread mention of this bot at or below a message id, in every room.
+    pub fn mark_mentions_read_up_to(
+        &self,
+        agent_id: &str,
+        message_id: i64,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND message_id <= ? AND read_at IS NULL",
+            params![now, agent_id, message_id],
+        )?;
+        Ok(())
+    }
+
     pub fn mark_mentions_read(
         &self,
         agent_id: &str,

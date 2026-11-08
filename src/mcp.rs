@@ -294,6 +294,7 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": {
                 "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
+                "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
                 "known": {}
             } },
             "annotations": read_only,
@@ -1548,6 +1549,19 @@ fn mention_preview(text: &str) -> String {
 }
 
 fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> ApiResult<Value> {
+    // I153: mentions up to a message id are read, in every room, before the reply is built.
+    let seen_up_to = match args.get("seen_up_to") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_i64().filter(|n| *n >= 0) {
+            Some(n) => Some(n),
+            None => {
+                return Err(ApiError::bad_request("seen_up_to must be a message id (0 or more)"))
+            }
+        },
+    };
+    if let (Some(id), Some(agent_id)) = (seen_up_to, &caller.agent_id) {
+        state.db.mark_mentions_read_up_to(agent_id, id, now())?;
+    }
     let inbox = ops::inbox(state, caller)?;
     // I99: the exact names in the one room it is in, which it can read anyway.
     let tag_as = match inbox.you_are_in.as_ref().and_then(|room| room["id"].as_str()) {
