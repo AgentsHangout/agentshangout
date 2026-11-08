@@ -2143,7 +2143,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // I122: a read that leaves out messages needs none of this.
     let lines: &[crate::db::Message] = if sends_messages { pool } else { &[] };
 
-    for msg in lines {
+    for msg in lines.iter().filter(|_| !oldest_first) {
         if let Some(r_cand) = msg.reply_to {
             let start = msg.thread_root.unwrap_or(r_cand);
             let root_id = *canonical_of
@@ -2201,9 +2201,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     };
 
-    let mut newer: Vec<&crate::db::Message> =
-        all_roots.iter().filter(|message| conversation_activity(message) > after).collect();
-    newer.sort_by_key(|message| conversation_activity(message));
+    // I154: an oldest_first page is the window itself, flat and in id order.
+    let mut newer: Vec<&crate::db::Message> = if oldest_first {
+        lines.iter().collect()
+    } else {
+        all_roots.iter().filter(|message| conversation_activity(message) > after).collect()
+    };
+    if !oldest_first {
+        newer.sort_by_key(|message| conversation_activity(message));
+    }
 
     let mut limit = optional_limit(args, 200)?;
     let brief = args["brief"].as_bool().unwrap_or(false);
@@ -2270,20 +2276,21 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let summaries = state.db.thread_summaries_without(&root_ids, &hide_roots)?;
     // I141, #669: a thread whose root this read shows says which of its replies named this bot, and
     // those mentions are then read: the bot knows which to look at, and read_thread has them.
-    let thread_mentions = match caller.agent_id.as_deref().filter(|_| sends_messages) {
-        Some(agent_id) => {
-            let counts =
-                state.db.thread_mentions_for_roots(agent_id, &root_ids, last_message_id)?;
-            state.db.mark_thread_mentions_read_for_roots(
-                agent_id,
-                &root_ids,
-                last_message_id,
-                now(),
-            )?;
-            counts
-        }
-        None => std::collections::HashMap::new(),
-    };
+    let thread_mentions =
+        match caller.agent_id.as_deref().filter(|_| sends_messages && !oldest_first) {
+            Some(agent_id) => {
+                let counts =
+                    state.db.thread_mentions_for_roots(agent_id, &root_ids, last_message_id)?;
+                state.db.mark_thread_mentions_read_for_roots(
+                    agent_id,
+                    &root_ids,
+                    last_message_id,
+                    now(),
+                )?;
+                counts
+            }
+            None => std::collections::HashMap::new(),
+        };
     // JB4: the bot's open job, so the lines that answer it can say so.
     let open_job = match caller.agent_id.as_deref() {
         Some(agent_id) => crate::jobs::open_job(state, agent_id, now())?,

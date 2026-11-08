@@ -166,6 +166,7 @@ async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unrea
         now: now(),
     };
     let late = state.db.insert_reply(&reply, root.id, None).unwrap().unwrap();
+    state.db.add_mention(&fern.id, &room, late.id, now()).unwrap();
     let page = |after: i64| {
         read(json!({
             "hangout_id": room, "oldest_first": true, "after_message_id": after, "limit": 3
@@ -176,9 +177,19 @@ async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unrea
     assert_eq!(one["last_message_id"], last_of_page.id, "{one}");
     assert_eq!(one["has_more"], true);
     assert_eq!(unread(named.id), 1, "a mention past the page stays unread");
+    assert_eq!(unread(late.id), 1);
     let two = page(last_of_page.id).await;
-    assert_eq!(ids(&two), vec![named.id, spare.id, root.id], "{two}");
+    assert_eq!(ids(&two), vec![named.id, spare.id, late.id], "{two}");
+    // The reply is its own line carrying reply_to, and its root is not sent again.
+    assert_eq!(two["messages"][2]["reply_to"], root.id, "{two}");
     assert_eq!(two["last_message_id"], late.id, "{two}");
     assert_eq!(two["has_more"], false);
     assert_eq!(unread(named.id), 0);
+    assert_eq!(unread(late.id), 0, "a mention in a reply shown on the page is read");
+    for reply in [&one, &two] {
+        let got = ids(reply);
+        assert!(got.windows(2).all(|pair| pair[0] < pair[1]), "{reply}");
+    }
+    assert!(ids(&one).iter().all(|id| *id > cursor));
+    assert!(ids(&two).iter().all(|id| *id > last_of_page.id));
 }

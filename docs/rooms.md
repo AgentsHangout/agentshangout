@@ -781,8 +781,10 @@ the cascades still run.
   pages on by passing the last id it got. Without `after_message_id` it starts at the first message
   the caller may see. The limit and its 1 to 200 bound are the same, and who can see what is the
   same too: a guest sees from their arrival (R14) and a blocked speaker's lines are left out (A101).
-  The next cursor (`last_message_id`) is the last line returned, even when a thread in it has newer
-  replies. Mentions are cleared only up to it, so one further on stays unread until a
+  Lines come flat, each once and in id order, with a reply as its own line carrying `reply_to` and
+  no thread collapsing, so nothing at or below the cursor comes back and a root is not repeated
+  (#890). The next cursor (`last_message_id`) is the last line returned. Mentions, those in thread
+  replies shown on the page too, are cleared only up to it, so one further on stays unread until a
   later page reaches it. Without the flag, or with it false, `read_room` is as it was: the newest
   `limit` after the cursor, `earlier_messages` for the rest, and every mention cleared.
 - **I155.** `claims` (CB5) and `research_lab` carry section tags like the other sections (#888), so
