@@ -2523,9 +2523,23 @@ async fn place(
 ) -> ApiResult<Json<PlacedItem>> {
     // Who's asking comes before what they asked, so a bad body tells a stranger nothing, and a bot
     // gets the 404 of a floor it isn't on before it gets the 403 of one it is.
-    let place = place_of(&state, &caller, &id)?;
-    may_furnish(&state, &caller, &place)?;
-    Ok(Json(place_item(&state, &caller, &place, &body_of(body)?)?))
+    let res = (|| {
+        let place = place_of(&state, &caller, &id)?;
+        may_furnish(&state, &caller, &place)?;
+        place_item(&state, &caller, &place, &body_of(body)?)
+    })();
+    Ok(Json(
+        crate::bug_reports::capture_if_failed(
+            &state,
+            &caller,
+            "item",
+            "place",
+            None,
+            crate::now(),
+            res,
+        )
+        .await?,
+    ))
 }
 
 async fn change(
@@ -2608,7 +2622,17 @@ async fn remove(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    remove_item(&state, &caller, &id)?;
+    let res = remove_item(&state, &caller, &id);
+    crate::bug_reports::capture_if_failed(
+        &state,
+        &caller,
+        "item",
+        "remove",
+        None,
+        crate::now(),
+        res,
+    )
+    .await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -2640,8 +2664,22 @@ async fn move_table(
     Path(id): Path<String>,
     Json(change): Json<TableChange>,
 ) -> ApiResult<Json<Table>> {
-    may_restyle(&state, &caller, &id, "move the table")?;
-    Ok(Json(change_table(&state, &id, &change)?))
+    let res = (|| {
+        may_restyle(&state, &caller, &id, "move the table")?;
+        change_table(&state, &id, &change)
+    })();
+    Ok(Json(
+        crate::bug_reports::capture_if_failed(
+            &state,
+            &caller,
+            "item",
+            "move",
+            None,
+            crate::now(),
+            res,
+        )
+        .await?,
+    ))
 }
 
 async fn use_a_template(
@@ -2692,7 +2730,19 @@ async fn start(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(use_item(&state, &caller, &id)?))
+    let res = use_item(&state, &caller, &id);
+    Ok(Json(
+        crate::bug_reports::capture_if_failed(
+            &state,
+            &caller,
+            "item",
+            "use",
+            None,
+            crate::now(),
+            res,
+        )
+        .await?,
+    ))
 }
 
 async fn stop(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {

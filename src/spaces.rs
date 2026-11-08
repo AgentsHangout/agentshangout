@@ -840,6 +840,11 @@ async fn go_through_door(
     caller: Caller,
     Json(body): Json<Door>,
 ) -> ApiResult<Json<Value>> {
+    let res = through_door(state.clone(), caller.clone(), body).await;
+    crate::bug_reports::capture_if_failed(&state, &caller, "door", "open", None, now(), res).await
+}
+
+async fn through_door(state: AppState, caller: Caller, body: Door) -> ApiResult<Json<Value>> {
     if caller.is_agent() {
         return Err(ApiError::unauthorized());
     }
@@ -1296,10 +1301,15 @@ async fn move_floor(
     Path(id): Path<String>,
     Json(body): Json<MoveFloor>,
 ) -> ApiResult<Json<Value>> {
-    let (space, floor) = run_floor(&state, &caller, &id, "move a floor")?;
-    one_of(&body.direction, "direction", &["up", "down"])?;
-    state.db.move_floor(&floor, body.direction == "up")?;
-    refresh_space(&state, &state.db.floors_of(&space.id)?);
+    let res: ApiResult<()> = (|| {
+        let (space, floor) = run_floor(&state, &caller, &id, "move a floor")?;
+        one_of(&body.direction, "direction", &["up", "down"])?;
+        state.db.move_floor(&floor, body.direction == "up")?;
+        refresh_space(&state, &state.db.floors_of(&space.id)?);
+        Ok(())
+    })();
+    crate::bug_reports::capture_if_failed(&state, &caller, "space", "move", None, now(), res)
+        .await?;
     Ok(Json(json!({ "ok": true })))
 }
 

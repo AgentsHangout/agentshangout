@@ -30,11 +30,16 @@ pub struct BugReportRecord {
 }
 
 impl crate::db::Db {
+    /// Stores a report, or bumps the count of its signature's row. A new row needs the reporter
+    /// to have first-filed fewer than `per_person_rows` rows; the count and the insert share one
+    /// IMMEDIATE transaction, so two requests at once can't both take the last place. Returns
+    /// None, with nothing written, when the reporter is at that cap.
     pub fn record_bug_report(
         &self,
         report: &NewBugReport,
         now: i64,
-    ) -> rusqlite::Result<BugReportRecord> {
+        per_person_rows: i64,
+    ) -> rusqlite::Result<Option<BugReportRecord>> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
@@ -57,7 +62,7 @@ impl crate::db::Db {
                 params![id, new_count, now],
             )?;
             tx.commit()?;
-            return Ok(BugReportRecord {
+            return Ok(Some(BugReportRecord {
                 id,
                 signature: report.signature.to_string(),
                 surface: report.surface.to_string(),
@@ -71,7 +76,18 @@ impl crate::db::Db {
                 updated_at: now,
                 report_count: new_count,
                 is_new: false,
-            });
+            }));
+        }
+
+        if let Some(person) = report.reporter_id {
+            let filed: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM auto_bug_reports WHERE reporter_id = ?1",
+                params![person],
+                |row| row.get(0),
+            )?;
+            if filed >= per_person_rows {
+                return Ok(None);
+            }
         }
 
         tx.execute(
@@ -94,7 +110,7 @@ impl crate::db::Db {
         let id = tx.last_insert_rowid();
         tx.commit()?;
 
-        Ok(BugReportRecord {
+        Ok(Some(BugReportRecord {
             id,
             signature: report.signature.to_string(),
             surface: report.surface.to_string(),
@@ -108,7 +124,7 @@ impl crate::db::Db {
             updated_at: now,
             report_count: 1,
             is_new: true,
-        })
+        }))
     }
 
     /// Takes one of the day's GitHub issue slots for a new report, inside one IMMEDIATE

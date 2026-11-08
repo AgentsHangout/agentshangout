@@ -2240,7 +2240,17 @@ async fn build_house(
     Path(id): Path<String>,
     Json(body): Json<Named>,
 ) -> ApiResult<Json<city::HouseView>> {
-    let house = city::build_house(&state, &caller, &id, &body.name)?;
+    let built = city::build_house(&state, &caller, &id, &body.name);
+    let house = crate::bug_reports::capture_if_failed(
+        &state,
+        &caller,
+        "house",
+        "build",
+        None,
+        crate::now(),
+        built,
+    )
+    .await?;
     Ok(Json(city::house_view(&state, &caller, &house.id)?))
 }
 

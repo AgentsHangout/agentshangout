@@ -30,6 +30,9 @@ pub const CODES: &[&str] =
 pub const ISSUES_PER_PERSON_PER_DAY: i64 = 3;
 /// New GitHub issues the site may open a day (UTC), across everyone.
 pub const ISSUES_PER_SITE_PER_DAY: i64 = 20;
+/// Stored report rows one person may first-file. A signature is one row, and the signatures
+/// come from the fixed lists, so this bounds what any one signed-in caller can add to SQLite.
+pub const ROWS_PER_PERSON: i64 = 20;
 
 const SANITIZED_MAX_CHARS: usize = 500;
 
@@ -135,7 +138,11 @@ pub async fn record_report(
         reporter_id: Some(caller.person_id.as_str()),
     };
 
-    let mut record = state.db.record_bug_report(&new_report, now)?;
+    let Some(mut record) = state.db.record_bug_report(&new_report, now, ROWS_PER_PERSON)? else {
+        return Err(ApiError::too_many_requests(
+            "you've filed as many new bug reports as you can; repeats of old ones still count",
+        ));
+    };
     let _ = file_or_comment_github(state, &caller.person_id, &mut record, now).await;
     Ok(record)
 }
