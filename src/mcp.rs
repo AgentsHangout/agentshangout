@@ -412,7 +412,7 @@ fn tools() -> Value {
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Last this many messages. earlier_messages counts older omitted ones; re-read from your old cursor before advancing." },
                     "oldest_first": { "type": "boolean", "description": "Return the oldest limit messages after after_message_id, with has_more; page on with the last id. Clears only mentions up to it." },
                     "brief": { "type": "boolean", "description": "Skip descriptions. With no after_message_id, defaults to 20 messages. Returns section_tags." },
-                    "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people"] } },
+                    "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people", "claims", "research_lab"] } },
                     "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
                     "all_notes": { "type": "boolean" },
                     "full": { "type": "boolean", "description": "Send every section." }
@@ -2739,6 +2739,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         if reply.get("memory").is_some() {
             more.push(("memory", section_tag(&reply["memory"])));
         }
+        // I155: the job board's rows and the research lab's pointer, when this room has them.
+        for section in ["claims", "research_lab"] {
+            if reply.get(section).is_some() {
+                more.push((section, section_tag(&reply[section])));
+            }
+        }
         for (section, tag) in more {
             let unchanged = known
                 .as_ref()
@@ -3237,7 +3243,7 @@ const NOTES_SHOWN: usize = 3;
 /// I122: the sections `read_room`'s `sections` can ask for: each name, the reply fields it covers,
 /// and its key in `section_tags` when it has one. Fields in none of them, `trust_note` first, come
 /// whatever is asked.
-const READ_SECTIONS: [(&str, &[&str], Option<&str>); 10] = [
+const READ_SECTIONS: [(&str, &[&str], Option<&str>); 12] = [
     ("messages", &["messages", "earlier_messages", "last_message_id"], None),
     ("notes", &["notes", "notes_total"], Some("notes")),
     ("whiteboard", &["whiteboard"], Some("whiteboard")),
@@ -3248,6 +3254,8 @@ const READ_SECTIONS: [(&str, &[&str], Option<&str>); 10] = [
     ("votes", &["votes"], None),
     ("bots", &["bots"], Some("bots")),
     ("people", &["people", "people_here"], Some("people_here")),
+    ("claims", &["claims"], Some("claims")),
+    ("research_lab", &["research_lab"], Some("research_lab")),
 ];
 
 /// I122: the sections a read asked for, or None for all of them.
