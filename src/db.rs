@@ -3855,6 +3855,12 @@ pub fn mint_room(conn: &Connection, now: i64) -> rusqlite::Result<i64> {
 pub const STARTER_QUESTION_HC: i64 = 10;
 pub const STARTER_QUESTIONS_A_WEEK: i64 = 10;
 
+/// HC56 to HC58 (#678, favors): how many funded questions a sponsor has open at once, how many
+/// days one stays open before it refunds itself, and what share of an award is burned.
+pub const OPEN_QUESTIONS: i64 = 3;
+pub const QUESTION_DAYS: i64 = 14;
+pub const AWARD_BURN_PERCENT: i64 = 8;
+
 fn starter_refusal(
     conn: &Connection,
     person: &str,
@@ -13571,9 +13577,10 @@ impl Db {
              UNION ALL
              SELECT CASE WHEN s.pack LIKE 'question:%' THEN 'question'
                          WHEN s.pack LIKE 'tip:%' THEN 'tip'
+                         WHEN s.pack LIKE 'burn:%' THEN 'burn'
                          ELSE 'spend' END, -s.amount,
                     s.created_at, s.created_at, NULL,
-                    CASE WHEN s.pack LIKE 'question:%' THEN NULL
+                    CASE WHEN s.pack LIKE 'question:%' OR s.pack LIKE 'burn:%' THEN NULL
                          WHEN s.pack LIKE 'tip:%' THEN (SELECT t.reason FROM bot_tips t WHERE 'tip:' || t.id = s.pack)
                          ELSE s.pack END,
                     CASE WHEN s.pack LIKE 'tip:%' THEN (SELECT b.name FROM bot_tips t LEFT JOIN agents b ON b.id = t.bot_id WHERE 'tip:' || t.id = s.pack)
@@ -13659,6 +13666,16 @@ impl Db {
         if exists(&tx, "SELECT 1 FROM question_bounties WHERE card_id=?", [card])? {
             return Ok(Some("already funded"));
         }
+        // HC56: a sponsor has at most 3 open at once, not counting a starter question (HC28).
+        let open: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM question_bounties q WHERE q.sponsor_id=?1 AND q.status='open'
+               AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=q.id)",
+            [sponsor],
+            |r| r.get(0),
+        )?;
+        if open >= OPEN_QUESTIONS {
+            return Ok(Some("you have 3 funded questions open; cancel or award one first"));
+        }
         let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1) + {} + {}", contributions::CONTRIBUTIONS_PAID, coin_drops::COIN_DROPS_PAID), [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
@@ -13683,7 +13700,7 @@ impl Db {
                              + {}
                              - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
                                 WHERE person_id=?1 AND pack NOT LIKE 'question:%'
-                                  AND pack NOT LIKE 'tip:%'))",
+                                  AND pack NOT LIKE 'tip:%' AND pack NOT LIKE 'burn:%'))",
                 contributions::CONTRIBUTIONS_PAID,
                 coin_drops::COIN_DROPS_PAID
             ),
@@ -13791,7 +13808,7 @@ impl Db {
                              + {}
                              - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
                                 WHERE person_id=?1 AND pack NOT LIKE 'question:%'
-                                  AND pack NOT LIKE 'tip:%'))",
+                                  AND pack NOT LIKE 'tip:%' AND pack NOT LIKE 'burn:%'))",
                 contributions::CONTRIBUTIONS_PAID,
                 coin_drops::COIN_DROPS_PAID
             ),
@@ -13953,6 +13970,16 @@ impl Db {
                 return Ok(Some("that answer's owner has already had a starter question's award"));
             }
             tx.execute("UPDATE question_bounties SET status='paid',recipient_id=?1,accepted_submission=?2,settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=?3 AND status='open'",params![recipient,answer,bounty])?;
+            // HC58: 8% of a sponsor's award, rounded down, is burned: written as the recipient's
+            // spend, so a previous binary subtracts it too. The site's starter award isn't a trade.
+            if !exists(&tx, "SELECT 1 FROM starter_questions WHERE bounty_id=?", [&bounty])? {
+                tx.execute(
+                    "INSERT INTO credit_spends(person_id,pack,amount,created_at)
+                     SELECT ?1, 'burn:' || id, amount * ?2 / 100, CAST(strftime('%s','now') AS INTEGER)
+                       FROM question_bounties WHERE id=?3 AND amount * ?2 / 100 > 0",
+                    params![recipient, AWARD_BURN_PERCENT, bounty],
+                )?;
+            }
         } else {
             tx.execute(
                 "UPDATE question_bounties SET status='refunded',settled_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=? AND status='open'",
@@ -13961,6 +13988,20 @@ impl Db {
         }
         tx.commit()?;
         Ok(None)
+    }
+
+    /// HC57: refunds every funded question still open 14 days after it was funded, the same way
+    /// cancelling does. Returns how many it refunded.
+    pub fn expire_questions(&self, now: i64) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "UPDATE question_bounties AS q SET status='refunded', settled_at=?1
+              WHERE status='open'
+                AND (EXISTS (SELECT 1 FROM credit_spends s WHERE s.person_id=q.sponsor_id
+                              AND s.pack='question:' || q.id AND s.created_at <= ?2)
+                     OR EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=q.id
+                                 AND s.created_at <= ?2))",
+            params![now, now - QUESTION_DAYS * crate::ops::DAY_SECS],
+        )
     }
 
     pub fn question_bounty(&self, card: &str) -> rusqlite::Result<Option<serde_json::Value>> {
@@ -13976,6 +14017,17 @@ impl Db {
             return Ok(None);
         };
         let starter = exists(&conn, "SELECT 1 FROM starter_questions WHERE bounty_id=?", [&id])?;
+        // HC57: an open question says when it refunds itself.
+        let funded: Option<i64> = conn
+            .query_row(
+                "SELECT created_at FROM credit_spends WHERE person_id=?1 AND pack='question:' || ?2
+                 UNION ALL SELECT created_at FROM starter_questions WHERE bounty_id=?2 LIMIT 1",
+                params![sponsor, id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let expires_at =
+            funded.filter(|_| status == "open").map(|at| at + QUESTION_DAYS * crate::ops::DAY_SECS);
         let sponsor_name: String = conn
             .query_row("SELECT name FROM people WHERE id=?", [&sponsor], |r| r.get(0))
             .optional()?
@@ -13983,7 +14035,7 @@ impl Db {
         let mut stmt = conn.prepare("SELECT a.id,a.bot_id,a.owner_id,a.text,COALESCE(b.name,'Bot who left'),COALESCE(p.name,'Someone who left'),(b.owner_id=a.owner_id AND p.id IS NOT NULL) FROM question_answers a LEFT JOIN agents b ON b.id=a.bot_id LEFT JOIN people p ON p.id=a.owner_id WHERE a.bounty_id=? ORDER BY a.created_at,a.id")?;
         let answers = stmt.query_map([&id],|r| Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"bot_id":r.get::<_,String>(1)?,"owner_id":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"bot_name":r.get::<_,String>(4)?,"owner_name":r.get::<_,String>(5)?,"eligible":r.get::<_,Option<bool>>(6)?.unwrap_or(false)})))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(Some(
-            serde_json::json!({"amount":amount,"status":status,"sponsor_id":sponsor,"sponsor_name":sponsor_name,"accepted_submission_id":accepted,"submissions":answers,"starter":starter}),
+            serde_json::json!({"amount":amount,"status":status,"sponsor_id":sponsor,"sponsor_name":sponsor_name,"accepted_submission_id":accepted,"submissions":answers,"starter":starter,"expires_at":expires_at}),
         ))
     }
 
@@ -21600,6 +21652,38 @@ mod tests {
         assert_eq!(totals.paid - totals.spent, 8);
     }
 
+    // HC56 to HC58 (#678, favors): three open at once, 8% of an award burned, and a refund after
+    // 14 days open.
+    #[test]
+    fn funded_questions_cap_burn_and_expire() {
+        let db = funded_question_fixture();
+        {
+            let conn = db.conn();
+            for card in ["q3", "q4"] {
+                conn.execute("INSERT INTO board_cards(id,board_id,title,body,person_id,created_at,updated_at) VALUES(?,'board','Question','','p1',0,0)", [card]).unwrap();
+            }
+            conn.execute("INSERT INTO credit_paid(person_id,kind,source_id,city_id,amount,day,created_at) VALUES('p1','gathering','more','c1',300,0,0)", []).unwrap();
+        }
+        let balance = |person| {
+            let totals = db.credit_totals(person, 0).unwrap();
+            totals.paid - totals.spent
+        };
+        for (id, card) in [("f1", "q1"), ("f2", "q2"), ("f3", "q3")] {
+            assert_eq!(db.fund_question(id, card, "p1", 50, 1).unwrap(), None);
+        }
+        assert!(db.fund_question("f4", "q4", "p1", 1, 1).unwrap().is_some(), "a fourth is refused");
+        assert_eq!(db.answer_question("a1", "q1", "b2", "p2", "done", 1).unwrap(), None);
+        assert_eq!(db.resolve_question("q1", "p1", Some("a1")).unwrap(), None);
+        assert_eq!(balance("p2"), 46, "4 of 50 burned");
+        assert_eq!(db.fund_question("f4", "q4", "p1", 50, 1).unwrap(), None, "a slot freed");
+        let day = crate::ops::DAY_SECS;
+        assert_eq!(db.question_bounty("q2").unwrap().unwrap()["expires_at"], 1 + 14 * day);
+        assert_eq!(db.expire_questions(14 * day).unwrap(), 0);
+        assert_eq!(db.expire_questions(1 + 14 * day).unwrap(), 3);
+        assert_eq!(balance("p1"), 270, "only the award is gone");
+        assert!(db.answer_question("a2", "q2", "b2", "p2", "late", 2).unwrap().is_some());
+    }
+
     // HC28: the site pays a starter question's bounty, so its sponsor spends nothing and a cancel
     // pays them nothing back. They can have one at a time, and a cancelled one frees the slot.
     #[test]
@@ -21701,7 +21785,10 @@ mod tests {
         assert_eq!(results.iter().filter(|r| r.is_none()).count(), 1);
         let p1 = db.credit_totals("p1", 0).unwrap();
         let p2 = db.credit_totals("p2", 0).unwrap();
-        assert_eq!(p1.paid - p1.spent + p2.paid - p2.spent, 20);
+        // HC58: an award burns 1 of the 15; a refund burns nothing.
+        let burned =
+            if db.question_bounty(card).unwrap().unwrap()["status"] == "paid" { 1 } else { 0 };
+        assert_eq!(p1.paid - p1.spent + p2.paid - p2.spent, 20 - burned);
     }
 
     #[test]

@@ -1895,7 +1895,7 @@ function creditsCard(credits) {
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
     // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
     // contributions, which carry when they happened rather than a UTC day.
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found', tip: 'A tip for your bot' };
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', burn: 'Burned from an award', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found', tip: 'A tip for your bot' };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'
@@ -1949,7 +1949,7 @@ function creditsCard(credits) {
       }, `Show all ${now.history.length}`) : null,
       questionEscrowRows(now.open_questions || [], error, async () => render(await api('/api/credits'))),
       error,
-      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it or award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
+      h('p', { class: 'muted fine' }, 'A gathering you said yes to pays 20. A good trip pays 5, to the bot\'s owner and to the resident who let it in. What\'s paid stays paid. Only you and your bots can see this. Credits buy packs; a question bounty is reserved until you cancel it, it has been open 14 days, or you award it to another owner\'s bot. Credits can\'t be bought or cashed out.'),
     ].filter(Boolean));
   }
 
@@ -6259,7 +6259,8 @@ async function roomView(id) {
         submission.can_accept ? h('button', {
           type: 'button', class: 'primary',
           onclick: act(boardsError, async () => {
-            if (!confirm(`Accept this answer and pay ${count(bounty.amount, 'credit', 'credits')} to ${submission.owner_name}?`)) return;
+            const burn = bounty.starter ? 0 : Math.floor(bounty.amount * 8 / 100);
+            if (!confirm(`Accept this answer and pay ${count(bounty.amount - burn, 'credit', 'credits')} to ${submission.owner_name}${burn ? ` (${burn} of the ${bounty.amount} is burned)` : ''}?`)) return;
             await api(`/api/cards/${encodeURIComponent(card.id)}/bounty/accept`, {
               method: 'POST', body: { submission_id: submission.id },
             });

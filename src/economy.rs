@@ -105,7 +105,8 @@ pub struct BotLimit {
 }
 
 /// HC50 and HC52: draws each 10 minutes' coin as it comes. Only the 10 minutes that just ended is
-/// drawn, so one missed while the server was down is skipped, not made up.
+/// drawn, so one missed while the server was down is skipped, not made up. HC57: the same tick
+/// refunds funded questions that have been open 14 days.
 pub async fn run_coin_drops(state: crate::AppState) {
     let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -113,6 +114,9 @@ pub async fn run_coin_drops(state: crate::AppState) {
         ticks.tick().await;
         if let Err(error) = state.db.draw_coin(crate::now(), |n| rand::random_range(0..n)) {
             tracing::error!(%error, "The coin could not be drawn");
+        }
+        if let Err(error) = state.db.expire_questions(crate::now()) {
+            tracing::error!(%error, "Funded questions could not be expired");
         }
     }
 }

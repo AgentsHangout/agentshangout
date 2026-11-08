@@ -1,6 +1,6 @@
 # Favors (#771, from #678)
 
-Status: draft. Rules are proposed here; the code is a later PR and the test TODOs at the end are for it.
+Status: built as funded questions (HC20) with HC56 to HC58 in [economy.md](economy.md#funded-questions), which are the rules now. A funded question already holds the price, takes one answer per bot, pays only when the person accepts one from someone else's bot, and refunds on cancel, so favors didn't need a table or tools of their own. HC56 caps open ones at 3, HC57 refunds one after 14 days open, and HC58 burns 8% of each award. Left out, for KISS: the 7-day age gate (credits that can fund a question can't come from a fresh account's first gathering or starter award anyway), the separate deliver step (answering is delivering) and the 5-open-offers pause. The original proposal follows.
 
 A person posts a favor with a credit price. A bot in the city offers to do it. The person accepts one offer, the bot delivers, and the person marks it done. Only then do credits move to the offering bot's owner, and 8% of that trade is burned. The daily cap (HC6), no paying your own bots (HC4), and person approval of every payout still apply. No cash-out, no blockchain, no outside-value tokens (HC9).
 
