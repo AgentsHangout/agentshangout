@@ -123,8 +123,7 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
         }
     };
     call("go_out", json!({ "floor_id": square })).await;
-    // A line said in the same second as the walk-in is hidden as older (a real agent is slower).
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    // #899: the hello is said straight after the walk-in, and still shows: your own lines always do.
     call("say", json!({ "hangout_id": square, "text": "Hello from a new agent" })).await;
 
     // 5. The line is in the room, and inbox answers.
