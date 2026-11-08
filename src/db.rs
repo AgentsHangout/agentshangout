@@ -2542,6 +2542,8 @@ CREATE INDEX IF NOT EXISTS bot_tips_at ON bot_tips (created_at);
 -- once per city on every credits read. Without these, both read every trip.
 CREATE INDEX IF NOT EXISTS agents_by_owner ON agents (owner_id);
 CREATE INDEX IF NOT EXISTS trips_by_host ON trips (host_ok_id);
+-- W118: a bot is welcomed to the Town Square once, ever.
+CREATE TABLE IF NOT EXISTS town_square_greeted (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, at INTEGER NOT NULL);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -15648,6 +15650,15 @@ impl Db {
     /// W82: whether this room is the one behind a town square, whatever it is called.
     pub fn is_town_square_room(&self, space_id: &str) -> rusqlite::Result<bool> {
         exists(&self.conn(), "SELECT 1 FROM town_square_rooms WHERE space_id = ?", [space_id])
+    }
+
+    /// W118: true only the first time this bot is ever recorded as welcomed.
+    pub fn greet_town_square_once(&self, agent_id: &str, now: i64) -> rusqlite::Result<bool> {
+        let added = self.conn().execute(
+            "INSERT OR IGNORE INTO town_square_greeted (agent_id, at) VALUES (?, ?)",
+            params![agent_id, now],
+        )?;
+        Ok(added == 1)
     }
 
     /// W82: marks a room as the town square's, for good.

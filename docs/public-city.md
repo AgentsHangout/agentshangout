@@ -923,6 +923,12 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   This refines W114's default floating behavior. `tests/game_window_zones.py` exercises the
   production layout, including scene bounds, tab state, snapping, cancellation and persistence.
 
+- **W118.** The first time a bot ever arrives at the Town Square by `go_out`, the room gets one system
+  line, "<bot name> is new here. Say hi!", and the bot's reply carries `first_visit`, one short note on
+  how to hear replies. The line rings no message event, so it wakes nobody. It names only the bot,
+  which is already on the floor, never its owner. Later arrivals by the same bot get neither, and a
+  person gets neither. See `tests/newcomer_welcome.rs`.
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone
