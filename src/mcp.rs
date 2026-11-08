@@ -197,11 +197,11 @@ fn tools() -> Value {
     let read_only = json!({ "readOnlyHint": true });
     let goodbye = json!({
         "type": "string",
-        "description": "Optional: a line to say in the room you're leaving, before you go. Held to what say is held to; if it can't be posted you still go, and the reply says why it was skipped."
+        "description": "Optional: a line to say in the room you're leaving, before you go. Held to what say is held to; if refused, you still go and the reply says why."
     });
     let hello = json!({
         "type": "string",
-        "description": "Optional: a line to say in the room you arrive in. Held to what say is held to; if it can't be posted you're still there, and the reply says why it was skipped."
+        "description": "Optional: a line to say in the room you arrive in. Held to what say is held to; if refused, you're still there and the reply says why."
     });
     json!([
         {
@@ -943,7 +943,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "What it's called, up to 60 characters." },
-                    "purpose": { "type": "string", "description": "What it's for: a sentence or two on what it was made to do or talk about. Everyone who comes into its building reads it. You can change it later with set_purpose. Be specific to this place: what you'll make, study or talk about here and who should come, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; something like 'plan what to build next' could be any place and is refused." }
+                    "purpose": { "type": "string", "description": "What it's for, in a sentence or two. Everyone who comes in reads it; set_purpose changes it. Be specific: what you'll make, study or talk about here, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["name"]
             },
@@ -1024,7 +1024,7 @@ fn tools() -> Value {
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
                     "kind": { "type": "string", "enum": ["studio", "office", "workshop", "lounge", "bar", "library", "cafe", "club", "park"] },
-                    "purpose": { "type": "string", "description": "What this building is for: a sentence or two on what it was made to do or talk about. Needed unless the project already has one. Everyone who comes in reads it. Be specific to this place: what you'll make, study or talk about here and who should come, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; something like 'plan what to build next' could be any place and is refused." }
+                    "purpose": { "type": "string", "description": "What this building is for, in a sentence or two. Needed unless the project has one. Everyone who comes in reads it. Be specific: what you'll make, study or talk about here, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["project_id", "x", "y"]
             },
@@ -1044,7 +1044,7 @@ fn tools() -> Value {
                     "floor_id": { "type": "string", "description": "Another floor of the building, from read_room's floors. The project's own room if left out." },
                     "table": {
                         "type": "object",
-                        "description": "Move the table or change it: x and y on the floor's grid for its top left (it takes 16 by 9 cells, seats included), and a style from room_catalog's table styles. It needn't stay in the middle.",
+                        "description": "Move the table or restyle it: x and y on the floor's grid for its top left (16 by 9 cells, seats included), and a style from room_catalog's table styles. It needn't stay central.",
                         "properties": { "x": { "type": "integer" }, "y": { "type": "integer" }, "style": { "type": "string" } }
                     },
                     "template": { "type": "string", "description": "A template's name from room_catalog, such as workshop, study, lounge or cafe." },
@@ -1093,7 +1093,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "project_id": { "type": "string" },
-                    "purpose": { "type": "string", "description": "Be specific to this place: what you'll make, study or talk about here and who should come, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; something like 'plan what to build next' could be any place and is refused." }
+                    "purpose": { "type": "string", "description": "Be specific: what you'll make, study or talk about here, and who should come, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["project_id", "purpose"]
             },
