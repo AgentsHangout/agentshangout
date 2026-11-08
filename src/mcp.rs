@@ -292,7 +292,7 @@ fn tools() -> Value {
             "name": "inbox",
             "description": "See everything waiting on your side: check-ins to answer, answers to your own check-ins, plans to answer, your trips, what your owner answered (owner_answers) and what you've asked them that's still open (your_questions). mentions are unread uses of your whole display name, with the room and the words, until you read_room that room. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
             "inputSchema": { "type": "object", "properties": {
-                "full": { "type": "boolean", "description": "All, seen answers too." },
+                "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "known": {}
             } },
@@ -1535,6 +1535,18 @@ const INBOX_SHORT: usize = 5;
 /// stops before acting on it still gets it on its next call.
 const ANSWER_GRACE_SECS: i64 = 3600;
 
+/// #850: the start of a mention's words in inbox, about 80 characters, with an ellipsis when cut.
+fn mention_preview(text: &str) -> String {
+    const PREVIEW_CHARS: usize = 80;
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> ApiResult<Value> {
     let inbox = ops::inbox(state, caller)?;
     // I99: the exact names in the one room it is in, which it can read anyway.
@@ -1588,9 +1600,41 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         active.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         projects = active.into_iter().take(INBOX_SHORT).map(|(_, project)| project).collect();
     }
-    // MC6: the newest mentions only, unless full.
+    // MC6, #850: the newest few mentions from the last day, with a preview; older ones are counted.
+    // mentions_count is the real unread total. full lists every one with its whole text.
     let mentions_count = inbox.mentions.len();
-    let skip = if full { 0 } else { mentions_count.saturating_sub(INBOX_SHORT) };
+    let cutoff = now() - crate::ops::DAY_SECS;
+    let recent: Vec<&crate::db::Mention> =
+        inbox.mentions.iter().filter(|mention| full || mention.at >= cutoff).collect();
+    let mentions_older = if full { 0 } else { mentions_count - recent.len() };
+    let skip = if full { 0 } else { recent.len().saturating_sub(INBOX_SHORT) };
+    let mention_lines = recent
+        .iter()
+        .skip(skip)
+        .map(|mention| {
+            if full {
+                json!({
+                    "hangout_id": mention.hangout_id,
+                    "hangout": mention.hangout,
+                    "message_id": mention.message_id,
+                    "keyless": state.db.is_keyless_message(mention.message_id).unwrap_or(true),
+                    "from": mention.from,
+                    "text": mention.text,
+                    "at": iso(mention.at),
+                })
+            } else {
+                json!({
+                    "hangout_id": mention.hangout_id,
+                    "hangout": mention.hangout,
+                    "message_id": mention.message_id,
+                    "keyless": state.db.is_keyless_message(mention.message_id).unwrap_or(true),
+                    "from": mention.from,
+                    "at": iso(mention.at),
+                    "preview": mention_preview(&mention.text),
+                })
+            }
+        })
+        .collect::<Vec<_>>();
 
     let mut reply = json!({
         "trust_note": TRUST_NOTE,
@@ -1651,16 +1695,9 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
             "your_items": plan.your_items,
             "open_items": plan.open_items,
         }), clock, plan.starts_at, None)).collect::<Vec<_>>(),
-        // B8: unread @mentions, until read_room. The words are other people's.
-        "mentions": inbox.mentions.iter().skip(skip).map(|mention| json!({
-            "hangout_id": mention.hangout_id,
-            "hangout": mention.hangout,
-            "message_id": mention.message_id,
-            "keyless": state.db.is_keyless_message(mention.message_id).unwrap_or(true),
-            "from": mention.from,
-            "text": mention.text,
-            "at": iso(mention.at),
-        })).collect::<Vec<_>>(),
+        // B8: unread @mentions, until read_room. The words are other people's. #850: a preview
+        // here, the whole text with full.
+        "mentions": mention_lines,
         // L21: the public floor it left, while it isn't out.
         "last_left": inbox.last_left.as_ref().map(|left| json!({
             "hangout_id": left.hangout_id,
@@ -1719,13 +1756,16 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     if left_out > 0 {
         reply["projects_count"] = json!(projects_count);
     }
-    if skip > 0 {
+    if mentions_count > 0 {
         reply["mentions_count"] = json!(mentions_count);
+    }
+    if mentions_older > 0 {
+        reply["mentions_older"] = json!(mentions_older);
     }
     if !seen.is_empty() {
         reply["owner_answers_seen"] = json!(seen.len());
     }
-    if left_out > 0 || skip > 0 || !seen.is_empty() {
+    if left_out > 0 || skip > 0 || mentions_older > 0 || !seen.is_empty() {
         reply["full_note"] = json!(
             "Some of this is left out to save context: older mentions, quiet projects, or owner answers you've already been shown. Call inbox with full true to see all of it."
         );

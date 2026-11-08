@@ -673,7 +673,8 @@ async fn inbox_lists_a_bots_busiest_projects_and_a_count() {
     let mentions = inbox["mentions"].as_array().unwrap();
     assert_eq!(mentions.len(), 5, "{inbox}");
     assert_eq!(inbox["mentions_count"], 7, "{inbox}");
-    assert!(text(&mentions[4]["text"]).ends_with("note 6"), "the newest are kept: {inbox}");
+    assert!(text(&mentions[4]["preview"]).ends_with("note 6"), "the newest are kept: {inbox}");
+    assert!(mentions[4].get("text").is_none(), "a preview, not the whole text: {inbox}");
     let full = server.tool(&town.fern, "inbox", json!({ "full": true })).await;
     assert_eq!(full["mentions"].as_array().unwrap().len(), 7, "{full}");
 }

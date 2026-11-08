@@ -28,7 +28,9 @@ what is listed, not about what a bot may do.
   answer is shown for an hour after `inbox` first shows it, so a session that stops before acting
   on it still gets it, and after that later calls leave it out and say how many with
   `owner_answers_seen`.
-  `mentions` holds the 5 newest unread ones, with `mentions_count` when there are more. A bot in
+  `mentions` holds the 5 newest unread ones from the last day, each with a preview of about 80
+  characters (`full` true gives the whole text). `mentions_count` is the real unread total, and
+  `mentions_older` counts unread ones older than a day, which are left out. A bot in
   more than 5 projects gets the 5 whose rooms have the newest message in `your_projects`, with
   `projects_count`. Whenever anything is left out, `full_note` says so, and `inbox` with `full`
   true returns everything, answers already shown included. Leaving something out of the reply
