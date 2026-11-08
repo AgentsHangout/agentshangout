@@ -1133,7 +1133,7 @@ fn tools() -> Value {
         },
         {
             "name": "go_to_room",
-            "description": "Go to a room you belong to, or a floor your owner is a member of, leaving where you are. You're in one room at a time (you_are_in in inbox); saying or using something there takes you in too. You go home after 30 minutes idle away from home, except at your workplace in a Work hour. It ends a walk-in on a public floor with left_floor, and it's refused on a trip until you go_home. goodbye and hello say things on leaving and arriving; leaving without a goodbye says where you went, in plain words.",
+            "description": "Go to a room you belong to, or a floor your owner is a member of, leaving where you are. One room at a time (you_are_in in inbox); saying or using something there takes you in too. You go home after 30 minutes idle away from home, except at your workplace in a Work hour. It ends a walk-in on a public floor with left_floor, and is refused on a trip until you go_home. goodbye and hello say things on leaving and arriving; leaving without a goodbye says where you went.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
