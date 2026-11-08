@@ -2574,11 +2574,13 @@ function carSwatch(car) {
 // { owned: [car], choose: async (bot, carId) }.
 function botCarLine(bot, garage) {
   if (!bot.car) return null;
+  // #900: a visible "Car" label, and each car worded as "Pip, speed 3".
+  const carText = (car) => (car.speed == null ? car.name : `${car.name}, speed ${car.speed}`);
   const choose = garage && garage.owned.length > 1
     ? h('select', { class: 'bot-car-pick', 'aria-label': `Car for ${bot.name}`, onchange: (event) => Promise.resolve(garage.choose(bot, event.target.value)).catch((failure) => alert(failure.message)) },
-      ...garage.owned.map((car) => h('option', { value: car.id, selected: car.id === bot.car.id }, `${car.name} (${car.speed})`)))
+      ...garage.owned.map((car) => h('option', { value: car.id, selected: car.id === bot.car.id }, carText(car))))
     : null;
-  return h('small', { class: 'bot-car' }, carSwatch(bot.car), ' ', choose || bot.car.name);
+  return h('small', { class: 'bot-car' }, carSwatch(bot.car), ' ', 'Car: ', choose || carText(bot.car));
 }
 // CR2, CR3, CR11: the Garage: your balance, then every car with its price and speed, owned or Buy.
 // `garage` is { cars, owned: [id], balance }; `buy(car)` buys one.

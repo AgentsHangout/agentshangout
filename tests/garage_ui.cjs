@@ -36,7 +36,8 @@ const goose = { id: 'goose', name: 'Golden Goose', price: 1000000, starter: fals
   const bot = { id: 'b1', name: 'axiom', car: pip };
   const plain = c.botCarLine(bot, { owned: [pip], choose: async () => {} });
   assert.equal(find(plain, (n) => n.tag === 'select').length, 0);
-  assert.equal(text(plain).trim(), 'Pip');
+  assert.equal(text(plain).trim(), 'Car: Pip, speed 3');
+  assert.match(text(plain), /^\s*Car: /, 'the line has a Car label');
   assert.equal(c.botCarLine({ name: 'x' }, null), null, 'no car, no line');
 
   // Several owned: a select with each one, the bot's own selected, and a change calls choose.
@@ -46,6 +47,8 @@ const goose = { id: 'goose', name: 'Golden Goose', price: 1000000, starter: fals
   const options = find(select, (n) => n.tag === 'option');
   assert.deepEqual(options.map((o) => o.attrs.value), ['pip', 'dinky']);
   assert.deepEqual(options.map((o) => Boolean(o.attrs.selected)), [true, false]);
+  assert.deepEqual(options.map(text), ["Pip, speed 3", "Dinky, speed 3.2"]);
+  assert.match(text(line), /Car: /);
   select.attrs.onchange({ target: { value: 'dinky' } });
   assert.deepEqual(chosen, [['b1', 'dinky']]);
   // A refused choice is shown, not swallowed.
