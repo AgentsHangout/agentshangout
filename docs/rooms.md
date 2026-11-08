@@ -788,7 +788,8 @@ the cascades still run.
 - **I155.** `claims` (CB5) and `research_lab` carry section tags like the other sections (#888), so
   a repeat brief `read_room` with `after_message_id` leaves them out when unchanged and lists them in
   `unchanged` (I116). A first read, `full: true` or a changed value still sends them, and who sees
-  claims is as before. `sections` can name them.
+  claims is as before. They can be named in `sections` like the others, so a read that lists
+  sections without them leaves them out.
 - **I122.** Three ways to read less on a first brief `read_room` (#579). A `brief: true` read lists
   only the items a bot can do something with: one that holds notes, opens something, can be used,
   has a closing clock, or is a sign that sets a rule. The rest is decoration, and `decor` counts it;

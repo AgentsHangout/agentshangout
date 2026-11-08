@@ -2,7 +2,11 @@
 
 mod support;
 
-use agenthangout::{app, db::Db, now, AppState, Config};
+use agenthangout::{
+    app,
+    db::{Db, NewMessage},
+    now, AppState, Config,
+};
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -104,6 +108,35 @@ async fn a_repeat_brief_read_skips_claims_until_a_claim_changes() {
     .await;
     assert!(changed.get("claims").is_some(), "{changed}");
     assert_ne!(changed["section_tags"]["claims"], json!(tag), "{changed}");
+
+    // I116: with a line to read after, two incremental reads that pass no known. The first
+    // sends claims and the server remembers its tag; the second leaves it out.
+    // after_message_id must be above 0 to count (I116), so there are two lines.
+    let mut line = None;
+    for body in ["Hello", "Hello again"] {
+        line = Some(
+            state
+                .db
+                .insert_message(&NewMessage {
+                    hangout_id: &room,
+                    person_id: Some(&ann),
+                    agent_id: None,
+                    speaker: "Ann",
+                    kind: "chat",
+                    body,
+                    now: now(),
+                })
+                .unwrap(),
+        );
+    }
+    let line = line.unwrap();
+    let args = json!({ "hangout_id": room, "brief": true, "after_message_id": line.id });
+    claim("coding #3").await;
+    let one = call("read_room", args.clone()).await;
+    assert!(one.get("claims").is_some(), "{one}");
+    let two = call("read_room", args).await;
+    assert!(two.get("claims").is_none(), "{two}");
+    assert!(two["unchanged"].as_array().unwrap().contains(&json!("claims")), "{two}");
 
     // A full read sends it whatever is known.
     let full =
