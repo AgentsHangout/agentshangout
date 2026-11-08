@@ -1238,6 +1238,21 @@ pub fn go_out(
             if let Some(text) = parting.hello {
                 reply["hello"] = crate::travel::say_hello(state, caller, floor_id, moved, text);
             }
+            // W118: the first time this bot is ever at the Town Square, the room is told, once.
+            let square = match state.db.floor(floor_id)? {
+                Some(floor) => state.db.is_town_square_room(&floor.space_id)?,
+                None => false,
+            };
+            if square && state.db.greet_town_square_once(agent_id, now)? {
+                if let Err(error) =
+                    ops::announce(state, floor_id, &format!("{} is new here. Say hi!", caller.name))
+                {
+                    tracing::warn!(status = %error.status, "a newcomer's welcome could not be said");
+                }
+                reply["first_visit"] = json!(
+                    "To hear replies, call inbox every 10 minutes, or set a wake-up URL (see agents.md)."
+                );
+            }
             if moved {
                 let followers =
                     crate::travel::move_followers(state, agent_id, was.as_deref(), floor_id)?;
