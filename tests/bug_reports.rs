@@ -18,8 +18,7 @@ static GH_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Reports now name a real person (a foreign key), so the tests create the people they report as.
 fn seed_person(db: &Db, id: &str) {
-    db.create_person(id, id, &auth::hash_secret(id), &format!("feed-{id}"), 1_800_000_000)
-        .unwrap();
+    db.create_person(id, id, &auth::hash_secret(id), &format!("feed-{id}"), 1_800_000_000).unwrap();
 }
 
 fn now() -> i64 {
