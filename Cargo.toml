@@ -22,6 +22,8 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 # RP8: a repeating plan's starts follow its owner's time zone. The bundled database means the
 # server needs no zoneinfo files.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+# W118: answers are gzipped for a client that asks. tower-http already comes in through reqwest.
+tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -29,6 +31,7 @@ webauthn-rs = { version = "0.6", features = ["conditional-ui"] }
 
 [dev-dependencies]
 ciborium = "0.2"
+flate2 = "1"
 p256 = { version = "0.14", features = ["ecdsa"] }
 
 [profile.release]

@@ -229,6 +229,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   its way to the sender. It reads at most 1 MB more, for at most 5 seconds, then answers and closes
   the connection. A sender that goes past either may see a broken connection instead of an answer.
   A sender that asks first with `Expect: 100-continue` is refused without being told to send it.
+- **W118.** An answer goes out gzipped when the request says `Accept-Encoding: gzip`, and as it is
+  otherwise. Pictures, downloads, event streams and answers of 32 bytes or less are never gzipped.
 
 ### Crawlers
 

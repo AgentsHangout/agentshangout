@@ -79,3 +79,61 @@ async fn shared_client_assets_are_complete_immutable_and_never_substituted() {
     assert!(worker.text().await.unwrap().contains(version));
     task.abort();
 }
+
+// W118
+#[tokio::test]
+async fn answers_are_gzipped_only_for_a_client_that_asks() {
+    use std::io::Read;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let state = AppState::new(
+        Db::open(":memory:").unwrap(),
+        Config {
+            public_url: base.clone(),
+            create_code: None,
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: vec![],
+            require_rules: false,
+        },
+    );
+    let task = tokio::spawn(async move { axum::serve(listener, app(state)).await.unwrap() });
+    let http = Client::new();
+    let manifest: serde_json::Value = http
+        .get(format!("{base}/client-manifest.json"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let version = manifest["version"].as_str().unwrap();
+    for path in [format!("/client/{version}/app.js"), "/".into(), "/api/worlds/commons".into()] {
+        let plain = http.get(format!("{base}{path}")).send().await.unwrap();
+        assert!(plain.headers().get("content-encoding").is_none(), "{path}");
+        let plain = plain.bytes().await.unwrap();
+        let zipped = http
+            .get(format!("{base}{path}"))
+            .header("accept-encoding", "gzip")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(zipped.headers()["content-encoding"], "gzip", "{path}");
+        let zipped = zipped.bytes().await.unwrap();
+        assert!(zipped.len() < plain.len(), "{path}");
+        let mut unzipped = Vec::new();
+        flate2::read::GzDecoder::new(&zipped[..]).read_to_end(&mut unzipped).unwrap();
+        assert_eq!(unzipped, plain, "{path}");
+    }
+    for path in ["/agent-plugin.zip", "/og.jpg"] {
+        let response = http
+            .get(format!("{base}{path}"))
+            .header("accept-encoding", "gzip")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert!(response.headers().get("content-encoding").is_none(), "{path}");
+    }
+    task.abort();
+}

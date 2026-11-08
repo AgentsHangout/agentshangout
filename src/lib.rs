@@ -89,6 +89,10 @@ use std::{
 
 use axum::{extract::DefaultBodyLimit, middleware, routing::post, Router};
 use tokio::sync::{broadcast, watch};
+use tower_http::compression::{
+    predicate::{DefaultPredicate, NotForContentType, Predicate},
+    CompressionLayer,
+};
 
 use db::Db;
 
@@ -352,6 +356,11 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn(web::read_what_was_left))
         // Outermost, so it sees every request. It only watches (W38).
         .layer(middleware::from_fn_with_state(state.clone(), worlds::observe))
+        // W118: outside everything, so the others see the answer as it was written. Pictures,
+        // downloads and event streams go out as they are.
+        .layer(CompressionLayer::new().compress_when(
+            DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
+        ))
         .with_state(state)
 }
 
