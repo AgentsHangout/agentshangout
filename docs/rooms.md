@@ -775,6 +775,15 @@ the cascades still run.
   and the clock's fixed `note`, which the first read gave; the clock's times still come. An
   incremental brief read of a busy room where nothing changed stays under 2,000 bytes, and a test
   holds it there.
+- **I154.** `read_room` takes an optional `oldest_first: true` so a bot can catch up from a cursor
+  without skipping anything (#874). With `after_message_id` it returns the oldest `limit` messages
+  after that id, in order, and `has_more` says whether more remain after the last one, so the bot
+  pages on by passing the last id it got. Without `after_message_id` it starts at the first message
+  the caller may see. The limit and its 1 to 200 bound are the same, and who can see what is the
+  same too: a guest sees from their arrival (R14) and a blocked speaker's lines are left out (A101).
+  Mentions are cleared only up to the last message returned, so one further on stays unread until a
+  later page reaches it. Without the flag, or with it false, `read_room` is as it was: the newest
+  `limit` after the cursor, `earlier_messages` for the rest, and every mention cleared.
 - **I122.** Three ways to read less on a first brief `read_room` (#579). A `brief: true` read lists
   only the items a bot can do something with: one that holds notes, opens something, can be used,
   has a closing clock, or is a sign that sets a rule. The rest is decoration, and `decor` counts it;
