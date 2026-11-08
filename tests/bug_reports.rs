@@ -446,8 +446,10 @@ async fn bug_report_slot_claims_are_atomic_under_concurrency() {
                     reporter_id: None,
                 },
                 1_800_000_000,
+                100,
             )
-            .unwrap();
+            .unwrap()
+            .expect("no reporter, so no cap");
         ids.push(rec.id);
     }
     let db = &state.db;
@@ -523,4 +525,80 @@ async fn bug_report_repeats_post_only_a_few_github_comments() {
     unsafe {
         std::env::remove_var("AGENTHANGOUT_GITHUB_TOKEN");
     }
+}
+
+/// BG4 (#915): a person may first-file only so many rows; repeats of rows that already exist
+/// still count, and a refused report writes nothing.
+#[tokio::test]
+async fn bug_report_rows_are_capped_per_person_but_repeats_still_count() {
+    let state = test_state(None);
+    seed_person(&state.db, "rower");
+    seed_person(&state.db, "other");
+    let c = caller_for("rower");
+    let cap = bug_reports::ROWS_PER_PERSON;
+    let mut first = Vec::new();
+    for surface in ["house", "space", "place", "item", "door"] {
+        for action in bug_reports::ACTIONS {
+            for code in bug_reports::CODES {
+                if (first.len() as i64) < cap {
+                    let rec = bug_reports::record_report(
+                        &state,
+                        &c,
+                        surface,
+                        action,
+                        code,
+                        "x",
+                        None,
+                        now(),
+                    )
+                    .await
+                    .expect("under the cap");
+                    first.push((surface, action, code, rec.id));
+                }
+            }
+        }
+    }
+    assert_eq!(first.len() as i64, cap);
+
+    // The next new signature from the same person is refused, and nothing is stored for it.
+    let err =
+        bug_reports::record_report(&state, &c, "item", "bulldoze", "unknown", "x", None, now())
+            .await
+            .unwrap_err();
+    assert_eq!(err.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(state.db.list_bug_reports(1000).unwrap().len() as i64, cap);
+
+    // A repeat of a row that already exists still counts, even at the cap.
+    let (s, a, code, _) = first[0];
+    let again = bug_reports::record_report(&state, &c, s, a, code, "x", None, now()).await.unwrap();
+    assert_eq!(again.report_count, 2);
+
+    // Another person is not affected by this person's cap.
+    let other = caller_for("other");
+    bug_reports::record_report(&state, &other, "item", "bulldoze", "unknown", "x", None, now())
+        .await
+        .expect("a different person has their own cap");
+}
+
+/// BG4 (#915): a failed in-game action is captured with its fixed code; a success is not.
+#[tokio::test]
+async fn capture_if_failed_records_the_failure_and_passes_the_result_through() {
+    let state = test_state(None);
+    seed_person(&state.db, "player");
+    let c = caller_for("player");
+    let failed: agenthangout::error::ApiResult<()> =
+        Err(agenthangout::error::ApiError::conflict("that item is closed").with_reason("closed"));
+    let out = bug_reports::capture_if_failed(&state, &c, "item", "use", None, now(), failed).await;
+    assert_eq!(out.unwrap_err().status, axum::http::StatusCode::CONFLICT);
+    let rows = state.db.list_bug_reports(10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].surface.as_str(), rows[0].action.as_str(), rows[0].code.as_str()),
+        ("item", "use", "closed")
+    );
+
+    let ok: agenthangout::error::ApiResult<u8> = Ok(7);
+    let out = bug_reports::capture_if_failed(&state, &c, "item", "use", None, now(), ok).await;
+    assert_eq!(out.unwrap(), 7);
+    assert_eq!(state.db.list_bug_reports(10).unwrap().len(), 1, "a success stores nothing");
 }
