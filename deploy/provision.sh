@@ -50,8 +50,24 @@ fi
 chown root:agenthangout /etc/agenthangout.env
 umask 022
 
+# Pages, scripts and JSON are gzipped for someone signed out (#748): a first visit to the map drops
+# from 2.1 MB to about 0.6 MB. A signed-in answer goes out as it is, because one can hold a secret
+# beside text anyone can put there, and a gzipped answer's size could give the secret away (BREACH).
 cat > /etc/caddy/Caddyfile <<EOF
 $PUBLIC_HOST${ALSO_SERVE:+, $ALSO_SERVE} {
+    @signed_out {
+        not header Cookie *
+        not header Authorization *
+    }
+    encode @signed_out gzip zstd {
+        match {
+            header Content-Type text/html*
+            header Content-Type text/css*
+            header Content-Type text/javascript*
+            header Content-Type application/javascript*
+            header Content-Type application/json*
+        }
+    }
     reverse_proxy 127.0.0.1:8787
 }
 EOF

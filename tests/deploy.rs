@@ -13,10 +13,13 @@ use std::{
 };
 
 /// The download writes the tag as the binary, and the health check fails while `$bin.down` exists.
+/// While `$bin.nolink` exists the release link fails and the file only comes through the API.
 const STAND_INS: &str = r#"
 curl() {
     case "$*" in
-        *releases/download/*) printf %s "$tag" > "$work/agenthangout" ;;
+        *releases/download/*) [ ! -e "$bin.nolink" ] && printf %s "$tag" > "$work/agenthangout" ;;
+        *releases/tags/*) printf '{"url": "https://api.github.com/repos/a/b/releases/1", "assets": [{"url": "https://api.github.com/repos/a/b/releases/assets/7"}]}' ;;
+        *releases/assets/7*) printf %s "$tag" > "$work/agenthangout" ;;
         *) [ ! -e "$bin.down" ] ;;
     esac
 }
@@ -184,6 +187,19 @@ fn a_release_that_doesnt_come_up_doesnt_count_as_installed() {
     server.set_down(false);
 
     installed(&server.deploy("v0.1.69"), "v0.1.69");
+}
+
+// 2026-11-08: the release link answered 504 for v0.1.545 while the API served the file.
+#[test]
+fn a_release_link_that_fails_comes_through_the_api() {
+    let server = Server::new();
+    fs::write(server.dir.join("agenthangout.nolink"), "").unwrap();
+    let output = server.deploy("v0.1.68");
+    installed(&output, "v0.1.68");
+    assert!(stderr(&output).contains("trying GitHub's API"), "{}", stderr(&output));
+    // Through the API the hash still decides.
+    stopped(&server.run(&["v0.1.69", &sha256("something else")]));
+    assert_eq!(server.binary(), "v0.1.68");
 }
 
 #[test]
