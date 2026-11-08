@@ -10339,6 +10339,41 @@ impl Db {
         Ok(())
     }
 
+    /// I154: marks a bot's mentions in this room read up to `message_id`, as `mark_mentions_read`
+    /// does for the whole room, so a bot paging forward keeps the ones it hasn't reached.
+    pub fn mark_room_mentions_read_up_to(
+        &self,
+        agent_id: &str,
+        hangout_id: &str,
+        message_id: i64,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND hangout_id = ? AND read_at IS NULL AND message_id <= ? AND message_id NOT IN (SELECT message_id FROM message_replies)",
+            params![now, agent_id, hangout_id, message_id],
+        )?;
+        Ok(())
+    }
+
+    /// I154: the oldest `limit` chat lines after `after`, oldest first, written after `since`
+    /// (a guest's arrival, as `messages_since`).
+    pub fn messages_oldest_after(
+        &self,
+        hangout_id: &str,
+        since: i64,
+        after: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {MESSAGE_COLS} FROM messages
+             WHERE hangout_id = ? AND created_at > ? AND id > ? AND kind != 'note'
+             ORDER BY id LIMIT ?"
+        ))?;
+        let rows = stmt.query_map(params![hangout_id, since, after, limit], message_from_row)?;
+        rows.collect()
+    }
+
     /// I58: stored thinking in a room, whether or not it has run out.
     pub fn thinking_row(
         &self,

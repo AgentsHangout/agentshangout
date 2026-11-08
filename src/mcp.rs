@@ -410,6 +410,7 @@ fn tools() -> Value {
                     "hangout_id": hangout_id,
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Last this many messages. earlier_messages counts older omitted ones; re-read from your old cursor before advancing." },
+                    "oldest_first": { "type": "boolean", "description": "Return the oldest limit messages after after_message_id, with has_more; page on with the last id. Clears only mentions up to it." },
                     "brief": { "type": "boolean", "description": "Skip descriptions. With no after_message_id, defaults to 20 messages. Returns section_tags." },
                     "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people"] } },
                     "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
@@ -2054,8 +2055,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let sends_messages = sections.as_ref().is_none_or(|chosen| chosen.contains(&"messages"));
     // B8: reading the room is what clears mentions. The doorbell's own reads don't, so a mention
     // stays in inbox until the bot itself catches up here.
+    // I154: an oldest_first read clears only the mentions at or below the last line it returns.
+    let oldest_first = args["oldest_first"].as_bool().unwrap_or(false);
     if let Some(agent_id) = caller.agent_id.as_ref().filter(|_| sends_messages) {
-        state.db.mark_mentions_read(agent_id, &hangout.id, now())?;
+        if !oldest_first {
+            state.db.mark_mentions_read(agent_id, &hangout.id, now())?;
+        }
         // I117: and the thread replies it has since answered in their thread.
         state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
     }
@@ -2108,8 +2113,29 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // once per reply. Nothing is kept past this read.
     let mut canonical_of: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
     let mut visible_of: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
+    // I154: oldest_first reads the lines after the cursor from the start, `limit` of them, instead
+    // of taking the snapshot's newest. The same visibility applies: a guest's arrival (R14) and
+    // blocks (A101). The cursor moves past a line a block hides, so a page of them can't stall it.
+    let hide_roots = crate::blocks::hidden_speakers(state, caller)?;
+    let mut window: Vec<crate::db::Message> = Vec::new();
+    let mut window_end = after;
+    let mut has_more = false;
+    if oldest_first && sends_messages {
+        let page = optional_limit(args, 200)?.unwrap_or(200);
+        window = state.db.messages_oldest_after(
+            &hangout.id,
+            guest_since.unwrap_or(i64::MIN),
+            after,
+            page as i64 + 1,
+        )?;
+        has_more = window.len() > page;
+        window.truncate(page);
+        window_end = window.last().map_or(after, |m| m.id);
+        window.retain(|message| !crate::blocks::hides(&hide_roots, message));
+    }
+    let pool: &[crate::db::Message] = if oldest_first { &window } else { &snapshot.messages };
     // I122: a read that leaves out messages needs none of this.
-    let lines: &[crate::db::Message] = if sends_messages { &snapshot.messages } else { &[] };
+    let lines: &[crate::db::Message] = if sends_messages { pool } else { &[] };
 
     for msg in lines {
         if let Some(r_cand) = msg.reply_to {
@@ -2126,7 +2152,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 None => true,
             };
             if root_visible {
-                if !snapshot.messages.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
+                if !pool.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
                     missing_root_ids.insert(root_id);
                 }
             } else {
@@ -2141,7 +2167,6 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let mut sorted_missing: Vec<i64> = missing_root_ids.into_iter().collect();
     sorted_missing.sort_by(|a, b| b.cmp(a));
     // A101: a root by someone this caller blocked isn't put back.
-    let hide_roots = crate::blocks::hidden_speakers(state, caller)?;
     for root_id in sorted_missing.into_iter().take(50) {
         if let Ok(Some(root)) = state.db.message(root_id) {
             if root.hangout_id == hangout.id && !crate::blocks::hides(&hide_roots, &root) {
@@ -2161,9 +2186,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         if msg.reply_to.is_some() {
             msg.id
         } else {
-            snapshot
-                .messages
-                .iter()
+            pool.iter()
                 .filter(|m| m.thread_root == Some(msg.id) || m.reply_to == Some(msg.id))
                 .map(|m| m.id)
                 .max()
@@ -2218,7 +2241,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     };
 
-    let kept = limit.map_or(0, |lim| newer.len().saturating_sub(lim));
+    // I154: an oldest_first window is already `limit` long.
+    let kept = limit.filter(|_| !oldest_first).map_or(0, |lim| newer.len().saturating_sub(lim));
     let roots: Vec<&crate::db::Message> = newer.into_iter().skip(kept).collect();
     if let Some(agent_id) = caller.agent_id.as_ref().filter(|_| sends_messages) {
         let inline_ids: Vec<i64> =
@@ -2227,7 +2251,15 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             state.db.mark_thread_mentions_read(agent_id, &inline_ids, now())?;
         }
     }
-    let last_message_id = roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after);
+    // I154: an oldest_first read's cursor is the last line it fetched, whatever its threads hold.
+    let last_message_id = if oldest_first {
+        window_end
+    } else {
+        roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after)
+    };
+    if let Some(agent_id) = caller.agent_id.as_ref().filter(|_| sends_messages && oldest_first) {
+        state.db.mark_room_mentions_read_up_to(agent_id, &hangout.id, last_message_id, now())?;
+    }
     let root_ids: Vec<i64> = roots.iter().filter(|m| m.reply_to.is_none()).map(|m| m.id).collect();
     let summaries = state.db.thread_summaries_without(&root_ids, &hide_roots)?;
     // I141, #669: a thread whose root this read shows says which of its replies named this bot, and
@@ -2650,6 +2682,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     if kept > 0 {
         reply["earlier_messages"] = json!(kept);
+    }
+    if oldest_first {
+        reply["has_more"] = json!(has_more);
     }
     // A101: only how many, never whose.
     if snapshot.hidden > 0 {
