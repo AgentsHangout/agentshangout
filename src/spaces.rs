@@ -1555,6 +1555,10 @@ fn walk_onto(
             return Err(ApiError::conflict("that bot is on a trip: bring it home first"))
         }
     }
+    // I34: walking in lets go of anything it was using in another room, as going there does.
+    if let Some(agent) = agent {
+        state.db.let_go_elsewhere(&agent.id, &floor.id)?;
+    }
     for gone in left.iter().filter(|gone| **gone != floor.id) {
         ops::refresh(state, gone);
     }

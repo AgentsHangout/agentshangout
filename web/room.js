@@ -4579,6 +4579,15 @@ function spotsOf({ use, side, facing, left, top, wide, deep, y }) {
   });
 }
 
+// I36: the words beside a bot's name. What it's using goes there only while it's drawn at that item,
+// and not on a seat, which says as much by itself (side by side the words would collide too). A bot
+// with no place left there wanders, so it says nothing about the item (#918).
+function doingTag(data, spot) {
+  return data.activity ? `· ${data.activity.via}`
+    : data.does && spot && !spot.over ? `· ${data.does}`
+      : data.asking ? '· waiting' : '';
+}
+
 // Facing 2 and 3 are the other way round. Words stay readable, so a sign or a kind with `words` never is.
 function paintItem(g, { paint, side, sign, words, x, y, wide, deep, facing }, t) {
   const flip = facing >= 2 && !sign && !words;
@@ -5563,10 +5572,7 @@ export class Room {
       bot.chip.title = data.status ? `${named}: ${data.status}` : named;
       bot.thinking = liveThinking(data.thinking);
       this.syncThink(bot);
-      // A bot on a sofa says what it's doing by being there, and side by side the words would collide.
-      bot.doing.textContent = data.activity ? `· ${data.activity.via}`
-        : data.does && !bot.spot?.over ? `· ${data.does}`
-          : data.asking ? '· waiting' : '';
+      bot.doing.textContent = doingTag(data, bot.spot);
     }
     for (const [id, bot] of this.bots) {
       if (seen.has(id)) continue;
