@@ -2132,6 +2132,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         window = state.db.messages_oldest_after(
             &hangout.id,
             guest_since.unwrap_or(i64::MIN),
+            caller.agent_id.as_deref(),
             after,
             page as i64 + 1,
         )?;
