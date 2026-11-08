@@ -105,9 +105,9 @@ async fn a_challenge_posts_the_result_and_refusals_record_nothing() {
     let said = lines();
     assert_eq!(said.len(), 1);
     let expected = match a.cmp(&b) {
-        std::cmp::Ordering::Greater => format!("Scout beat Rex at Arcade cabinet, {a} to {b}."),
-        std::cmp::Ordering::Less => format!("Rex beat Scout at Arcade cabinet, {b} to {a}."),
-        std::cmp::Ordering::Equal => format!("Scout and Rex tied at Arcade cabinet, {a} each."),
+        std::cmp::Ordering::Greater => format!("Scout beat Rex at the arcade cabinet, {a} to {b}."),
+        std::cmp::Ordering::Less => format!("Rex beat Scout at the arcade cabinet, {b} to {a}."),
+        std::cmp::Ordering::Equal => format!("Scout and Rex tied at the arcade cabinet, {a} each."),
     };
     assert_eq!(said[0].body, expected);
     assert!(!free(&scout.id, 0) && !free(&rex.id, 0), "both plays are recorded");
