@@ -63,3 +63,10 @@ assert.deepEqual([added, toggled], [['trust'], ['trust']]);
 alone.open();
 assert.deepEqual(opened, ['bots', 'trust']);
 console.log('My bots view: one button and view on the map and in a room, Trust hosted inside it, as a large panel.');
+
+// #902: a click on the car picker stays in the picker, so the row's click doesn't center the map and close the panel.
+const pickerAt = app.indexOf("h('select', { class: 'bot-car-pick'");
+assert.ok(pickerAt >= 0, 'the car picker');
+const pickerLine = app.slice(pickerAt, app.indexOf('\n', pickerAt));
+assert.ok(pickerLine.includes('onclick: stay') && pickerLine.includes('onmousedown: stay') && pickerLine.includes('onkeydown: stay'), 'the picker keeps its clicks and keys to itself');
+assert.ok(app.includes('const stay = (event) => event.stopPropagation();'));

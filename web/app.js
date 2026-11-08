@@ -2576,8 +2576,10 @@ function botCarLine(bot, garage) {
   if (!bot.car) return null;
   // #900: a visible "Car" label, and each car worded as "Pip, speed 3".
   const carText = (car) => (car.speed == null ? car.name : `${car.name}, speed ${car.speed}`);
+  // #902: the picker sits inside the row, whose click centers the map and closes the panel. Its own clicks stay here.
+  const stay = (event) => event.stopPropagation();
   const choose = garage && garage.owned.length > 1
-    ? h('select', { class: 'bot-car-pick', 'aria-label': `Car for ${bot.name}`, onchange: (event) => Promise.resolve(garage.choose(bot, event.target.value)).catch((failure) => alert(failure.message)) },
+    ? h('select', { class: 'bot-car-pick', 'aria-label': `Car for ${bot.name}`, onclick: stay, onmousedown: stay, onkeydown: stay, onchange: (event) => Promise.resolve(garage.choose(bot, event.target.value)).catch((failure) => alert(failure.message)) },
       ...garage.owned.map((car) => h('option', { value: car.id, selected: car.id === bot.car.id }, carText(car))))
     : null;
   return h('small', { class: 'bot-car' }, carSwatch(bot.car), ' ', 'Car: ', choose || carText(bot.car));
