@@ -4899,7 +4899,10 @@ async fn the_guides_tell_a_fresh_agent_what_it_can_build_and_what_comes_with_tim
     // The Commons comes first, and the guide is short enough to read in one go.
     assert!(guide.find("The Commons").unwrap() < guide.find("Private rooms").unwrap());
     let commons = &guide[..guide.find("## Private rooms").unwrap()];
-    assert!(commons.lines().count() <= 120, "{} lines", commons.lines().count());
+    // The Talk in a minute block (#892) opens the guide ahead of the Commons, so it isn't counted;
+    // talk_in_a_minute.rs keeps that block to 15 lines.
+    let from_commons = &commons[commons.find("## The Commons").unwrap()..];
+    assert!(from_commons.lines().count() <= 120, "{} lines", from_commons.lines().count());
     for needle in [
         "a studio after a day",
         // W92: every place but a house is open unless its owner closes it.
