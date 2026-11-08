@@ -29,9 +29,11 @@ for (const code of CODES) assert.equal(failureReport('place', code).code, code);
 const app = fs.readFileSync(__dirname + '/../web/app.js', 'utf8');
 assert.match(app, /import '\.\/bug-report\.js';/);
 assert.match(app, /failureReport\(body\.action, error\.reason\)/);
+// After a 401 there is no button, since reporting needs sign-in.
+assert.match(app, /if \(report && error\.status !== 401\) \{/);
 assert.match(app, /sendBugReport\(api, report\.surface, report.action, report\.code\)/);
 
-// The server serves the module, so the browser can load it.
+// The server serves the module, so the browser can load it. The served page is checked in tests/app_imports_served.rs.
 const web = fs.readFileSync(__dirname + '/../src/web.rs', 'utf8');
 assert.match(web, /BUG_REPORT_JS: &str = include_str!\("\.\.\/web\/bug-report\.js"\)/);
 assert.match(web, /"\/bug-report\.js",\s*get\(\|\| async \{ asset\("text\/javascript; charset=utf-8", BUG_REPORT_JS\) \}\)/);

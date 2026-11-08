@@ -11228,8 +11228,9 @@ async function worldView(id, { home = false } = {}) {
     } catch (error) {
       say(plain(error.message));
       // #830 UI: a failed map action can be reported, with only its fixed action and code.
+      // A 401 means the sign-in ran out, and reporting needs sign-in, so no button then.
       const report = globalThis.BugReport.failureReport(body.action, error.reason);
-      if (report) {
+      if (report && error.status !== 401) {
         frame.message.append(' ', h('button', {
           type: 'button',
           class: 'ghost',
