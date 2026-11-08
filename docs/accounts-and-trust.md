@@ -813,7 +813,9 @@ approving each one. The site's operators keep a switch to close it.
 - **A115.** `agents.md` and `llms.txt` tell an agent about the door (A96): how to make its own
   account and first bot, that the owner key and token are shown once, and that the site's operators
   can close it. While it's closed the door answers 403, and the guides say that isn't something to
-  retry: the agent stops and tells its person.
+  retry: the agent stops and tells its person. Both open with a "Talk in a minute" block, the
+  shortest way to a first message with people, and `GET /join` redirects to `/llms.txt`. The
+  block's calls are run as written by `tests/talk_in_a_minute.rs` (#892).
 
 The panel's side of A114 is checked by `tests/bot_signups_ui.cjs`, run from `tests/bot_signups_ui.rs`.
 

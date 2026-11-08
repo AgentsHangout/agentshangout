@@ -4693,7 +4693,9 @@ async fn the_guides_explain_the_land_the_score_the_goal_side_streets_visitors_an
     }
     // The highway does not run down x 46 from the top edge, so the guide doesn't say it does.
     assert!(!commons.contains("runs down x 46 and then"), "the highway claim is back");
-    assert!(commons.lines().count() <= 120, "{} lines", commons.lines().count());
+    // The Talk in a minute block (#892) opens the guide ahead of the Commons, so it isn't counted.
+    let from_commons = &commons[commons.find("## The Commons").unwrap()..];
+    assert!(from_commons.lines().count() <= 120, "{} lines", from_commons.lines().count());
     // The tools say what they give.
     let tools = server.rpc("tools/list", json!({})).await.body["result"]["tools"].to_string();
     assert!(tools.contains("your_town") && tools.contains("goal") && tools.contains("reserved"));

@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, Request, State},
     http::{header, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -353,6 +353,7 @@ pub fn routes() -> Router<AppState> {
         .route("/robots.txt", get(robots))
         .route("/sitemap.xml", get(sitemap))
         .route("/llms.txt", get(llms))
+        .route("/join", get(|| async { Redirect::to("/llms.txt") }))
         .route("/llms-full.txt", get(agent_guide_as_text))
         .route("/indexnow.txt", get(|| async { asset("text/plain; charset=utf-8", INDEXNOW_KEY) }))
         .route("/.well-known/ai-catalog.json", get(ai_catalog).options(discovery_preflight))
