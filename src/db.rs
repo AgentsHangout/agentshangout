@@ -1984,7 +1984,7 @@ CREATE TABLE IF NOT EXISTS person_votes (
 CREATE TABLE IF NOT EXISTS vote_candidates (
     vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
     choice      INTEGER NOT NULL,
-    agent_id    TEXT NOT NULL,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     PRIMARY KEY (vote_id, choice)
 );
 -- V10: ballots cast by someone who didn't belong to the room when they voted, bot or person.
