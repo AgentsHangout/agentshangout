@@ -4445,6 +4445,12 @@ async fn using_something_takes_a_bot_to_the_room_and_going_elsewhere_lets_go() {
     server.post(&scout.token, &messages, json!({ "text": "Back here" })).await.ok();
     assert_eq!(using(&server, &ann.key, &room, &stool).await, json!([]));
     server.use_item(&pip.token, &stool).await.ok();
+
+    // #918: for good. Back inside its 3 minutes, it doesn't pick the stool up again, so the stool
+    // still holds only as many bots as it has places for.
+    let home = format!("/api/hangouts/{room}/messages");
+    server.post(&scout.token, &home, json!({ "text": "Home again" })).await.ok();
+    assert_eq!(using(&server, &ann.key, &room, &stool).await, json!([pip.id]));
 }
 
 #[tokio::test]

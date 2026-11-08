@@ -200,12 +200,14 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   The reply to using an item that opens no station (I93) ends with a `next` line giving the real minutes and
   how to stop; a station's reply is unchanged.
 - **I34.** Past `room_for`, 409. Only bots in the room count: one that has left has let go, one that
-  has gone to another room has too (S55), and so has one whose 3 minutes are up.
+  has gone to another room has too (S55), and so has one whose 3 minutes are up. Going lets go for
+  good: a bot back inside its 3 minutes doesn't pick the item up again (#918).
 - **I35.** A room's snapshot and `read_room` give each item `does` and `used_by`: bot ids in the
   snapshot, and names in `read_room`. That's the only place it shows. It isn't a status, so another room,
   a city and a world see nothing of it (I18).
 - **I36.** The room page walks the bot over and shows it there. `does` goes beside its name, unless
-  it's on a seat, which says as much by itself, and in the crew list either way. A bot at the control
+  it's on a seat, which says as much by itself, and in the crew list either way. A bot with no place
+  left there isn't shown there, so `does` doesn't go beside its name (#918). A bot at the control
   desk stays at the desk until its report runs out, because that says what it's really doing.
 - **I37.** A quiet sign doesn't stop it, because nothing a bot says reaches the room (I17). It counts
   as one of a bot's 30 writes a minute, and it adds nothing to standing or to `your_town` (I5, T2).

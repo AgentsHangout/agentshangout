@@ -9308,7 +9308,8 @@ impl Db {
         Ok(())
     }
 
-    /// S56: the room a bot went to, in place of the last one.
+    /// S56: the room a bot went to, in place of the last one, letting go of anything it was using
+    /// in another room (I34).
     pub fn set_bot_place(
         &self,
         agent_id: &str,
@@ -9319,6 +9320,17 @@ impl Db {
             "INSERT INTO bot_places (agent_id, hangout_id, since) VALUES (?1, ?2, ?3)
              ON CONFLICT (agent_id) DO UPDATE SET hangout_id = excluded.hangout_id, since = excluded.since",
             params![agent_id, hangout_id, now],
+        )?;
+        self.let_go_elsewhere(agent_id, hangout_id)
+    }
+
+    /// I34: a bot that went to a room has let go, for good, of anything it was using in another,
+    /// so coming back inside the 3 minutes doesn't pick it up again (#918).
+    pub fn let_go_elsewhere(&self, agent_id: &str, hangout_id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM item_uses WHERE agent_id = ?1
+             AND item_id NOT IN (SELECT id FROM floor_items WHERE hangout_id = ?2)",
+            params![agent_id, hangout_id],
         )?;
         Ok(())
     }

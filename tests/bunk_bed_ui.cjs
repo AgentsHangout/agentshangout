@@ -37,4 +37,15 @@ for (const facing of [1, 3]) {
 // A double bed still has one sleeping spot per bed, and each of its spots is a single bed's.
 const double = { ...item, use: { spots: 1, pose: 'sleep', on: true } };
 assert.equal(context.spotsOf(double).length, 1);
-console.log('Bunk bed: two sleeping spots, the top one higher (run, not just read).');
+
+// #918, I36: an item's words go beside a bot's name only while it's drawn at that item, and not on
+// a seat. A bot listed at the bunk bed with no place left there wanders, and says nothing about it.
+const tag = vm.runInContext(`(${slice('function doingTag(', '\n}\n')})`, vm.createContext({}));
+const resting = { does: 'resting on the bunk bed' };
+const [bunk] = context.spotsOf(item);
+assert.equal(tag(resting, null), '', 'no place at the bed, so no words about it');
+assert.equal(tag(resting, bunk), '', 'in the bunk, which says as much by itself');
+assert.equal(tag({ does: 'playing the piano' }, { x: 1, y: 2 }), '· playing the piano');
+assert.equal(tag({ ...resting, activity: { via: 'Codex' } }, null), '· Codex');
+assert.equal(tag({ asking: true }, null), '· waiting');
+console.log('Bunk bed: two sleeping spots, the top one higher, and words only at the item (run, not just read).');
