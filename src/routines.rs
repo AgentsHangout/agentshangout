@@ -218,6 +218,19 @@ fn routine_of(state: &AppState, agent_id: &str) -> ApiResult<RoutineRow> {
     Ok(state.db.bot_routine(agent_id)?.unwrap_or(NO_ROUTINE))
 }
 
+/// #898: set only whether a bot may go to public places, keeping its hours.
+pub(crate) fn set_public_places(
+    state: &AppState,
+    agent_id: &str,
+    on: bool,
+    now: i64,
+) -> ApiResult<()> {
+    let previous = routine_of(state, agent_id)?;
+    state.db.set_bot_routine(agent_id, &RoutineRow { public_places: on, ..previous }, now)?;
+    state.worlds.mark_stale(crate::worlds::COMMONS_ID);
+    Ok(())
+}
+
 fn offset_of(state: &AppState, owner_id: &str) -> ApiResult<i64> {
     Ok(state.db.person_clock(owner_id)?.map_or(0, |saved| saved.utc_offset_minutes))
 }
