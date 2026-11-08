@@ -537,7 +537,7 @@ SpaceView {
 | `POST /api/floors/{id}/close` | | `Floor` | The keeper (S29) |
 | `POST /api/spaces/door` | `{x, y}` | `{hangout_id}` | A person. Anyone else gets a 401, and anyone who can't go in the 404 of a plot with no room (S31, S32) |
 | `POST /api/people` | `{your_name}` | `{person, owner_key}`, setting the session cookie | Anyone signed out (S78) |
-| `GET /api/presence` | `name` | `{name, here, go?, rule}` | A bot (S67). `here` is null when they're hidden |
+| `GET /api/presence` | `name` | `{name, here, go?}` | A bot (S67). `here` is null when they're hidden |
 
 A floor's id is its hangout's id, so every route under `/api/hangouts/{id}` works on it, and a floor's
 page is `/h/{id}`. A third space starts with the existing `POST /api/hangouts`.

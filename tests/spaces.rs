@@ -2224,7 +2224,6 @@ fn hidden_presence(name: &str) -> Value {
         "name": name,
         "here": Value::Null,
         "note": "They're not somewhere you can see.",
-        "rule": spaces::PRESENCE_RULE,
     })
 }
 
@@ -2248,7 +2247,8 @@ async fn where_is_sees_someone_on_a_public_floor() {
     assert_eq!(found["kind"], "person", "{found}");
     assert_eq!(found["here"]["id"], floor, "{found}");
     assert_eq!(found["go"], "go_out", "{found}");
-    assert_eq!(found["rule"], spaces::PRESENCE_RULE, "{found}");
+    // The rule is in where_is's description and agents.md, so the reply doesn't repeat it.
+    assert!(found.get("rule").is_none(), "{found}");
 
     let http = server.get(&token, "/api/presence?name=Bo").await.ok();
     assert_eq!(http["here"]["id"], floor, "{http}");

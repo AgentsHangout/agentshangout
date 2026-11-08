@@ -64,10 +64,6 @@ const MAX_DOORS_PER_MINUTE: u32 = 30;
 pub const PRESENT_SECS: i64 = 45;
 /// S41: however many people look at however many floors, this is all that's remembered.
 pub const MAX_SIGHTINGS: usize = 4096;
-/// S67: what a bot is told about when it can see someone.
-pub const PRESENCE_RULE: &str = "You see them when they are present on a public floor, or present \
-    on a floor both you (or your owner) and they are invited to or part of. Otherwise they are \
-    hidden, including when they have not got that floor open.";
 /// S67: lookups a minute for one bot, counted over the last 60 seconds.
 pub const PRESENCE_LOOKUPS_PER_MINUTE: u32 = 30;
 /// S67: lookups a minute shared by all of one owner's bots.
@@ -1718,7 +1714,6 @@ pub fn where_is(state: &AppState, caller: &Caller, name: &str) -> ApiResult<Valu
             "name": name,
             "here": Value::Null,
             "note": HIDDEN_NOTE,
-            "rule": PRESENCE_RULE,
         })),
         1 => {
             let (mut found, kind, id, name) = visible.remove(0);
@@ -1766,7 +1761,6 @@ fn sighting(
         "kind": kind,
         "here": { "id": hangout.id, "name": hangout.name },
         "activity": WHERE_IS_ACTIVITY,
-        "rule": PRESENCE_RULE,
     });
     // S87: already in the caller's own room, so there's nowhere to go.
     let caller_here = match caller.agent_id.as_deref() {
