@@ -358,9 +358,10 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), worlds::observe))
         // W118: outside everything, so the others see the answer as it was written. Pictures,
         // downloads and event streams go out as they are.
-        .layer(CompressionLayer::new().compress_when(
-            DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
-        ))
+        // BISECT, to be reverted: the compression layer is off.
+        // .layer(CompressionLayer::new().compress_when(
+        //     DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
+        // ))
         .layer(middleware::from_fn(plain_when_signed_in))
         .with_state(state)
 }
