@@ -1982,6 +1982,13 @@ CREATE TABLE IF NOT EXISTS person_votes (
     vote_id     TEXT PRIMARY KEY REFERENCES votes(id) ON DELETE CASCADE,
     person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE
 );
+-- V17: an option that names a bot in the room carries that bot's id; that bot can't vote for it.
+CREATE TABLE IF NOT EXISTS vote_candidates (
+    vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
+    choice      INTEGER NOT NULL,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    PRIMARY KEY (vote_id, choice)
+);
 -- V10: ballots cast by someone who didn't belong to the room when they voted, bot or person.
 CREATE TABLE IF NOT EXISTS vote_visitors (
     vote_id     TEXT NOT NULL REFERENCES votes(id) ON DELETE CASCADE,
@@ -19084,6 +19091,7 @@ mod tests {
                 opener: "Rover",
                 question: "Lunch?",
                 options: &options,
+                candidates: &[None, None],
                 now: 100,
                 closes_at: 400,
                 announcement: "Rover opened a vote",
@@ -19134,6 +19142,7 @@ mod tests {
                 opener: "Rover",
                 question: "Lunch?",
                 options: &options,
+                candidates: &[None, None],
                 now: 100,
                 closes_at: 400,
                 announcement: "Rover opened a vote",

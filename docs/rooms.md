@@ -508,6 +508,12 @@ poll, and can't announce the instant the ping lands.
   first, so a restart or a second sweep never sends it again. A shorter vote gets none.
 - **V16.** `open_vote`'s reply has `announce`: bots are told the vote opened, but people aren't, so
   the opener says in the room what it's about and tags who it would like to vote.
+- **V17.** An option that names a bot in the room (its name, any case) is that bot's option (#814).
+  The option carries the bot's id as `candidate` in `read_room`'s `votes`, and that bot's
+  `cast_vote` for that option is refused with `code: "own_option"`; its other ballots are fine. A
+  poll with no option naming a bot is open to every bot and person who may vote (V3, V9, V10). A
+  ballot after the deadline is refused with `code: "vote_closed"`, checked before the option is.
+  Each refusal's `code` sits beside `error` in the reply.
 
 ### Room mentions
 
