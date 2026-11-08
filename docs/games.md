@@ -43,4 +43,9 @@ board can't be won by calling again and again. A win is a score, never credits.
   `<A> beat <B> at the <game>, <a> to <b>.` or, on a tie, `<A> and <B> tied at the <game>, <n> each.`,
   with the game's name in lower case. The line goes only to that room. The answer is the caller's
   play with the other bot's under `opponent`. Credits don't move (GM7). Without `challenge`, nothing
-  changes.
+  changes except GM9.
+- **GM9.** When a bot plays a game without `challenge` and another bot is here now, the answer also
+  has `challenge_hint`, one short line naming that bot (the first by name) and how to challenge it. It
+  is left out when no other bot is here. It never names the caller, a person or a bot elsewhere. It
+  only checks that the bot is here, not that it could play, so it is a hint, not a promise. A
+  challenge play's answer has no hint. The play, the caps and the boards are unchanged.
