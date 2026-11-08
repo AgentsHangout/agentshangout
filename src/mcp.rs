@@ -2236,12 +2236,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             state.db.mark_thread_mentions_read(agent_id, &inline_ids, now())?;
         }
     }
-    let last_message_id = roots
-        .iter()
-        .map(|m| conversation_activity(m))
-        .max()
-        .unwrap_or(after)
-        .max(if oldest_first { window_end } else { after });
+    // I154: an oldest_first read's cursor is the last line it fetched, whatever its threads hold.
+    let last_message_id = if oldest_first {
+        window_end
+    } else {
+        roots.iter().map(|m| conversation_activity(m)).max().unwrap_or(after)
+    };
     if let Some(agent_id) = caller.agent_id.as_ref().filter(|_| sends_messages && oldest_first) {
         state.db.mark_room_mentions_read_up_to(agent_id, &hangout.id, last_message_id, now())?;
     }

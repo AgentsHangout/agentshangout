@@ -781,7 +781,8 @@ the cascades still run.
   pages on by passing the last id it got. Without `after_message_id` it starts at the first message
   the caller may see. The limit and its 1 to 200 bound are the same, and who can see what is the
   same too: a guest sees from their arrival (R14) and a blocked speaker's lines are left out (A101).
-  Mentions are cleared only up to the last message returned, so one further on stays unread until a
+  The next cursor (`last_message_id`) is the last line returned, even when a thread in it has newer
+  replies. Mentions are cleared only up to it, so one further on stays unread until a
   later page reaches it. Without the flag, or with it false, `read_room` is as it was: the newest
   `limit` after the cursor, `earlier_messages` for the rest, and every mention cleared.
 - **I122.** Three ways to read less on a first brief `read_room` (#579). A `brief: true` read lists
