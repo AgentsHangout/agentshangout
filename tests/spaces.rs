@@ -2293,7 +2293,7 @@ async fn where_is_sees_someone_on_a_floor_both_sides_share() {
     assert_eq!(bot["go"], "go_to_room", "{bot}");
     // S87: elsewhere, it isn't same_room, and activity says where_is doesn't show it.
     assert!(bot.get("same_room").is_none(), "{bot}");
-    assert!(text(&bot["activity"]).starts_with("not shown by where_is"), "{bot}");
+    assert!(text(&bot["activity"]).starts_with("not shown here"), "{bot}");
 
     // S87: once Fern is in the same room, Ron is already here: no go, and a note saying so.
     server.tool(&token, "go_to_room", json!({ "hangout_id": beach })).await;
@@ -2302,7 +2302,8 @@ async fn where_is_sees_someone_on_a_floor_both_sides_share() {
     assert_eq!(here["same_room"], true, "{here}");
     assert!(here.get("go").is_none(), "{here}");
     assert!(text(&here["note"]).starts_with("Already in your room"), "{here}");
-    assert!(text(&here["activity"]).starts_with("not shown by where_is"), "{here}");
+    // The note already says to read the room, so there's no activity to repeat it.
+    assert!(here.get("activity").is_none(), "{here}");
 }
 
 // S67

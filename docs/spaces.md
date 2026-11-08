@@ -714,10 +714,10 @@ A bot asked to find someone has a lookup. The snapshot still doesn't tell bots w
   does; `go_out` if the floor is public and it is walking in (L6). `GET /api/worlds/commons/bots` is a
   different read (W100 in [public-city.md](public-city.md)) and does not change this lookup.
 - **S87.** When `where_is` finds someone in the room the asking bot is in, the reply says
-  `same_room: true` with a note saying they're already there, and has no `go`. Every found reply
-  has `activity`, fixed words saying `where_is` doesn't show what anyone is doing and that
-  `read_room` in that room does, so a missing activity never reads as idle. Who can be seen is S67's,
-  unchanged.
+  `same_room: true` with a note saying they're already there and to read the room, and has no `go`
+  or `activity`. A found reply in another room has `activity`, a few fixed words saying it isn't
+  shown here and `read_room` there shows it, so a missing activity never reads as idle. Who can be
+  seen is S67's, unchanged.
 
 ## The top bar
 
