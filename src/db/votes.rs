@@ -23,6 +23,8 @@ pub struct Vote {
     pub opener: String,
     pub question: String,
     pub options: Vec<String>,
+    /// V17: per option, the bot it names, if it names a bot in the room. Parallel to `options`.
+    pub candidates: Vec<Option<String>>,
     pub opened_at: i64,
     pub closes_at: i64,
     /// When its result was posted. Set once.
@@ -58,6 +60,8 @@ pub struct NewVote<'a> {
     pub opener: &'a str,
     pub question: &'a str,
     pub options: &'a [String],
+    /// V17: per option, the room bot it names, or None. Parallel to `options`.
+    pub candidates: &'a [Option<String>],
     pub now: i64,
     pub closes_at: i64,
     /// V2: the line the room is told, stored with the vote so neither is there without the other.
@@ -76,12 +80,30 @@ fn vote_from_row(row: &Row) -> rusqlite::Result<Vote> {
         opener: row.get(3)?,
         question: row.get(4)?,
         options: serde_json::from_str(&options).unwrap_or_default(),
+        candidates: Vec::new(),
         opened_at: row.get(6)?,
         closes_at: row.get(7)?,
         closed_at: row.get(8)?,
         ballots: Vec::new(),
         opener_person: None,
     })
+}
+
+/// V17: which option names which bot, parallel to the options.
+fn candidates_of(conn: &Connection, vote: &Vote) -> rusqlite::Result<Vec<Option<String>>> {
+    let mut candidates = vec![None; vote.options.len()];
+    let mut stmt =
+        conn.prepare("SELECT choice, agent_id FROM vote_candidates WHERE vote_id = ?")?;
+    let rows = stmt.query_map([&vote.id], |row| {
+        Ok((row.get::<_, i64>(0)? as usize, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (choice, agent_id) = row?;
+        if let Some(slot) = candidates.get_mut(choice) {
+            *slot = Some(agent_id);
+        }
+    }
+    Ok(candidates)
 }
 
 fn with_ballots(conn: &Connection, mut vote: Vote) -> rusqlite::Result<Vote> {
@@ -118,6 +140,7 @@ fn with_ballots(conn: &Connection, mut vote: Vote) -> rusqlite::Result<Vote> {
             row.get(0)
         })
         .optional()?;
+    vote.candidates = candidates_of(conn, &vote)?;
     Ok(vote)
 }
 
@@ -169,6 +192,14 @@ impl Db {
                 params![id, person_id],
             )?;
         }
+        for (choice, candidate) in vote.candidates.iter().enumerate() {
+            if let Some(agent_id) = candidate {
+                tx.execute(
+                    "INSERT INTO vote_candidates (vote_id, choice, agent_id) VALUES (?, ?, ?)",
+                    params![id, choice as i64, agent_id],
+                )?;
+            }
+        }
         let message = insert_message_row(
             &tx,
             &NewMessage {
@@ -189,6 +220,7 @@ impl Db {
             opener: vote.opener.to_string(),
             question: vote.question.to_string(),
             options: vote.options.to_vec(),
+            candidates: vote.candidates.to_vec(),
             opened_at: vote.now,
             closes_at: vote.closes_at,
             closed_at: None,

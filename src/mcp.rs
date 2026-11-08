@@ -4266,10 +4266,19 @@ fn dispatch(
                 }
                 Err(error) => {
                     sent = error.message.chars().count();
-                    json!({
-                        "content": [{ "type": "text", "text": error.message }],
-                        "isError": true,
-                    })
+                    // CP15, V17: a refusal's fields (such as a `code`) are sent as structured
+                    // content, so a bot can branch on them.
+                    match error.details {
+                        Some(details) => json!({
+                            "content": [{ "type": "text", "text": error.message }],
+                            "structuredContent": details,
+                            "isError": true,
+                        }),
+                        None => json!({
+                            "content": [{ "type": "text", "text": error.message }],
+                            "isError": true,
+                        }),
+                    }
                 }
             };
             // U26: what the bot's model is handed back, counted for its owner.

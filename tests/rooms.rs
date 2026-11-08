@@ -6524,6 +6524,59 @@ async fn a_bot_votes_once_and_the_result_is_posted_once_when_time_is_up() {
     assert!(read["messages"].to_string().contains("Movie night? Yes 0, No 0. Nobody voted."));
 }
 
+// V17: a bot can't vote for the option that names it, a poll with no bot-named option is open to all,
+// and a ballot after the deadline says it's closed with its own code.
+#[tokio::test]
+async fn a_bot_cant_vote_for_the_option_naming_it_and_a_closed_vote_says_so() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    let fido = server.bot(&ann, &room, "Fido").await;
+    let rex = server.bot(&ann, &room, "Rex").await;
+    let args = json!({ "hangout_id": room, "question": "Who gets the bench?",
+                       "options": ["Fido", "Rex"], "minutes": 30 });
+    let race = server.tool(&rover.token, "open_vote", args).await["structuredContent"].clone();
+    let race_id = text(&race["id"]);
+    assert_eq!(race["options"][0]["candidate"], json!(fido.id), "{race}");
+    assert_eq!(race["options"][1]["candidate"], json!(rex.id), "{race}");
+    let cast = |token: &str, option: &str| {
+        let args = json!({ "vote_id": race_id, "option": option });
+        let token = token.to_string();
+        let server = &server;
+        async move { server.tool(&token, "cast_vote", args).await }
+    };
+
+    let own = cast(&fido.token, "Fido").await;
+    assert_eq!(own["isError"], true, "{own}");
+    assert_eq!(own["structuredContent"]["code"], "own_option", "{own}");
+    assert!(text(&own["content"][0]["text"]).contains("names it"), "{own}");
+    // It can still vote for the other option, and anyone else can vote for its name.
+    assert_ne!(cast(&fido.token, "Rex").await["isError"], true);
+    assert_ne!(cast(&rex.token, "Fido").await["isError"], true);
+    assert_ne!(cast(&rover.token, "Fido").await["isError"], true);
+    // The option naming it is refused, not moved: the earlier Rex ballot stands.
+    let own_again = cast(&rex.token, "Rex").await;
+    assert_eq!(own_again["structuredContent"]["code"], "own_option", "{own_again}");
+
+    // A general poll: no option names a bot, so every bot can vote, its opener included.
+    let general = json!({ "hangout_id": room, "question": "Pizza or tacos?",
+                          "options": ["Pizza", "Tacos"], "minutes": 30 });
+    let poll = server.tool(&fido.token, "open_vote", general).await["structuredContent"].clone();
+    assert!(poll["options"][0].get("candidate").is_none(), "{poll}");
+    let mine = server
+        .tool(&fido.token, "cast_vote", json!({ "vote_id": poll["id"], "option": "Pizza" }))
+        .await;
+    assert_ne!(mine["isError"], true, "{mine}");
+    assert_eq!(mine["structuredContent"]["voted"], 1, "{mine}");
+
+    // After the deadline, the refusal says the vote is closed, under its own code.
+    server.state.db.age_vote(&race_id, 31 * 60).unwrap();
+    let late = cast(&rover.token, "Fido").await;
+    assert_eq!(late["isError"], true, "{late}");
+    assert_eq!(late["structuredContent"]["code"], "vote_closed", "{late}");
+    assert!(text(&late["content"][0]["text"]).contains("closed"), "{late}");
+}
+
 // I85
 #[tokio::test]
 async fn a_bot_shows_what_its_busy_with_until_it_ends_or_runs_out() {

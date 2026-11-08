@@ -110,6 +110,17 @@ pub fn open(
         )));
     }
     let now = now();
+    // V17: an option that names a bot in the room (by its name, any case) is that bot's option.
+    let room_bots = state.db.agents_in(hangout_id, now)?;
+    let candidates: Vec<Option<String>> = choices
+        .iter()
+        .map(|choice| {
+            room_bots
+                .iter()
+                .find(|bot| bot.name.eq_ignore_ascii_case(choice))
+                .map(|bot| bot.id.clone())
+        })
+        .collect();
     let opened_lately = state.db.votes_opened_since(
         hangout_id,
         caller.agent_id.as_deref(),
@@ -137,6 +148,7 @@ pub fn open(
             opener: &opener,
             question: &question,
             options: &choices,
+            candidates: &candidates,
             now,
             closes_at: now + minutes * 60,
             announcement: &announcement,
@@ -168,11 +180,22 @@ pub fn cast(state: &AppState, caller: &Caller, vote_id: &str, option: &str) -> A
     crate::rules::require(state, caller)?;
     let vote = find(state, caller, vote_id)?;
     may_cast(state, caller, &vote.hangout_id)?;
+    // V17: the code says why, so a bot can tell a closed vote from its own option.
+    if !vote.open(now()) {
+        settle_due(state)?;
+        return Err(closed(&vote));
+    }
     let option = option.trim();
     let choice =
         vote.options.iter().position(|choice| choice.eq_ignore_ascii_case(option)).ok_or_else(
             || ApiError::bad_request(format!("option must be one of: {}", vote.options.join(", "))),
         )?;
+    // V17: a bot can't vote for the option that names it.
+    if let Some(agent_id) = caller.agent_id.as_deref() {
+        if vote.candidates.get(choice).and_then(Option::as_deref) == Some(agent_id) {
+            return Err(own_option());
+        }
+    }
     ops::note_agent_write(state, caller)?;
     // V10: whether they belong is as it is when they vote, and stays with the ballot.
     let visitor = match caller.agent_id.as_deref() {
@@ -200,6 +223,16 @@ pub fn cast(state: &AppState, caller: &Caller, vote_id: &str, option: &str) -> A
 
 fn closed(vote: &Vote) -> ApiError {
     ApiError::conflict(format!("this vote closed at {}", iso(vote.closes_at)))
+        .with_details(json!({ "code": CLOSED_CODE }))
+}
+
+/// V17: the error codes a refused ballot carries, beside `error`, for a bot to branch on.
+pub const CLOSED_CODE: &str = "vote_closed";
+pub const OWN_OPTION_CODE: &str = "own_option";
+
+fn own_option() -> ApiError {
+    ApiError::forbidden("a bot can't vote for the option that names it")
+        .with_details(json!({ "code": OWN_OPTION_CODE }))
 }
 
 // V7
@@ -320,23 +353,31 @@ pub fn vote_json(vote: &Vote, now: i64) -> Value {
         "id": vote.id,
         "question": vote.question,
         "opened_by": vote.opener,
-        "options": vote.options.iter().zip(&tally).enumerate().map(|(i, (option, count))| json!({
-            "option": option,
-            "votes": count,
-            // V4, V9, V10: who chose it. A bot with its owner, a person as themselves, and anyone
-            // who walked in marked as a visitor.
-            "voters": vote.ballots.iter().filter(|ballot| ballot.choice == i).map(|ballot| {
-                let mut voter = if ballot.kind == "person" {
-                    json!({ "person": ballot.voter })
-                } else {
-                    json!({ "bot": ballot.voter, "owner": ballot.owner })
-                };
-                if ballot.visitor {
-                    voter["visitor"] = json!(true);
-                }
-                voter
-            }).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "options": vote.options.iter().zip(&tally).enumerate().map(|(i, (option, count))| {
+            let mut shown = json!({
+                "option": option,
+                "votes": count,
+                // V4, V9, V10: who chose it. A bot with its owner, a person as themselves, and
+                // anyone who walked in marked as a visitor.
+                "voters": vote.ballots.iter().filter(|ballot| ballot.choice == i).map(|ballot| {
+                    let mut voter = if ballot.kind == "person" {
+                        json!({ "person": ballot.voter })
+                    } else {
+                        json!({ "bot": ballot.voter, "owner": ballot.owner })
+                    };
+                    if ballot.visitor {
+                        voter["visitor"] = json!(true);
+                    }
+                    voter
+                }).collect::<Vec<_>>(),
+            });
+            // V17: the bot an option names, when it names one.
+            if let Some(Some(agent_id)) = vote.candidates.get(i) {
+                shown["candidate"] = json!(agent_id);
+            }
+            shown
+        }).collect::<Vec<_>>(),
+
         "voted": vote.ballots.len(),
         "open": vote.open(now),
         "opened_at": iso(vote.opened_at),
