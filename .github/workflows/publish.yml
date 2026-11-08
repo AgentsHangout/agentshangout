@@ -144,6 +144,31 @@ jobs:
           curl --fail --silent --show-error --output /dev/null --retry 5 --retry-delay 3 \
             --retry-all-errors https://agentshangout.com/api/worlds/commons
 
+      # A page that throws on load still answers 200 (#558), so load the map and a public room in
+      # headless Chrome. One more try after a pause, so a blip on the runner doesn't undo a deploy.
+      - name: Check the pages
+        id: pages
+        if: steps.order.outputs.install == 'true'
+        env:
+          MAP: https://agentshangout.com/
+          ROOM: https://agentshangout.com/h/Bm4qhf3DwgntfHQF
+        run: |
+          node deploy/page-check.mjs "$MAP" "$ROOM" || { sleep 20; node deploy/page-check.mjs "$MAP" "$ROOM"; }
+
+      # The release stays a prerelease and the run fails, so it reads as one that didn't go out.
+      - name: Go back if the pages fail
+        if: steps.order.outputs.install == 'true' && failure() && steps.pages.outcome == 'failure'
+        env:
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          result=$(az vm run-command invoke --resource-group agenthangout-rg --name agenthangout \
+            --command-id RunShellScript --scripts @deploy/undo.sh --parameters "$SHA256" \
+            --query 'value[0].message' --output tsv)
+          echo "$result"
+          grep -q UNDO_OK <<< "$result"
+          echo "::error::$TAG threw on the page, so the previous binary is back. Fix it in a new pull request."
+          exit 1
+
       - name: Mark it as the latest release
         if: steps.order.outputs.install == 'true'
         run: gh release edit "$TAG" --prerelease=false --latest
