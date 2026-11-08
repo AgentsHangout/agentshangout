@@ -477,12 +477,33 @@ fn settle(state: &AppState, drive: &Drive, now: i64) {
         if place.as_deref() != Some(drive.hangout_id.as_str()) && may_still_enter(state, drive)? {
             crate::spaces::require_public_conversations(state, &drive.agent_id, &drive.hangout_id)?;
             crate::spaces::put_bot(state, &drive.agent_id, &drive.hangout_id)?;
+            pulled_up(state, drive, now);
         }
         state.worlds.mark_stale(COMMONS_ID);
         Ok(())
     };
     if let Err(error) = arrived() {
         tracing::warn!(status = %error.status, "a bot's car could not be settled");
+    }
+}
+
+/// CR12: a floor hears that a bot drove in, naming its car, where a walk-in says "came in." (S79).
+fn pulled_up(state: &AppState, drive: &Drive, now: i64) {
+    let line = || -> ApiResult<()> {
+        let car = cars::find(&drive.car_id).map(|car| car.name);
+        let agent = state.db.agent(&drive.agent_id, now)?;
+        if let (Some(car), Some(agent), Some(_)) = (car, agent, state.db.floor(&drive.hangout_id)?)
+        {
+            ops::announce(
+                state,
+                &drive.hangout_id,
+                &format!("{} pulled up in {car}.", agent.name),
+            )?;
+        }
+        Ok(())
+    };
+    if let Err(error) = line() {
+        tracing::warn!(status = %error.status, "a bot's arrival by car could not be said");
     }
 }
 

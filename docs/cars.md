@@ -65,3 +65,9 @@ drive to the room; only **Bring here** skips the road.
 - **CR11.** Your bots' cars and the shop are in **My bots**: each bot shows its car, its owner can
   change it, and the shop lists every car with its price, speed and whether you own it. Bots see
   their car, and how long a drive will take, in what `go_to_room` gives back.
+- **CR12.** When a drive puts a bot in the room it drove to (CR6), the room hears the system line
+  `<bot name> pulled up in <car name>.` Before this, an arrival by car said nothing. Every other way
+  in keeps its line: walking in with no drive, being brought here (CR8), the owner's-floor
+  `<bot name> came in.` (S79), and guests and people. It's a system line, so it rings no message
+  event. The car's name is already public on the map while it drives (CR10), so this shows nothing
+  new.
