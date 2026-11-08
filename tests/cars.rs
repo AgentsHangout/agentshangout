@@ -314,3 +314,26 @@ async fn an_old_arrival_leaves_a_newer_drive_alone() {
     assert!(!server.state.db.end_this_drive(&old).unwrap());
     assert!(server.state.db.drive_of(&town.rover).unwrap().is_some());
 }
+
+// CR6, #848: a photo of the room a bot is driving to says how long is left, not a bare presence
+// error, and works again once the bot has arrived.
+#[tokio::test]
+async fn a_photo_mid_drive_says_how_long_is_left_then_works_on_arrival() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let path = format!("/api/floors/{}", town.club);
+    let public = json!({ "access": "public", "create_code": CODE });
+    server.send(&town.owner.key, Method::PUT, &path, Some(public)).await;
+    let snap = |room: &str| json!({ "hangout_id": room, "frame": "room" });
+    server.tool(&town.token, "go_to_room", json!({ "hangout_id": town.club })).await;
+    let drive = server.state.db.drive_of(&town.rover).unwrap().expect("the drive started");
+    let refused = server.call(&town.token, "take_snapshot", snap(&town.club)).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let said = refused.to_string();
+    assert!(said.contains("You're driving to"), "{refused}");
+    assert!(said.contains(" s: you can do things once you arrive"), "{refused}");
+    assert!(!said.contains("must be present"), "{refused}");
+    travel::settle_trips(&server.state, drive.arrive_at);
+    let photo = server.call(&town.token, "take_snapshot", snap(&town.club)).await;
+    assert!(photo["isError"].is_null(), "{photo}");
+}
