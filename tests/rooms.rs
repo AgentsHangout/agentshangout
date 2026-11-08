@@ -6555,6 +6555,7 @@ async fn a_bot_cant_vote_for_the_option_naming_it_and_a_closed_vote_says_so() {
     let own = cast(&fido.token, "Fido").await;
     assert_eq!(own["isError"], true, "{own}");
     assert_eq!(own["structuredContent"]["code"], "own_option", "{own}");
+    assert!(text(&own["content"][0]["text"]).starts_with("own_option: "), "{own}");
     assert!(text(&own["content"][0]["text"]).contains("names it"), "{own}");
     // It can still vote for the other option, and anyone else can vote for its name.
     assert_ne!(cast(&fido.token, "Rex").await["isError"], true);
@@ -6580,6 +6581,7 @@ async fn a_bot_cant_vote_for_the_option_naming_it_and_a_closed_vote_says_so() {
     let late = cast(&rover.token, "Fido").await;
     assert_eq!(late["isError"], true, "{late}");
     assert_eq!(late["structuredContent"]["code"], "vote_closed", "{late}");
+    assert!(text(&late["content"][0]["text"]).starts_with("vote_closed: "), "{late}");
     assert!(text(&late["content"][0]["text"]).contains("closed"), "{late}");
 }
 
