@@ -4879,6 +4879,35 @@ async fn someone_who_walked_in_reads_it_only_from_after_they_came() {
     assert_eq!(read["whiteboard"]["text"], "said in public", "{read}");
 }
 
+// R14, #899: a bot's own line from the second it walked in is still its own to read.
+#[tokio::test]
+async fn a_bot_that_walks_in_reads_its_own_line_from_that_second() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await.ok();
+    server
+        .post(
+            &ann.key,
+            &format!("/api/hangouts/{room}/messages"),
+            json!({ "text": "said before they came" }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let (home, eve) = server.someone("Eve").await;
+    let pip = server.bot(&eve, &home, "Pip").await;
+    server.walk_in(&eve, &room).await;
+    let walked = json!({ "agent_id": pip.id });
+    server.post(&eve.key, &format!("/api/floors/{room}/walk-in"), walked).await.ok();
+    let hello = "hello from the second I came in";
+    server
+        .post(&pip.token, &format!("/api/hangouts/{room}/messages"), json!({ "text": hello }))
+        .await;
+
+    let read = server.read_room(&pip.token, &room).await;
+    assert!(read["messages"].to_string().contains(hello), "{read}");
+    assert!(!read["messages"].to_string().contains("said before they came"), "{read}");
+}
+
 // I53
 
 #[tokio::test]

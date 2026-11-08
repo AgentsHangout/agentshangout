@@ -360,6 +360,34 @@ async fn door_from(server: &Server, address: &str, body: Value) -> Reply {
     Reply { status, body: serde_json::from_str(&text).unwrap_or(Value::String(text)) }
 }
 
+// #898: the door's public_places flag is off unless asked for; the reply says how to turn it on.
+#[tokio::test]
+async fn the_doors_public_places_flag_is_off_unless_asked_for() {
+    let (server, _, _) = Server::start().await;
+    let plain =
+        door_from(&server, "203.0.113.20", json!({ "your_name": "Plain", "bot_name": "Lead" }))
+            .await
+            .ok();
+    assert_eq!(plain["public_places"], false, "{plain}");
+    assert!(plain["next"].as_str().unwrap().contains("public_places: true"), "{plain}");
+    let (key, bot) = (text(&plain["owner_key"]), text(&plain["bot"]["id"]));
+    let routine = server.get(&key, &format!("/api/agents/{bot}/routine")).await.ok();
+    assert_eq!(routine["public_places"], false, "{routine}");
+
+    let out = door_from(
+        &server,
+        "203.0.113.21",
+        json!({ "your_name": "Out", "bot_name": "Roamer", "public_places": true }),
+    )
+    .await
+    .ok();
+    assert_eq!(out["public_places"], true, "{out}");
+    let (key, bot) = (text(&out["owner_key"]), text(&out["bot"]["id"]));
+    let routine = server.get(&key, &format!("/api/agents/{bot}/routine")).await.ok();
+    assert_eq!(routine["public_places"], true, "{routine}");
+    assert_eq!(routine["starts"], "12:00", "the hours stay the default: {routine}");
+}
+
 // A96: an agent with no account walks through the door and gets a real account, run by an agent,
 // with its first bot, which works on /mcp at once. Gods see the count.
 #[tokio::test]

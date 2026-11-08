@@ -10361,16 +10361,20 @@ impl Db {
         &self,
         hangout_id: &str,
         since: i64,
+        as_agent: Option<&str>,
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND created_at > ? AND id > ? AND kind != 'note'
+             WHERE hangout_id = ? AND (created_at > ? OR (created_at = ? AND agent_id = ?))
+               AND id > ? AND kind != 'note'
              ORDER BY id LIMIT ?"
         ))?;
-        let rows = stmt.query_map(params![hangout_id, since, after, limit], message_from_row)?;
+        let own = as_agent.unwrap_or("");
+        let rows =
+            stmt.query_map(params![hangout_id, since, since, own, after, limit], message_from_row)?;
         rows.collect()
     }
 
@@ -11925,13 +11929,31 @@ impl Db {
         after: i64,
         limit: i64,
     ) -> rusqlite::Result<Vec<Message>> {
+        self.messages_since_as(hangout_id, since, None, after, limit)
+    }
+
+    /// As `messages_since`, but the bot `as_agent` also gets its own lines from the second it
+    /// arrived (R14). It can't have said anything earlier on this floor in that second, so
+    /// nothing from before the arrival is shown.
+    pub fn messages_since_as(
+        &self,
+        hangout_id: &str,
+        since: i64,
+        as_agent: Option<&str>,
+        after: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<Message>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {MESSAGE_COLS} FROM messages
-             WHERE hangout_id = ? AND created_at > ? AND id > ? AND kind != 'note'
+             WHERE hangout_id = ? AND (created_at > ? OR (created_at = ? AND agent_id = ?))
+               AND id > ? AND kind != 'note'
              ORDER BY id DESC LIMIT ?"
         ))?;
-        let rows = stmt.query_map(params![hangout_id, since, after, limit], message_from_row)?;
+        // An empty agent id matches nothing, since every bot has a real one.
+        let own = as_agent.unwrap_or("");
+        let rows =
+            stmt.query_map(params![hangout_id, since, since, own, after, limit], message_from_row)?;
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
         Ok(messages)

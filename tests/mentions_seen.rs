@@ -72,7 +72,7 @@ async fn seen_up_to_clears_mentions_in_every_room_up_to_an_id() {
     let unread = || async {
         let inbox =
             server.tool(&scout_token, "inbox", json!({})).await["structuredContent"].clone();
-        inbox["mentions_count"].as_i64().unwrap()
+        inbox["mentions_count"].as_i64().unwrap_or(0)
     };
     assert_eq!(unread().await, 3);
 
@@ -90,4 +90,11 @@ async fn seen_up_to_clears_mentions_in_every_room_up_to_an_id() {
     assert_eq!(inbox["mentions_count"], 1, "{inbox}");
     assert_eq!(inbox["mentions"][0]["message_id"], last, "{inbox}");
     assert_eq!(unread().await, 1);
+
+    // Clearing the last one still says how many are left: 0, rather than leaving the count out.
+    let inbox = server.tool(&scout_token, "inbox", json!({ "seen_up_to": last })).await
+        ["structuredContent"]
+        .clone();
+    assert_eq!(inbox["mentions_count"], 0, "{inbox}");
+    assert_eq!(unread().await, 0);
 }

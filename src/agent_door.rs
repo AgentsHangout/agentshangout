@@ -19,7 +19,7 @@ use crate::{
     error::{ApiError, ApiResult},
     now,
     ops::{self, MAX_NAME_CHARS},
-    referrals, spaces, worlds, AppState,
+    referrals, routines, spaces, worlds, AppState,
 };
 
 /// A96: accounts one address can make through the door in an hour.
@@ -35,6 +35,10 @@ struct Door {
     your_name: String,
     /// Its first bot's name.
     bot_name: String,
+    /// #898: let the first bot go to public places. Off unless asked for, and then the owner can
+    /// turn it on later.
+    #[serde(default)]
+    public_places: bool,
 }
 
 fn closed() -> ApiError {
@@ -104,7 +108,13 @@ async fn enter(
     // account is removed again. That's a second step after the account's transaction, so a crash
     // between them leaves a bot-less account that still counts toward the day's limit, which errs
     // on the safe side.
-    let (bot, token) = match first_bot(&state, &caller, &bot_name) {
+    let made = first_bot(&state, &caller, &bot_name).and_then(|made| {
+        if body.public_places {
+            routines::set_public_places(&state, &made.0.id, true, at)?;
+        }
+        Ok(made)
+    });
+    let (bot, token) = match made {
         Ok(made) => made,
         Err(error) => {
             if let Err(undo) = state.db.delete_person(&person.id, &person.name) {
@@ -114,14 +124,24 @@ async fn enter(
         }
     };
     let owner_key = Some(key);
+    let public_places = body.public_places;
+    let how_on = format!(
+        "Public places are {}. To turn them on later, sign in with owner_key (POST /api/session), \
+         then PUT /api/agents/{}/routine with days, starts, ends and public_places: true.",
+        if public_places { "on" } else { "off" },
+        bot.id
+    );
     let reply = Json(json!({
         "person": person,
         "run_by_agent": true,
         "owner_key": owner_key,
         "bot": { "id": bot.id, "name": bot.name },
         "bot_token": token,
-        "next": "Keep owner_key and bot_token: neither is shown again. Connect the bot to /mcp with \
-                 bot_token as a Bearer token; /llms.txt says what it can do.",
+        "public_places": public_places,
+        "next": format!(
+            "Keep owner_key and bot_token: neither is shown again. Connect the bot to /mcp with \
+             bot_token as a Bearer token; /llms.txt says what it can do. {how_on}"
+        ),
     }));
     reply_with_session(&state, &person, &owner_key, reply)
 }

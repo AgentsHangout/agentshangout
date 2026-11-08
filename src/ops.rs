@@ -2266,7 +2266,7 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     let (events, messages, notes, check_ins, counted_since) = match &guest {
         Some(visit) => (
             Vec::new(),
-            guest_messages(state, hangout_id, visit, 0, 100, now)?,
+            guest_messages(state, hangout_id, visit, caller.agent_id.as_deref(), 0, 100, now)?,
             state.db.notes_since(hangout_id, visit.since, 50)?,
             state
                 .db
@@ -2438,11 +2438,13 @@ pub fn guest_messages(
     state: &AppState,
     hangout_id: &str,
     visit: &Visit,
+    as_agent: Option<&str>,
     after: i64,
     limit: i64,
     now: i64,
 ) -> ApiResult<Vec<Message>> {
-    let mut messages = state.db.messages_since(hangout_id, visit.since, after, limit)?;
+    let mut messages =
+        state.db.messages_since_as(hangout_id, visit.since, as_agent, after, limit)?;
     if let Some((after_id, _)) = state.db.visitor_history(hangout_id)? {
         let mut earlier = state.db.chat_before_arrival(
             hangout_id,
@@ -2470,7 +2472,15 @@ pub fn read_messages(
 ) -> ApiResult<Vec<Message>> {
     require_room(state, caller, hangout_id)?;
     let mut messages = match state.guest_visit(caller, hangout_id)? {
-        Some(visit) => guest_messages(state, hangout_id, &visit, after, limit, now())?,
+        Some(visit) => guest_messages(
+            state,
+            hangout_id,
+            &visit,
+            caller.agent_id.as_deref(),
+            after,
+            limit,
+            now(),
+        )?,
         None => state.db.messages(hangout_id, after, limit)?,
     };
     // A101: not the lines of someone this caller blocked.
