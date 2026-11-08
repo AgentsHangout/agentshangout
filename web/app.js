@@ -4,6 +4,8 @@ import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
+// #830 UI: sets globalThis.BugReport, the fixed-code report that the map's Report a problem button sends.
+import './bug-report.js';
 import { createClientUpdates } from './client-updates.js';
 
 // #913: the passkey code, the plan invite and the bot setup page load when something asks for them,
@@ -11225,6 +11227,26 @@ async function worldView(id, { home = false } = {}) {
       watch.soon();
     } catch (error) {
       say(plain(error.message));
+      // #830 UI: a failed map action can be reported, with only its fixed action and code.
+      // A 401 means the sign-in ran out, and reporting needs sign-in, so no button then.
+      const report = globalThis.BugReport.failureReport(body.action, error.reason);
+      if (report && error.status !== 401) {
+        frame.message.append(' ', h('button', {
+          type: 'button',
+          class: 'ghost',
+          onclick: async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            try {
+              await globalThis.BugReport.sendBugReport(api, report.surface, report.action, report.code);
+              button.textContent = 'Reported. Thanks.';
+            } catch {
+              button.disabled = false;
+              button.textContent = 'Could not send. Try again.';
+            }
+          },
+        }, 'Report a problem'));
+      }
       if (error.status === 401) {
         account.open('Your sign-in has run out. Sign in again and you\'ll be right back on this map.', true);
       }

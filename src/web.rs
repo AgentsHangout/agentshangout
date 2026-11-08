@@ -52,6 +52,7 @@ const PETS_JS: &str = include_str!("../web/pets.js");
 const CARS_JS: &str = include_str!("../web/cars.js");
 const PASSKEY_JS: &str = include_str!("../web/passkey.js");
 const PLAN_INVITE_JS: &str = include_str!("../web/plan-invite.js");
+const BUG_REPORT_JS: &str = include_str!("../web/bug-report.js");
 const BOT_SETUP_JS: &str = include_str!("../web/bot-setup.js");
 const TUTORIAL_JS: &str = include_str!("../web/tutorial.js");
 const FAVICON: &str = include_str!("../web/favicon.svg");
@@ -329,6 +330,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/plan-invite.js",
             get(|| async { asset("text/javascript; charset=utf-8", PLAN_INVITE_JS) }),
+        )
+        .route(
+            "/bug-report.js",
+            get(|| async { asset("text/javascript; charset=utf-8", BUG_REPORT_JS) }),
         )
         .route(
             "/bot-setup.js",
