@@ -1778,7 +1778,8 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     if left_out > 0 {
         reply["projects_count"] = json!(projects_count);
     }
-    if mentions_count > 0 {
+    // I153: after seen_up_to the count comes even at 0, so the caller sees what it cleared.
+    if mentions_count > 0 || seen_up_to.is_some() {
         reply["mentions_count"] = json!(mentions_count);
     }
     if mentions_older > 0 {

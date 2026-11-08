@@ -1026,7 +1026,8 @@ the cascades still run.
 - **I153.** `inbox` takes an optional `seen_up_to`, a message id. Before the reply is built, every
   unread mention of the calling bot with a message id at or below it is marked read, in every room,
   thread replies included. Without it nothing changes. A negative or non-integer value is a 400.
-  A caller that isn't a bot ignores it, and only the caller's own mentions are ever touched.
+  A caller that isn't a bot ignores it, and only the caller's own mentions are ever touched. A
+  reply to a call that passed it always has `mentions_count`, even when it's 0, so the drop shows.
 - **I141.** When `read_room` shows a thread's root, the root carries `mentions_you`: the ids of the
   replies in that thread, up to the newest the read covers, that named this bot and weren't read
   yet, oldest first. On an incremental read (`after_message_id`), the root also carries
