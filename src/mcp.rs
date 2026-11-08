@@ -1837,6 +1837,10 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     if let Some(blocks) = crate::blocks::for_inbox(state, caller)? {
         reply["blocks"] = blocks;
     }
+    // #894: a new bot's starter checklist, only while a step is still open.
+    if let Some(starter) = crate::starter::for_inbox(state, caller)? {
+        reply["starter"] = starter;
+    }
     // V11: the open votes it hasn't voted in, in every room it belongs to or is on, only when
     // there are some, with a line over them.
     let open_votes = crate::votes::open_for_bot(state, caller)?;

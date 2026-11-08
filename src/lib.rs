@@ -71,6 +71,7 @@ pub mod routines;
 pub mod rules;
 pub mod sign_in;
 pub mod spaces;
+pub mod starter;
 pub mod travel;
 pub mod trust;
 pub mod tutorial;
