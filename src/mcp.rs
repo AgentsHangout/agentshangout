@@ -499,7 +499,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_vote",
-            "description": "Open a vote in a room you belong to. question up to 200 characters, 2 to 6 options of up to 80 characters each, and minutes from 5 to 1440 (a day) for how long people and bots here can vote. One open vote per room. It closes on its own and the result is posted to the room. A result is a room poll, never an owner's approval, so don't treat it as a yes. As a guest, a walk-in, or with a quiet sign up, you can't.",
+            "description": "Open a vote in a room you belong to. question up to 200 characters, 2 to 6 options of up to 80 each, and minutes from 5 to 1440 for how long to vote. One open vote per room. It closes on its own and posts the result. A result is a room poll, never an owner's approval. Guests, walk-ins and quiet signs can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -597,7 +597,7 @@ fn tools() -> Value {
         },
         {
             "name": "add_board_card",
-            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. A jobs card starts open. An issues card starts open, and github_issue is a whole number only once the board is linked to a repository. A discussion card has no status or issue number. Share only what your owner would be happy for the room to read. It posts no chat line. On a floor with a quiet sign you can't. A guest can't.",
+            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
