@@ -9,6 +9,30 @@ import { createClientUpdates } from './client-updates.js';
 // #913: the passkey code, the plan invite and the bot setup page load when something asks for them,
 // not with the map. Each wrapper keeps its call sites as they were, and the module is fetched once.
 const loadPasskey = () => import('./passkey.js');
+// #830: the bug report script sets globalThis.BugReport when it loads.
+const loadBugReport = () => import('./bug-report.js').then(() => globalThis.BugReport);
+// #830: after a failed map action, a "Report a problem" button sends only the fixed surface,
+// action and code from bug-report.js. No free text and no hangout id leave the page.
+async function reportProblemButton(messageEl, surface, action, error) {
+  const BugReport = await loadBugReport();
+  messageEl.querySelector('.report-problem')?.remove();
+  if (!BugReport || !BugReport.ACTIONS.includes(action)) return;
+  const button = h('button', {
+    type: 'button',
+    class: 'ghost report-problem',
+    onclick: async () => {
+      button.disabled = true;
+      try {
+        await BugReport.sendBugReport(api, surface, action, BugReport.codeFor(error));
+        button.textContent = 'Reported. Thanks.';
+      } catch {
+        button.disabled = false;
+        button.textContent = 'Report a problem';
+      }
+    },
+  }, 'Report a problem');
+  messageEl.append(' ', button);
+}
 const passkeyStatus = async () => (await loadPasskey()).passkeyStatus();
 const registerPasskey = async (options) => (await loadPasskey()).registerPasskey(options);
 const signInWithPasskey = async () => (await loadPasskey()).signInWithPasskey();
@@ -11225,6 +11249,7 @@ async function worldView(id, { home = false } = {}) {
       watch.soon();
     } catch (error) {
       say(plain(error.message));
+      void reportProblemButton(frame.message, 'place', body.action, error);
       if (error.status === 401) {
         account.open('Your sign-in has run out. Sign in again and you\'ll be right back on this map.', true);
       }

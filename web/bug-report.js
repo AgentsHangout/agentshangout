@@ -21,7 +21,16 @@
     return api('/api/bugs/report', { method: 'POST', body });
   }
 
-  const api = { SURFACES, ACTIONS, CODES, buildBugReport, sendBugReport };
+  // The short code for a failed request: the server's reason when it is on the list, else the
+  // HTTP status's meaning, else 'unknown'. The error's own message is never used.
+  const STATUS_CODES = { 400: 'invalid', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 410: 'closed', 429: 'limit', 503: 'unavailable' };
+  function codeFor(error) {
+    if (error && CODES.includes(error.reason)) return error.reason;
+    const code = error && STATUS_CODES[error.status];
+    return code || 'unknown';
+  }
+
+  const api = { SURFACES, ACTIONS, CODES, buildBugReport, sendBugReport, codeFor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.BugReport = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

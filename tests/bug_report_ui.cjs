@@ -1,7 +1,7 @@
 // #830 UI: the bug report control only sends fixed codes, and no free-text note.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { buildBugReport, sendBugReport, SURFACES, ACTIONS, CODES } = require('../web/bug-report.js');
+const { buildBugReport, sendBugReport, codeFor, SURFACES, ACTIONS, CODES } = require('../web/bug-report.js');
 
 // The lists must match the server's lists in src/bug_reports.rs.
 const rs = fs.readFileSync(__dirname + '/../src/bug_reports.rs', 'utf8');
@@ -21,6 +21,13 @@ assert.deepEqual(buildBugReport('house', 'build', 'unknown'), { surface: 'house'
 assert.throws(() => buildBugReport('house', 'build', 'Error at /root/x: ah_secret'), /unknown code/);
 assert.throws(() => buildBugReport('room', 'build', 'unknown'), /unknown surface/);
 assert.throws(() => buildBugReport('house', 'drop table', 'unknown'), /unknown action/);
+
+// The code from a failed request: the server's reason if listed, else the status, else unknown.
+assert.equal(codeFor({ reason: 'limit', status: 429 }), 'limit');
+assert.equal(codeFor({ reason: 'Error at /root/x: secret', status: 409 }), 'conflict');
+assert.equal(codeFor({ status: 404 }), 'not_found');
+assert.equal(codeFor({ status: 500, message: 'ah_secret' }), 'unknown');
+assert.equal(codeFor(undefined), 'unknown');
 
 // The sender posts the built body to the one endpoint.
 (async () => {
