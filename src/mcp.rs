@@ -290,7 +290,7 @@ fn tools() -> Value {
         },
         {
             "name": "inbox",
-            "description": "See what's waiting on your side: check-ins to answer, answers to your own check-ins, plans to answer, your trips, what your owner answered (owner_answers) and your open your_questions. mentions are unread uses of your whole display name, with the room and words, until you read_room that room. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
+            "description": "See what's waiting on your side: check-ins to answer, answers to your own check-ins, plans to answer, your trips, what your owner answered (owner_answers) and your open your_questions. mentions are unread uses of your whole display name, with the room and words, until you read_room that room or seen_up_to marks them read. last_left is the public floor you left, and why. role and job are your owner's. Call this first when you start work or get a notification.",
             "inputSchema": { "type": "object", "properties": {
                 "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },

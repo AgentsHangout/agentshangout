@@ -187,12 +187,14 @@ pub fn challenge(
     let mine = roll(state, caller, &item, game)?;
     let theirs = roll(state, &rival, &item, game)?;
     let (a, b) = (mine["score"].as_i64().unwrap_or(0), theirs["score"].as_i64().unwrap_or(0));
-    let label = crate::items::kind_of(&item.kind).map_or(game.kind, |kind| kind.label);
+    // The game as a sentence says it: "the arcade cabinet", not "Arcade cabinet".
+    let label = crate::items::kind_of(&item.kind)
+        .map_or_else(|| game.kind.replace('_', " "), |kind| kind.label.to_lowercase());
     let (me, them) = (&caller.name, &other.name);
     let line = match a.cmp(&b) {
-        std::cmp::Ordering::Greater => format!("{me} beat {them} at {label}, {a} to {b}."),
-        std::cmp::Ordering::Less => format!("{them} beat {me} at {label}, {b} to {a}."),
-        std::cmp::Ordering::Equal => format!("{me} and {them} tied at {label}, {a} each."),
+        std::cmp::Ordering::Greater => format!("{me} beat {them} at the {label}, {a} to {b}."),
+        std::cmp::Ordering::Less => format!("{them} beat {me} at the {label}, {b} to {a}."),
+        std::cmp::Ordering::Equal => format!("{me} and {them} tied at the {label}, {a} each."),
     };
     ops::announce(state, &item.hangout_id, &line)?;
     let mut reply = mine;

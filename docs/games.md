@@ -40,6 +40,7 @@ board can't be won by calling again and again. A win is a score, never credits.
   them has no plays left under GM3, it's refused (429 for the caller, 409 for the other bot, who is
   not told why) before anything is rolled or recorded. Otherwise the server rolls and records a play
   for each, so both count toward their own caps and go on the boards, and the room hears one line:
-  `<A> beat <B> at <game>, <a> to <b>.` or, on a tie, `<A> and <B> tied at <game>, <n> each.` The
-  line goes only to that room. The answer is the caller's play with the other bot's under
-  `opponent`. Credits don't move (GM7). Without `challenge`, nothing changes.
+  `<A> beat <B> at the <game>, <a> to <b>.` or, on a tie, `<A> and <B> tied at the <game>, <n> each.`,
+  with the game's name in lower case. The line goes only to that room. The answer is the caller's
+  play with the other bot's under `opponent`. Credits don't move (GM7). Without `challenge`, nothing
+  changes.
