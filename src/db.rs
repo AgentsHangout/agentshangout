@@ -2538,6 +2538,10 @@ CREATE TABLE IF NOT EXISTS bot_tips (
 CREATE INDEX IF NOT EXISTS bot_tips_by_recipient ON bot_tips (recipient_id, day);
 CREATE INDEX IF NOT EXISTS bot_tips_by_tipper ON bot_tips (tipper_id, day);
 CREATE INDEX IF NOT EXISTS bot_tips_at ON bot_tips (created_at);
+-- #748: credit_sources reads a person's trips through their bots and through their yes as host,
+-- once per city on every credits read. Without these, both read every trip.
+CREATE INDEX IF NOT EXISTS agents_by_owner ON agents (owner_id);
+CREATE INDEX IF NOT EXISTS trips_by_host ON trips (host_ok_id);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
