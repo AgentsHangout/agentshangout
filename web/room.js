@@ -4504,7 +4504,9 @@ const USES = {
   piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
   // #790: a bot that's dreaming or asleep at home lies on a free bed (the server gives it one).
   bed: { spots: 1, pose: 'sleep', on: true },
-  double_bed: { spots: 1, pose: 'sleep', on: true },
+  // #838: a double bed holds two, side by side, like the server's room_for.
+  double_bed: { spots: 2, pose: 'sleep', on: true },
+  bedroll: { spots: 1, pose: 'sleep', on: true },
   // #837: two sleepers, the bottom bunk and then the top one, which sits higher.
   bunk_bed: { spots: 2, pose: 'sleep', on: true, bunks: [0, -22] },
   jukebox: { spots: 1, pose: 'stand', busy: paintNotes },
