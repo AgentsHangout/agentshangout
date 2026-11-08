@@ -548,8 +548,10 @@ mod tests {
             })
             .collect();
         let mut scene = room(json!(items), bots, whole());
-        scene["look"]["flooring"] = json!("grass");
-        scene["look"]["outdoors"] = json!(true);
+        // The live Fairground's look: outdoors on grass, the default furniture hidden, a picnic table.
+        scene["look"] = json!({"paint":"sage","flooring":"grass","outdoors":true,
+            "hidden":["bar","arcade","plants","rug","beanbags","couch","desk"],
+            "table":{"x":12,"y":1,"style":"picnic"}});
         scene
     }
 
@@ -558,7 +560,7 @@ mod tests {
     #[test]
     fn a_standing_bot_stands_where_its_tag_covers_no_item() {
         let rects = |scene: &Value| -> Vec<(f64, f64, f64, f64)> {
-            let script = "const s=JSON.parse(__camera_scene);JSON.stringify(cameraPlaced(s).filter(i=>!i.flat).map(i=>{const up=Math.max(i.rise||0,i.deep);return [i.left,i.y-up,i.wide,up]}))";
+            let script = "const s=JSON.parse(__camera_scene);const [dx,dy]=tableShift(s.look.table),t=FURNITURE.find(e=>e[0]==='table');JSON.stringify([...cameraPlaced(s).filter(i=>!i.flat).map(i=>{const up=Math.max(i.rise||0,i.deep);return [i.left,i.y-up,i.wide,up]}),[t[1]+dx,t[2]+dy-12,t[3],t[4]+12]])";
             serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
         };
         let lone = bot_in("Town Square Hermes", "idle", false);

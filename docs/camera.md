@@ -95,6 +95,7 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   below the board goes under its feet instead, next to its seat, rather than up onto the board or
   down onto the faces at the table. CP10 still holds.
 - **CP19.** A figure standing in the grid stands where the strip under its feet, where its name tag
-  goes, is clear of furniture and items, when such a spot is near enough (the same search as
-  CP14), so a tag doesn't cover the top of a whiteboard, a guitar or a piano. When there is none,
-  it stands as CP14 says.
+  goes, is clear of furniture and items as they're drawn (an item's art and the table rise above
+  their footprints), when such a spot is near enough (the same search as CP14). So a tag doesn't
+  cover the top of a whiteboard, a guitar, a piano or the table. When there is none, it stands as
+  CP14 says.
