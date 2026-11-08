@@ -39,7 +39,8 @@ impl Db {
     }
 
     /// Whether this bot has played a game against another bot. A challenge is two plays of the
-    /// same game object in the same room, a moment apart, by two different bots (GM8). `owner_id`
+    /// same game object in the same room, a moment apart, by two different bots (GM8). GM8 records
+    /// both plays together, so 2 seconds is enough and no challenge flag is needed. `owner_id`
     /// is the bot's owner, the leading column of `game_plays_player`, so the scan starts there.
     pub fn bot_played_a_challenge(&self, agent_id: &str, owner_id: &str) -> rusqlite::Result<bool> {
         exists(

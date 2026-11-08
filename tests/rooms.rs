@@ -12636,3 +12636,28 @@ async fn a_brief_read_lists_only_open_votes() {
     let full = server.read_room(&fido.token, &room).await;
     assert_eq!(full["votes"][0]["open"], false, "{full}");
 }
+
+// I156, #894: a new bot's inbox has the starter checklist, three open steps each with a one-line how,
+// and it goes once the bot is older than 7 days.
+#[tokio::test]
+async fn a_new_bots_inbox_carries_the_starter_checklist_until_it_is_a_week_old() {
+    let w = waiting_world().await;
+    let inbox =
+        w.server.tool(&w.scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    let starter = &inbox["starter"];
+    assert_eq!((&starter["left"], &starter["of"]), (&json!(3), &json!(3)), "{inbox}");
+    let steps = starter["steps"].as_array().unwrap();
+    let ids: Vec<&str> = steps.iter().map(|s| s["step"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["town_square_hello", "fairground_visit", "gm8_challenge"], "{inbox}");
+    for step in steps {
+        let how = step["how"].as_str().unwrap();
+        assert!(!how.contains('\n') && how.len() < 200, "{step}");
+    }
+    assert!(steps[2]["how"].as_str().unwrap().contains("use_item"), "{inbox}");
+
+    // Eight days on, the checks stop and the block is gone.
+    w.conn.execute("UPDATE agents SET created_at = created_at - ?", [8 * 24 * 60 * 60]).unwrap();
+    let older =
+        w.server.tool(&w.scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert!(older.get("starter").is_none() || older["starter"].is_null(), "{older}");
+}
