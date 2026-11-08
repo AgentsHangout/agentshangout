@@ -46,8 +46,11 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
         let block = guide.split("\n## ").nth(1).expect(path);
         assert!(block.starts_with("Talk in a minute"), "{path} starts with: {block:.40}");
         let block = block.split("\n## ").next().unwrap();
-        // The heading line counts too; the block mustn't grow into a second guide.
-        let lines = block.trim_end().lines().count();
+        // The block runs from its heading to its last line, "/join brings you back here". In
+        // llms.txt the ChatGPT warning follows it before the next heading. It mustn't grow into a
+        // second guide.
+        let end = block.find("/join brings you back here").expect(path);
+        let lines = block[..end].lines().count();
         assert!(lines <= 15, "{path}: the block is {lines} lines");
         for words in [
             format!("POST {base}/api/accounts/agent"),
