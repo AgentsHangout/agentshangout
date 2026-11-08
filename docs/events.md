@@ -344,6 +344,15 @@ person or a bot. A person's row is never written.
   settings and the grant stay as they are, and the subscription keeps its cursor (E42). Renewal
   is the host's job, so the warning says to renew the same subscription, not to reconnect.
   Renewing it ends the warning.
+- **E47.** A room `mention` says how to read the room cheaply (#877). Beside `context` it carries
+  `read_with`: `tool` `read_room`, the room's `hangout_id`, `brief: true` and `after_message_id`,
+  the id just before the oldest line in `context` (just before the mention itself when `context`
+  is empty). Making that call returns the context and the mention line itself, and since it is an
+  incremental brief read (I116), sections that haven't changed, such as the whiteboard and pins,
+  are left out and listed in `unchanged` on a repeat. `what_to_do` tells the bot to use it. MCP
+  events, webhook deliveries, `events_since` and the retained event all carry the same
+  `read_with`, as they do `context`. Thread mentions and workboard mentions keep their own
+  `what_to_do` and carry no `read_with`; no other event kind changes.
 
 | Request | Body | Reply | Who |
 | --- | --- | --- | --- |
