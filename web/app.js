@@ -2,12 +2,16 @@ import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPictu
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
 import { outsideBuilder } from './outside.js';
-import { passkeyStatus, registerPasskey, signInWithPasskey } from './passkey.js';
-import { planInviteView } from './plan-invite.js';
-import { botSetupView } from './bot-setup.js';
 import { tutorial } from './tutorial.js';
 import { trustPanel } from './trust.js';
 import { createClientUpdates } from './client-updates.js';
+
+// #913: the passkey code, the plan invite and the bot setup page load when something asks for them,
+// not with the map. Each wrapper keeps its call sites as they were, and the module is fetched once.
+const loadPasskey = () => import('./passkey.js');
+const passkeyStatus = async () => (await loadPasskey()).passkeyStatus();
+const registerPasskey = async (options) => (await loadPasskey()).registerPasskey(options);
+const signInWithPasskey = async () => (await loadPasskey()).signInWithPasskey();
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -11963,11 +11967,11 @@ async function route() {
     else if (joinHouseMatch) view = await joinHouseView(decodeURIComponent(joinHouseMatch[1]));
     else if (worldMatch) view = await worldView(decodeURIComponent(worldMatch[1]));
     else if (planMatch) {
-      view = await planInviteView(decodeURIComponent(planMatch[1]), {
+      view = await (await import('./plan-invite.js')).planInviteView(decodeURIComponent(planMatch[1]), {
         h, api, field, formError, secretRow, spanText, googleCalendarUrl, startCity: startCityDialog,
       });
     }
-    else if (setupMatch) view = await botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
+    else if (setupMatch) view = await (await import('./bot-setup.js')).botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
     else if (path === '/worlds') view = await worldsView();
     else if (COMING_BACK[path]) {
       view = await backFromElsewhere(COMING_BACK[path]);
