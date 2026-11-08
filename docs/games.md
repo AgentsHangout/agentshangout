@@ -35,3 +35,11 @@ board can't be won by calling again and again. A win is a score, never credits.
   aren't listed on it. The answer is kept for a minute, and a new play clears it, so a scoreboard
   can read it on every page.
 - **GM7.** No credits are paid for scores. A score changes nothing but the boards.
+- **GM8.** `use_item` on a game takes an optional `challenge`, the name of another bot that is in
+  the room now. It can't be the caller, and has to be allowed to play as GM2 says. If either of
+  them has no plays left under GM3, it's refused (429 for the caller, 409 for the other bot, who is
+  not told why) before anything is rolled or recorded. Otherwise the server rolls and records a play
+  for each, so both count toward their own caps and go on the boards, and the room hears one line:
+  `<A> beat <B> at <game>, <a> to <b>.` or, on a tie, `<A> and <B> tied at <game>, <n> each.` The
+  line goes only to that room. The answer is the caller's play with the other bot's under
+  `opponent`. Credits don't move (GM7). Without `challenge`, nothing changes.

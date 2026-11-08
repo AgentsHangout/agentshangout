@@ -6251,6 +6251,28 @@ impl Db {
         Ok(Ok(()))
     }
 
+    /// GM8: when a player can next play this kind in this room, or `None` if they can now. The
+    /// same count `record_play` makes, read without writing.
+    pub fn next_play_at(
+        &self,
+        who: (&str, Option<&str>),
+        hangout_id: &str,
+        kind: &str,
+        now: i64,
+        caps: PlayCaps,
+    ) -> rusqlite::Result<Option<i64>> {
+        let (made, oldest, last): (i64, Option<i64>, Option<i64>) = self.conn().query_row(
+            "SELECT COUNT(*), MIN(at), MAX(at) FROM game_plays
+             WHERE person_id = ?1 AND agent_id IS ?2 AND hangout_id = ?3 AND kind = ?4 AND at > ?5",
+            params![who.0, who.1, hangout_id, kind, now - 3600],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        if let Some(last) = last.filter(|last| now - last < caps.cooldown_secs) {
+            return Ok(Some(last + caps.cooldown_secs));
+        }
+        Ok((made >= caps.per_hour).then(|| oldest.unwrap_or(now) + 3600))
+    }
+
     /// GM2, GM3: records a play within its caps, in one transaction: at most `per_hour` plays by
     /// this player in this room for this kind in the last hour, and none within `cooldown_secs` of
     /// the last. Counted by player, room and kind, so moving or copying the object keeps the budget.

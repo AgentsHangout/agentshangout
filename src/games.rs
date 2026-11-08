@@ -65,6 +65,17 @@ pub fn play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value
     ops::no_house_bot(caller)?;
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     ops::require_room(state, caller, &item.hangout_id)?;
+    let game = may_play(state, caller, &item)?;
+    roll(state, caller, &item, game)
+}
+
+/// GM2: the checks every player of a game passes, the caller or (GM8) an opponent.
+fn may_play(
+    state: &AppState,
+    caller: &Caller,
+    item: &crate::db::FloorItem,
+) -> ApiResult<&'static GameKind> {
+    ops::no_house_bot(caller)?;
     let Some(game) = kind_of(&item.kind) else {
         return Err(ApiError::bad_request("that isn't a game you can play"));
     };
@@ -75,6 +86,17 @@ pub fn play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value
     }
     crate::rules::require(state, caller)?;
     crate::items::no_quiet(state, caller, &item.hangout_id)?;
+    Ok(game)
+}
+
+/// GM2, GM3: rolls and records one play.
+fn roll(
+    state: &AppState,
+    caller: &Caller,
+    item: &crate::db::FloorItem,
+    game: &GameKind,
+) -> ApiResult<Value> {
+    let item_id = item.id.as_str();
     let now = now();
     let score = rand::random_range(game.min..=game.max);
     let outcome = state.db.record_play(
@@ -110,6 +132,73 @@ pub fn play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value
         ))
         .retry_after((next_at - now).max(1) as u64)),
     }
+}
+
+/// GM8: the caller plays the game at `item_id` against another bot that is here now. Both have to
+/// be allowed to play and have plays left before anything is rolled; then each rolls and records a
+/// play as in GM2, and the room hears one line with who won. No credits change hands (GM7).
+pub fn challenge(
+    state: &AppState,
+    caller: &Caller,
+    item_id: &str,
+    opponent: &str,
+) -> ApiResult<Value> {
+    ops::no_house_bot(caller)?;
+    let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
+    ops::require_room(state, caller, &item.hangout_id)?;
+    let game = may_play(state, caller, &item)?;
+    let now = now();
+    let Some(other) = crate::items::bot_here_named(state, &item.hangout_id, opponent, now)? else {
+        return Err(ApiError::conflict(format!("{opponent} isn't a bot that's here right now")));
+    };
+    if Some(other.id.as_str()) == caller.agent_id.as_deref() {
+        return Err(ApiError::bad_request("you can't challenge yourself"));
+    }
+    let rival = Caller {
+        person_id: other.owner_id.clone(),
+        agent_id: Some(other.id.clone()),
+        name: other.name.clone(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    // Whatever stops the rival, the caller only hears that they can't play, not why.
+    let cannot = || ApiError::conflict(format!("{} can't play right now", other.name));
+    may_play(state, &rival, &item).map_err(|_| cannot())?;
+    let wait = |who: &Caller| {
+        state.db.next_play_at(
+            (&who.person_id, who.agent_id.as_deref()),
+            &item.hangout_id,
+            game.kind,
+            now,
+            CAPS,
+        )
+    };
+    if let Some(next_at) = wait(caller)? {
+        return Err(ApiError::too_many_requests(format!(
+            "you've played {} enough for now: you can play again at {}",
+            game.kind,
+            ops::iso(next_at)
+        ))
+        .retry_after((next_at - now).max(1) as u64));
+    }
+    if wait(&rival)?.is_some() {
+        return Err(cannot());
+    }
+    let mine = roll(state, caller, &item, game)?;
+    let theirs = roll(state, &rival, &item, game)?;
+    let (a, b) = (mine["score"].as_i64().unwrap_or(0), theirs["score"].as_i64().unwrap_or(0));
+    let label = crate::items::kind_of(&item.kind).map_or(game.kind, |kind| kind.label);
+    let (me, them) = (&caller.name, &other.name);
+    let line = match a.cmp(&b) {
+        std::cmp::Ordering::Greater => format!("{me} beat {them} at {label}, {a} to {b}."),
+        std::cmp::Ordering::Less => format!("{them} beat {me} at {label}, {b} to {a}."),
+        std::cmp::Ordering::Equal => format!("{me} and {them} tied at {label}, {a} each."),
+    };
+    ops::announce(state, &item.hangout_id, &line)?;
+    let mut reply = mine;
+    reply["opponent"] = json!({ "bot": them, "result": theirs });
+    reply["line"] = json!(line);
+    Ok(reply)
 }
 
 /// GM5: one line of a room's board as the caller sees it: a bot by name, the caller's own line as

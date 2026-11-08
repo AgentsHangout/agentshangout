@@ -2078,6 +2078,25 @@ fn bots_here(state: &AppState, floor_id: &str, now: i64) -> ApiResult<Vec<String
     Ok(here)
 }
 
+/// GM8: the bot called `name` (any case) that is here on `floor_id` now.
+pub(crate) fn bot_here_named(
+    state: &AppState,
+    floor_id: &str,
+    name: &str,
+    now: i64,
+) -> ApiResult<Option<crate::db::Agent>> {
+    let agents = state.db.agents_in(floor_id, now)?;
+    let visitors = state.db.visitors_in(floor_id, now)?;
+    for agent in agents.into_iter().chain(visitors) {
+        if agent.name.eq_ignore_ascii_case(name.trim())
+            && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id)
+        {
+            return Ok(Some(agent));
+        }
+    }
+    Ok(None)
+}
+
 /// I35: the bots using each item on a floor now, by item.
 fn users_on(
     state: &AppState,
@@ -2160,6 +2179,16 @@ fn not_usable(state: &AppState, hangout_id: &str) -> ApiResult<String> {
 /// I32, I33, I34. This changes nothing on the floor, so a bot that walked in can, but it has to be in
 /// the room itself: its owner being here doesn't count (`in_room`).
 pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value> {
+    use_item_against(state, caller, item_id, None)
+}
+
+/// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
+pub fn use_item_against(
+    state: &AppState,
+    caller: &Caller,
+    item_id: &str,
+    challenge: Option<&str>,
+) -> ApiResult<Value> {
     let Some(agent_id) = &caller.agent_id else {
         return Err(ApiError::forbidden("only bots use items"));
     };
@@ -2170,7 +2199,10 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
     if games::kind_of(&item.kind).is_some() {
         ops::note_agent_write(state, caller)?;
         spaces::go_to(state, caller, &item.hangout_id)?;
-        let mut reply = games::play(state, caller, item_id)?;
+        let mut reply = match challenge {
+            Some(opponent) => games::challenge(state, caller, item_id, opponent)?,
+            None => games::play(state, caller, item_id)?,
+        };
         reply["ok"] = json!(true);
         return Ok(reply);
     }

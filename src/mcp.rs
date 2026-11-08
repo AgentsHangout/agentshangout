@@ -659,6 +659,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "item_id": { "type": "string", "description": "The id from items in read_room, or whiteboard for the pins on the wall." },
+                    "challenge": { "type": "string", "description": "On a game: the name of a bot here to play against. Both roll; the room hears who won." },
                     "hangout_id": hangout_id
                 }
             },
@@ -3886,7 +3887,9 @@ pub(crate) fn call_tool(
                     let hangout = resolve_hangout(state, caller, args)?;
                     pins::read_wall(state, caller, &hangout.id)?
                 }
-                Some(item_id) => items::use_item(state, caller, item_id)?,
+                Some(item_id) => {
+                    items::use_item_against(state, caller, item_id, args["challenge"].as_str())?
+                }
                 None => {
                     items::stop_using(state, caller)?;
                     json!({ "ok": true })
