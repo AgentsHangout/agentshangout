@@ -115,7 +115,11 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
         axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
     ) -> (StatusCode, Json<Value>) {
         let (count, len) = {
-            let v = v.lock().unwrap();
+            let mut v = v.lock().unwrap();
+            if q["page"] == "1" {
+                let hits = v["hits"].as_u64().unwrap_or(0);
+                v["hits"] = json!(hits + 1);
+            }
             if v["pr_fail"] == true {
                 return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
             }
@@ -870,35 +874,51 @@ async fn rw13_filters_narrow_the_board_and_no_filter_changes_nothing() {
 }
 
 /// #879: changed files are read in one reply, all pages up to a cap, and say when they're cut.
+/// RW9's guard: one GitHub read per pull request every five minutes, the last read served between.
 #[tokio::test]
-async fn pr879_changed_files_read_in_pages_capped_and_flagged() {
+async fn pr879_changed_files_read_in_pages_capped_flagged_and_cached() {
     let (state, owner, _bot, upstream) = setup().await;
-    // Not before the board is read.
-    assert!(research_work::pr_files(&state, &owner, "lab", 12).await.is_err());
+    let hits = || upstream.lock().unwrap()["hits"].as_u64().unwrap_or(0);
+    let t0: i64 = 1_000_000;
+    let w = 301; // past the five-minute window
+                 // Not before the board is read.
+    assert!(research_work::pr_files_at(&state, &owner, "lab", 12, t0).await.is_err());
     research_work::list(&state, &owner, "lab").await.unwrap();
     // Not for an issue.
-    assert!(research_work::pr_files(&state, &owner, "lab", 9).await.is_err());
+    assert!(research_work::pr_files_at(&state, &owner, "lab", 9, t0).await.is_err());
 
-    // A few small files: every field, no truncation.
+    // A few small files: every field, no truncation, a fresh read.
     upstream.lock().unwrap()["file_count"] = json!(3);
-    let few = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
-    assert_eq!(few["file_count"], 3);
-    assert_eq!(few["truncated"], false);
+    let before = hits();
+    let few = research_work::pr_files_at(&state, &owner, "lab", 12, t0).await.unwrap();
+    assert_eq!(hits() - before, 1);
+    assert_eq!((few["file_count"].clone(), few["cached"].clone()), (json!(3), json!(false)));
+    assert_eq!((few["truncated"].clone(), few["checked_at"].clone()), (json!(false), json!(t0)));
     assert_eq!(few["files"][2]["filename"], "src/f2.rs");
     assert_eq!(few["files"][2]["status"], "modified");
     assert_eq!(few["files"][2]["additions"], 3);
     assert_eq!(few["files"][2]["deletions"], 1);
     assert_eq!(few["files"][2]["hunks"].as_str().unwrap().len(), 10);
 
-    // 250 files over three pages: all of them, and the last page is short, so not truncated.
+    // Inside the window: the last read again, from memory, though GitHub now has 250 files.
     upstream.lock().unwrap()["file_count"] = json!(250);
-    let all = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    let before = hits();
+    let again = research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 299).await.unwrap();
+    assert_eq!(hits() - before, 0);
+    assert_eq!((again["file_count"].clone(), again["cached"].clone()), (json!(3), json!(true)));
+    assert_eq!(again["checked_at"], t0);
+
+    // Past the window: 250 files over three pages, all of them, and the last page is short.
+    let all = research_work::pr_files_at(&state, &owner, "lab", 12, t0 + w).await.unwrap();
     assert_eq!((all["file_count"].as_u64(), all["truncated"].clone()), (Some(250), json!(false)));
-    assert_eq!(all["files"][249]["filename"], "src/f249.rs");
+    assert_eq!(
+        (all["cached"].clone(), all["files"][249]["filename"].clone()),
+        (json!(false), json!("src/f249.rs"))
+    );
 
     // 450 files: the cap holds at 300 and says so.
     upstream.lock().unwrap()["file_count"] = json!(450);
-    let capped = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    let capped = research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 2 * w).await.unwrap();
     assert_eq!(
         (capped["file_count"].as_u64(), capped["truncated"].clone()),
         (Some(300), json!(true))
@@ -907,24 +927,42 @@ async fn pr879_changed_files_read_in_pages_capped_and_flagged() {
 
     // Exactly 300: a full last page may hide more, so it's flagged too.
     upstream.lock().unwrap()["file_count"] = json!(300);
-    let full = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    let full = research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 3 * w).await.unwrap();
     assert_eq!((full["file_count"].as_u64(), full["truncated"].clone()), (Some(300), json!(true)));
 
     // Hunks: 30 KB each, so two fit in the 64 KB budget and the third is listed without them.
     upstream.lock().unwrap()["file_count"] = json!(3);
     upstream.lock().unwrap()["patch_len"] = json!(30 * 1024);
-    let budget = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    let budget = research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 4 * w).await.unwrap();
     assert_eq!(budget["files"][1]["hunks"].as_str().unwrap().len(), 30 * 1024);
     assert!(budget["files"][2]["hunks"].is_null());
     assert_eq!(budget["files"][2]["filename"], "src/f2.rs");
     assert_eq!(budget["truncated"], true);
 
-    // GitHub down on the first page is an error, not an empty list that looks complete.
+    // GitHub down when the window opens: an error, and the last good read is kept, so a retry
+    // inside the window is served it (cached) without another GitHub read.
     upstream.lock().unwrap()["pr_fail"] = json!(true);
-    assert!(research_work::pr_files(&state, &owner, "lab", 12).await.is_err());
+    assert!(research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 5 * w).await.is_err());
     upstream.lock().unwrap()["pr_fail"] = json!(false);
+    let before = hits();
+    let kept =
+        research_work::pr_files_at(&state, &owner, "lab", 12, t0 + 5 * w + 10).await.unwrap();
+    assert_eq!((hits() - before, kept["cached"].clone()), (0, json!(true)));
+    assert_eq!(kept["checked_at"], t0 + 4 * w);
 
-    // Someone outside the room can't read it.
+    // Two requests at the same moment: one GitHub read, and the second is served without waiting.
+    upstream.lock().unwrap()["file_count"] = json!(5);
+    let before = hits();
+    let t = t0 + 6 * w;
+    let (a, b) = tokio::join!(
+        research_work::pr_files_at(&state, &owner, "lab", 12, t),
+        research_work::pr_files_at(&state, &owner, "lab", 12, t)
+    );
+    assert_eq!(hits() - before, 1);
+    assert_eq!(a.unwrap()["file_count"], 5);
+    assert_eq!(b.unwrap()["cached"], true);
+
+    // Someone outside the room can't read it, cached or not.
     let outsider = auth::Caller {
         person_id: "stranger".into(),
         agent_id: None,
@@ -932,5 +970,5 @@ async fn pr879_changed_files_read_in_pages_capped_and_flagged() {
         secret_hash: String::new(),
         is_house: false,
     };
-    assert!(research_work::pr_files(&state, &outsider, "lab", 12).await.is_err());
+    assert!(research_work::pr_files_at(&state, &outsider, "lab", 12, t).await.is_err());
 }

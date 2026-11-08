@@ -812,15 +812,45 @@ const FILE_PAGE: usize = 100;
 const MAX_FILE_PAGES: usize = 3;
 const MAX_FILE_PAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_HUNK_BYTES: usize = 64 * 1024;
+/// #879: one GitHub read per pull request per this many seconds (RW9's window); in between, the
+/// last read is served from memory.
+const PR_FILES_WINDOW: i64 = 300;
+/// #879: how many pull requests the cache holds before the ones past their window are dropped.
+const PR_FILES_CACHE_MAX: usize = 512;
+
+/// #879: the changed files last read for each pull request. Kept in memory, never in the database.
+#[derive(Default)]
+pub struct PrFilesCache(std::sync::Mutex<std::collections::HashMap<(String, u64), PrFilesSlot>>);
+
+#[derive(Clone)]
+struct PrFilesSlot {
+    /// When the window was last claimed, by a read that may have failed.
+    attempted_at: i64,
+    /// The last good read, and when it was made.
+    read: Option<(i64, Value)>,
+}
+
 /// #879: a pull request's changed files, names, status, +/- counts and hunks, read from GitHub on
-/// request. Read-only: nothing is stored or written. `truncated` is true when the file cap, the
-/// hunk budget, or a failed later page cut the list short, or when the last page read was full, so
-/// there may be more.
+/// request. Read-only: nothing is written to the database. `truncated` is true when the file cap,
+/// the hunk budget, or a failed later page cut the list short, or when the last page read was
+/// full, so there may be more. A pull request is read from GitHub at most every five minutes; in
+/// between, the last read is served with `cached` true.
 pub async fn pr_files(
     state: &AppState,
     caller: &Caller,
     id: &str,
     number: u64,
+) -> ApiResult<Value> {
+    pr_files_at(state, caller, id, number, crate::now()).await
+}
+
+/// `pr_files` at a given Unix time, so the five-minute window can be tested.
+pub async fn pr_files_at(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+    at: i64,
 ) -> ApiResult<Value> {
     let lab = lab(state, caller, id)?;
     crate::ops::require_room(state, caller, id)?;
@@ -834,6 +864,78 @@ pub async fn pr_files(
             "that isn't a pull request on the lab's workboard; read it first",
         ));
     }
+    let key = (repo.clone(), number);
+    match claim_pr_files(state, &key, at) {
+        PrFilesClaim::Held(slot) => {
+            crate::ops::require_room(state, caller, id)?;
+            match slot.read {
+                Some((checked_at, read)) => Ok(served_files(id, number, &read, checked_at, true)),
+                None => {
+                    Err(ApiError::bad_request("GitHub unavailable; try again in a few minutes"))
+                }
+            }
+        }
+        PrFilesClaim::Taken(previous) => {
+            let fetched = read_pr_files(state, &repo, number).await;
+            let outcome = match fetched {
+                Ok(read) => {
+                    let out = served_files(id, number, &read, at, false);
+                    store_pr_files(state, key, at, read);
+                    Ok(out)
+                }
+                // A failed read keeps the last good one, so it isn't lost.
+                Err(e) => {
+                    keep_pr_files(state, key, at, previous);
+                    Err(e)
+                }
+            };
+            crate::ops::require_room(state, caller, id)?;
+            outcome
+        }
+    }
+}
+
+/// What a request finds when it asks to read a pull request's files.
+enum PrFilesClaim {
+    /// Inside the window: the slot, with the last good read if there is one.
+    Held(PrFilesSlot),
+    /// Outside it: this request reads GitHub, and keeps this last good read if its read fails.
+    Taken(Option<(i64, Value)>),
+}
+
+/// Claims the window for one pull request. Sync, so the lock never spans an await.
+fn claim_pr_files(state: &AppState, key: &(String, u64), at: i64) -> PrFilesClaim {
+    let mut cache = state.pr_files_cache.0.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(slot) = cache.get(key).filter(|s| s.attempted_at > at - PR_FILES_WINDOW) {
+        return PrFilesClaim::Held(slot.clone());
+    }
+    if cache.len() >= PR_FILES_CACHE_MAX {
+        cache.retain(|_, s| s.attempted_at > at - PR_FILES_WINDOW);
+    }
+    let previous = cache.get(key).and_then(|s| s.read.clone());
+    cache.insert(key.clone(), PrFilesSlot { attempted_at: at, read: previous.clone() });
+    PrFilesClaim::Taken(previous)
+}
+
+fn store_pr_files(state: &AppState, key: (String, u64), at: i64, read: Value) {
+    let mut cache = state.pr_files_cache.0.lock().unwrap_or_else(|e| e.into_inner());
+    cache.insert(key, PrFilesSlot { attempted_at: at, read: Some((at, read)) });
+}
+
+fn keep_pr_files(state: &AppState, key: (String, u64), at: i64, previous: Option<(i64, Value)>) {
+    let mut cache = state.pr_files_cache.0.lock().unwrap_or_else(|e| e.into_inner());
+    cache.insert(key, PrFilesSlot { attempted_at: at, read: previous });
+}
+
+fn served_files(id: &str, number: u64, read: &Value, checked_at: i64, cached: bool) -> Value {
+    json!({"lab_id":id,"number":number,"file_count":read["file_count"],"files":read["files"],
+        "truncated":read["truncated"],"max_files":MAX_PR_FILES,"checked_at":checked_at,
+        "cached":cached,
+        "note":"Read from GitHub's public API at most every five minutes; in between, the last read is served (cached true). Not stored in the database. truncated means there may be more files than this reply holds."})
+}
+
+/// The changed files of one pull request from GitHub: `file_count`, `files` and `truncated`.
+async fn read_pr_files(state: &AppState, repo: &str, number: u64) -> ApiResult<Value> {
     let _slot = state
         .github_refresh_slots
         .acquire()
@@ -896,10 +998,7 @@ pub async fn pr_files(
             truncated = true;
         }
     }
-    crate::ops::require_room(state, caller, id)?;
-    Ok(json!({"lab_id":id,"number":number,"file_count":files.len(),"files":files,
-        "truncated":truncated,"max_files":MAX_PR_FILES,
-        "note":"Read from GitHub's public API on request, not stored. truncated means there may be more files than this reply holds."}))
+    Ok(json!({"file_count": files.len(), "files": files, "truncated": truncated}))
 }
 /// RW8: claim or renew an item, leading it or pairing with whoever leads it.
 pub fn claim(
