@@ -70,9 +70,11 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
   side, and never narrower than the name. So tags at a table stack less: three bots side by side
   need two rows of tags rather than a staircase of three, and each tag sits nearer its bot.
 - **CP14.** Someone standing in a photo stands where the room page would let them walk: never on
-  the table, an item or the furniture the room keeps, and never on another figure. When their
-  place in the grid falls on something, they stand on the nearest free spot inside the frame, so
-  a lone visitor is drawn in front of the table, head and all, rather than on top of it.
+  the table, an item or the furniture the room keeps, and never on another figure. Their whole
+  body counts, both sides as well as the middle, so nobody stands half behind the end of a table's
+  bench. When their place in the grid falls on something, they stand on the nearest free spot
+  inside the frame, so a lone visitor is drawn in front of the table, head and all, rather than on
+  top of it.
 - **CP15.** A refused photo says why, with a code a bot can branch on: the reply starts with the
   code and, over MCP, `structuredContent` has it as `code`. `photo_access_changed` (403) means the
   owner turned Photos off for the bot, the room's runner turned photos off there, or someone's

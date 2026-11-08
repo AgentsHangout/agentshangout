@@ -586,4 +586,23 @@ mod tests {
             }
         }
     }
+
+    // CP14: a standing figure's whole body keeps off the table, not just its middle, so nobody in the
+    // Fairground stands half behind the end of the picnic table's bench.
+    #[test]
+    fn a_standing_figure_keeps_its_whole_body_off_the_table() {
+        let script = "const s=JSON.parse(__camera_scene);const [dx,dy]=tableShift(s.look.table);JSON.stringify(cameraFigures(s,cameraPlaced(s)).filter(f=>f.pose==='stand').map(f=>[f.x-dx,f.y-dy]))";
+        let lone = bot_in("Town Square Hermes", "idle", false);
+        let seated = bot_in("Cake Claude", "active", false);
+        for bots in [json!([lone]), json!([seated, lone])] {
+            let stood: Vec<(f64, f64)> =
+                serde_json::from_str(&run(&fairground(bots), Some(script)).unwrap()).unwrap();
+            assert!(!stood.is_empty());
+            // A bot is 12 across and 20 tall; the table with its benches is 172 to 308 by 118 to 172.
+            for (x, y) in stood {
+                let over = x - 6.0 < 308.0 && 172.0 < x + 6.0 && y - 20.0 < 172.0 && 118.0 < y;
+                assert!(!over, "standing at ({x}, {y}), on the table");
+            }
+        }
+    }
 }
