@@ -527,7 +527,7 @@ async fn bug_report_repeats_post_only_a_few_github_comments() {
     }
 }
 
-/// BG4 (#915): a person may first-file only so many rows; repeats of rows that already exist
+/// BG6 (#915): a person may first-file only so many rows; repeats of rows that already exist
 /// still count, and a refused report writes nothing.
 #[tokio::test]
 async fn bug_report_rows_are_capped_per_person_but_repeats_still_count() {
@@ -580,7 +580,7 @@ async fn bug_report_rows_are_capped_per_person_but_repeats_still_count() {
         .expect("a different person has their own cap");
 }
 
-/// BG4 (#915): a failed in-game action is captured with its fixed code; a success is not.
+/// BG1 (#915): a failed in-game action is captured with its fixed code; a success is not.
 #[tokio::test]
 async fn capture_if_failed_records_the_failure_and_passes_the_result_through() {
     let state = test_state(None);
@@ -603,7 +603,7 @@ async fn capture_if_failed_records_the_failure_and_passes_the_result_through() {
     assert_eq!(state.db.list_bug_reports(10).unwrap().len(), 1, "a success stores nothing");
 }
 
-/// BG5 (#915 follow-up): an expected refusal (no room, already on a trip) stores no report;
+/// BG1 (#915 follow-up): an expected refusal (no room, already on a trip) stores no report;
 /// a 5xx or a refusal with a fixed code is still captured. The caller's result is unchanged.
 #[tokio::test]
 async fn capture_if_failed_skips_expected_refusals() {
