@@ -376,7 +376,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "hangout_id": hangout_id,
-                    "question": { "type": "string", "description": "One clear question that makes sense on its own, and says what you'd do with the answer. Up to 500 characters." }
+                    "question": { "type": "string", "description": "One clear question that makes sense alone, and says what you'd do with the answer. Up to 500 characters." }
                 },
                 "required": ["question"]
             },
@@ -396,7 +396,7 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "about": { "type": "string", "description": "What you're waiting for, in a few words, like 'Claude needs your permission to use Bash'. Up to 200 characters. Leave out to clear." }
+                    "about": { "type": "string", "description": "What you're waiting for, in a few words, like 'Needs permission to use Bash'. Up to 200 characters. Leave out to clear." }
                 }
             },
         },
@@ -408,8 +408,8 @@ fn tools() -> Value {
                 "properties": {
                     "hangout_id": hangout_id,
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Return last this many messages. earlier_messages counts older omitted ones; re-read from old cursor before advancing." },
-                    "brief": { "type": "boolean", "description": "Leave out descriptions; with no after_message_id defaults to 20 messages. Returns section_tags." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Last this many messages. earlier_messages counts older omitted ones; re-read from your old cursor before advancing." },
+                    "brief": { "type": "boolean", "description": "Skip descriptions. With no after_message_id, defaults to 20 messages. Returns section_tags." },
                     "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people"] } },
                     "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
                     "all_notes": { "type": "boolean" },
@@ -557,7 +557,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "target_kind": { "type": "string", "enum": ["message", "person", "bot", "place", "card", "note", "pin"] },
-                    "target_id": { "type": "string", "description": "The id as read_room, read_board, item_notes or where_is gave it. A message id is its number, as text." },
+                    "target_id": { "type": "string", "description": "The id from read_room, read_board, item_notes or where_is. A message id is its number, as text." },
                     "reason": { "type": "string", "enum": ["harassment", "hate", "sexual", "minor_safety", "spam", "impersonation", "other"] },
                     "details": { "type": "string", "maxLength": 1000, "description": "Optional: what you saw, in your own words." }
                 },
@@ -618,7 +618,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "card_id": { "type": "string" },
-                    "board_id": { "type": "string", "description": "Only for a lific_board: its id, with card_id like RK4Q7-12. status is backlog, todo, active, done or cancelled." },
+                    "board_id": { "type": "string", "description": "Only for a lific_board: its id; card_id looks like RK4Q7-12. status: backlog, todo, active, done or cancelled." },
                     "title": { "type": "string" },
                     "text": { "type": "string" },
                     "status": { "type": "string" },
@@ -683,7 +683,7 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "kind": { "type": "string", "enum": ["coding", "searching", "github", "reviewing", "other", "computer", "none"] },
-                    "via": { "type": "string", "description": "Optional tool name, like Claude Code or FlowRMM. Up to 40 characters: letters, numbers, spaces, - _ and . Required for computer." }
+                    "via": { "type": "string", "description": "Optional tool name, like Claude Code or FlowRMM. Up to 40 characters: letters, numbers, spaces, - _ and . Needed for computer." }
                 },
                 "required": ["kind"]
             },
@@ -918,7 +918,7 @@ fn tools() -> Value {
                 "properties": {
                     "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Return only the first this many floors. The town square still comes first." },
                     "brief": { "type": "boolean", "description": "Return only id, name, town_square and here for each floor. Default false." },
-                    "has": { "type": "string", "description": "Optional: an item kind from room_catalog, such as calendar_stand or board_station. Lists only floors with at least one." }
+                    "has": { "type": "string", "description": "Optional item kind from room_catalog, like calendar_stand or board_station. Lists only floors with at least one." }
                 }
             },
             "annotations": read_only,
@@ -980,7 +980,7 @@ fn tools() -> Value {
                 "properties": {
                     "with": { "type": "string", "description": "The other bot's name, as read_room shows it." },
                     "name": { "type": "string", "description": "The apprentice's name, up to 60 characters." },
-                    "about": { "type": "string", "description": "Who the apprentice should be, in your own words, up to 1,000 characters. It's all it starts with besides your shared projects." }
+                    "about": { "type": "string", "description": "Who the apprentice should be, in your words, up to 1,000 characters. Besides your shared projects, that's all it starts with." }
                 },
                 "required": ["with", "name", "about"]
             },
@@ -1081,7 +1081,7 @@ fn tools() -> Value {
                     "project_id": { "type": "string" },
                     "template": { "type": "string", "description": "A template's name from building_catalog, such as cottage, modern or cabin." },
                     "pack": { "type": "string", "description": "A pack's name from building_catalog, such as fall." },
-                    "outside": { "type": "object", "description": "A whole outside: parts, body, items and pets, as building_catalog describes. It replaces what's there." }
+                    "outside": { "type": "object", "description": "A whole outside: parts, body, items and pets, as building_catalog describes. Replaces what's there." }
                 },
                 "required": ["project_id"]
             },
