@@ -243,8 +243,16 @@ pub async fn file_or_comment_github(
     Ok(())
 }
 
+/// Which failures are worth a report: a server error (5xx), or a refusal that names one of the
+/// fixed codes. A normal refusal (no room, already on a trip, not yours) is expected and is
+/// not stored.
+pub fn is_unexpected(err: &ApiError) -> bool {
+    err.status.is_server_error() || err.reason.is_some_and(|r| CODES.contains(&r))
+}
+
 /// Auto-capture on a failed in-game action. The error text stays in SQLite; the code is the
 /// error's fixed reason when it has one, else "unknown". The caller's result is unchanged.
+/// Only unexpected failures are stored (see `is_unexpected`).
 #[allow(clippy::too_many_arguments)]
 pub async fn capture_if_failed<T>(
     state: &AppState,
@@ -256,6 +264,9 @@ pub async fn capture_if_failed<T>(
     res: ApiResult<T>,
 ) -> ApiResult<T> {
     if let Err(ref err) = res {
+        if !is_unexpected(err) {
+            return res;
+        }
         let code = err.reason.filter(|r| CODES.contains(r)).unwrap_or("unknown");
         let _ = record_report(state, caller, surface, action, code, &err.message, hangout_id, now)
             .await;

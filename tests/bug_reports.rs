@@ -602,3 +602,43 @@ async fn capture_if_failed_records_the_failure_and_passes_the_result_through() {
     assert_eq!(out.unwrap(), 7);
     assert_eq!(state.db.list_bug_reports(10).unwrap().len(), 1, "a success stores nothing");
 }
+
+/// BG5 (#915 follow-up): an expected refusal (no room, already on a trip) stores no report;
+/// a 5xx or a refusal with a fixed code is still captured. The caller's result is unchanged.
+#[tokio::test]
+async fn capture_if_failed_skips_expected_refusals() {
+    use agenthangout::error::{ApiError, ApiResult};
+    use axum::http::StatusCode;
+
+    let state = test_state(None);
+    seed_person(&state.db, "player");
+    let c = caller_for("player");
+
+    let expected: Vec<ApiError> = vec![
+        ApiError::conflict("there's no room there right now"),
+        ApiError::conflict("bot is already on a trip, at Lake House"),
+        ApiError::forbidden("that trip isn't this bot's"),
+        ApiError::not_found(),
+    ];
+    for err in expected {
+        let status = err.status;
+        let res: ApiResult<()> = Err(err);
+        let out =
+            bug_reports::capture_if_failed(&state, &c, "house", "build", None, now(), res).await;
+        assert_eq!(out.unwrap_err().status, status, "the result passes through");
+    }
+    assert!(state.db.list_bug_reports(10).unwrap().is_empty(), "expected refusals store no report");
+
+    let server: ApiResult<()> =
+        Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error"));
+    let out =
+        bug_reports::capture_if_failed(&state, &c, "house", "build", None, now(), server).await;
+    assert_eq!(out.unwrap_err().status, StatusCode::INTERNAL_SERVER_ERROR);
+    let rows = state.db.list_bug_reports(10).unwrap();
+    assert_eq!(rows.len(), 1, "a 5xx is stored");
+    assert_eq!(rows[0].code, "unknown");
+
+    let coded: ApiResult<()> = Err(ApiError::conflict("that item is closed").with_reason("closed"));
+    let _ = bug_reports::capture_if_failed(&state, &c, "item", "use", None, now(), coded).await;
+    assert_eq!(state.db.list_bug_reports(10).unwrap().len(), 2, "a fixed-code refusal is stored");
+}
