@@ -619,6 +619,9 @@ async fn capture_if_failed_skips_expected_refusals() {
         ApiError::conflict("bot is already on a trip, at Lake House"),
         ApiError::forbidden("that trip isn't this bot's"),
         ApiError::not_found(),
+        // Coded but expected: the reason is not on the fixed list, so nothing is stored.
+        ApiError::conflict("there's no room there right now").with_reason("no_room"),
+        ApiError::forbidden("accept the rules first").with_reason("rules_not_accepted"),
     ];
     for err in expected {
         let status = err.status;
