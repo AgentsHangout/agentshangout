@@ -21,7 +21,19 @@
     return api('/api/bugs/report', { method: 'POST', body });
   }
 
-  const api = { SURFACES, ACTIONS, CODES, buildBugReport, sendBugReport };
+  // The town map's own actions, as the server's fixed action names. Anything else (walking,
+  // emotes) has no report, so no button is offered for it.
+  const MAP_ACTIONS = { road: 'build', place: 'place', bulldoze: 'bulldoze', relocate: 'move' };
+
+  // The report for a failed map action, or null. The code is the server's fixed reason when the
+  // error has one from CODES, else "unknown". The map's actions all report on the place surface.
+  function failureReport(mapAction, reason) {
+    const action = Object.prototype.hasOwnProperty.call(MAP_ACTIONS, mapAction) ? MAP_ACTIONS[mapAction] : null;
+    if (!action) return null;
+    return { surface: 'place', action, code: CODES.includes(reason) ? reason : 'unknown' };
+  }
+
+  const api = { SURFACES, ACTIONS, CODES, MAP_ACTIONS, buildBugReport, sendBugReport, failureReport };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.BugReport = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
