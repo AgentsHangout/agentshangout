@@ -20,7 +20,7 @@ case "$want" in
     *[!0-9a-f]*) echo "sha256 must be hex" >&2; exit 1 ;;
 esac
 
-repo=CakeRepository/agentshangout
+repo=AgentsHangout/agentshangout
 bin=/usr/local/bin/agenthangout
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -46,8 +46,17 @@ healthy() {
     return 1
 }
 
-curl -fsSL --retry 3 -o "$work/agenthangout" \
-    "https://github.com/$repo/releases/download/$tag/agenthangout-linux-x86_64"
+# The release link is GitHub's front door, which answered 504 for a new release on 2026-11-08 while
+# the file itself was fine. The same file comes through the API too, and the hash below checks it.
+if ! curl -fsSL --retry 3 -o "$work/agenthangout" \
+    "https://github.com/$repo/releases/download/$tag/agenthangout-linux-x86_64"; then
+    echo "The release link failed, so trying GitHub's API" >&2
+    asset=$(curl -fsSL --retry 3 "https://api.github.com/repos/$repo/releases/tags/$tag" |
+        grep -o '"url": *"https://api.github.com/repos/[^"]*/releases/assets/[0-9]*"' |
+        head -n 1 | cut -d '"' -f 4)
+    [ -n "$asset" ] || { echo "GitHub's API has no file for $tag" >&2; exit 1; }
+    curl -fsSL --retry 3 -H "Accept: application/octet-stream" -o "$work/agenthangout" "$asset"
+fi
 echo "$want  $work/agenthangout" | sha256sum -c -
 
 # Through the unit, so the copy belongs to the service's user and the nightly backup can replace it.
