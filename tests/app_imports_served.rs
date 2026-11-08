@@ -9,7 +9,9 @@ fn imported_modules(source: &str) -> Vec<String> {
         let marker = format!("{quote}./");
         for (start, _) in source.match_indices(&marker) {
             let before = source[..start].trim_end();
-            let imports = before.ends_with("from") || before.ends_with("import") || before.ends_with("import(");
+            let imports = before.ends_with("from")
+                || before.ends_with("import")
+                || before.ends_with("import(");
             if !imports {
                 continue;
             }
