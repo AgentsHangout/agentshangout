@@ -8,7 +8,7 @@ const slice = (from, end) => {
   assert.ok(start >= 0, from);
   return app.slice(start, app.indexOf(end, start) + end.length);
 };
-const clockCode = slice('function voteClock(closesAt) {', '\n}\n');
+const clockCode = slice('function voteClock(closesAt, {', '\n}\n');
 const cardCode = slice('function voteCard(vote,', '\n}\n');
 const untilCode = slice('function untilText(unix) {', '\n}\n');
 
@@ -78,6 +78,26 @@ const vote = {
   const before = cleared.length;
   ticks[ticks.length - 1]();
   assert.equal(cleared.length, before + 1, 'the timer stops once closed');
+
+  // At zero, a card that was open asks the page to re-read the votes, once; a card that starts past zero doesn't.
+  const realDate = vm.runInContext('Date', context);
+  const fake = { now: Date.now() };
+  context.Date = { parse: Date.parse, now: () => fake.now };
+  let expiredCalls = 0;
+  context.voteCard({ ...vote, closes_at: new Date(fake.now + 2000).toISOString() }, { onExpire: () => { expiredCalls += 1; } });
+  const liveTick = ticks[ticks.length - 1];
+  fake.now += 1000;
+  liveTick();
+  assert.equal(expiredCalls, 0, 'no re-read while time is left');
+  fake.now += 2000;
+  liveTick();
+  assert.equal(expiredCalls, 1, 'at zero the page re-reads the votes');
+  liveTick();
+  assert.equal(expiredCalls, 1, 'only once');
+  context.voteCard({ ...vote, closes_at: new Date(fake.now - 1000).toISOString() }, { onExpire: () => { expiredCalls += 1; } });
+  ticks[ticks.length - 1]();
+  assert.equal(expiredCalls, 1, 'a card that starts past zero does not loop the re-read');
+  context.Date = realDate;
 
   // A refusal shows on the card.
   const refused = context.voteCard(vote, { cast: async () => { throw new Error('guests can\'t vote'); } });
