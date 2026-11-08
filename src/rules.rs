@@ -116,6 +116,7 @@ pub const UNGATED_ROUTES: &[&str] = &[
     "POST /api/house-invites/{code}/join",
     "POST /api/worlds/join/{code}",
     "POST /api/players/claim",
+    "POST /api/bugs/report",
     // What only the caller or their own bots read: settings, private notes, marks, blocks.
     "PUT /api/me/github-display",
     "PUT /api/clock",

@@ -13,6 +13,7 @@ pub mod bot_setup;
 pub mod bot_trust;
 pub mod brand;
 pub mod bridge;
+pub mod bug_reports;
 pub mod cadence;
 pub mod camera;
 pub mod cars;
@@ -340,6 +341,7 @@ pub fn app(state: AppState) -> Router {
         .merge(camera::routes())
         .merge(usage::routes())
         .merge(oauth::routes())
+        .merge(bug_reports::routes())
         .merge(web::routes())
         .route("/mcp", post(mcp::handle))
         .route("/public/mcp", post(public_mcp::handle))

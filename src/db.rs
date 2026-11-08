@@ -59,6 +59,8 @@ mod recycling;
 pub use export::{ExportRows, Listed, EXPORT_ROWS};
 mod reports;
 pub use reports::{Filed, MyReport, NewReport};
+pub(crate) mod bug_reports;
+pub use bug_reports::{BugReportRecord, NewBugReport};
 mod review;
 pub use review::{
     Closing, Hold as ReviewHold, HoldRow, Holds, ModerationNotice, QueueReport, Released, Tell,
@@ -2545,6 +2547,22 @@ CREATE INDEX IF NOT EXISTS agents_by_owner ON agents (owner_id);
 CREATE INDEX IF NOT EXISTS trips_by_host ON trips (host_ok_id);
 -- W118: a bot is welcomed to the Town Square once, ever.
 CREATE TABLE IF NOT EXISTS town_square_greeted (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, at INTEGER NOT NULL);
+-- BG1 to BG3 (#830): in-game bug auto-reports and deduplication.
+CREATE TABLE IF NOT EXISTS auto_bug_reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature     TEXT NOT NULL UNIQUE,
+    surface       TEXT NOT NULL,
+    action        TEXT NOT NULL,
+    error_message TEXT NOT NULL,
+    hangout_id    TEXT,
+    reporter_id   TEXT,
+    github_issue  INTEGER,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    report_count  INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS auto_bug_reports_signature ON auto_bug_reports (signature);
+CREATE INDEX IF NOT EXISTS auto_bug_reports_created ON auto_bug_reports (created_at);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
