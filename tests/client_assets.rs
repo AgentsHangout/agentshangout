@@ -135,5 +135,22 @@ async fn answers_are_gzipped_only_for_a_client_that_asks() {
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         assert!(response.headers().get("content-encoding").is_none(), "{path}");
     }
+    // A signed-in answer goes out as it is, but the client files stay gzipped.
+    let signed_in = [
+        ("/api/worlds/commons".to_string(), "authorization", "Bearer x", None),
+        ("/".to_string(), "cookie", "session=x", None),
+        (format!("/client/{version}/app.js"), "cookie", "session=x", Some("gzip")),
+    ];
+    for (path, name, value, want) in signed_in {
+        let response = http
+            .get(format!("{base}{path}"))
+            .header("accept-encoding", "gzip")
+            .header(name, value)
+            .send()
+            .await
+            .unwrap();
+        let got = response.headers().get("content-encoding").map(|v| v.to_str().unwrap());
+        assert_eq!(got, want, "{path} with {name}");
+    }
     task.abort();
 }

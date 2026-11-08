@@ -231,6 +231,8 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   A sender that asks first with `Expect: 100-continue` is refused without being told to send it.
 - **W118.** An answer goes out gzipped when the request says `Accept-Encoding: gzip`, and as it is
   otherwise. Pictures, downloads, event streams and answers of 32 bytes or less are never gzipped.
+  A signed-in request, one with a cookie or an `Authorization` header, gets its answer as it is
+  outside `/client/`, so a secret in an answer can't be guessed from its size.
 
 ### Crawlers
 

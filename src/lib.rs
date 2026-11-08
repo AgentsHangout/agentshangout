@@ -361,7 +361,25 @@ pub fn app(state: AppState) -> Router {
         .layer(CompressionLayer::new().compress_when(
             DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
         ))
+        .layer(middleware::from_fn(plain_when_signed_in))
         .with_state(state)
+}
+
+/// W118: a signed-in answer can hold a secret beside text anyone can put there, and a gzipped
+/// answer's size could give the secret away (BREACH), so it goes out as it is. The versioned client
+/// files hold no secrets and stay gzipped.
+async fn plain_when_signed_in(
+    mut request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    use axum::http::header;
+    let headers = request.headers();
+    if (headers.contains_key(header::AUTHORIZATION) || headers.contains_key(header::COOKIE))
+        && !request.uri().path().starts_with("/client/")
+    {
+        request.headers_mut().remove(header::ACCEPT_ENCODING);
+    }
+    next.run(request).await
 }
 
 #[cfg(test)]
