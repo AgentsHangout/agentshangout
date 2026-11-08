@@ -2311,7 +2311,9 @@ function mentionBox(input, { names, load, pick }) {
 // #814: an open vote's time left, counted down from the server's closes_at. role=timer is a live
 // region that is off, so the text ticks each second without a screen reader announcing every change;
 // its aria-label gives the closing time once. At zero it reads closed and stops ticking.
-function voteClock(closesAt) {
+// onExpire runs once, when the countdown ticks over to zero while the card is up, so the page can
+// re-read the votes and drop the ballot buttons. A card that starts already past zero doesn't call it.
+function voteClock(closesAt, { onExpire = null } = {}) {
   const end = Math.floor(Date.parse(closesAt) / 1000);
   const pad = (n) => String(n).padStart(2, '0');
   const textNow = () => {
@@ -2320,11 +2322,17 @@ function voteClock(closesAt) {
     if (left < 3600) return `closes in ${Math.floor(left / 60)}:${pad(left % 60)}`;
     return `closes in ${Math.floor(left / 3600)}h ${pad(Math.floor((left % 3600) / 60))}m`;
   };
+  const startedOpen = textNow() !== 'closed';
   const clock = h('span', { role: 'timer', 'aria-label': `Closes ${whenText(end)}` }, textNow());
   const timer = setInterval(() => {
     const next = textNow();
     clock.textContent = next;
     if (next === 'closed' || clock.isConnected === false) clearInterval(timer);
+    if (next === 'closed' && startedOpen && onExpire) {
+      const fire = onExpire;
+      onExpire = null;
+      fire();
+    }
   }, 1000);
   return clock;
 }
@@ -2334,7 +2342,7 @@ function voteClock(closesAt) {
 // whoever opened it. A visitor, who walked onto a public floor, is marked as one.
 //   cast(option)  votes, and returns a promise
 //   close()       closes it early, for its opener
-function voteCard(vote, { cast = null, close = null, collapsible = false, expanded = false, onToggle = null } = {}) {
+function voteCard(vote, { cast = null, close = null, collapsible = false, expanded = false, onToggle = null, onExpire = null } = {}) {
   const voterName = (voter) => `${voter.person || `${voter.bot} (${voter.owner ? `${voter.owner}'s bot` : 'a bot'})`}${voter.visitor ? ', visiting' : ''}`;
   const status = h('small', { class: 'muted', role: 'status' });
   const run = (action) => async () => {
@@ -2344,7 +2352,7 @@ function voteCard(vote, { cast = null, close = null, collapsible = false, expand
       status.textContent = error.message;
     }
   };
-  const when = vote.open ? voteClock(vote.closes_at) : 'closed';
+  const when = vote.open ? voteClock(vote.closes_at, { onExpire }) : 'closed';
   const details = [
     h('ul', { class: 'vote-options' }, vote.options.map((option) => h('li', {},
       vote.open && cast
@@ -5127,7 +5135,7 @@ async function roomView(id) {
       snapshot.you.agent_id || snapshot.guest ? null : h('div', { class: 'event-actions' },
         h('button', { type: 'button', onclick: openVoteDialog }, 'Open a vote')),
       votes.length
-        ? h('div', { class: 'list' }, votes.map((vote) => voteCard(vote, voteActions(vote))))
+        ? h('div', { class: 'list' }, votes.map((vote) => voteCard(vote, { ...voteActions(vote), onExpire: () => reload() })))
         : h('p', { class: 'muted' }, 'No votes right now.'));
   }
 
@@ -5137,6 +5145,7 @@ async function roomView(id) {
     const open = (snapshot.votes || []).filter((vote) => vote.open);
     voteCardsEl.replaceChildren(...open.map((vote) => voteCard(vote, {
       ...voteActions(vote),
+      onExpire: () => reload(),
       collapsible: true,
       expanded: expanded.has(vote.id),
       onToggle: (next) => {
