@@ -42,6 +42,7 @@ pub use contributions::{
 mod bridge;
 pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
+mod starter;
 pub use bot_setup::{BotSetupDraft, SetupFields, SetupGrant};
 pub use keyless::KeylessCard;
 mod bot_trust;
