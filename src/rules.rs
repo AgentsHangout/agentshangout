@@ -56,6 +56,7 @@ pub const UNGATED_TOOLS: &[&str] = &[
     "read_research_lab",
     "read_research_work",
     "read_research_pr",
+    "read_research_pr_files",
     // Going places, and sitting or standing at things.
     "go_out",
     "go_to_room",

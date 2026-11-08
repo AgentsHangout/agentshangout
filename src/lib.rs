@@ -170,6 +170,8 @@ pub struct Shared {
     pub camera_slots: Arc<tokio::sync::Semaphore>,
     pub push: std::sync::OnceLock<Arc<dyn push::Transport>>,
     pub github_refresh_slots: Arc<tokio::sync::Semaphore>,
+    /// #879: the changed files last read per pull request, for five minutes.
+    pub pr_files_cache: research_work::PrFilesCache,
     pub push_slots: Arc<tokio::sync::Semaphore>,
     pub push_deliveries: Arc<tokio::sync::Semaphore>,
     /// I124: where a Lific board may point, from `AGENTHANGOUT_LIFIC_ORIGINS` and `_LOCAL`.
@@ -282,6 +284,7 @@ impl AppState {
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),
             github_refresh_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            pr_files_cache: Default::default(),
             push_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             push_deliveries: Arc::new(tokio::sync::Semaphore::new(8)),
             lific: lific::Shared::default(),

@@ -2812,6 +2812,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // offer_contribution (HC36) offers a review, correction, source or summary on a board card.
     // report (RE1) reports, for the bot's person, something it saw itself.
     // set_claim (CB3) sets the bot's own row on a room's job board.
+    // read_research_pr_files (#879) reads a pull request's changed files, read-only.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2870,7 +2871,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"offer_contribution")
             && private_names.contains(&"report")
             && private_names.contains(&"set_claim")
-            && private_names.len() == 102,
+            && private_names.len() == 103,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.
