@@ -31,17 +31,25 @@ impl Db {
         )
     }
 
+    /// When this bot was created, or None if there's no such bot.
+    pub fn bot_created_at(&self, agent_id: &str) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row("SELECT created_at FROM agents WHERE id = ?", [agent_id], |row| row.get(0))
+            .optional()
+    }
+
     /// Whether this bot has played a game against another bot. A challenge is two plays of the
-    /// same game object in the same room, a moment apart, by two different bots (GM8).
-    pub fn bot_played_a_challenge(&self, agent_id: &str) -> rusqlite::Result<bool> {
+    /// same game object in the same room, a moment apart, by two different bots (GM8). `owner_id`
+    /// is the bot's owner, the leading column of `game_plays_player`, so the scan starts there.
+    pub fn bot_played_a_challenge(&self, agent_id: &str, owner_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),
             "SELECT 1 FROM game_plays a
              JOIN game_plays b ON b.hangout_id = a.hangout_id AND b.item_id = a.item_id
                   AND b.kind = a.kind AND b.agent_id IS NOT NULL AND b.agent_id != a.agent_id
                   AND ABS(b.at - a.at) <= 2
-             WHERE a.agent_id = ? LIMIT 1",
-            [agent_id],
+             WHERE a.person_id = ? AND a.agent_id = ? LIMIT 1",
+            params![owner_id, agent_id],
         )
     }
 }
