@@ -94,3 +94,7 @@ one visitor's animation frame. No 3D viewer, external renderer, browser process 
 - **CP18.** No name tag covers the wall board. A seated figure's tag that has no room above its head
   below the board goes under its feet instead, next to its seat, rather than up onto the board or
   down onto the faces at the table. CP10 still holds.
+- **CP19.** A figure standing in the grid stands where the strip under its feet, where its name tag
+  goes, is clear of furniture and items, when such a spot is near enough (the same search as
+  CP14), so a tag doesn't cover the top of a whiteboard, a guitar or a piano. When there is none,
+  it stands as CP14 says.

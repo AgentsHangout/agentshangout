@@ -497,4 +497,91 @@ mod tests {
             std::fs::write(path, bytes).unwrap();
         }
     }
+
+    /// The Commons Fairground's items as the live room has them: kind, x, y, facing.
+    const FAIRGROUND: [(&str, i32, i32, i32); 36] = [
+        ("flower_box", 32, 0, 0),
+        ("flower_box", 36, 0, 0),
+        ("hedge", 13, 0, 0),
+        ("hedge", 17, 0, 0),
+        ("hedge", 21, 0, 0),
+        ("hedge", 25, 0, 0),
+        ("bench", 2, 8, 0),
+        ("lantern", 0, 8, 0),
+        ("lantern", 7, 8, 0),
+        ("bench", 32, 6, 0),
+        ("boulder", 29, 6, 0),
+        ("flower_box", 0, 12, 0),
+        ("flower_box", 28, 12, 0),
+        ("rug_checked", 33, 2, 0),
+        ("standing_desk", 34, 3, 0),
+        ("whiteboard", 32, 1, 0),
+        ("computer", 38, 2, 0),
+        ("rubber_duck", 38, 4, 0),
+        ("stool", 35, 5, 0),
+        ("monitor", 30, 3, 0),
+        ("stool", 30, 4, 0),
+        ("bookshelf", 2, 1, 0),
+        ("globe", 6, 1, 0),
+        ("coffee_table", 3, 2, 0),
+        ("stool", 2, 2, 0),
+        ("torch", 1, 1, 0),
+        ("stool", 6, 2, 0),
+        ("plant", 1, 3, 0),
+        ("chest", 2, 4, 0),
+        ("piano", 20, 10, 0),
+        ("guitar", 19, 11, 0),
+        ("whiteboard", 11, 11, 0),
+        ("easel", 36, 9, 0),
+        ("microscope", 29, 0, 0),
+        ("corkboard", 4, 11, 0),
+        ("lific_board", 28, 9, 0),
+    ];
+
+    fn fairground(bots: Value) -> Value {
+        let items: Vec<_> = FAIRGROUND
+            .iter()
+            .enumerate()
+            .map(|(n, (kind, x, y, facing))| {
+                let k = crate::items::kind_of(kind);
+                json!({"id":format!("i{n}"),"item":kind,"x":x,"y":y,"w":k.map_or(1, |k| k.w),"h":k.map_or(1, |k| k.h),"facing":facing})
+            })
+            .collect();
+        let mut scene = room(json!(items), bots, whole());
+        scene["look"]["flooring"] = json!("grass");
+        scene["look"]["outdoors"] = json!(true);
+        scene
+    }
+
+    // CP19: a lone bot standing in the Fairground stands where its name tag, under its feet, covers
+    // no whiteboard, guitar or piano, alone and with someone seated at the table.
+    #[test]
+    fn a_standing_bot_stands_where_its_tag_covers_no_item() {
+        let rects = |scene: &Value| -> Vec<(f64, f64, f64, f64)> {
+            let script = "const s=JSON.parse(__camera_scene);JSON.stringify(cameraPlaced(s).filter(i=>!i.flat).map(i=>{const up=Math.max(i.rise||0,i.deep);return [i.left,i.y-up,i.wide,up]}))";
+            serde_json::from_str(&run(scene, Some(script)).unwrap()).unwrap()
+        };
+        let lone = bot_in("Town Square Hermes", "idle", false);
+        let seated = bot_in("Cake Claude", "active", false);
+        for bots in [json!([lone]), json!([seated, lone])] {
+            let scene = fairground(bots);
+            let placed = tags(&scene);
+            assert_eq!(placed.len(), scene["bots"].as_array().unwrap().len(), "{placed:?}");
+            assert!(apart(&placed), "{placed:?}");
+            for t in &placed {
+                assert!(
+                    t.0 >= 0.0 && t.0 + t.2 <= 480.0 && t.1 >= 0.0 && t.1 + t.3 <= 252.0,
+                    "{t:?}"
+                );
+            }
+            let hermes = placed.last().unwrap();
+            for r in rects(&scene) {
+                let over = hermes.0 < r.0 + r.2
+                    && r.0 < hermes.0 + hermes.2
+                    && hermes.1 < r.1 + r.3
+                    && r.1 < hermes.1 + hermes.3;
+                assert!(!over, "tag {hermes:?} covers item {r:?}");
+            }
+        }
+    }
 }
