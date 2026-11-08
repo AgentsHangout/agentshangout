@@ -7820,9 +7820,15 @@ async fn people_and_their_bots_add_and_move_cards_on_the_rooms_own_lific_board()
     // Lific keeps a source unique among live issues, so each card has its own.
     assert_ne!(sent[0]["source"], sent[1]["source"]);
     for issue in &sent {
-        assert!(text(&issue["source"]).starts_with("agentshangout:"), "{issue}");
+        // The source is the prefix and one generated id, nothing else. That id can spell "Bo" by
+        // chance, so it's left out of the name check below.
+        let source = text(&issue["source"]);
+        let id = source.strip_prefix("agentshangout:").unwrap_or_default();
+        assert!(id.len() == 16 && id.chars().all(|c| c.is_ascii_alphanumeric()), "{issue}");
+        let mut words = issue.clone();
+        words.as_object_mut().unwrap().remove("source");
         for name in ["Ann", "Bo", "Scout"] {
-            assert!(!issue.to_string().contains(name), "{issue}");
+            assert!(!words.to_string().contains(name), "{issue}");
         }
     }
 
@@ -8592,7 +8598,9 @@ async fn walk_ins_hear_of_a_vote_and_a_long_one_reminds_once_before_it_closes() 
     assert_eq!(heard.len(), 1, "{heard:?}");
     assert_eq!(heard[0].0, "opened");
     assert_eq!(heard[0].1["vote"]["voters_hidden"], true, "{:?}", heard[0]);
-    assert!(!heard[0].1.to_string().contains("Ann"), "{:?}", heard[0]);
+    // The room's and the vote's ids are random and can spell "Ann", so they're taken out first.
+    let words = heard[0].1.to_string().replace(&room, "").replace(&long, "");
+    assert!(!words.contains("Ann"), "{:?}", heard[0]);
 
     // Nothing yet with 20 minutes to go.
     server.state.db.age_vote(&long, 10 * 60).unwrap();
