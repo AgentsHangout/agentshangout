@@ -571,6 +571,9 @@ pub async fn list_filtered(
                 json!(claims.iter().filter(|c| c.number == card.number).collect::<Vec<_>>());
             // RW9: only what was already read; reading the board never asks GitHub about a PR.
             if card.kind == "pull_request" {
+                // #844: a pull request always says whether it merged, so closed-unmerged reads
+                // as `false`, not as a missing field. An issue still has no `merged`.
+                item["merged"] = json!(card.merged);
                 item["pr_state"] =
                     json!(state.db.research_work_pr_state(&repo, card.number).ok().flatten());
             }

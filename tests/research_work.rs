@@ -725,7 +725,18 @@ async fn rw13_filters_narrow_the_board_and_no_filter_changes_nothing() {
     let all = research_work::list(&state, &owner, "lab").await.unwrap();
     assert!(all.get("filter").is_none());
     assert_eq!(all["items"].as_array().unwrap().len(), 5);
-    assert!(all["items"][0].get("merged").is_none(), "unmerged items keep their shape");
+    assert!(all["items"][0].get("merged").is_none(), "an issue has no merged");
+    // #844: every pull request says merged true or false; closed-unmerged isn't a missing field.
+    let item = |n: u64| {
+        all["items"].as_array().unwrap().iter().find(|i| i["number"] == n).unwrap().clone()
+    };
+    assert_eq!(
+        (item(12)["merged"].clone(), item(13)["merged"].clone()),
+        (json!(false), json!(true))
+    );
+    assert_eq!(item(14)["merged"], false, "closed and not merged");
+    assert!(item(15).get("merged").is_none(), "a closed issue has none");
+    assert!(item(12)["pr_state"].is_null(), "not read yet (RW9)");
     let numbers = |v: &Value| -> Vec<u64> {
         v["items"].as_array().unwrap().iter().map(|i| i["number"].as_u64().unwrap()).collect()
     };
