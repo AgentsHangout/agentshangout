@@ -250,7 +250,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **Which packs and what they cost.** Two so far: `winter` for 15 credits, and `stargazer`, a
   night-sky pack with no season, for 20.
 - **Speed.** `credits` still runs the history queries for every city on each read, then writes down
-  only what's new. An index on `trips` may be enough if it gets slow.
+  only what's new. Indexes on the bots' owners and on trips' hosts keep those reads to the
+  person's own trips (#748).
 
 ### Funded questions
 
