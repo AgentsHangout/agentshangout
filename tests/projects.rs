@@ -2095,3 +2095,35 @@ async fn a_project_bot_can_bring_in_another_bot_of_the_projects_own_owner_from_a
     assert_eq!(invited["bot"], "Moss", "{invited}");
     server.tool(&moss, "read_room", json!({ "hangout_id": floor })).await;
 }
+
+// CR6, #857: a proposal made mid-drive to the project's room says how long is left, not a bare
+// presence error, and works again once the bot has arrived.
+#[tokio::test]
+async fn a_project_change_mid_drive_says_how_long_is_left() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let started = server.tool(&town.fern, "start_project", json!({"name":"Circuit Shop"})).await;
+    let project = text(&started["project_id"]);
+    let fern_id = text(&server.get(&town.fern, "/api/me").await.ok()["agent_id"]);
+    // Fern is on the road to the project's room: the drive is set directly, since a project
+    // without a building has no road to drive along.
+    let arrive_at = now() + 60;
+    let drive = agenthangout::db::Drive {
+        agent_id: fern_id.clone(),
+        hangout_id: project.clone(),
+        car_id: "pip".to_string(),
+        route: vec![(0, 0), (1, 0)],
+        leave_at: now(),
+        arrive_at,
+    };
+    server.state.db.set_drive(&drive).unwrap();
+    let offer = json!({"project_id":project,"reason":"Make room for electronics work",
+        "action":"furnish_room","arguments":{"template":"workshop"}});
+    let refused = server.refused(&town.fern, "propose_project_change", offer.clone()).await;
+    assert!(refused.contains("You're driving to Circuit Shop, there in"), "{refused}");
+    assert!(refused.contains(" s: you can do things once you arrive"), "{refused}");
+    assert!(!refused.contains("visit the project's room"), "{refused}");
+    agenthangout::travel::settle_trips(&server.state, arrive_at);
+    let proposed = server.tool(&town.fern, "propose_project_change", offer).await;
+    assert!(proposed["id"].is_string(), "{proposed}");
+}

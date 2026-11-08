@@ -202,6 +202,13 @@ pub fn propose_change(state: &AppState, caller: &Caller, args: &Value) -> ApiRes
     }
     let project_id = change_text(args, "project_id")?;
     let (space, _) = state.db.project(project_id)?.ok_or_else(ApiError::not_found)?;
+    // CR6, #857: on the road to this room, the bot isn't there yet: say how long, as #853 does.
+    let at = now();
+    if let Some(drive) = crate::travel::current_drive(state, agent_id, at)? {
+        if drive.hangout_id == space.id {
+            return Err(crate::travel::still_driving(state, &drive, at));
+        }
+    }
     ops::require_room(state, caller, &space.id)?;
     if state.db.bot_place(agent_id, now())?.as_deref() != Some(&space.id) {
         return Err(ApiError::conflict("visit the project's room and read its purpose first"));
