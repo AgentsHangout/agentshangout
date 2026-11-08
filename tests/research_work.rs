@@ -108,7 +108,34 @@ async fn setup() -> (AppState, auth::Caller, auth::Caller, Arc<Mutex<Value>>) {
         let reviews = v.lock().unwrap()["reviews"].clone();
         Json(if reviews.is_null() { json!([]) } else { reviews })
     }
+    // #879: pull request 12's changed files, `file_count` of them, each with `patch_len` bytes
+    // of hunks. Pages of 100 by the `page` and `per_page` query, like GitHub's.
+    async fn files(
+        State(v): State<Arc<Mutex<Value>>>,
+        axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    ) -> (StatusCode, Json<Value>) {
+        let (count, len) = {
+            let v = v.lock().unwrap();
+            if v["pr_fail"] == true {
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})));
+            }
+            (v["file_count"].as_u64().unwrap_or(0), v["patch_len"].as_u64().unwrap_or(10))
+        };
+        let per: u64 = q["per_page"].parse().unwrap();
+        let page: u64 = q["page"].parse().unwrap();
+        let from = (page - 1) * per;
+        let to = count.min(from + per);
+        let patch = "+".repeat(len as usize);
+        let entries = (from..to)
+            .map(|n| {
+                json!({"filename":format!("src/f{n}.rs"),"status":"modified",
+                    "additions":3,"deletions":1,"patch":patch})
+            })
+            .collect();
+        (StatusCode::OK, Json(Value::Array(entries)))
+    }
     let router = Router::new()
+        .route("/repos/org/repo/pulls/12/files", get(files))
         .route("/repos/org/repo/pulls/12", get(pr12))
         .route("/repos/org/repo/commits/{sha}/check-runs", get(checks))
         .route("/repos/org/repo/pulls/12/reviews", get(reviews))
@@ -840,4 +867,70 @@ async fn rw13_filters_narrow_the_board_and_no_filter_changes_nothing() {
         .await
         .unwrap();
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+}
+
+/// #879: changed files are read in one reply, all pages up to a cap, and say when they're cut.
+#[tokio::test]
+async fn pr879_changed_files_read_in_pages_capped_and_flagged() {
+    let (state, owner, _bot, upstream) = setup().await;
+    // Not before the board is read.
+    assert!(research_work::pr_files(&state, &owner, "lab", 12).await.is_err());
+    research_work::list(&state, &owner, "lab").await.unwrap();
+    // Not for an issue.
+    assert!(research_work::pr_files(&state, &owner, "lab", 9).await.is_err());
+
+    // A few small files: every field, no truncation.
+    upstream.lock().unwrap()["file_count"] = json!(3);
+    let few = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(few["file_count"], 3);
+    assert_eq!(few["truncated"], false);
+    assert_eq!(few["files"][2]["filename"], "src/f2.rs");
+    assert_eq!(few["files"][2]["status"], "modified");
+    assert_eq!(few["files"][2]["additions"], 3);
+    assert_eq!(few["files"][2]["deletions"], 1);
+    assert_eq!(few["files"][2]["hunks"].as_str().unwrap().len(), 10);
+
+    // 250 files over three pages: all of them, and the last page is short, so not truncated.
+    upstream.lock().unwrap()["file_count"] = json!(250);
+    let all = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!((all["file_count"].as_u64(), all["truncated"].clone()), (Some(250), json!(false)));
+    assert_eq!(all["files"][249]["filename"], "src/f249.rs");
+
+    // 450 files: the cap holds at 300 and says so.
+    upstream.lock().unwrap()["file_count"] = json!(450);
+    let capped = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(
+        (capped["file_count"].as_u64(), capped["truncated"].clone()),
+        (Some(300), json!(true))
+    );
+    assert_eq!(capped["max_files"], 300);
+
+    // Exactly 300: a full last page may hide more, so it's flagged too.
+    upstream.lock().unwrap()["file_count"] = json!(300);
+    let full = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!((full["file_count"].as_u64(), full["truncated"].clone()), (Some(300), json!(true)));
+
+    // Hunks: 30 KB each, so two fit in the 64 KB budget and the third is listed without them.
+    upstream.lock().unwrap()["file_count"] = json!(3);
+    upstream.lock().unwrap()["patch_len"] = json!(30 * 1024);
+    let budget = research_work::pr_files(&state, &owner, "lab", 12).await.unwrap();
+    assert_eq!(budget["files"][1]["hunks"].as_str().unwrap().len(), 30 * 1024);
+    assert!(budget["files"][2]["hunks"].is_null());
+    assert_eq!(budget["files"][2]["filename"], "src/f2.rs");
+    assert_eq!(budget["truncated"], true);
+
+    // GitHub down on the first page is an error, not an empty list that looks complete.
+    upstream.lock().unwrap()["pr_fail"] = json!(true);
+    assert!(research_work::pr_files(&state, &owner, "lab", 12).await.is_err());
+    upstream.lock().unwrap()["pr_fail"] = json!(false);
+
+    // Someone outside the room can't read it.
+    let outsider = auth::Caller {
+        person_id: "stranger".into(),
+        agent_id: None,
+        name: "Stranger".into(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(research_work::pr_files(&state, &outsider, "lab", 12).await.is_err());
 }

@@ -239,6 +239,9 @@ fn client() -> ApiResult<Client> {
         .map_err(|_| ApiError::bad_request("GitHub unavailable"))
 }
 async fn get(client: &Client, url: String) -> Option<Value> {
+    get_limited(client, url, 1024 * 1024).await
+}
+async fn get_limited(client: &Client, url: String, limit: usize) -> Option<Value> {
     let mut r =
         client.get(url).header("Accept", "application/vnd.github+json").send().await.ok()?;
     if !r.status().is_success() {
@@ -246,7 +249,7 @@ async fn get(client: &Client, url: String) -> Option<Value> {
     }
     let mut body = Vec::new();
     while let Some(chunk) = r.chunk().await.ok()? {
-        if body.len() + chunk.len() > 1024 * 1024 {
+        if body.len() + chunk.len() > limit {
             return None;
         }
         body.extend_from_slice(&chunk)
@@ -801,6 +804,102 @@ pub async fn pr_status(
         "requested":pr_state.requested,"requested_teams":pr_state.requested_teams,
         "checked_at":pr_state.checked_at,"stale":pr_state.stale,
         "note":"Read from GitHub's public API at most every five minutes. unknown or stale means it couldn't be checked, not that it passed."}))
+}
+/// #879: how many changed files one reply lists, how many GitHub pages of 100 are read for them,
+/// and how many bytes of diff hunks one reply carries in all.
+pub const MAX_PR_FILES: usize = 300;
+const FILE_PAGE: usize = 100;
+const MAX_FILE_PAGES: usize = 3;
+const MAX_FILE_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HUNK_BYTES: usize = 64 * 1024;
+/// #879: a pull request's changed files, names, status, +/- counts and hunks, read from GitHub on
+/// request. Read-only: nothing is stored or written. `truncated` is true when the file cap, the
+/// hunk budget, or a failed later page cut the list short, or when the last page read was full, so
+/// there may be more.
+pub async fn pr_files(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    number: u64,
+) -> ApiResult<Value> {
+    let lab = lab(state, caller, id)?;
+    crate::ops::require_room(state, caller, id)?;
+    let repo = canonical_repo(&lab.github)?;
+    let is_pr = state
+        .db
+        .research_work_snapshot(&repo)?
+        .is_some_and(|s| s.cards.iter().any(|c| c.number == number && c.kind == "pull_request"));
+    if !is_pr {
+        return Err(ApiError::bad_request(
+            "that isn't a pull request on the lab's workboard; read it first",
+        ));
+    }
+    let _slot = state
+        .github_refresh_slots
+        .acquire()
+        .await
+        .map_err(|_| ApiError::bad_request("GitHub unavailable"))?;
+    let c = client()?;
+    let base = api_base(state);
+    let mut files: Vec<Value> = Vec::new();
+    let mut truncated = false;
+    let mut hunk_bytes = 0usize;
+    'pages: for page in 1..=MAX_FILE_PAGES {
+        let url =
+            format!("{base}/repos/{repo}/pulls/{number}/files?per_page={FILE_PAGE}&page={page}");
+        let list = match get_limited(&c, url, MAX_FILE_PAGE_BYTES)
+            .await
+            .and_then(|v| v.as_array().cloned())
+        {
+            Some(list) => list,
+            None if page == 1 => return Err(ApiError::bad_request("GitHub unavailable")),
+            None => {
+                truncated = true;
+                break;
+            }
+        };
+        for entry in &list {
+            if files.len() == MAX_PR_FILES {
+                truncated = true;
+                break 'pages;
+            }
+            let Some(name) = entry["filename"].as_str() else {
+                // An entry without its name can't be shown as a file, so the list is incomplete.
+                truncated = true;
+                continue;
+            };
+            // GitHub leaves `patch` out for binary files and huge diffs: null, not truncated.
+            let hunks = match entry["patch"].as_str() {
+                Some(p) if hunk_bytes + p.len() <= MAX_HUNK_BYTES => {
+                    hunk_bytes += p.len();
+                    Some(p)
+                }
+                Some(_) => {
+                    truncated = true;
+                    None
+                }
+                None => None,
+            };
+            files.push(json!({
+                "filename": name,
+                "status": entry["status"].as_str(),
+                "previous_filename": entry["previous_filename"].as_str(),
+                "additions": entry["additions"].as_u64(),
+                "deletions": entry["deletions"].as_u64(),
+                "hunks": hunks,
+            }));
+        }
+        if list.len() < FILE_PAGE {
+            break;
+        }
+        if page == MAX_FILE_PAGES {
+            truncated = true;
+        }
+    }
+    crate::ops::require_room(state, caller, id)?;
+    Ok(json!({"lab_id":id,"number":number,"file_count":files.len(),"files":files,
+        "truncated":truncated,"max_files":MAX_PR_FILES,
+        "note":"Read from GitHub's public API on request, not stored. truncated means there may be more files than this reply holds."}))
 }
 /// RW8: claim or renew an item, leading it or pairing with whoever leads it.
 pub fn claim(

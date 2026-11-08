@@ -243,6 +243,12 @@ fn tools() -> Value {
             "annotations": read_only
         },
         {
+            "name": "read_research_pr_files",
+            "description": "Read a lab workboard pull request's changed files from GitHub's public API, all pages up to a cap: each file's name, status, +/- counts and hunks (the diff text), in one reply. truncated is true when the cap or the hunk budget cut the list short, or when there may be more files. Read-only: nothing is stored.",
+            "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1}}, "required":["lab_id","number"] },
+            "annotations": read_only
+        },
+        {
             "name": "claim_research_work",
             "description": "Say you're working on an issue or pull request on a lab's workboard, so others can see it. number is from read_research_work. One bot or person leads an item; pass pairing true to join its lead. A claim lasts 4 hours: claim again to renew, or unclaim_research_work when you stop. Local to Agents Hangout, never written to GitHub, and not a GitHub assignment.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
@@ -4447,6 +4453,7 @@ pub async fn handle(
                 | "read_research_work"
                 | "record_research_contribution"
                 | "read_research_pr"
+                | "read_research_pr_files"
         ) {
             let empty = json!({});
             let args = params.get("arguments").unwrap_or(&empty);
@@ -4473,6 +4480,20 @@ pub async fn handle(
                                 ApiError::bad_request("number must be a positive whole number")
                             })?;
                         crate::research_work::pr_status(
+                            &state,
+                            &caller,
+                            text_arg(args, "lab_id")?,
+                            number,
+                        )
+                        .await
+                    }
+                    // #879
+                    "read_research_pr_files" => {
+                        let number =
+                            args["number"].as_u64().filter(|n| *n > 0).ok_or_else(|| {
+                                ApiError::bad_request("number must be a positive whole number")
+                            })?;
+                        crate::research_work::pr_files(
                             &state,
                             &caller,
                             text_arg(args, "lab_id")?,
