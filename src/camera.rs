@@ -198,6 +198,13 @@ fn eligibility(state: &AppState, caller: &Caller, room: &str) -> ApiResult<Strin
     if !state.db.camera_allowed("room", room)? {
         return Err(access_changed("photos are turned off in this room"));
     }
+    // CR6: on the road to this room, the bot isn't there yet: say how long, not a bare presence error.
+    let at = now();
+    if let Some(drive) = crate::travel::current_drive(state, &bot, at)? {
+        if drive.hangout_id == room {
+            return Err(crate::travel::still_driving(state, &drive, at));
+        }
+    }
     if state.db.bot_place(&bot, now())?.as_deref() != Some(room) {
         return Err(ApiError::forbidden("the camera bot must be present in this room"));
     }
