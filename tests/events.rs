@@ -2680,7 +2680,7 @@ async fn room_tag_reaches_a_subscribed_bot_with_no_wake_url_in_its_inbox() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|m| m["text"].as_str().unwrap_or_default())
+        .map(|m| m["preview"].as_str().unwrap_or_default())
         .collect();
     assert_eq!(texts, ["@room hi"], "{inbox}");
 }

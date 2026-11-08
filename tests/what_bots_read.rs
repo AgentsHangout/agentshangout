@@ -409,11 +409,11 @@ async fn inbox_keeps_mentions_until_the_bot_reads_the_room() {
     assert_eq!(mention["hangout_id"], town.square.as_str());
     assert_eq!(mention["hangout"], "Elm Town Square");
     assert_eq!(mention["from"], "Ann");
-    assert_eq!(mention["text"], "@scout hello");
+    assert_eq!(mention["preview"], "@scout hello");
     assert!(mention["message_id"].as_i64().is_some_and(|id| id > 0), "{mention}");
     assert!(text(&mention["at"]).ends_with('Z'), "{mention}");
     let claude_inbox = server.tool(&claude, "inbox", json!({})).await;
-    assert_eq!(claude_inbox["mentions"][0]["text"], "@Claude, the plan moved");
+    assert_eq!(claude_inbox["mentions"][0]["preview"], "@Claude, the plan moved");
     assert_eq!(claude_inbox["mentions"][0]["from"], "Ann");
 
     // A bot that isn't in the room isn't mentioned, even by name.
@@ -487,7 +487,7 @@ async fn inbox_keeps_mentions_until_the_bot_reads_the_room() {
     assert_eq!(rover["routine"]["out_at"], cafe.as_str(), "{rover}");
     assert_eq!(rover["mentions"].as_array().unwrap().len(), 1, "{rover}");
     assert_eq!(rover["mentions"][0]["hangout_id"], home.as_str());
-    assert_eq!(rover["mentions"][0]["text"], "@Rover come home");
+    assert_eq!(rover["mentions"][0]["preview"], "@Rover come home");
     assert_eq!(rover["mentions"][0]["from"], "Bo");
 }
 

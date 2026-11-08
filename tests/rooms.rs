@@ -6568,7 +6568,7 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|m| text(&m["text"]))
+                .map(|m| text(&m["preview"]))
                 .collect::<Vec<_>>()
         }
     };
@@ -6694,7 +6694,11 @@ async fn room_mentions_reach_every_subscribed_bot_here_and_nobody_elsewhere() {
         let server = &server;
         async move {
             let inbox = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
-            inbox["mentions"].as_array().unwrap().iter().any(|m| m["text"] == "@room standup now")
+            inbox["mentions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["preview"] == "@room standup now")
         }
     };
     for bot in &here {
@@ -10602,11 +10606,15 @@ async fn waiting_leaves_out_mentions_the_bot_cannot_clear() {
     state.db.add_agent_to_room(&w.room, &w.scout.id).unwrap();
     assert_eq!(w.waiting("list_hangouts", json!({})).await["mentions"], 1, "back in, it counts");
 
-    // Over a week old, it drops out of the count, but inbox still lists it.
+    // Over a week old, it drops out of the count. #850: inbox counts a mention older than a day
+    // as mentions_older, and full still lists it.
     w.age(7 * 86_400);
     assert!(w.waiting("list_hangouts", json!({})).await.is_null(), "over a week old");
     let inbox = w.server.tool(&w.scout.token, "inbox", json!({})).await;
-    assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 1);
+    assert_eq!(inbox["structuredContent"]["mentions"].as_array().unwrap().len(), 0);
+    assert_eq!(inbox["structuredContent"]["mentions_older"], 1);
+    let full = w.server.tool(&w.scout.token, "inbox", json!({ "full": true })).await;
+    assert_eq!(full["structuredContent"]["mentions"].as_array().unwrap().len(), 1);
 }
 
 // I91, #494: a brief read says how to use its section_tags.
@@ -11257,6 +11265,90 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     let quiet = w.server.read_room(&w.scout.token, &w.room).await;
     assert!(!quiet.to_string().contains("mentions_you"), "{quiet}");
     assert!(!quiet.to_string().contains("mention_replies"), "{quiet}");
+}
+
+// #850: a brief read of a reply mention and the thread clear logic. Reading only the top-level
+// line doesn't clear a mention on its reply: the thread does, once its root is shown or Scout
+// answers there.
+#[tokio::test]
+async fn a_reply_mention_is_cleared_by_its_thread_not_by_a_top_level_read() {
+    let w = waiting_world().await;
+    let root = w
+        .server
+        .tool(&w.pip.token, "say", json!({ "hangout_id": w.room, "text": "a topic" }))
+        .await["structuredContent"]["message_id"]
+        .as_i64()
+        .unwrap();
+    w.server
+        .tool(
+            &w.pip.token,
+            "say",
+            json!({ "hangout_id": w.room, "text": "@Scout over to you", "reply_to": root }),
+        )
+        .await;
+    let scout_id: String =
+        w.conn.query_row("SELECT id FROM agents WHERE name = 'Scout'", [], |r| r.get(0)).unwrap();
+    let unread = || {
+        w.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mentions m JOIN agents a ON a.id = m.agent_id
+                 WHERE a.name = 'Scout' AND m.read_at IS NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(unread(), 1);
+    let db = &w.server.state.db;
+    db.mark_mentions_read(&scout_id, &w.room, now()).unwrap();
+    assert_eq!(unread(), 1, "a reply isn't cleared by the top-level mark");
+    db.mark_thread_mentions_read_for_roots(&scout_id, &[root], i64::MAX, now()).unwrap();
+    assert_eq!(unread(), 0);
+}
+
+// #850: inbox lists the newest 5 unread mentions from the last day as previews, counts the
+// rest, and full gives every one with its whole text.
+#[tokio::test]
+async fn inbox_previews_recent_mentions_and_counts_the_older_ones() {
+    let w = waiting_world().await;
+    let long = "x".repeat(120);
+    for n in 0..6 {
+        w.mention(&format!("{long} {n}")).await;
+    }
+    w.age(2 * 86_400);
+    for n in 0..2 {
+        w.mention(&format!("fresh {n}")).await;
+    }
+    let inbox =
+        w.server.tool(&w.scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    assert_eq!(inbox["mentions_count"], 8, "{inbox}");
+    assert_eq!(inbox["mentions_older"], 6, "{inbox}");
+    let mentions = inbox["mentions"].as_array().unwrap();
+    assert_eq!(mentions.len(), 2, "{inbox}");
+    assert_eq!(mentions[1]["preview"], "@Scout fresh 1", "{inbox}");
+    assert!(mentions[1].get("text").is_none(), "{inbox}");
+    assert!(inbox["full_note"].is_string(), "{inbox}");
+
+    let full = w.server.tool(&w.scout.token, "inbox", json!({ "full": true })).await
+        ["structuredContent"]
+        .clone();
+    let all = full["mentions"].as_array().unwrap();
+    assert_eq!(all.len(), 8, "{full}");
+    assert_eq!(all[7]["text"], "@Scout fresh 1", "{full}");
+    assert!(full.get("mentions_older").is_none(), "{full}");
+    assert!(full.get("mentions_count").is_some(), "{full}");
+}
+
+// #850: a long mention's preview is 80 characters and an ellipsis.
+#[tokio::test]
+async fn a_long_mention_previews_eighty_characters() {
+    let w = waiting_world().await;
+    w.mention(&"y".repeat(120)).await;
+    let inbox =
+        w.server.tool(&w.scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    let preview = inbox["mentions"][0]["preview"].as_str().unwrap();
+    // "@Scout " is 7 characters of the text, so the first 80 characters hold 73 y's.
+    assert_eq!(preview, format!("@Scout {}…", "y".repeat(73)), "{inbox}");
 }
 
 // I141, #670 smoke: a brief read (I109) lists mentions_you on the roots it shows too.
