@@ -2097,6 +2097,24 @@ pub(crate) fn bot_here_named(
     Ok(None)
 }
 
+/// GM9: the name of one other bot that is here on `floor_id` now, first by name, if any.
+fn other_bot_here(
+    state: &AppState,
+    floor_id: &str,
+    me: &str,
+    now: i64,
+) -> ApiResult<Option<String>> {
+    let mut names = Vec::new();
+    let agents = state.db.agents_in(floor_id, now)?;
+    for agent in agents.into_iter().chain(state.db.visitors_in(floor_id, now)?) {
+        if agent.id != me && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id) {
+            names.push(agent.name);
+        }
+    }
+    names.sort_by_key(|name| name.to_lowercase());
+    Ok(names.into_iter().next())
+}
+
 /// I35: the bots using each item on a floor now, by item.
 fn users_on(
     state: &AppState,
@@ -2201,7 +2219,16 @@ pub fn use_item_against(
         spaces::go_to(state, caller, &item.hangout_id)?;
         let mut reply = match challenge {
             Some(opponent) => games::challenge(state, caller, item_id, opponent)?,
-            None => games::play(state, caller, item_id)?,
+            None => {
+                let mut reply = games::play(state, caller, item_id)?;
+                // GM9: a solo play points at the challenge it could have been.
+                if let Some(name) = other_bot_here(state, &item.hangout_id, agent_id, now())? {
+                    reply["challenge_hint"] = json!(format!(
+                        "Add challenge: \"{name}\" to play someone here; the room hears who won."
+                    ));
+                }
+                reply
+            }
         };
         reply["ok"] = json!(true);
         return Ok(reply);
