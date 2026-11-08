@@ -157,7 +157,7 @@ jobs:
 
       # The release stays a prerelease and the run fails, so it reads as one that didn't go out.
       - name: Go back if the pages fail
-        if: failure() && steps.pages.outcome == 'failure'
+        if: steps.order.outputs.install == 'true' && failure() && steps.pages.outcome == 'failure'
         env:
           SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
