@@ -2553,16 +2553,20 @@ CREATE TABLE IF NOT EXISTS auto_bug_reports (
     signature     TEXT NOT NULL UNIQUE,
     surface       TEXT NOT NULL,
     action        TEXT NOT NULL,
+    code          TEXT NOT NULL,
     error_message TEXT NOT NULL,
     hangout_id    TEXT,
     reporter_id   TEXT,
     github_issue  INTEGER,
+    filed_day     INTEGER,
+    filed_by      TEXT,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     report_count  INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS auto_bug_reports_signature ON auto_bug_reports (signature);
 CREATE INDEX IF NOT EXISTS auto_bug_reports_created ON auto_bug_reports (created_at);
+CREATE INDEX IF NOT EXISTS auto_bug_reports_filed_day ON auto_bug_reports (filed_day, filed_by);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.

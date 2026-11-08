@@ -6,6 +6,7 @@ pub struct NewBugReport<'a> {
     pub signature: &'a str,
     pub surface: &'a str,
     pub action: &'a str,
+    pub code: &'a str,
     pub error_message: &'a str,
     pub hangout_id: Option<&'a str>,
     pub reporter_id: Option<&'a str>,
@@ -17,6 +18,7 @@ pub struct BugReportRecord {
     pub signature: String,
     pub surface: String,
     pub action: String,
+    pub code: String,
     pub error_message: String,
     pub hangout_id: Option<String>,
     pub reporter_id: Option<String>,
@@ -60,6 +62,7 @@ impl crate::db::Db {
                 signature: report.signature.to_string(),
                 surface: report.surface.to_string(),
                 action: report.action.to_string(),
+                code: report.code.to_string(),
                 error_message: report.error_message.to_string(),
                 hangout_id: report.hangout_id.map(str::to_string),
                 reporter_id: report.reporter_id.map(str::to_string),
@@ -73,14 +76,15 @@ impl crate::db::Db {
 
         tx.execute(
             "INSERT INTO auto_bug_reports (
-                 signature, surface, action, error_message,
+                 signature, surface, action, code, error_message,
                  hangout_id, reporter_id, github_issue,
                  created_at, updated_at, report_count
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?7, 1)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?8, 1)",
             params![
                 report.signature,
                 report.surface,
                 report.action,
+                report.code,
                 report.error_message,
                 report.hangout_id,
                 report.reporter_id,
@@ -95,6 +99,7 @@ impl crate::db::Db {
             signature: report.signature.to_string(),
             surface: report.surface.to_string(),
             action: report.action.to_string(),
+            code: report.code.to_string(),
             error_message: report.error_message.to_string(),
             hangout_id: report.hangout_id.map(str::to_string),
             reporter_id: report.reporter_id.map(str::to_string),
@@ -104,6 +109,40 @@ impl crate::db::Db {
             report_count: 1,
             is_new: true,
         })
+    }
+
+    /// Takes one of the day's GitHub issue slots for a new report, inside one IMMEDIATE
+    /// transaction, so two requests at once can't both take the last slot. Returns false when
+    /// the person or the site is at its cap for `day`; the report then stays in SQLite only.
+    pub fn claim_bug_issue_slot(
+        &self,
+        id: i64,
+        person_id: &str,
+        day: i64,
+        per_person: i64,
+        per_site: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mine: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM auto_bug_reports WHERE filed_day = ?1 AND filed_by = ?2",
+            params![day, person_id],
+            |row| row.get(0),
+        )?;
+        let all: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM auto_bug_reports WHERE filed_day = ?1",
+            params![day],
+            |row| row.get(0),
+        )?;
+        let won = mine < per_person && all < per_site;
+        if won {
+            tx.execute(
+                "UPDATE auto_bug_reports SET filed_day = ?2, filed_by = ?3 WHERE id = ?1",
+                params![id, day, person_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(won)
     }
 
     pub fn set_bug_report_github_issue(&self, id: i64, issue_number: i64) -> rusqlite::Result<()> {
@@ -118,7 +157,7 @@ impl crate::db::Db {
     pub fn list_bug_reports(&self, limit: i64) -> rusqlite::Result<Vec<BugReportRecord>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, signature, surface, action, error_message, hangout_id,
+            "SELECT id, signature, surface, action, code, error_message, hangout_id,
                     reporter_id, github_issue, created_at, updated_at, report_count
              FROM auto_bug_reports
              ORDER BY id DESC
@@ -130,13 +169,14 @@ impl crate::db::Db {
                 signature: row.get(1)?,
                 surface: row.get(2)?,
                 action: row.get(3)?,
-                error_message: row.get(4)?,
-                hangout_id: row.get(5)?,
-                reporter_id: row.get(6)?,
-                github_issue: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-                report_count: row.get(10)?,
+                code: row.get(4)?,
+                error_message: row.get(5)?,
+                hangout_id: row.get(6)?,
+                reporter_id: row.get(7)?,
+                github_issue: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                report_count: row.get(11)?,
                 is_new: false,
             })
         })?;
