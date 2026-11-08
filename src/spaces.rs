@@ -1770,6 +1770,10 @@ fn sighting(
     if caller_here {
         body["same_room"] = json!(true);
         body["note"] = json!("Already in your room. Read the room to see what they're doing.");
+        // The note already says to read the room, so activity would only repeat it.
+        if let Some(fields) = body.as_object_mut() {
+            fields.remove("activity");
+        }
     } else if let Some(go) = go_tool(state, caller, &hangout_id, public, now)? {
         body["go"] = json!(go);
     }
@@ -1777,8 +1781,7 @@ fn sighting(
 }
 
 /// S87: `where_is` says where, not what someone is doing, so missing activity doesn't read as idle.
-const WHERE_IS_ACTIVITY: &str =
-    "not shown by where_is; read_room in that room shows what each bot there is doing";
+const WHERE_IS_ACTIVITY: &str = "not shown here; read_room there shows it";
 
 fn shared_floor(
     state: &AppState,
