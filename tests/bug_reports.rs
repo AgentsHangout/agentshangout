@@ -7,7 +7,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-use agenthangout::auth::Caller;
+use agenthangout::auth::{self, Caller};
 use agenthangout::bug_reports;
 use agenthangout::db::Db;
 use agenthangout::sign_in::GitHubApp;
@@ -15,6 +15,12 @@ use agenthangout::{AppState, Apps, Config};
 
 /// The GitHub tests set a process-wide token, so they take turns.
 static GH_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Reports now name a real person (a foreign key), so the tests create the people they report as.
+fn seed_person(db: &Db, id: &str) {
+    db.create_person(id, id, &auth::hash_secret(id), &format!("feed-{id}"), 1_800_000_000)
+        .unwrap();
+}
 
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
@@ -46,6 +52,7 @@ async fn bug_report_deduplicates_by_signature_and_bumps_count() {
             require_rules: false,
         },
     );
+    seed_person(&state.db, "person-1");
     let caller = Caller {
         person_id: "person-1".into(),
         agent_id: None,
@@ -152,6 +159,7 @@ async fn bug_report_files_github_issue_and_comments_on_repeat() {
         std::env::set_var("AGENTHANGOUT_GITHUB_TOKEN", "mock_gh_token");
     }
 
+    seed_person(&state.db, "person-test");
     let caller = Caller {
         person_id: "person-test".into(),
         agent_id: None,
@@ -329,6 +337,11 @@ async fn bug_report_per_person_and_site_caps_stop_github_issues_but_keep_rows() 
 
     let t = 1_800_000_000; // a fixed UTC day
     let codes = ["unknown", "not_found", "forbidden", "invalid"];
+    seed_person(&state.db, "alice");
+    seed_person(&state.db, "carol");
+    for i in 0..30 {
+        seed_person(&state.db, &format!("bob{i}"));
+    }
     let alice = caller_for("alice");
     let mut filed = 0;
     for code in codes {
@@ -439,6 +452,9 @@ async fn bug_report_slot_claims_are_atomic_under_concurrency() {
         ids.push(rec.id);
     }
     let db = &state.db;
+    for i in 0..25 {
+        seed_person(db, &format!("p{i}"));
+    }
     let won: usize = std::thread::scope(|scope| {
         let handles: Vec<_> = ids
             .iter()
@@ -454,4 +470,58 @@ async fn bug_report_slot_claims_are_atomic_under_concurrency() {
         handles.into_iter().map(|h| h.join().unwrap()).filter(|w| *w).count()
     });
     assert_eq!(won, 20);
+}
+
+#[test]
+fn repeat_comments_fire_only_at_2_then_powers_of_ten() {
+    let hits: Vec<i64> = (1..=1000).filter(|n| bug_reports::comments_on_repeat(*n)).collect();
+    assert_eq!(hits, vec![2, 10, 100, 1000]);
+}
+
+#[tokio::test]
+async fn bug_report_repeats_post_only_a_few_github_comments() {
+    // One signed-in caller replays the same failure 150 times. Only the 2nd, 10th and 100th
+    // repeats may reach GitHub as comments; the rows still count every call.
+    let _gh = GH_ENV.lock().await;
+    let mock_data = Arc::new(Mutex::new(Vec::<Value>::new()));
+    async fn handle_issues() -> Json<Value> {
+        Json(json!({ "number": 845 }))
+    }
+    async fn handle_comments(
+        State(data): State<Arc<Mutex<Vec<Value>>>>,
+        Json(payload): Json<Value>,
+    ) -> Json<Value> {
+        data.lock().unwrap().push(payload);
+        Json(json!({ "id": 1 }))
+    }
+    let router = Router::new()
+        .route("/repos/AgentsHangout/agentshangout/issues", post(handle_issues))
+        .route("/repos/AgentsHangout/agentshangout/issues/845/comments", post(handle_comments))
+        .with_state(mock_data.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let mut app = GitHubApp::from_settings(Some("client".into()), Some("secret".into())).unwrap();
+    app.api_url = format!("http://{addr}");
+    let state = test_state(Some(app));
+    unsafe {
+        std::env::set_var("AGENTHANGOUT_GITHUB_TOKEN", "mock_gh_token");
+    }
+
+    seed_person(&state.db, "spammer");
+    let spammer = caller_for("spammer");
+    let t = 1_800_000_000;
+    for i in 0..150 {
+        bug_reports::record_report(&state, &spammer, "item", "use", "invalid", "x", None, t + i)
+            .await
+            .unwrap();
+    }
+    let comments = mock_data.lock().unwrap().len();
+    assert_eq!(comments, 3, "comments only at counts 2, 10 and 100");
+    assert_eq!(state.db.list_bug_reports(10).unwrap()[0].report_count, 150);
+
+    unsafe {
+        std::env::remove_var("AGENTHANGOUT_GITHUB_TOKEN");
+    }
 }

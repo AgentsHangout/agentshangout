@@ -140,8 +140,26 @@ pub async fn record_report(
     Ok(record)
 }
 
+/// Repeat occurrences that get a GitHub comment: the 2nd, then the 10th, 100th, 1000th and so
+/// on. A repeat that isn't one of these is kept in SQLite only, so a signed-in caller who
+/// replays one failure can't post a comment per call. The count is bumped inside the same
+/// IMMEDIATE transaction as the row, so each count is seen by exactly one request.
+pub fn comments_on_repeat(report_count: i64) -> bool {
+    if report_count < 2 {
+        return false;
+    }
+    if report_count == 2 {
+        return true;
+    }
+    let mut n = report_count;
+    while n % 10 == 0 {
+        n /= 10;
+    }
+    n == 1
+}
+
 /// BG3: file a new GitHub issue if this report won a slot under the caps, or comment on the
-/// existing issue for a repeat. Nothing else leaves the server.
+/// existing issue for a repeat that `comments_on_repeat` allows. Nothing else leaves the server.
 pub async fn file_or_comment_github(
     state: &AppState,
     person_id: &str,
@@ -199,7 +217,9 @@ pub async fn file_or_comment_github(
                 }
             }
         }
-    } else if let Some(issue_num) = record.github_issue {
+    } else if let (Some(issue_num), true) =
+        (record.github_issue, comments_on_repeat(record.report_count))
+    {
         let url = format!("{}/repos/{}/issues/{}/comments", api_base, repo, issue_num);
         let body = format!(
             "Repeat occurrence: seen {} times (latest at {}). Surface: `{}`, Action: `{}`, Code: `{}`.",

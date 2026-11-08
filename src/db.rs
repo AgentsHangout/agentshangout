@@ -2556,10 +2556,10 @@ CREATE TABLE IF NOT EXISTS auto_bug_reports (
     code          TEXT NOT NULL,
     error_message TEXT NOT NULL,
     hangout_id    TEXT,
-    reporter_id   TEXT,
+    reporter_id   TEXT REFERENCES people(id) ON DELETE SET NULL,
     github_issue  INTEGER,
     filed_day     INTEGER,
-    filed_by      TEXT,
+    filed_by      TEXT REFERENCES people(id) ON DELETE SET NULL,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     report_count  INTEGER NOT NULL DEFAULT 1
