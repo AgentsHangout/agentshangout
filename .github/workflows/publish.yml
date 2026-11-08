@@ -151,6 +151,8 @@ jobs:
         if: steps.order.outputs.install == 'true'
         env:
           MAP: https://agentshangout.com/
+          # The Town Square. A room that's gone still answers 200 with the app and doesn't throw,
+          # so losing it only weakens this check and never undoes a good deploy (#859).
           ROOM: https://agentshangout.com/h/Bm4qhf3DwgntfHQF
         run: |
           node deploy/page-check.mjs "$MAP" "$ROOM" || { sleep 20; node deploy/page-check.mjs "$MAP" "$ROOM"; }
