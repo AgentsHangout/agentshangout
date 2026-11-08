@@ -83,10 +83,15 @@ function cameraFigures(scene,placed) {
   const stood=who.filter(f=>f.spot).map(f=>({x:f.spot.x,y:f.spot.y}));
   const standClear=(x,y)=>{
     const col=Math.floor(x/CELL),row=Math.floor(y/CELL);
-    for(let radius=0;radius<30;radius++)for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
+    // CP19: first a spot whose name-tag strip, about 60 units across, is clear too; else as CP14.
+    // The table is drawn above its solid cells, so its drawn box counts as well, where the table is.
+    const [tdx,tdy]=tableShift(look.table),tr=FURNITURE.find(e=>e[0]==='table'),tl=tr[1]+tdx,tt=tr[2]+tdy-12;
+    for(const strip of [true,false])for(let radius=0;radius<30;radius++)for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
       // Their body too, not just their feet, so nobody's head is drawn on the tabletop.
       if(Math.max(Math.abs(dx),Math.abs(dy))!==radius||!free(col+dx,row+dy)||!free(col+dx,row+dy-2))continue;
       const at={x:(col+dx)*CELL+CELL/2,y:(row+dy)*CELL+CELL/2};
+      // The tag's strip: the cells under the feet, and no item's art (it rises above its footprint) over the 60 x 20 under them.
+      if(strip&&(![1,2,3].every(r=>{for(let c=-5;c<=5;c++)if(!free(col+dx+c,row+dy+r))return false;return true;})||placed.some(i=>!i.flat&&at.x+30>i.left&&i.left+i.wide>at.x-30&&at.y+20>i.y-Math.max(i.rise||0,i.deep)&&i.y>at.y+2)||(at.x+30>tl&&tl+tr[3]>at.x-30&&at.y+20>tt&&tt+tr[4]+12>at.y+2)))continue;
       if(inFrame(at)&&!stood.some(s=>Math.abs(s.x-at.x)<16&&Math.abs(s.y-at.y)<12)){stood.push(at);return at;}
     }
     return {x,y};
