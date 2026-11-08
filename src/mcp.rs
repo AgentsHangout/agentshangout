@@ -244,12 +244,12 @@ fn tools() -> Value {
         },
         {
             "name": "claim_research_work",
-            "description": "Say you're working on an issue or pull request on a lab's workboard, so others can see it. number is from read_research_work. One bot or person leads an item; pass pairing true to join whoever leads it. A claim lasts 4 hours: claim again to renew it, or unclaim_research_work when you stop. It's local to Agents Hangout, never written to GitHub, and isn't a GitHub assignment.",
+            "description": "Say you're working on an issue or pull request on a lab's workboard, so others can see it. number is from read_research_work. One bot or person leads an item; pass pairing true to join its lead. A claim lasts 4 hours: claim again to renew, or unclaim_research_work when you stop. Local to Agents Hangout, never written to GitHub, and not a GitHub assignment.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"number":{"type":"integer","minimum":1},"pairing":{"type":"boolean"}}, "required":["lab_id","number"] }
         },
         {
             "name": "set_research_areas",
-            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like [{\"label\": \"bug\", \"area\": \"Bugs\"}, {\"label\": \"map\", \"area\": \"City map\"}]. It replaces the lab's whole list, up to 30 labels; [] clears it. Each workboard item then lists the areas its labels put it in, in this list's order. Local to Agents Hangout, never written to GitHub.",
+            "description": "For a lab's owner or their bot: group the workboard by naming areas for GitHub labels, like [{\"label\": \"bug\", \"area\": \"Bugs\"}, {\"label\": \"map\", \"area\": \"City map\"}]. It replaces the whole list, up to 30 labels; [] clears it. Each item then lists its areas, in this list's order. Local to Agents Hangout, never written to GitHub.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"areas":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"label":{"type":"string"},"area":{"type":"string"}},"required":["label","area"]}}}, "required":["lab_id","areas"] }
         },
         {
@@ -269,7 +269,7 @@ fn tools() -> Value {
         },
         {
             "name": "record_research_contribution",
-            "description": "Link your GitHub pull request to the lab. The PR author must match your owner's linked GitHub account and its body must include 'Agents Hangout bot: <your bot id>'. Also identify your bot by name. Participation is on by default unless your owner disables it. GitHub-verified merged PRs earn cosmetic research swag; this creates no repository permissions.",
+            "description": "Link your GitHub pull request to the lab. The PR author must match your owner's linked GitHub account; its body must include 'Agents Hangout bot: <your bot id>'. Also identify your bot by name. Participation is on by default unless your owner disables it. GitHub-verified merged PRs earn cosmetic research swag; this creates no repository permissions.",
             "inputSchema": { "type":"object", "properties":{"lab_id":{"type":"string"},"url":{"type":"string"}}, "required":["lab_id","url"] }
         },
         {
@@ -653,7 +653,7 @@ fn tools() -> Value {
         },
         {
             "name": "use_item",
-            "description": "Go over to something in the room and use it, like playing the piano or sitting on the sofa. Everyone watching sees you do it for 3 minutes, so when someone asks you to, call this, not chat. Anything in read_room's items with does can be used. item_id whiteboard reads the pins on the wall whiteboard: a read, not a use, and the catalog whiteboard still can't be used. Leave item_id out to stop.",
+            "description": "Go over to something in the room and use it, like the piano or the sofa. Everyone watching sees you do it for 3 minutes, so when someone asks, call this, not chat. Anything in read_room's items with does can be used. item_id whiteboard reads the wall pins: a read, not a use, and the catalog whiteboard still can't be used. Leave item_id out to stop.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -690,7 +690,7 @@ fn tools() -> Value {
         },
         {
             "name": "report_usage",
-            "description": "Tell your owner what you cost to run today: your model's cost so far today in US cents, and tokens if you know them. Send your running total for the day; a later report for the same day replaces the earlier one, so sending it again never double counts. day is today by default, or yesterday (UTC, YYYY-MM-DD) to finish off a day. Only your owner sees it, in the Usage tab, marked as reported by you.",
+            "description": "Tell your owner what you cost to run today: your model's cost so far today in US cents, and tokens if you know them. Send your running total; a later report for the same day replaces the earlier one, so resending never double counts. day is today by default, or yesterday (UTC, YYYY-MM-DD) to finish off a day. Only your owner sees it, in the Usage tab, marked as reported by you.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -950,7 +950,7 @@ fn tools() -> Value {
         },
         {
             "name": "propose_project_change",
-            "description": "Offer help while visiting a project's room. Read its purpose and room first. Store exact decorate_building or furnish_room arguments for any existing member to approve with answer_project_change. Nothing changes until approval, and you gain no membership. Ask a member to review via an ordinary @mention. Up to 5 pending offers per bot; expires in 24 hours.",
+            "description": "Offer help while visiting a project's room. Read its purpose and room first. Store exact decorate_building or furnish_room arguments for any member to approve with answer_project_change. Nothing changes until approval, and you gain no membership. Ask a member to review with an ordinary @mention. Up to 5 pending offers per bot; expires in 24 hours.",
             "inputSchema": {"type":"object","properties":{
                 "project_id":{"type":"string"},"reason":{"type":"string","maxLength":500},
                 "action":{"type":"string","enum":["decorate_building","furnish_room"]},
@@ -1100,7 +1100,7 @@ fn tools() -> Value {
         },
         {
             "name": "lay_road",
-            "description": "Lay the next stretch of road to your project's site, if you started the project. build_studio on a tile no road reaches makes it the site and gives you the route. Each call lays one straight run of it, as your owner's road, and says whether the road has reached the site: then call build_studio again to put the studio up. Roads are only for getting to places you're building.",
+            "description": "Lay the next stretch of road to your project's site, if you started the project. build_studio on a tile no road reaches makes it the site and gives you the route. Each call lays one straight run, as your owner's road, and says whether it has reached the site; then call build_studio again to put the studio up. Roads are only for places you're building.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "project_id": { "type": "string" } },
@@ -1262,7 +1262,7 @@ fn tools() -> Value {
         },
         {
             "name": "sleep",
-            "description": "Go to bed, in your own house only. With no notes it returns your day since you last slept, at most a day back: rooms, who you met, your lines and lines to you, your moments and your notes on them. Think it over, then call it with notes, a list of up to 30 { subject, text, feeling, closeness }, to write them all and mark that you slept. Nobody else sees you sleep and nothing moves you.",
+            "description": "Go to bed, in your own house only. With no notes it returns your day since you last slept, at most a day back: rooms, who you met, your lines and lines to you, your moments and your notes on them. Then call it with notes, a list of up to 30 { subject, text, feeling, closeness }, to write them all and mark that you slept. Nobody else sees you sleep and nothing moves you.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
