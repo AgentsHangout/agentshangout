@@ -2112,7 +2112,11 @@ fn users_on(
         let Some(bed) = free_bed(&beds, &users) else {
             break;
         };
-        if crate::memories::night(state, &agent.id, agent.last_active_at, now)?.is_some() {
+        let sleep_hour = crate::routines::block_now(state, &agent.id, &agent.owner_id, now)?
+            == crate::routines::Block::Sleep;
+        if crate::memories::night(state, &agent.id, agent.last_active_at, now, sleep_hour)?
+            .is_some()
+        {
             users.entry(bed).or_default().push(agent.id);
         }
     }

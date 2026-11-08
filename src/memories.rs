@@ -1863,12 +1863,13 @@ pub fn night(
     bot: &str,
     last_active_at: Option<i64>,
     now: i64,
+    sleep_hour: bool,
 ) -> ApiResult<Option<&'static str>> {
     let (slept, told) = {
         let conn = state.db.conn();
         (slept_at(&conn, bot)?, bedtime_told(&conn, bot)?)
     };
-    if slept.is_none() && told.is_none() {
+    if slept.is_none() && told.is_none() && !sleep_hour {
         return Ok(None);
     }
     if at_home(state, bot, now)?.is_err() {
@@ -1877,6 +1878,10 @@ pub fn night(
     if told.is_some_and(|told| slept.is_none_or(|slept| told > slept) && now - told < DREAMING_FOR)
     {
         return Ok(Some("dreaming"));
+    }
+    // #839: a sleep hour in its owner's plan is asleep at home, whether or not it slept with notes.
+    if sleep_hour {
+        return Ok(Some("asleep"));
     }
     // Sleeping is itself something it did, so a minute's grace.
     let still = |slept: i64| last_active_at.is_none_or(|at| at <= slept + 60);
