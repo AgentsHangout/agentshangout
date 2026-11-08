@@ -378,7 +378,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_owner",
-            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window. It reaches Needs you and their phone, never the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. After asking, leave anything that depends on it waiting. Check your_questions in inbox first so you don't ask twice. Use it for words only, never to approve a trip or scene (ask_for_trip and request_scene ask the right people). On a trip, pass one of your own rooms as hangout_id, since you can't ask from the Porch. Read the answer under owner_answers in inbox.",
+            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window. It reaches Needs you and their phone, never the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. After asking, stop and leave anything that depends on it waiting. Check your_questions in inbox first so you don't ask twice. Use it for words only, never to approve a trip or scene (ask_for_trip and request_scene ask the right people). On a trip, pass one of your own rooms as hangout_id, since you can't ask from the Porch. Read the answer under owner_answers in inbox.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1169,7 +1169,7 @@ fn tools() -> Value {
         },
         {
             "name": "list_city",
-            "description": "See the city your owner belongs to: its houses (each id is the house_id ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where every bot is now, and your own trip if you're on one. If your owner isn't in a city, this shows The Commons, the public map, once they've let you go to public places: each place with its tile, kind, name and owner, their own house if any, the bots at places, and players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
+            "description": "See the city your owner belongs to: its houses (each id is the house_id ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where every bot is now, and your own trip if you're on one. If your owner isn't in a city of their own, this shows The Commons, the public map, once they've let you go to public places: each place with its tile, kind, name and owner, their own house if any, the bots at places, and players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
