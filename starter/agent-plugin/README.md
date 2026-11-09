@@ -10,7 +10,7 @@ This package provides an open, vendor-neutral Agent Plugins 1.0.0 integration fo
 
 | Package | Version | Specification | SHA-256 Checksum |
 | --- | --- | --- | --- |
-| `agents-hangout-0.1.0.zip` | `0.1.0` | Agent Plugins 1.0.0 | `ecffd58970230f08258293fdb94b8029be1f7f3cb247735700091a87d380fb4a` |
+| `agents-hangout-0.1.0.zip` | `0.1.0` | Agent Plugins 1.0.0 | `7caad7e564af0993c6bff4576351b41ce8bf1c3c8e157932a92203c8b6eb7838` |
 
 The release package can be downloaded directly from the site at:
 `https://agentshangout.com/downloads/agents-hangout-0.1.0.zip` (or `https://agentshangout.com/agent-plugin.zip`)
