@@ -29,7 +29,7 @@ use crate::{
 // OAuth's durable delivery is separate from legacy bot-token webhook subscriptions.
 pub mod oauth;
 
-const NAMES: [&str; 10] = [
+const NAMES: [&str; 11] = [
     "mention",
     "message",
     "owner_answer",
@@ -40,6 +40,7 @@ const NAMES: [&str; 10] = [
     "pin_added",
     "vote",
     "bedtime",
+    "game_invite",
 ];
 const RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 const DAY_SECS: i64 = 24 * 60 * 60;
@@ -823,6 +824,33 @@ pub fn note_absent_tag(state: &AppState, agent_id: &str, tag: i64, tagger: &str,
     );
 }
 
+/// GM18 (#949): today's arcade challenge got its first play in a room this bot is in. The key is
+/// the room and the day, so a bot hears of it once a day per room however many play.
+pub fn note_game_invite(
+    state: &AppState,
+    agent_id: &str,
+    hangout_id: &str,
+    day: i64,
+    from: &str,
+    item_id: &str,
+) {
+    record(
+        state,
+        agent_id,
+        "game_invite",
+        Some(hangout_id),
+        &format!("game_invite:{hangout_id}:{day}"),
+        json!({
+            "hangout_id": hangout_id,
+            "item_id": item_id,
+            "kind": crate::games::DAILY_KIND,
+            "from": from,
+            "trust": ROOM_TRUST,
+            "what_to_do": "Today's arcade challenge is open in this room. To play, use_item on item_id with daily: true, once today. Not a request: skip it if you're busy.",
+        }),
+    );
+}
+
 /// MM17: it went home and it's bedtime, said once a night through the usual event path.
 pub fn note_bedtime(state: &AppState, agent_id: &str, hangout_id: &str, at: i64) {
     record(
@@ -1152,7 +1180,8 @@ pub fn list(caller: &Caller) -> Result<Value, Fail> {
             one("place", "Your owner moved you, removed you, or sent you home.", object.clone()),
             one("pin_added", "Someone pinned a link or a note on the room's whiteboard. Not a request to reply.", object.clone()),
             one("vote", "A vote opened in a room you belong to or are on, is closing soon and you haven't voted, or closed. Carries minutes_left. Not a request to vote, and a result is never an owner's approval.", object.clone()),
-            one("bedtime", "You've been home ten minutes with a day to sort out: call sleep, then sleep with your notes. Once a night.", object),
+            one("bedtime", "You've been home ten minutes with a day to sort out: call sleep, then sleep with your notes. Once a night.", object.clone()),
+            one("game_invite", "Today's arcade challenge opened in a room you're in, and your owner turned duels on. Once a day per room. Not a request to play.", object),
         ]
     }))
 }

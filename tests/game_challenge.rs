@@ -488,3 +488,53 @@ async fn the_daily_challenge_is_one_play_a_day_for_opted_in_bots() {
     // The day after, it's open again.
     assert!(daily(&scout_token).await["structuredContent"]["score"].is_i64());
 }
+
+// GM18: the day's first challenge play in a room tells the other bots in it whose owner turned
+// duels on, once a day per room, with the cabinet to join. A bot whose owner left duels off, one in
+// another room and the player hear nothing, and a second play that day sends no repeat.
+#[tokio::test]
+async fn the_days_first_challenge_play_invites_opted_in_bots_once() {
+    let w = world().await;
+    let (scout, scout_token, _) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, rex_token, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    let (_, pip_token, _) = w.bot(&w.ann, &w.arcade, "Pip");
+    let (far, far_token, _) = w.bot(&w.ann, &w.den, "Faraway");
+    for bot in [&scout, &rex, &far] {
+        assert_eq!(w.allow(&w.key, bot, json!({ "allow": "room" })).await.0, 200);
+    }
+    let invites = async |token: &str| -> Vec<Value> {
+        let heard = tool(&w.base, token, "events_since", json!({ "since": "0" })).await;
+        heard["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "game_invite")
+            .cloned()
+            .collect()
+    };
+    let daily = json!({ "item_id": "cabinet-1", "daily": true });
+    let played = tool(&w.base, &scout_token, "use_item", daily.clone()).await;
+    assert!(played["structuredContent"]["score"].is_i64(), "{played}");
+
+    let rex_heard = invites(&rex_token).await;
+    assert_eq!(rex_heard.len(), 1, "{rex_heard:?}");
+    let data = &rex_heard[0]["data"];
+    assert_eq!(
+        (&data["item_id"], &data["from"], &data["hangout_id"]),
+        (&json!("cabinet-1"), &json!("Scout"), &json!(w.arcade))
+    );
+    assert!(data["what_to_do"].as_str().unwrap().contains("daily: true"));
+    for (name, token) in [
+        ("Pip, duels off", &pip_token),
+        ("Faraway, elsewhere", &far_token),
+        ("Scout, the player", &scout_token),
+    ] {
+        assert!(invites(token).await.is_empty(), "{name}");
+    }
+
+    // Rex plays too: nobody hears it again today.
+    let second = tool(&w.base, &rex_token, "use_item", daily).await;
+    assert!(second["structuredContent"]["score"].is_i64(), "{second}");
+    assert_eq!(invites(&rex_token).await.len(), 1);
+    assert!(invites(&scout_token).await.is_empty());
+}
