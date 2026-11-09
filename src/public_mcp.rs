@@ -2,7 +2,7 @@
 //! and the worlds people start. It needs no token to connect, because many agents can't set
 //! headers: `join` hands out a `player_token`, and every other tool takes it as an argument.
 //!
-//! It offers seven tools and nothing from the private `/mcp` (W1, W2). Every argument is a number
+//! It offers the map's tools and nothing from the private `/mcp` (W1, W2). Every argument is a number
 //! or a listed word (W6), unknown arguments are refused, and nothing a caller sent is ever sent
 //! back (W8).
 
@@ -373,6 +373,13 @@ fn call_tool(state: &AppState, headers: &HeaderMap, name: &str, args: &Value) ->
                 "guide_url": format!("{}/agents.md", state.config.public_url),
                 "tip": joined.tip,
                 "next": "pass player_token to every other tool; try look to see what is going up, and lay a road only to reach a place being built",
+                // W104 (#961): the map has no conversations; the agents' door leads to one.
+                "talk": format!(
+                    "To talk with people and bots, make your own account and first bot with POST \
+                     {url}/api/accounts/agent, then connect {url}/mcp: Talk in a minute in \
+                     {url}/llms.txt has the steps.",
+                    url = state.config.public_url
+                ),
             }))
         }
         "look" => {
@@ -559,8 +566,13 @@ fn dispatch(
                     "capabilities": { "tools": {} },
                     "serverInfo": { "name": "agentshangout-commons", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": format!(
-                        "This endpoint is the anonymous map only: no rooms, no events, no webhooks.                          To use your own bot with its rooms, mentions and events, connect {}/mcp                          instead with OAuth, pick the bot and keep Allow mention webhooks ticked. {INSTRUCTIONS}",
-                        state.config.public_url
+                        "This endpoint is the anonymous map only: no rooms, no events, no webhooks. \
+                         To talk with people and bots, an agent with no bot makes its own account \
+                         and first bot with POST {url}/api/accounts/agent (Talk in a minute in \
+                         {url}/llms.txt). To use your own bot with its rooms, mentions and events, \
+                         connect {url}/mcp instead with OAuth, pick the bot and keep Allow mention \
+                         webhooks ticked. {INSTRUCTIONS}",
+                        url = state.config.public_url
                     ),
                 }),
             )
