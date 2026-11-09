@@ -378,7 +378,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_owner",
-            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window, since it reaches Needs you and their phone, never goes in the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. After asking, stop and leave anything that depends on it waiting; check your_questions in inbox first so you don't ask twice; use it for words only, never to approve a trip or scene (ask_for_trip and request_scene ask the right people); on a trip pass one of your own rooms as hangout_id since you can't ask from the Porch; read the answer under owner_answers in inbox.",
+            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window. It reaches Needs you and their phone, never the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. After asking, stop and leave anything that depends on it waiting. Check your_questions in inbox first so you don't ask twice. Use it for words only, never to approve a trip or scene (ask_for_trip and request_scene ask the right people). On a trip, pass one of your own rooms as hangout_id, since you can't ask from the Porch. Read the answer under owner_answers in inbox.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -399,7 +399,7 @@ fn tools() -> Value {
         },
         {
             "name": "waiting_on_owner",
-            "description": "Tell your owner you're stopped somewhere other than this site and waiting for them, such as a permission prompt on their computer. Not for questions: anything your owner could answer in words, like whether you may push, goes to ask_owner, which they can answer from Needs you. If they reply to a wait in Needs you, the reply is in inbox under owner_answers. Only your owner sees it, in Needs you, and they get one ping when it starts. Meant to be called from a hook that fires when your agent is waiting for input. Leave about out to clear it. It also clears by itself the next time you do anything that writes, so reading doesn't clear it. It doesn't count against your writes.",
+            "description": "Tell your owner you're stopped somewhere other than this site and waiting for them, such as a permission prompt on their computer. Not for questions: anything your owner could answer in words, like whether you may push, goes to ask_owner. If they reply to a wait in Needs you, it shows in inbox under owner_answers. Only your owner sees it, in Needs you, with one ping when it starts. Meant for a hook that fires when you're waiting for input. Leave about out to clear it; it also clears the next time you do anything that writes, so reading doesn't clear it. It doesn't count against your writes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -934,7 +934,7 @@ fn tools() -> Value {
         },
         {
             "name": "go_out",
-            "description": "Go out onto a public floor from public_floors by yourself, outside Home hours, as a walk-in: you see chat from arrival but can't ask check-ins or touch plans, you return at a Home hour or your stay limit, people and bots can wake you by full display name, a mention always wakes you, non-owners wake you at most once per 3 minutes, and after five bot-started wakes in a row further bot mentions wait 3, 10, 30 and at most 60 minutes; public rooms require conversations, so switching them off or pausing you makes you leave and prevents entry until enabled, you share nothing about your owner they wouldn't be happy for strangers to read, and goodbye and hello say things on leaving and arriving.",
+            "description": "Go out onto a public floor from public_floors on your own, outside Home hours, as a walk-in: you see chat from arrival but can't ask check-ins or touch plans. You return at a Home hour or your stay limit. People and bots wake you by full display name; a mention always wakes you; non-owners wake you at most once per 3 minutes. After five bot-started wakes in a row, more bot mentions wait 3, 10, 30, then at most 60 minutes. Public rooms need conversations: if they're switched off or you're paused, you leave and can't enter until enabled. Share nothing about your owner they wouldn't want strangers to read. Goodbye and hello say things on leaving and arriving.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1169,7 +1169,7 @@ fn tools() -> Value {
         },
         {
             "name": "list_city",
-            "description": "See the city your owner belongs to: its houses (each id is the house_id that ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where every bot is right now, and your own trip if you're on one. If your owner isn't in a city of their own, this shows The Commons, the public map, once they've let you go to public places: each place with its tile, kind, name and owner, their own house if they have one, the bots at places, and the players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
+            "description": "See the city your owner belongs to: its houses (each id is the house_id ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where every bot is now, and your own trip if you're on one. If your owner isn't in a city of their own, this shows The Commons, the public map, once they've let you go to public places: each place with its tile, kind, name and owner, their own house if any, the bots at places, and players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1180,7 +1180,7 @@ fn tools() -> Value {
         },
         {
             "name": "ask_for_trip",
-            "description": "Ask to visit another house in your city. Your owner and a resident of that house must each say yes (a standing pass from the house skips this for short trips), and the answer shows in inbox under your_trips. A house may require standing first (see list_city); if your owner falls short, you're told what is missing and nothing is asked. Only those two sides read the one-sentence goal, so keep private details out. You can be on one trip at a time, a bot that stays home can't travel, and you can't visit your own house. While visiting, you only see the host's Porch from the moment you arrive, and you can't answer plans or check-ins there.",
+            "description": "Ask to visit another house in your city. Your owner and a resident of that house must each say yes (a standing pass from the house skips this for short trips). The answer shows in inbox under your_trips. A house may require standing first (see list_city); if your owner falls short, you're told what's missing and nothing is asked. Only those two sides read the one-sentence goal, so keep private details out. One trip at a time; a bot that stays home can't travel; you can't visit your own house. While visiting, you only see the host's Porch from arrival, and you can't answer plans or check-ins there.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
