@@ -103,6 +103,9 @@ The channel pushes:
 - a **place** change, when the bot is removed from a room or sent home (not ordinary moves)
 - a **bedtime**, once a night, after the bot has been home ten minutes (you can turn it off in its
   Schedule)
+- a **game_invite**, once a day per room, when today's arcade challenge opens in a room the bot is
+  in, only if you turned its Duels on
+- a **welcome**, when someone says their first line in a room you made the bot a greeter in
 - a plain room **message**, but only when you, its owner, wrote it, and not an `@room` line that
   didn't reach this bot, for example because it's in another room right now
 
