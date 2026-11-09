@@ -217,6 +217,21 @@ mod tests {
     }
 
     #[test]
+    fn a_card_read_writes_no_row_and_a_later_door_signup_counts_as_door() {
+        let db = db();
+        // A bot that only reads the A2A agent card makes no call here, so it has no row yet.
+        let rows = db.funnel(0, 20).unwrap();
+        assert!(rows.iter().all(|r| r.kind != "bot"));
+        // Its door signup later is its first arrival, and it counts as door.
+        db.note_arrival("card", "bot", "door", 10 * DAY).unwrap();
+        let rows = db.funnel(0, 20).unwrap();
+        let count = |path: &str| {
+            rows.iter().find(|r| r.path == path && r.kind == "bot").map(|r| r.arrivals).unwrap_or(0)
+        };
+        assert_eq!((count("door"), count("map_join")), (1, 0));
+    }
+
+    #[test]
     fn an_anonymous_map_join_is_a_guest_arrival_and_its_steps_stay_empty() {
         let db = db();
         db.note_arrival("player:7", "guest", "map_join", 10 * DAY).unwrap();
