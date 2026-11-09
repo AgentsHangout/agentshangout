@@ -278,6 +278,8 @@ fn approve_draft(state: &AppState, caller: &Caller, id: &str, edits: &Value) -> 
         }
     };
     state.db.record_bot_setup_bot(id, &bot.id, at)?;
+    // I162 (#964): a bot that drafted its setup over MCP and was approved counts as an MCP arrival.
+    crate::usage::note_arrival(state, &bot.id, "bot", "mcp_setup", at);
     if let Some(role) = &fields.role {
         state.db.set_bot_role(&bot.id, role, at)?;
     }

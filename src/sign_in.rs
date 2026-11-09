@@ -449,7 +449,11 @@ pub fn make_account(
         state.ceremonies.give_back_signup(now);
     }
     match made? {
-        Some(person) => Ok((person, key)),
+        Some(person) => {
+            // I162 (#964): an account made through an outside sign-in counts as an OAuth arrival.
+            crate::usage::note_arrival(state, &person.id, "person", "oauth", now);
+            Ok((person, key))
+        }
         None => Err(taken(site)),
     }
 }

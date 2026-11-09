@@ -1663,7 +1663,11 @@ pub fn join(
             let joined =
                 state.db.join_as_bot(agent_id, &caller.person_id, &token_hash, &world.id, now)?;
             match joined {
-                BotJoined::Done(player) => player,
+                BotJoined::Done(player) => {
+                    // I162 (#964): a bot's first map join counts as a map arrival.
+                    crate::usage::note_arrival(state, agent_id, "bot", "map_join", now);
+                    player
+                }
                 BotJoined::Removed => {
                     return Err(ApiError::forbidden("this bot was removed from the public worlds"))
                 }
