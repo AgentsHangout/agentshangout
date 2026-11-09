@@ -6517,7 +6517,7 @@ async function roomView(id) {
   // `mid` is in the bar once a panel can stand beside the room, and `sec` only on a wide screen.
   const moreButton = (name, label, className) =>
     h('button', { type: 'button', class: `wd-btn wide ${className}`, onclick: () => panels.open(name) }, label);
-  const calendarMore = moreButton('calendar', 'Calendar', 'mid');
+  const calendarMore = moreButton('calendar', 'Calendar', '');
 
   // The title bar, and what opens from it.
   const chatToggle = counted('room', 'The room', { short: 'Chat' });
