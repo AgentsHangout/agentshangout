@@ -7896,6 +7896,37 @@ async fn guest_does_not_see_pre_arrival_root_in_thread_mention() {
     }
 }
 
+/// Says `text` as a reply on a Porch a guest arrived on at `since`, and makes sure the line is
+/// stamped after that second. The wall clock can step back (WSL2 does), so a line can land in the
+/// arrival's second even after a pause; then it's posted again once the clock is past it. The
+/// stray earlier line is one the guest can't read, so it doesn't change what they see.
+async fn say_after_arrival(
+    server: &Server,
+    bot: &Bot,
+    porch: &str,
+    text: &str,
+    reply_to: i64,
+    since: i64,
+) -> Value {
+    loop {
+        while now() <= since {
+            tokio::time::sleep(StdDuration::from_millis(100)).await;
+        }
+        let said = server
+            .tool(
+                &bot.token,
+                "say",
+                json!({ "hangout_id": porch, "text": text, "reply_to": reply_to }),
+            )
+            .await;
+        assert_ne!(said["isError"], true, "{said}");
+        let id = said["structuredContent"]["message_id"].as_i64().unwrap();
+        if server.state.db.message(id).unwrap().unwrap().created_at > since {
+            return said;
+        }
+    }
+}
+
 #[tokio::test]
 async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     let server = Server::start().await;
@@ -7927,27 +7958,22 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     // 2. Scout arrives on the porch
     server.arrive(&scout, &w.bo, &w.ann, &w.ann_home.id, "visit", "").await;
     pause_a_second().await;
+    let since = server.state.db.bot_visit(porch, &scout.id, now()).unwrap().unwrap().since;
+    // If the clock stepped back between root A and the arrival, A is stamped after the arrival and
+    // is rightly visible, so there's no pre-arrival root to test with. Nothing to check then.
+    if server.state.db.message(pre_id).unwrap().unwrap().created_at > since {
+        eprintln!("clock stepped back before the arrival; no pre-arrival root to test");
+        return;
+    }
 
     // 3. AnnBot posts reply B answering pre-arrival root message A
-    let rep_b = server
-        .tool(
-            &ann_bot.token,
-            "say",
-            json!({ "hangout_id": porch, "text": "Welcome Scout (B)", "reply_to": pre_id }),
-        )
-        .await;
-    assert_ne!(rep_b["isError"], true, "{rep_b}");
+    let rep_b =
+        say_after_arrival(&server, &ann_bot, porch, "Welcome Scout (B)", pre_id, since).await;
     let b_id = rep_b["structuredContent"]["message_id"].as_i64().unwrap();
 
     // 4. AnnBot posts reply C answering reply B (same thread)
-    let rep_c = server
-        .tool(
-            &ann_bot.token,
-            "say",
-            json!({ "hangout_id": porch, "text": "Glad you made it (C)", "reply_to": b_id }),
-        )
-        .await;
-    assert_ne!(rep_c["isError"], true, "{rep_c}");
+    let rep_c =
+        say_after_arrival(&server, &ann_bot, porch, "Glad you made it (C)", b_id, since).await;
     let c_id = rep_c["structuredContent"]["message_id"].as_i64().unwrap();
 
     // 5. Scout calls read_room: replies B and C must be visible inline without pre-arrival root A
