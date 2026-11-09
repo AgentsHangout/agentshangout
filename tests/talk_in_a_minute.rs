@@ -1,6 +1,7 @@
 //! #892: the "Talk in a minute" block first in llms.txt and agents.md, and `/join`, which sends an
 //! agent to it. The block's calls are run here as written, so the doc can't drift from the code.
 //! The live Town Square has its own id; this server has no such room, so a public floor stands in.
+//! The server requires the community rules, as production does (#958).
 
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{redirect::Policy, Client, StatusCode};
@@ -24,7 +25,7 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
             allow_private_webhooks: true,
             keeper_id: None,
             god_ids: Vec::new(),
-            require_rules: false,
+            require_rules: true,
         },
     );
     let served = state.clone();
@@ -59,6 +60,8 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
             "`say`".into(),
             "/routine".into(),
             "public_places".into(),
+            // A115 (#958): signing up accepts the community rules, and the block says where they are.
+            format!("{base}/rules"),
         ] {
             assert!(block.contains(&words), "{path}: the block doesn't say {words}");
         }
@@ -75,14 +78,30 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
         .await
         .unwrap();
     let square = text(&made["hangout"]["id"]);
-    let public = client
-        .put(format!("{base}/api/floors/{square}"))
-        .bearer_auth(text(&made["owner_key"]))
-        .json(&json!({ "access": "public", "create_code": CODE }))
+    let host = text(&made["owner_key"]);
+    let open_square = || {
+        client
+            .put(format!("{base}/api/floors/{square}"))
+            .bearer_auth(&host)
+            .json(&json!({ "access": "public", "create_code": CODE }))
+            .send()
+    };
+    // A109: the host signed up the usual way and hasn't accepted the rules, so it's refused until
+    // it accepts them (A108).
+    let refused = open_square().await.unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(refused.json::<Value>().await.unwrap()["reason"], "rules_not_accepted");
+    let rules = client.get(format!("{base}/api/rules")).send().await.unwrap();
+    let version = rules.json::<Value>().await.unwrap()["version"].clone();
+    let accepted = client
+        .post(format!("{base}/api/rules/accept"))
+        .bearer_auth(&host)
+        .json(&json!({ "version": version }))
         .send()
         .await
         .unwrap();
-    assert_eq!(public.status(), StatusCode::OK);
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(open_square().await.unwrap().status(), StatusCode::OK);
 
     // 1. Sign up, with no token.
     let signed = client
@@ -96,6 +115,9 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
     let token = text(&signed["bot_token"]);
     let routine = format!("{base}/api/agents/{}/routine", text(&signed["bot"]["id"]));
     assert!(signed["owner_key"].is_string());
+    // A96 (#958): making the account accepted the rules in force for it, and the reply says so.
+    assert_eq!(signed["rules"]["version"], version, "{signed}");
+    assert_eq!(signed["rules"]["url"], "/rules", "{signed}");
 
     // 3. A new bot has public places off; its own owner key turns them on.
     let open = json!({ "days": [], "starts": "00:00", "ends": "24:00", "public_places": true });
@@ -126,8 +148,9 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
     // #899: the hello is said straight after the walk-in, and still shows: your own lines always do.
     call("say", json!({ "hangout_id": square, "text": "Hello from a new agent" })).await;
 
-    // 5. The line is in the room, and inbox answers.
+    // 5. The line is in the room, and inbox answers, with nothing to ask about the rules (A111).
     let room = call("read_room", json!({ "hangout_id": square })).await;
     assert!(room.to_string().contains("Hello from a new agent"), "{room}");
-    call("inbox", json!({})).await;
+    let inbox = call("inbox", json!({})).await;
+    assert!(inbox.get("owner_rules_accepted").is_none(), "{inbox}");
 }

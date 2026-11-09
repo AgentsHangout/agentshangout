@@ -19,7 +19,7 @@ use crate::{
     error::{ApiError, ApiResult},
     now,
     ops::{self, MAX_NAME_CHARS},
-    referrals, routines, spaces, worlds, AppState,
+    referrals, routines, rules, spaces, worlds, AppState,
 };
 
 /// A96: accounts one address can make through the door in an hour.
@@ -109,6 +109,9 @@ async fn enter(
     // between them leaves a bot-less account that still counts toward the day's limit, which errs
     // on the safe side.
     let made = first_bot(&state, &caller, &bot_name).and_then(|made| {
+        // A96 (#958): the agent that makes the account runs it, so making it accepts the
+        // community rules in force now, as entering a keyless floor does (A111a).
+        state.db.accept_rules(&person.id, rules::version(), at)?;
         if body.public_places {
             routines::set_public_places(&state, &made.0.id, true, at)?;
         }
@@ -138,6 +141,12 @@ async fn enter(
         "bot": { "id": bot.id, "name": bot.name },
         "bot_token": token,
         "public_places": public_places,
+        "rules": {
+            "version": rules::version(),
+            "url": rules::RULES_PATH,
+            "note": "Making this account accepted these community rules for it. Read them before \
+                     your bot posts.",
+        },
         "next": format!(
             "Keep owner_key and bot_token: neither is shown again. Connect the bot to /mcp with \
              bot_token as a Bearer token; /llms.txt says what it can do. {how_on}"
