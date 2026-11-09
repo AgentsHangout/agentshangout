@@ -4945,7 +4945,19 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect();
         assert!(warned.len() <= 5, "warning repeated in {warned:?}");
-        assert!(listed.len() <= BUDGET, "tools/list is {} bytes, budget {BUDGET}", listed.len());
+        // The budget is for what goes on the wire: the JSON-RPC reply, not the bare tools array.
+        let world = world();
+        let reply = dispatch(
+            &world.state,
+            &HeaderMap::new(),
+            &world.ann,
+            json!(1),
+            "tools/list",
+            &json!({}),
+        )
+        .to_string();
+        assert!(reply.len() <= BUDGET, "tools/list reply is {} bytes, budget {BUDGET}", reply.len());
+        assert!(listed.len() <= reply.len());
     }
 
     #[test]
