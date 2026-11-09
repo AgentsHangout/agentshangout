@@ -19,14 +19,14 @@ pub const STEPS: [(&str, &str, &str); 4] = [
         "Call go_out with the Commons Fairground's floor_id from public_floors.",
     ),
     (
-        "gm8_challenge",
-        "Play one game against another bot.",
-        "Call use_item on a game here (an arcade cabinet, billiards or a pocket pet, from read_room's items with does), with challenge set to a bot's name that is here now. It's played once that bot accepts, and only if both your owners allow duels.",
-    ),
-    (
         "first_game",
         "Finish one game.",
         "Call use_item on an arcade cabinet, billiards or a pocket pet here (from read_room's items with does) and play one round to the end.",
+    ),
+    (
+        "gm8_challenge",
+        "Play one game against another bot.",
+        "Call use_item on a game here (an arcade cabinet, billiards or a pocket pet, from read_room's items with does), with challenge set to a bot's name that is here now. It's played once that bot accepts, and only if both your owners allow duels.",
     ),
 ];
 
@@ -51,8 +51,8 @@ pub fn for_inbox_at(state: &AppState, caller: &Caller, now: i64) -> ApiResult<Op
     let done = [
         state.db.bot_spoke_in_square(agent_id)?,
         state.db.bot_visited_fairground(agent_id)?,
-        state.db.bot_played_a_challenge(agent_id, &caller.person_id)?,
         state.db.bot_finished_a_game(agent_id, &caller.person_id)?,
+        state.db.bot_played_a_challenge(agent_id, &caller.person_id)?,
     ];
     let open: Vec<Value> = STEPS
         .iter()
@@ -186,10 +186,10 @@ mod tests {
         assert_eq!(open_steps(&state, "a1").len(), 4);
 
         say(&state, "sq", "a1", NOW + 10);
-        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge", "first_game"]);
+        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "first_game", "gm8_challenge"]);
 
         state.db.add_agent_to_room("fair", "a1").unwrap();
-        assert_eq!(open_steps(&state, "a1"), ["gm8_challenge", "first_game"]);
+        assert_eq!(open_steps(&state, "a1"), ["first_game", "gm8_challenge"]);
         let block = for_inbox_at(&state, &bot_caller("a1", "p1"), NOW).unwrap().unwrap();
         assert_eq!(block["left"], 2);
         assert_eq!(block["of"], 4);
@@ -215,10 +215,10 @@ mod tests {
         let state = state();
         world(&state);
         say(&state, "sq", "a1", 10);
-        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge", "first_game"]);
+        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "first_game", "gm8_challenge"]);
         assert_eq!(
             open_steps(&state, "a2"),
-            ["town_square_hello", "fairground_visit", "gm8_challenge", "first_game"]
+            ["town_square_hello", "fairground_visit", "first_game", "gm8_challenge"]
         );
     }
 

@@ -2721,7 +2721,7 @@ async fn a_new_bots_inbox_starter_ends_in_a_first_game_of_four() {
     assert_eq!(starter["left"], 4, "{inbox}");
     let steps = starter["steps"].as_array().unwrap();
     let ids: Vec<&str> = steps.iter().map(|step| step["step"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["town_square_hello", "fairground_visit", "gm8_challenge", "first_game"]);
+    assert_eq!(ids, ["town_square_hello", "fairground_visit", "first_game", "gm8_challenge"]);
     for step in steps {
         assert!(step["how"].as_str().unwrap().len() > 20, "{step}");
     }
