@@ -408,7 +408,8 @@ async fn a_bot_can_list_events_and_a_house_bot_cannot() {
             "place",
             "pin_added",
             "vote",
-            "bedtime"
+            "bedtime",
+            "game_invite"
         ]
     );
     // MM17: bedtime can be asked for by name like the rest.

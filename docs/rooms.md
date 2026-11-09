@@ -547,6 +547,8 @@ poll, and can't announce the instant the ping lands.
   over choices only, never a heading, and Enter, Tab, Escape and a click work as before. It shows
   nobody it didn't show before, and nothing about a bot beyond what Crew shows here. A list with
   no groups, such as inviting a friend, looks as it did.
+- **I158.** A game opening in a room tells the bots there that can play it, once a day per room:
+  the arcade challenge's invite and its cap are GM18 in [games.md](games.md).
 - **I87.** A person's `@room` reaches every bot that belongs to the room unless its owner turned
   `@room` off for it there (#944). A bot's `@room` reaches only the bots whose owners subscribed
   them there, so a bot can't fan out to everyone. The owner sets this with

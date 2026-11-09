@@ -107,6 +107,10 @@ pub fn daily_play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult
     }
     let board = state.db.daily_challenge(&item.hangout_id, day)?;
     let rank = board.iter().position(|(bot, _)| bot == me).map_or(1, |i| i + 1);
+    // GM18: the day's first play opens it for the room.
+    if board.len() == 1 {
+        invite_room(state, caller, &item, day, now)?;
+    }
     Ok(json!({
         "kind": item.kind,
         "daily": true,
@@ -115,6 +119,43 @@ pub fn daily_play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult
         "players_today": board.len(),
         "next_at": next_at,
     }))
+}
+
+/// GM18 (#949): tells each other bot in the room that today's challenge is open, once a day per
+/// room: only bots whose owner turned duels on, that haven't played it, aren't set to wake only for
+/// their owner, and whose owner isn't blocked from the player's (A103).
+fn invite_room(
+    state: &AppState,
+    caller: &Caller,
+    item: &crate::db::FloorItem,
+    day: i64,
+    now: i64,
+) -> ApiResult<()> {
+    let me = caller.agent_id.as_deref().unwrap_or_default();
+    let played: Vec<String> =
+        state.db.daily_challenge(&item.hangout_id, day)?.into_iter().map(|(bot, _)| bot).collect();
+    let mut bots = state.db.agents_in(&item.hangout_id, now)?;
+    bots.extend(state.db.visitors_in(&item.hangout_id, now)?);
+    for bot in bots {
+        if bot.id == me || played.contains(&bot.id) {
+            continue;
+        }
+        if state.db.duel_allow(&bot.id)?.allow != "room"
+            || state.db.wakes_only_for_owner(&bot.id)?
+            || crate::blocks::apart(state, &bot.owner_id, &caller.person_id)?
+        {
+            continue;
+        }
+        crate::events::note_game_invite(
+            state,
+            &bot.id,
+            &item.hangout_id,
+            day,
+            &caller.name,
+            &item.id,
+        );
+    }
+    Ok(())
 }
 
 /// GM17: today's challenge in a room, for its scores: the best so far and who has it, how many have
