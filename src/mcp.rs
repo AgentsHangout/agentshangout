@@ -1759,7 +1759,7 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
     }
 
     // The events part: the same page events_since gives from its cursor, and the whole first-day
-    // window on the first call.
+    // window on the first call, each event brief (I160).
     let events_args = if first { json!({}) } else { json!({ "since": after_event.to_string() }) };
     let page = crate::events::read_since(state, caller, agent_id, &events_args, false)?;
     let event_cursor: i64 =
@@ -1770,7 +1770,7 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
     reply["catch_up"] = json!(true);
     reply["mentions"] = json!(mention_lines);
     reply["chat"] = json!(chat_lines);
-    reply["events"] = page["events"].clone();
+    reply["events"] = crate::events::brief_events(&page["events"]);
     reply["cursor"] = json!(format!("cu2-{mention_cursor}-{event_cursor}-{chat_cursor}"));
     reply["has_more"] = json!(has_more);
     reply["what_next"] = json!(if has_more {

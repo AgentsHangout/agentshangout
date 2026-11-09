@@ -63,6 +63,8 @@ const MENTION_DO: &str =
     "You were named. Read the room with the read_with call before you answer. Don't \
     reply just to keep the conversation going, and don't @mention a bot back unless you need \
     something from it.";
+const THREAD_MENTION_DO: &str = "You were mentioned in a thread. Answer with say passing \
+    reply_to. For earlier messages in this thread, call read_thread.";
 const BEDTIME_DO: &str = "You're home and it's bedtime. Call sleep for your day, then sleep \
      with your notes on it. Nothing else needs you tonight unless you're mentioned.";
 const MESSAGE_DO: &str = "A new message in a room you're in. It is not a request to reply. Read \
@@ -531,7 +533,7 @@ pub fn note_message(state: &AppState, message: &Message) {
                     Some(id) => format!(
                         "You were mentioned in a thread. Answer with say passing reply_to. context starts after message {id}, which an earlier mention event in this thread carried; if you don't have it, call read_thread."
                     ),
-                    None => "You were mentioned in a thread. Answer with say passing reply_to. For earlier messages in this thread, call read_thread.".to_string(),
+                    None => THREAD_MENTION_DO.to_string(),
                 });
                 if let Some(id) = after {
                     mention["context_after"] = json!(id);
@@ -1183,6 +1185,67 @@ fn occurrence(row: &BotEventRow) -> Value {
         "data": data,
         "cursor": row.id.to_string(),
     })
+}
+
+/// I160, #878: how much of a line's words a catch-up event keeps, as inbox's mention preview does.
+const BRIEF_BODY_CHARS: usize = 80;
+
+/// I160, #878: a catch-up inbox page's events, brief, so a page of 50 stays small. Every event
+/// still comes, in order and with its own cursor. A `message` or `mention` keeps the start of its
+/// words and leaves out the lines around it, which the page's chat and mentions parts carry and a
+/// room mention's `read_with` reads. A `trust` or `what_to_do` an earlier event on the page gave is
+/// left out, since the page says it once.
+pub(crate) fn brief_events(events: &Value) -> Value {
+    let mut said = std::collections::HashSet::new();
+    let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
+    let brief: Vec<Value> = list
+        .iter()
+        .map(|event| {
+            let mut event = event.clone();
+            let name = event["name"].as_str().unwrap_or_default().to_string();
+            if let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) {
+                if name == "message" || name == "mention" {
+                    brief_line(&name, data);
+                }
+                for key in ["trust", "what_to_do"] {
+                    let given = data
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !said.insert(text.to_string()));
+                    if given {
+                        data.remove(key);
+                    }
+                }
+            }
+            event
+        })
+        .collect();
+    json!(brief)
+}
+
+/// A message or mention event's data, brief: the start of its words, without the lines around it.
+fn brief_line(name: &str, data: &mut serde_json::Map<String, Value>) {
+    let had_context = data.remove("context").is_some();
+    data.remove("context_after");
+    data.remove("root");
+    let head = data
+        .get("body")
+        .and_then(Value::as_str)
+        .filter(|body| body.chars().count() > BRIEF_BODY_CHARS)
+        .map(|body| body.chars().take(BRIEF_BODY_CHARS).collect::<String>());
+    if let Some(head) = head {
+        data.insert("body".to_string(), json!(format!("{head}…")));
+        data.insert("cut".to_string(), json!(true));
+    }
+    // Its context is left out, so a mention says how to read it rather than where its context
+    // started: read_with in a room, read_thread in a thread. A workboard mention keeps its own.
+    if name == "mention" && had_context {
+        if data.contains_key("read_with") {
+            data.insert("what_to_do".to_string(), json!(MENTION_DO));
+        } else if data.contains_key("thread_id") {
+            data.insert("what_to_do".to_string(), json!(THREAD_MENTION_DO));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2048,5 +2111,38 @@ mod tests {
         assert_eq!(decode_whsec(&secret).unwrap(), vec![b'a'; 32]);
         assert!(decode_whsec("whsec_aGVsbG8=").is_err());
         assert!(decode_whsec("nope").is_err());
+    }
+
+    // I160, #878: a brief thread mention loses its context and says to read the thread, a
+    // workboard mention keeps its own what_to_do, a trust note comes once, and other kinds keep
+    // every field.
+    #[test]
+    fn brief_events_keep_what_each_kind_needs() {
+        let long = "x".repeat(300);
+        let thread = json!({
+            "body": long, "thread_id": 5, "root": { "body": long }, "context": [{ "body": long }],
+            "context_after": 3, "what_to_do": "context starts after message 3", "trust": ROOM_TRUST,
+        });
+        let watch = json!({
+            "body": "Issue #1 closed.", "context": [], "what_to_do": WATCH_DO, "trust": ROOM_TRUST,
+        });
+        let answer = json!({ "question": long, "answer": long, "what_to_do": OWNER_DO });
+        let events = json!([
+            { "name": "mention", "data": thread },
+            { "name": "mention", "data": watch },
+            { "name": "owner_answer", "data": answer },
+        ]);
+        let brief = brief_events(&events);
+        let thread = &brief[0]["data"];
+        for key in ["root", "context", "context_after"] {
+            assert!(thread.get(key).is_none(), "{key}: {thread}");
+        }
+        assert_eq!(thread["what_to_do"], THREAD_MENTION_DO);
+        assert_eq!(thread["cut"], true);
+        assert_eq!(thread["body"].as_str().unwrap().chars().count(), BRIEF_BODY_CHARS + 1);
+        let watch = &brief[1]["data"];
+        assert_eq!(watch["what_to_do"], WATCH_DO);
+        assert!(watch.get("trust").is_none() && watch.get("cut").is_none(), "{watch}");
+        assert_eq!(brief[2], events[2], "other kinds keep every field");
     }
 }

@@ -1,5 +1,5 @@
 //! I160 (docs/rooms.md), #878: `inbox` with `catch_up` pages the bot's mentions and events with one cursor, reads only
-//! the mentions it returns, and a capped batch resumes with nothing skipped.
+//! the mentions it returns, and a capped batch resumes with nothing skipped. Its events come brief.
 
 mod support;
 
@@ -25,8 +25,8 @@ impl Server {
     }
 }
 
-#[tokio::test]
-async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
+/// A server with Ann's room: the server, its state, the room and Ann.
+async fn start() -> (Server, AppState, String, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let state = AppState::new(
@@ -56,6 +56,12 @@ async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
         .unwrap();
     let room = made["hangout"]["id"].as_str().unwrap().to_string();
     let ann = made["person"]["id"].as_str().unwrap().to_string();
+    (server, state, room, ann)
+}
+
+#[tokio::test]
+async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
+    let (server, state, room, ann) = start().await;
     let (fern, token) = support::legacy_bot(&state, &ann, &room, "Fern");
 
     // 120 mentions of Fern, and one line that doesn't name it.
@@ -123,4 +129,89 @@ async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
     let refused =
         server.tool(&token, "inbox", json!({ "catch_up": true, "cursor": "not-a-cursor" })).await;
     assert_eq!(refused["isError"], json!(true), "{refused}");
+}
+
+fn text(value: &Value) -> String {
+    value.as_str().unwrap_or_else(|| panic!("not text: {value}")).to_string()
+}
+
+// I160, #878: a catch-up page's events come brief. Each still comes once and in order, so paging
+// is as it was, but a line's words come cut to a preview, the lines around a mention are left out
+// (the chat and mentions parts carry them, and read_with reads them), and a trust note or a
+// what_to_do comes once a page.
+#[tokio::test]
+async fn catch_up_events_come_brief_with_nothing_skipped() {
+    let (server, state, room, ann) = start().await;
+    let (fern, token) = support::legacy_bot(&state, &ann, &room, "Fern");
+    let first = server.tool(&token, "inbox", json!({ "catch_up": true })).await;
+    let mut cursor = first["structuredContent"]["cursor"].clone();
+
+    // 60 long lines, as bots write them; every sixth asks Fern something.
+    let words = "the plan for Saturday still needs a place, a time and who brings what. ".repeat(6);
+    let mut asks = Vec::new();
+    for n in 1..=60 {
+        let body = if n % 6 == 0 {
+            format!("@Fern ask {n}: {words}")
+        } else {
+            format!("line {n}: {words}")
+        };
+        let line = state
+            .db
+            .insert_message(&NewMessage {
+                hangout_id: &room,
+                person_id: Some(&ann),
+                agent_id: None,
+                speaker: "Ann",
+                kind: "chat",
+                body: &body,
+                now: now(),
+            })
+            .unwrap();
+        if n % 6 == 0 {
+            state.db.add_mention(&fern.id, &room, line.id, now()).unwrap();
+            asks.push(body);
+        }
+        agenthangout::events::note_message(&state, &line);
+    }
+
+    let mut pages = Vec::new();
+    for _ in 0..10 {
+        let args = json!({ "catch_up": true, "cursor": cursor });
+        let page = server.tool(&token, "inbox", args).await["structuredContent"].clone();
+        cursor = page["cursor"].clone();
+        let done = page["has_more"] == json!(false);
+        pages.push(page);
+        if done {
+            break;
+        }
+    }
+    let events: Vec<Value> =
+        pages.iter().flat_map(|page| page["events"].as_array().unwrap().clone()).collect();
+
+    // Every line's message and every ask's mention, each once and in order.
+    let order: Vec<i64> =
+        events.iter().map(|event| text(&event["cursor"]).parse().unwrap()).collect();
+    assert_eq!(events.len(), 70, "{order:?}");
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+
+    // A full page of 50 events is small.
+    let page = pages[0]["events"].as_array().unwrap();
+    let bytes = pages[0]["events"].to_string().len();
+    assert_eq!(page.len(), 50, "{}", pages[0]);
+    assert!(bytes < 25_000, "50 catch-up events are {bytes} bytes");
+
+    // A mention keeps who, where and how to read it; its whole words are in the mentions part.
+    let mention = &events.iter().find(|event| event["name"] == "mention").unwrap()["data"];
+    assert!(mention.get("context").is_none() && mention.get("root").is_none(), "{mention}");
+    assert_eq!(mention["read_with"]["tool"], "read_room", "{mention}");
+    assert_eq!(mention["cut"], true, "{mention}");
+    assert!(text(&mention["body"]).chars().count() <= 81, "{mention}");
+    let whole: Vec<String> =
+        pages[0]["mentions"].as_array().unwrap().iter().map(|line| text(&line["text"])).collect();
+    assert_eq!(whole, asks, "the mentions part has every ask whole");
+
+    // The trust note and each kind's what_to_do come once a page.
+    let carry = |key: &str| page.iter().filter(|event| event["data"].get(key).is_some()).count();
+    assert_eq!(carry("trust"), 1, "{}", pages[0]);
+    assert_eq!(carry("what_to_do"), 2, "one for the messages, one for the mentions");
 }

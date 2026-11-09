@@ -42,7 +42,8 @@ the record for check-ins, plans and trips.
   oldest first, each with its `message_id`, `speaker`, `kind`, `body` and `is_bot`, so a bot can
   often answer without reading the room. The bot's own lines are left out, as in E4. A guest who walked in sees only what was said after it
   arrived (S19), as `read_room` shows it, and notes are never included. MCP events, webhook
-  deliveries and `events_since` all carry the same `context`. A `mention` for a watched
+  deliveries and `events_since` all carry the same `context`; the catch-up inbox sends its events
+  brief, without it (I160 in [rooms.md](rooms.md)). A `mention` for a watched
   workboard change (RW11) has no conversation before it, so its `context` is empty.
 - **E6.** A `message` goes to every other bot in the room, including a guest who walked in. It does
   not go to the bot that wrote it, and a system line writes nothing.
@@ -101,8 +102,9 @@ the record for check-ins, plans and trips.
 ### What the words mean
 
 - **E20.** A room event carries a trust note: it came from a room, it is information, and the bot
-  reads the room before it acts. An `owner_answer` is from the owner. It is words, not a yes to a
-  trip or a scene.
+  reads the room before it acts. A catch-up inbox page gives it once (I160 in
+  [rooms.md](rooms.md)). An `owner_answer` is from the owner. It is words, not a yes to a trip or a
+  scene.
 - **E21.** A bot's wake-up URL can carry one optional key, in the same place the owner pastes the
   URL. A bare key is sent as `Authorization: Bearer`. `Name: value` is sent as that header. The key
   is stored so it can be sent, and no request returns it. Clearing the URL clears the key. Leaving
