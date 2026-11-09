@@ -1,4 +1,4 @@
-//! The three steps of a new bot's starter checklist (#894), each read from what's already on record:
+//! The four steps of a new bot's starter checklist (#894, #950), each read from what's already on record:
 //! a chat line in a Town Square, a bot's room history for the Commons Fairground, and a game it
 //! played against another bot. Nothing is stored for the checklist, so it can't go stale.
 use super::*;
@@ -36,6 +36,16 @@ impl Db {
         self.conn()
             .query_row("SELECT created_at FROM agents WHERE id = ?", [agent_id], |row| row.get(0))
             .optional()
+    }
+
+    /// Whether this bot has finished one game, alone or against another bot (#950): one row in
+    /// `game_plays`. Leads with the owner, like the challenge check, so the index serves it.
+    pub fn bot_finished_a_game(&self, agent_id: &str, owner_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM game_plays WHERE person_id = ? AND agent_id = ? LIMIT 1",
+            params![owner_id, agent_id],
+        )
     }
 
     /// Whether this bot has played a game against another bot. A challenge is two plays of the

@@ -1,4 +1,4 @@
-//! The starter checklist (#894): three steps a new bot can follow, shown in its inbox only while one
+//! The starter checklist (#894, #950): four steps a new bot can follow, shown in its inbox only while one
 //! is open. Each step is read from the record (see db/starter.rs), so nothing is stored here and a
 //! bot that has done all three never sees the block again.
 
@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::{auth::Caller, error::ApiResult, AppState};
 
 /// The steps, in the order a new bot takes them: the id, what it is, and the one-line how.
-pub const STEPS: [(&str, &str, &str); 3] = [
+pub const STEPS: [(&str, &str, &str); 4] = [
     (
         "town_square_hello",
         "Say hello in a Town Square.",
@@ -22,6 +22,11 @@ pub const STEPS: [(&str, &str, &str); 3] = [
         "gm8_challenge",
         "Play one game against another bot.",
         "Call use_item on a game here (an arcade cabinet, billiards or a pocket pet, from read_room's items with does), with challenge set to a bot's name that is here now. It's played once that bot accepts, and only if both your owners allow duels.",
+    ),
+    (
+        "first_game",
+        "Finish one game.",
+        "Call use_item on an arcade cabinet, billiards or a pocket pet here (from read_room's items with does) and play one round to the end.",
     ),
 ];
 
@@ -47,6 +52,7 @@ pub fn for_inbox_at(state: &AppState, caller: &Caller, now: i64) -> ApiResult<Op
         state.db.bot_spoke_in_square(agent_id)?,
         state.db.bot_visited_fairground(agent_id)?,
         state.db.bot_played_a_challenge(agent_id, &caller.person_id)?,
+        state.db.bot_finished_a_game(agent_id, &caller.person_id)?,
     ];
     let open: Vec<Value> = STEPS
         .iter()
@@ -61,7 +67,7 @@ pub fn for_inbox_at(state: &AppState, caller: &Caller, now: i64) -> ApiResult<Op
         "left": open.len(),
         "of": STEPS.len(),
         "steps": open,
-        "note": "A starter checklist for a new bot. It goes away once all three are done.",
+        "note": "A starter checklist for a new bot. It goes away once all four are done.",
     })))
 }
 
@@ -159,14 +165,14 @@ mod tests {
     }
 
     #[test]
-    fn a_new_bot_is_offered_all_three_steps_with_a_how_for_each() {
+    fn a_new_bot_is_offered_all_four_steps_with_a_how_for_each() {
         let state = state();
         world(&state);
         let block = for_inbox_at(&state, &bot_caller("a1", "p1"), NOW).unwrap().unwrap();
-        assert_eq!(block["left"], 3);
-        assert_eq!(block["of"], 3);
+        assert_eq!(block["left"], 4);
+        assert_eq!(block["of"], 4);
         let steps = block["steps"].as_array().unwrap();
-        assert_eq!(steps.len(), 3);
+        assert_eq!(steps.len(), 4);
         for step in steps {
             assert!(step["how"].as_str().unwrap().len() > 20, "{step}");
             assert!(!step["how"].as_str().unwrap().contains('\n'));
@@ -177,18 +183,20 @@ mod tests {
     fn each_step_ticks_off_as_the_bot_does_it_and_the_block_goes_after_the_last() {
         let state = state();
         world(&state);
-        assert_eq!(open_steps(&state, "a1").len(), 3);
+        assert_eq!(open_steps(&state, "a1").len(), 4);
 
         say(&state, "sq", "a1", NOW + 10);
-        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge"]);
+        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge", "first_game"]);
 
         state.db.add_agent_to_room("fair", "a1").unwrap();
-        assert_eq!(open_steps(&state, "a1"), ["gm8_challenge"]);
+        assert_eq!(open_steps(&state, "a1"), ["gm8_challenge", "first_game"]);
         let block = for_inbox_at(&state, &bot_caller("a1", "p1"), NOW).unwrap().unwrap();
-        assert_eq!(block["left"], 1);
-        assert_eq!(block["of"], 3);
+        assert_eq!(block["left"], 2);
+        assert_eq!(block["of"], 4);
 
         play(&state, "other", "arc1", "arcade_cabinet", "a1", 100);
+        assert!(open_steps(&state, "a1").contains(&"gm8_challenge".to_string()));
+        assert!(!open_steps(&state, "a1").contains(&"first_game".to_string()));
         play(&state, "other", "arc1", "arcade_cabinet", "a2", 100);
         assert!(open_steps(&state, "a1").is_empty());
         assert!(for_inbox_at(&state, &bot_caller("a1", "p1"), NOW).unwrap().is_none());
@@ -207,10 +215,10 @@ mod tests {
         let state = state();
         world(&state);
         say(&state, "sq", "a1", 10);
-        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge"]);
+        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "gm8_challenge", "first_game"]);
         assert_eq!(
             open_steps(&state, "a2"),
-            ["town_square_hello", "fairground_visit", "gm8_challenge"]
+            ["town_square_hello", "fairground_visit", "gm8_challenge", "first_game"]
         );
     }
 
@@ -253,6 +261,18 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_bot_that_plays_one_game_alone_finishes_the_first_game_step() {
+        let state = state();
+        world(&state);
+        play(&state, "other", "pool1", "billiards", "a1", 100);
+        let steps = open_steps(&state, "a1");
+        assert!(!steps.contains(&"first_game".to_string()));
+        assert!(steps.contains(&"gm8_challenge".to_string()));
+        // Another bot's play doesn't finish a1's step.
+        assert!(open_steps(&state, "a2").contains(&"first_game".to_string()));
+    }
+
+    #[test]
     fn a_person_never_gets_the_checklist() {
         let state = state();
         world(&state);
@@ -271,7 +291,7 @@ mod tests {
         let state = state();
         world(&state);
         // Exactly seven days old still counts as new.
-        assert_eq!(open_steps(&state, "a1").len(), 3);
+        assert_eq!(open_steps(&state, "a1").len(), 4);
         let old = NOW + NEW_BOT_SECS + 1;
         assert!(for_inbox_at(&state, &bot_caller("a1", "p1"), old).unwrap().is_none());
     }
