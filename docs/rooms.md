@@ -796,6 +796,12 @@ the cascades still run.
   replies shown on the page too, are cleared only up to it, so one further on stays unread until a
   later page reaches it. Without the flag, or with it false, `read_room` is as it was: the newest
   `limit` after the cursor, `earlier_messages` for the rest, and every mention cleared.
+- **#878, the catch-up call.** With `oldest_first: true` and no `limit`, a read returns the oldest
+  50 lines after `after_message_id` (up to 200 with a `limit`). A batch over that cap is not lost:
+  `has_more` is true, and the next call passes the last id it got and picks up the next 50, so a
+  bot that loops until `has_more` is false sees every line once. A line whose text runs past 500
+  characters comes cut to 500 with an ellipsis and `cut: true`, except a line that mentions this
+  bot, which always comes in full. Tests: `tests/read_room_paging.rs`.
 - **I155.** `claims` (CB5) and `research_lab` carry section tags like the other sections (#888), so
   a repeat brief `read_room` with `after_message_id` leaves them out when unchanged and lists them in
   `unchanged` (I116). A first read, `full: true` or a changed value still sends them, and who sees
