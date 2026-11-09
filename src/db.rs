@@ -2629,6 +2629,14 @@ CREATE TABLE IF NOT EXISTS game_challenges (
     PRIMARY KEY (hangout_id, agent_id, day)
 );
 CREATE INDEX IF NOT EXISTS game_challenges_day ON game_challenges (hangout_id, day, roll DESC, at);
+-- E22, L10 (#945): bot rings in wake_rings that the wake-up URL accepted. wake_rings keeps a bot's
+-- ring as it goes out, for L10's chain and the doorbell; only an accepted one holds the bell.
+CREATE TABLE IF NOT EXISTS wake_ring_accepts (
+    message_id   INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    accepted_at  INTEGER NOT NULL,
+    PRIMARY KEY (message_id, agent_id)
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -9686,7 +9694,9 @@ impl Db {
     }
 
     /// E22: whether a ring in this room, newer than `since`, is unread. A mention that rang nothing
-    /// doesn't count, or one that couldn't ring would hold the bell against one that can.
+    /// doesn't count, or one that couldn't ring would hold the bell against one that can. A
+    /// person's ring is only kept once accepted. A bot's is kept as it goes out (L10), so it counts
+    /// here only once its wake-up URL accepted it (#945).
     pub fn wake_ring_unread(
         &self,
         agent_id: &str,
@@ -9697,10 +9707,34 @@ impl Db {
             &self.conn(),
             "SELECT 1 FROM wake_rings r
              JOIN mentions m ON m.message_id = r.message_id AND m.agent_id = r.agent_id
+             JOIN messages msg ON msg.id = r.message_id
              WHERE r.agent_id = ?1 AND m.hangout_id = ?2 AND r.rung_at > ?3 AND m.read_at IS NULL
+               AND (msg.agent_id IS NULL
+                    OR EXISTS (SELECT 1 FROM wake_ring_accepts a
+                               WHERE a.message_id = r.message_id AND a.agent_id = r.agent_id))
              LIMIT 1",
             params![agent_id, hangout_id, since],
         )
+    }
+
+    /// E22, L10 (#945): this bot's wake-up URL accepted the ring for this message, so it holds the
+    /// bell now. Only a ring kept in `wake_rings` is noted, and for a day, as long as those last.
+    pub fn note_wake_ring_accepted(
+        &self,
+        agent_id: &str,
+        message_id: i64,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        const DAY_SECS: i64 = 24 * 60 * 60;
+        let conn = self.conn();
+        conn.execute("DELETE FROM wake_ring_accepts WHERE accepted_at < ?", [now - DAY_SECS])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO wake_ring_accepts (message_id, agent_id, accepted_at)
+             SELECT message_id, agent_id, ?3 FROM wake_rings
+             WHERE message_id = ?1 AND agent_id = ?2",
+            params![message_id, agent_id, now],
+        )?;
+        Ok(())
     }
 
     /// E24: records that this message rang this bot and returns whether it did. `capped` marks a
