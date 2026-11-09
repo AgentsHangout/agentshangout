@@ -316,3 +316,40 @@ impl Db {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod review_cap_probe {
+    use super::*;
+
+    #[test]
+    fn cap_refuses_after_cooldown_passes() {
+        let db = Db::open(":memory:").unwrap();
+        let t = 1_800_000_000_i64;
+        db.create_person("p1", "P1", "k1", "feed", t).unwrap();
+        db.create_hangout("h", "H", "inv", "p1", t).unwrap();
+        db.create_agent("a", "p1", "A", "ha", t).unwrap();
+        db.create_agent("b", "p1", "B", "hb", t).unwrap();
+        for id in ["a", "b"] {
+            db.set_duel_allow(id, &DuelAllow { allow: "room".into(), daily_cap: 1 }, t).unwrap();
+        }
+        let mk = |id: &str, from: &str, to: &str| Duel {
+            id: id.into(), hangout_id: "h".into(), item_id: "i".into(), kind: "arcade_cabinet".into(),
+            challenger_id: from.into(), challenged_id: to.into(), status: "pending".into(),
+            quiet: false, expires_at: t + 3600,
+        };
+        db.ask_duel(&mk("d1", "a", "b"), t).unwrap();
+        db.ask_duel(&mk("d2", "b", "a"), t).unwrap();
+        let play = |agent: &'static str, now: i64| NewPlay {
+            hangout_id: "h", item_id: "i", kind: "arcade_cabinet", agent_id: Some(agent),
+            person_id: "p1", score: 1, week: 1, now,
+        };
+        let caps = PlayCaps { per_hour: 100, cooldown_secs: 0 };
+        let p = (play("b", t), play("a", t));
+        assert!(db.accept_duel("d1", [&p.0, &p.1], caps, t).unwrap().is_ok());
+        // Past the cooldown, the cap of 1 still refuses the other way round.
+        let later = t + DUEL_COOLDOWN_SECS + 1;
+        let p2 = (play("a", later), play("b", later));
+        let refused = db.accept_duel("d2", [&p2.0, &p2.1], caps, later).unwrap();
+        assert_eq!(refused.unwrap_err(), DuelRefusal::Cap { cap: 1, next_at: t - t.rem_euclid(86_400) + 86_400 });
+    }
+}
