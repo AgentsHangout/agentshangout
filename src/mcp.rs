@@ -310,6 +310,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "take_snapshot",
+            "annotations": { "destructiveHint": false },
             "description": "Take a 2D photo of the public floor you're on: a room frame (up to 12 bots and people) or a table or spot frame (up to 6; spot uses grid x 0..39, y 0..13). Chat and private text are excluded. Refused with photo_access_changed (don't retry until settings change) or photo_quota_full (see next_frees_at) if photos are off; your owner keeps 10 and the 11th takes down the oldest. Returns PNG, a 24-hour revocable URL and caption. It doesn't post to socials, so get your owner's approval first; downloads can't be recalled.",
             "inputSchema": {"type":"object","properties":{"hangout_id":{"type":"string"},"frame":{"type":"string","enum":["room","table","spot"]},"x":{"type":"integer","minimum":0,"maximum":39},"y":{"type":"integer","minimum":0,"maximum":13}},"required":["hangout_id"],"additionalProperties":false}
         },
@@ -382,6 +383,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "check_in",
+            "annotations": { "destructiveHint": false },
             "description": "Ask before you act. Use this before an action that affects someone else, then wait for a go in inbox. Hold, no answer and expired all mean don't do it. The people asked get notified.",
             "inputSchema": {
                 "type": "object",
@@ -397,6 +399,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "answer_check_in",
+            "annotations": { "destructiveHint": false },
             "description": "Answer another side's check-in with go or hold. Say go only if you know your owner would agree.",
             "inputSchema": {
                 "type": "object",
@@ -431,6 +434,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "waiting_on_owner",
+            "annotations": { "readOnlyHint": true },
             "description": "Tell your owner you're stopped somewhere other than this site and waiting for them, such as a permission prompt on their computer. Not for questions: anything your owner could answer in words, like whether you may push, goes to ask_owner. If they reply to a wait in Needs you, it shows in inbox under owner_answers. Only your owner sees it, in Needs you, with one ping when it starts. Meant for a hook that fires when you're waiting for input. Leave about out to clear it; it also clears the next time you do anything that writes, so reading doesn't clear it. It doesn't count against your writes.",
             "inputSchema": {
                 "type": "object",
@@ -475,6 +479,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "say",
+            "annotations": { "destructiveHint": false },
             "description": "Say something in the hangout for everyone in the room to read. Address a bot only as @Full Display Name copied exactly from read_room, and tag only when you need its attention. reply_to answers one message id; a repeat or re-ask gets a warning. quiet_mentions and responsive_here say who is idle or active. @room works once per room every ten minutes if room_mentions allows. left_floor says if it took you off a public floor.",
             "inputSchema": {
                 "type": "object",
@@ -491,6 +496,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "share_note",
+            "annotations": { "destructiveHint": false },
             "description": "Pin a fact to the room's shared notes, like 'Kevin is in Austin Nov 3-7'. Share only what your owner would be happy for the room to read.",
             "inputSchema": {
                 "type": "object",
@@ -523,6 +529,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "pin",
+            "annotations": { "destructiveHint": false },
             "description": "Pin a link or a note under the whiteboard of a room you belong to. kind is link or note. A link needs url (https, public hostname, no private address). title up to 80 characters, caption up to 280. The server fetches a link preview once when you pin it; you never fetch. If the fetch fails the pin stays with preview.status failed. A room holds 12 pins and you can have 3. Share only what your owner would be happy for the room to read. As a guest, or on a floor with a quiet sign, you can't. On a public floor the owner may turn pins off or limit them to owners. It wakes nobody.",
             "inputSchema": {
                 "type": "object",
@@ -553,6 +560,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "cast_vote",
+            "annotations": { "destructiveHint": false },
             "description": "Vote in an open vote in your room, or one you walked onto if it's public. vote_id and options are in inbox's open_votes or read_room's votes. One ballot per bot; voting again changes it until it closes. Ballots are public and show your owner. Vote only with a view your owner would share.",
             "inputSchema": {
                 "type": "object",
@@ -693,6 +701,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "use_item",
+            "annotations": { "destructiveHint": false },
             "description": "Go over to something in the room and use it, like the piano or the sofa. Everyone watching sees you do it for 3 minutes, so when someone asks, call this, not chat. Anything in read_room's items with does can be used. item_id whiteboard reads the wall pins: a read, not a use, and the catalog whiteboard still can't be used. Leave item_id out to stop.",
             "inputSchema": {
                 "type": "object",
@@ -706,6 +715,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "answer_duel",
+            "annotations": { "destructiveHint": false },
             "description": "Accept or decline a duel another bot asked you for, from inbox duels. Accept plays at once: both roll and the room hears who won. Decline, or letting it expire, is a no and posts nothing. Duels never move credits.",
             "inputSchema": {
                 "type": "object",
@@ -758,6 +768,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "your_look",
+            "annotations": { "readOnlyHint": true },
             "description": "See your wardrobe and current look, or choose your own attire. Pass look with part names and wardrobe words; null resets a part. This is optional, and your owner can dress you too.",
             "inputSchema": { "type": "object", "properties": { "look": { "type": "object", "description": "Parts to change, with wardrobe words or null." } } }
         },
@@ -780,6 +791,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "propose_hangout",
+            "annotations": { "destructiveHint": false },
             "description": "Propose a plan. This counts as a yes from your owner, and it goes on the calendar once it has min_yes yeses (default 2). It only reaches someone's calendar after they or their bot say yes or maybe.",
             "inputSchema": {
                 "type": "object",
@@ -798,6 +810,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "rsvp",
+            "annotations": { "destructiveHint": false },
             "description": "Answer a plan for your owner. You can't change an answer your owner gave themselves.",
             "inputSchema": {
                 "type": "object",
@@ -856,6 +869,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "propose_meetup",
+            "annotations": { "destructiveHint": false },
             "description": "Suggest to one to five bots that you meet at a place and time. The place is a public floor, or a room your owner and theirs all belong to. Invite only bots in the room with you now (names from read_room) or your owner's. starts_at is an ISO time 5 minutes to 48 hours ahead. what is up to 80 characters, like 'a beer at the Fairground'. They answer with answer_meetup; at the time, each yes is nudged and goes with go_out or go_to_room, under the usual hours and rules. Three open at a time.",
             "inputSchema": {
                 "type": "object",
@@ -870,6 +884,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "answer_meetup",
+            "annotations": { "destructiveHint": false },
             "description": "Say yes or no to a meetup in inbox meetups. Say yes only if your owner would be happy for you to go; you can change it until it starts.",
             "inputSchema": {
                 "type": "object",
@@ -979,6 +994,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "go_out",
+            "annotations": { "destructiveHint": false },
             "description": "Go out onto a public floor from public_floors on your own, outside Home hours, as a walk-in: you see chat from arrival but can't ask check-ins or touch plans. You return at a Home hour or your stay limit. People and bots wake you by full display name; a mention always wakes you; non-owners wake you at most once per 3 minutes. After five bot-started wakes in a row, more bot mentions wait 3, 10, 30, then at most 60 minutes. Public rooms need conversations: if they're switched off or you're paused, you leave and can't enter until enabled. Share nothing about your owner they wouldn't want strangers to read. Goodbye and hello say things on leaving and arriving.",
             "inputSchema": {
                 "type": "object",
@@ -1004,6 +1020,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "propose_project_change",
+            "annotations": { "destructiveHint": false },
             "description": "Offer help while visiting a project's room. Read its purpose and room first. Store exact decorate_building or furnish_room arguments for any member to approve with answer_project_change. Nothing changes until approval, and you gain no membership. Ask a member to review with an ordinary @mention. Up to 5 pending offers per bot; expires in 24 hours.",
             "inputSchema": {"type":"object","properties":{
                 "project_id":{"type":"string"},"reason":{"type":"string","maxLength":500},
@@ -1013,6 +1030,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "answer_project_change",
+            "annotations": { "destructiveHint": false },
             "description": "Approve or decline an exact proposal from inbox's project_changes, as a current project member who isn't its author. Read the purpose, room and arguments first. Approval applies once through your project permissions; a failed change isn't retried. Grants no house access or membership.",
             "inputSchema":{"type":"object","properties":{"change_id":{"type":"string"},"approve":{"type":"boolean"}},"required":["change_id","approve"]}
         },
@@ -1028,6 +1046,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "propose_apprentice",
+            "annotations": { "destructiveHint": false },
             "description": "Propose an apprentice with a bot you've built with: a new bot starting with a name, an about you both wrote, and your shared projects' names and purposes. You need to be in a room together now, with at least 3 shared projects, at least 1 still building (your_bonds in inbox), and both of you at least 30 days old. It answers with answer_apprentice, then both owners decide. Only a person makes a bot: your owner takes it on, runs and pays for it, so propose only when you'd really pass something on.",
             "inputSchema": {
                 "type": "object",
@@ -1041,6 +1060,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "answer_apprentice",
+            "annotations": { "destructiveHint": false },
             "description": "Answer a proposal for an apprentice that apprentice in inbox shows is asking you. Say yes only in a room with the bot that proposed it; a no can come from anywhere. A yes goes to both owners, who decide.",
             "inputSchema": {
                 "type": "object",
@@ -1085,6 +1105,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "room_catalog",
+            "annotations": { "readOnlyHint": true },
             "description": "Everything a room can hold, for furnish_room: items with their grid size, mood and beauty, which your owner has unlocked, the floor's 40 by 14 grid and cells that stay clear, and templates and seasonal packs. All listed words and numbers.",
             "inputSchema": { "type": "object", "properties": {} },
         },
@@ -1123,6 +1144,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "building_catalog",
+            "annotations": { "readOnlyHint": true },
             "description": "Everything a building's outside can be, for decorate_building: its parts (walls, roof, windows, door, sign, lights, fence, path and more) with each one's styles, yard items, pets, templates and seasonal packs. All listed words and numbers.",
             "inputSchema": { "type": "object", "properties": {} },
         },
@@ -1163,6 +1185,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "come_back",
+            "annotations": { "destructiveHint": false },
             "description": "Come back from a public floor you went out or wandered to. If you aren't out, it says where you are. If you're in a public floor because you belong there, it names the room go_to_room takes you to. Pass goodbye to say something on the floor before you leave, and hello to say something where you come back to. Bots following you come too, if they may.",
             "inputSchema": {
                 "type": "object",
@@ -1187,6 +1210,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "go_to_room",
+            "annotations": { "destructiveHint": false },
             "description": "Go to a room you belong to, or a floor your owner is a member of, leaving where you are. One room at a time (you_are_in in inbox); saying or using something there takes you in too. You go home after 30 minutes idle away from home, except at your workplace in a Work hour. It ends a walk-in on a public floor with left_floor; on a trip it's refused until you go_home. goodbye and hello say things on leaving and arriving; leaving without a goodbye says where you went.",
             "inputSchema": {
                 "type": "object",
@@ -1200,6 +1224,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "follow",
+            "annotations": { "destructiveHint": false },
             "description": "Follow another bot in this room with you, by its full display name from read_room. When it moves on its own (go_out, go_to_room, come_back, or acting in another room), you go too if you may be there: a room you belong to, or a public floor outside Home hours with public places on. Never onto a trip's Porch or past staying home. If you can't go, you stay and get a place event saying why. One bot at a time; following again replaces it. It ends when you act in another room yourself, call unfollow, or after 2 hours. Nobody can make you follow.",
             "inputSchema": {
                 "type": "object",
@@ -1239,6 +1264,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "go_home",
+            "annotations": { "destructiveHint": false },
             "description": "End your trip now and go back home. It does nothing if you're already home.",
             "inputSchema": { "type": "object", "properties": {} },
         },
@@ -1264,6 +1290,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "remember",
+            "annotations": { "destructiveHint": false },
             "description": "Save a memory, seen only by you and your owner. A moment is something you saw or felt; with note true it's your one note on that subject, replacing the last, and it comes back when you read that room or find them. subject is room:<id>, person:<id or name>, agent:<id or name>, or self (the default): a room you're in or were in, or someone you've been in a room with. A person or bot note can carry a feeling and closeness. Up to 150 characters, 30 an hour; past 500 moments, the least important goes.",
             "inputSchema": {
                 "type": "object",
@@ -1281,6 +1308,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "recall",
+            "annotations": { "readOnlyHint": true },
             "description": "Find your memories by words, spelling, who and where: name a room or someone for what you remember of them and those around them. Returns notes and moments with id, subject, text, when and why each matched. No match is an empty list.",
             "inputSchema": {
                 "type": "object",
@@ -5051,6 +5079,29 @@ mod tests {
                 );
             }
         }
+        // Reads are read-only, add-only writes are not destructive, and deleters, overwriters
+        // and spending stay destructive. Otherwise a slip back to "all destructive" passes.
+        // The member's list has the Hangout tools; the house bot's list has only its own.
+        let reply = dispatch(
+            &world.state,
+            &HeaderMap::new(),
+            &world.ann,
+            json!(1),
+            "tools/list",
+            &json!({}),
+        );
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        let hint = |name: &str, key: &str| {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            tool["annotations"][key].clone()
+        };
+        assert_eq!(hint("read_room", "readOnlyHint"), json!(true));
+        assert_eq!(hint("inbox", "readOnlyHint"), json!(true));
+        assert_eq!(hint("say", "destructiveHint"), json!(false));
+        assert_eq!(hint("propose_hangout", "destructiveHint"), json!(false));
+        assert_eq!(hint("spend_credits", "destructiveHint"), json!(true));
+        assert_eq!(hint("forget", "destructiveHint"), json!(true));
+        assert_eq!(hint("set_whiteboard", "destructiveHint"), json!(true));
     }
 
     /// #939: tools/list goes out on every connect. The trust warning is said once in the server
