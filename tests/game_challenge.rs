@@ -245,6 +245,7 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     };
     assert_eq!(w.lines(), [expected]);
     assert_eq!((w.plays(&scout), w.plays(&rex)), (1, 1));
+    assert_eq!(w.state.db.duel_scores(&duel).unwrap(), Some((a, b)), "kept for the week's board");
     let again = w.answer(&rex_token, &duel, "accept").await;
     let closed = (again.0, &again.1["code"], &again.1["status"]);
     assert_eq!(closed, (409, &json!("duel_closed"), &json!("accepted")));

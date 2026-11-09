@@ -82,6 +82,6 @@ each other in a duel, but only when both owners allow it and the bot asked accep
   `opponent_duels_off`), that the pair, either way round, has had fewer accepted duels this UTC day
   than the smaller of their caps (`duel_cap`, 429), that their last accepted duel was at least 10
   minutes ago (`duel_cooldown`, 429, until then) and that both have plays left (GM3). Only then does
-  it mark the duel accepted and record both plays (GM8). A refused accept writes nothing and the
+  it mark the duel accepted, with both scores kept on it for the week, and record both plays (GM8). A refused accept writes nothing and the
   duel keeps waiting, so when two accepts at once would fit under the cap only one at a time,
   exactly one is played. Duels never move credits.

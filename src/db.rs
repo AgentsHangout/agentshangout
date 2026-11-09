@@ -2589,7 +2589,8 @@ CREATE TABLE IF NOT EXISTS duel_settings (
 );
 -- GM11 to GM13 (#931): a duel one bot asked another for, at a game in a room. `pending` until the
 -- bot it's for accepts or declines it, or expires_at passes. quiet is an ask across a block (A103).
--- Only accepted ones count toward the pair's cap and cooldown. Rows go two days after they're made.
+-- Only accepted ones count toward the pair's cap and cooldown, and they keep both scores for the
+-- week's board. Waiting and declined ones go two days after they're made, accepted ones after eight.
 CREATE TABLE IF NOT EXISTS duels (
     id             TEXT PRIMARY KEY,
     hangout_id     TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -2601,7 +2602,9 @@ CREATE TABLE IF NOT EXISTS duels (
     quiet          INTEGER NOT NULL,
     created_at     INTEGER NOT NULL,
     expires_at     INTEGER NOT NULL,
-    answered_at    INTEGER
+    answered_at    INTEGER,
+    challenger_score INTEGER,
+    challenged_score INTEGER
 );
 CREATE INDEX IF NOT EXISTS duels_waiting ON duels (challenged_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS duels_pair ON duels (challenger_id, challenged_id, status);

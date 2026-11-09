@@ -12,8 +12,11 @@ pub const DUEL_MAX_CAP: i64 = 20;
 pub const DUEL_WAIT_SECS: i64 = 10 * 60;
 /// GM13: how long after a pair's last accepted duel before the next.
 pub const DUEL_COOLDOWN_SECS: i64 = 10 * 60;
-/// How long a duel is kept after it's asked for. The cap and the cooldown look back a day at most.
+/// How long a duel that wasn't accepted is kept after it's asked for. The cap and the cooldown
+/// look back a day at most.
 const DUEL_KEEP_SECS: i64 = 2 * 86_400;
+/// How long an accepted duel, with its two scores, is kept: past a GM4 week, for the week's board.
+const DUEL_RESULT_KEEP_SECS: i64 = 8 * 86_400;
 
 /// GM10: a bot's standing allow, as its owner set it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,7 +163,10 @@ impl Db {
     pub fn ask_duel(&self, duel: &Duel, now: i64) -> rusqlite::Result<Duel> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute("DELETE FROM duels WHERE created_at < ?", [now - DUEL_KEEP_SECS])?;
+        tx.execute(
+            "DELETE FROM duels WHERE (status <> 'accepted' AND created_at < ?1) OR created_at < ?2",
+            params![now - DUEL_KEEP_SECS, now - DUEL_RESULT_KEEP_SECS],
+        )?;
         let waiting: Option<String> = tx
             .query_row(
                 "SELECT id FROM duels WHERE challenger_id = ?1 AND challenged_id = ?2
@@ -273,9 +279,11 @@ impl Db {
         if let Some(last) = last.filter(|last| now - last < DUEL_COOLDOWN_SECS) {
             return Ok(Err(DuelRefusal::Cooldown { next_at: last + DUEL_COOLDOWN_SECS }));
         }
+        // plays[0] is the accepting bot's, the one the duel was for.
         tx.execute(
-            "UPDATE duels SET status = 'accepted', answered_at = ? WHERE id = ?",
-            params![now, id],
+            "UPDATE duels SET status = 'accepted', answered_at = ?, challenged_score = ?,
+                 challenger_score = ? WHERE id = ?",
+            params![now, plays[0].score, plays[1].score, id],
         )?;
         let mine = record_play_in(&tx, plays[0], caps)?;
         if let PlayOutcome::Capped { next_at } = mine {
@@ -287,6 +295,18 @@ impl Db {
         }
         tx.commit()?;
         Ok(Ok(DuelPlays { mine, theirs }))
+    }
+
+    /// An accepted duel's two scores, challenger's first, for the week's board.
+    pub fn duel_scores(&self, id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT challenger_score, challenged_score FROM duels
+                 WHERE id = ? AND status = 'accepted'",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
     }
 
     /// Moves a duel's expiry, for a test of GM11: the clock can't be moved over HTTP.
