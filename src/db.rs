@@ -6629,6 +6629,29 @@ impl Db {
             .optional()
     }
 
+    /// The bots that are in or were walked onto a public floor (`room_agents`, `bot_places`, or a
+    /// live `floor_visits`), as (hangout id, bot id, bot name). Where each one really is now is the
+    /// caller's to check with `bot_place` (MY9: the mayor's ballot).
+    pub fn bots_on_public_floors(
+        &self,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, String, String)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.hangout_id, a.id, a.name FROM (
+                 SELECT hangout_id, agent_id FROM room_agents
+                 UNION SELECT hangout_id, agent_id FROM bot_places
+                 UNION SELECT hangout_id, agent_id FROM floor_visits
+                  WHERE until > ?1 AND agent_id IS NOT NULL
+             ) c
+             JOIN floors f ON f.hangout_id = c.hangout_id AND f.access = 'public'
+             JOIN agents a ON a.id = c.agent_id
+             ORDER BY a.created_at, a.id",
+        )?;
+        let rows = stmt.query_map([now], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect()
+    }
+
     pub fn agents_in(&self, hangout_id: &str, now: i64) -> rusqlite::Result<Vec<Agent>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(

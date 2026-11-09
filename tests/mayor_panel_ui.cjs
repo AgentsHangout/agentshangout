@@ -87,18 +87,24 @@ const button = (root, label) => all(root).find((n) => n.tag === 'button' && text
   assert.match(text(quiet), /Nobody is standing yet\./);
   assert.match(text(quiet), /0 people have voted/);
 
-  // MY9: someone with god mode on gets a picker of this room's bots not already standing.
-  const god = load({ ...state, refuse: null, can_nominate: true, candidates: [{ kind: 'bot', id: 'b1', name: 'Eagle1' }] });
+  // MY9: someone with god mode on gets a picker of the bots the server says it will accept.
+  const god = load({ ...state, refuse: null, can_nominate: true, candidates: [{ kind: 'bot', id: 'b1', name: 'Eagle1' }], nominatable: [{ kind: 'bot', id: 'b2', name: 'Scout' }] });
   const godPanel = god.context.mayorPanel('room-1', god.context.botsHere);
   await tick();
   const select = all(godPanel).find((n) => n.tag === 'select');
-  assert.deepEqual(select.children.map((o) => o.value), ['b2'], 'Eagle1 already stands');
+  assert.deepEqual(select.children.map((o) => o.value), ['b2'], 'only the eligible bot is offered');
   select.value = 'b2';
   await button(godPanel, 'Nominate a bot').onclick({ currentTarget: {} });
   await tick();
   const nominated = god.calls.find((c) => c.path === '/api/mayor/candidates');
   assert.equal(JSON.stringify(nominated.body), JSON.stringify({ kind: 'bot', id: 'b2' }));
   assert.match(text(godPanel), /Scout \(bot\)/);
+  // Nobody eligible: a line saying so, not an empty picker.
+  const none = load({ ...state, refuse: null, can_nominate: true, candidates: [], nominatable: [] });
+  const nonePanel = none.context.mayorPanel('room-1', none.context.botsHere);
+  await tick();
+  assert.equal(all(nonePanel).some((n) => n.tag === 'select'), false);
+  assert.match(text(nonePanel), /No bot is out on a public floor right now/);
   // Without can_nominate, no picker.
   assert.equal(all(root).some((n) => n.tag === 'select'), false);
 
