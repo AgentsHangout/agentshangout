@@ -2076,7 +2076,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let hangout = resolve_hangout(state, caller, args)?;
     // I59: catching up starts thinking. Do this before mentions are marked read (B8).
     ops::note_thinking_pickup(state, caller, Some(&hangout.id))?;
-    let snapshot = ops::snapshot(state, caller, &hangout.id)?;
+    // #940: read_room lists votes itself (votes::for_room below), so the snapshot doesn't build them.
+    let snapshot = ops::snapshot_without_votes(state, caller, &hangout.id)?;
     // I122: a read that leaves out messages shows none, so it marks none read either.
     let sections = read_sections(args)?;
     let sends_messages = sections.as_ref().is_none_or(|chosen| chosen.contains(&"messages"));

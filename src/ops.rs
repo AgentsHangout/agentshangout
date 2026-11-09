@@ -2209,6 +2209,25 @@ pub struct Snapshot {
 }
 
 pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Snapshot> {
+    snapshot_with(state, caller, hangout_id, true)
+}
+
+/// #940: the same snapshot without building `votes`, for a read that builds its own list of
+/// votes (read_room). Votes still settle at the same point, so nothing else changes.
+pub fn snapshot_without_votes(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+) -> ApiResult<Snapshot> {
+    snapshot_with(state, caller, hangout_id, false)
+}
+
+fn snapshot_with(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    with_votes: bool,
+) -> ApiResult<Snapshot> {
     let mut hangout = require_room(state, caller, hangout_id)?;
     // N12: a person who opens the room has seen what mentioned them there.
     if !caller.is_agent() {
@@ -2396,8 +2415,11 @@ pub fn snapshot(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
             && !state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public")
         {
             Vec::new()
-        } else {
+        } else if with_votes {
             crate::votes::for_room(state, caller, hangout_id)?
+        } else {
+            crate::votes::settle_due(state)?;
+            Vec::new()
         },
         events,
         invitees,
