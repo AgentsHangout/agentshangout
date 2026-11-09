@@ -1,4 +1,4 @@
-//! Test for paging `read_room` forward from a cursor, written from I154 in docs/rooms.md.
+//! Test for paging `read_room` forward from a cursor, written from I157 in docs/rooms.md.
 
 mod support;
 
@@ -16,7 +16,7 @@ fn ids(reply: &Value) -> Vec<i64> {
     reply["messages"].as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect()
 }
 
-// I154
+// I157
 #[tokio::test]
 async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unread_mentions() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -194,7 +194,7 @@ async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unrea
     assert!(ids(&two).iter().all(|id| *id > last_of_page.id));
 }
 
-// #878: a catch-up read with no limit is the oldest 50 after the cursor. A batch over that cap
+// I157 (#878): a catch-up read with no limit is the oldest 50 after the cursor. A batch over that cap
 // resumes on the next call with nothing skipped, a long line is cut and marked, and a long line
 // that mentions the bot keeps its full text.
 #[tokio::test]
