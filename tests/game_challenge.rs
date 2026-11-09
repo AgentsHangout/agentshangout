@@ -220,7 +220,10 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     assert_eq!(duels["waiting"][0]["duel_id"], duel.as_str(), "{duels}");
     assert_eq!(duels["waiting"][0]["from"], "Scout");
     assert!(text(&duels["how"]).contains("answer_duel"));
-    assert_eq!(w.inbox(&scout_token).await["duels"], json!({ "allow": "room", "daily_cap": 5 }));
+    // GM17's open daily challenge rides along; the rest is just the allow, with nothing waiting.
+    let mut own = w.inbox(&scout_token).await["duels"].clone();
+    own.as_object_mut().unwrap().remove("daily");
+    assert_eq!(own, json!({ "allow": "room", "daily_cap": 5 }));
     assert!(w.inbox(&pip_token).await.get("duels").is_none());
 
     // GM13: nobody else answers it, the bot that asked included.
@@ -410,4 +413,78 @@ async fn the_week_board_has_the_rooms_duels() {
     let last_week = agenthangout::games::week_start(agenthangout::games::week_of(now())) - 60;
     w.state.db.set_duel_answered_at(&duel, last_week).unwrap();
     assert_eq!(scores(&rex_token).await["duels"], json!([]));
+}
+
+// GM17: one challenge play a UTC day per bot per room on the cabinet, for bots whose owner turned
+// duels on, kept apart from GM3's plays. The room's scores have today's challenge, a finished day's
+// winner counts in GM16's lines as days_won, and an opted-in bot's inbox has the open challenge
+// until it plays it.
+#[tokio::test]
+async fn the_daily_challenge_is_one_play_a_day_for_opted_in_bots() {
+    let w = world().await;
+    let (scout, scout_token, _) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, rex_token, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    let (_, pip_token, _) = w.bot(&w.ann, &w.arcade, "Pip");
+    for bot in [&scout, &rex] {
+        assert_eq!(w.allow(&w.key, bot, json!({ "allow": "room" })).await.0, 200);
+    }
+    let daily = |token: &str| {
+        let args = json!({ "item_id": "cabinet-1", "daily": true });
+        let token = token.to_string();
+        let base = w.base.clone();
+        async move { tool(&base, &token, "use_item", args).await }
+    };
+    let scores = async |token: &str| {
+        let path = format!("/api/hangouts/{}/scores", w.arcade);
+        send(&w.base, token, Method::GET, &path, None).await.1
+    };
+
+    // An opted-in bot in the room has it open in its inbox; one whose owner left duels off doesn't.
+    assert!(w.inbox(&scout_token).await["duels"]["daily"]["how"].as_str().is_some());
+    assert!(w.inbox(&pip_token).await["duels"].is_null());
+    let refused = daily(&pip_token).await;
+    assert_eq!(refused["structuredContent"]["code"], "duels_off", "{refused}");
+
+    // One play: a score and a rank, and none of GM3's plays spent.
+    let played = daily(&scout_token).await["structuredContent"].clone();
+    assert_eq!((&played["daily"], &played["rank_today"]), (&json!(true), &json!(1)), "{played}");
+    let score = played["score"].as_i64().unwrap();
+    assert_eq!(w.plays(&scout), 0, "practice plays are untouched");
+    let again = daily(&scout_token).await;
+    assert_eq!(again["structuredContent"]["code"], "daily_done", "{again}");
+    assert!(w.inbox(&scout_token).await["duels"]["daily"].is_null(), "played, so it's gone");
+
+    // The room's scores: today's best and leader, the caller's own roll, and whether it's open.
+    let board = scores(&rex_token).await["challenge"].clone();
+    assert_eq!(
+        (&board["best"], &board["leader"], &board["players"]),
+        (&json!(score), &json!("Scout"), &json!(1))
+    );
+    assert_eq!((&board["yours"], &board["open"]), (&Value::Null, &json!(true)), "{board}");
+    let mine = scores(&scout_token).await["challenge"].clone();
+    assert_eq!(
+        (&mine["leader"], &mine["yours"], &mine["open"]),
+        (&json!("you"), &json!(score), &json!(false))
+    );
+
+    // GM17: today's lead isn't a win yet. Moved to yesterday, it's a finished day Scout won, which
+    // counts this week unless today is Monday, when yesterday was last week's.
+    let today = agenthangout::games::day_of(now());
+    assert!(scores(&rex_token).await["duels"].as_array().unwrap().is_empty());
+    w.state.db.set_challenge_day(&w.arcade, &scout, today - 1).unwrap();
+    let week_day = agenthangout::games::day_of(agenthangout::games::week_start(
+        agenthangout::games::week_of(now()),
+    ));
+    let lines = scores(&rex_token).await["duels"].clone();
+    if today > week_day {
+        assert_eq!(
+            (&lines[0]["name"], &lines[0]["days_won"]),
+            (&json!("Scout"), &json!(1)),
+            "{lines}"
+        );
+    } else {
+        assert_eq!(lines, json!([]), "Sunday's win was last week's");
+    }
+    // The day after, it's open again.
+    assert!(daily(&scout_token).await["structuredContent"]["score"].is_i64());
 }

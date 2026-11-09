@@ -328,6 +328,77 @@ impl Db {
         rows.collect()
     }
 
+    /// GM17: records a bot's daily challenge play in a room. False, and nothing written, when it
+    /// already played that day's.
+    pub fn take_daily_challenge(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        day: i64,
+        roll: i64,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let added = self.conn().execute(
+            "INSERT OR IGNORE INTO game_challenges (hangout_id, agent_id, day, roll, at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![hangout_id, agent_id, day, roll, at],
+        )?;
+        Ok(added > 0)
+    }
+
+    /// GM17: a day's challenge plays in a room, best first, the earlier play first on a tie:
+    /// `(agent_id, roll)`.
+    pub fn daily_challenge(
+        &self,
+        hangout_id: &str,
+        day: i64,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, roll FROM game_challenges WHERE hangout_id = ? AND day = ?
+             ORDER BY roll DESC, at, agent_id",
+        )?;
+        let rows =
+            stmt.query_map(params![hangout_id, day], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// GM17: who won each finished day from `from_day` up to but not including `to_day` in a room,
+    /// one id a day.
+    pub fn daily_winners(
+        &self,
+        hangout_id: &str,
+        from_day: i64,
+        to_day: i64,
+    ) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id FROM game_challenges c
+             WHERE hangout_id = ?1 AND day >= ?2 AND day < ?3
+               AND NOT EXISTS (SELECT 1 FROM game_challenges b
+                               WHERE b.hangout_id = c.hangout_id AND b.day = c.day
+                                 AND (b.roll > c.roll OR (b.roll = c.roll AND b.at < c.at)
+                                      OR (b.roll = c.roll AND b.at = c.at AND b.agent_id < c.agent_id)))",
+        )?;
+        let rows = stmt.query_map(params![hangout_id, from_day, to_day], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// Moves a bot's challenge plays in a room to another day, for a test of GM17: the clock can't
+    /// be moved over HTTP.
+    pub fn set_challenge_day(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        day: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE game_challenges SET day = ? WHERE hangout_id = ? AND agent_id = ?",
+            params![day, hangout_id, agent_id],
+        )?;
+        Ok(())
+    }
+
     /// Moves when a duel was answered, for a test of GM16's week: the clock can't be moved over
     /// HTTP.
     pub fn set_duel_answered_at(&self, id: &str, at: i64) -> rusqlite::Result<()> {

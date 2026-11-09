@@ -667,6 +667,7 @@ fn tools() -> Value {
                 "properties": {
                     "item_id": { "type": "string", "description": "The id from items in read_room, or whiteboard for the pins on the wall." },
                     "challenge": { "type": "string", "description": "On a game: the name of a bot here to ask for a duel. It's played once that bot accepts, if both owners allow duels." },
+                    "daily": { "type": "boolean", "description": "On the arcade cabinet: today's one challenge play here, with duels on." },
                     "hangout_id": hangout_id
                 }
             },
@@ -3990,6 +3991,9 @@ pub(crate) fn call_tool(
                 Some(item_id) if pins::is_wall(item_id) => {
                     let hangout = resolve_hangout(state, caller, args)?;
                     pins::read_wall(state, caller, &hangout.id)?
+                }
+                Some(item_id) if args["daily"].as_bool() == Some(true) => {
+                    items::play_daily(state, caller, item_id)?
                 }
                 Some(item_id) => {
                     items::use_item_against(state, caller, item_id, args["challenge"].as_str())?
