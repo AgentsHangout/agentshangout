@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use axum::{
     extract::{rejection::JsonRejection, Path, State},
+    http::StatusCode,
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -131,6 +132,9 @@ pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     let candidates = state.db.mayor_candidates(election.id)?;
     let (voted, mine) = state.db.mayor_ballots_for(election.id, &caller.person_id)?;
     let (me_kind, me_id) = me(caller);
+    let can_nominate = !caller.is_agent() && crate::god_mode::is_on(state, &caller.person_id)?;
+    // MY9: the bots the nominate call would accept right now, so the picker offers only those.
+    let eligible = if can_nominate { Some(nominatable(state, &candidates, now())?) } else { None };
     let mayor = state.db.last_mayor_election()?.map(|last| {
         json!({
             "mayor": last.winner.as_ref().map(candidate_json),
@@ -150,7 +154,8 @@ pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "your_ballot": mine.map(|(kind, id)| json!({ "kind": kind, "id": id })),
         "you_stand": candidates.iter().any(|c| c.kind == me_kind && c.id == me_id),
         // MY9: only someone with god mode on sees this, and only they can nominate.
-        "can_nominate": !caller.is_agent() && crate::god_mode::is_on(state, &caller.person_id)?,
+        "can_nominate": can_nominate,
+        "nominatable": eligible,
         "last_week": mayor,
         "note": "Ballots are secret: totals show once the week closes. The mayor is a title for the week, with no powers.",
     }))
@@ -267,8 +272,31 @@ pub struct Nomination {
     pub id: String,
 }
 
+/// MY9: the bots a god-mode caller can put on the ballot now: out on a public floor (where
+/// `bot_place` says they are), not a house's own bot, and not already standing this week.
+fn nominatable(state: &AppState, candidates: &[MayorCandidate], at: i64) -> ApiResult<Vec<Value>> {
+    let standing: std::collections::HashSet<&str> =
+        candidates.iter().filter(|c| c.kind == "bot").map(|c| c.id.as_str()).collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut bots = Vec::new();
+    for (floor, id, name) in state.db.bots_on_public_floors(at)? {
+        if standing.contains(id.as_str()) || !seen.insert(id.clone()) {
+            continue;
+        }
+        if state.db.bot_place(&id, at)?.as_deref() != Some(floor.as_str()) {
+            continue;
+        }
+        if state.db.bot_home(&id)?.is_some_and(|home| home.is_house) {
+            continue;
+        }
+        bots.push(json!({ "kind": "bot", "id": id, "name": name, "hangout_id": floor }));
+    }
+    Ok(bots)
+}
+
 /// MY9: someone with god mode on puts a bot on this week's ballot, whoever it belongs to. Anyone
-/// else gets W75's 404. The cap and the close still hold.
+/// else gets W75's 404. The cap and the close still hold. A refusal for a bot says why, in words,
+/// so it's never a bare "not found".
 fn nominate(state: &AppState, caller: &Caller, nomination: &Nomination) -> ApiResult<Value> {
     if caller.is_agent() || !crate::god_mode::may_use(state, &caller.person_id) {
         return Err(ApiError::not_found());
@@ -280,18 +308,34 @@ fn nominate(state: &AppState, caller: &Caller, nomination: &Nomination) -> ApiRe
         return Err(ApiError::bad_request("nominate a bot: kind is \"bot\""));
     }
     let at = now();
-    let bot = state.db.agent(&nomination.id, at)?.ok_or_else(ApiError::not_found)?;
+    let Some(bot) = state.db.agent(&nomination.id, at)? else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no bot with that id, so there's nothing to nominate",
+        )
+        .with_reason("no_such_bot"));
+    };
     // The ballot is public, so only a bot out on a public floor now can be put on it: a bot that
-    // stays in private rooms is "not found", and its name never reaches the ballot.
+    // stays in private rooms is refused by name only, and its name never reaches the ballot.
     let public = match state.db.bot_place(&bot.id, at)? {
         Some(place) => state.db.floor(&place)?.is_some_and(|floor| floor.access == "public"),
         None => false,
     };
     if !public {
-        return Err(ApiError::not_found());
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            format!(
+                "{} isn't out on a public floor right now, so it can't go on the ballot. Bots \
+                 are nominated from where they are now: try again once it's on the square or \
+                 another public floor.",
+                bot.name
+            ),
+        )
+        .with_reason("bot_not_on_public_floor"));
     }
     if state.db.bot_home(&bot.id)?.is_some_and(|home| home.is_house) {
-        return Err(ApiError::bad_request("a house's own bot doesn't stand for mayor"));
+        return Err(ApiError::bad_request("a house's own bot doesn't stand for mayor")
+            .with_reason("house_bot"));
     }
     let election = open_for_changes(state)?;
     let candidate = MayorCandidate { kind: "bot".to_string(), id: bot.id, name: bot.name };

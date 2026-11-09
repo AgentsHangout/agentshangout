@@ -799,10 +799,17 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     assert!(names.contains(&"Eagle"), "{race}");
     // A bot that isn't out on a public floor is "not found", so its name never reaches the ballot.
     let (hidden_bot, _) = server.bot(&ann, &own_room, "Private").await;
-    server
+    let why = server
         .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": hidden_bot }))
         .await
         .refused(StatusCode::NOT_FOUND);
+    assert_eq!(why["reason"], "bot_not_on_public_floor", "{why}");
+    assert!(why["error"].as_str().unwrap().contains("Private"), "{why}");
+    // The picker offers only what nominate accepts: Eagle is out on the square, Private isn't.
+    let offered = server.get(&justin.key, "/api/mayor").await.ok()["nominatable"].clone();
+    let ids: Vec<&str> =
+        offered.as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, Vec::<&str>::new(), "Eagle is standing, Private is hidden: {offered}");
     // Twice is still once, and only bots that exist, as bots.
     let again = server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
     assert_eq!(again["candidates"].as_array().unwrap().len(), 2, "{again}");
@@ -810,6 +817,11 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
         .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": "no-such" }))
         .await
         .refused(StatusCode::NOT_FOUND);
+    let gone = server
+        .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "bot", "id": "no-such" }))
+        .await
+        .refused(StatusCode::NOT_FOUND);
+    assert_eq!(gone["reason"], "no_such_bot", "{gone}");
     server
         .post(&justin.key, "/api/mayor/candidates", json!({ "kind": "person", "id": ann.id }))
         .await
@@ -817,6 +829,9 @@ async fn god_mode_stands_any_time_and_nominates_bots() {
     // The bot can still take itself off, and its person can take it off too.
     let withdrawn = server.tool(&eagle, "mayor_race", json!({ "action": "withdraw" })).await;
     assert_eq!(withdrawn["candidates"].as_array().unwrap().len(), 1, "{withdrawn}");
+    // Off the ballot, Eagle is out on the square again, so the picker offers it.
+    let back = server.get(&justin.key, "/api/mayor").await.ok()["nominatable"].clone();
+    assert!(back.as_array().unwrap().iter().any(|b| b["id"] == json!(eagle_id)), "{back}");
     server.post(&justin.key, "/api/mayor/candidates", nominate.clone()).await.ok();
     let off = format!("/api/mayor/candidates/bot/{eagle_id}");
     let by_owner = server.delete(&ann.key, &off).await.ok();

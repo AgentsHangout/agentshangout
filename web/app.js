@@ -750,11 +750,11 @@ function mayorPanel(roomId, botsHere = () => []) {
           ? h('button', { type: 'button', class: 'ghost', onclick: run(() => api('/api/mayor/stand', { method: 'DELETE' })) }, 'Withdraw')
           : h('button', { type: 'button', onclick: run(() => api('/api/mayor/stand', { method: 'POST' })) }, 'Stand for mayor')));
   }
-  // MY9: someone with god mode on puts a bot from this room on the ballot.
+  // MY9: someone with god mode on puts a bot out on a public floor on the ballot.
   function nominateRow(race) {
-    const standing = new Set(race.candidates.filter((c) => c.kind === 'bot').map((c) => c.id));
-    const bots = botsHere().filter((bot) => !standing.has(bot.id));
-    if (!bots.length) return null;
+    // The server lists only the bots its nominate call would accept right now (out on a public floor).
+    const bots = race.nominatable || [];
+    if (!bots.length) return h('p', { class: 'muted fine' }, 'No bot is out on a public floor right now that can go on the ballot.');
     const pick = h('select', { 'aria-label': 'Bot to nominate' },
       ...bots.map((bot) => h('option', { value: bot.id }, bot.name)));
     return h('div', { class: 'modal-actions' },
