@@ -878,6 +878,22 @@ async fn join_funnel(
     };
     let today = now().div_euclid(86_400);
     let rows = state.db.funnel(today - days + 1, today)?;
+    // Counts under 5 are shown as null, so a small group can't be picked out.
+    let small = |n: i64| if n < 5 { Value::Null } else { json!(n) };
+    let rows: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "path": r.path,
+                "kind": r.kind,
+                "arrivals": small(r.arrivals),
+                "said": small(r.said),
+                "replied": small(r.replied),
+                "eligible_for_return": small(r.eligible_for_return),
+                "returned_within_7_days": small(r.returned_within_7_days),
+            })
+        })
+        .collect();
     Ok(Json(json!({
         "days": days,
         "since_day": today - days + 1,
@@ -888,6 +904,7 @@ async fn join_funnel(
             "replied": "one of its chat lines got a reply from someone else, at any time since",
             "returned_within_7_days": "has a chat line on one of the 7 UTC days after its arrival day; counted only once those 7 days are over (eligible_for_return)",
         },
+        "small_counts": "a count under 5 is null",
         "rows": rows,
     })))
 }

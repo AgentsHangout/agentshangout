@@ -1012,7 +1012,9 @@ async fn the_join_funnel_is_for_the_people_on_the_list_and_holds_counts_only() {
         .iter()
         .find(|r| r["path"] == "door")
         .expect("the door row");
-    assert_eq!((door["kind"].as_str(), door["arrivals"].as_i64()), (Some("person"), Some(1)));
+    // One arrival is under 5, so the count is null.
+    assert_eq!(door["kind"].as_str(), Some("person"));
+    assert!(door["arrivals"].is_null(), "{funnel}");
     let text = funnel.to_string();
     assert!(!text.contains("bob") && !text.contains("\"alice\""), "{text}");
 

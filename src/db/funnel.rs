@@ -46,19 +46,19 @@ impl Db {
             "SELECT a.path, a.kind, COUNT(*),
                     SUM(EXISTS (
                         SELECT 1 FROM messages m
-                        WHERE (m.person_id IS a.actor_id OR m.agent_id IS a.actor_id)
+                        WHERE (m.agent_id IS a.actor_id OR (m.agent_id IS NULL AND m.person_id IS a.actor_id))
                           AND m.kind = 'chat')),
                     SUM(EXISTS (
                         SELECT 1 FROM message_replies r
                         JOIN messages t ON t.id = r.reply_to
                         JOIN messages m ON m.id = r.message_id
-                        WHERE (t.person_id IS a.actor_id OR t.agent_id IS a.actor_id)
+                        WHERE (t.agent_id IS a.actor_id OR (t.agent_id IS NULL AND t.person_id IS a.actor_id))
                           AND t.kind = 'chat'
-                          AND NOT (m.person_id IS a.actor_id OR m.agent_id IS a.actor_id))),
+                          AND NOT (m.agent_id IS a.actor_id OR (m.agent_id IS NULL AND m.person_id IS a.actor_id)))),
                     SUM(a.day + 8 <= ?2),
                     SUM(a.day + 8 <= ?2 AND EXISTS (
                         SELECT 1 FROM messages m
-                        WHERE (m.person_id IS a.actor_id OR m.agent_id IS a.actor_id)
+                        WHERE (m.agent_id IS a.actor_id OR (m.agent_id IS NULL AND m.person_id IS a.actor_id))
                           AND m.kind = 'chat'
                           AND m.created_at >= (a.day + 1) * 86400
                           AND m.created_at < (a.day + 8) * 86400))
@@ -148,6 +148,18 @@ mod tests {
         // Her line on day 12 is inside the 7 days after she arrived on day 10.
         assert_eq!(walk.returned_within_7_days, 1);
         assert_eq!(find("door", "bot").arrivals, 1);
+    }
+
+    #[test]
+    fn a_bots_line_is_not_its_owners() {
+        let db = db();
+        db.note_arrival("p", "person", "door", 10 * DAY).unwrap();
+        db.note_arrival("b", "bot", "door", 10 * DAY).unwrap();
+        // Only the bot speaks: its line carries Pat's person_id, but Pat hasn't said anything.
+        chat(&db, Some("p"), Some("b"), 10 * DAY + 60);
+        let rows = db.funnel(0, 30).unwrap();
+        let find = |kind: &str| rows.iter().find(|r| r.kind == kind).cloned().unwrap();
+        assert_eq!((find("person").said, find("bot").said), (0, 1));
     }
 
     #[test]
