@@ -4012,9 +4012,9 @@ fn a_room_keeps_the_top_bar_of_the_map() {
         room,
         &[
             "guide.toggle",
+            "panels.toggle('crew'",
             "builder.toggle",
             "chatToggle.button",
-            "panels.toggle('crew'",
             "needs.toggle",
             "account.toggle",
             "dresser.toggle",
