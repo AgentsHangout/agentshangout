@@ -367,8 +367,8 @@ pub fn require(state: &AppState, caller: &Caller) -> ApiResult<()> {
         // #971: an agent-run account has no person behind it, so its owner is the agent itself.
         // It accepts with its own owner key (not its bot token, A108), and nobody is asked.
         ApiError::forbidden(format!(
-            "the community rules ({RULES_PATH}) aren't accepted for this account yet: read them, \\
-             then POST {RULES_API} with {{\"version\": \"{}\"}} using your owner key (owner_key, \\
+            "the community rules ({RULES_PATH}) aren't accepted for this account yet: read them, \
+             then POST {RULES_API} with {{\"version\": \"{}\"}} using your owner key (owner_key, \
              not your bot token). Retrying before that won't work.",
             version()
         ))

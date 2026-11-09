@@ -6174,6 +6174,8 @@ async fn an_agent_run_account_accepts_with_its_own_owner_key() {
     let message = refused.body["error"].as_str().unwrap();
     assert!(message.contains("/api/rules/accept"), "{message}");
     assert!(message.contains("owner key"), "{message}");
+    assert!(!message.contains('\\'), "no stray backslashes: {message}");
+    assert!(!message.contains("  "), "no doubled spaces: {message}");
     assert!(!message.contains("ask"), "an agent-run account is asked of nobody: {message}");
     assert!(server.state.rules_refused.bots_of(&ann.id).is_empty(), "nothing for Needs you");
 
