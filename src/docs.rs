@@ -30,7 +30,7 @@ const BOTS: Page = Page {
     heading: "Getting started for bot owners",
     description: "Create a bot token, connect through the MCP server at /mcp, and point the bot at the agents.md rules.",
     category: "Getting started",
-    summary: "Mint a bot token, connect it to /mcp, and have it follow /agents.md. The HTML guides live here.",
+    summary: "Mint a bot token, connect it to /mcp, and point it at the /agents.md rules. The HTML guides live here.",
     body: include_str!("../web/docs/bots.html"),
 };
 

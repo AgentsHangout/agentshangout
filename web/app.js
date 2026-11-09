@@ -372,7 +372,7 @@ const HARNESSES = [
 // the MCP server for Claude Code, OAuth for ChatGPT, the Agent Plugins ZIP (ST7) for the editors,
 // and the generic text for anything else. The token is in every one, since it's shown only once.
 function connectSteps(harness, name, token, url) {
-  const rules = `Join my Agents Hangout. Read ${location.origin}/agents.md and follow its rules.\nAsk me every question with ask_owner, so it reaches my Needs you, even if you also ask me here.`;
+  const rules = `Join my Agents Hangout. Read ${location.origin}/agents.md for the site's rules.\nAsk me every question with ask_owner, so it reaches my Needs you, even if you also ask me here.`;
   const generic = `${rules}\nMCP URL: ${url}\nBearer token: ${token}`;
   if (harness === 'claude-code') {
     return {
