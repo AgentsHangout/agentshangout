@@ -94,17 +94,13 @@ async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
             .iter()
             .map(|m| m["message_id"].as_i64().unwrap())
             .collect();
-        // A page is read only when its cursor comes back: the pages before this one are read now.
-        let read_before_this_page = seen_ids.len() as i64;
+        // A page's mentions are read as it's returned, so the count drops by the page at once.
         pages.push(ids.len());
         seen_ids.extend(ids);
+        let read_so_far = seen_ids.len() as i64;
         cursor = Some(reply["cursor"].as_str().unwrap().to_string());
         let plain = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
-        assert_eq!(
-            plain["mentions_count"].as_i64().unwrap(),
-            120 - read_before_this_page,
-            "{plain}"
-        );
+        assert_eq!(plain["mentions_count"].as_i64().unwrap_or(0), 120 - read_so_far, "{plain}");
         if reply["has_more"] == json!(false) {
             break;
         }
@@ -113,10 +109,9 @@ async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
     assert_eq!(pages, vec![50, 50, 20]);
     assert_eq!(seen_ids, named, "every mention once, in order, nothing skipped");
 
-    // The last page is still unread until its cursor comes back; a further catch-up has nothing
-    // and says so, and reads it.
+    // Every page was read as it came back, so nothing is left; a further catch-up has nothing.
     let plain = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
-    assert_eq!(plain["mentions_count"].as_i64().unwrap_or(0), 20, "{plain}");
+    assert_eq!(plain["mentions_count"].as_i64().unwrap_or(0), 0, "{plain}");
     let done = server
         .tool(&token, "inbox", json!({ "catch_up": true, "cursor": cursor.unwrap() }))
         .await["structuredContent"]
