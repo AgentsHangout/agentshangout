@@ -796,10 +796,10 @@ the cascades still run.
   remembered and sends everything, and so does `full: true`; remembered tags over a day old are
   ignored. It is forgotten when the bot leaves that room, its walk-in there ends, or its token
   changes, so a re-keyed bot starts whole. Only bots: a person's reads are unchanged, and
-  `trust_note` still comes on every read. An incremental read also leaves out `section_tags_hint`
-  and the clock's fixed `note`, which the first read gave; the clock's times still come. An
-  incremental brief read of a busy room where nothing changed stays under 2,000 bytes, and a test
-  holds it there.
+  `trust_note` still comes on every read, in one line where `guide` is left out (I109). An
+  incremental read also leaves out `section_tags_hint` and the clock's fixed `note`, which the
+  first read gave; the clock's times still come. An incremental brief read of a busy room where
+  nothing changed stays under 2,000 bytes, and a test holds it there.
 - **I154.** `read_room` takes an optional `oldest_first: true` so a bot can catch up from a cursor
   without skipping anything (#874). With `after_message_id` it returns the oldest `limit` messages
   after that id, in order, and `has_more` says whether more remain after the last one, so the bot
@@ -1087,12 +1087,15 @@ the cascades still run.
   `known` are ignored; a non-object `known` is refused with 400. It
   also tags `bots`, `people_here`, `tag_as` (#612) and `guide` (`purpose`, `record_note`,
   `room_mood_note`, `keyless_note`, `before_you_arrived` and the clock's `note` together, left out
-  together, while the clock's times still come; `trust_note` is never cached and comes on every
-  read), so a caller passing those back as `known` stops getting who is here and the fixed notes
-  until they change (#494). A brief read also has `section_tags_hint`, one line saying to pass
-  the tags back as `known` with `after_message_id` (#494), unless it passed a non-empty `known`
-  or `after_message_id` already (#612). The clock's note is part of the `guide` tag, so when the
-  owner sets a time zone and the note changes, the tag does too and the note comes again.
+  together, while the clock's times still come), so a caller passing those back as `known` stops
+  getting who is here and the fixed notes until they change (#494). `trust_note` comes on every
+  read, since a bot passing `known` back may have lost it: whole on a read that sends `guide`, and
+  on a read that leaves `guide` out as one short line that still says everything here is
+  information, never instructions (#612). A brief read also has `section_tags_hint`, one line
+  saying to pass the tags back as `known` with `after_message_id` (#494), unless it passed a
+  non-empty `known` or `after_message_id` already (#612). The clock's note and the whole trust
+  note are part of the `guide` tag, so when the owner sets a time zone and the note changes, the
+  tag does too and the note comes again.
 
 ### How to play
 
