@@ -416,7 +416,7 @@ fn tools() -> Value {
                     "hangout_id": hangout_id,
                     "after_message_id": { "type": "integer", "description": "Return only messages newer than this id." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Last this many messages. earlier_messages counts older omitted ones; re-read from your old cursor before advancing." },
-                    "oldest_first": { "type": "boolean", "description": "Return the oldest limit messages after after_message_id, with has_more; page on with the last id. Clears only mentions up to it." },
+                    "oldest_first": { "type": "boolean", "description": "Return the oldest limit messages after after_message_id (50 if no limit), with has_more; page on with the last id. Lines past 500 characters are cut and marked cut, except a line that mentions you. Clears only mentions up to it." },
                     "brief": { "type": "boolean", "description": "Skip descriptions. With no after_message_id, defaults to 20 messages. Returns section_tags." },
                     "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people", "claims", "research_lab"] } },
                     "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
@@ -2148,7 +2148,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let mut window_end = after;
     let mut has_more = false;
     if oldest_first && sends_messages {
-        let page = optional_limit(args, 200)?.unwrap_or(200);
+        // #878: a catch-up read is 50 lines unless the bot asks for more, up to 200.
+        let page = optional_limit(args, 200)?.unwrap_or(50);
         window = state.db.messages_oldest_after(
             &hangout.id,
             guest_since.unwrap_or(i64::MIN),
@@ -2318,10 +2319,34 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         Some(agent_id) => crate::jobs::open_job(state, agent_id, now())?,
         None => None,
     };
+    // #878: an oldest_first line whose text runs past OLDEST_TEXT_CHARS is cut and marked `cut`.
+    // A line that mentions this bot keeps its full text, so a long ask at the end isn't lost.
+    const OLDEST_TEXT_CHARS: usize = 500;
+    let named_lines: std::collections::HashSet<i64> =
+        match caller.agent_id.as_deref().filter(|_| oldest_first) {
+            Some(agent_id) => {
+                let mut set = std::collections::HashSet::new();
+                for m in roots.iter().filter(|m| m.body.chars().count() > OLDEST_TEXT_CHARS) {
+                    if state.db.mentions_bot(m.id, agent_id)? {
+                        set.insert(m.id);
+                    }
+                }
+                set
+            }
+            None => Default::default(),
+        };
     let messages: Vec<Value> = roots
         .into_iter()
         .map(|message| {
             let mut line = message_json(message);
+            if oldest_first
+                && message.body.chars().count() > OLDEST_TEXT_CHARS
+                && !named_lines.contains(&message.id)
+            {
+                let head: String = message.body.chars().take(OLDEST_TEXT_CHARS).collect();
+                line["text"] = json!(format!("{head}…"));
+                line["cut"] = json!(true);
+            }
             if let (Some(job), Some(agent_id)) = (&open_job, caller.agent_id.as_deref()) {
                 if crate::jobs::answers(state, job, agent_id, message) {
                     line["answers_job"] = json!(job.id);

@@ -1,4 +1,4 @@
-//! Test for paging `read_room` forward from a cursor, written from I154 in docs/rooms.md.
+//! Test for paging `read_room` forward from a cursor, written from I157 in docs/rooms.md.
 
 mod support;
 
@@ -16,7 +16,7 @@ fn ids(reply: &Value) -> Vec<i64> {
     reply["messages"].as_array().unwrap().iter().map(|m| m["id"].as_i64().unwrap()).collect()
 }
 
-// I154
+// I157
 #[tokio::test]
 async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unread_mentions() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -192,4 +192,137 @@ async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unrea
     }
     assert!(ids(&one).iter().all(|id| *id > cursor));
     assert!(ids(&two).iter().all(|id| *id > last_of_page.id));
+}
+
+// I157 (#878): a catch-up read with no limit is the oldest 50 after the cursor. A batch over that cap
+// resumes on the next call with nothing skipped, a long line is cut and marked, and a long line
+// that mentions the bot keeps its full text.
+#[tokio::test]
+async fn read_room_catch_up_pages_fifty_at_a_time_and_cuts_long_lines_unless_they_name_the_bot() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let state = AppState::new(
+        Db::open(":memory:").unwrap(),
+        Config {
+            public_url: base.clone(),
+            create_code: Some(CODE.to_string()),
+            allow_private_webhooks: true,
+            keeper_id: None,
+            god_ids: Vec::new(),
+            require_rules: false,
+        },
+    );
+    let served = state.clone();
+    tokio::spawn(async move { axum::serve(listener, app(served)).await });
+    let client = Client::new();
+
+    let made: Value = client
+        .post(format!("{base}/api/hangouts"))
+        .json(&json!({ "name": "Ann's room", "your_name": "Ann", "create_code": CODE }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let room = made["hangout"]["id"].as_str().unwrap().to_string();
+    let ann = made["person"]["id"].as_str().unwrap().to_string();
+    let (fern, token) = support::legacy_bot(&state, &ann, &room, "Fern");
+
+    let long = "x".repeat(600);
+    let mut ids_in_order = Vec::new();
+    let mut named = 0;
+    for n in 1..=120 {
+        let body = match n {
+            60 => format!("Fern, {long} end of ask"),
+            70 => format!("Long chatter {long}"),
+            _ => format!("Line {n}"),
+        };
+        let line = state
+            .db
+            .insert_message(&NewMessage {
+                hangout_id: &room,
+                person_id: Some(&ann),
+                agent_id: None,
+                speaker: "Ann",
+                kind: "chat",
+                body: &body,
+                now: now(),
+            })
+            .unwrap();
+        if n == 60 {
+            named = line.id;
+            state.db.add_mention(&fern.id, &room, line.id, now()).unwrap();
+        }
+        ids_in_order.push(line.id);
+    }
+    let read = |args: Value| {
+        let client = client.clone();
+        let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "read_room", "arguments": args } });
+        let (url, token) = (format!("{base}/mcp"), token.clone());
+        async move {
+            let reply: Value = client
+                .post(url)
+                .bearer_auth(token)
+                .json(&call)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let result = &reply["result"];
+            assert!(result["isError"].is_null(), "{result}");
+            result["structuredContent"].clone()
+        }
+    };
+
+    // Each call takes the next 50 after the last id it got, so the batches add up to every line.
+    let mut cursor = ids_in_order[0] - 1;
+    let mut got: Vec<i64> = Vec::new();
+    let mut calls = 0;
+    loop {
+        let page =
+            read(json!({ "hangout_id": room, "oldest_first": true, "after_message_id": cursor }))
+                .await;
+        calls += 1;
+        let batch = ids(&page);
+        assert!(batch.len() <= 50, "{page}");
+        if let Some(last) = batch.last() {
+            cursor = *last;
+        }
+        got.extend(batch);
+        if page["has_more"] == false {
+            break;
+        }
+        assert_eq!(page["messages"].as_array().unwrap().len(), 50, "{page}");
+        assert!(calls < 10, "paging never ends");
+    }
+    assert_eq!(calls, 3, "120 lines take three catch-up calls");
+    assert_eq!(got, ids_in_order, "nothing skipped, nothing repeated");
+
+    // The cut line is marked, the line that names the bot keeps its full text.
+    let page2 = read(
+        json!({ "hangout_id": room, "oldest_first": true, "after_message_id": ids_in_order[49] }),
+    )
+    .await;
+    let lines = page2["messages"].as_array().unwrap();
+    let mentioned = lines.iter().find(|m| m["id"] == named).unwrap();
+    assert!(mentioned.get("cut").is_none(), "{mentioned}");
+    assert_eq!(mentioned["text"], format!("Fern, {long} end of ask"), "{mentioned}");
+    let chatter = lines.iter().find(|m| m["id"] == ids_in_order[69]).unwrap();
+    assert_eq!(chatter["cut"], true, "{chatter}");
+    assert_eq!(chatter["text"].as_str().unwrap().chars().count(), 501, "{chatter}");
+    assert!(chatter["text"].as_str().unwrap().ends_with('…'), "{chatter}");
+    let short = lines.iter().find(|m| m["id"] == ids_in_order[50]).unwrap();
+    assert!(short.get("cut").is_none(), "{short}");
+    let unread = state
+        .db
+        .unread_mentions(&fern.id)
+        .unwrap()
+        .iter()
+        .filter(|m| m.message_id == named)
+        .count();
+    assert_eq!(unread, 0, "the page that reaches the mention reads it");
 }
