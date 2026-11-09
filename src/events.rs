@@ -1193,8 +1193,9 @@ const BRIEF_BODY_CHARS: usize = 80;
 /// I160, #878: a catch-up inbox page's events, brief, so a page of 50 stays small. Every event
 /// still comes, in order and with its own cursor. A `message` or `mention` keeps the start of its
 /// words and leaves out the lines around it, which the page's chat and mentions parts carry and a
-/// room mention's `read_with` reads. A `trust` or `what_to_do` an earlier event on the page gave is
-/// left out, since the page says it once.
+/// room mention's `read_with` reads. A `what_to_do` an earlier event on the page gave is left out,
+/// since the page says it once. Every event keeps its `trust` (E20), so a harness that hands events
+/// on one at a time still gives each its trust note.
 pub(crate) fn brief_events(events: &Value) -> Value {
     let mut said = std::collections::HashSet::new();
     let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
@@ -1207,14 +1208,12 @@ pub(crate) fn brief_events(events: &Value) -> Value {
                 if name == "message" || name == "mention" {
                     brief_line(&name, data);
                 }
-                for key in ["trust", "what_to_do"] {
-                    let given = data
-                        .get(key)
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| !said.insert(text.to_string()));
-                    if given {
-                        data.remove(key);
-                    }
+                let given = data
+                    .get("what_to_do")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !said.insert(text.to_string()));
+                if given {
+                    data.remove("what_to_do");
                 }
             }
             event
@@ -2114,8 +2113,8 @@ mod tests {
     }
 
     // I160, #878: a brief thread mention loses its context and says to read the thread, a
-    // workboard mention keeps its own what_to_do, a trust note comes once, and other kinds keep
-    // every field.
+    // workboard mention keeps its own what_to_do, a what_to_do comes once a page while every event
+    // keeps its trust note, and other kinds keep every field.
     #[test]
     fn brief_events_keep_what_each_kind_needs() {
         let long = "x".repeat(300);
@@ -2131,6 +2130,7 @@ mod tests {
             { "name": "mention", "data": thread },
             { "name": "mention", "data": watch },
             { "name": "owner_answer", "data": answer },
+            { "name": "mention", "data": thread },
         ]);
         let brief = brief_events(&events);
         let thread = &brief[0]["data"];
@@ -2142,7 +2142,11 @@ mod tests {
         assert_eq!(thread["body"].as_str().unwrap().chars().count(), BRIEF_BODY_CHARS + 1);
         let watch = &brief[1]["data"];
         assert_eq!(watch["what_to_do"], WATCH_DO);
-        assert!(watch.get("trust").is_none() && watch.get("cut").is_none(), "{watch}");
+        assert_eq!(watch["trust"], ROOM_TRUST, "every event keeps its trust note: {watch}");
+        assert!(watch.get("cut").is_none(), "{watch}");
         assert_eq!(brief[2], events[2], "other kinds keep every field");
+        let again = &brief[3]["data"];
+        assert!(again.get("what_to_do").is_none(), "given once a page: {again}");
+        assert_eq!(again["trust"], ROOM_TRUST, "{again}");
     }
 }

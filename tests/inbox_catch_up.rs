@@ -137,8 +137,8 @@ fn text(value: &Value) -> String {
 
 // I160, #878: a catch-up page's events come brief. Each still comes once and in order, so paging
 // is as it was, but a line's words come cut to a preview, the lines around a mention are left out
-// (the chat and mentions parts carry them, and read_with reads them), and a trust note or a
-// what_to_do comes once a page.
+// (the chat and mentions parts carry them, and read_with reads them), and a what_to_do comes once a
+// page, while every event keeps its trust note.
 #[tokio::test]
 async fn catch_up_events_come_brief_with_nothing_skipped() {
     let (server, state, room, ann) = start().await;
@@ -210,8 +210,8 @@ async fn catch_up_events_come_brief_with_nothing_skipped() {
         pages[0]["mentions"].as_array().unwrap().iter().map(|line| text(&line["text"])).collect();
     assert_eq!(whole, asks, "the mentions part has every ask whole");
 
-    // The trust note and each kind's what_to_do come once a page.
+    // Every room event keeps its trust note (E20); each kind's what_to_do comes once a page.
     let carry = |key: &str| page.iter().filter(|event| event["data"].get(key).is_some()).count();
-    assert_eq!(carry("trust"), 1, "{}", pages[0]);
+    assert_eq!(carry("trust"), page.len(), "{}", pages[0]);
     assert_eq!(carry("what_to_do"), 2, "one for the messages, one for the mentions");
 }
