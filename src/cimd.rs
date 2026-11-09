@@ -154,9 +154,7 @@ fn read(client_id: &str, url: &Url, body: &str) -> Option<Document> {
         return None;
     }
     let registration: crate::oauth::Registration = serde_json::from_value(value).ok()?;
-    if !crate::oauth::valid_metadata(&registration) {
-        return None;
-    }
+    crate::oauth::valid_metadata(&registration).ok()?;
     Some(Document {
         name: crate::oauth::client_name(&registration.client_name).to_string(),
         redirects: registration.redirect_uris,

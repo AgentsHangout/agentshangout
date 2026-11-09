@@ -135,6 +135,31 @@ fn no_store(mut response: Response) -> Response {
 fn error(name: &str) -> Response {
     no_store((StatusCode::BAD_REQUEST, Json(json!({"error":name}))).into_response())
 }
+/// A120 (#319): a refusal says which check failed, as RFC 6749 lets `error_description` do. The
+/// words are fixed ASCII and never repeat what the caller sent.
+fn refuse(name: &str, why: &'static str) -> Response {
+    let body = json!({"error":name,"error_description":why});
+    no_store((StatusCode::BAD_REQUEST, Json(body)).into_response())
+}
+const BAD_RESOURCE: &str =
+    "resource must be this server's MCP URL exactly, as its protected resource metadata gives it";
+const BAD_SCOPE: &str = "scope must be mcp:bot, mcp:bot mcp:events or mcp:setup";
+const UNKNOWN_CLIENT: &str = "unknown client_id";
+const PUBLIC_CLIENT: &str =
+    "send no Authorization header: clients here are public, with token_endpoint_auth_method none";
+const BAD_VERIFIER: &str = "code_verifier must be 43 to 128 characters from A-Z, a-z, 0-9 and -._~";
+/// A120: one sentence for every way a code or refresh token can fail, so none is told apart.
+fn bad_grant(r: &TokenRequest) -> &'static str {
+    if r.grant_type == "refresh_token" {
+        "the refresh token is invalid, expired, used or revoked, or was issued to another client"
+    } else {
+        "the code is invalid, expired, used or revoked, or its client_id, redirect_uri or \
+         code_verifier doesn't match"
+    }
+}
+const NOT_THIS_SITE: &str = "the form must be sent from this site's own page (Origin)";
+const STALE_NONCE: &str = "the nonce is unknown, expired or already used: open the page again";
+const BAD_DECISION: &str = "decision must be allow or deny";
 fn html(body: String) -> Response {
     let mut response = no_store(Html(format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Agents Hangout connection</title><link rel=\"stylesheet\" href=\"/style.css\"><main class=\"oauth-page\"><h1>Agents Hangout connection</h1>{body}</main></html>")).into_response());
     // no-referrer makes browser form POST Origin null. Send only the origin, never the
@@ -226,8 +251,8 @@ async fn register(
     if !limit(&s, &h, "register", 10) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    if !valid_metadata(&r) {
-        return Ok(error("invalid_client_metadata"));
+    if let Err(why) = valid_metadata(&r) {
+        return Ok(refuse("invalid_client_metadata", why));
     }
     let id = format!("ah_client_{}", auth::new_ceremony_id());
     let name = client_name(&r.client_name);
@@ -238,16 +263,28 @@ async fn register(
 }
 /// What a client may register, by DCR or in its metadata document (A118): one to five valid
 /// callbacks, a name of at most 100 characters, and a public client using the code flow only.
-pub(crate) fn valid_metadata(r: &Registration) -> bool {
-    !(r.redirect_uris.is_empty()
-        || r.redirect_uris.len() > 5
-        || r.redirect_uris.iter().any(|u| !valid_redirect(u))
-        || r.client_name.chars().count() > 100
-        || r.token_endpoint_auth_method.as_deref().is_some_and(|m| m != "none")
-        || r.grant_types
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|s| s != "authorization_code" && s != "refresh_token"))
-        || r.response_types.as_ref().is_some_and(|v| v != &vec!["code".to_string()]))
+/// Otherwise, the first of those it breaks (A120).
+pub(crate) fn valid_metadata(r: &Registration) -> Result<(), &'static str> {
+    Err(if r.redirect_uris.is_empty() || r.redirect_uris.len() > 5 {
+        "redirect_uris must list one to five callbacks"
+    } else if r.redirect_uris.iter().any(|u| !valid_redirect(u)) {
+        "each redirect_uri must be https, or http to a loopback address with a port, at most \
+         2048 characters, with no login or fragment"
+    } else if r.client_name.chars().count() > 100 {
+        "client_name must be at most 100 characters"
+    } else if r.token_endpoint_auth_method.as_deref().is_some_and(|m| m != "none") {
+        "token_endpoint_auth_method must be none"
+    } else if r
+        .grant_types
+        .as_ref()
+        .is_some_and(|v| v.iter().any(|s| s != "authorization_code" && s != "refresh_token"))
+    {
+        "grant_types may only be authorization_code and refresh_token"
+    } else if r.response_types.as_ref().is_some_and(|v| v != &vec!["code".to_string()]) {
+        "response_types must be code only"
+    } else {
+        return Ok(());
+    })
 }
 pub(crate) fn client_name(name: &str) -> &str {
     if name.trim().is_empty() {
@@ -269,27 +306,47 @@ async fn client(s: &AppState, h: &HeaderMap, client_id: &str) -> ApiResult<Optio
         fetched_from: Some(d.host),
     }))
 }
+/// The client a valid authorization request names, or the first check it fails (A120).
 async fn valid_request(
     s: &AppState,
     h: &HeaderMap,
     r: &Authorization,
-) -> ApiResult<Option<ClientRecord>> {
+) -> ApiResult<Result<ClientRecord, &'static str>> {
     // A118: only a document's URL may be longer than the usual 128 characters.
     let longest = if crate::cimd::is_url(&r.client_id) { crate::cimd::MAX_URL_CHARS } else { 128 };
-    if r.client_id.len() > longest
-        || r.response_type != "code"
-        || r.code_challenge_method != "S256"
-        || r.code_challenge.len() != 43
-        || !r.code_challenge.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        || r.resource != resource(s)
-        || !valid_scope(&r.scope)
-        || r.state.len() > 1024
-    {
-        return Ok(None);
+    let base64url = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+    let malformed = if r.client_id.len() > longest {
+        Some("client_id must be at most 128 characters, or 512 for a metadata document URL")
+    } else if r.response_type != "code" {
+        Some("response_type must be code")
+    } else if r.code_challenge_method != "S256" {
+        Some("code_challenge_method must be S256")
+    } else if r.code_challenge.len() != 43 || !r.code_challenge.bytes().all(base64url) {
+        Some("code_challenge must be 43 base64url characters")
+    } else if r.resource != resource(s) {
+        Some(BAD_RESOURCE)
+    } else if !valid_scope(&r.scope) {
+        Some(BAD_SCOPE)
+    } else if r.state.len() > 1024 {
+        Some("state must be at most 1024 characters")
+    } else {
+        None
+    };
+    if let Some(why) = malformed {
+        return Ok(Err(why));
     }
-    let Some(c) = client(s, h, &r.client_id).await? else { return Ok(None) };
+    let Some(c) = client(s, h, &r.client_id).await? else {
+        return Ok(Err(if crate::cimd::is_url(&r.client_id) {
+            "the client's metadata document could not be fetched or did not match (A118)"
+        } else {
+            UNKNOWN_CLIENT
+        }));
+    };
     let redirects: Vec<String> = serde_json::from_str(&c.redirects).unwrap_or_default();
-    Ok(redirects.iter().any(|u| same_redirect(u, &r.redirect_uri)).then_some(c))
+    if !redirects.iter().any(|u| same_redirect(u, &r.redirect_uri)) {
+        return Ok(Err("redirect_uri is not registered for this client"));
+    }
+    Ok(Ok(c))
 }
 /// A118: where the consent page says a client's details came from, never that it's verified.
 fn fetched(c: &ClientRecord) -> String {
@@ -306,7 +363,10 @@ async fn authorize(
     if !limit(&s, &h, "authorize", 30) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    let Some(c) = valid_request(&s, &h, &r).await? else { return Ok(error("invalid_request")) };
+    let c = match valid_request(&s, &h, &r).await? {
+        Ok(c) => c,
+        Err(why) => return Ok(refuse("invalid_request", why)),
+    };
     let fetched = fetched(&c);
     let local = local_callback(&r.redirect_uri);
     let caller = match owner(&s, &h) {
@@ -383,11 +443,11 @@ async fn authorize(
     );
     Ok(response)
 }
-fn redirect(r: &Authorization, key: &str, value: &str, issuer: &str) -> ApiResult<Response> {
+fn redirect(r: &Authorization, pairs: &[(&str, &str)], issuer: &str) -> ApiResult<Response> {
     let mut url =
         Url::parse(&r.redirect_uri).map_err(|_| ApiError::bad_request("invalid redirect"))?;
     url.query_pairs_mut()
-        .append_pair(key, value)
+        .extend_pairs(pairs)
         .append_pair("state", &r.state)
         .append_pair("iss", issuer);
     Ok(no_store((StatusCode::SEE_OTHER, [(header::LOCATION, url.as_str())]).into_response()))
@@ -398,7 +458,7 @@ async fn consent(
     Form(c): Form<Consent>,
 ) -> ApiResult<Response> {
     if !same_origin(&s, &h) {
-        return Ok(error("invalid_request"));
+        return Ok(refuse("invalid_request", NOT_THIS_SITE));
     }
     let caller = owner(&s, &h)?;
     let Some(payload) = s.db.oauth_take_request(
@@ -408,16 +468,18 @@ async fn consent(
         now(),
     )?
     else {
-        return Ok(error("invalid_request"));
+        return Ok(refuse("invalid_request", STALE_NONCE));
     };
     let Ok(r) = serde_json::from_str::<Authorization>(&payload) else {
-        return Ok(error("invalid_request"));
+        return Ok(refuse("invalid_request", STALE_NONCE));
     };
-    let Some(known) = valid_request(&s, &h, &r).await? else {
-        return Ok(error("invalid_request"));
+    let known = match valid_request(&s, &h, &r).await? {
+        Ok(known) => known,
+        Err(why) => return Ok(refuse("invalid_request", why)),
     };
     if c.decision == "deny" {
-        return redirect(&r, "error", "access_denied", &s.config.public_url);
+        let denied = [("error", "access_denied"), ("error_description", "the person chose Deny")];
+        return redirect(&r, &denied, &s.config.public_url);
     }
     // A118: a client known by its document is kept as a registration, so its grant has a client,
     // under the same cap as registering one.
@@ -430,7 +492,7 @@ async fn consent(
     // #647: a setup grant, with no bot, lasting a day.
     if r.scope == SETUP_SCOPE {
         if c.decision != "allow" {
-            return Ok(error("invalid_request"));
+            return Ok(refuse("invalid_request", BAD_DECISION));
         }
         let g = crate::db::SetupGrant {
             id: auth::new_id(),
@@ -449,12 +511,14 @@ async fn consent(
         )? {
             return Ok(error("access_denied"));
         }
-        return redirect(&r, "code", &code, &s.config.public_url);
+        return redirect(&r, &[("code", &code)], &s.config.public_url);
     }
-    if c.decision != "allow"
-        || !s.db.agents_of(&caller.person_id, now())?.iter().any(|a| a.id == c.agent_id)
-    {
-        return Ok(error("invalid_request"));
+    if c.decision != "allow" {
+        return Ok(refuse("invalid_request", BAD_DECISION));
+    }
+    // A120: a bot that doesn't exist and someone else's get the same words.
+    if !s.db.agents_of(&caller.person_id, now())?.iter().any(|a| a.id == c.agent_id) {
+        return Ok(refuse("invalid_request", "agent_id must be one of your bots"));
     }
     let g = Grant {
         id: auth::new_id(),
@@ -480,7 +544,7 @@ async fn consent(
     )? {
         return Ok(error("access_denied"));
     }
-    redirect(&r, "code", &code, &s.config.public_url)
+    redirect(&r, &[("code", &code)], &s.config.public_url)
 }
 async fn token(
     State(s): State<AppState>,
@@ -490,12 +554,19 @@ async fn token(
     if !limit(&s, &h, "token", 60) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    if h.contains_key(header::AUTHORIZATION)
-        || r.resource != resource(&s)
-        || r.scope.as_deref().is_some_and(|scope| !valid_scope(scope))
-        || s.db.oauth_client(&r.client_id)?.is_none()
-    {
-        return Ok(error("invalid_request"));
+    let refused = if h.contains_key(header::AUTHORIZATION) {
+        Some(PUBLIC_CLIENT)
+    } else if r.resource != resource(&s) {
+        Some(BAD_RESOURCE)
+    } else if r.scope.as_deref().is_some_and(|scope| !valid_scope(scope)) {
+        Some(BAD_SCOPE)
+    } else if s.db.oauth_client(&r.client_id)?.is_none() {
+        Some(UNKNOWN_CLIENT)
+    } else {
+        None
+    };
+    if let Some(why) = refused {
+        return Ok(refuse("invalid_request", why));
     }
     // #647: a setup code or refresh token gets setup tokens, from the setup grants only.
     let setup = r.code.starts_with(SETUP_CODE) || r.refresh_token.starts_with(SETUP_REFRESH);
@@ -517,7 +588,7 @@ async fn token(
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
             {
-                return Ok(error("invalid_grant"));
+                return Ok(refuse("invalid_grant", BAD_VERIFIER));
             }
             s.db.oauth_exchange(
                 &auth::hash_secret(&r.code),
@@ -538,7 +609,7 @@ async fn token(
         )?,
         _ => return Ok(error("unsupported_grant_type")),
     };
-    let Some(g) = g else { return Ok(error("invalid_grant")) };
+    let Some(g) = g else { return Ok(refuse("invalid_grant", bad_grant(&r))) };
     Ok(no_store(Json(json!({"access_token":access,"token_type":"Bearer","expires_in":(at+3600).min(g.expires_at)-at,"refresh_token":refresh,"scope":g.scope})).into_response()))
 }
 /// #647: the token endpoint for setup grants, the same exchange and rotation as for bots.
@@ -558,7 +629,7 @@ fn setup_token(s: &AppState, r: &TokenRequest) -> ApiResult<Response> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
             {
-                return Ok(error("invalid_grant"));
+                return Ok(refuse("invalid_grant", BAD_VERIFIER));
             }
             s.db.setup_exchange(
                 &auth::hash_secret(&r.code),
@@ -579,7 +650,7 @@ fn setup_token(s: &AppState, r: &TokenRequest) -> ApiResult<Response> {
         )?,
         _ => return Ok(error("unsupported_grant_type")),
     };
-    let Some(g) = g else { return Ok(error("invalid_grant")) };
+    let Some(g) = g else { return Ok(refuse("invalid_grant", bad_grant(r))) };
     Ok(no_store(Json(json!({"access_token":access,"token_type":"Bearer","expires_in":(at+3600).min(g.expires_at)-at,"refresh_token":refresh,"scope":SETUP_SCOPE})).into_response()))
 }
 async fn revoke(
@@ -623,7 +694,7 @@ async fn owner_revoke(
     Form(r): Form<OwnerRevocation>,
 ) -> ApiResult<Response> {
     if !same_origin(&s, &h) {
-        return Ok(error("invalid_request"));
+        return Ok(refuse("invalid_request", NOT_THIS_SITE));
     }
     let c = owner(&s, &h)?;
     if s.db
@@ -631,7 +702,7 @@ async fn owner_revoke(
         .as_deref()
         != Some("manage")
     {
-        return Ok(error("invalid_request"));
+        return Ok(refuse("invalid_request", STALE_NONCE));
     }
     s.db.oauth_revoke(&r.grant_id, &c.person_id)?;
     s.db.setup_revoke(&r.grant_id, &c.person_id)?;
