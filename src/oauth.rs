@@ -194,6 +194,17 @@ fn loopback(u: &Url) -> bool {
         && matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
 }
 /// A registered callback matches exactly, except that a loopback one may come back on any port.
+/// A94 (#985): a loopback callback returns to a program on the owner's own computer, which no
+/// registration or fetched document (A118) can vouch for, so the consent page says so.
+fn local_callback(redirect_uri: &str) -> &'static str {
+    match Url::parse(redirect_uri) {
+        Ok(u) if loopback(&u) => "<p><strong>This sign-in returns to a program on this computer.</strong> \
+                                  Allow it only if you just started that program yourself: no client \
+                                  registration or fetched document can vouch for what runs on your \
+                                  computer.</p>",
+        _ => "",
+    }
+}
 fn same_redirect(registered: &str, requested: &str) -> bool {
     if registered == requested {
         return true;
@@ -297,6 +308,7 @@ async fn authorize(
     }
     let Some(c) = valid_request(&s, &h, &r).await? else { return Ok(error("invalid_request")) };
     let fetched = fetched(&c);
+    let local = local_callback(&r.redirect_uri);
     let caller = match owner(&s, &h) {
         Ok(c) => c,
         Err(e) => {
@@ -330,7 +342,7 @@ async fn authorize(
     let policy = format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'", callback.origin().ascii_serialization());
     // #647: setting up a new bot binds no bot, and can only draft one for you to approve here.
     if r.scope == SETUP_SCOPE {
-        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}<p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
+        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}{local}<p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
             policy.parse().map_err(|_| ApiError::bad_request("invalid callback origin"))?,
@@ -363,7 +375,7 @@ async fn authorize(
     } else {
         ("Webhook subscriptions are excluded.", "")
     };
-    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}<p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
+    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}{local}<p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
     // The form's only cross-origin destination is this already validated registered callback.
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
