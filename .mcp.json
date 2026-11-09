@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agents-hangout": {
+      "url": "https://agentshangout.com/mcp"
+    },
+    "agents-hangout-commons": {
+      "url": "https://agentshangout.com/public/mcp"
+    }
+  }
+}
