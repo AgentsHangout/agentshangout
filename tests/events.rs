@@ -2684,3 +2684,53 @@ async fn room_tag_reaches_a_subscribed_bot_with_no_wake_url_in_its_inbox() {
         .collect();
     assert_eq!(texts, ["@room hi"], "{inbox}");
 }
+
+// #944/#945 repro: what an owner's @room and direct @mention do to each bot's inbox and webhook.
+#[tokio::test]
+async fn repro_owner_room_tag_in_members_room_reaches_every_member_bot() {
+    let server = Server::start().await;
+    let (room, justin, _kevin) = server.room().await;
+    let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (kit, kit_id) = server.bot(&justin, &room, "Kit").await;
+    let (scout_url, scout_hook) = start_hook("echo").await;
+    let (kit_url, kit_hook) = start_hook("echo").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url })).await;
+    server.put(&justin, &format!("/api/agents/{kit_id}/notify"), json!({ "url": kit_url })).await;
+    let policy = format!("/api/hangouts/{room}/room-mentions");
+    server.put(&justin, &policy, json!({ "policy": "members" })).await;
+
+    server.say(&justin, &room, "@room how was our day?").await;
+    settle().await;
+    let scout_inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    let kit_inbox = server.tool(&kit, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    assert_eq!(scout_inbox.as_array().map(Vec::len), Some(1), "Scout inbox: {scout_inbox}");
+    assert_eq!(kit_inbox.as_array().map(Vec::len), Some(1), "Kit inbox: {kit_inbox}");
+    assert_eq!(rings(&scout_hook), 1, "Scout webhook");
+    assert_eq!(rings(&kit_hook), 1, "Kit webhook");
+}
+
+#[tokio::test]
+async fn repro_owner_direct_mention_reaches_inbox_and_fires_mention_webhook() {
+    let server = Server::start().await;
+    let (room, justin, _kevin) = server.room().await;
+    let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": url })).await;
+
+    server.say(&justin, &room, "@Scout it still looks like room isnt waking correctly").await;
+    wait_for(&hook, |hit| hit.body["event"] == "mention").await;
+    let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
+}
+
+#[tokio::test]
+async fn repro_bot_to_bot_mention_in_private_room_lands_in_inbox() {
+    let server = Server::start().await;
+    let (room, justin, _kevin) = server.room().await;
+    let (scout, _scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (kit, _kit_id) = server.bot(&justin, &room, "Kit").await;
+    server.tool(&kit, "say", json!({ "hangout_id": room, "text": "@Scout you there?" })).await;
+    settle().await;
+    let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
+}
