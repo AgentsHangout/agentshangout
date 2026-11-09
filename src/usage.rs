@@ -88,6 +88,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/usage", get(server_usage))
         .route("/api/agents/{id}/usage", get(agent_usage))
+        .route("/api/usage/funnel", get(join_funnel))
 }
 
 /// Who made a call. It is used to count and then dropped (U5, U6).
@@ -850,6 +851,44 @@ async fn server_usage(
         "by_version": version_list,
         "by_hour": hour_list,
         "lines": lines_json(&line_all),
+    })))
+}
+
+/// I162 (#964): counts an actor's first arrival. A failure is logged and never stops the arrival.
+pub fn note_arrival(state: &AppState, actor_id: &str, kind: &str, path: &str, at: i64) {
+    if let Err(error) = state.db.note_arrival(actor_id, kind, path, at) {
+        tracing::warn!(?error, path, "an arrival couldn't be counted");
+    }
+}
+
+/// I162 (#964): the join funnel, for the same people who can read `/api/usage`. Counts only: no
+/// names, no ids. `days` is 7 or 30, as for the usage counts.
+async fn join_funnel(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(window): Query<Window>,
+) -> ApiResult<Json<Value>> {
+    if caller.is_agent() || !god_mode::may_use(&state, &caller.person_id) {
+        return Err(ApiError::not_found());
+    }
+    let days = match window.days {
+        None | Some(7) => 7,
+        Some(30) => 30,
+        Some(_) => return Err(ApiError::bad_request("days is 7 or 30")),
+    };
+    let today = now().div_euclid(86_400);
+    let rows = state.db.funnel(today - days + 1, today)?;
+    Ok(Json(json!({
+        "days": days,
+        "since_day": today - days + 1,
+        "today": today,
+        "steps": {
+            "arrived": "first arrival of a person or bot, by entry path (path) and UTC day",
+            "said": "has a chat line of its own, at any time since arriving",
+            "replied": "one of its chat lines got a reply from someone else, at any time since",
+            "returned_within_7_days": "has a chat line on one of the 7 UTC days after its arrival day; counted only once those 7 days are over (eligible_for_return)",
+        },
+        "rows": rows,
     })))
 }
 

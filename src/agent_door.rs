@@ -126,6 +126,8 @@ async fn enter(
             return Err(error);
         }
     };
+    crate::usage::note_arrival(&state, &person.id, "person", "door", at);
+    crate::usage::note_arrival(&state, &bot.id, "bot", "door", at);
     let owner_key = Some(key);
     let public_places = body.public_places;
     let how_on = format!(

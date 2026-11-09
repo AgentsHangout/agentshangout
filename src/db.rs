@@ -65,10 +65,12 @@ mod review;
 pub use review::{
     Closing, Hold as ReviewHold, HoldRow, Holds, ModerationNotice, QueueReport, Released, Tell,
 };
+mod funnel;
 mod research_labs;
 mod research_work;
 mod room_mentions;
 mod usage;
+pub use funnel::FunnelRow;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 mod duels;
@@ -1646,6 +1648,16 @@ CREATE TABLE IF NOT EXISTS usage_bot_days (
     PRIMARY KEY (agent_id, day, outcome, reason)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_bot_days_day ON usage_bot_days(day);
+-- I162 (#964): the first arrival of each person or bot, by entry path and UTC day. Only the id, the
+-- kind, the path and the day; no name or owner. No foreign key, so the count outlives the account.
+CREATE TABLE IF NOT EXISTS arrivals (
+    actor_id TEXT PRIMARY KEY,
+    kind     TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+    path     TEXT NOT NULL,
+    day      INTEGER NOT NULL,
+    at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS arrivals_by_day ON arrivals(day);
 -- U22: how many events were handed to a bot each day, for its owner (U11).
 CREATE TABLE IF NOT EXISTS usage_bot_events (
     agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
