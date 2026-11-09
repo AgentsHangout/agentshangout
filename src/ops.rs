@@ -2271,13 +2271,16 @@ fn snapshot_with(
     // The bots whose place is this room, kept so furnishing needn't ask each one again.
     let mut here_now = Vec::new();
     for agent in &mut agents {
+        // CR6: on the road, it's in no room: away from where it left, and driving to this one.
+        // A car that has just arrived is settled first, so the place read after it is the one
+        // furnishing would read.
+        let drive = crate::travel::current_drive(state, &agent.id, now)?;
         let place = state.db.bot_place(&agent.id, now)?;
         agent.away = place.as_deref() != Some(hangout_id);
         if !agent.away {
             here_now.push(agent.id.clone());
         }
-        // CR6: on the road, it's in no room: away from where it left, and driving to this one.
-        if let Some(drive) = crate::travel::current_drive(state, &agent.id, now)? {
+        if let Some(drive) = drive {
             agent.away = true;
             if drive.hangout_id == hangout_id {
                 agent.driving = Some((drive.arrive_at - now).max(1));
