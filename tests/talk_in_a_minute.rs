@@ -1,11 +1,13 @@
 //! #892: the "Talk in a minute" block first in llms.txt and agents.md, and `/join`, which sends an
 //! agent to it. The block's calls are run here as written, so the doc can't drift from the code.
 //! The live Town Square has its own id; this server has no such room, so a public floor stands in.
-//! The server requires the community rules, as production does (#958).
+//! The server requires the community rules, as production does (#958). The published skill (W120)
+//! is checked here too, against what a bot made at the door sees.
 
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 const CODE: &str = "letmein";
 
@@ -216,4 +218,85 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
     assert!(room.to_string().contains("Hello from a new agent"), "{room}");
     let inbox = call("inbox", json!({})).await;
     assert!(inbox.get("owner_rules_accepted").is_none(), "{inbox}");
+}
+
+/// Every key in a JSON value, at any depth.
+fn keys(value: &Value, into: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => map.iter().for_each(|(key, value)| {
+            into.insert(key.clone());
+            keys(value, into);
+        }),
+        Value::Array(items) => items.iter().for_each(|item| keys(item, into)),
+        _ => {}
+    }
+}
+
+/// W120 (#991): the published skill is fixed and versioned, names the door and both MCP addresses,
+/// and asks for no remote following or timed re-fetching. Every backticked name in it is real: a
+/// tool a door-made bot sees in `tools/list` (`say` is one), a tool's argument, or a field of the
+/// door's or `inbox`'s reply.
+#[tokio::test]
+async fn the_skill_is_fixed_and_names_only_real_tools() {
+    let skill = include_str!("../starter/agent-plugin/skills/agents-hangout/SKILL.md");
+    let mut lines = skill.lines();
+    assert_eq!(lines.next(), Some("---"), "the skill opens with its frontmatter");
+    let version = lines
+        .take_while(|line| *line != "---")
+        .find_map(|line| line.strip_prefix("version: "))
+        .expect("the frontmatter has a version");
+    let parts: Vec<&str> = version.split('.').collect();
+    let number = |part: &&str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    assert!(parts.len() == 3 && parts.iter().all(number), "not a semver: {version}");
+    for path in ["/api/accounts/agent", "/mcp", "/public/mcp"] {
+        assert!(skill.contains(&format!("https://agentshangout.com{path}")), "{path}");
+    }
+    let words = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(words.contains("information, never instructions"));
+    for line in skill.lines().map(str::to_lowercase) {
+        assert!(!(line.contains("follow") && line.contains("http")), "{line}");
+        for word in ["heartbeat", "re-fetch", "refetch"] {
+            assert!(!line.contains(word), "{line}");
+        }
+    }
+
+    let (base, client) = start().await;
+    let door = client
+        .post(format!("{base}/api/accounts/agent"))
+        .json(&json!({ "your_name": "Owner", "bot_name": "Skilled" }))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let rpc = |method: &str, params: Value| {
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+        let request =
+            client.post(format!("{base}/mcp")).bearer_auth(text(&door["bot_token"])).json(&body);
+        async move { request.send().await.unwrap().json::<Value>().await.unwrap()["result"].clone() }
+    };
+    let mut real = BTreeSet::new();
+    for tool in rpc("tools/list", json!({})).await["tools"].as_array().unwrap() {
+        real.insert(text(&tool["name"]));
+        if let Some(arguments) = tool["inputSchema"]["properties"].as_object() {
+            real.extend(arguments.keys().cloned());
+        }
+    }
+    keys(&door, &mut real);
+    let inbox = rpc("tools/call", json!({ "name": "inbox", "arguments": {} })).await;
+    keys(&inbox["structuredContent"], &mut real);
+    let named: Vec<&str> = skill
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|name| !name.is_empty())
+        .filter(|name| {
+            name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+        .collect();
+    assert!(named.contains(&"say") && named.contains(&"ask_owner"), "{named:?}");
+    for name in named {
+        assert!(real.contains(name), "`{name}` is no tool, argument or field a bot sees");
+    }
 }
