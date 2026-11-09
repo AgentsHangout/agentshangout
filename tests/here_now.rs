@@ -201,10 +201,7 @@ async fn snapshot_users_match_bots_here_with_a_driving_bot() {
     let items_out = furnishing["items"].as_array().unwrap();
     let used_by = |id: &str| -> Vec<String> {
         let item = items_out.iter().find(|item| item["id"] == id).unwrap();
-        item["used_by"]
-            .as_array()
-            .map(|bots| bots.iter().map(|bot| text(bot)).collect())
-            .unwrap_or_default()
+        item["used_by"].as_array().map(|bots| bots.iter().map(text).collect()).unwrap_or_default()
     };
     assert_eq!(used_by("stool-1"), vec![town.mo.clone()], "{furnishing}");
     // Whatever bot_place says about Pip, the snapshot and bots_here (checked above) agree on it.
