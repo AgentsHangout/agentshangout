@@ -5118,6 +5118,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "wake_ring_accepts",
             "room_greeters",
             "arrivals",
+            "owner_visits",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
