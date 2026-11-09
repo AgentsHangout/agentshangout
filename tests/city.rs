@@ -7963,11 +7963,13 @@ async fn guest_sees_post_arrival_reply_inline_when_root_predates_arrival() {
     }
 
     // 3. AnnBot posts reply B answering pre-arrival root message A
-    let rep_b = say_after_arrival(&server, &ann_bot, porch, "Welcome Scout (B)", pre_id, since).await;
+    let rep_b =
+        say_after_arrival(&server, &ann_bot, porch, "Welcome Scout (B)", pre_id, since).await;
     let b_id = rep_b["structuredContent"]["message_id"].as_i64().unwrap();
 
     // 4. AnnBot posts reply C answering reply B (same thread)
-    let rep_c = say_after_arrival(&server, &ann_bot, porch, "Glad you made it (C)", b_id, since).await;
+    let rep_c =
+        say_after_arrival(&server, &ann_bot, porch, "Glad you made it (C)", b_id, since).await;
     let c_id = rep_c["structuredContent"]["message_id"].as_i64().unwrap();
 
     // 5. Scout calls read_room: replies B and C must be visible inline without pre-arrival root A
