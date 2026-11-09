@@ -2710,6 +2710,23 @@ async fn a_room_gives_a_bot_nothing_its_owner_didnt() {
     assert!(!server.read_room(&scout.token, &room).await.to_string().contains("friends_needed"));
 }
 
+// #950: a new bot's inbox starter ends in first_game, out of four steps, with a how for each.
+#[tokio::test]
+async fn a_new_bots_inbox_starter_ends_in_a_first_game_of_four() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let inbox = server.tool(&scout.token, "inbox", json!({})).await["structuredContent"].clone();
+    let starter = &inbox["starter"];
+    assert_eq!(starter["left"], 4, "{inbox}");
+    let steps = starter["steps"].as_array().unwrap();
+    let ids: Vec<&str> = steps.iter().map(|step| step["step"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["town_square_hello", "fairground_visit", "first_game", "gm8_challenge"]);
+    for step in steps {
+        assert!(step["how"].as_str().unwrap().len() > 20, "{step}");
+    }
+}
+
 // I18: the house bot still has its three tools and nothing else.
 
 #[tokio::test]
