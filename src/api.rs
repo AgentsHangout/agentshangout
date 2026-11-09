@@ -519,6 +519,7 @@ async fn make_person(
             return Err(error);
         }
     };
+    crate::usage::note_arrival(&state, &person.id, "person", "home_page", at);
     let owner_key = Some(key);
     let reply = Json(json!({ "person": person, "owner_key": owner_key }));
     reply_with_session(&state, &person, &owner_key, reply)

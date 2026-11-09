@@ -1497,6 +1497,7 @@ fn walk_in_with_a_name(
     }
     crate::referrals::allow_new_person(state, headers)?;
     let (person, key) = api::new_person(state, your_name)?;
+    crate::usage::note_arrival(state, &person.id, "person", "walk_in", now);
     let mut walked = walk_onto(state, &floor, &person.id, None)?;
     let owner_key = Some(key);
     walked["person"] = json!(person);
