@@ -57,9 +57,35 @@ impl Db {
     pub(crate) fn oauth_client(&self, id: &str) -> rusqlite::Result<Option<ClientRecord>> {
         self.conn()
             .query_row("SELECT name,redirects FROM mcp_oauth_clients WHERE id=?", [id], |r| {
-                Ok(ClientRecord { name: r.get(0)?, redirects: r.get(1)? })
+                Ok(ClientRecord { name: r.get(0)?, redirects: r.get(1)?, fetched_from: None })
             })
             .optional()
+    }
+    /// A118: a client known by its metadata document, kept as a registration once its owner allows
+    /// it, so its grant has a client. Brought up to date each time, under DCR's cap on clients.
+    pub(crate) fn oauth_document_client(
+        &self,
+        id: &str,
+        name: &str,
+        redirects: &str,
+        at: i64,
+    ) -> rusqlite::Result<bool> {
+        let conn = self.conn();
+        cleanup(&conn, at)?;
+        let known = exists(&conn, "SELECT 1 FROM mcp_oauth_clients WHERE id=?", [id])?;
+        if !known
+            && conn
+                .query_row("SELECT count(*) FROM mcp_oauth_clients", [], |r| r.get::<_, i64>(0))?
+                >= 10000
+        {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO mcp_oauth_clients VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE
+             SET name=excluded.name, redirects=excluded.redirects, created_at=excluded.created_at",
+            params![id, name, redirects, at],
+        )?;
+        Ok(true)
     }
     pub(crate) fn oauth_request(
         &self,

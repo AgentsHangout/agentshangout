@@ -2026,3 +2026,76 @@ async fn after_approval_the_agent_reconnects_as_the_new_bot() {
     assert!(as_bot["result"]["isError"].is_null(), "{as_bot}");
     assert!(as_bot.to_string().contains("Keep the merge queue moving."), "its role: {as_bot}");
 }
+
+/// A118: the metadata documents these tests serve from memory, in place of fetching them, so A119's
+/// bounds stay as they are. Its address check has a unit test of its own in src/cimd.rs.
+const DOCUMENT: &str = "https://client.example/oauth/client.json";
+fn serve_documents(server: &Server) {
+    server.state.cimd.serve_from_memory(|url| {
+        let (named, callback) = match url {
+            DOCUMENT => (DOCUMENT, CALLBACK),
+            "https://client.example/oauth/other.json" => {
+                ("https://elsewhere.example/client.json", CALLBACK)
+            }
+            "https://client.example/oauth/elsewhere.json" => {
+                ("https://client.example/oauth/elsewhere.json", "https://client.example/elsewhere")
+            }
+            _ => return None,
+        };
+        let document = json!({
+            "client_id": named,
+            "client_name": "Doc client",
+            "redirect_uris": [callback],
+            "token_endpoint_auth_method": "none",
+        });
+        Some(document.to_string())
+    });
+}
+
+// A118 (#983): an https client_id names its metadata document, which stands in for registering.
+// Authorize, consent and the token all go through, and the consent page says where the client's
+// details came from, never that they're verified.
+#[tokio::test]
+async fn a_client_id_url_names_its_document_and_goes_through_authorize() {
+    let server = Server::start().await;
+    serve_documents(&server);
+    let metadata: Value = server
+        .client
+        .get(format!("{}/.well-known/oauth-authorization-server", server.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(metadata["client_id_metadata_document_supported"], true, "{metadata}");
+    let (session, bot, _, _) = server.setup().await;
+    let page = server.authorize(&session, DOCUMENT).await.text().await.unwrap();
+    assert!(page.contains("Client details fetched from client.example."), "{page}");
+    assert!(page.contains("Client label (not verified): <strong>Doc client</strong>"), "{page}");
+    assert!(!page.contains("verified host") && !page.contains("<img"), "{page}");
+
+    let code = server.code(&session, DOCUMENT, &bot).await;
+    let token = server.exchange(DOCUMENT, &code, VERIFIER).await;
+    assert_eq!(token.status(), StatusCode::OK);
+    let token: Value = token.json().await.unwrap();
+    assert_eq!(server.mcp(token["access_token"].as_str().unwrap()).await.status(), StatusCode::OK);
+}
+
+// A118: a document whose client_id names another URL, or that doesn't list the request's callback,
+// is refused like an unknown client.
+#[tokio::test]
+async fn a_client_document_must_name_itself_and_list_the_callback() {
+    let server = Server::start().await;
+    serve_documents(&server);
+    let (session, _, _, _) = server.setup().await;
+    for (url, why) in [
+        ("https://client.example/oauth/other.json", "its client_id is another URL"),
+        ("https://client.example/oauth/elsewhere.json", "it doesn't list this callback"),
+    ] {
+        let refused = server.authorize(&session, url).await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{why}");
+        let body: Value = refused.json().await.unwrap();
+        assert_eq!(body["error"], "invalid_request", "{why}");
+    }
+}
