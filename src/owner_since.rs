@@ -56,14 +56,19 @@ pub fn counts(state: &AppState, person_id: &str, since: i64) -> rusqlite::Result
         rusqlite::params![person_id, since],
         |row| row.get(0),
     )?;
-    // People who joined a room this person is in, other than the person themself.
+    // Joins to a room this person is in, by people other than the person themself, counted once per
+    // room. Only joins on or after this person's own join to that room count: someone who joined
+    // before this person was in the room was already there when they arrived, so it isn't news.
     let people_joined_rooms: i64 = conn.query_row(
         "SELECT COUNT(*) FROM members m
+         JOIN members me ON me.hangout_id = m.hangout_id AND me.person_id = ?1
          WHERE m.joined_at > ?2 AND m.person_id != ?1
-           AND m.hangout_id IN (SELECT hangout_id FROM members WHERE person_id = ?1)",
+           AND m.joined_at >= me.joined_at",
         rusqlite::params![person_id, since],
         |row| row.get(0),
     )?;
+    // The window is `at > since` / `joined_at > since`, so an event in the same second as the
+    // previous visit is not counted. Harmless at one-second resolution, and it keeps the reset exact.
     Ok(Counts { mentions, plans_invited, people_joined_rooms })
 }
 

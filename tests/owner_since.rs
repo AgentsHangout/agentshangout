@@ -18,11 +18,15 @@ struct Server {
 
 impl Server {
     async fn start() -> Self {
+        Self::start_on(":memory:").await
+    }
+
+    async fn start_on(db_path: &str) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
         let state = AppState::new(
-            Db::open(":memory:").unwrap(),
+            Db::open(db_path).unwrap(),
             Config {
                 public_url: base.clone(),
                 create_code: Some(CODE.to_string()),
@@ -160,4 +164,43 @@ async fn no_key_no_count() {
 
 fn owner_room(server: &Server, person_id: &str) -> String {
     server.state.db.hangouts_for_person(person_id).unwrap()[0].id.clone()
+}
+
+// S3: a join only counts if it came after this person's own join to that room. Bo was in the room
+// before Ann, so Bo's join isn't news to Ann; Carl joining after Ann is.
+#[tokio::test]
+async fn people_already_in_a_room_before_you_are_not_counted() {
+    let path = std::env::temp_dir().join(format!("since-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let path_str = path.to_str().unwrap();
+    let server = Server::start_on(path_str).await;
+    let raw = rusqlite::Connection::open(path_str).unwrap();
+    let (ann_key, ann_id, _) = server.someone("Ann").await;
+    let (_, bo_id, bo_code) = server.someone("Bo").await;
+    let (carl_key, _, _) = server.someone("Carl").await;
+    let room: String = raw
+        .query_row("SELECT hangout_id FROM members WHERE person_id = ?1", [&bo_id], |r| r.get(0))
+        .unwrap();
+    let (status, body) = server
+        .send(&ann_key, Method::POST, &format!("/api/invites/{bo_code}/join"), Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Bo was in the room first, then Ann.
+    raw.execute(
+        "UPDATE members SET joined_at = strftime('%s','now') - 200 WHERE hangout_id = ?1 AND person_id = ?2",
+        rusqlite::params![room, bo_id],
+    )
+    .unwrap();
+    raw.execute(
+        "UPDATE members SET joined_at = strftime('%s','now') - 100 WHERE hangout_id = ?1 AND person_id = ?2",
+        rusqlite::params![room, ann_id],
+    )
+    .unwrap();
+    assert_eq!(server.since(&ann_key).await["counts"]["people_joined_rooms"], 0);
+    let (status, body) = server
+        .send(&carl_key, Method::POST, &format!("/api/invites/{bo_code}/join"), Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(server.since(&ann_key).await["counts"]["people_joined_rooms"], 1);
+    let _ = std::fs::remove_file(&path);
 }
