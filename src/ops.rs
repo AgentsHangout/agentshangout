@@ -495,6 +495,8 @@ fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionR
             let agent_id = bot.id.clone();
             let hangout_id = message.hangout_id.clone();
             let message_id = message.id;
+            // E22: a ring from the bot's owner, which holds their next mention once it's accepted.
+            let owner = !person && message.agent_id.is_none();
             notify::send_result(
                 state,
                 &bot.id,
@@ -508,6 +510,7 @@ fn deliver_ring(state: &AppState, message: &Message, bot: &Agent, ring: MentionR
                         message_id,
                         &hangout_id,
                         person,
+                        owner,
                         &posted,
                     );
                 },
@@ -671,12 +674,15 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     Ok(())
 }
 
+/// What a ring did. Only an accepted ring from a person, the bot's owner included, starts their
+/// 3-minute wait (E22, E31): a refused or failed one woke nothing.
 fn record_mention_delivery(
     state: &AppState,
     agent_id: &str,
     message_id: i64,
     hangout_id: &str,
     person: bool,
+    owner: bool,
     posted: &notify::Posted,
 ) {
     let at = now();
@@ -684,6 +690,10 @@ fn record_mention_delivery(
         if person {
             if let Err(error) = state.db.note_person_wake(agent_id, message_id, hangout_id, at) {
                 tracing::warn!(%error, "a person wake could not be recorded");
+            }
+        } else if owner {
+            if let Err(error) = state.db.note_wake_ring(agent_id, message_id, at, false) {
+                tracing::warn!(%error, "an owner wake could not be recorded");
             }
         }
         ("sent", "accepted".to_string())
@@ -714,8 +724,8 @@ pub(crate) fn owner_ring_held(
 }
 
 /// E22, E24, E25, E31: who this mention rings, and why it doesn't. `belongs` is whether the bot
-/// belongs in this room. Bot rings are recorded here so a chain hold can count them. A non-owner
-/// person's ring is not: it counts only once the receiver accepts it.
+/// belongs in this room. Bot rings are recorded here so a chain hold can count them. A person's
+/// ring, its owner's too, is not: it counts only once the receiver accepts it.
 fn rings_for_mention(
     state: &AppState,
     message: &Message,
@@ -786,7 +796,10 @@ fn rings_for_mention(
             }
         }
     }
-    state.db.note_wake_ring(&bot.id, message.id, at, from_bot)?;
+    // L10: a bot's ring counts as it goes out. The owner's is recorded once accepted (E22).
+    if from_bot {
+        state.db.note_wake_ring(&bot.id, message.id, at, true)?;
+    }
     Ok(MentionRing::Send { once: false, person: false })
 }
 
@@ -889,7 +902,7 @@ fn deliver_held_mentions(
         false,
         message_ids.to_vec(),
         move |state, posted| {
-            record_mention_delivery(state, &send_id, latest, &hangout_id, false, &posted);
+            record_mention_delivery(state, &send_id, latest, &hangout_id, false, false, &posted);
         },
     );
     Ok(())

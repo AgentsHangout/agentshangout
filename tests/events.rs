@@ -1448,6 +1448,44 @@ async fn a_failed_person_wake_does_not_hold_the_next_mention() {
     assert_eq!(rings(&hook), 2, "the refused one did not hold the bell");
 }
 
+// E22 (#945): an owner's ring the wake-up URL refused woke nothing, so it doesn't hold the owner's
+// next mention there: that one rings at once.
+#[tokio::test]
+async fn a_refused_owner_ring_does_not_hold_the_owners_next_mention() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (url, hook) = start_hook("refused").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": url })).await;
+
+    server.say(&justin, &room, "@Scout first").await;
+    let failed = wait_decision(&server, &justin, &scout_id, "failed").await;
+    assert_eq!(failed["reason"], "http_401", "{failed}");
+    *hook.mode.lock().unwrap() = "echo";
+    server.say(&justin, &room, "@Scout it still looks like room isnt waking correctly").await;
+    let sent = wait_decision(&server, &justin, &scout_id, "sent").await;
+    assert_eq!(sent["reason"], "accepted", "{sent}");
+    assert_eq!(rings(&hook), 2, "the refused ring held nothing");
+}
+
+// E22: an owner's ring the bot accepted still holds the owner's next mention there for 3 minutes,
+// while it's unread.
+#[tokio::test]
+async fn an_accepted_owner_ring_still_holds_the_owners_next_mention() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": url })).await;
+
+    server.say(&justin, &room, "@Scout first").await;
+    wait_decision(&server, &justin, &scout_id, "sent").await;
+    server.say(&justin, &room, "@Scout second").await;
+    settle().await;
+    assert_eq!(rings(&hook), 1, "the accepted ring holds the next one");
+    assert_eq!(decisions(&server, &justin, &scout_id).await[0]["reason"], "unread");
+}
+
 // E31: a delivery that has not finished does not drop a mention that arrives during it.
 #[tokio::test]
 async fn a_wake_still_in_flight_does_not_drop_the_next_person_mention() {
