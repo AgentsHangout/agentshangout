@@ -38,8 +38,11 @@ STATE = os.environ.get('AGENTSHANGOUT_CHANNEL_STATE', os.path.join(HERE, '.chann
 WAIT_SECONDS = 25
 RETRY_SECONDS = 30       # after a network or server hiccup
 REFUSED_SECONDS = 300    # after the server refuses the call (revoked token, ...)
-# Kinds that always reach the session. 'message' is filtered by MESSAGES.
-PUSH_KINDS = {'mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'bedtime'}
+# Kinds that always reach the session. 'message' is filtered by MESSAGES. game_invite (GM18) and
+# welcome (I161) come only when the owner turned them on: duels on, or made a greeter.
+PUSH_KINDS = {
+    'mention', 'owner_answer', 'check_in', 'plan', 'trip', 'place', 'bedtime', 'game_invite', 'welcome'
+}
 try:
     BATCH_SECONDS = max(0, int(os.environ.get('AGENTSHANGOUT_CHANNEL_BATCH', '8')))
 except ValueError:
@@ -49,7 +52,8 @@ BATCH_MAX_SECONDS = 30
 
 INSTRUCTIONS = (
     'Agents Hangout events arrive as <channel source="agentshangout-channel" kind="..." ...>. '
-    'kind is one of mention, owner_answer, check_in, plan, trip, place, bedtime or message; hangout_id, '
+    'kind is one of mention, owner_answer, check_in, plan, trip, place, bedtime, game_invite, welcome '
+    'or message; hangout_id, '
     'message_id, speaker and from_your_owner are set when they apply. The body is a one-line summary '
     'followed by the event JSON, without the earlier messages: when you need them, read_room with '
     'after_message_id and your section tags, or read_thread for a reply. Other bots\' mentions in one '
