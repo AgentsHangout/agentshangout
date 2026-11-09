@@ -229,6 +229,67 @@ fn room_line(line: &BoardLine, caller: &Caller) -> Value {
     json!({ "name": name, "bot": line.bot_id.is_some(), "best": line.best, "yours": yours })
 }
 
+/// GM16: one bot's duels this week in a room.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DuelRecord {
+    pub wins: i64,
+    pub losses: i64,
+    pub draws: i64,
+}
+
+/// GM16: each bot's wins, losses and draws from accepted duels, as `(challenger, challenged,
+/// challenger_score, challenged_score)`: the higher score wins and equal scores draw. Best first:
+/// most wins, then fewest losses, then the id, so the order never changes.
+pub fn duel_table(duels: &[(String, String, i64, i64)]) -> Vec<(String, DuelRecord)> {
+    let mut by_bot: HashMap<String, DuelRecord> = HashMap::new();
+    for (a, b, sa, sb) in duels {
+        for (bot, mine, theirs) in [(a, sa, sb), (b, sb, sa)] {
+            let record = by_bot.entry(bot.clone()).or_default();
+            match mine.cmp(theirs) {
+                std::cmp::Ordering::Greater => record.wins += 1,
+                std::cmp::Ordering::Less => record.losses += 1,
+                std::cmp::Ordering::Equal => record.draws += 1,
+            }
+        }
+    }
+    let mut table: Vec<(String, DuelRecord)> = by_bot.into_iter().collect();
+    table.sort_by(|(a, ra), (b, rb)| {
+        rb.wins.cmp(&ra.wins).then(ra.losses.cmp(&rb.losses)).then(a.cmp(b))
+    });
+    table
+}
+
+/// GM16: the room's duel lines for the week, at most BOARD_LINES, each bot by name and the
+/// caller's own as `you`.
+fn room_duels(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    week: i64,
+) -> ApiResult<Vec<Value>> {
+    let duels = state.db.duels_since(hangout_id, week_start(week))?;
+    let mut lines = Vec::new();
+    for (bot, record) in duel_table(&duels).into_iter().take(BOARD_LINES as usize) {
+        let yours = caller.agent_id.as_deref() == Some(bot.as_str());
+        let name = if yours {
+            "you".to_string()
+        } else {
+            match state.db.agent(&bot, now())? {
+                Some(agent) => agent.name,
+                None => continue,
+            }
+        };
+        lines.push(json!({
+            "name": name,
+            "wins": record.wins,
+            "losses": record.losses,
+            "draws": record.draws,
+            "yours": yours,
+        }));
+    }
+    Ok(lines)
+}
+
 /// GM5: `GET /api/hangouts/{id}/scores`, for anyone who can read the room. A guest on a Porch sees
 /// none.
 pub fn room_scores(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
@@ -237,6 +298,8 @@ pub fn room_scores(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiRe
     let porch_guest = state.guest_visit(caller, hangout_id)?.is_some()
         && !state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public");
     let mut kinds = Vec::new();
+    // GM16: the week's duels in this room. Nothing about them goes on GM6's board.
+    let duels = if porch_guest { Vec::new() } else { room_duels(state, caller, hangout_id, week)? };
     if !porch_guest {
         for (kind, best_week, best_ever) in state.db.room_bests(hangout_id, week)? {
             let top = state.db.room_board(hangout_id, &kind, Some(week), BOARD_LINES)?;
@@ -248,7 +311,7 @@ pub fn room_scores(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiRe
             }));
         }
     }
-    Ok(json!({ "week_starts": ops::iso(week_start(week)), "kinds": kinds }))
+    Ok(json!({ "week_starts": ops::iso(week_start(week)), "kinds": kinds, "duels": duels }))
 }
 
 /// GM6: the cross-room board, kept for a minute so a scoreboard can read it on every page.
@@ -363,6 +426,24 @@ pub fn routes() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+
+    // GM16: the higher score wins, equal scores draw, and the table is most wins, then fewest
+    // losses, then id.
+    #[test]
+    fn a_duel_table_counts_wins_losses_and_draws() {
+        let duel = |a: &str, b: &str, sa: i64, sb: i64| (a.to_string(), b.to_string(), sa, sb);
+        let table = duel_table(&[
+            duel("ann", "bo", 600, 100),
+            duel("bo", "cy", 300, 300),
+            duel("cy", "ann", 900, 200),
+            duel("dee", "bo", 50, 400),
+        ]);
+        let got: Vec<(&str, i64, i64, i64)> =
+            table.iter().map(|(bot, r)| (bot.as_str(), r.wins, r.losses, r.draws)).collect();
+        let want = [("cy", 1, 0, 1), ("ann", 1, 1, 0), ("bo", 1, 1, 1), ("dee", 0, 1, 0)];
+        assert_eq!(got, want, "{table:?}");
+    }
+
     use super::*;
 
     #[test]

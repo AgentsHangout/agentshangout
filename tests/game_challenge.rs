@@ -356,3 +356,58 @@ async fn two_accepts_at_once_at_the_cap_play_only_one() {
     }
     assert_eq!(w.lines().len(), 6);
 }
+
+// GM16: the room's scores have this week's duels, one line per bot with its wins, losses and draws,
+// the caller's own as `you`. A waiting duel isn't on it, and one answered last week drops off.
+#[tokio::test]
+async fn the_week_board_has_the_rooms_duels() {
+    let w = world().await;
+    let (scout, scout_token, scout_caller) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, rex_token, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    for bot in [&scout, &rex] {
+        assert_eq!(w.allow(&w.key, bot, json!({ "allow": "room" })).await.0, 200);
+    }
+    let scores = async |token: &str| {
+        let path = format!("/api/hangouts/{}/scores", w.arcade);
+        send(&w.base, token, Method::GET, &path, None).await.1
+    };
+    let duel = text(&w.challenge(&scout_caller, "Rex").unwrap()["duel_id"]);
+    assert_eq!(scores(&rex_token).await["duels"], json!([]), "a waiting duel isn't on the board");
+
+    assert_eq!(w.answer(&rex_token, &duel, "accept").await.0, 200);
+    let (a, b) = w.state.db.duel_scores(&duel).unwrap().unwrap();
+    let board = scores(&rex_token).await;
+    let lines = board["duels"].as_array().unwrap().clone();
+    assert_eq!(lines.len(), 2, "{board}");
+    let line = |name: &str| lines.iter().find(|l| l["name"] == name).cloned().unwrap();
+    let (rex_line, scout_line) = (line("you"), line("Scout"));
+    assert_eq!(rex_line["yours"], true);
+    let record = |l: &Value| (l["wins"].as_i64(), l["losses"].as_i64(), l["draws"].as_i64());
+    let (win, lose, draw) = (Some(1), Some(0), Some(0));
+    let (scout_won, rex_won) = ((win, lose, draw), (lose, win, draw));
+    match a.cmp(&b) {
+        std::cmp::Ordering::Greater => {
+            assert_eq!((record(&scout_line), record(&rex_line)), (scout_won, rex_won));
+        }
+        std::cmp::Ordering::Less => {
+            assert_eq!((record(&scout_line), record(&rex_line)), (rex_won, scout_won));
+        }
+        std::cmp::Ordering::Equal => {
+            let drew = (lose, lose, win);
+            assert_eq!((record(&scout_line), record(&rex_line)), (drew, drew));
+        }
+    }
+    // Scout sees itself as `you` and Rex by name.
+    let theirs = scores(&scout_token).await;
+    let names: Vec<&str> =
+        theirs["duels"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"you") && names.contains(&"Rex"), "{theirs}");
+    // GM16: nothing about duels goes on the site-wide board (GM6).
+    let top = send(&w.base, "", Method::GET, "/api/scores/top", None).await.1;
+    assert!(!top.to_string().contains("wins"), "{top}");
+
+    // Answered before this week's Monday, it's off the week's board.
+    let last_week = agenthangout::games::week_start(agenthangout::games::week_of(now())) - 60;
+    w.state.db.set_duel_answered_at(&duel, last_week).unwrap();
+    assert_eq!(scores(&rex_token).await["duels"], json!([]));
+}
