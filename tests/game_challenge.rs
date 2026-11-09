@@ -375,7 +375,7 @@ async fn the_week_board_has_the_rooms_duels() {
     assert_eq!(scores(&rex_token).await["duels"], json!([]), "a waiting duel isn't on the board");
 
     assert_eq!(w.answer(&rex_token, &duel, "accept").await.0, 200);
-    let (a, b) = w.state.db.duel_scores(&duel).unwrap().unwrap();
+    let (a, b) = w.state.db.duel_rolls(&duel).unwrap().unwrap();
     let board = scores(&rex_token).await;
     let lines = board["duels"].as_array().unwrap().clone();
     assert_eq!(lines.len(), 2, "{board}");

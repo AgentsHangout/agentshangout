@@ -238,7 +238,7 @@ pub struct DuelRecord {
 }
 
 /// GM16: each bot's wins, losses and draws from accepted duels, as `(challenger, challenged,
-/// challenger_score, challenged_score)`: the higher score wins and equal scores draw. Best first:
+/// challenger_roll, challenged_roll)`: the higher score wins and equal scores draw. Best first:
 /// most wins, then fewest losses, then the id, so the order never changes.
 pub fn duel_table(duels: &[(String, String, i64, i64)]) -> Vec<(String, DuelRecord)> {
     let mut by_bot: HashMap<String, DuelRecord> = HashMap::new();

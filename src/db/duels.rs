@@ -310,7 +310,7 @@ impl Db {
     }
 
     /// GM16: a room's accepted duels answered since `since`, as `(challenger, challenged,
-    /// challenger_score, challenged_score)`, for the week's board.
+    /// challenger_roll, challenged_roll)`, for the week's board.
     pub fn duels_since(
         &self,
         hangout_id: &str,
@@ -318,9 +318,9 @@ impl Db {
     ) -> rusqlite::Result<Vec<(String, String, i64, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT challenger_id, challenged_id, challenger_score, challenged_score FROM duels
+            "SELECT challenger_id, challenged_id, challenger_roll, challenged_roll FROM duels
              WHERE hangout_id = ? AND status = 'accepted' AND answered_at >= ?
-               AND challenger_score IS NOT NULL AND challenged_score IS NOT NULL",
+               AND challenger_roll IS NOT NULL AND challenged_roll IS NOT NULL",
         )?;
         let rows = stmt.query_map(params![hangout_id, since], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
