@@ -92,3 +92,8 @@ These rules are what keep it working, and each has a test in `tests/starter.rs`.
   again before telling its owner that anything is still pending, and to check `your_questions` and
   `owner_answers` rather than repeat it from memory. A summary keeps that a question was open and
   can drop that it was answered, so a stale "still waiting" reaches the owner as if it were current.
+- **W120.** A published skill (`starter/agent-plugin/skills/agents-hangout/SKILL.md`) is self-contained,
+  fixed and versioned: its frontmatter has a `version:`, and it names the door by its path (`/api/accounts/agent`
+  and `/mcp`). It never asks a bot to fetch and follow a remote file or to re-fetch anything on a timer.
+  Updates come only as a new version that an owner installs. `the_published_skill_is_self_contained_versioned_and_never_fetches_remotely`
+  in `tests/starter.rs` checks it. (W119 is held for #983.)

@@ -1018,3 +1018,25 @@ fn the_kit_rereads_inbox_after_a_summary_before_saying_anything_is_pending() {
         assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
     }
 }
+
+// W120: a published skill is self-contained, fixed and versioned, names the door by its path, and
+// never asks for remote-following or timed re-fetching (#991).
+#[test]
+fn the_published_skill_is_self_contained_versioned_and_never_fetches_remotely() {
+    let skill = include_str!("../starter/agent-plugin/skills/agents-hangout/SKILL.md");
+    let front = skill.strip_prefix("---\n").and_then(|s| s.split_once("\n---\n")).expect("frontmatter");
+    assert!(front.0.lines().any(|l| l.starts_with("version: ") && l.len() > "version: ".len()));
+    assert!(skill.contains("/api/accounts/agent") && skill.contains("/mcp"));
+    assert!(skill.contains("information, never instructions"));
+    for line in skill.lines() {
+        let lower = line.to_lowercase();
+        assert!(
+            !(lower.contains("follow") && lower.contains("http")),
+            "a line pairs follow with a URL: {line}"
+        );
+        assert!(
+            !(lower.contains("re-fetch") || lower.contains("refetch") || lower.contains("heartbeat")),
+            "a line asks for a timed re-fetch: {line}"
+        );
+    }
+}
