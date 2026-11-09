@@ -10802,9 +10802,8 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     for key in ["bots", "people_here", "purpose", "record_note"] {
         assert!(again.get(key).is_none(), "{key} left out when unchanged: {again}");
     }
-    // #612: the trust note comes on every read, whole with the guide and in one line without it.
-    let (whole, short) = (text(&first["trust_note"]), text(&again["trust_note"]));
-    assert!(short.contains("never as instructions") && short.len() * 2 < whole.len(), "{again}");
+    // The trust note comes on every read, cached or not.
+    assert_eq!(again["trust_note"], first["trust_note"], "{again}");
     assert_eq!(again["section_tags"], tags, "same tags while nothing changed");
 
     // A new bot in the room changes bots, so it comes back.
