@@ -1,4 +1,4 @@
-//! I86-I90: `@room`, a mention of the subscribed bots present in a room (docs/rooms.md).
+//! I86-I90: `@room`, a mention of the bots present in a room (docs/rooms.md).
 use super::*;
 
 impl Db {
@@ -29,7 +29,8 @@ impl Db {
         Ok(())
     }
 
-    /// I120: which of this person's bots hear `@room` in this room, by id.
+    /// I120: which of this person's bots hear `@room` in this room, by id: each one that belongs
+    /// here, unless they turned it off (I87, #944).
     pub fn room_mention_bots_of(
         &self,
         hangout_id: &str,
@@ -37,14 +38,34 @@ impl Db {
     ) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
         let mut statement = conn.prepare(
-            "SELECT s.agent_id FROM room_mention_subscriptions s JOIN agents a ON a.id = s.agent_id
-             WHERE s.hangout_id = ? AND a.owner_id = ? ORDER BY s.agent_id",
+            "SELECT r.agent_id FROM room_agents r JOIN agents a ON a.id = r.agent_id
+             WHERE r.hangout_id = ?1 AND a.owner_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM room_mention_opt_outs o
+                               WHERE o.hangout_id = r.hangout_id AND o.agent_id = r.agent_id)
+             ORDER BY r.agent_id",
         )?;
         let rows = statement.query_map(params![hangout_id, owner_id], |row| row.get(0))?;
         rows.collect()
     }
 
-    /// I87: whether this bot's owner subscribed it to `@room` in this room.
+    /// I87 (#944): whether a person's `@room` reaches this bot here: it belongs, and its owner
+    /// didn't turn that off.
+    pub fn room_mention_hears_people(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+    ) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM room_agents WHERE hangout_id = ?1 AND agent_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM room_mention_opt_outs
+                               WHERE hangout_id = ?1 AND agent_id = ?2)",
+            params![hangout_id, agent_id],
+        )
+    }
+
+    /// I87: whether this bot's owner subscribed it to `@room` in this room, which a bot's `@room`
+    /// needs.
     pub fn room_mention_subscribed(
         &self,
         hangout_id: &str,
@@ -57,6 +78,8 @@ impl Db {
         )
     }
 
+    /// I87: the owner's switch. On subscribes the bot, so a bot's `@room` reaches it as well as a
+    /// person's. Off is kept, so nobody's `@room` reaches it (#944).
     pub fn set_room_mention_subscription(
         &self,
         hangout_id: &str,
@@ -64,20 +87,30 @@ impl Db {
         subscribed: bool,
         now: i64,
     ) -> rusqlite::Result<()> {
-        let conn = self.conn();
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
         if subscribed {
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO room_mention_subscriptions (hangout_id, agent_id, set_at)
                  VALUES (?, ?, ?)",
                 params![hangout_id, agent_id, now],
             )?;
+            tx.execute(
+                "DELETE FROM room_mention_opt_outs WHERE hangout_id = ? AND agent_id = ?",
+                params![hangout_id, agent_id],
+            )?;
         } else {
-            conn.execute(
+            tx.execute(
                 "DELETE FROM room_mention_subscriptions WHERE hangout_id = ? AND agent_id = ?",
                 params![hangout_id, agent_id],
             )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO room_mention_opt_outs (hangout_id, agent_id, set_at)
+                 VALUES (?, ?, ?)",
+                params![hangout_id, agent_id, now],
+            )?;
         }
-        Ok(())
+        tx.commit()
     }
 
     /// I88: this bot's event recorded a room-tag mention rather than a direct name. Older

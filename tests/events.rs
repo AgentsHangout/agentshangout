@@ -2615,7 +2615,7 @@ async fn a_mention_context_leaves_out_notes_and_reaches_webhooks_the_same() {
 }
 
 // #791: @room wakes each subscribed bot here through the same wake a direct @mention gets, once,
-// and nobody else: not an unsubscribed bot here.
+// and nobody else: not a bot here whose owner turned @room off (#944).
 #[tokio::test]
 async fn room_tag_wakes_each_subscribed_bot_here_and_no_one_else() {
     let server = Server::start().await;
@@ -2631,6 +2631,7 @@ async fn room_tag_wakes_each_subscribed_bot_here_and_no_one_else() {
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&justin, &policy, json!({ "policy": "members" })).await;
     server.put(&justin, &format!("{policy}/bots/{scout_id}"), json!({ "subscribed": true })).await;
+    server.put(&justin, &format!("{policy}/bots/{kit_id}"), json!({ "subscribed": false })).await;
 
     server.say(&kevin, &room, "@room standup now").await;
 
@@ -2639,7 +2640,7 @@ async fn room_tag_wakes_each_subscribed_bot_here_and_no_one_else() {
     assert_eq!(sent["reason"], "accepted", "{sent}");
     settle().await;
     assert_eq!(rings(&scout_hook), 1, "one wake per bot");
-    assert_eq!(rings(&kit_hook), 0, "an unsubscribed bot here isn't woken");
+    assert_eq!(rings(&kit_hook), 0, "a bot turned off here isn't woken");
     assert!(decisions(&server, &justin, &kit_id).await.is_empty(), "nor is it asked");
 }
 
@@ -2694,15 +2695,19 @@ async fn repro_owner_room_tag_in_members_room_reaches_every_member_bot() {
     let (kit, kit_id) = server.bot(&justin, &room, "Kit").await;
     let (scout_url, scout_hook) = start_hook("echo").await;
     let (kit_url, kit_hook) = start_hook("echo").await;
-    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url })).await;
+    server
+        .put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": scout_url }))
+        .await;
     server.put(&justin, &format!("/api/agents/{kit_id}/notify"), json!({ "url": kit_url })).await;
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&justin, &policy, json!({ "policy": "members" })).await;
 
     server.say(&justin, &room, "@room how was our day?").await;
     settle().await;
-    let scout_inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
-    let kit_inbox = server.tool(&kit, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    let scout_inbox =
+        server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    let kit_inbox =
+        server.tool(&kit, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
     assert_eq!(scout_inbox.as_array().map(Vec::len), Some(1), "Scout inbox: {scout_inbox}");
     assert_eq!(kit_inbox.as_array().map(Vec::len), Some(1), "Kit inbox: {kit_inbox}");
     assert_eq!(rings(&scout_hook), 1, "Scout webhook");
@@ -2719,7 +2724,8 @@ async fn repro_owner_direct_mention_reaches_inbox_and_fires_mention_webhook() {
 
     server.say(&justin, &room, "@Scout it still looks like room isnt waking correctly").await;
     wait_for(&hook, |hit| hit.body["event"] == "mention").await;
-    let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    let inbox =
+        server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
     assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
 }
 
@@ -2731,6 +2737,7 @@ async fn repro_bot_to_bot_mention_in_private_room_lands_in_inbox() {
     let (kit, _kit_id) = server.bot(&justin, &room, "Kit").await;
     server.tool(&kit, "say", json!({ "hangout_id": room, "text": "@Scout you there?" })).await;
     settle().await;
-    let inbox = server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
+    let inbox =
+        server.tool(&scout, "inbox", json!({})).await["structuredContent"]["mentions"].clone();
     assert_eq!(inbox.as_array().map(Vec::len), Some(1), "{inbox}");
 }

@@ -1,5 +1,6 @@
-//! `@room`: one mention for the subscribed bots present in a room (docs/rooms.md, I86-I90). Off
-//! until the room's owner turns it on, and a bot hears it only if its owner subscribed it.
+//! `@room`: one mention for the bots present in a room (docs/rooms.md, I86-I90). Off until the
+//! room's owner turns it on. A person's reaches each bot that belongs unless its owner turned that
+//! off; a bot's reaches only the bots whose owners subscribed them (#944).
 
 use axum::{
     extract::{Path, State},
@@ -76,8 +77,20 @@ fn refusal(state: &AppState, message: &Message) -> ApiResult<Option<&'static str
     Ok(None)
 }
 
-/// I87, I88: the bots this line's `@room` reaches: subscribed, belonging here and present now,
-/// not its speaker, and not already named in the line. Records what happened for the sender.
+/// I87 (#944): whether this line's `@room` reaches a bot that belongs here: a person's unless the
+/// bot's owner turned it off, a bot's only if the owner subscribed it.
+fn hears(state: &AppState, message: &Message, agent_id: &str) -> ApiResult<bool> {
+    let room = &message.hangout_id;
+    Ok(if message.agent_id.is_some() {
+        state.db.room_mention_subscribed(room, agent_id)?
+    } else {
+        state.db.room_mention_hears_people(room, agent_id)?
+    })
+}
+
+/// I87, I88: the bots this line's `@room` reaches: belonging here and present now, as `hears`
+/// allows, not its speaker, and not already named in the line. Records what happened for the
+/// sender.
 pub fn recipients(
     state: &AppState,
     message: &Message,
@@ -100,7 +113,7 @@ pub fn recipients(
         if state.db.bot_place(&bot.id, at)?.as_deref() != Some(room.as_str()) {
             continue;
         }
-        if state.db.room_mention_subscribed(room, &bot.id)? {
+        if hears(state, message, &bot.id)? {
             reached.push(bot);
         }
     }
@@ -111,7 +124,7 @@ pub fn recipients(
 
 /// I88: a person's room-tag mentions in this message page, for this caller only. The stored
 /// recipient set fixes presence at send time; reading never expands it from current membership.
-/// Recheck opt-in and room policy before exposing an additional polling wake.
+/// Recheck the owner's switch (I87) and room policy before exposing an additional polling wake.
 pub(crate) fn polling_ids(
     state: &AppState,
     caller: &Caller,
@@ -124,7 +137,7 @@ pub(crate) fn polling_ids(
     let policy = state.db.room_mention_policy(room)?;
     if policy == "off"
         || !state.db.belongs_to_room(room, agent_id)?
-        || !state.db.room_mention_subscribed(room, agent_id)?
+        || !state.db.room_mention_hears_people(room, agent_id)?
     {
         return Ok(Vec::new());
     }
@@ -186,7 +199,7 @@ pub fn outcome(state: &AppState, message: &Message) -> ApiResult<Option<Value>> 
             {
                 continue;
             }
-            if !state.db.room_mention_subscribed(room, &bot.id)? {
+            if !hears(state, message, &bot.id)? {
                 unsubscribed += 1;
             }
         }
@@ -244,10 +257,11 @@ pub fn settings_for(
     Ok((policy, state.db.room_mention_bots_of(hangout_id, &caller.person_id)?))
 }
 
-/// I86, I87: what read_room says about `@room` here, for this caller.
+/// I86, I87: what read_room says about `@room` here, for this caller: the setting, and whether a
+/// person's `@room` here reaches it (#944).
 pub fn for_read(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
     let subscribed = match caller.agent_id.as_deref() {
-        Some(agent_id) => state.db.room_mention_subscribed(hangout_id, agent_id)?,
+        Some(agent_id) => state.db.room_mention_hears_people(hangout_id, agent_id)?,
         None => false,
     };
     Ok(json!({

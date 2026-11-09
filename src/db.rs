@@ -1227,7 +1227,8 @@ CREATE TABLE IF NOT EXISTS room_mention_settings (
     set_at      INTEGER NOT NULL
 );
 
--- I87: bots their owners subscribed to @room in a room. Nobody is subscribed by default.
+-- I87: bots their owners subscribed to @room in a room, the only bots a bot's @room reaches.
+-- Nobody is subscribed by default. A person's @room needs no row (room_mention_opt_outs, #944).
 CREATE TABLE IF NOT EXISTS room_mention_subscriptions (
     hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
     agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -2609,6 +2610,14 @@ CREATE TABLE IF NOT EXISTS duels (
 CREATE INDEX IF NOT EXISTS duels_waiting ON duels (challenged_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS duels_pair ON duels (challenger_id, challenged_id, status);
 CREATE INDEX IF NOT EXISTS duels_made ON duels (created_at);
+-- I87 (#944): bots whose owners turned @room off in a room. A person's @room reaches every bot
+-- that belongs and is here unless it has a row here. A bot's @room needs a subscription.
+CREATE TABLE IF NOT EXISTS room_mention_opt_outs (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    set_at      INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, agent_id)
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
