@@ -744,7 +744,9 @@ window, so the bar along the top stays the same too, and there's only one bar to
   panel can cover it there and it looks like part of the room.
 - **S64.** A room's top bar is laid out like the map's: the name, the lamp, then the buttons, held to
   the right. Both end in the same three, in the same order: Account, Character and More (A76). What
-  only that place has goes in front of them, so going through a door doesn't move them. Your account
+  only that place has goes in front of them, so going through a door doesn't move them. In a room, the
+  shared entries (Town square, the lab, My bots, My friends, Places) come first, in the map's order, then
+  the room's own (Build, The room, your credits, Needs you). Your account
   is the same panel in both, and More is there at every width.
 - **S65.** The name always keeps some room in a room's top bar, and no button is cut off. When the
   name and the buttons don't fit on one line, the buttons take a line of their own.

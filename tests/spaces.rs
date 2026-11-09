@@ -4008,11 +4008,16 @@ fn a_room_keeps_the_top_bar_of_the_map() {
     // The same three end both bars, and the buttons are held to the right, so what only one of them
     // has goes in front. Then a door moves none of the three.
     in_order(map, &["guide?.toggle", "account.toggle", "dresser.toggle", "panels.toggle('more'"]);
+    // #1005: the shared entries sit in the map's order (Town square, research, My bots, friends, Places)
+    // in front of the room's own actions.
     in_order(
         room,
         &[
             "guide.toggle",
+            "'/#square'",
             "panels.toggle('crew'",
+            "'/#friends'",
+            "'/#rooms'",
             "builder.toggle",
             "chatToggle.button",
             "needs.toggle",
