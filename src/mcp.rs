@@ -1612,18 +1612,20 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
         json!({ "trust_note": TRUST_NOTE })
     };
 
-    let mut unread: Vec<crate::db::Mention> = state
-        .db
-        .unread_mentions(agent_id)?
-        .into_iter()
-        .filter(|mention| mention.message_id > after_mention)
-        .collect();
+    let mut unread: Vec<crate::db::Mention> = state.db.unread_mentions(agent_id)?;
     unread.sort_by_key(|mention| mention.message_id);
+    // Read on the next call: the page the caller got back is marked read only once its cursor
+    // comes back. A lost reply means the same page comes again.
+    let passed: Vec<i64> = unread
+        .iter()
+        .map(|mention| mention.message_id)
+        .filter(|id| *id <= after_mention)
+        .collect();
+    state.db.mark_mentions_read_ids(agent_id, &passed, now())?;
+    unread.retain(|mention| mention.message_id > after_mention);
     let mentions_more = unread.len() > CATCH_UP_PAGE;
     unread.truncate(CATCH_UP_PAGE);
     let mention_cursor = unread.last().map_or(after_mention, |mention| mention.message_id);
-    let returned: Vec<i64> = unread.iter().map(|mention| mention.message_id).collect();
-    state.db.mark_mentions_read_ids(agent_id, &returned, now())?;
     let mention_lines: Vec<Value> = unread
         .iter()
         .map(|mention| {
