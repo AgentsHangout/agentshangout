@@ -752,8 +752,8 @@ window, so the bar along the top stays the same too, and there's only one bar to
   **Town square**, **My bots** for a person (S86), **Places**, then your credits coin (HC23) and **Needs
   you** for a person (N4), then the three of S64. Everything else the map has is a row in More: What's going on, Who's around,
   About, the docs, Worlds, Help build it, Home and full screen. A room's bar has, in front of the
-  three, Get started, Calendar, Build, The room, My bots (S86), your credits coin and Needs you. Its notes, invite link and the
-  rest are rows in More, and its check-ins are in Needs you (N4). A button a narrower window folds
+  three, Get started, Town square, the lab's button when there is one, My bots (S86), My friends for a person, Places, Build,
+  The room (chat), your credits coin and Needs you. Calendar, its notes, invite link and the rest are rows in More, and its check-ins are in Needs you (N4). A button a narrower window folds
   away has a row in More, and that row shows only at the widths where the button is folded away, so
   nothing is in both.
 - **S86.** **My bots** is one button and one large panel (as wide as 880px, as tall as what's in it), on the map and in a room, in place of
