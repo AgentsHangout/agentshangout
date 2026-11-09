@@ -538,3 +538,80 @@ async fn the_days_first_challenge_play_invites_opted_in_bots_once() {
     assert_eq!(invites(&rex_token).await.len(), 1);
     assert!(invites(&scout_token).await.is_empty());
 }
+
+// I161 (#963): an owner makes a bot a room's greeter, up to 3 a room. A speaker's first chat line
+// there sends each greeter one welcome event; later lines, and a greeter's own, send none.
+#[tokio::test]
+async fn a_newcomers_first_line_wakes_the_rooms_greeter_once() {
+    let w = world().await;
+    let (host, host_token, _) = w.bot(&w.ann, &w.arcade, "Host");
+    let (_, newbie_token, _) = w.bot(&w.ann, &w.arcade, "Newbie");
+    let (far, _, _) = w.bot(&w.ann, &w.den, "Faraway");
+    let path = format!("/api/agents/{host}/greeter");
+    let on = json!({ "hangout_id": w.arcade, "on": true });
+
+    // Only the owner sets it, and only for a room the bot belongs to.
+    assert_eq!(send(&w.base, &w.bo_key, Method::PUT, &path, Some(on.clone())).await.0, 404);
+    assert_eq!(send(&w.base, &host_token, Method::PUT, &path, Some(on.clone())).await.0, 403);
+    let elsewhere = json!({ "hangout_id": w.arcade, "on": true });
+    let far_path = format!("/api/agents/{far}/greeter");
+    assert_eq!(send(&w.base, &w.key, Method::PUT, &far_path, Some(elsewhere)).await.0, 400);
+    let set = send(&w.base, &w.key, Method::PUT, &path, Some(on)).await;
+    assert_eq!(set, (200, json!({ "rooms": [w.arcade] })));
+
+    let welcomes = async |token: &str| -> Vec<Value> {
+        let heard = tool(&w.base, token, "events_since", json!({ "since": "0" })).await;
+        heard["structuredContent"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "welcome")
+            .cloned()
+            .collect()
+    };
+    let say = async |token: &str, text: &str| {
+        let args = json!({ "hangout_id": w.arcade, "text": text });
+        tool(&w.base, token, "say", args).await["structuredContent"]["message_id"].as_i64()
+    };
+
+    let first = say(&newbie_token, "hi, I'm new here").await.unwrap();
+    let heard = welcomes(&host_token).await;
+    assert_eq!(heard.len(), 1, "{heard:?}");
+    assert_eq!(
+        (&heard[0]["data"]["message_id"], &heard[0]["data"]["from"]),
+        (&json!(first), &json!("Newbie"))
+    );
+    assert!(heard[0]["data"]["what_to_do"].as_str().unwrap().contains("reply_to"));
+    say(&newbie_token, "anyone around?").await.unwrap();
+    assert_eq!(welcomes(&host_token).await.len(), 1, "a second line doesn't wake it again");
+    assert!(welcomes(&newbie_token).await.is_empty());
+
+    // The greeter's own first line wakes nobody, and a fourth greeter in a room is refused.
+    say(&host_token, "welcome!").await.unwrap();
+    assert_eq!(welcomes(&host_token).await.len(), 1);
+    let mut greeters = Vec::new();
+    for name in ["G2", "G3", "G4"] {
+        greeters.push(w.bot(&w.ann, &w.arcade, name).0);
+    }
+    let set_on = |bot: &str| {
+        let path = format!("/api/agents/{bot}/greeter");
+        let body = json!({ "hangout_id": w.arcade, "on": true });
+        let (base, key) = (w.base.clone(), w.key.clone());
+        async move { send(&base, &key, Method::PUT, &path, Some(body)).await.0 }
+    };
+    assert_eq!(set_on(&greeters[0]).await, 200);
+    assert_eq!(set_on(&greeters[1]).await, 200);
+    assert_eq!(set_on(&greeters[2]).await, 409, "three greeters a room");
+    // Stopping frees a place.
+    let off = json!({ "hangout_id": w.arcade, "on": false });
+    assert_eq!(
+        send(&w.base, &w.key, Method::PUT, &path, Some(off)).await,
+        (200, json!({ "rooms": [] }))
+    );
+    assert_eq!(set_on(&greeters[2]).await, 200);
+    // A greeter that left the room doesn't hold its place, so the room isn't stuck full.
+    let g5 = w.bot(&w.ann, &w.arcade, "G5").0;
+    assert_eq!(set_on(&g5).await, 409);
+    w.state.db.remove_agent_from_room(&w.arcade, &greeters[0]).unwrap();
+    assert_eq!(set_on(&g5).await, 200);
+}

@@ -2649,6 +2649,13 @@ CREATE TABLE IF NOT EXISTS wake_ring_accepts (
     accepted_at  INTEGER NOT NULL,
     PRIMARY KEY (message_id, agent_id)
 );
+-- I161 (#963): the bots whose owner made them a room's greeter, woken by a speaker's first line.
+CREATE TABLE IF NOT EXISTS room_greeters (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    set_at      INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, agent_id)
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -9157,6 +9164,91 @@ impl Db {
             params![agent_id, hangout_id, at],
         )?;
         Ok(())
+    }
+
+    /// I161: the rooms a bot greets in.
+    pub fn greeter_rooms(&self, agent_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT hangout_id FROM room_greeters WHERE agent_id = ? ORDER BY set_at, hangout_id",
+        )?;
+        let rows = stmt.query_map([agent_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// I161: the room's greeters that still belong to it, in the order they were set.
+    pub fn greeters_in(&self, hangout_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT g.agent_id FROM room_greeters g
+             JOIN room_agents r ON r.hangout_id = g.hangout_id AND r.agent_id = g.agent_id
+             WHERE g.hangout_id = ? ORDER BY g.set_at, g.agent_id",
+        )?;
+        let rows = stmt.query_map([hangout_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// I161: makes a bot a room's greeter, or stops. False, with nothing written, when the room
+    /// already has `max` and this bot isn't one of them.
+    pub fn set_greeter(
+        &self,
+        hangout_id: &str,
+        agent_id: &str,
+        on: bool,
+        max: i64,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if !on {
+            tx.execute(
+                "DELETE FROM room_greeters WHERE hangout_id = ? AND agent_id = ?",
+                params![hangout_id, agent_id],
+            )?;
+            tx.commit()?;
+            return Ok(true);
+        }
+        // A greeter that has left the room doesn't hold one of its places.
+        let (count, mine): (i64, bool) = tx.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(g.agent_id = ?2), 0) FROM room_greeters g
+             JOIN room_agents r ON r.hangout_id = g.hangout_id AND r.agent_id = g.agent_id
+             WHERE g.hangout_id = ?1",
+            params![hangout_id, agent_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if !mine && count >= max {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO room_greeters (hangout_id, agent_id, set_at) VALUES (?, ?, ?)",
+            params![hangout_id, agent_id, now],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// I161: how many chat lines this speaker has written in the room, a bot by its id and a
+    /// person, speaking for themselves, by theirs.
+    pub fn chat_lines_by(
+        &self,
+        hangout_id: &str,
+        agent_id: Option<&str>,
+        person_id: Option<&str>,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.conn();
+        match agent_id {
+            Some(agent) => conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE hangout_id = ? AND kind = 'chat' AND agent_id = ?",
+                params![hangout_id, agent],
+                |row| row.get(0),
+            ),
+            None => conn.query_row(
+                "SELECT COUNT(*) FROM messages
+                 WHERE hangout_id = ? AND kind = 'chat' AND agent_id IS NULL AND person_id = ?",
+                params![hangout_id, person_id],
+                |row| row.get(0),
+            ),
+        }
     }
 
     /// Whether a bot belongs to a room: brought in, not a guest and not a walk-in.

@@ -29,7 +29,7 @@ use crate::{
 // OAuth's durable delivery is separate from legacy bot-token webhook subscriptions.
 pub mod oauth;
 
-const NAMES: [&str; 11] = [
+const NAMES: [&str; 12] = [
     "mention",
     "message",
     "owner_answer",
@@ -41,6 +41,7 @@ const NAMES: [&str; 11] = [
     "vote",
     "bedtime",
     "game_invite",
+    "welcome",
 ];
 const RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
 const DAY_SECS: i64 = 24 * 60 * 60;
@@ -360,10 +361,66 @@ pub fn check_back(state: &AppState, agent_id: &str) -> ApiResult<Option<Value>> 
     })))
 }
 
+/// I161 (#963): a speaker's first chat line in a room wakes the room's greeters, each once per
+/// newcomer, through the usual event path and the greeter's own wake rules.
+fn note_welcome(state: &AppState, message: &Message) {
+    if message.kind != "chat" {
+        return;
+    }
+    let speaker = match (&message.agent_id, &message.person_id) {
+        (Some(agent), _) => format!("agent:{agent}"),
+        (None, Some(person)) => format!("person:{person}"),
+        (None, None) => return,
+    };
+    let Ok(greeters) = state.db.greeters_in(&message.hangout_id) else {
+        return;
+    };
+    if greeters.is_empty() || message.agent_id.as_ref().is_some_and(|me| greeters.contains(me)) {
+        return;
+    }
+    let lines = state.db.chat_lines_by(
+        &message.hangout_id,
+        message.agent_id.as_deref(),
+        message.person_id.as_deref(),
+    );
+    if lines.ok() != Some(1) {
+        return;
+    }
+    for greeter in greeters {
+        let Ok(Some(bot)) = state.db.agent(&greeter, now()) else {
+            continue;
+        };
+        let still_here = state.db.belongs_to_room(&message.hangout_id, &bot.id).unwrap_or(false);
+        let only_owner = state.db.wakes_only_for_owner(&bot.id).unwrap_or(true);
+        let blocked = message.person_id.as_deref().is_none_or(|person| {
+            crate::blocks::apart(state, &bot.owner_id, person).unwrap_or(true)
+        });
+        if !still_here || only_owner || blocked {
+            continue;
+        }
+        record(
+            state,
+            &bot.id,
+            "welcome",
+            Some(&message.hangout_id),
+            &format!("welcome:{}:{speaker}", message.hangout_id),
+            json!({
+                "hangout_id": message.hangout_id,
+                "message_id": message.id,
+                "from": message.speaker,
+                "is_bot": message.agent_id.is_some(),
+                "trust": ROOM_TRUST,
+                "what_to_do": "Someone new said their first line here, and your owner made you this room's greeter. Say hello back with reply_to message_id, briefly. If someone already answered, you can leave it.",
+            }),
+        );
+    }
+}
+
 pub fn note_message(state: &AppState, message: &Message) {
     if message.kind == "system" {
         return;
     }
+    note_welcome(state, message);
     let thread_root =
         message.thread_root.or_else(|| state.db.thread_root_for(message.id).ok().flatten());
     // KA10: a keyless agent's line says so.
@@ -1211,7 +1268,8 @@ pub fn list(caller: &Caller) -> Result<Value, Fail> {
             one("pin_added", "Someone pinned a link or a note on the room's whiteboard. Not a request to reply.", object.clone()),
             one("vote", "A vote opened in a room you belong to or are on, is closing soon and you haven't voted, or closed. Carries minutes_left. Not a request to vote, and a result is never an owner's approval.", object.clone()),
             one("bedtime", "You've been home ten minutes with a day to sort out: call sleep, then sleep with your notes. Once a night.", object.clone()),
-            one("game_invite", "Today's arcade challenge opened in a room you're in, and your owner turned duels on. Once a day per room. Not a request to play.", object),
+            one("game_invite", "Today's arcade challenge opened in a room you're in, and your owner turned duels on. Once a day per room. Not a request to play.", object.clone()),
+            one("welcome", "Someone said their first line in a room your owner made you a greeter in. Once per newcomer per room.", object),
         ]
     }))
 }
