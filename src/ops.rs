@@ -674,8 +674,9 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     Ok(())
 }
 
-/// What a ring did. Only an accepted ring from a person, the bot's owner included, starts their
-/// 3-minute wait (E22, E31): a refused or failed one woke nothing.
+/// What a ring did. Only an accepted ring holds the bell (E22, E31, L10): a refused or failed one
+/// woke nothing. A person's ring, the owner's included, is kept from now. A bot's was kept as it
+/// went out, for L10's chain, and from now it holds too.
 fn record_mention_delivery(
     state: &AppState,
     agent_id: &str,
@@ -695,6 +696,8 @@ fn record_mention_delivery(
             if let Err(error) = state.db.note_wake_ring(agent_id, message_id, at, false) {
                 tracing::warn!(%error, "an owner wake could not be recorded");
             }
+        } else if let Err(error) = state.db.note_wake_ring_accepted(agent_id, message_id, at) {
+            tracing::warn!(%error, "an accepted bot wake could not be recorded");
         }
         ("sent", "accepted".to_string())
     } else {
@@ -796,7 +799,8 @@ fn rings_for_mention(
             }
         }
     }
-    // L10: a bot's ring counts as it goes out. The owner's is recorded once accepted (E22).
+    // L10: a bot's ring counts as it goes out, and holds the bell once accepted (E22, #945). The
+    // owner's is recorded once accepted.
     if from_bot {
         state.db.note_wake_ring(&bot.id, message.id, at, true)?;
     }

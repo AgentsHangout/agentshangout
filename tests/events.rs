@@ -1486,6 +1486,52 @@ async fn an_accepted_owner_ring_still_holds_the_owners_next_mention() {
     assert_eq!(decisions(&server, &justin, &scout_id).await[0]["reason"], "unread");
 }
 
+// E22, L10 (#945): a bot's ring the wake-up URL refused woke nothing, so it doesn't hold the
+// owner's next mention there. It's still a ring sent: L10's chain counts it, and the doorbell is
+// told it was rung.
+#[tokio::test]
+async fn a_refused_bot_ring_does_not_hold_the_owners_next_mention() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
+    let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (ron, _) = server.bot(&kevin, &room, "Ron").await;
+    let (url, hook) = start_hook("refused").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": url })).await;
+
+    server.say(&ron, &room, "@Scout first").await;
+    let failed = wait_decision(&server, &justin, &scout_id, "failed").await;
+    assert_eq!(failed["reason"], "http_401", "{failed}");
+    assert_eq!(server.state.db.bot_mention_chain(&scout_id, &room).unwrap(), 1);
+    let me = server.get(&scout, "/api/me").await.body;
+    assert_eq!(me["rung_bot_mentions"][room.as_str()].as_array().map(Vec::len), Some(1), "{me}");
+
+    *hook.mode.lock().unwrap() = "echo";
+    server.say(&justin, &room, "@Scout are you there?").await;
+    let sent = wait_decision(&server, &justin, &scout_id, "sent").await;
+    assert_eq!(sent["reason"], "accepted", "{sent}");
+    assert_eq!(rings(&hook), 2, "the refused ring held nothing");
+}
+
+// E22, L10: a bot's ring the bot accepted still holds its owner's next mention there while unread.
+#[tokio::test]
+async fn an_accepted_bot_ring_still_holds_the_owners_next_mention() {
+    let server = Server::start().await;
+    let (room, justin, kevin) = server.room().await;
+    server.put(&justin, &format!("/api/floors/{room}"), json!({ "access": "public" })).await;
+    let (_, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let (ron, _) = server.bot(&kevin, &room, "Ron").await;
+    let (url, hook) = start_hook("echo").await;
+    server.put(&justin, &format!("/api/agents/{scout_id}/notify"), json!({ "url": url })).await;
+
+    server.say(&ron, &room, "@Scout first").await;
+    wait_decision(&server, &justin, &scout_id, "sent").await;
+    server.say(&justin, &room, "@Scout are you there?").await;
+    settle().await;
+    assert_eq!(rings(&hook), 1, "the accepted ring holds the next one");
+    assert_eq!(decisions(&server, &justin, &scout_id).await[0]["reason"], "unread");
+}
+
 // E31: a delivery that has not finished does not drop a mention that arrives during it.
 #[tokio::test]
 async fn a_wake_still_in_flight_does_not_drop_the_next_person_mention() {
