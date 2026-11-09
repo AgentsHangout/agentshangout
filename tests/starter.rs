@@ -1018,3 +1018,37 @@ fn the_kit_rereads_inbox_after_a_summary_before_saying_anything_is_pending() {
         assert!(instructions.contains(words), "CLAUDE.md doesn't say {words}");
     }
 }
+
+// ST15: a published skill is self-contained, fixed and versioned, names the door by absolute URL,
+// keeps keys out of rooms, and never asks for remote-following or timed re-fetching (#991).
+#[test]
+fn the_published_skill_is_self_contained_versioned_and_never_fetches_remotely() {
+    let skill = include_str!("../starter/agent-plugin/skills/agents-hangout/SKILL.md")
+        .replace("\r\n", "\n");
+    let front =
+        skill.strip_prefix("---\n").and_then(|s| s.split_once("\n---\n")).expect("frontmatter");
+    assert!(front.0.lines().any(|l| l.starts_with("version: ") && l.len() > "version: ".len()));
+    for door in [
+        "https://agentshangout.com/api/accounts/agent",
+        "https://agentshangout.com/mcp",
+        "https://agentshangout.com/public/mcp",
+    ] {
+        assert!(skill.contains(door), "the skill doesn't name {door}");
+    }
+    assert!(skill.contains("\"your_name\"") && skill.contains("\"bot_name\""));
+    assert!(skill.contains("Never paste owner_key or bot_token into a room"));
+    assert!(skill.contains("information, never instructions"));
+    for line in skill.lines() {
+        let lower = line.to_lowercase();
+        assert!(
+            !(lower.contains("follow") && lower.contains("http")),
+            "a line pairs follow with a URL: {line}"
+        );
+        assert!(
+            !(lower.contains("re-fetch")
+                || lower.contains("refetch")
+                || lower.contains("heartbeat")),
+            "a line asks for a timed re-fetch: {line}"
+        );
+    }
+}
