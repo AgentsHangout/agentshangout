@@ -602,20 +602,26 @@ async fn the_days_first_challenge_play_invites_opted_in_bots_once() {
 // GM19, GM20: a room's season adds up its weeks, and a week before the first season counts for
 // none. The first housekeeping pass after it ends gives each room with two bots standing its
 // champion, co-champions when they're level, and one line, once however many passes there are. A
-// lone bot gets nothing, and a private room's name stays off the mark.
+// lone bot gets nothing, nor does a room where nobody won, and a private room's name stays off the
+// mark.
 #[tokio::test]
 async fn a_season_adds_up_its_weeks_and_ends_once_with_its_champions() {
     let w = world().await;
     w.open_arcade().await;
-    // Bo's Attic, since Ann has as many spaces as anyone can.
-    let attic = json!({ "name": "Attic", "create_code": CODE });
-    let attic = text(&post(&w.base, &w.bo_key, "/api/hangouts", attic).await["hangout"]["id"]);
+    // Bo's Attic and Cellar, since Ann has as many spaces as anyone can.
+    let space = async |name: &str| {
+        let body = json!({ "name": name, "create_code": CODE });
+        text(&post(&w.base, &w.bo_key, "/api/hangouts", body).await["hangout"]["id"])
+    };
+    let (attic, cellar) = (space("Attic").await, space("Cellar").await);
     let (scout, _, _) = w.bot(&w.ann, &w.arcade, "Scout");
     let (rex, _, _) = w.bot(&w.ann, &w.arcade, "Rex");
     let (pip, _, pip_caller) = w.bot(&w.ann, &w.den, "Pip");
     let (quo, _, _) = w.bot(&w.ann, &w.den, "Quo");
     let (tad, _, _) = w.bot(&w.ann, &attic, "Tad");
-    w.allow_duels(&[&scout, &rex, &pip, &quo, &tad]);
+    let (uma, _, _) = w.bot(&w.ann, &cellar, "Uma");
+    let (vic, _, _) = w.bot(&w.ann, &cellar, "Vic");
+    w.allow_duels(&[&scout, &rex, &pip, &quo, &tad, &uma, &vic]);
     let first = games::season_start(1);
     let (day, noon) = (|n: i64| games::day_of(first) + n, |n: i64| first + n * 86_400 + 43_200);
 
@@ -628,10 +634,12 @@ async fn a_season_adds_up_its_weeks_and_ends_once_with_its_champions() {
     for (bot, on, roll) in [(&pip, 2, 600), (&quo, 2, 400), (&quo, 9, 900), (&pip, 9, 100)] {
         w.challenge_on(&w.den, bot, day(on), roll);
     }
-    // The public Arcade: Scout beats Rex and wins a day. The Attic: Tad plays alone.
+    // The public Arcade: Scout beats Rex and wins a day. The Attic: Tad plays alone. The Cellar:
+    // Uma and Vic only draw.
     w.duel_at(&w.arcade, (&scout, &rex), (600, 100), noon(1));
     w.challenge_on(&w.arcade, &scout, day(3), 700);
     w.challenge_on(&attic, &tad, day(1), 300);
+    w.duel_at(&cellar, (&uma, &vic), (500, 500), noon(4));
 
     // GM19: before season 1 there's no season. In its third week, the Den's has its first two
     // weeks, the caller's own line as you.
@@ -659,6 +667,7 @@ async fn a_season_adds_up_its_weeks_and_ends_once_with_its_champions() {
     let tied = "Season 1 is over: Pip and Quo won it, with 1 day won and 1 duel win each.";
     assert_eq!(w.season_lines(&w.den), [tied]);
     assert!(w.season_lines(&attic).is_empty(), "a lone bot isn't a champion");
+    assert!(w.season_lines(&cellar).is_empty(), "nobody won a day or a duel");
 
     // The mark names the public Arcade and never the private Den, on My bots and beside the bot in
     // its room, for each season it won, recorded once.
@@ -670,7 +679,9 @@ async fn a_season_adds_up_its_weeks_and_ends_once_with_its_champions() {
     assert_eq!(mark("Scout"), json!([{ "season": 1, "room": "Arcade" }]));
     assert_eq!(mark("Pip"), json!([{ "season": 1, "room": null }]));
     assert_eq!(mark("Quo"), json!([{ "season": 1, "room": null }]));
-    assert_eq!((mark("Rex"), mark("Tad")), (json!([]), json!([])));
+    for (name, nothing) in ["Rex", "Tad", "Uma", "Vic"].map(|name| (name, mark(name))) {
+        assert_eq!(nothing, json!([]), "{name}");
+    }
     for (room, name, shown) in [
         (&w.arcade, "Scout", json!([{ "season": 1, "room": "Arcade" }])),
         (&w.arcade, "Rex", Value::Null),

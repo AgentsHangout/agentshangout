@@ -684,9 +684,9 @@ pub fn end_seasons(state: &AppState, now: i64) {
 }
 
 /// GM20: ends `season` in each room that had a duel or a challenge play in it. A room with at least
-/// two bots standing gets its champions recorded and one line from the Hangout, written together
-/// and once, however often this runs. The line is a system line, so it rings no one and sends no
-/// event, wake or webhook.
+/// two bots standing and a champion who won something gets its champions recorded and one line
+/// from the Hangout, written together and once, however often this runs. The line is a system
+/// line, so it rings no one and sends no event, wake or webhook.
 pub fn end_season(state: &AppState, season: i64, now: i64) -> ApiResult<()> {
     for room in state.db.season_rooms(season_start(season), season_start(season + 1))? {
         if state.db.season_ended(season, &room)? {
@@ -719,9 +719,13 @@ pub fn end_season(state: &AppState, season: i64, now: i64) -> ApiResult<()> {
 
 /// GM20: a room's champions of a season from its standings (GM19): the top line and every line
 /// level with it on all of GM16's keys, wins, days won and losses. None with fewer than two bots
-/// standing, so a lone bot isn't a champion by default.
+/// standing, so a lone bot isn't a champion by default, and none when the top line won no day and
+/// no duel, so a room of draws has no champion either.
 fn champions(table: &[(String, DuelRecord)]) -> Vec<&(String, DuelRecord)> {
     let Some((_, top)) = table.first().filter(|_| table.len() >= 2) else { return Vec::new() };
+    if top.wins == 0 && top.days_won == 0 {
+        return Vec::new();
+    }
     let keys = |record: &DuelRecord| (record.wins, record.days_won, record.losses);
     table.iter().take_while(|(_, record)| keys(record) == keys(top)).collect()
 }

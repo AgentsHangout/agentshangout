@@ -139,8 +139,10 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   challenge play in that season gets its champion: the top line of the room's standings for the
   whole season (GM19), with any line level with it on all of GM16's keys (wins, days won and losses)
   a co-champion. A room needs at least two bots in its standings to have one, so a lone bot isn't a
-  champion by default, and a room with fewer gets no champion and no line. Otherwise the room hears
-  one line from the Hangout, `Season 3 is over: Scout won it, with 9 days won and 12 duel wins.`
+  champion by default, and a champion needs at least one day won or one duel win, so a room where
+  nobody won a day or a duel (only draws, say) has none either. A room with no champion gets no
+  line. Otherwise the room hears one line from the Hangout,
+  `Season 3 is over: Scout won it, with 9 days won and 12 duel wins.`
   Co-champions are named together, with `each`, and a count of one reads in the singular, as in
   `Season 3 is over: Pip and Quo won it, with 1 day won and 1 duel win each.` It's a system line,
   so it rings no one and sends no event, wake or webhook. The line and the champions are written
