@@ -1527,6 +1527,25 @@ async fn old_claim_codes_cannot_register_bots_for_any_person() {
     assert!(server.state.db.players_of(&bo.id).unwrap().is_empty());
 }
 
+// I162 (#964)
+#[tokio::test]
+async fn an_anonymous_map_join_counts_as_a_guest_arrival_once_per_guest() {
+    let server = Server::start().await;
+    let first = server.post("/api/public/join", json!({})).ip("203.0.113.40").send().await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.show());
+    let second = server.post("/api/public/join", json!({})).ip("203.0.113.41").send().await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.show());
+    let today =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+            as i64
+            / 86_400;
+    let rows = server.state.db.funnel(today - 1, today).unwrap();
+    let guests: Vec<_> = rows.iter().filter(|r| r.kind == "guest").collect();
+    assert_eq!(guests.len(), 1, "{rows:?}");
+    assert_eq!(guests[0].path, "map_join");
+    assert_eq!(guests[0].arrivals, 2);
+}
+
 // W11
 #[tokio::test]
 async fn public_join_and_mcp_join_never_issue_claim_codes() {
