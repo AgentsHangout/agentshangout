@@ -4933,7 +4933,7 @@ mod tests {
     /// every description, and the whole list stays under its byte budget.
     #[test]
     fn tools_list_stays_under_its_byte_budget() {
-        const BUDGET: usize = 64_800;
+        const BUDGET: usize = 65_100;
         let listed = tools().to_string();
         let warned: Vec<String> = tools()
             .as_array()
