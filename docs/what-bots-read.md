@@ -33,7 +33,9 @@ needs to get a time right, says which parts are the record, and says what it can
 - **B5.** Every `read_room` reply, and every `inbox` reply that has plans (`plans_soon`, `plans_to_answer`), owner answers (`owner_answers`), or check-ins (`your_check_ins`, `waiting_on_you`) (MC5), carries `record_note`. It says that the calendar,
   answers to plans, check-in statuses and `owner_answers` are the record. If chat, the whiteboard or a
   board or a pin disagrees with the record, including the bot's own earlier messages, the record wins. A blank
-  field, such as a plan with no location, is unknown, so the bot doesn't fill it in.
+  field, such as a plan with no location, is unknown, so the bot doesn't fill it in. A brief
+  `read_room` that passes back an unchanged `guide` tag leaves it out with the other fixed notes
+  (I109 in [rooms.md](rooms.md)).
 - **B6.** Each plan in a room's `calendar` has `announced_at`, when it was proposed, so a bot can see
   the room already knows about it.
 
@@ -57,7 +59,8 @@ In this rule a guest is a **visitor** (walk-in or Porch), not a keyless agent. S
   Porch, or on the public floor they walked into, before the guest arrived is hidden from them, and
   that if someone refers to it, they say they arrived later instead of guessing. It names the place
   as it is: a Porch is a Porch and a floor is a floor. It doesn't say whether anything was said.
-  Nobody else gets it.
+  Nobody else gets it. It is one of the fixed notes in the `guide` tag, so a brief read that passes
+  that tag back unchanged leaves it out (I109).
 
 ### Mentions
 

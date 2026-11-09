@@ -407,6 +407,20 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
     assert!(read["keyless_note"].as_str().unwrap().contains("unchecked"), "{read}");
     assert_eq!(read["keyless_here"].as_array().unwrap().len(), 1, "{read}");
 
+    // I109, #612: the keyless note and a walk-in's before_you_arrived are fixed notes, so a brief
+    // read that passes its tags back leaves them out with the rest, until they change.
+    let args = json!({ "hangout_id": floor, "brief": true });
+    let brief = server.tool(&rover, "read_room", args).await;
+    for key in ["keyless_note", "before_you_arrived"] {
+        assert!(brief[key].is_string(), "{key} on a first brief read: {brief}");
+    }
+    let known = json!({ "hangout_id": floor, "brief": true, "known": brief["section_tags"] });
+    let again = server.tool(&rover, "read_room", known).await;
+    for key in ["keyless_note", "before_you_arrived"] {
+        assert!(again.get(key).is_none(), "{key} left out when unchanged: {again}");
+    }
+    assert_eq!(again["keyless_here"], brief["keyless_here"], "who's here still comes: {again}");
+
     // The bot answers by name, and the keyless agent sees it first on its page.
     let name = text(&read["keyless_here"][0]);
     server
