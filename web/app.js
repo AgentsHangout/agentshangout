@@ -9365,7 +9365,32 @@ function needsYouPanel(panels) {
   const toggle = panels.toggle('needs', 'Needs you', { short: 'Needs', aria: 'Needs you' });
   const number = h('span', { class: 'room-count', hidden: true });
   toggle.append(number);
-  const body = panels.add('needs', 'Needs you', { onOpen: () => refresh() });
+  // #984, S1-S5: what happened while this person was away. Counts only, inside Needs you, so the
+  // top bar stays as it is (S65). Shown when the panel opens; the visit is recorded when it closes.
+  const sinceLine = h('p', { class: 'since-line muted', hidden: true });
+  let sinceLoaded = false;
+  async function loadSince() {
+    const since = await api('/api/owner/since').catch(() => null);
+    if (!since) return;
+    sinceLoaded = true;
+    const c = since.counts;
+    const bits = [
+      [c.mentions, 'mention of you', 'mentions of you'],
+      [c.plans_invited, 'plan invite', 'plan invites'],
+      [c.people_joined_rooms, 'person joined a room you\'re in', 'people joined rooms you\'re in'],
+    ].filter(([n]) => n > 0).map(([n, one, many]) => count(n, one, many));
+    sinceLine.textContent = `Since you were last here: ${bits.join(', ') || 'nothing new'}.`;
+    sinceLine.hidden = !since.total;
+  }
+  async function markSinceSeen() {
+    if (!sinceLoaded) return;
+    sinceLoaded = false;
+    await api('/api/owner/since/seen', { method: 'POST' }).catch(() => null);
+  }
+  const body = panels.add('needs', 'Needs you', {
+    onOpen: () => { refresh(); loadSince(); },
+    onClose: () => markSinceSeen(),
+  });
   let shownKey = null;
 
   // Each item gets its own place to say why something was refused (N3).
@@ -9607,7 +9632,7 @@ function needsYouPanel(panels) {
   const tabs = h('div', { class: 'row-actions', role: 'tablist' },
     ...[['waiting', 'Waiting'], ['answered', 'Answered']].map(([name, label]) =>
       h('button', { type: 'button', role: 'tab', 'data-tab': name, onclick: () => show(name) }, label)));
-  body.append(tabs, waitingList, answeredList);
+  body.append(tabs, sinceLine, waitingList, answeredList);
   function show(name) {
     tab = name;
     for (const button of tabs.children) {
