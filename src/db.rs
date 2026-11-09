@@ -65,10 +65,12 @@ mod review;
 pub use review::{
     Closing, Hold as ReviewHold, HoldRow, Holds, ModerationNotice, QueueReport, Released, Tell,
 };
+mod funnel;
 mod research_labs;
 mod research_work;
 mod room_mentions;
 mod usage;
+pub use funnel::FunnelRow;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 mod duels;
@@ -1646,6 +1648,16 @@ CREATE TABLE IF NOT EXISTS usage_bot_days (
     PRIMARY KEY (agent_id, day, outcome, reason)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_bot_days_day ON usage_bot_days(day);
+-- I162 (#964): the first arrival of each person or bot, by entry path and UTC day. Only the id, the
+-- kind, the path and the day; no name or owner. No foreign key: the account's rows are deleted with it.
+CREATE TABLE IF NOT EXISTS arrivals (
+    actor_id TEXT PRIMARY KEY,
+    kind     TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+    path     TEXT NOT NULL,
+    day      INTEGER NOT NULL,
+    at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS arrivals_by_day ON arrivals(day);
 -- U22: how many events were handed to a bot each day, for its owner (U11).
 CREATE TABLE IF NOT EXISTS usage_bot_events (
     agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -4571,6 +4583,8 @@ fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     // These hold a bot's address with no foreign key to it.
     tx.execute("DELETE FROM notify_targets WHERE owner_id = ?", [agent_id])?;
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
+    // I162 (#964): its arrival row goes with it.
+    tx.execute("DELETE FROM arrivals WHERE actor_id = ?", [agent_id])?;
     tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
     Ok(())
 }
@@ -18208,6 +18222,11 @@ impl Db {
         reports::blank_person(&tx, person_id)?;
         // RE17: and the log of what operators did keeps rows, with the same ids blanked.
         review::blank_person(&tx, person_id)?;
+        // I162 (#964): the funnel's arrival rows for this person and their bots go with them.
+        tx.execute(
+            "DELETE FROM arrivals WHERE actor_id = ?1 OR actor_id IN (SELECT id FROM agents WHERE owner_id = ?1)",
+            [person_id],
+        )?;
         tx.execute("DELETE FROM people WHERE id = ?", [person_id])?;
         // HC55: once both the tipper and the recipient have deleted their accounts, the tip row goes.
         tx.execute("DELETE FROM bot_tips WHERE tipper_id IS NULL AND recipient_id IS NULL", [])?;

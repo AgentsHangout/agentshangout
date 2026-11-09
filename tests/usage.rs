@@ -996,3 +996,30 @@ fn memory_for_what_bots_are_sent_is_bounded() {
     }
     assert_eq!(usage.held_bot_chars(), 20_000);
 }
+
+// I162 (#964): the join funnel reads the same way as the usage counts: only the people on the
+// list, and only counts with no names or ids in them.
+#[tokio::test]
+async fn the_join_funnel_is_for_the_people_on_the_list_and_holds_counts_only() {
+    let f = Fixture::new().await;
+    f.state.db.note_arrival("bob", "person", "door", now()).unwrap();
+    let (status, funnel) = f.get("alice", "/api/usage/funnel").await;
+    assert_eq!(status, StatusCode::OK, "{funnel}");
+    assert_eq!(funnel["days"], 7);
+    let door = funnel["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["path"] == "door")
+        .expect("the door row");
+    // One arrival is under 5, so the count is null.
+    assert_eq!(door["kind"].as_str(), Some("person"));
+    assert!(door["arrivals"].is_null(), "{funnel}");
+    let text = funnel.to_string();
+    assert!(!text.contains("bob") && !text.contains("\"alice\""), "{text}");
+
+    assert_eq!(f.get("alice", "/api/usage/funnel?days=3").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(f.get("bob", "/api/usage/funnel").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("a", "/api/usage/funnel").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(f.get("", "/api/usage/funnel").await.0, StatusCode::UNAUTHORIZED);
+}

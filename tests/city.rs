@@ -4655,6 +4655,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "sign_in_sessions",
         "cities",
         "city_members",
+        "arrivals",
         "houses",
         "residents",
         "bot_homes",
@@ -5116,6 +5117,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "game_challenges",
             "wake_ring_accepts",
             "room_greeters",
+            "arrivals",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }
