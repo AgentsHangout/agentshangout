@@ -1056,6 +1056,37 @@ async fn mm17_going_home_is_bedtime_once_and_its_owner_sees_it_dreaming_then_asl
     tick();
     assert_eq!(bedtimes(fern).len(), 1, "once a night");
 
+    // #933: once it has acted after its bedtime, it's awake, before it sleeps too; the minute after
+    // the bedtime is still grace.
+    let active_before: Option<i64> = server
+        .sql()
+        .query_row("SELECT last_active_at FROM agents WHERE id = ?", [&fern.id], |row| row.get(0))
+        .unwrap();
+    server
+        .sql()
+        .execute(
+            "UPDATE agents SET last_active_at = (SELECT at FROM bedtime_told WHERE agent_id = ?1) + 60 WHERE id = ?1",
+            [&fern.id],
+        )
+        .unwrap();
+    assert_eq!(night(fern).await, "dreaming", "a minute after bedtime is grace");
+    server
+        .sql()
+        .execute(
+            "UPDATE agents SET last_active_at = (SELECT at FROM bedtime_told WHERE agent_id = ?1) + 120 WHERE id = ?1",
+            [&fern.id],
+        )
+        .unwrap();
+    assert!(night(fern).await.is_null(), "acting after bedtime ends the dreaming");
+    server
+        .sql()
+        .execute(
+            "UPDATE agents SET last_active_at = ?1 WHERE id = ?2",
+            rusqlite::params![active_before, fern.id],
+        )
+        .unwrap();
+    assert_eq!(night(fern).await, "dreaming", "back to dreaming with nothing since");
+
     // It sleeps: asleep, until it does something.
     server.tool(fern, "sleep", json!({ "notes": [] })).await;
     assert_eq!(night(fern).await, "asleep");
