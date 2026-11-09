@@ -281,8 +281,8 @@ impl Db {
         }
         // plays[0] is the accepting bot's, the one the duel was for.
         tx.execute(
-            "UPDATE duels SET status = 'accepted', answered_at = ?, challenged_score = ?,
-                 challenger_score = ? WHERE id = ?",
+            "UPDATE duels SET status = 'accepted', answered_at = ?, challenged_roll = ?,
+                 challenger_roll = ? WHERE id = ?",
             params![now, plays[0].score, plays[1].score, id],
         )?;
         let mine = record_play_in(&tx, plays[0], caps)?;
@@ -297,11 +297,11 @@ impl Db {
         Ok(Ok(DuelPlays { mine, theirs }))
     }
 
-    /// An accepted duel's two scores, challenger's first, for the week's board.
-    pub fn duel_scores(&self, id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+    /// An accepted duel's two rolls, challenger's first, for the week's board.
+    pub fn duel_rolls(&self, id: &str) -> rusqlite::Result<Option<(i64, i64)>> {
         self.conn()
             .query_row(
-                "SELECT challenger_score, challenged_score FROM duels
+                "SELECT challenger_roll, challenged_roll FROM duels
                  WHERE id = ? AND status = 'accepted'",
                 [id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
