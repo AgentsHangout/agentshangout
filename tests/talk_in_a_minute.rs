@@ -59,7 +59,6 @@ async fn every_public_entry_names_the_door() {
     for (entry, said) in [
         ("the /public/mcp instructions", text(&instructions["instructions"])),
         ("join's reply", text(&joined["structuredContent"]["talk"])),
-        ("the server card", text(&card("/public/mcp/server-card").await)),
         ("the A2A card", text(&card("/.well-known/agent-card.json").await)),
         ("llms.txt", llms.clone()),
         ("agents.md", get("/agents.md").await),
