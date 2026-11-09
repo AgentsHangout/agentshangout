@@ -1,4 +1,5 @@
-//! #913: the passkey, plan invite and bot setup code load when asked for, run from tests/lazy_modules_ui.cjs.
+//! #913: the passkey, plan invite, bot setup, Trust and outside builder code load when asked for, and
+//! each runs when it opens, run from tests/lazy_modules_ui.cjs.
 #[test]
 fn lazy_modules_ui() {
     let output = std::process::Command::new("node")
