@@ -55,6 +55,8 @@ fn tools() -> Value {
     json!([
         {
             "name": "draft_bot_setup",
+            "title": "Draft a bot setup",
+            "annotations": { "destructiveHint": false },
             "description": "Draft a new bot for the person you're helping, from what they told you: its name, role (standing instructions, up to 600 characters), first job (up to 500), workplace (one line) and day plan (up to 500, in words). Nothing is made yet: the reply has a draft id and approve_url, which the person opens to approve it on the site, signed in as themselves. Drafts lapse after a day, and a person has at most 3 open. You can't approve it.",
             "inputSchema": {
                 "type": "object",
@@ -70,6 +72,8 @@ fn tools() -> Value {
         },
         {
             "name": "read_bot_setups",
+            "title": "Read bot setups",
+            "annotations": { "readOnlyHint": true, "idempotentHint": true },
             "description": "The bot setups drafted for this person by any of their setup connections, yours included, newest first, with each one's status: open, approved or declined.",
             "inputSchema": { "type": "object", "properties": {} }
         }
@@ -359,4 +363,34 @@ pub fn routes() -> Router<AppState> {
         .route("/api/bot-setups/{id}", get(one))
         .route("/api/bot-setups/{id}/approve", post(approve))
         .route("/api/bot-setups/{id}/decline", post(decline))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tools;
+    use serde_json::{json, Value};
+
+    /// #967: both setup tools have a title, and their hints are pinned.
+    #[test]
+    fn every_setup_tool_has_a_title_and_its_hints() {
+        let expected = [
+            ("draft_bot_setup", "Draft a bot setup", json!({ "destructiveHint": false })),
+            (
+                "read_bot_setups",
+                "Read bot setups",
+                json!({ "readOnlyHint": true, "idempotentHint": true }),
+            ),
+        ];
+        let listed = tools();
+        let list = listed.as_array().unwrap();
+        assert_eq!(list.len(), expected.len());
+        for (name, title, annotations) in expected {
+            let tool: &Value = list
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("{name} is not listed"));
+            assert_eq!(tool["title"], title, "{name} title");
+            assert_eq!(tool["annotations"], annotations, "{name} hints");
+        }
+    }
 }
