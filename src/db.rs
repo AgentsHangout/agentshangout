@@ -5362,6 +5362,12 @@ fn hand_over_what_stays(conn: &Connection, person_id: &str, name: &str) -> rusql
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: makes the next `Db::open` fail after SCHEMA, so the migration's rollback is tested.
+    static FAIL_ARRIVALS_MIGRATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// I162 (#964): an `arrivals` table made before anonymous map guests were counted has no `guest`
 /// kind in its check. It is moved aside here, so SCHEMA makes the wider table and `open` copies the
 /// rows across. Returns true when that move happened.
@@ -5438,22 +5444,30 @@ fn mention_from_row(row: &Row) -> rusqlite::Result<Mention> {
 
 impl Db {
     pub fn open(path: &str) -> rusqlite::Result<Self> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
         // MM5, MM9: recall's index of a bot's memories lives in the temporary database for one
         // search. Kept in memory, its words never reach a file on disk.
         conn.pragma_update(None, "temp_store", "MEMORY")?;
         remake_index(&conn, "players_one_own_per_person", "removed = 0")?;
-        let widen_arrivals = widen_arrivals_kind(&conn)?;
-        conn.execute_batch(SCHEMA)?;
+        // I162 (#964): the widen, SCHEMA and the copy are one transaction. A failure at any step
+        // rolls the rename back, so the next open sees the old table and copies it again.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let widen_arrivals = widen_arrivals_kind(&tx)?;
+        tx.execute_batch(SCHEMA)?;
+        #[cfg(test)]
+        if FAIL_ARRIVALS_MIGRATION.with(|f| f.replace(false)) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if widen_arrivals {
-            conn.execute_batch(
+            tx.execute_batch(
                 "INSERT INTO arrivals (actor_id, kind, path, day, at)
                     SELECT actor_id, kind, path, day, at FROM arrivals_before_guests;
                  DROP TABLE arrivals_before_guests;",
             )?;
         }
+        tx.commit()?;
         Ok(Self {
             conn: Mutex::new(conn),
             outside_map: Mutex::new(None),

@@ -264,4 +264,60 @@ mod tests {
         drop(db);
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn a_failed_arrivals_widen_rolls_back_and_the_next_open_copies_the_rows() {
+        let path = std::env::temp_dir().join(format!("croakie-964-fail-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path_str = path.to_str().unwrap();
+        {
+            let conn = Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE arrivals (
+                    actor_id TEXT PRIMARY KEY,
+                    kind     TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+                    path     TEXT NOT NULL,
+                    day      INTEGER NOT NULL,
+                    at       INTEGER NOT NULL
+                 );
+                 CREATE INDEX arrivals_by_day ON arrivals(day);
+                 INSERT INTO arrivals VALUES ('old', 'bot', 'door', 10, 864000);",
+            )
+            .unwrap();
+        }
+        // The open fails after the rename and SCHEMA have run: nothing may be left half done.
+        FAIL_ARRIVALS_MIGRATION.with(|f| f.set(true));
+        assert!(Db::open(path_str).is_err());
+        {
+            let conn = Connection::open(path_str).unwrap();
+            let names: Vec<String> = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'arrivals%'",
+                )
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(|n| n.unwrap())
+                .collect();
+            assert_eq!(names, vec!["arrivals".to_string()]);
+            let sql: String = conn
+                .query_row("SELECT sql FROM sqlite_master WHERE name = 'arrivals'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert!(!sql.contains("'guest'"));
+            let rows: i64 =
+                conn.query_row("SELECT COUNT(*) FROM arrivals", [], |r| r.get(0)).unwrap();
+            assert_eq!(rows, 1);
+        }
+        // The next open does the whole move and keeps the row.
+        let db = Db::open(path_str).unwrap();
+        db.note_arrival("player:1", "guest", "map_join", 11 * DAY).unwrap();
+        let rows = db.funnel(0, 20).unwrap();
+        let count =
+            |kind: &str| rows.iter().filter(|r| r.kind == kind).map(|r| r.arrivals).sum::<i64>();
+        assert_eq!((count("bot"), count("guest")), (1, 1));
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
 }
