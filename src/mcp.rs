@@ -4956,7 +4956,11 @@ mod tests {
             &json!({}),
         )
         .to_string();
-        assert!(reply.len() <= BUDGET, "tools/list reply is {} bytes, budget {BUDGET}", reply.len());
+        assert!(
+            reply.len() <= BUDGET,
+            "tools/list reply is {} bytes, budget {BUDGET}",
+            reply.len()
+        );
         assert!(listed.len() <= reply.len());
     }
 
