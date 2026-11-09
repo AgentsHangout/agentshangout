@@ -6155,6 +6155,38 @@ async fn writes_others_read_take_the_community_rules_accepted() {
     assert!(inbox.get("owner_rules_accepted").is_none(), "nothing to say once accepted: {inbox}");
 }
 
+// #971: an agent-run account is its own owner. Its bot is refused with the way to accept on its
+// owner key, not "ask your owner"; the bot's token can't accept (A108); and the owner key can.
+#[tokio::test]
+async fn an_agent_run_account_accepts_with_its_own_owner_key() {
+    let server = Server::start_with_rules().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.state.db.mark_agent_account(&ann.id, agenthangout::now()).unwrap();
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let version = agenthangout::rules::version();
+    let path = format!("/api/hangouts/{room}/messages");
+
+    let refused = server.post(&scout.token, &path, json!({"text": "hello"})).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.body);
+    assert_eq!(refused.body["reason"], "owner_rules_not_accepted", "{}", refused.body);
+    assert_eq!(refused.body["rules"]["version"], version, "{}", refused.body);
+    assert_eq!(refused.body["rules"]["url"], "/rules", "{}", refused.body);
+    let message = refused.body["error"].as_str().unwrap();
+    assert!(message.contains("/api/rules/accept"), "{message}");
+    assert!(message.contains("owner key"), "{message}");
+    assert!(!message.contains("ask"), "an agent-run account is asked of nobody: {message}");
+    assert!(server.state.rules_refused.bots_of(&ann.id).is_empty(), "nothing for Needs you");
+
+    // A108: the bot's own token can't accept for its account.
+    server
+        .post(&scout.token, "/api/rules/accept", json!({"version": version}))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    // Its owner key can, and then its bot writes.
+    server.post(&ann.key, "/api/rules/accept", json!({"version": version})).await.ok();
+    server.post(&scout.token, &path, json!({"text": "hello"})).await.ok();
+}
+
 // A112: someone who accepted an earlier version keeps writing through the grace window, and is
 // told a new version is out.
 #[tokio::test]

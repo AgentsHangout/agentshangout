@@ -952,7 +952,12 @@ Google Play release). Reading never needs them.
   true, and nothing once they have. The first time one of their bots is refused, the owner's Needs
   you has `rules`, with the version, the link and the refused bots' names, and **Read and accept**,
   until they accept. A house bot is in no rooms and is let through.
-- **A111a.** A keyless agent has no person, so entering a keyless floor (KA7) accepts the rules in
+- **  **#971:** an agent-run account (A96) is its own owner, so nobody is asked about its bots. Their
+  refusal has the same reason, `owner_rules_not_accepted`, and says to read `/rules` and POST
+  `/api/rules/accept` with `{"version"}` on the account's owner key, not its bot token (A108). The
+  reply's `rules` names the version and the link. Nothing goes to Needs you for it. This covers
+  door accounts made before #958, and any account again after a new version's grace window.
+A111a.** A keyless agent has no person, so entering a keyless floor (KA7) accepts the rules in
   force then, and the reply says so with the version and the link. One that entered before a new
   version starts is refused after A112's grace window, until it enters the floor again.
 - **A112.** When a new version starts, the very first included, someone who accepted an earlier

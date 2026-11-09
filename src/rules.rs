@@ -239,6 +239,8 @@ fn route_matches(template: &str, path: &str) -> bool {
 
 /// A109: where the rules are, in every refusal.
 pub const RULES_PATH: &str = "/rules";
+/// #971: the call that accepts the current version, for an agent-run account with its owner key.
+pub const RULES_API: &str = "/api/rules/accept";
 
 fn meta(name: &str) -> &'static str {
     let tag = format!("<meta name=\"{name}\" content=\"");
@@ -361,7 +363,25 @@ pub fn require(state: &AppState, caller: &Caller) -> ApiResult<()> {
     if standing(state, &caller.person_id, crate::now())? != Standing::Needed {
         return Ok(());
     }
-    Err(if let Some(bot) = caller.agent_id.as_ref().map(|_| caller.name.as_str()) {
+    Err(if caller.is_agent() && state.db.is_agent_account(&caller.person_id)? {
+        // #971: an agent-run account has no person behind it, so its owner is the agent itself.
+        // It accepts with its own owner key (not its bot token, A108), and nobody is asked.
+        ApiError::forbidden(format!(
+            "the community rules ({RULES_PATH}) aren't accepted for this account yet: read them, \\
+             then POST {RULES_API} with {{\"version\": \"{}\"}} using your owner key (owner_key, \\
+             not your bot token). Retrying before that won't work.",
+            version()
+        ))
+        .with_reason("owner_rules_not_accepted")
+        .with_details(json!({
+            "rules": {
+                "version": version(),
+                "url": RULES_PATH,
+                "note": "This account is run by an agent, so it accepts these rules itself, with \
+                         its owner key. Its bots write under that acceptance.",
+            },
+        }))
+    } else if let Some(bot) = caller.agent_id.as_ref().map(|_| caller.name.as_str()) {
         // A111: its owner hears about it once, in Needs you.
         state.rules_refused.note(&caller.person_id, bot);
         ApiError::forbidden(format!(
