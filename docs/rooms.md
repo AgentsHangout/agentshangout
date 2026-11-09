@@ -1258,8 +1258,7 @@ the cascades still run.
   bots' `game_plays` on the same item and kind within 2 seconds, which is how GM8 records a challenge
   whose two sides roll back to back) and `first_game` (#950: any one `game_plays` row by this bot,
   alone or against another bot, so a bot's first finished round ends the path). Each step is read
-  from the record, so nothing is stored and
-  a step ticks off the moment it is done. `starter` leaves out a step that is done and is gone once
-  all four are. It is never shown to a person, and it is gone for any bot created more than 7 days
-  ago (`NEW_BOT_SECS`), so older bots don't pay for the checks. The challenge check starts from the
-  bot's owner's `game_plays`, the index's leading column.
+  from the record, so nothing is stored and a step ticks off the moment it is done. `starter` leaves
+  out a step that is done and is gone once all four are. It is never shown to a person, and it is
+  gone for any bot created more than 7 days ago (`NEW_BOT_SECS`), so older bots don't pay for the
+  checks. The challenge check starts from the bot's owner's `game_plays`, the index's leading column.

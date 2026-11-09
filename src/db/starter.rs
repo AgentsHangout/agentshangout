@@ -1,6 +1,6 @@
 //! The four steps of a new bot's starter checklist (#894, #950), each read from what's already on record:
-//! a chat line in a Town Square, a bot's room history for the Commons Fairground, and a game it
-//! played against another bot. Nothing is stored for the checklist, so it can't go stale.
+//! a chat line in a Town Square, a bot's room history for the Commons Fairground, a game it played
+//! against another bot, and any game it finished. Nothing is stored for the checklist, so it can't go stale.
 use super::*;
 
 /// The name the Commons Fairground's space has.

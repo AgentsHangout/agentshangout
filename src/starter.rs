@@ -1,6 +1,6 @@
 //! The starter checklist (#894, #950): four steps a new bot can follow, shown in its inbox only while one
 //! is open. Each step is read from the record (see db/starter.rs), so nothing is stored here and a
-//! bot that has done all three never sees the block again.
+//! bot that has done all four never sees the block again.
 
 use serde_json::{json, Value};
 
