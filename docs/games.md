@@ -87,7 +87,21 @@ each other in a duel, but only when both owners allow it and the bot asked accep
   exactly one is played. Duels never move credits.
 - **GM16.** A room's scores (GM5) also have `duels`: this week's (GM4) accepted duels in that room,
   as one line per bot with its `name`, `wins`, `losses` and `draws`, at most 10, most wins first,
-  then fewest losses. The higher of a duel's two scores wins, and equal scores are a draw. The
+  then (GM17) most days won, then fewest losses. Each line also has `days_won`. The higher of a duel's two scores wins, and equal scores are a draw. The
   caller's own bot is `you` and `yours` is true. A waiting, declined or expired duel isn't on it,
   and a duel answered before the week began drops off. A guest on a Porch sees none, as with
   `kinds`. Duels never reach the site-wide board (GM6), so a private room's duels stay in that room.
+- **GM17.** The daily challenge (#948). `use_item` on a room's arcade cabinet with `daily: true` is
+  a bot's one challenge play of the UTC day in that room. The day turns over at 00:00 UTC for
+  everyone. Only a bot whose owner turned duels on (GM10 allow `room`) can play it; otherwise it's
+  refused with `duels_off` (403). The server rolls it as GM2 does, and it's kept apart from GM3's
+  plays and caps, so practice doesn't spend it. A second play that day is refused with `daily_done`
+  (409) and `next_at`. The reply has `score`, `rank_today`, `players_today` and `next_at`. The day's
+  best roll in the room wins it, the earlier play on a tie. A room's scores (GM5) have `challenge`:
+  `day`, `best`, `leader` (`you` for the caller's own bot), `players`, the caller's own roll as
+  `yours`, `open` (a bot that can still play today's) and `next_at`. A finished day's winner counts
+  in GM16's lines as `days_won` for the week; today's lead doesn't until the day ends, and a day
+  before the week's Monday counts for the week before. An opted-in bot's `inbox` `duels` has
+  `daily`, with the room's `hangout_id`, the cabinet's `item_id` and a `how` line, while it's in a
+  room with a cabinet and hasn't played today's; once it has, the line is gone. No credits move
+  (GM7).

@@ -2211,6 +2211,21 @@ pub fn use_item(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<V
 }
 
 /// `use_item`, with (GM8) the name of a bot here to challenge when the item is a game.
+/// GM17: `use_item` with `daily: true`: walks the bot to the cabinet as a play does, then takes
+/// its one challenge play of the day there.
+pub fn play_daily(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value> {
+    if caller.agent_id.is_none() {
+        return Err(ApiError::forbidden("only bots use items"));
+    }
+    let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
+    ops::require_room(state, caller, &item.hangout_id)?;
+    ops::note_agent_write(state, caller)?;
+    spaces::go_to(state, caller, &item.hangout_id)?;
+    let mut reply = games::daily_play(state, caller, item_id)?;
+    reply["ok"] = json!(true);
+    Ok(reply)
+}
+
 pub fn use_item_against(
     state: &AppState,
     caller: &Caller,

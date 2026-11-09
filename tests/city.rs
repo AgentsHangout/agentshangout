@@ -4837,6 +4837,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         "duel_settings",
         "duels",
         "room_mention_opt_outs",
+        "game_challenges",
     ];
     let columns = |connection: &Connection, table: &str| -> Vec<String> {
         let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
@@ -5110,6 +5111,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "duels",
             "duel_settings",
             "room_mention_opt_outs",
+            "game_challenges",
         ] {
             connection.execute(&format!("DROP TABLE {table}"), []).unwrap();
         }

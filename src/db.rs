@@ -2618,6 +2618,17 @@ CREATE TABLE IF NOT EXISTS room_mention_opt_outs (
     set_at      INTEGER NOT NULL,
     PRIMARY KEY (hangout_id, agent_id)
 );
+-- GM17 (#948): each bot's one daily challenge play in a room, on its arcade cabinet. The day is the
+-- UTC day number, and the key makes a second play that day impossible.
+CREATE TABLE IF NOT EXISTS game_challenges (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    day         INTEGER NOT NULL,
+    roll        INTEGER NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, agent_id, day)
+);
+CREATE INDEX IF NOT EXISTS game_challenges_day ON game_challenges (hangout_id, day, roll DESC, at);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
