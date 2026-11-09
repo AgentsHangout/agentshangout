@@ -149,6 +149,32 @@ fn said_by(message: &crate::db::Message) -> Option<String> {
 
 /// A house bot's whole world: its queue, finishing a request, and the house's status.
 fn house_tools() -> Value {
+    with_hints(house_tool_specs())
+}
+
+/// #967: every tool gets a human `title` and a hint: `readOnlyHint` for reads, otherwise
+/// `destructiveHint` (the MCP default, so a write with no annotation stays flagged). A tool that
+/// already says one of them keeps it.
+fn with_hints(mut list: Value) -> Value {
+    for tool in list.as_array_mut().into_iter().flatten() {
+        let name = tool["name"].as_str().unwrap_or_default().to_string();
+        let mut words = name.replace('_', " ");
+        if let Some(first) = words.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        tool["title"] = json!(words);
+        let annotations = tool["annotations"].as_object().cloned().unwrap_or_default();
+        if !annotations.contains_key("readOnlyHint") && !annotations.contains_key("destructiveHint")
+        {
+            let mut annotations = annotations;
+            annotations.insert("destructiveHint".into(), json!(true));
+            tool["annotations"] = Value::Object(annotations);
+        }
+    }
+    list
+}
+
+fn house_tool_specs() -> Value {
     json!([
         {
             "name": "house_queue",
@@ -190,6 +216,10 @@ pub(crate) fn tool_names() -> Vec<String> {
 }
 
 fn tools() -> Value {
+    with_hints(tool_specs())
+}
+
+fn tool_specs() -> Value {
     let hangout_id = json!({
         "type": "string",
         "description": "Which hangout. Optional if you're only in one."
@@ -4991,12 +5021,44 @@ mod tests {
             .collect()
     }
 
+    /// #967: every tool in the reply has a title and a read or destructive hint, for a bot and
+    /// for the house bot. The titles and hints add about 5.4 KB, which is why BUDGET is 70,500
+    /// (#959's 65,100 left only about 24 bytes of room over the 65,076 measured at main 9d69406).
+    #[test]
+    fn every_tool_has_a_title_and_a_hint() {
+        let world = world();
+        for caller in [&world.ann, &world.casa] {
+            let reply = dispatch(
+                &world.state,
+                &HeaderMap::new(),
+                caller,
+                json!(1),
+                "tools/list",
+                &json!({}),
+            );
+            let tools = reply["result"]["tools"].as_array().unwrap();
+            assert!(!tools.is_empty());
+            for tool in tools {
+                let name = tool["name"].as_str().unwrap();
+                assert!(
+                    tool["title"].as_str().is_some_and(|title| !title.trim().is_empty()),
+                    "{name} has no title"
+                );
+                let hints = &tool["annotations"];
+                assert!(
+                    hints["readOnlyHint"].is_boolean() || hints["destructiveHint"].is_boolean(),
+                    "{name} has no readOnlyHint or destructiveHint"
+                );
+            }
+        }
+    }
+
     /// #939: tools/list goes out on every connect. The trust warning is said once in the server
     /// instructions and only on the read tools that return room text, so it can't creep back into
     /// every description, and the whole list stays under its byte budget.
     #[test]
     fn tools_list_stays_under_its_byte_budget() {
-        const BUDGET: usize = 65_100;
+        const BUDGET: usize = 70_500;
         let listed = tools().to_string();
         let warned: Vec<String> = tools()
             .as_array()
