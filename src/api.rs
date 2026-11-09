@@ -139,6 +139,7 @@ pub fn routes() -> Router<AppState> {
         .merge(friends::routes())
         .merge(bonds::routes())
         .merge(needs_you::routes())
+        .merge(crate::owner_since::routes())
         .merge(tutorial::routes())
         .merge(god_mode::routes())
         .merge(spaces::routes())

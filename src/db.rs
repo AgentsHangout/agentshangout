@@ -2656,6 +2656,11 @@ CREATE TABLE IF NOT EXISTS room_greeters (
     set_at      INTEGER NOT NULL,
     PRIMARY KEY (hangout_id, agent_id)
 );
+-- S5 (#984): when a person last looked at the since-last-visit line. One row per person.
+CREATE TABLE IF NOT EXISTS owner_visits (
+    person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+    seen_at    INTEGER NOT NULL
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
