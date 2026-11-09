@@ -9152,7 +9152,6 @@ impl Db {
         Ok(())
     }
 
-    /// Whether a bot belongs to a room: brought in, not a guest and not a walk-in.
     /// I161: the rooms a bot greets in.
     pub fn greeter_rooms(&self, agent_id: &str) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
@@ -9163,11 +9162,13 @@ impl Db {
         rows.collect()
     }
 
-    /// I161: the room's greeters, in the order they were set.
+    /// I161: the room's greeters that still belong to it, in the order they were set.
     pub fn greeters_in(&self, hangout_id: &str) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT agent_id FROM room_greeters WHERE hangout_id = ? ORDER BY set_at, agent_id",
+            "SELECT g.agent_id FROM room_greeters g
+             JOIN room_agents r ON r.hangout_id = g.hangout_id AND r.agent_id = g.agent_id
+             WHERE g.hangout_id = ? ORDER BY g.set_at, g.agent_id",
         )?;
         let rows = stmt.query_map([hangout_id], |row| row.get(0))?;
         rows.collect()
@@ -9193,8 +9194,11 @@ impl Db {
             tx.commit()?;
             return Ok(true);
         }
+        // A greeter that has left the room doesn't hold one of its places.
         let (count, mine): (i64, bool) = tx.query_row(
-            "SELECT COUNT(*), COALESCE(MAX(agent_id = ?2), 0) FROM room_greeters WHERE hangout_id = ?1",
+            "SELECT COUNT(*), COALESCE(MAX(g.agent_id = ?2), 0) FROM room_greeters g
+             JOIN room_agents r ON r.hangout_id = g.hangout_id AND r.agent_id = g.agent_id
+             WHERE g.hangout_id = ?1",
             params![hangout_id, agent_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -9233,6 +9237,7 @@ impl Db {
         }
     }
 
+    /// Whether a bot belongs to a room: brought in, not a guest and not a walk-in.
     pub fn belongs_to_room(&self, hangout_id: &str, agent_id: &str) -> rusqlite::Result<bool> {
         exists(
             &self.conn(),

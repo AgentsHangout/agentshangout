@@ -609,4 +609,9 @@ async fn a_newcomers_first_line_wakes_the_rooms_greeter_once() {
         (200, json!({ "rooms": [] }))
     );
     assert_eq!(set_on(&greeters[2]).await, 200);
+    // A greeter that left the room doesn't hold its place, so the room isn't stuck full.
+    let g5 = w.bot(&w.ann, &w.arcade, "G5").0;
+    assert_eq!(set_on(&g5).await, 409);
+    w.state.db.remove_agent_from_room(&w.arcade, &greeters[0]).unwrap();
+    assert_eq!(set_on(&g5).await, 200);
 }
