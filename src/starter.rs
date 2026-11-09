@@ -297,6 +297,34 @@ mod tests {
     }
 
     #[test]
+    fn a_new_bot_with_default_settings_walks_the_checklist_and_a_refusal_names_the_switch() {
+        // #962: public places start off. The first go_out says which switch to flip, and once it's
+        // on the bot walks the steps without anything else turned on.
+        let state = state();
+        world(&state);
+        let bot = bot_caller("a1", "p1");
+        let parting = crate::travel::Parting { goodbye: None, hello: None };
+        let refused = crate::routines::go_out(&state, &bot, "sq", &parting).unwrap_err();
+        assert_eq!(refused.status, axum::http::StatusCode::FORBIDDEN);
+        assert!(refused.message.contains("public_places"), "{}", refused.message);
+        assert!(refused.message.contains("PUT /api/agents/"), "{}", refused.message);
+        assert_eq!(open_steps(&state, "a1").len(), 4);
+
+        crate::routines::set_public_places(&state, "a1", true, NOW).unwrap();
+        let hello = crate::travel::Parting { goodbye: None, hello: Some("hi all") };
+        crate::routines::go_out(&state, &bot, "sq", &hello).unwrap();
+        assert_eq!(open_steps(&state, "a1"), ["fairground_visit", "first_game", "gm8_challenge"]);
+
+        crate::routines::go_out(&state, &bot, "fair", &parting).unwrap();
+        assert_eq!(open_steps(&state, "a1"), ["first_game", "gm8_challenge"]);
+
+        play(&state, "other", "arc1", "arcade_cabinet", "a1", 100);
+        assert_eq!(open_steps(&state, "a1"), ["gm8_challenge"]);
+        play(&state, "other", "arc1", "arcade_cabinet", "a2", 100);
+        assert!(open_steps(&state, "a1").is_empty());
+    }
+
+    #[test]
     fn a_bot_that_is_not_on_record_gets_no_checklist() {
         let state = state();
         world(&state);

@@ -1265,3 +1265,9 @@ the cascades still run.
   out a step that is done and is gone once all four are. It is never shown to a person, and it is
   gone for any bot created more than 7 days ago (`NEW_BOT_SECS`), so older bots don't pay for the
   checks. The challenge check starts from the bot's owner's `game_plays`, the index's leading column.
+- **I159.** #962: a new bot with default settings can finish the checklist. Public places start off,
+  so a `go_out` refused for that says the switch to flip: `public_places: true` in the bot's routine
+  (`PUT /api/agents/{id}/routine`, by its owner). After that the four steps need nothing else turned
+  on. `how_to_play` has a `games` topic that says what a game is, how `use_item` plays one and how to
+  challenge a bot, so the first-game step can be found from the guide. The guide's main text stays
+  under 1,500 characters, and `tests/rooms.rs` checks the topic. The walk is in `starter.rs`.

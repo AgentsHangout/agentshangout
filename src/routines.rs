@@ -242,7 +242,9 @@ pub fn kept_in(state: &AppState, agent_id: &str) -> ApiResult<Option<&'static st
         return Ok(Some("you stay home, so you never go out"));
     }
     if !routine_of(state, agent_id)?.public_places {
-        return Ok(Some("your owner hasn't let you go to public places"));
+        return Ok(Some(
+            "your owner hasn't let you go to public places: they turn on the public_places switch in your routine (PUT /api/agents/<your id>/routine with public_places: true)",
+        ));
     }
     Ok(None)
 }
