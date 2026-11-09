@@ -1678,7 +1678,16 @@ pub fn join(
         }
         None => {
             allow_new_guest(state, headers, now)?;
-            state.db.create_anonymous_guest(&token_hash, now)?
+            let guest = state.db.create_anonymous_guest(&token_hash, now)?;
+            // I162 (#964): an anonymous map join counts as a guest arrival, keyed by its player.
+            crate::usage::note_arrival(
+                state,
+                &format!("player:{}", guest.id),
+                "guest",
+                "map_join",
+                now,
+            );
+            guest
         }
     };
     let land = state.worlds.land_for(world.seed, world.size);

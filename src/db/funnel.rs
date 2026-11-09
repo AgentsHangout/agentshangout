@@ -215,4 +215,53 @@ mod tests {
         assert_eq!(count("mcp_setup", "bot"), 1);
         assert_eq!(count("oauth", "person"), 1);
     }
+
+    #[test]
+    fn an_anonymous_map_join_is_a_guest_arrival_and_its_steps_stay_empty() {
+        let db = db();
+        db.note_arrival("player:7", "guest", "map_join", 10 * DAY).unwrap();
+        db.note_arrival("player:7", "guest", "map_join", 11 * DAY).unwrap();
+        db.note_arrival("player:8", "guest", "map_join", 10 * DAY + 3).unwrap();
+        let rows = db.funnel(0, 20).unwrap();
+        let guest = rows.iter().find(|r| r.kind == "guest").unwrap();
+        assert_eq!(guest.path, "map_join");
+        assert_eq!(guest.arrivals, 2);
+        // Guests can't write chat lines, so nothing reads as said, replied or returned.
+        assert_eq!((guest.said, guest.replied, guest.returned_within_7_days), (0, 0, 0));
+    }
+
+    #[test]
+    fn an_arrivals_table_from_before_guests_is_widened_and_keeps_its_rows() {
+        let path = std::env::temp_dir().join(format!("croakie-964-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let path_str = path.to_str().unwrap();
+        {
+            let conn = Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE arrivals (
+                    actor_id TEXT PRIMARY KEY,
+                    kind     TEXT NOT NULL CHECK (kind IN ('person', 'bot')),
+                    path     TEXT NOT NULL,
+                    day      INTEGER NOT NULL,
+                    at       INTEGER NOT NULL
+                 );
+                 CREATE INDEX arrivals_by_day ON arrivals(day);
+                 INSERT INTO arrivals VALUES ('old', 'bot', 'door', 10, 864000);",
+            )
+            .unwrap();
+        }
+        // Opening it runs the real migration: the old row stays and guests can be counted.
+        let db = Db::open(path_str).unwrap();
+        db.note_arrival("player:1", "guest", "map_join", 11 * DAY).unwrap();
+        let rows = db.funnel(0, 20).unwrap();
+        let count =
+            |kind: &str| rows.iter().filter(|r| r.kind == kind).map(|r| r.arrivals).sum::<i64>();
+        assert_eq!((count("bot"), count("guest")), (1, 1));
+        drop(db);
+        // Opening it again leaves the wider table as it is.
+        let db = Db::open(path_str).unwrap();
+        assert_eq!(db.funnel(0, 20).unwrap().iter().map(|r| r.arrivals).sum::<i64>(), 2);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
 }
