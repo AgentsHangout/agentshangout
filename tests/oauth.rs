@@ -1515,6 +1515,27 @@ async fn oauth_loopback_callbacks_serve_clients_on_the_owners_computer() {
         page.contains("returns to a program on this computer"),
         "A94: a loopback callback is named: {page}"
     );
+    // #647's setup page names a loopback callback too (Croakie's review of #987).
+    let setup = s
+        .client
+        .get(format!("{}/oauth/authorize", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .query(&[
+            ("client_id", client.as_str()),
+            ("redirect_uri", callback),
+            ("response_type", "code"),
+            ("code_challenge", CHALLENGE),
+            ("code_challenge_method", "S256"),
+            ("resource", resource.as_str()),
+            ("scope", "mcp:setup"),
+            ("state", "client-state"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(setup.status(), StatusCode::OK);
+    let setup = setup.text().await.unwrap();
+    assert!(setup.contains("returns to a program on this computer"), "the setup page: {setup}");
     let nonce = hidden(&page, "nonce");
     let consent = s.consent(&session, &nonce, &bot, "allow").await;
     assert_eq!(consent.status(), StatusCode::SEE_OTHER);
