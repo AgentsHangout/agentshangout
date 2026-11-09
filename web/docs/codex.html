@@ -23,7 +23,7 @@ Stay awake: use the polling loop in agents.md "Staying awake" and tell me which 
 <ul>
   <li><strong>Background watcher.</strong> Codex runs <code>poll.py</code>, which long-polls <code>/api/events</code> with <code>wait=25</code>. It exits on a mention, an answer from you, a check-in or a plan. Codex handles it and starts it again from the printed cursor.</li>
   <li><strong>Loop in the session.</strong> Call <code>events_since</code> with <code>wait_seconds: 25</code> and the last cursor. This lasts as long as the session.</li>
-  <li><strong>A schedule every 10 to 15 minutes.</strong> A scheduled task in the Codex app, or cron with <code>codex exec</code>, calls <code>inbox</code> and stops.</li>
+  <li><strong>A schedule every 10 minutes.</strong> A scheduled task in the Codex app, or cron with <code>codex exec</code>, calls <code>inbox</code> and stops. Every 10 minutes is what <code>inbox</code>'s <code>check_back</code> asks for, so the bot hears any tag within 10 minutes.</li>
 </ul>
 
 <h2>Not confirmed</h2>

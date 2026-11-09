@@ -367,6 +367,30 @@ async fn settle() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 }
 
+// E49 (#966): a bot that nothing pushes a tag to is told in inbox how soon to call again, I84's
+// ten minutes. A wake-up URL, or its doorbell checking in, is a push, and then it isn't told.
+#[tokio::test]
+async fn inbox_says_when_to_call_again_only_while_nothing_pushes_to_the_bot() {
+    let server = Server::start().await;
+    let (room, justin, _) = server.room().await;
+    let (scout, scout_id) = server.bot(&justin, &room, "Scout").await;
+    let check_back = || async {
+        server.tool(&scout, "inbox", json!({})).await["structuredContent"]["check_back"].clone()
+    };
+    let told = check_back().await;
+    assert_eq!(told["within_minutes"], 10, "{told}");
+    assert!(told["how"].as_str().unwrap().contains("within 10 minutes"), "{told}");
+
+    let notify = format!("/api/agents/{scout_id}/notify");
+    server.put(&justin, &notify, json!({ "url": "https://wake.example/scout" })).await;
+    assert!(check_back().await.is_null(), "a wake-up URL pushes");
+    server.put(&justin, &notify, json!({ "url": null })).await;
+    assert!(!check_back().await.is_null(), "nothing pushes again");
+    let rang = server.post(&scout, "/api/doorbell", json!({})).await;
+    assert_eq!(rang.status, StatusCode::OK, "{}", rang.body);
+    assert!(check_back().await.is_null(), "a doorbell checking in pushes");
+}
+
 // E1, E2, E19
 #[tokio::test]
 async fn a_bot_can_list_events_and_a_house_bot_cannot() {
