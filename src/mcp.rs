@@ -301,6 +301,8 @@ fn tools() -> Value {
                 "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
+                "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
+                "cursor": { "type": "string", "description": "The cursor from the last catch_up page. Opaque: pass it back as it came." },
                 "known": {}
             } },
             "annotations": read_only,
@@ -1567,6 +1569,96 @@ fn mention_preview(text: &str) -> String {
     } else {
         head
     }
+}
+
+/// #878: the page size of a catch-up inbox, as read_room's catch-up (I157).
+const CATCH_UP_PAGE: usize = 50;
+
+/// #878: the cursor a catch-up inbox page hands back. Its shape is opaque to callers: the mention
+/// position and the event position, or nothing on the first call.
+fn catch_up_cursor(text: Option<&str>) -> ApiResult<(i64, i64, bool)> {
+    let Some(text) = text.filter(|text| !text.is_empty()) else {
+        return Ok((0, 0, true));
+    };
+    let bad = || ApiError::bad_request("cursor must be a cursor that inbox catch_up returned");
+    let (mention, event) =
+        text.strip_prefix("cu1-").and_then(|rest| rest.split_once('-')).ok_or_else(bad)?;
+    let mention: i64 = mention.parse().map_err(|_| bad())?;
+    let event: i64 = event.parse().map_err(|_| bad())?;
+    if mention < 0 || event < 0 {
+        return Err(bad());
+    }
+    Ok((mention, event, false))
+}
+
+/// #878: `inbox` with catch_up. One cursor across the mentions (the chat that names this bot, oldest
+/// first, 50 at a time), the events after its position, and on the first call the state parts of
+/// inbox. Only the mentions it returns are read, and nothing after the cursor is skipped.
+fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Err(ApiError::forbidden("only bots have a catch-up inbox"));
+    };
+    let (after_mention, after_event, first) =
+        catch_up_cursor(args.get("cursor").and_then(Value::as_str))?;
+    let mut reply = if first {
+        let mut snapshot = inbox_json(state, caller, false, &json!({}))?;
+        if let Some(map) = snapshot.as_object_mut() {
+            for key in ["mentions", "mentions_count", "mentions_older"] {
+                map.remove(key);
+            }
+        }
+        snapshot
+    } else {
+        json!({ "trust_note": TRUST_NOTE })
+    };
+
+    let mut unread: Vec<crate::db::Mention> = state
+        .db
+        .unread_mentions(agent_id)?
+        .into_iter()
+        .filter(|mention| mention.message_id > after_mention)
+        .collect();
+    unread.sort_by_key(|mention| mention.message_id);
+    let mentions_more = unread.len() > CATCH_UP_PAGE;
+    unread.truncate(CATCH_UP_PAGE);
+    let mention_cursor = unread.last().map_or(after_mention, |mention| mention.message_id);
+    let returned: Vec<i64> = unread.iter().map(|mention| mention.message_id).collect();
+    state.db.mark_mentions_read_ids(agent_id, &returned, now())?;
+    let mention_lines: Vec<Value> = unread
+        .iter()
+        .map(|mention| {
+            json!({
+                "hangout_id": mention.hangout_id,
+                "hangout": mention.hangout,
+                "message_id": mention.message_id,
+                "keyless": state.db.is_keyless_message(mention.message_id).unwrap_or(true),
+                "from": mention.from,
+                "text": mention.text,
+                "at": iso(mention.at),
+            })
+        })
+        .collect();
+
+    // The events part: the same page events_since gives from its cursor, and the whole first-day
+    // window on the first call.
+    let events_args = if first { json!({}) } else { json!({ "since": after_event.to_string() }) };
+    let page = crate::events::read_since(state, caller, agent_id, &events_args, false)?;
+    let event_cursor: i64 =
+        page["cursor"].as_str().and_then(|cursor| cursor.parse().ok()).unwrap_or(after_event);
+    let events_more = page["hasMore"] == true;
+
+    let has_more = mentions_more || events_more;
+    reply["catch_up"] = json!(true);
+    reply["mentions"] = json!(mention_lines);
+    reply["events"] = page["events"].clone();
+    reply["cursor"] = json!(format!("cu1-{mention_cursor}-{event_cursor}"));
+    reply["has_more"] = json!(has_more);
+    reply["what_next"] = json!(if has_more {
+        "Pass cursor back as cursor. Nothing after it is skipped."
+    } else {
+        "Caught up. Keep the cursor for the next catch_up call."
+    });
+    Ok(reply)
 }
 
 fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> ApiResult<Value> {
@@ -3708,6 +3800,7 @@ pub(crate) fn call_tool(
         "read_room" => read_room(state, caller, args),
         "read_thread" => read_thread(state, caller, args),
         "how_to_play" => crate::how_to_play::tool(args),
+        "inbox" if args["catch_up"].as_bool() == Some(true) => catch_up_inbox(state, caller, args),
         "inbox" => inbox_json(state, caller, args["full"].as_bool().unwrap_or(false), args),
         "credits" => {
             // HC35: what's newly merged is looked up in the background, and shows next time.

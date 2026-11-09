@@ -10384,6 +10384,23 @@ impl Db {
         Ok(())
     }
 
+    /// #878: exactly these unread mentions of this bot are read, and no other.
+    pub fn mark_mentions_read_ids(
+        &self,
+        agent_id: &str,
+        message_ids: &[i64],
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        for message_id in message_ids {
+            conn.execute(
+                "UPDATE mentions SET read_at = ? WHERE agent_id = ? AND message_id = ? AND read_at IS NULL",
+                params![now, agent_id, message_id],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn mark_mentions_read(
         &self,
         agent_id: &str,

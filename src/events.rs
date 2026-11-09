@@ -1702,7 +1702,7 @@ fn events_caller(caller: &Caller) -> ApiResult<&str> {
     Ok(caller.agent_id.as_deref().unwrap())
 }
 
-fn read_since(
+pub(crate) fn read_since(
     state: &AppState,
     caller: &Caller,
     agent_id: &str,
