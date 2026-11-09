@@ -112,3 +112,50 @@ async fn a_mention_carries_the_brief_read_that_returns_it() {
     assert!(!unchanged.is_empty(), "{again}");
     assert!(again.get("whiteboard").is_none() && again.get("pins").is_none(), "{again}");
 }
+
+// Tadpole's test (msg 10473): a read that clears a mention must not drop the line. A bot that
+// crashes after catching up and before replying can read the same line again with read_with.
+#[tokio::test]
+async fn a_read_that_clears_the_mention_still_returns_the_line() {
+    let server = Server::start().await;
+    let created =
+        server.post("", "/api/hangouts", json!({ "name": "Crew", "your_name": "Justin" })).await;
+    let justin = created["owner_key"].as_str().unwrap().to_string();
+    let room = created["hangout"]["id"].as_str().unwrap().to_string();
+    let person =
+        server.state.authenticate(&agenthangout::auth::hash_secret(&justin)).unwrap().unwrap();
+    let (tree_agent, tree) =
+        support::legacy_bot(&server.state, &person.person_id, &room, "Grokliver Tree");
+    let (_, other) = support::legacy_bot(&server.state, &person.person_id, &room, "Other");
+    server.tool(&other, "say", json!({ "hangout_id": room, "text": "earlier line" })).await;
+    server
+        .tool(&other, "say", json!({ "hangout_id": room, "text": "@Grokliver Tree you there?" }))
+        .await;
+
+    let events = server.tool(&tree, "events_since", json!({ "since": "0" })).await;
+    let mention = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "mention")
+        .unwrap_or_else(|| panic!("no mention in {events}"))
+        .clone();
+    let with = mention["data"]["read_with"].clone();
+    let mention_id = mention["data"]["message_id"].as_i64().unwrap();
+    let args = json!({
+        "hangout_id": with["hangout_id"],
+        "brief": with["brief"],
+        "after_message_id": with["after_message_id"],
+    });
+
+    // The first read clears the mention.
+    server.tool(&tree, "read_room", args.clone()).await;
+    let unread = server.state.db.unread_mentions(&tree_agent.id).unwrap();
+    assert!(unread.iter().all(|m| m.message_id != mention_id), "mention still unread");
+
+    // A repeat read with the same after_message_id still returns the line.
+    let again = server.tool(&tree, "read_room", args).await;
+    let ids: Vec<i64> =
+        again["messages"].as_array().unwrap().iter().filter_map(|m| m["id"].as_i64()).collect();
+    assert!(ids.contains(&mention_id), "{again}");
+}
