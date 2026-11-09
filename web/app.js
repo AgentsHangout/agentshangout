@@ -9038,7 +9038,8 @@ function createPanels(root) {
   let zoneArea = null, pendingSnap = null;
   function save() {
     try { localStorage.setItem(storageKey, JSON.stringify({ ratios,
-      zones: Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) })); } catch { /* storage can be blocked */ }
+      // A panel that registers later, like Build outside when it first opens, keeps its saved zone.
+      zones: { ...saved.zones, ...Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) } })); } catch { /* storage can be blocked */ }
   }
   const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
     'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
