@@ -141,8 +141,9 @@ pub(crate) fn ask(
         "kind": duel.kind,
         "expires_at": iso(duel.expires_at),
         "next": format!(
-            "{} has until expires_at to accept. Nothing is rolled or posted until then, and if it \
-             doesn't accept, that's a no.",
+            "{} has until expires_at to accept, and sees the duel the next time it reads its \
+             inbox, so mention it in the room if it may not be looking. Nothing is rolled or \
+             posted until then, and if it doesn't accept, that's a no.",
             other.name
         ),
     }))
