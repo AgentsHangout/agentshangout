@@ -31,6 +31,8 @@ pub(crate) fn webhook_scope(scope: &str) -> bool {
 pub(crate) struct ClientRecord {
     pub name: String,
     pub redirects: String,
+    /// A118: the host a client's metadata document was fetched from. None for a registered one.
+    pub fetched_from: Option<String>,
 }
 pub(crate) struct Grant {
     pub id: String,
@@ -57,11 +59,12 @@ struct Authorization {
     #[serde(default)]
     state: String,
 }
+/// What a client registers (DCR), or what its metadata document says (A118).
 #[derive(Deserialize)]
-struct Registration {
-    redirect_uris: Vec<String>,
+pub(crate) struct Registration {
+    pub redirect_uris: Vec<String>,
     #[serde(default)]
-    client_name: String,
+    pub client_name: String,
     #[serde(default)]
     token_endpoint_auth_method: Option<String>,
     #[serde(default)]
@@ -172,7 +175,7 @@ async fn resource_metadata(State(s): State<AppState>) -> Response {
 }
 async fn server_metadata(State(s): State<AppState>) -> Response {
     let b = &s.config.public_url;
-    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE,EVENTS_SCOPE,SETUP_SCOPE],"authorization_response_iss_parameter_supported":true})).into_response())
+    no_store(Json(json!({"issuer":b,"authorization_endpoint":format!("{b}/oauth/authorize"),"token_endpoint":format!("{b}/oauth/token"),"registration_endpoint":format!("{b}/oauth/register"),"revocation_endpoint":format!("{b}/oauth/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"code_challenge_methods_supported":["S256"],"scopes_supported":[SCOPE,EVENTS_SCOPE,SETUP_SCOPE],"authorization_response_iss_parameter_supported":true,"client_id_metadata_document_supported":true})).into_response())
 }
 fn valid_redirect(raw: &str) -> bool {
     if raw.len() > 2048 {
@@ -212,7 +215,20 @@ async fn register(
     if !limit(&s, &h, "register", 10) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    if r.redirect_uris.is_empty()
+    if !valid_metadata(&r) {
+        return Ok(error("invalid_client_metadata"));
+    }
+    let id = format!("ah_client_{}", auth::new_ceremony_id());
+    let name = client_name(&r.client_name);
+    if !s.db.oauth_register(&id, name, &serde_json::to_string(&r.redirect_uris).unwrap(), now())? {
+        return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
+    }
+    Ok(no_store((StatusCode::CREATED,Json(json!({"client_id":id,"client_id_issued_at":now(),"client_name":name,"redirect_uris":r.redirect_uris,"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}))).into_response()))
+}
+/// What a client may register, by DCR or in its metadata document (A118): one to five valid
+/// callbacks, a name of at most 100 characters, and a public client using the code flow only.
+pub(crate) fn valid_metadata(r: &Registration) -> bool {
+    !(r.redirect_uris.is_empty()
         || r.redirect_uris.len() > 5
         || r.redirect_uris.iter().any(|u| !valid_redirect(u))
         || r.client_name.chars().count() > 100
@@ -220,20 +236,36 @@ async fn register(
         || r.grant_types
             .as_ref()
             .is_some_and(|v| v.iter().any(|s| s != "authorization_code" && s != "refresh_token"))
-        || r.response_types.as_ref().is_some_and(|v| v != &vec!["code".to_string()])
-    {
-        return Ok(error("invalid_client_metadata"));
-    }
-    let id = format!("ah_client_{}", auth::new_ceremony_id());
-    let name =
-        if r.client_name.trim().is_empty() { "Unnamed client" } else { r.client_name.trim() };
-    if !s.db.oauth_register(&id, name, &serde_json::to_string(&r.redirect_uris).unwrap(), now())? {
-        return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
-    }
-    Ok(no_store((StatusCode::CREATED,Json(json!({"client_id":id,"client_id_issued_at":now(),"client_name":name,"redirect_uris":r.redirect_uris,"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}))).into_response()))
+        || r.response_types.as_ref().is_some_and(|v| v != &vec!["code".to_string()]))
 }
-fn valid_request(s: &AppState, r: &Authorization) -> ApiResult<Option<ClientRecord>> {
-    if r.client_id.len() > 128
+pub(crate) fn client_name(name: &str) -> &str {
+    if name.trim().is_empty() {
+        "Unnamed client"
+    } else {
+        name.trim()
+    }
+}
+/// The client a request names: a registered one, or for an https id its metadata document (A118),
+/// whose fetch counts against the same limit as registering.
+async fn client(s: &AppState, h: &HeaderMap, client_id: &str) -> ApiResult<Option<ClientRecord>> {
+    if !crate::cimd::is_url(client_id) {
+        return Ok(s.db.oauth_client(client_id)?);
+    }
+    let document = crate::cimd::client(s, client_id, || limit(s, h, "register", 10)).await;
+    Ok(document.map(|d| ClientRecord {
+        name: d.name,
+        redirects: serde_json::to_string(&d.redirects).unwrap_or_default(),
+        fetched_from: Some(d.host),
+    }))
+}
+async fn valid_request(
+    s: &AppState,
+    h: &HeaderMap,
+    r: &Authorization,
+) -> ApiResult<Option<ClientRecord>> {
+    // A118: only a document's URL may be longer than the usual 128 characters.
+    let longest = if crate::cimd::is_url(&r.client_id) { crate::cimd::MAX_URL_CHARS } else { 128 };
+    if r.client_id.len() > longest
         || r.response_type != "code"
         || r.code_challenge_method != "S256"
         || r.code_challenge.len() != 43
@@ -244,9 +276,16 @@ fn valid_request(s: &AppState, r: &Authorization) -> ApiResult<Option<ClientReco
     {
         return Ok(None);
     }
-    let Some(c) = s.db.oauth_client(&r.client_id)? else { return Ok(None) };
+    let Some(c) = client(s, h, &r.client_id).await? else { return Ok(None) };
     let redirects: Vec<String> = serde_json::from_str(&c.redirects).unwrap_or_default();
     Ok(redirects.iter().any(|u| same_redirect(u, &r.redirect_uri)).then_some(c))
+}
+/// A118: where the consent page says a client's details came from, never that it's verified.
+fn fetched(c: &ClientRecord) -> String {
+    match &c.fetched_from {
+        Some(host) => format!("<p>Client details fetched from {}.</p>", escape(host)),
+        None => String::new(),
+    }
 }
 async fn authorize(
     State(s): State<AppState>,
@@ -256,7 +295,8 @@ async fn authorize(
     if !limit(&s, &h, "authorize", 30) {
         return Ok(no_store(StatusCode::TOO_MANY_REQUESTS.into_response()));
     }
-    let Some(c) = valid_request(&s, &r)? else { return Ok(error("invalid_request")) };
+    let Some(c) = valid_request(&s, &h, &r).await? else { return Ok(error("invalid_request")) };
+    let fetched = fetched(&c);
     let caller = match owner(&s, &h) {
         Ok(c) => c,
         Err(e) => {
@@ -290,7 +330,7 @@ async fn authorize(
     let policy = format!("default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'self' {}; frame-ancestors 'none'", callback.origin().ascii_serialization());
     // #647: setting up a new bot binds no bot, and can only draft one for you to approve here.
     if r.scope == SETUP_SCOPE {
-        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
+        let mut response = html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}<p>Return to: {}</p><p>This connection lets your AI agent set up a new bot with you: it can draft the bot's name, role, first job, workplace and day plan, and nothing else. It can't act as you or any bot, and nothing is made until you approve the draft on this site. Access lasts a day and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><button name=\"decision\" value=\"allow\">Allow setting up a new bot</button><button name=\"decision\" value=\"deny\">Deny</button></form>", escape(&caller.name), escape(&c.name), escape(&r.client_id), escape(&r.redirect_uri), escape(&nonce)));
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
             policy.parse().map_err(|_| ApiError::bad_request("invalid callback origin"))?,
@@ -323,7 +363,7 @@ async fn authorize(
     } else {
         ("Webhook subscriptions are excluded.", "")
     };
-    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p><p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
+    let mut response=html(format!("<p>Signed in as <strong>{}</strong>.</p><p>Client label (not verified): <strong>{}</strong></p><p>Client ID: {}</p>{fetched}<p>Return to: {}</p><p>This connection can use the selected bot's existing MCP read and write tools, including messages, plans and travel, wherever that bot is permitted. It cannot act as you or other bots. {event_consent} Access lasts up to 30 days and can be revoked under <a href=\"/oauth/connections\">MCP connections</a>.</p><form method=\"post\" action=\"/oauth/consent\"><input type=\"hidden\" name=\"nonce\" value=\"{}\"><label>Bot <select required name=\"agent_id\">{choices}</select></label>{event_choice}<button name=\"decision\" value=\"allow\">Allow selected bot</button><button formnovalidate name=\"decision\" value=\"deny\">Deny</button></form>",escape(&caller.name),escape(&c.name),escape(&r.client_id),escape(&r.redirect_uri),escape(&nonce)));
     // The form's only cross-origin destination is this already validated registered callback.
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
@@ -361,11 +401,19 @@ async fn consent(
     let Ok(r) = serde_json::from_str::<Authorization>(&payload) else {
         return Ok(error("invalid_request"));
     };
-    if valid_request(&s, &r)?.is_none() {
+    let Some(known) = valid_request(&s, &h, &r).await? else {
         return Ok(error("invalid_request"));
-    }
+    };
     if c.decision == "deny" {
         return redirect(&r, "error", "access_denied", &s.config.public_url);
+    }
+    // A118: a client known by its document is kept as a registration, so its grant has a client,
+    // under the same cap as registering one.
+    if c.decision == "allow"
+        && known.fetched_from.is_some()
+        && !s.db.oauth_document_client(&r.client_id, &known.name, &known.redirects, now())?
+    {
+        return Ok(error("temporarily_unavailable"));
     }
     // #647: a setup grant, with no bot, lasting a day.
     if r.scope == SETUP_SCOPE {

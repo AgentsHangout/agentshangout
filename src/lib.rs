@@ -17,6 +17,7 @@ pub mod bug_reports;
 pub mod cadence;
 pub mod camera;
 pub mod cars;
+pub mod cimd;
 pub mod city;
 pub mod claims;
 pub mod clock;
@@ -145,6 +146,8 @@ pub struct Shared {
     /// E44: set when the server is asked to stop, so a waiting poll answers instead of being cut off.
     pub shutting_down: watch::Sender<bool>,
     pub(crate) oauth_events: events::oauth::Runtime,
+    /// A118, A119: OAuth client metadata documents read lately, in memory only.
+    pub cimd: cimd::Documents,
     /// Passkeys, built from `config.public_url`. `None` when that address is an IP number, which
     /// a passkey can't belong to, so the passkey routes refuse.
     pub webauthn: Option<webauthn_rs::Webauthn>,
@@ -271,6 +274,7 @@ impl AppState {
             bot_events,
             shutting_down,
             oauth_events: events::oauth::Runtime::default(),
+            cimd: cimd::Documents::default(),
             webauthn,
             ceremonies: passkey::Ceremonies::default(),
             discord: apps.discord,
