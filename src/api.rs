@@ -140,6 +140,7 @@ pub fn routes() -> Router<AppState> {
         .merge(bonds::routes())
         .merge(needs_you::routes())
         .merge(crate::owner_since::routes())
+        .merge(crate::owner_reasons::routes())
         .merge(tutorial::routes())
         .merge(god_mode::routes())
         .merge(spaces::routes())

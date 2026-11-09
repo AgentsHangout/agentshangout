@@ -72,7 +72,7 @@ pub fn counts(state: &AppState, person_id: &str, since: i64) -> rusqlite::Result
     Ok(Counts { mentions, plans_invited, people_joined_rooms })
 }
 
-fn last_visit(state: &AppState, person_id: &str) -> rusqlite::Result<Option<i64>> {
+pub fn last_visit(state: &AppState, person_id: &str) -> rusqlite::Result<Option<i64>> {
     let conn = state.db.conn();
     let mut stmt = conn.prepare("SELECT seen_at FROM owner_visits WHERE person_id = ?1")?;
     let mut rows = stmt.query([person_id])?;
