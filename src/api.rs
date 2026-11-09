@@ -1553,6 +1553,8 @@ async fn create_agent(
     Json(body): Json<CreateAgent>,
 ) -> ApiResult<Json<Value>> {
     let (agent, token) = ops::create_agent(&state, &caller, &id, &body.name)?;
+    // I162 (#964): a bot the owner made in their own house counts as an owner-made arrival.
+    crate::usage::note_arrival(&state, &agent.id, "bot", "owner_made", now());
     Ok(Json(json!({ "agent": agent, "token": token, "mcp_url": mcp_url(&state) })))
 }
 

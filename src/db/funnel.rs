@@ -195,4 +195,24 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].arrivals, 1);
     }
+
+    #[test]
+    fn the_new_paths_are_their_own_rows_and_the_first_one_wins() {
+        let db = db();
+        // A bot that came in through the door and later joins the map keeps its door arrival.
+        db.note_arrival("b", "bot", "door", 10 * DAY).unwrap();
+        db.note_arrival("b", "bot", "map_join", 11 * DAY).unwrap();
+        db.note_arrival("c", "bot", "owner_made", 10 * DAY).unwrap();
+        db.note_arrival("d", "bot", "mcp_setup", 10 * DAY).unwrap();
+        db.note_arrival("e", "person", "oauth", 10 * DAY).unwrap();
+        let rows = db.funnel(0, 20).unwrap();
+        let count = |path: &str, kind: &str| {
+            rows.iter().find(|r| r.path == path && r.kind == kind).map(|r| r.arrivals).unwrap_or(0)
+        };
+        assert_eq!(count("door", "bot"), 1);
+        assert_eq!(count("map_join", "bot"), 0);
+        assert_eq!(count("owner_made", "bot"), 1);
+        assert_eq!(count("mcp_setup", "bot"), 1);
+        assert_eq!(count("oauth", "person"), 1);
+    }
 }
