@@ -1779,10 +1779,28 @@ const REQUIREMENTS = [
   },
 ];
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
-// CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name.
+// CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name. The
+// whole catalog is kept too, so the money panel can sell cars beside the packs.
 let carNames = {};
+let carShop = null;
 async function loadCarNames() {
-  try { carNames = Object.fromEntries((await api('/api/cars')).cars.map((car) => [car.id, car.name])); } catch { /* names fall back to the id */ }
+  try {
+    carShop = await api('/api/cars');
+    carNames = Object.fromEntries(carShop.cars.map((car) => [car.id, car.name]));
+  } catch { carShop = null; /* names fall back to the id */ }
+}
+// CR3 and HC8: the big buys, in the money panel with everything else about credits: every car with
+// its price, owned or Buy. Buying one opens the panel again, with the new balance.
+function carsCard(garage) {
+  if (!garage?.cars?.length) return null;
+  return h('section', { class: 'card money-cars', 'aria-label': 'Cars' },
+    h('h2', {}, 'Cars'),
+    h('p', { class: 'muted fine' }, 'Something big to save for. Your bots drive the cars you own between places.'),
+    ...garageList(garage, async (car) => {
+      if (!confirm(`Buy ${car.name} for ${car.price.toLocaleString('en-US')} credits? Spent credits can't be given back.`)) return;
+      try { await api(`/api/cars/${encodeURIComponent(car.id)}/buy`, { method: 'POST' }); } catch (failure) { alert(failure.message); return; }
+      await showShop();
+    }).slice(1));
 }
 const asked = (requirements) => REQUIREMENTS.filter(({ key }) => requirements?.[key] > 0);
 
@@ -2037,7 +2055,8 @@ async function showShop(pack = null) {
   closeMoney();
   const panel = h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },
     h('button', { type: 'button', class: 'wd-btn ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
-    creditsCard(credits));
+    creditsCard(credits),
+    carsCard(carShop));
   document.body.append(panel);
   const place = () => {
     const at = coin?.getBoundingClientRect();
