@@ -7,12 +7,7 @@
 //! a second lookup can't move it. It also has a short timeout and reads at most a few KB, and
 //! what it reads is kept in memory for a while, in a cache bounded by size and by time.
 
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{Arc, Mutex, OnceLock},
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Mutex, time::Duration};
 
 use reqwest::{
     header::{HeaderMap, ACCEPT, CACHE_CONTROL},
@@ -21,6 +16,8 @@ use reqwest::{
 use serde_json::Value;
 
 use crate::AppState;
+#[cfg(debug_assertions)]
+use std::sync::{Arc, OnceLock};
 
 /// A118: the longest `client_id` that can be a document's URL. Every other id keeps A65's 128.
 pub const MAX_URL_CHARS: usize = 512;
@@ -44,23 +41,39 @@ pub(crate) struct Document {
     pub host: String,
 }
 
+/// A test's stand-in for the network, in a debug build only (`serve_from_memory`).
+#[cfg(debug_assertions)]
 type Fetcher = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// A119: documents read lately, each until its time is up.
 #[derive(Default)]
 pub struct Documents {
     cache: Mutex<HashMap<String, (Document, i64)>>,
+    #[cfg(debug_assertions)]
     fetcher: OnceLock<Fetcher>,
 }
 
 impl Documents {
     /// Tests only: serve documents from memory in place of the network, so a test never has to
-    /// loosen A119 to reach a local server. The server itself never sets this.
+    /// loosen A119 to reach a local server. It exists only in a debug build, which is what
+    /// `cargo test` makes; the release build the server runs has no such seam.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
     pub fn serve_from_memory(
         &self,
         fetch: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) {
         let _ = self.fetcher.set(Arc::new(fetch));
+    }
+
+    /// A test's document in place of a fetch: only in a debug build, and only once a test set it.
+    fn served(&self, client_id: &str) -> Option<Option<(String, i64)>> {
+        #[cfg(debug_assertions)]
+        if let Some(fetch) = self.fetcher.get() {
+            return Some(fetch(client_id).map(|body| (body, DEFAULT_SECS)));
+        }
+        let _ = client_id;
+        None
     }
 
     fn cached(&self, client_id: &str, now: i64) -> Option<Document> {
@@ -124,8 +137,8 @@ pub(crate) async fn client(
     if !may_fetch() {
         return None;
     }
-    let (body, keep_secs) = match state.cimd.fetcher.get() {
-        Some(fetch) => (fetch(client_id)?, DEFAULT_SECS),
+    let (body, keep_secs) = match state.cimd.served(client_id) {
+        Some(served) => served?,
         None => fetch(&url).await?,
     };
     let document = read(client_id, &url, &body)?;
@@ -171,14 +184,22 @@ async fn fetch(url: &Url) -> Option<(String, i64)> {
         let keep_secs = max_age(response.headers());
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.ok()? {
-            if body.len() + chunk.len() > MAX_BYTES {
+            if !within_cap(&mut body, &chunk) {
                 return None;
             }
-            body.extend_from_slice(&chunk);
         }
         Some((String::from_utf8(body).ok()?, keep_secs))
     };
     tokio::time::timeout(TIMEOUT, fetched).await.ok()?
+}
+
+/// A119: adds a chunk to a document's body, or refuses once the body would pass `MAX_BYTES`.
+fn within_cap(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if body.len() + chunk.len() > MAX_BYTES {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
 }
 
 /// A119: the address to connect to, only when every address the host resolved to is public (no
@@ -242,6 +263,33 @@ mod tests {
         assert_eq!(checked(vec![at("93.184.215.14"), at("10.0.0.7")]), None);
         let public = vec![at("[2606:2800:21f:cb07:6820:80da:af6b:8b2c]"), at("93.184.215.14")];
         assert_eq!(checked(public), Some(at("93.184.215.14")), "IPv4 first");
+    }
+
+    #[test]
+    fn a_document_is_kept_for_its_max_age_up_to_an_hour() {
+        let kept = |value: &str| {
+            let mut headers = HeaderMap::new();
+            if !value.is_empty() {
+                headers.insert(CACHE_CONTROL, value.parse().unwrap());
+            }
+            max_age(&headers)
+        };
+        assert_eq!(kept(""), DEFAULT_SECS, "no Cache-Control");
+        assert_eq!(kept("max-age=60"), 60);
+        assert_eq!(kept("public, max-age=120"), 120);
+        assert_eq!(kept("max-age=99999"), MAX_SECS, "capped at an hour");
+        assert_eq!(kept("max-age=soon"), 0, "unreadable");
+        assert_eq!(kept("no-store"), 0);
+        assert_eq!(kept("max-age=60, no-cache"), 0);
+    }
+
+    #[test]
+    fn a_document_is_read_to_5_kb_and_no_further() {
+        let mut body = Vec::new();
+        assert!(within_cap(&mut body, &vec![b'a'; MAX_BYTES - 1]));
+        assert!(within_cap(&mut body, b"b"), "exactly 5 KB is fine");
+        assert!(!within_cap(&mut body, b"c"), "one byte more is refused");
+        assert_eq!(body.len(), MAX_BYTES);
     }
 
     #[test]
