@@ -1510,7 +1510,33 @@ async fn oauth_loopback_callbacks_serve_clients_on_the_owners_computer() {
         .to_str()
         .unwrap()
         .contains("form-action 'self' http://127.0.0.1:51234"));
-    let nonce = hidden(&page.text().await.unwrap(), "nonce");
+    let page = page.text().await.unwrap();
+    assert!(
+        page.contains("returns to a program on this computer"),
+        "A94: a loopback callback is named: {page}"
+    );
+    // #647's setup page names a loopback callback too (Croakie's review of #987).
+    let setup = s
+        .client
+        .get(format!("{}/oauth/authorize", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .query(&[
+            ("client_id", client.as_str()),
+            ("redirect_uri", callback),
+            ("response_type", "code"),
+            ("code_challenge", CHALLENGE),
+            ("code_challenge_method", "S256"),
+            ("resource", resource.as_str()),
+            ("scope", "mcp:setup"),
+            ("state", "client-state"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(setup.status(), StatusCode::OK);
+    let setup = setup.text().await.unwrap();
+    assert!(setup.contains("returns to a program on this computer"), "the setup page: {setup}");
+    let nonce = hidden(&page, "nonce");
     let consent = s.consent(&session, &nonce, &bot, "allow").await;
     assert_eq!(consent.status(), StatusCode::SEE_OTHER);
     let location = reqwest::Url::parse(consent.headers()["location"].to_str().unwrap()).unwrap();
@@ -2074,6 +2100,10 @@ async fn a_client_id_url_names_its_document_and_goes_through_authorize() {
     assert!(page.contains("Client details fetched from client.example."), "{page}");
     assert!(page.contains("Client label (not verified): <strong>Doc client</strong>"), "{page}");
     assert!(!page.contains("verified host") && !page.contains("<img"), "{page}");
+    assert!(
+        !page.contains("returns to a program on this computer"),
+        "an https callback isn't local: {page}"
+    );
 
     let code = server.code(&session, DOCUMENT, &bot).await;
     let token = server.exchange(DOCUMENT, &code, VERIFIER).await;
