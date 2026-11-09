@@ -1875,8 +1875,12 @@ pub fn night(
     if at_home(state, bot, now)?.is_err() {
         return Ok(None);
     }
-    if told.is_some_and(|told| slept.is_none_or(|slept| told > slept) && now - told < DREAMING_FOR)
-    {
+    // Acting is what ends a night, a minute's grace after the moment it was told (#933), as it does
+    // after sleeping below.
+    let still = |since: i64| last_active_at.is_none_or(|at| at <= since + 60);
+    if told.is_some_and(|told| {
+        slept.is_none_or(|slept| told > slept) && now - told < DREAMING_FOR && still(told)
+    }) {
         return Ok(Some("dreaming"));
     }
     // #839: a sleep hour in its owner's plan is asleep at home, whether or not it slept with notes.
@@ -1884,7 +1888,6 @@ pub fn night(
         return Ok(Some("asleep"));
     }
     // Sleeping is itself something it did, so a minute's grace.
-    let still = |slept: i64| last_active_at.is_none_or(|at| at <= slept + 60);
     Ok(slept.filter(|slept| now - slept < ASLEEP_FOR && still(*slept)).map(|_| "asleep"))
 }
 

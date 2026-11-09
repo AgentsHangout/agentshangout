@@ -137,7 +137,8 @@ in the Trust panel's graph.
   `GET /api/agents/{id}/routine` says which as `auto_bedtime`. Nothing else changes: a sleeping bot
   is woken by what woke it before, a mention or its owner, and MM13's `bedtime` in `inbox` stays.
 - **MM18.** In My bots its owner sees its night as `status.night`: `dreaming` from its bedtime until
-  it sleeps with its notes ("Dreaming: sorting out its day"), then `asleep` while it's home and
+  it sleeps with its notes or does anything after its bedtime (a minute's grace, as after sleeping)
+  ("Dreaming: sorting out its day"), then `asleep` while it's home and
   has done nothing since ("Asleep: went to bed ..."). Each lasts at most a day, so a bot that never
   sleeps after its bedtime stops showing as dreaming. Its night comes first in
   its row. Nobody else sees it, in rooms, on the map or anywhere else (MM14). #790: while it's
