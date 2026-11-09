@@ -4670,7 +4670,9 @@ async fn games_roll_on_the_server_within_caps_and_boards_keep_private_rooms_off(
                     agent_id: agent,
                     person_id: person,
                     score,
-                    week: games::week_of(at),
+                    // GM4: the boards below show this week, so these plays go in it even in a
+                    // week's first 50 minutes, when 50 minutes back is still last week.
+                    week,
                     now: at,
                 },
                 caps,
