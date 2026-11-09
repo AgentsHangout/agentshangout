@@ -347,8 +347,46 @@ async fn answer_route(
     Ok(Json(answer(&state, &caller, &id, &body.answer)?))
 }
 
+/// I161: the most greeters one room has.
+pub const MAX_GREETERS: i64 = 3;
+
+/// I161: the rooms a bot greets in, for its owner.
+async fn get_greeter(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let bot = ops::own_agent(&state, &caller, &id, "choose where a bot greets")?;
+    Ok(Json(json!({ "rooms": state.db.greeter_rooms(&bot.id)? })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GreeterBody {
+    hangout_id: String,
+    on: bool,
+}
+
+/// I161: the owner makes a bot a greeter in a room it belongs to, or stops.
+async fn put_greeter(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<GreeterBody>,
+) -> ApiResult<Json<Value>> {
+    let bot = ops::own_agent(&state, &caller, &id, "choose where a bot greets")?;
+    if body.on && !state.db.belongs_to_room(&body.hangout_id, &bot.id)? {
+        return Err(ApiError::bad_request("a bot greets only in a room it belongs to"));
+    }
+    if !state.db.set_greeter(&body.hangout_id, &bot.id, body.on, MAX_GREETERS, now())? {
+        return Err(ApiError::conflict(format!("that room already has {MAX_GREETERS} greeters")));
+    }
+    Ok(Json(json!({ "rooms": state.db.greeter_rooms(&bot.id)? })))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents/{id}/duels", get(get_allow).put(put_allow))
+        .route("/api/agents/{id}/greeter", get(get_greeter).put(put_greeter))
         .route("/api/duels/{id}/answer", post(answer_route))
 }
