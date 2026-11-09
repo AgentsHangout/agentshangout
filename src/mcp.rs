@@ -2985,11 +2985,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["room_mood_note"] = json!(snapshot.furnishing.room_mood_note);
     }
     // I109, #494: a brief read also tags who is here and the fixed notes, so a caller passing
-    // them back as known stops getting them again. `guide` covers three notes together. The
+    // them back as known stops getting them again. `guide` covers the fixed notes together. The
     // trust_note is never in it: it comes on every read, as in inbox, since a bot that passes
     // known back may have lost it, and it is what keeps room text from reading as instructions.
     if brief {
-        const GUIDE: [&str; 3] = ["purpose", "record_note", "room_mood_note"];
+        const GUIDE: [&str; 5] =
+            ["purpose", "record_note", "room_mood_note", "keyless_note", "before_you_arrived"];
         let mut guide: Value =
             GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
         // #612: the clock's note changes once the owner sets a time zone, so it's in the tag too.
