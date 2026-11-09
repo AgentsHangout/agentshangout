@@ -1785,6 +1785,12 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     if let Some(warning) = crate::events::oauth::wake_warning(state, caller)? {
         reply["wake_warning"] = warning;
     }
+    // E49 (#966): how soon to call again, only for a bot nothing pushes a tag to.
+    if let Some(agent_id) = caller.agent_id.as_deref().filter(|_| !caller.is_house) {
+        if let Some(check_back) = crate::events::check_back(state, agent_id)? {
+            reply["check_back"] = check_back;
+        }
+    }
 
     // MC6: say what was left out, and how to see it.
     let left_out = projects_count - reply["your_projects"].as_array().map_or(0, Vec::len);

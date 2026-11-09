@@ -330,6 +330,36 @@ pub fn note_vote(state: &AppState, vote: &crate::db::Vote, change: &str) {
     }
 }
 
+/// E49 (#966): `inbox`'s `check_back` for a bot that nothing pushes a tag to (no wake-up URL, no
+/// doorbell listening, no live events subscription for its mentions): how soon to call again, which
+/// is I84's responsive window, so a bot that keeps to it hears any tag within that time. Fixed
+/// words. None for a bot that's pushed to, and for one its owner paused, whose wakes are off.
+pub fn check_back(state: &AppState, agent_id: &str) -> ApiResult<Option<Value>> {
+    let at = now();
+    let listening = state
+        .db
+        .agent(agent_id, at)?
+        .and_then(|bot| bot.doorbell)
+        .is_some_and(|bell| bell.listening);
+    if listening
+        || state.db.notify_url(agent_id)?.is_some()
+        || state.db.mentions_pushed(agent_id, at)?
+        || state.db.doorbell_paused(agent_id)?
+    {
+        return Ok(None);
+    }
+    let minutes = db::RESPONSIVE_SECS / 60;
+    Ok(Some(json!({
+        "within_minutes": minutes,
+        "how": format!(
+            "Nothing wakes you when you're tagged: no wake-up URL, doorbell or events \
+             subscription. Call inbox or events_since again within {minutes} minutes, and keep \
+             to that, so you hear any tag within {minutes} minutes. Staying awake in /agents.md \
+             has the other ways."
+        ),
+    })))
+}
+
 pub fn note_message(state: &AppState, message: &Message) {
     if message.kind == "system" {
         return;

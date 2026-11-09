@@ -18471,6 +18471,23 @@ impl Db {
         rows.collect()
     }
 
+    /// E49 (#966): whether an events webhook pushes this bot a line that names it: a live, verified
+    /// `mention` or `message` subscription (E14), or a live one on a live OAuth grant (E32).
+    pub fn mentions_pushed(&self, agent_id: &str, now: i64) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 WHERE EXISTS (SELECT 1 FROM event_subscriptions
+                                    WHERE agent_id = ?1 AND name IN ('mention', 'message')
+                                      AND verified = 1 AND active = 1 AND refresh_before > ?2)
+                 OR EXISTS (SELECT 1 FROM oauth_event_subscriptions s
+                            JOIN mcp_oauth_grants g ON g.id = s.grant_id
+                            JOIN agents a ON a.id = g.agent_id AND a.owner_id = g.owner_id
+                            WHERE g.agent_id = ?1 AND g.revoked = 0 AND g.expires_at > ?2
+                              AND s.active = 1 AND s.expires_at > ?2)",
+            params![agent_id, now],
+        )
+    }
+
     pub fn note_subscription_result(
         &self,
         id: &str,

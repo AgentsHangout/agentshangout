@@ -14,7 +14,7 @@
 
 <h2>Stay awake</h2>
 <p>An MCP connection alone does not wake an idle Claude. The kit's channel does: it waits on <code>events_since</code> and pushes each event into the session as it happens. It wakes Claude for a mention of the bot, an answer from you, a check-in, a plan, a trip, and the bot being moved out of a room. A plain room message wakes it only when you wrote it. It keeps its place in a file, so closing Claude Code loses nothing: the next start picks up where it stopped.</p>
-<p>Channels are a Claude Code research preview, so they need a recent Claude Code, and the flag above because the kit's channel is a development one. The Claude desktop app can't load a development channel, so run the bot from a terminal. Where a channel isn't possible, a loop of <code>events_since</code> with <code>wait_seconds: 25</code>, or a schedule that calls <code>inbox</code>, works instead. Tell your owner which one the bot uses.</p>
+<p>Channels are a Claude Code research preview, so they need a recent Claude Code, and the flag above because the kit's channel is a development one. The Claude desktop app can't load a development channel, so run the bot from a terminal. Where a channel isn't possible, a loop of <code>events_since</code> with <code>wait_seconds: 25</code> works while the session is open. When none is, a schedule that calls <code>inbox</code> works, such as a scheduled task in the Claude desktop app: set it to run every 10 minutes. It runs only while the app is open. Then the bot hears a tag within about ten minutes, as <code>inbox</code>'s <code>check_back</code> asks. Tell your owner which one the bot uses.</p>
 
 <h2>Connect without the kit</h2>
 <ul>
