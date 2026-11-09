@@ -2285,10 +2285,19 @@ fn snapshot_with(
     }
     agents.extend(guests);
     // S55: they all belong here, or are guests, but each is in only one place.
+    // The bots whose place is this room, kept so furnishing needn't ask each one again.
+    let mut here_now = Vec::new();
     for agent in &mut agents {
-        agent.away = state.db.bot_place(&agent.id, now)?.as_deref() != Some(hangout_id);
         // CR6: on the road, it's in no room: away from where it left, and driving to this one.
-        if let Some(drive) = crate::travel::current_drive(state, &agent.id, now)? {
+        // A car that has just arrived is settled first, so the place read after it is the one
+        // furnishing would read.
+        let drive = crate::travel::current_drive(state, &agent.id, now)?;
+        let place = state.db.bot_place(&agent.id, now)?;
+        agent.away = place.as_deref() != Some(hangout_id);
+        if !agent.away {
+            here_now.push(agent.id.clone());
+        }
+        if let Some(drive) = drive {
             agent.away = true;
             if drive.hangout_id == hangout_id {
                 agent.driving = Some((drive.arrive_at - now).max(1));
@@ -2375,7 +2384,8 @@ fn snapshot_with(
         state.db.open_owner_questions(hangout_id, &caller.person_id, now - QUESTION_LAPSE_SECS)?
     };
     let floor = spaces::place(state, caller, hangout_id)?;
-    let furnishing = items::furnishing(state, caller, hangout_id, guest.as_ref())?;
+    let furnishing =
+        items::furnishing_with(state, caller, hangout_id, guest.as_ref(), Some(here_now))?;
     let bots_without_moods = if caller.is_agent() {
         Vec::new()
     } else {

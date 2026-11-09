@@ -1530,12 +1530,24 @@ pub fn furnishing(
     hangout_id: &str,
     guest: Option<&Visit>,
 ) -> ApiResult<Furnishing> {
+    furnishing_with(state, caller, hangout_id, guest, None)
+}
+
+/// As `furnishing`, but `here` can carry the bots already known to be in the room (a snapshot has
+/// just asked each one where it is), so their places are not asked again.
+pub fn furnishing_with(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    guest: Option<&Visit>,
+    here: Option<Vec<String>>,
+) -> ApiResult<Furnishing> {
     let items = state.db.floor_items(hangout_id)?;
     let room_mood = if feels_moods(state, caller)? { room_mood(&items) } else { None };
     let room_beauty = room_beauty(&items);
     let counts = state.db.item_note_counts(hangout_id, notes_since(guest))?;
     let mut clocks = state.db.closing_clocks_on(hangout_id)?;
-    let mut users = users_on(state, caller, hangout_id)?;
+    let mut users = users_on_with(state, caller, hangout_id, here)?;
     Ok(Furnishing {
         room_mood,
         room_mood_note: room_mood.and_then(mood_note),
@@ -2131,8 +2143,20 @@ fn users_on(
     viewer: &Caller,
     floor_id: &str,
 ) -> ApiResult<HashMap<String, Vec<String>>> {
+    users_on_with(state, viewer, floor_id, None)
+}
+
+fn users_on_with(
+    state: &AppState,
+    viewer: &Caller,
+    floor_id: &str,
+    here: Option<Vec<String>>,
+) -> ApiResult<HashMap<String, Vec<String>>> {
     let now = now();
-    let here = bots_here(state, floor_id, now)?;
+    let here = match here {
+        Some(here) => here,
+        None => bots_here(state, floor_id, now)?,
+    };
     let mut users: HashMap<String, Vec<String>> = HashMap::new();
     for (item_id, agent_id) in state.db.item_uses(floor_id, now)? {
         if here.contains(&agent_id) {
