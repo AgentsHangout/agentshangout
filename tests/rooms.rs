@@ -6664,8 +6664,9 @@ async fn room_mentions_reach_subscribed_bots_here_once_and_only_when_the_owner_a
     };
 
     // Off until the owner turns it on, and only the owner can; only a bot's owner subscribes it.
+    // #944: a person's @room reaches a bot that belongs without that, so read_room says it does.
     let read = server.read_room(&fido.token, &room).await;
-    assert_eq!(read["room_mentions"], json!({ "policy": "off", "you_are_subscribed": false }));
+    assert_eq!(read["room_mentions"], json!({ "policy": "off", "you_are_subscribed": true }));
     server
         .put(&bob.key, &policy, json!({ "policy": "members" }))
         .await
@@ -11775,9 +11776,10 @@ async fn person_room_tag_rings_polling_bots_from_the_recorded_room_recipient_set
     server.state.db.set_bot_place(&away.id, &elsewhere, now()).unwrap();
     let policy = format!("/api/hangouts/{room}/room-mentions");
     server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
-    for bot in [&fido, &rex, &away] {
+    // #944: Quiet is here, but Ann turned @room off for it.
+    for (bot, on) in [(&fido, true), (&rex, true), (&away, true), (&quiet, false)] {
         server
-            .put(&ann.key, &format!("{policy}/bots/{}", bot.id), json!({ "subscribed": true }))
+            .put(&ann.key, &format!("{policy}/bots/{}", bot.id), json!({ "subscribed": on }))
             .await
             .ok();
     }
@@ -11905,6 +11907,11 @@ async fn polling_room_tag_ids_are_caller_and_page_scoped_without_reclassifying_n
     server.put(&ann.key, &policy, json!({ "policy": "members" })).await.ok();
     server
         .put(&ann.key, &format!("{policy}/bots/{}", fido.id), json!({ "subscribed": true }))
+        .await
+        .ok();
+    // #944: Ann turned @room off for Rex, so it isn't a recipient.
+    server
+        .put(&ann.key, &format!("{policy}/bots/{}", rex.id), json!({ "subscribed": false }))
         .await
         .ok();
     let bell = agenthangout::doorbell::Doorbell::new(&server.base, &fido.token);
@@ -12038,7 +12045,11 @@ async fn the_chat_box_offers_room_only_where_it_would_work() {
     assert_eq!(snap(ann.key.clone()).await["room_mention_policy"], "members");
     assert!(snap(bob.key.clone()).await["room_mention_policy"].is_null());
     let rover = server.bot(&bob, &room, "Rover").await;
+    // #944: a bot's switch starts on, and off stays off until its owner turns it on again.
+    assert_eq!(snap(bob.key.clone()).await["room_mention_bots"], json!([rover.id]));
     let switch = format!("/api/hangouts/{room}/room-mentions/bots/{}", rover.id);
+    server.put(&bob.key, &switch, json!({ "subscribed": false })).await.ok();
+    assert_eq!(snap(bob.key.clone()).await["room_mention_bots"], json!([]));
     server.put(&bob.key, &switch, json!({ "subscribed": true })).await.ok();
     assert_eq!(snap(bob.key.clone()).await["room_mention_bots"], json!([rover.id]));
     assert_eq!(

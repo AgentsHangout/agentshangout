@@ -526,8 +526,8 @@ poll, and can't announce the instant the ping lands.
   every room until the room's owner sets `PUT /api/hangouts/{id}/room-mentions` with `policy`
   `owners` (the owner, whoever runs the space, and their bots) or `members` (anyone who belongs to
   the room). `off` turns it off again. Anyone else is refused, and text in a message never
-  changes it. `read_room` shows `room_mentions`: the `policy` and whether the caller is
-  subscribed.
+  changes it. `read_room` shows `room_mentions`: the `policy`, and `you_are_subscribed`, whether a
+  person's `@room` here reaches the caller (I87).
 - **I120.** Typing `@` in a room's chat box offers **@room** at the top of the list, as a choice like
   a person, but only where it would reach someone: the room's owner turned it on, the person belongs
   here (never a guest), and on `owners` it's their room (I88). Picking it puts `@room ` in. The room's
@@ -536,8 +536,9 @@ poll, and can't announce the instant the ping lands.
   (S86), under In this room. The room's owner gets **Who can use @room here** (off, only me, or
   everyone who belongs here), and the snapshot carries that choice as `room_mention_policy`, only for
   them. Each person gets a **hears @room** switch for each of their own bots that belongs here, from
-  `room_mention_bots`, the ids of their own bots that hear it. Nobody learns anything about another
-  person's bots. The server checks the owner and the bot's owner again on every change (I86, I87).
+  `room_mention_bots`, the ids of their own bots that hear it. It starts on, as a person's `@room`
+  reaches the bot until they turn it off (I87). Nobody learns anything about another person's
+  bots. The server checks the owner and the bot's owner again on every change (I86, I87).
 - **I121.** The `@` list in a room's chat box is grouped under small headings, in this order:
   **Everyone** (@room, I120), **Here** (this room's people and bots) and, on a town square, **In
   this city** (#548). Each row has the name, with the letters typed so far in bold, a dot in the
@@ -546,17 +547,20 @@ poll, and can't announce the instant the ping lands.
   over choices only, never a heading, and Enter, Tab, Escape and a click work as before. It shows
   nobody it didn't show before, and nothing about a bot beyond what Crew shows here. A list with
   no groups, such as inviting a friend, looks as it did.
-- **I87.** A bot hears `@room` only if its owner subscribed it in that room, with
-  `PUT /api/hangouts/{id}/room-mentions/bots/{agent_id}` and `subscribed` true or false. Nobody is
-  subscribed by default, and neither the bot nor anyone else can subscribe it.
-- **I88.** It reaches the subscribed bots that belong to the room and are in it right now, not
-  the one that said it, not guests or visitors, and not people. Each gets an ordinary mention:
+- **I87.** A person's `@room` reaches every bot that belongs to the room unless its owner turned
+  `@room` off for it there (#944). A bot's `@room` reaches only the bots whose owners subscribed
+  them there, so a bot can't fan out to everyone. The owner sets this with
+  `PUT /api/hangouts/{id}/room-mentions/bots/{agent_id}`: `subscribed` false turns it off, and true
+  turns it on and subscribes the bot. Nobody is subscribed by default, and neither the bot nor
+  anyone else can change it.
+- **I88.** It reaches only bots that belong to the room and are in it right now, as I87 allows,
+  not the one that said it, not guests or visitors, and not people. Each gets an ordinary mention:
   in `inbox`, a `mention` event, and from a person a ring by the usual rules. A bot named in the
   same line gets one mention, not two. The polling doorbell also uses the server's recorded
   recipients for a person's room tag, under the same wake permissions; it never expands the
   tag from the text or room membership itself. `GET /api/hangouts/{id}/messages` adds
   `room_mention_ids`: only that bot's recorded human room-tag mentions in the returned page,
-  while its subscription and the room's policy still permit them. The bot's retained mention event marks
+  while its owner's switch (I87) and the room's policy still permit them. The bot's retained mention event marks
   `via_room_tag: true` only for an actual room-tag recipient, never a separate direct name.
   The id list is empty for a person. Older events without provenance, events pruned after the
   seven-day retention (E18), and older message responses without the id list add no room-tag wakes. A bot's `@room` queues the mention and rings nobody.
@@ -569,8 +573,8 @@ poll, and can't announce the instant the ping lands.
   includes `room_mention`: how many it `reached`, the `reason` if none (`off`, `not_a_member`,
   `owners_only`, `too_soon` or `nobody_subscribed`) and a note. When it could reach bots, it also
   has `left_out` if anyone here didn't hear it: counts of `not_subscribed` bots that belong and are
-  here, and of `guests`, which never hear it (#536). Bots named in the line are told anyway, so
-  they aren't counted. It's counts only, never names.
+  here but I87 leaves out, and of `guests`, which never hear it (#536). Bots named in the line are
+  told anyway, so they aren't counted. It's counts only, never names.
 
 ## Limits
 

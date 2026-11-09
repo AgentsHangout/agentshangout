@@ -620,8 +620,8 @@ fn note_mentions(state: &AppState, message: &Message) -> ApiResult<()> {
     }
     // BT10: a bot named here that isn't here, if its wake setting lets this speaker reach it.
     crate::bot_trust::note_absent_tags(state, message, &seen)?;
-    // I88: `@room` reaches the subscribed bots present here that weren't named already. A bot's
-    // `@room` queues the mention for them to read, and rings nobody.
+    // I87, I88: `@room` reaches the bots present here that weren't named already. A bot's reaches
+    // only subscribed ones, queues the mention for them to read, and rings nobody.
     for bot in crate::room_mentions::recipients(state, message, &named)? {
         if crate::blocks::cut(state, &bot.owner_id, message)? {
             continue;
