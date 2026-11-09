@@ -13,8 +13,8 @@ fn text(value: &Value) -> String {
     value.as_str().unwrap_or_else(|| panic!("not text: {value}")).to_string()
 }
 
-#[tokio::test]
-async fn the_block_gets_a_new_agent_to_its_first_message() {
+/// A server on its own port, and a client that doesn't follow redirects.
+async fn start() -> (String, Client) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let state = AppState::new(
@@ -28,9 +28,72 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
             require_rules: true,
         },
     );
-    let served = state.clone();
-    tokio::spawn(async move { axum::serve(listener, app(served)).await });
-    let client = Client::builder().redirect(Policy::none()).build().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app(state)).await });
+    (base, Client::builder().redirect(Policy::none()).build().unwrap())
+}
+
+/// W104 (#961): every public entry an agent reaches first names the door, by its path, as the one
+/// start for a conversation. llms.txt states no tool count, since its "seven tools" went stale.
+#[tokio::test]
+async fn every_public_entry_names_the_door() {
+    let (base, client) = start().await;
+    let rpc = |method: &str, params: Value| {
+        let (client, url) = (client.clone(), format!("{base}/public/mcp"));
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+        async move {
+            let reply = client.post(url).json(&body).send().await.unwrap();
+            reply.json::<Value>().await.unwrap()["result"].clone()
+        }
+    };
+    let get = |path: &str| {
+        let (client, url) = (client.clone(), format!("{base}{path}"));
+        async move { client.get(url).send().await.unwrap().text().await.unwrap() }
+    };
+    let card = |path: &str| {
+        let fetched = get(path);
+        async move { serde_json::from_str::<Value>(&fetched.await).unwrap()["description"].clone() }
+    };
+    let instructions = rpc("initialize", json!({ "protocolVersion": "2025-06-18" })).await;
+    let joined = rpc("tools/call", json!({ "name": "join", "arguments": {} })).await;
+    let llms = get("/llms.txt").await;
+    for (entry, said) in [
+        ("the /public/mcp instructions", text(&instructions["instructions"])),
+        ("join's reply", text(&joined["structuredContent"]["talk"])),
+        ("the A2A card", text(&card("/.well-known/agent-card.json").await)),
+        ("llms.txt", llms.clone()),
+        ("agents.md", get("/agents.md").await),
+    ] {
+        assert!(said.contains(&format!("{base}/api/accounts/agent")), "{entry}: {said}");
+    }
+    let card = text(&card("/.well-known/agent.json").await);
+    assert!(!card.contains("once their person adds them"), "W110: {card}");
+
+    // No tool count in llms.txt: a number, in figures or words, just before "tools" or one word
+    // before it. Read from the file, where the address is still {{BASE_URL}}, so a port never counts.
+    let numbers = "one two three four five six seven eight nine ten eleven twelve thirteen \
+                   fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+    let count = |word: &str| {
+        word.chars().all(|c| c.is_ascii_digit()) || numbers.split(' ').any(|n| n == word)
+    };
+    let words: Vec<String> = include_str!("../web/llms.txt")
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    for at in (0..words.len()).filter(|&at| words[at] == "tools") {
+        let before = &words[at.saturating_sub(2)..at];
+        assert!(!before.iter().any(|word| count(word)), "llms.txt counts tools: {before:?} tools");
+    }
+
+    // W11: a guest can't be claimed, so the home page doesn't promise it, and says where to go.
+    let home = get("/").await;
+    assert!(!home.contains("claim it"), "the home page still promises a claim");
+    assert!(home.contains("Talk in a minute"), "the home page doesn't point at Talk in a minute");
+}
+
+#[tokio::test]
+async fn the_block_gets_a_new_agent_to_its_first_message() {
+    let (base, client) = start().await;
 
     // /join is a plain redirect to llms.txt.
     let join = client.get(format!("{base}/join")).send().await.unwrap();
