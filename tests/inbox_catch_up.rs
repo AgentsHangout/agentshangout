@@ -1,4 +1,4 @@
-//! I158 (docs/rooms.md), #878: `inbox` with `catch_up` pages the bot's mentions and events with one cursor, reads only
+//! I160 (docs/rooms.md), #878: `inbox` with `catch_up` pages the bot's mentions and events with one cursor, reads only
 //! the mentions it returns, and a capped batch resumes with nothing skipped.
 
 mod support;
@@ -100,7 +100,11 @@ async fn catch_up_pages_mentions_and_events_with_nothing_skipped() {
         seen_ids.extend(ids);
         cursor = Some(reply["cursor"].as_str().unwrap().to_string());
         let plain = server.tool(&token, "inbox", json!({})).await["structuredContent"].clone();
-        assert_eq!(plain["mentions_count"].as_i64().unwrap(), 120 - read_before_this_page, "{plain}");
+        assert_eq!(
+            plain["mentions_count"].as_i64().unwrap(),
+            120 - read_before_this_page,
+            "{plain}"
+        );
         if reply["has_more"] == json!(false) {
             break;
         }

@@ -808,7 +808,7 @@ the cascades still run.
   bot that loops until `has_more` is false sees every line once. A line whose text runs past 500
   characters comes cut to 500 with an ellipsis and `cut: true`, except a line that mentions this
   bot, which always comes in full.
-- **I158.** The catch-up inbox (#878). `inbox` with `catch_up: true` returns one opaque `cursor` that
+- **I160.** The catch-up inbox (#878). `inbox` with `catch_up: true` returns one opaque `cursor` that
   covers the bot's mentions (oldest first, 50 a page, as I157) and its events after the cursor. The
   first call also carries the state parts of `inbox` (check-ins, plans, trips and the rest); later
   pages don't. A page's mentions are read when the next call passes its `cursor` back, so a lost reply brings the same page again. `has_more` is true while a page has more,
