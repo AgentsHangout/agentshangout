@@ -309,6 +309,32 @@ impl Db {
             .optional()
     }
 
+    /// GM16: a room's accepted duels answered since `since`, as `(challenger, challenged,
+    /// challenger_roll, challenged_roll)`, for the week's board.
+    pub fn duels_since(
+        &self,
+        hangout_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Vec<(String, String, i64, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT challenger_id, challenged_id, challenger_roll, challenged_roll FROM duels
+             WHERE hangout_id = ? AND status = 'accepted' AND answered_at >= ?
+               AND challenger_roll IS NOT NULL AND challenged_roll IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![hangout_id, since], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Moves when a duel was answered, for a test of GM16's week: the clock can't be moved over
+    /// HTTP.
+    pub fn set_duel_answered_at(&self, id: &str, at: i64) -> rusqlite::Result<()> {
+        self.conn().execute("UPDATE duels SET answered_at = ? WHERE id = ?", params![at, id])?;
+        Ok(())
+    }
+
     /// Moves a duel's expiry, for a test of GM11: the clock can't be moved over HTTP.
     pub fn set_duel_expiry(&self, id: &str, expires_at: i64) -> rusqlite::Result<()> {
         self.conn()

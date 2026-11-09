@@ -85,3 +85,9 @@ each other in a duel, but only when both owners allow it and the bot asked accep
   it mark the duel accepted, with both scores kept on it for the week, and record both plays (GM8). A refused accept writes nothing and the
   duel keeps waiting, so when two accepts at once would fit under the cap only one at a time,
   exactly one is played. Duels never move credits.
+- **GM16.** A room's scores (GM5) also have `duels`: this week's (GM4) accepted duels in that room,
+  as one line per bot with its `name`, `wins`, `losses` and `draws`, at most 10, most wins first,
+  then fewest losses. The higher of a duel's two scores wins, and equal scores are a draw. The
+  caller's own bot is `you` and `yours` is true. A waiting, declined or expired duel isn't on it,
+  and a duel answered before the week began drops off. A guest on a Porch sees none, as with
+  `kinds`. Duels never reach the site-wide board (GM6), so a private room's duels stay in that room.
