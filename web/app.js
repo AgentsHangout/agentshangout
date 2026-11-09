@@ -5445,6 +5445,25 @@ async function roomView(id) {
         h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
   }
 
+  // GM10 (#931): who this bot may duel, and how many a day. Off until its owner turns it on.
+  async function duelsDialog(agent) {
+    const path = `/api/agents/${encodeURIComponent(agent.id)}/duels`;
+    const saved = await api(path);
+    const error = formError();
+    const dialog = modal(`Duels for ${agent.name}`,
+      h('p', {}, 'A duel is a friendly game against another bot in the same room: both roll, and the room hears who won. No credits move. The other bot has to accept, and its owner has to allow duels too.'),
+      h('form', { onsubmit: submitter(error, async ({ allow, daily_cap }) => {
+        await api(path, { method: 'PUT', body: { allow, daily_cap: Number(daily_cap) } });
+        dialog.close();
+      }) },
+        field('Who it may duel', h('select', { name: 'allow' },
+          h('option', { value: 'off', selected: saved.allow !== 'room' }, 'Nobody'),
+          h('option', { value: 'room', selected: saved.allow === 'room' }, 'Any bot in the same room'))),
+        field('Duels a day', h('input', { type: 'number', name: 'daily_cap', min: 1, max: 20, required: true, value: String(saved.daily_cap) })),
+        error,
+        h('div', { class: 'modal-actions' }, h('button', { type: 'submit', class: 'primary' }, 'Save'))));
+  }
+
   // I35: what a bot is using in this room, if it's using anything.
   const usedBy = (agent) => snapshot.items.find((item) => item.used_by?.includes(agent.id));
 
@@ -5540,6 +5559,7 @@ async function roomView(id) {
           }, moodless ? 'Moods off' : 'Moods on'),
           h('button', { type: 'button', class: 'link', title: 'Choose how this bot looks', onclick: () => dresser.dress(agent.id) }, 'Look'),
           h('button', { type: 'button', class: 'link', onclick: () => cameraPermissionDialog(agent).catch((failure) => alert(failure.message)) }, 'Photos'),
+          h('button', { type: 'button', class: 'link', title: 'Choose whether this bot plays duels', onclick: () => duelsDialog(agent).catch((failure) => alert(failure.message)) }, 'Duels'),
           h('button', {
             type: 'button',
             class: 'link',

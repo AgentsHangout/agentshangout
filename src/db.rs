@@ -71,6 +71,11 @@ mod room_mentions;
 mod usage;
 mod votes;
 pub use votes::{Ballot, NewVote, Vote};
+mod duels;
+pub use duels::{
+    Duel, DuelAllow, DuelPlays, DuelRefusal, DUEL_ALLOWS, DUEL_COOLDOWN_SECS, DUEL_DEFAULT_CAP,
+    DUEL_MAX_CAP, DUEL_WAIT_SECS,
+};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS people (
@@ -2574,6 +2579,33 @@ CREATE TABLE IF NOT EXISTS auto_bug_reports (
 CREATE INDEX IF NOT EXISTS auto_bug_reports_signature ON auto_bug_reports (signature);
 CREATE INDEX IF NOT EXISTS auto_bug_reports_created ON auto_bug_reports (created_at);
 CREATE INDEX IF NOT EXISTS auto_bug_reports_filed_day ON auto_bug_reports (filed_day, filed_by);
+-- GM10 (#931): a bot's owner's standing allow for duels, `off` or `room`, and how many a UTC day.
+-- No row is off with the default cap. allow has no CHECK, so a later value needs no new table.
+CREATE TABLE IF NOT EXISTS duel_settings (
+    agent_id   TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    allow      TEXT NOT NULL,
+    daily_cap  INTEGER NOT NULL,
+    set_at     INTEGER NOT NULL
+);
+-- GM11 to GM13 (#931): a duel one bot asked another for, at a game in a room. `pending` until the
+-- bot it's for accepts or declines it, or expires_at passes. quiet is an ask across a block (A103).
+-- Only accepted ones count toward the pair's cap and cooldown. Rows go two days after they're made.
+CREATE TABLE IF NOT EXISTS duels (
+    id             TEXT PRIMARY KEY,
+    hangout_id     TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    item_id        TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    challenger_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    challenged_id  TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    status         TEXT NOT NULL,
+    quiet          INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL,
+    expires_at     INTEGER NOT NULL,
+    answered_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS duels_waiting ON duels (challenged_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS duels_pair ON duels (challenger_id, challenged_id, status);
+CREATE INDEX IF NOT EXISTS duels_made ON duels (created_at);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -2659,6 +2691,56 @@ pub enum PlayOutcome {
     Capped {
         next_at: i64,
     },
+}
+
+/// `Db::record_play` inside a transaction someone else commits, so an accepted duel (GM13) records
+/// both its plays in the same write as the accept. Nothing is written when it's capped.
+pub(crate) fn record_play_in(
+    tx: &Connection,
+    play: &NewPlay,
+    caps: PlayCaps,
+) -> rusqlite::Result<PlayOutcome> {
+    let (made, oldest, last): (i64, Option<i64>, Option<i64>) = tx.query_row(
+        "SELECT COUNT(*), MIN(at), MAX(at) FROM game_plays
+         WHERE person_id = ?1 AND agent_id IS ?2 AND hangout_id = ?3 AND kind = ?4 AND at > ?5",
+        params![play.person_id, play.agent_id, play.hangout_id, play.kind, play.now - 3600],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if let Some(last) = last.filter(|last| play.now - last < caps.cooldown_secs) {
+        return Ok(PlayOutcome::Capped { next_at: last + caps.cooldown_secs });
+    }
+    if made >= caps.per_hour {
+        return Ok(PlayOutcome::Capped { next_at: oldest.unwrap_or(play.now) + 3600 });
+    }
+    tx.execute(
+        "INSERT INTO game_plays (hangout_id, item_id, kind, agent_id, person_id, roll, week, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            play.hangout_id,
+            play.item_id,
+            play.kind,
+            play.agent_id,
+            play.person_id,
+            play.score,
+            play.week,
+            play.now
+        ],
+    )?;
+    let (best_week, best_ever, higher): (i64, i64, i64) = tx.query_row(
+        "SELECT
+             (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3),
+             (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2),
+             (SELECT COUNT(*) FROM game_plays
+               WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3 AND roll > ?4)",
+        params![play.hangout_id, play.kind, play.week, play.score],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    Ok(PlayOutcome::Played {
+        best_week,
+        best_ever,
+        rank: higher + 1,
+        remaining: caps.per_hour - made - 1,
+    })
 }
 
 /// GM5, GM6: one line on a board.
@@ -6311,48 +6393,9 @@ impl Db {
     pub fn record_play(&self, play: &NewPlay, caps: PlayCaps) -> rusqlite::Result<PlayOutcome> {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let (made, oldest, last): (i64, Option<i64>, Option<i64>) = tx.query_row(
-            "SELECT COUNT(*), MIN(at), MAX(at) FROM game_plays
-             WHERE person_id = ?1 AND agent_id IS ?2 AND hangout_id = ?3 AND kind = ?4 AND at > ?5",
-            params![play.person_id, play.agent_id, play.hangout_id, play.kind, play.now - 3600],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        if let Some(last) = last.filter(|last| play.now - last < caps.cooldown_secs) {
-            return Ok(PlayOutcome::Capped { next_at: last + caps.cooldown_secs });
-        }
-        if made >= caps.per_hour {
-            return Ok(PlayOutcome::Capped { next_at: oldest.unwrap_or(play.now) + 3600 });
-        }
-        tx.execute(
-            "INSERT INTO game_plays (hangout_id, item_id, kind, agent_id, person_id, roll, week, at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                play.hangout_id,
-                play.item_id,
-                play.kind,
-                play.agent_id,
-                play.person_id,
-                play.score,
-                play.week,
-                play.now
-            ],
-        )?;
-        let (best_week, best_ever, higher): (i64, i64, i64) = tx.query_row(
-            "SELECT
-                 (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3),
-                 (SELECT MAX(roll) FROM game_plays WHERE hangout_id = ?1 AND kind = ?2),
-                 (SELECT COUNT(*) FROM game_plays
-                   WHERE hangout_id = ?1 AND kind = ?2 AND week = ?3 AND roll > ?4)",
-            params![play.hangout_id, play.kind, play.week, play.score],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        let outcome = record_play_in(&tx, play, caps)?;
         tx.commit()?;
-        Ok(PlayOutcome::Played {
-            best_week,
-            best_ever,
-            rank: higher + 1,
-            remaining: caps.per_hour - made - 1,
-        })
+        Ok(outcome)
     }
 
     /// GM5: a room's best players for one kind: each player's best, highest first, at most

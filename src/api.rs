@@ -156,6 +156,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::votes::routes())
         .merge(crate::rules::routes())
         .merge(crate::games::routes())
+        .merge(crate::duels::routes())
         .merge(crate::jobs::routes())
         .merge(outside::routes())
         .merge(looks::routes())

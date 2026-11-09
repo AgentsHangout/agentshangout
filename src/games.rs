@@ -70,7 +70,7 @@ pub fn play(state: &AppState, caller: &Caller, item_id: &str) -> ApiResult<Value
 }
 
 /// GM2: the checks every player of a game passes, the caller or (GM8) an opponent.
-fn may_play(
+pub(crate) fn may_play(
     state: &AppState,
     caller: &Caller,
     item: &crate::db::FloorItem,
@@ -96,47 +96,102 @@ fn roll(
     item: &crate::db::FloorItem,
     game: &GameKind,
 ) -> ApiResult<Value> {
-    let item_id = item.id.as_str();
     let now = now();
     let score = rand::random_range(game.min..=game.max);
-    let outcome = state.db.record_play(
-        &NewPlay {
-            hangout_id: &item.hangout_id,
-            item_id,
-            kind: game.kind,
-            agent_id: caller.agent_id.as_deref(),
-            person_id: &caller.person_id,
-            score,
-            week: week_of(now),
-            now,
-        },
-        CAPS,
-    )?;
-    match outcome {
-        PlayOutcome::Played { best_week, best_ever, rank, remaining } => {
-            state.games.forget();
-            Ok(json!({
-                "kind": game.kind,
-                "score": score,
-                "best_week": best_week,
-                "best_ever": best_ever,
-                "rank": rank,
-                "remaining": remaining,
-                "next_at": if remaining > 0 { ops::iso(now + CAPS.cooldown_secs) } else { ops::iso(now + 3600) },
-            }))
-        }
-        PlayOutcome::Capped { next_at } => Err(ApiError::too_many_requests(format!(
-            "you've played {} enough for now: you can play again at {}",
-            game.kind,
-            ops::iso(next_at)
-        ))
-        .retry_after((next_at - now).max(1) as u64)),
+    let outcome = state.db.record_play(&new_play(caller, item, game, score, now), CAPS)?;
+    if matches!(outcome, PlayOutcome::Played { .. }) {
+        state.games.forget();
+    }
+    play_answer(game, score, outcome, now)
+}
+
+/// GM2: a play of `game` at `item` by `caller`, with the score the server rolled.
+pub(crate) fn new_play<'a>(
+    caller: &'a Caller,
+    item: &'a crate::db::FloorItem,
+    game: &GameKind,
+    score: i64,
+    now: i64,
+) -> NewPlay<'a> {
+    NewPlay {
+        hangout_id: &item.hangout_id,
+        item_id: &item.id,
+        kind: game.kind,
+        agent_id: caller.agent_id.as_deref(),
+        person_id: &caller.person_id,
+        score,
+        week: week_of(now),
+        now,
     }
 }
 
-/// GM8: the caller plays the game at `item_id` against another bot that is here now. Both have to
-/// be allowed to play and have plays left before anything is rolled; then each rolls and records a
-/// play as in GM2, and the room hears one line with who won. No credits change hands (GM7).
+/// GM2, GM3: the answer to a recorded play, or 429 when a cap stopped it.
+pub(crate) fn play_answer(
+    game: &GameKind,
+    score: i64,
+    outcome: PlayOutcome,
+    now: i64,
+) -> ApiResult<Value> {
+    match outcome {
+        PlayOutcome::Played { best_week, best_ever, rank, remaining } => Ok(json!({
+            "kind": game.kind,
+            "score": score,
+            "best_week": best_week,
+            "best_ever": best_ever,
+            "rank": rank,
+            "remaining": remaining,
+            "next_at": if remaining > 0 { ops::iso(now + CAPS.cooldown_secs) } else { ops::iso(now + 3600) },
+        })),
+        PlayOutcome::Capped { next_at } => Err(capped(game, next_at, now)),
+    }
+}
+
+/// GM3: past a cap, and when the next play can be.
+pub(crate) fn capped(game: &GameKind, next_at: i64, now: i64) -> ApiError {
+    ApiError::too_many_requests(format!(
+        "you've played {} enough for now: you can play again at {}",
+        game.kind,
+        ops::iso(next_at)
+    ))
+    .retry_after((next_at - now).max(1) as u64)
+}
+
+/// GM8: another bot as a player, to check and record its side of a duel.
+pub(crate) fn player(bot: &crate::db::Agent) -> Caller {
+    Caller {
+        person_id: bot.owner_id.clone(),
+        agent_id: Some(bot.id.clone()),
+        name: bot.name.clone(),
+        secret_hash: String::new(),
+        is_house: false,
+    }
+}
+
+/// GM8: whatever stops the other bot playing, the caller only hears that it can't, not why.
+pub(crate) fn cannot_play(name: &str) -> ApiError {
+    ApiError::conflict(format!("{name} can't play right now"))
+}
+
+/// GM8: the line the room hears about a duel, the first bot being the one that challenged.
+pub(crate) fn result_line(
+    item: &crate::db::FloorItem,
+    game: &GameKind,
+    (me, a): (&str, i64),
+    (them, b): (&str, i64),
+) -> String {
+    // The game as a sentence says it: "the arcade cabinet", not "Arcade cabinet".
+    let label = crate::items::kind_of(&item.kind)
+        .map_or_else(|| game.kind.replace('_', " "), |kind| kind.label.to_lowercase());
+    match a.cmp(&b) {
+        std::cmp::Ordering::Greater => format!("{me} beat {them} at the {label}, {a} to {b}."),
+        std::cmp::Ordering::Less => format!("{them} beat {me} at the {label}, {b} to {a}."),
+        std::cmp::Ordering::Equal => format!("{me} and {them} tied at the {label}, {a} each."),
+    }
+}
+
+/// GM8, GM11: the caller asks another bot that is here now for a duel at the game at `item_id`.
+/// Both have to be allowed to play; then it's up to their owners' allows (GM11), and nothing is
+/// rolled until the other bot accepts (GM13). No credits change hands (GM7).
 pub fn challenge(
     state: &AppState,
     caller: &Caller,
@@ -147,60 +202,15 @@ pub fn challenge(
     let item = state.db.floor_item(item_id)?.ok_or_else(ApiError::not_found)?;
     ops::require_room(state, caller, &item.hangout_id)?;
     let game = may_play(state, caller, &item)?;
-    let now = now();
-    let Some(other) = crate::items::bot_here_named(state, &item.hangout_id, opponent, now)? else {
+    let Some(other) = crate::items::bot_here_named(state, &item.hangout_id, opponent, now())?
+    else {
         return Err(ApiError::conflict(format!("{opponent} isn't a bot that's here right now")));
     };
     if Some(other.id.as_str()) == caller.agent_id.as_deref() {
         return Err(ApiError::bad_request("you can't challenge yourself"));
     }
-    let rival = Caller {
-        person_id: other.owner_id.clone(),
-        agent_id: Some(other.id.clone()),
-        name: other.name.clone(),
-        secret_hash: String::new(),
-        is_house: false,
-    };
-    // Whatever stops the rival, the caller only hears that they can't play, not why.
-    let cannot = || ApiError::conflict(format!("{} can't play right now", other.name));
-    may_play(state, &rival, &item).map_err(|_| cannot())?;
-    let wait = |who: &Caller| {
-        state.db.next_play_at(
-            (&who.person_id, who.agent_id.as_deref()),
-            &item.hangout_id,
-            game.kind,
-            now,
-            CAPS,
-        )
-    };
-    if let Some(next_at) = wait(caller)? {
-        return Err(ApiError::too_many_requests(format!(
-            "you've played {} enough for now: you can play again at {}",
-            game.kind,
-            ops::iso(next_at)
-        ))
-        .retry_after((next_at - now).max(1) as u64));
-    }
-    if wait(&rival)?.is_some() {
-        return Err(cannot());
-    }
-    let mine = roll(state, caller, &item, game)?;
-    let theirs = roll(state, &rival, &item, game)?;
-    let (a, b) = (mine["score"].as_i64().unwrap_or(0), theirs["score"].as_i64().unwrap_or(0));
-    // The game as a sentence says it: "the arcade cabinet", not "Arcade cabinet".
-    let label = crate::items::kind_of(&item.kind)
-        .map_or_else(|| game.kind.replace('_', " "), |kind| kind.label.to_lowercase());
-    let (me, them) = (&caller.name, &other.name);
-    let line = match a.cmp(&b) {
-        std::cmp::Ordering::Greater => format!("{me} beat {them} at the {label}, {a} to {b}."),
-        std::cmp::Ordering::Less => format!("{them} beat {me} at the {label}, {b} to {a}."),
-        std::cmp::Ordering::Equal => format!("{me} and {them} tied at the {label}, {a} each."),
-    };
-    ops::announce(state, &item.hangout_id, &line)?;
-    let mut reply = mine;
-    reply["opponent"] = json!({ "bot": them, "result": theirs });
-    reply["line"] = json!(line);
-    Ok(reply)
+    may_play(state, &player(&other), &item).map_err(|_| cannot_play(&other.name))?;
+    crate::duels::ask(state, caller, &other, &item, game)
 }
 
 /// GM5: one line of a room's board as the caller sees it: a bot by name, the caller's own line as
@@ -258,7 +268,7 @@ impl TopCache {
     }
 
     /// A new best can change the board, so a play clears it.
-    fn forget(&self) {
+    pub(crate) fn forget(&self) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 }

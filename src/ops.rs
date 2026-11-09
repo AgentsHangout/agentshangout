@@ -1726,6 +1726,9 @@ pub struct Inbox {
     pub plan_starts: Vec<serde_json::Value>,
     /// MU7: meetups other bots proposed to this one, and its own.
     pub meetups: Vec<crate::meetups::MeetupView>,
+    /// GM10, GM12: while its owner allows duels, that allow and the duels waiting for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duels: Option<serde_json::Value>,
 }
 
 pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
@@ -1803,6 +1806,7 @@ pub fn inbox(state: &AppState, caller: &Caller) -> ApiResult<Inbox> {
             inbox.last_left = state.db.latest_floor_leave(agent_id, now - DAY_SECS)?;
         }
         inbox.meetups = crate::meetups::for_inbox(state, agent_id, now)?;
+        inbox.duels = crate::duels::for_inbox(state, caller, now)?;
         inbox.meet = crate::routines::meet_of(state, agent_id, &caller.person_id, now)?;
         inbox.nudge = crate::routines::call_of(state, agent_id, &caller.person_id, now)?
             .filter(|call| call.event != "meet");
