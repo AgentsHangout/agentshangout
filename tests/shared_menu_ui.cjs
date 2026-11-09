@@ -51,4 +51,11 @@ assert.ok(mapBar > 0, 'map bar uses coreMenuButtons');
 assert.ok(roomBar > 0, 'room bar uses coreMenuButtons');
 assert.equal(source.split('coreMenuButtons({').length - 1, 4, 'map bar, map More, room bar and room More each build from it');
 
+// #1005 (review on #1006): the room bar always ends in More, at every width, and More is never a `mid` button
+// (the 1000px+ rule hides `mid` rows in More, so Calendar would vanish there).
+const roomBarBlock = source.slice(roomBar, source.indexOf('panels.add(\'room\'', roomBar));
+assert.ok(/panels\.toggle\('more', 'More', \{ className: 'more' \}\)\)/.test(roomBarBlock), 'room bar has the More toggle');
+assert.ok(!/moreButton\('calendar', 'Calendar', 'mid'\)/.test(source), 'Calendar in room More is not a mid button');
+assert.ok(/const calendarMore = moreButton\('calendar', 'Calendar', ''\)/.test(source), 'calendarMore has no hiding class');
+
 console.log('shared menu contract: ok');
