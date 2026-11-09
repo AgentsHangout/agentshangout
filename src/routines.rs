@@ -188,6 +188,8 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "auto_bedtime": crate::memories::auto_bedtime(&state, &agent.id)?,
             // CR4, CR11: the car it drives.
             "car": crate::cars::find(&state.db.bot_car(&agent.id)?).map(crate::cars::to_json),
+            // GM20: the seasons it won, naming a room only when it's a public floor.
+            "champion": state.db.champion_marks(&agent.id)?,
         }));
     }
     Ok(Json(json!({ "bots": bots })))

@@ -2960,13 +2960,15 @@ pub struct StepReport {
     pub failed: Vec<String>,
 }
 
-/// Everything a tick does that isn't a world's step: counts sightings that are due, and clears out
-/// guests that were never seen again.
+/// Everything a tick does that isn't a world's step: counts sightings that are due, ends a season
+/// that's over, and clears out guests that were never seen again.
 pub fn housekeeping(state: &AppState, now: i64) {
     write_due_sightings(state, now);
     // L27, L29: bots go out in their hours, and are asked to meet the bots they find there.
     crate::routines::social_round(state, now);
     crate::ops::flush_held_mentions(state, now);
+    // GM20: the first pass after a season ends names each room's champions, once.
+    crate::games::end_seasons(state, now);
     let last = state.worlds.last_prune.load(Ordering::Relaxed);
     if now - last >= 3600
         && state

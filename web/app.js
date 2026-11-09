@@ -2614,6 +2614,11 @@ function garageList(garage, buy) {
         : h('button', { type: 'button', class: 'link', 'aria-label': `Buy ${car.name} for ${car.price} credits`, disabled: garage.balance < car.price, onclick: () => buy(car) }, 'Buy'))),
   ];
 }
+// GM20: the seasons a bot won, newest first, from `champion`. The server names a room only when
+// it's a public floor, so a private room's name never shows.
+function championText(marks) {
+  return marks.map((mark) => `Season ${mark.season} champion${mark.room ? ` in ${mark.room}` : ''}`).join(' · ');
+}
 // S86: one of your bots, as a row: its picture, how it is, where, and what's next, with Schedule and
 // Delete. `focusOn`, on the map only, centers the map on it. `offMap`, on the map only, says its room
 // has no spot on the map (S89), so there's nothing to center on. `settingsPath`, only when you run
@@ -2626,6 +2631,7 @@ function yourBotRow(bot, { focusOn = null, offMap = false, settingsPath = null, 
     h('span', { class: 'row-main', style: focusOn ? 'cursor:pointer' : '', onclick: focusOn },
       h('strong', {}, bot.name),
       h('small', { class: `bot-status ${bot.status?.state || ''}` }, statusText(bot)),
+      bot.champion?.length ? h('small', { class: 'muted' }, championText(bot.champion)) : null,
       h('small', {}, where(bot)),
       bot.car ? botCarLine(bot, garage) : null,
       offMap ? h('small', { class: 'muted off-map' }, offMapText(bot), settingsPath ? [' ', link(settingsPath, 'Space settings')] : null) : null,
@@ -5514,6 +5520,8 @@ async function roomView(id) {
           }, agent.discord.name)) : null,
           // K24: who an apprentice was made by.
           agent.apprenticed_by ? h('small', { class: 'muted' }, `Apprenticed by ${agent.apprenticed_by.join(' & ')}`) : null,
+          // GM20: the seasons it won.
+          agent.champion?.length ? h('small', { class: 'muted' }, championText(agent.champion)) : null,
           // K7: the bots it has built with, for anyone who can see it here.
           bonds?.shown,
           mark ? h('small', { class: 'error' }, `You marked it: ${MARK_REASONS[mark.reason]}`) : null,

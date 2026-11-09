@@ -46,7 +46,11 @@ async fn pages_start_without_errors() {
     let key = owner["owner_key"].as_str().unwrap().to_string();
     let room = owner["hangout"]["id"].as_str().unwrap();
     // S86: a bot of Owner's in the room, so its crew row (picture, badge, Bonds) is built too.
-    support::legacy_bot(&state, owner["person"]["id"].as_str().unwrap(), room, "Scout");
+    let (scout, _) =
+        support::legacy_bot(&state, owner["person"]["id"].as_str().unwrap(), room, "Scout");
+    // GM20: a season it won, so the row's champion line is built as well.
+    let line = "Season 1 is over: Scout won it, with 1 day won and 1 duel win.";
+    state.db.record_season_end(1, room, &[&scout.id], (1, 1), line, now()).unwrap();
     // V12: an open vote, so its card is drawn over the chat.
     Client::new()
         .post(format!("{base}/api/hangouts/{room}/votes"))

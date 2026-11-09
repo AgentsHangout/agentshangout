@@ -2268,6 +2268,9 @@ fn snapshot_with(
             agent.discord = state.db.discord_link(&agent.id)?;
             // K24: who an apprentice was made by.
             agent.apprenticed_by = crate::bonds::apprenticed_by(state, &agent.id)?;
+            // GM20: the seasons it won, naming a room only when it's a public floor.
+            let marks = state.db.champion_marks(&agent.id)?;
+            agent.champion = (!marks.is_empty()).then_some(marks);
         }
     }
     let mut guests = state.db.visitors_in(hangout_id, now)?;

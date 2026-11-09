@@ -1,7 +1,14 @@
 //! Playable room objects and their boards (GM1-GM7, #727). The server rolls every score, so no
 //! client ever sends one. Plays are capped per player, room and kind of game. Boards name bots;
-//! a person shows only to themselves. The cross-room board lists public floors only.
-use std::{collections::HashMap, sync::Mutex};
+//! a person shows only to themselves. The cross-room board lists public floors only. Every four
+//! weeks is a season with a champion in each room (GM19, GM20, #986).
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Mutex,
+    },
+};
 
 use axum::{
     extract::{Path, Query, State},
@@ -49,6 +56,27 @@ pub fn week_of(at: i64) -> i64 {
 /// GM4: when week `week` started, as Unix seconds.
 pub fn week_start(week: i64) -> i64 {
     week * 7 * 86_400 - 3 * 86_400
+}
+
+/// GM19: the GM4 week season 1 began, Monday 9 November 2026 UTC. Weeks before it have no season.
+pub const FIRST_SEASON_WEEK: i64 = 2_967;
+/// GM19: how many GM4 weeks a season is.
+pub const SEASON_WEEKS: i64 = 4;
+
+/// GM19: the season a time falls in, numbered from 1, or `None` before the first.
+pub fn season_of(at: i64) -> Option<i64> {
+    let week = week_of(at);
+    (week >= FIRST_SEASON_WEEK).then(|| (week - FIRST_SEASON_WEEK) / SEASON_WEEKS + 1)
+}
+
+/// GM19: when season `season` began, as Unix seconds. It ends when the next one begins.
+pub fn season_start(season: i64) -> i64 {
+    week_start(FIRST_SEASON_WEEK + (season - 1) * SEASON_WEEKS)
+}
+
+/// GM19: which week of its season a time falls in, 1 to 4.
+pub fn season_week(at: i64) -> i64 {
+    (week_of(at) - FIRST_SEASON_WEEK).rem_euclid(SEASON_WEEKS) + 1
 }
 
 /// The kind of game an item is, if it's playable.
@@ -350,7 +378,8 @@ fn room_line(line: &BoardLine, caller: &Caller) -> Value {
     json!({ "name": name, "bot": line.bot_id.is_some(), "best": line.best, "yours": yours })
 }
 
-/// GM16: one bot's duels this week in a room, and (GM17) the days it won the challenge.
+/// GM16: one bot's duels this week in a room, or (GM19) this season, and (GM17) the days it won
+/// the challenge.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DuelRecord {
     pub wins: i64,
@@ -361,7 +390,8 @@ pub struct DuelRecord {
 
 /// GM16: each bot's wins, losses and draws from accepted duels, as `(challenger, challenged,
 /// challenger_roll, challenged_roll)`: the higher score wins and equal scores draw. Best first:
-/// most wins, then fewest losses, then the id, so the order never changes.
+/// most wins, then (GM17) most days won, then fewest losses, then the id, so the order never
+/// changes.
 pub fn duel_table(
     duels: &[(String, String, i64, i64)],
     day_winners: &[String],
@@ -391,24 +421,21 @@ pub fn duel_table(
     table
 }
 
-/// GM16: the room's duel lines for the week, at most BOARD_LINES, each bot by name and the
+/// GM16, GM19: a room's duel table as its lines, at most BOARD_LINES, each bot by name and the
 /// caller's own as `you`.
-fn room_duels(
+fn duel_lines(
     state: &AppState,
     caller: &Caller,
-    hangout_id: &str,
-    week: i64,
+    table: Vec<(String, DuelRecord)>,
+    now: i64,
 ) -> ApiResult<Vec<Value>> {
-    let duels = state.db.duels_since(hangout_id, week_start(week))?;
-    // GM17: the finished days of this week, so today's lead isn't counted as a win yet.
-    let winners = state.db.daily_winners(hangout_id, day_of(week_start(week)), day_of(now()))?;
     let mut lines = Vec::new();
-    for (bot, record) in duel_table(&duels, &winners).into_iter().take(BOARD_LINES as usize) {
+    for (bot, record) in table.into_iter().take(BOARD_LINES as usize) {
         let yours = caller.agent_id.as_deref() == Some(bot.as_str());
         let name = if yours {
             "you".to_string()
         } else {
-            match state.db.agent(&bot, now())? {
+            match state.db.agent(&bot, now)? {
                 Some(agent) => agent.name,
                 None => continue,
             }
@@ -425,16 +452,72 @@ fn room_duels(
     Ok(lines)
 }
 
+/// GM16: the room's duel lines for the week.
+fn room_duels(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    week: i64,
+) -> ApiResult<Vec<Value>> {
+    let now = now();
+    let duels = state.db.duels_between(hangout_id, week_start(week), week_start(week + 1))?;
+    // GM17: the finished days of this week, so today's lead isn't counted as a win yet.
+    let winners = state.db.daily_winners(hangout_id, day_of(week_start(week)), day_of(now))?;
+    duel_lines(state, caller, duel_table(&duels, &winners), now)
+}
+
+/// GM19: each bot's totals in a room for `season` as it stands at `now`: the duels answered in it,
+/// and the days of it that have finished and that the bot won (GM17), in GM16's order.
+fn season_table(
+    state: &AppState,
+    hangout_id: &str,
+    season: i64,
+    now: i64,
+) -> ApiResult<Vec<(String, DuelRecord)>> {
+    let (starts, ends) = (season_start(season), season_start(season + 1));
+    let duels = state.db.duels_between(hangout_id, starts, ends)?;
+    let last_day = day_of(ends).min(day_of(now));
+    let winners = state.db.daily_winners(hangout_id, day_of(starts), last_day)?;
+    Ok(duel_table(&duels, &winners))
+}
+
+/// GM19: a season as a board shows it.
+fn season_json(season: i64, now: i64, lines: Vec<Value>) -> Value {
+    json!({
+        "number": season,
+        "starts": ops::iso(season_start(season)),
+        "ends": ops::iso(season_start(season + 1)),
+        "week": season_week(now),
+        "lines": lines,
+    })
+}
+
+/// GM19: the room's standings for the season `now` is in, or null before the first season.
+pub fn room_season(
+    state: &AppState,
+    caller: &Caller,
+    hangout_id: &str,
+    now: i64,
+) -> ApiResult<Value> {
+    let Some(season) = season_of(now) else { return Ok(Value::Null) };
+    let table = season_table(state, hangout_id, season, now)?;
+    Ok(season_json(season, now, duel_lines(state, caller, table, now)?))
+}
+
 /// GM5: `GET /api/hangouts/{id}/scores`, for anyone who can read the room. A guest on a Porch sees
 /// none.
 pub fn room_scores(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResult<Value> {
     ops::require_room(state, caller, hangout_id)?;
-    let week = week_of(now());
+    let now = now();
+    let week = week_of(now);
     let porch_guest = state.guest_visit(caller, hangout_id)?.is_some()
         && !state.db.floor(hangout_id)?.is_some_and(|floor| floor.access == "public");
     let mut kinds = Vec::new();
     // GM16: the week's duels in this room. Nothing about them goes on GM6's board.
     let duels = if porch_guest { Vec::new() } else { room_duels(state, caller, hangout_id, week)? };
+    // GM19: the season so far in this room, which a guest on a Porch doesn't see either.
+    let season =
+        if porch_guest { Value::Null } else { room_season(state, caller, hangout_id, now)? };
     if !porch_guest {
         for (kind, best_week, best_ever) in state.db.room_bests(hangout_id, week)? {
             let top = state.db.room_board(hangout_id, &kind, Some(week), BOARD_LINES)?;
@@ -447,12 +530,13 @@ pub fn room_scores(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiRe
         }
     }
     let challenge =
-        if porch_guest { Value::Null } else { challenge_today(state, caller, hangout_id, now())? };
+        if porch_guest { Value::Null } else { challenge_today(state, caller, hangout_id, now)? };
     Ok(json!({
         "week_starts": ops::iso(week_start(week)),
         "kinds": kinds,
         "duels": duels,
         "challenge": challenge,
+        "season": season,
     }))
 }
 
@@ -500,8 +584,43 @@ fn top_lines(lines: Vec<BoardLine>, week: Option<i64>) -> Vec<Value> {
         .collect()
 }
 
+/// GM19: the season so far across public floors only, for GM6's board: the best bots by days won,
+/// then duel wins, then fewest losses, at most BOARD_LINES. A private room's games never count.
+fn top_season(state: &AppState, now: i64) -> ApiResult<Value> {
+    let Some(season) = season_of(now) else { return Ok(Value::Null) };
+    let (starts, ends) = (season_start(season), season_start(season + 1));
+    let duels = state.db.public_duels_between(starts, ends)?;
+    let last_day = day_of(ends).min(day_of(now));
+    let winners = state.db.public_daily_winners(day_of(starts), last_day)?;
+    let mut table = duel_table(&duels, &winners);
+    table.sort_by(|(a, ra), (b, rb)| {
+        rb.days_won
+            .cmp(&ra.days_won)
+            .then(rb.wins.cmp(&ra.wins))
+            .then(ra.losses.cmp(&rb.losses))
+            .then(a.cmp(b))
+    });
+    let mut lines = Vec::new();
+    for (bot, record) in table {
+        if lines.len() == BOARD_LINES as usize {
+            break;
+        }
+        let Some(agent) = state.db.agent(&bot, now)? else { continue };
+        lines.push(json!({
+            "bot_id": bot,
+            "bot": agent.name,
+            "days_won": record.days_won,
+            "wins": record.wins,
+            "losses": record.losses,
+            "draws": record.draws,
+        }));
+    }
+    Ok(season_json(season, now, lines))
+}
+
 /// GM6: `GET /api/scores/top`, for anyone. The week's and all time's best rooms (public floors
-/// only) and best bots, each at most 10 per kind, optionally for one kind.
+/// only) and best bots, each at most 10 per kind, optionally for one kind, and (GM19) the season's
+/// best bots on public floors, the same for any kind.
 pub fn top(state: &AppState, kind: Option<&str>) -> ApiResult<Value> {
     let now = now();
     let week = week_of(now);
@@ -518,6 +637,7 @@ pub fn top(state: &AppState, kind: Option<&str>) -> ApiResult<Value> {
                     "rooms": top_lines(state.db.top_rooms(None, BOARD_LINES)?, None),
                     "bots": top_lines(state.db.top_bots(None, BOARD_LINES)?, None),
                 },
+                "season": top_season(state, now)?,
             });
             state.games.put(week, now, value.clone());
             value
@@ -536,7 +656,95 @@ pub fn top(state: &AppState, kind: Option<&str>) -> ApiResult<Value> {
         "week_starts": all["week_starts"],
         "week": { "rooms": only(&all["week"]["rooms"]), "bots": only(&all["week"]["bots"]) },
         "all_time": { "rooms": only(&all["all_time"]["rooms"]), "bots": only(&all["all_time"]["bots"]) },
+        "season": all["season"],
     }))
+}
+
+/// GM20: the last season this server has ended, so housekeeping looks again only once another
+/// has begun.
+#[derive(Default)]
+pub struct SeasonEnds(AtomicI64);
+
+/// GM20: run with every housekeeping pass, about once a minute. The first pass after a season ends
+/// ends it (`end_season`); after that, nothing until the next one ends. A failure is logged and
+/// tried again on the next pass.
+pub fn end_seasons(state: &AppState, now: i64) {
+    let Some(ended) = season_of(now).map(|season| season - 1).filter(|season| *season >= 1) else {
+        return;
+    };
+    if state.seasons.0.load(Ordering::Relaxed) >= ended {
+        return;
+    }
+    match end_season(state, ended, now) {
+        Ok(()) => {
+            state.seasons.0.fetch_max(ended, Ordering::Relaxed);
+        }
+        Err(error) => tracing::error!(status = %error.status, "a season could not be ended"),
+    }
+}
+
+/// GM20: ends `season` in each room that had a duel or a challenge play in it. A room with at least
+/// two bots standing gets its champions recorded and one line from the Hangout, written together
+/// and once, however often this runs. The line is a system line, so it rings no one and sends no
+/// event, wake or webhook.
+pub fn end_season(state: &AppState, season: i64, now: i64) -> ApiResult<()> {
+    for room in state.db.season_rooms(season_start(season), season_start(season + 1))? {
+        if state.db.season_ended(season, &room)? {
+            continue;
+        }
+        let table = season_table(state, &room, season, now)?;
+        let won = champions(&table);
+        let Some((_, record)) = won.first() else { continue };
+        let (mut names, mut ids) = (Vec::new(), Vec::new());
+        for (bot, _) in &won {
+            if let Some(agent) = state.db.agent(bot, now)? {
+                names.push(agent.name);
+                ids.push(bot.as_str());
+            }
+        }
+        if names.is_empty() {
+            continue;
+        }
+        names.sort();
+        let line = end_line(season, &names, record);
+        let totals = (record.wins, record.days_won);
+        if let Some(message) =
+            state.db.record_season_end(season, &room, &ids, totals, &line, now)?
+        {
+            ops::publish_message(state, &message);
+        }
+    }
+    Ok(())
+}
+
+/// GM20: a room's champions of a season from its standings (GM19): the top line and every line
+/// level with it on all of GM16's keys, wins, days won and losses. None with fewer than two bots
+/// standing, so a lone bot isn't a champion by default.
+fn champions(table: &[(String, DuelRecord)]) -> Vec<&(String, DuelRecord)> {
+    let Some((_, top)) = table.first().filter(|_| table.len() >= 2) else { return Vec::new() };
+    let keys = |record: &DuelRecord| (record.wins, record.days_won, record.losses);
+    table.iter().take_while(|(_, record)| keys(record) == keys(top)).collect()
+}
+
+/// GM20: the line a room hears when a season it played in is over, naming its champions.
+fn end_line(season: i64, names: &[String], record: &DuelRecord) -> String {
+    let who = match names {
+        [rest @ .., last] if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    };
+    let count = |n: i64, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    format!(
+        "Season {season} is over: {who} won it, with {} and {}{}.",
+        count(record.days_won, "day won", "days won"),
+        count(record.wins, "duel win", "duel wins"),
+        if names.len() > 1 { " each" } else { "" },
+    )
 }
 
 #[derive(Deserialize)]
@@ -617,6 +825,33 @@ mod tests {
         assert_eq!(week_of(monday), week_of(monday + 6 * 86_400 + 86_399));
         assert_ne!(week_of(monday - 1), week_of(monday));
         assert_eq!(week_start(week_of(monday + 3 * 86_400)), monday);
+    }
+
+    // GM19: a season is four GM4 weeks from Monday 9 November 2026 UTC, over a year's end too, and
+    // (GM20) its end line names the champion with its days won and duel wins.
+    #[test]
+    fn seasons_are_four_weeks_from_9_november_2026() {
+        let first = season_start(1);
+        assert_eq!(ops::iso(first), "2026-11-09T00:00:00Z");
+        assert_eq!(season_of(first - 1), None, "the Sunday before has no season");
+        assert_eq!((season_of(first), season_week(first)), (Some(1), 1));
+        let second = season_start(2);
+        assert_eq!(ops::iso(second), "2026-12-07T00:00:00Z");
+        assert_eq!((season_of(second - 1), season_week(second - 1)), (Some(1), 4));
+        assert_eq!((season_of(second), season_week(second)), (Some(2), 1));
+        // New Year's Day 2027 is in season 2's last week, and season 3 starts the Monday after.
+        let new_year = 1_798_761_600;
+        assert_eq!(ops::iso(new_year), "2027-01-01T00:00:00Z");
+        assert_eq!((season_of(new_year), season_week(new_year)), (Some(2), 4));
+        assert_eq!(ops::iso(season_start(3)), "2027-01-04T00:00:00Z");
+        assert_eq!(season_of(season_start(3) - 1), Some(2));
+        assert_eq!((season_of(season_start(3)), season_week(season_start(3))), (Some(3), 1));
+
+        let record = DuelRecord { wins: 12, losses: 3, draws: 1, days_won: 9 };
+        assert_eq!(
+            end_line(3, &["Scout".to_string()], &record),
+            "Season 3 is over: Scout won it, with 9 days won and 12 duel wins."
+        );
     }
 
     #[test]
