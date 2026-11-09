@@ -2,7 +2,11 @@
 
 mod support;
 
-use agenthangout::{auth::hash_secret, db::Db, items, now, AppState, Config};
+use agenthangout::{
+    auth::hash_secret,
+    db::{Db, DuelAllow},
+    items, now, AppState, Config,
+};
 use serde_json::{json, Value};
 
 const CODE: &str = "letmein";
@@ -86,7 +90,14 @@ async fn a_solo_play_names_one_bot_here_and_only_then() {
     // First by name, never the caller or the bot elsewhere.
     let hint = play("Cleo", None)["challenge_hint"].as_str().unwrap().to_string();
     assert!(hint.contains("\"Rex\"") && !hint.contains("Faraway"), "{hint}");
-    // A challenge play gets no hint.
-    support::legacy_bot(&state, &ann, &arcade, "Fresh");
-    assert!(play("Zed", Some("Fresh")).get("challenge_hint").is_none());
+    // A challenge gets no hint (GM11: both owners allow duels here, so it asks).
+    let (fresh, _) = support::legacy_bot(&state, &ann, &arcade, "Fresh");
+    let (zed, token) = support::legacy_bot(&state, &ann, &arcade, "Zed");
+    for bot in [&fresh.id, &zed.id] {
+        let room = DuelAllow { allow: "room".to_string(), daily_cap: 5 };
+        state.db.set_duel_allow(bot, &room, now()).unwrap();
+    }
+    let zed = state.authenticate(&hash_secret(&token)).unwrap().unwrap();
+    let asked = items::use_item_against(&state, &zed, "cabinet-1", Some("Fresh")).unwrap();
+    assert!(asked.get("challenge_hint").is_none() && asked["status"] == "pending", "{asked}");
 }

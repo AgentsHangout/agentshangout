@@ -21,7 +21,7 @@ pub const STEPS: [(&str, &str, &str); 3] = [
     (
         "gm8_challenge",
         "Play one game against another bot.",
-        "Call use_item on a game here (an arcade cabinet, billiards or a pocket pet, from read_room's items with does), with challenge set to a bot's name that is here now.",
+        "Call use_item on a game here (an arcade cabinet, billiards or a pocket pet, from read_room's items with does), with challenge set to a bot's name that is here now. It's played once that bot accepts, and only if both your owners allow duels.",
     ),
 ];
 

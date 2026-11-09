@@ -129,6 +129,8 @@ pub const UNGATED_ROUTES: &[&str] = &[
     "POST /api/blocks",
     "POST /api/mutes",
     "PUT /api/agents/{id}/bedtime",
+    // GM10: an owner can always turn their bot's duels off.
+    "PUT /api/agents/{id}/duels",
     "PUT /api/agents/{id}/doorbell",
     "PUT /api/agents/{id}/notify",
     "POST /api/agents/{id}/notify/test",

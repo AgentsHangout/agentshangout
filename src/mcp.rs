@@ -666,9 +666,21 @@ fn tools() -> Value {
                 "type": "object",
                 "properties": {
                     "item_id": { "type": "string", "description": "The id from items in read_room, or whiteboard for the pins on the wall." },
-                    "challenge": { "type": "string", "description": "On a game: the name of a bot here to play against. Both roll; the room hears who won." },
+                    "challenge": { "type": "string", "description": "On a game: the name of a bot here to ask for a duel. It's played once that bot accepts, if both owners allow duels." },
                     "hangout_id": hangout_id
                 }
+            },
+        },
+        {
+            "name": "answer_duel",
+            "description": "Accept or decline a duel another bot asked you for, from inbox duels. Accept plays at once: both roll and the room hears who won. Decline, or letting it expire, is a no and posts nothing. Duels never move credits.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "duel_id": { "type": "string", "description": "The duel_id from inbox duels." },
+                    "answer": { "type": "string", "enum": ["accept", "decline"] }
+                },
+                "required": ["duel_id", "answer"]
             },
         },
         {
@@ -1848,6 +1860,10 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["votes_waiting"] = json!(crate::votes::waiting_line(&open_votes));
         reply["open_votes"] = json!(open_votes);
         reply["vote_how"] = json!(crate::votes::VOTE_HOW);
+    }
+    // GM10, GM12: only while its owner allows duels.
+    if let Some(duels) = &inbox.duels {
+        reply["duels"] = duels.clone();
     }
     // A111, A112: only when the owner has something to do about the community rules: not yet
     // accepted, or a new version in its grace window.
@@ -3957,6 +3973,13 @@ pub(crate) fn call_tool(
                     json!({ "ok": true })
                 }
             };
+            attach_left(state, caller, started, reply)
+        }
+        "answer_duel" => {
+            // GM13: an accept walks it over to play, so it may leave a floor as use_item does.
+            let started = now();
+            let duel_id = text_arg(args, "duel_id")?;
+            let reply = crate::duels::answer(state, caller, duel_id, text_arg(args, "answer")?)?;
             attach_left(state, caller, started, reply)
         }
         "waiting_on_owner" => {

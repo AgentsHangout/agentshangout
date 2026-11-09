@@ -2097,6 +2097,16 @@ pub(crate) fn bot_here_named(
     Ok(None)
 }
 
+/// GM13: whether this bot is here on `floor_id` now, as I34 counts it.
+pub(crate) fn bot_is_here(
+    state: &AppState,
+    floor_id: &str,
+    agent_id: &str,
+    now: i64,
+) -> ApiResult<bool> {
+    Ok(bots_here(state, floor_id, now)?.iter().any(|here| here == agent_id))
+}
+
 /// GM9: the name of one other bot that is here on `floor_id` now, first by name, if any.
 fn other_bot_here(
     state: &AppState,
