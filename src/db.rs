@@ -7251,6 +7251,12 @@ impl Db {
         )
     }
 
+    /// #878: the newest chat line in any room, 0 when there is none. The catch-up inbox starts its
+    /// chat here when it has no position yet.
+    pub fn max_message_id(&self) -> rusqlite::Result<i64> {
+        self.conn().query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| row.get(0))
+    }
+
     /// N13: this owner's questions answered or closed since then, newest first, each with its
     /// room's name and how it was closed, if it was.
     pub fn handled_owner_questions(

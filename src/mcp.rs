@@ -301,7 +301,7 @@ fn tools() -> Value {
                 "full": { "type": "boolean", "description": "All, seen answers too, and every mention with its whole text." },
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
-                "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
+                "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, chat in your rooms, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
                 "cursor": { "type": "string", "description": "The cursor from the last catch_up page. Opaque: pass it back as it came." },
                 "known": {}
             } },
@@ -1574,32 +1574,48 @@ fn mention_preview(text: &str) -> String {
 /// #878: the page size of a catch-up inbox, as read_room's catch-up (I157).
 const CATCH_UP_PAGE: usize = 50;
 
-/// #878: the cursor a catch-up inbox page hands back. Its shape is opaque to callers: the mention
-/// position and the event position, or nothing on the first call.
-fn catch_up_cursor(text: Option<&str>) -> ApiResult<(i64, i64, bool)> {
+/// #878: the cursor a catch-up inbox page hands back: the mention position, the event position and
+/// the chat position. A `cu1` cursor from before the chat part has no chat position, so its chat
+/// starts at the newest line. No cursor is the first call.
+fn catch_up_cursor(text: Option<&str>) -> ApiResult<(i64, i64, Option<i64>)> {
     let Some(text) = text.filter(|text| !text.is_empty()) else {
-        return Ok((0, 0, true));
+        return Ok((0, 0, None));
     };
     let bad = || ApiError::bad_request("cursor must be a cursor that inbox catch_up returned");
-    let (mention, event) =
-        text.strip_prefix("cu1-").and_then(|rest| rest.split_once('-')).ok_or_else(bad)?;
-    let mention: i64 = mention.parse().map_err(|_| bad())?;
-    let event: i64 = event.parse().map_err(|_| bad())?;
-    if mention < 0 || event < 0 {
+    let (parts, has_chat) = if let Some(rest) = text.strip_prefix("cu2-") {
+        (rest.split('-').collect::<Vec<_>>(), true)
+    } else if let Some(rest) = text.strip_prefix("cu1-") {
+        (rest.split('-').collect::<Vec<_>>(), false)
+    } else {
+        return Err(bad());
+    };
+    if parts.len() != if has_chat { 3 } else { 2 } {
         return Err(bad());
     }
-    Ok((mention, event, false))
+    let mut numbers = Vec::new();
+    for part in &parts {
+        let n: i64 = part.parse().map_err(|_| bad())?;
+        if n < 0 {
+            return Err(bad());
+        }
+        numbers.push(n);
+    }
+    let chat = if has_chat { Some(numbers[2]) } else { None };
+    Ok((numbers[0], numbers[1], chat))
 }
 
 /// #878: `inbox` with catch_up. One cursor across the mentions (the chat that names this bot, oldest
-/// first, 50 at a time), the events after its position, and on the first call the state parts of
-/// inbox. Only the mentions it returns are read, and nothing after the cursor is skipped.
+/// first, 50 at a time), the events after its position, the chat in every room this bot is in
+/// (oldest first, 50 at a time, its own lines and blocked people's skipped), and on the first call
+/// the state parts of inbox. The mentions a page returns are read as it's returned, and nothing
+/// after the cursor is skipped.
 fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value> {
     let Some(agent_id) = caller.agent_id.as_deref() else {
         return Err(ApiError::forbidden("only bots have a catch-up inbox"));
     };
-    let (after_mention, after_event, first) =
-        catch_up_cursor(args.get("cursor").and_then(Value::as_str))?;
+    let cursor_text = args.get("cursor").and_then(Value::as_str);
+    let first = cursor_text.filter(|text| !text.is_empty()).is_none();
+    let (after_mention, after_event, after_chat) = catch_up_cursor(cursor_text)?;
     let mut reply = if first {
         let mut snapshot = inbox_json(state, caller, false, &json!({}))?;
         if let Some(map) = snapshot.as_object_mut() {
@@ -1611,17 +1627,17 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
     } else {
         json!({ "trust_note": TRUST_NOTE })
     };
+    let now_at = now();
 
+    // The mentions: each page is read once it's returned, so a lost reply is covered by read_room
+    // with after_message_id, which still returns every mention's line.
     let mut unread: Vec<crate::db::Mention> = state.db.unread_mentions(agent_id)?;
     unread.sort_by_key(|mention| mention.message_id);
-    // Read on the next call: the page the caller got back is marked read only once its cursor
-    // comes back. A lost reply means the same page comes again.
-    let passed: Vec<i64> =
-        unread.iter().map(|mention| mention.message_id).filter(|id| *id <= after_mention).collect();
-    state.db.mark_mentions_read_ids(agent_id, &passed, now())?;
     unread.retain(|mention| mention.message_id > after_mention);
     let mentions_more = unread.len() > CATCH_UP_PAGE;
     unread.truncate(CATCH_UP_PAGE);
+    let returned: Vec<i64> = unread.iter().map(|mention| mention.message_id).collect();
+    state.db.mark_mentions_read_ids(agent_id, &returned, now_at)?;
     let mention_cursor = unread.last().map_or(after_mention, |mention| mention.message_id);
     let mention_lines: Vec<Value> = unread
         .iter()
@@ -1638,6 +1654,52 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
         })
         .collect();
 
+    // The chat: the first page after the chat position across every room this bot is in. Each
+    // room is asked for one line more than a page, so the merged first page is exact. A first call
+    // or a cu1 cursor starts at the newest line, as the state parts already show what's there.
+    let rooms = state.db.hangouts_for_agent(agent_id, now_at)?;
+    let names: std::collections::HashMap<String, String> =
+        rooms.iter().map(|room| (room.id.clone(), room.name.clone())).collect();
+    let chat_after = match after_chat {
+        Some(chat) => chat,
+        None => state.db.max_message_id()?,
+    };
+    let mut chat: Vec<crate::db::Message> = Vec::new();
+    for room in &rooms {
+        let since = state.guest_visit(caller, &room.id)?.map_or(i64::MIN, |visit| visit.since);
+        chat.extend(state.db.messages_oldest_after(
+            &room.id,
+            since,
+            Some(agent_id),
+            chat_after,
+            CATCH_UP_PAGE as i64 + 1,
+        )?);
+    }
+    chat.sort_by_key(|message| message.id);
+    let chat_more = chat.len() > CATCH_UP_PAGE;
+    chat.truncate(CATCH_UP_PAGE);
+    let chat_cursor = chat.last().map_or(chat_after, |message| message.id);
+    let hidden = crate::blocks::hidden_speakers(state, caller)?;
+    let mut chat_lines: Vec<Value> = Vec::new();
+    for message in &chat {
+        if message.agent_id.as_deref() == Some(agent_id) || crate::blocks::hides(&hidden, message) {
+            continue;
+        }
+        let cut = message.body.chars().count() > 500;
+        let text: String = message.body.chars().take(500).collect();
+        chat_lines.push(json!({
+            "hangout_id": message.hangout_id,
+            "hangout": names.get(&message.hangout_id).cloned().unwrap_or_default(),
+            "message_id": message.id,
+            "keyless": state.db.is_keyless_message(message.id).unwrap_or(true),
+            "from": message.speaker,
+            "is_bot": message.agent_id.is_some(),
+            "text": text,
+            "cut": cut,
+            "at": iso(message.created_at),
+        }));
+    }
+
     // The events part: the same page events_since gives from its cursor, and the whole first-day
     // window on the first call.
     let events_args = if first { json!({}) } else { json!({ "since": after_event.to_string() }) };
@@ -1646,11 +1708,12 @@ fn catch_up_inbox(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<
         page["cursor"].as_str().and_then(|cursor| cursor.parse().ok()).unwrap_or(after_event);
     let events_more = page["hasMore"] == true;
 
-    let has_more = mentions_more || events_more;
+    let has_more = mentions_more || chat_more || events_more;
     reply["catch_up"] = json!(true);
     reply["mentions"] = json!(mention_lines);
+    reply["chat"] = json!(chat_lines);
     reply["events"] = page["events"].clone();
-    reply["cursor"] = json!(format!("cu1-{mention_cursor}-{event_cursor}"));
+    reply["cursor"] = json!(format!("cu2-{mention_cursor}-{event_cursor}-{chat_cursor}"));
     reply["has_more"] = json!(has_more);
     reply["what_next"] = json!(if has_more {
         "Pass cursor back as cursor. Nothing after it is skipped."

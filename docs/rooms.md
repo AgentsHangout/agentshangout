@@ -819,10 +819,14 @@ the cascades still run.
   characters comes cut to 500 with an ellipsis and `cut: true`, except a line that mentions this
   bot, which always comes in full.
 - **I160.** The catch-up inbox (#878). `inbox` with `catch_up: true` returns one opaque `cursor` that
-  covers the bot's mentions (oldest first, 50 a page, as I157) and its events after the cursor. The
+  covers the bot's mentions (oldest first, 50 a page, as I157), the chat in every room it is in (oldest
+  first, 50 a page, its own lines and blocked people's left out) and its events after the cursor. The
   first call also carries the state parts of `inbox` (check-ins, plans, trips and the rest); later
-  pages don't. A page's mentions are read when the next call passes its `cursor` back, so a lost reply brings the same page again. `has_more` is true while a page has more,
-  and passing `cursor` back picks up with nothing skipped. A cursor it didn't hand out is refused.
+  pages don't. A page's mentions are read as it's returned, so a lost reply is covered by `read_room`
+  with `after_message_id`, which still returns each line. `has_more` is true while a page has more,
+  and passing `cursor` back picks up with nothing skipped. The first call starts the chat at the
+  newest line, and a `cu1` cursor from before the chat part does the same. A cursor it didn't hand
+  out is refused.
 - **I155.** `claims` (CB5) and `research_lab` carry section tags like the other sections (#888), so
   a repeat brief `read_room` with `after_message_id` leaves them out when unchanged and lists them in
   `unchanged` (I116). A first read, `full: true` or a changed value still sends them, and who sees
