@@ -5687,7 +5687,6 @@ async function roomView(id) {
     const guest = snapshot.guest;
     guestEl.hidden = !guest;
     inviteButton.hidden = !snapshot.hangout.invite_code || Boolean(guest);
-    calendarToggle.hidden = Boolean(guest);
     calendarMore.hidden = Boolean(guest);
     if (guest && panels.current === 'calendar') panels.close(false);
     bringButton.hidden = Boolean(guest);
@@ -6518,11 +6517,10 @@ async function roomView(id) {
   // `mid` is in the bar once a panel can stand beside the room, and `sec` only on a wide screen.
   const moreButton = (name, label, className) =>
     h('button', { type: 'button', class: `wd-btn wide ${className}`, onclick: () => panels.open(name) }, label);
-  const calendarMore = moreButton('calendar', 'Calendar', 'mid');
+  const calendarMore = moreButton('calendar', 'Calendar', '');
 
   // The title bar, and what opens from it.
   const chatToggle = counted('room', 'The room', { short: 'Chat' });
-  const calendarToggle = panels.toggle('calendar', 'Calendar', { short: 'Plans', className: 'mid' });
   const boardsMore = moreButton('boards', 'Boards', '');
 
   // Guests go back to the city, because only the people who live here have a house page. A room with
@@ -6561,13 +6559,20 @@ async function roomView(id) {
 
   frame.back.append(backLink(backPath, backText, backShort));
   // S64, S68: what only a room has goes first, and the bar ends in the same three as the map's.
+  // #1005: the shared entries sit in the map's order; the room's own actions follow them, and Calendar is in More.
+  const roomLink = (path, label, short, className = '') => h('button', { type: 'button', class: `wd-tbtn ${className}`.trim(), onclick: () => go(path) },
+    h('span', { class: 'long' }, label), h('span', { class: 'short', 'aria-hidden': 'true' }, short || label));
   frame.actions.append(
     guide.toggle,
-    calendarToggle,
+    ...coreMenuButtons({
+      square: roomLink('/#square', 'Town square', 'Square'),
+      research: research?.toggle,
+      bots: panels.toggle('crew', 'My bots', { short: 'Bots', className: 'my-bots-button' }),
+      friends: me?.kind === 'person' ? roomLink('/#friends', 'My friends', 'Friends', 'friends-button') : null,
+      places: roomLink('/#rooms', 'Places', null, 'sec'),
+    }),
     builder.toggle,
     chatToggle.button,
-    ...[research?.toggle].filter(Boolean),
-    panels.toggle('crew', 'My bots', { short: 'Bots', className: 'my-bots-button' }),
     ...[creditCoin(me, account)].filter(Boolean),
     needs.toggle,
     account.toggle,
@@ -6634,10 +6639,15 @@ async function roomView(id) {
     aboutMore,
     h('div', { class: 'game-more' }, ...[
       moreButton('tutorial', 'Get started', 'sec tutorial-more'),
+      ...coreMenuButtons({
+        square: h('button', { type: 'button', class: 'wd-btn wide', onclick: () => go('/#square') }, 'Town square'),
+        research: research ? moreButton('research', 'Research workroom', '') : null,
+        friends: me?.kind === 'person' ? h('button', { type: 'button', class: 'wd-btn wide', onclick: () => go('/#friends') }, 'My friends') : null,
+        places: h('button', { type: 'button', class: 'wd-btn wide sec', onclick: () => go('/#rooms') }, 'Places'),
+      }),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
       boardsMore,
-      research ? moreButton('research', 'Research workroom', '') : null,
       displayMore,
       moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
@@ -9750,6 +9760,13 @@ function accountPanel(panels, me, parts) {
   };
 }
 
+// #1005: the entries every view shows, in this one order, on the map and in a room. A view that
+// has no such entry for someone passes null, and it's left out. A room's own actions come after.
+const CORE_MENU_ORDER = ['square', 'research', 'bots', 'friends', 'places'];
+function coreMenuButtons(controls) {
+  return CORE_MENU_ORDER.map((id) => controls[id] || null).filter(Boolean);
+}
+
 // W109: what a bot's state is called in a menu row.
 const BOT_STATE_WORD = { working: 'Working', idle: 'Idle', asleep: 'Asleep', offline: 'Offline' };
 
@@ -11078,11 +11095,13 @@ async function worldView(id, { home = false } = {}) {
   // S68: what someone needs to get going goes first, and the bar ends in the same three as a room's.
   frame.actions.append(...[
     guide?.toggle,
-    squareButton,
-    research?.toggle,
-    me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
-    me?.kind === 'person' ? panels.toggle('friends', 'My friends', { short: 'Friends', className: 'friends-button' }) : null,
-    panels.toggle('rooms', placesLabel, { className: 'sec' }),
+    ...coreMenuButtons({
+      square: squareButton,
+      research: research?.toggle,
+      bots: me && me.kind === 'person' ? panels.toggle('bots', 'My bots', { short: 'Bots', className: 'my-bots-button' }) : null,
+      friends: me?.kind === 'person' ? panels.toggle('friends', 'My friends', { short: 'Friends', className: 'friends-button' }) : null,
+      places: panels.toggle('rooms', placesLabel, { className: 'sec' }),
+    }),
     creditCoin(me, account),
     needs ? needs.toggle : null,
     account.toggle,
@@ -11097,11 +11116,14 @@ async function worldView(id, { home = false } = {}) {
     h('button', { type: 'button', class: `wd-btn wide ${className}`.trim(), onclick: () => panels.open(name) }, label);
   panels.add('more', 'More', {}, h('div', { class: 'game-more' }, ...[
     guide ? h('button', { type: 'button', class: 'wd-btn wide mid tutorial-more', onclick: () => panels.open('tutorial') }, 'Get started') : null,
-    moreRow('rooms', placesLabel, 'sec'),
-    research ? moreRow('research', 'Research labs') : null,
+    ...coreMenuButtons({
+      square: h('button', { type: 'button', class: 'wd-btn wide', onclick: toSquare }, 'Town square'),
+      research: research ? moreRow('research', 'Research labs') : null,
+      friends: me?.kind === 'person' ? moreRow('friends', 'My friends') : null,
+      places: moreRow('rooms', placesLabel, 'sec'),
+    }),
     moreRow('info', 'What\'s going on'),
     moreRow('around', 'Who\'s around'),
-    me?.kind === 'person' ? moreRow('friends', 'My friends') : null,
     ...notificationActions(me),
     moreRow('about', 'About'),
     signups?.row,
@@ -11852,6 +11874,8 @@ async function worldView(id, { home = false } = {}) {
   }
 
   let spokeAt = 0;
+  // #1005: a room's Town square, Places and My friends links come here as #square, #rooms, #friends.
+  let wantSquare = location.hash === '#square';
   function arrive(view) {
     const before = latest === view ? null : latest;
     latest = view;
@@ -11859,6 +11883,7 @@ async function worldView(id, { home = false } = {}) {
     wantOutsides(view);
     showFacts(frame, view);
     setTitle(view);
+    if (wantSquare && view.tiles?.length) { wantSquare = false; toSquare(); }
     showNews(view.disaster);
     // When it ends everyone's wait starts again, so that isn't left to the next look.
     if (me && before && before.disaster?.stage !== view.disaster?.stage) refreshTown();
@@ -11913,6 +11938,8 @@ async function worldView(id, { home = false } = {}) {
 
   root.append(summaryEl);
   if (home && location.hash === '#about') panels.open('about');
+  if (location.hash === '#rooms') panels.open('rooms');
+  if (location.hash === '#friends' && me?.kind === 'person') panels.open('friends');
   // After the page has this window, so the map has a size to go to a tile in.
   if (guide) setTimeout(guide.arrive);
   document.documentElement.classList.add('in-game');
