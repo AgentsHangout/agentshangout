@@ -296,8 +296,10 @@ impl Db {
         }
         let day = day_start(now);
         let next_at = day + 86_400;
+        // A103: a quiet ask (across a block) never reaches the owner, so it doesn't use up their asks.
         let owner_asks: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM duel_owner_asks WHERE owner_id = ?1 AND created_at >= ?2",
+            "SELECT COUNT(*) FROM duel_owner_asks o JOIN duels d ON d.id = o.duel_id
+              WHERE o.owner_id = ?1 AND o.created_at >= ?2 AND d.quiet = 0",
             params![owner_id, day],
             |row| row.get(0),
         )?;
@@ -815,6 +817,30 @@ mod owner_ask_caps {
         // Tomorrow the caps are fresh.
         let tomorrow = t + 86_400;
         assert!(db.ask_owner_duel(&ask("a4", "b4", tomorrow), "po", tomorrow).unwrap().is_ok());
+    }
+
+    // A103: a quiet ask (across a block) never reaches the owner, so it doesn't use up their asks:
+    // three quiet asks first, and a real ask is still made at the owner's cap.
+    #[test]
+    fn quiet_asks_dont_use_up_the_owner_cap() {
+        let db = world();
+        let t = 1_800_000_000_i64;
+        for n in 1..=3 {
+            let mut quiet = ask(&format!("a{n}"), &format!("b{n}"), t);
+            quiet.quiet = true;
+            let made = db.ask_owner_duel(&quiet, "po", t).unwrap();
+            assert!(made.is_ok(), "quiet ask {n}");
+        }
+        let real = db.ask_owner_duel(&ask("a4", "b4", t), "po", t).unwrap();
+        assert!(real.is_ok(), "a real ask still gets through after three quiet ones");
+        assert!(!real.unwrap().quiet);
+        // The real asks now count: two more fit (the owner's third and last), then the cap holds.
+        let second = db.ask_owner_duel(&ask("a1", "b2", t), "po", t).unwrap();
+        assert!(second.is_ok());
+        let third = db.ask_owner_duel(&ask("a2", "b3", t), "po", t).unwrap();
+        assert!(third.is_ok());
+        let fourth = db.ask_owner_duel(&ask("a3", "b4", t), "po", t).unwrap();
+        assert!(matches!(fourth, Err(OwnerAskCap::Owner { .. })));
     }
 
     // GM21: asks at once at the owner's cap: exactly one more than the cap is made, not two.
