@@ -1183,4 +1183,45 @@ mod tests {
         assert!(cut.ends_with('…'));
         assert_eq!(clean_title("<b>bold</b>"), "<b>bold</b>", "kept as text; the page escapes it");
     }
+
+    #[test]
+    fn done_keeps_the_newest_cards_even_past_the_cut() {
+        // 30 backlog cards, then 30 Done cards in board order, oldest first: the newest Done
+        // cards sit at the end of the board, past MAX_SHOWN (50).
+        let mut rows = Vec::new();
+        for i in 0..30 {
+            rows.push(json!({
+                "identifier": format!("B-{i}"), "title": "b", "status": "backlog",
+                "sort_order": i as f64, "updated_at": "2026-10-01T00:00:00Z", "deleted": false,
+            }));
+        }
+        for i in 0..30 {
+            rows.push(json!({
+                "identifier": format!("D-{i:02}"), "title": "d", "status": "done",
+                "sort_order": i as f64, "updated_at": format!("2026-11-01T00:00:{i:02}Z"),
+                "deleted": false,
+            }));
+        }
+        let index = json!({ "issues": rows });
+        let mut board = columns("item", "APP", &index, None);
+        assert_eq!(board["total"], 60);
+        let done_ids = |board: &Value| -> Vec<String> {
+            board["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["status"] == "done")
+                .unwrap()["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let before_fold = done_ids(&board);
+        assert_eq!(before_fold.first().map(String::as_str), Some("D-29"));
+        assert_eq!(before_fold.len(), MAX_SHOWN - 30);
+        fold_done(&mut board);
+        assert_eq!(done_ids(&board), ["D-29", "D-28", "D-27", "D-26", "D-25"]);
+    }
 }
