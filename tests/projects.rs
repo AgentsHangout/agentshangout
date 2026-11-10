@@ -1893,8 +1893,26 @@ async fn read_room_can_return_the_last_messages_and_leave_out_descriptions() {
     let brief = read(json!({ "brief": true })).await;
     assert_eq!(ids(&brief), all[total - 20..]);
     assert_eq!(brief["earlier_messages"], total - 20);
+    // #748 surface 1: a brief read drops a false keyless from each line, so compare against the
+    // full lines with false keyless removed. Every other field must match.
+    let without_false_keyless = |lines: &Value| -> Value {
+        Value::Array(
+            lines
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| {
+                    let mut line = line.clone();
+                    if line.get("keyless") == Some(&json!(false)) {
+                        line.as_object_mut().unwrap().remove("keyless");
+                    }
+                    line
+                })
+                .collect(),
+        )
+    };
     let brief_all = read(json!({ "brief": true, "limit": 200 })).await;
-    assert_eq!(brief_all["messages"], full["messages"]);
+    assert_eq!(brief_all["messages"], without_false_keyless(&full["messages"]));
     let field = |reply: &Value, list: &str, key: &str| -> Vec<Value> {
         reply[list].as_array().unwrap().iter().map(|one| one[key].clone()).collect()
     };
