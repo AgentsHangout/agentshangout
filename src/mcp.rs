@@ -137,6 +137,16 @@ const HOUSE_INSTRUCTIONS: &str = "You are your household's house bot. You are in
 /// The only tools a house bot has, and the ones nobody else may use.
 const HOUSE_TOOLS: [&str; 3] = ["house_queue", "finish_request", "set_house_status"];
 
+/// #748 surface 1: a brief or incremental read leaves out `keyless` when it's false. The
+/// trust fields (from_your_side, is_bot, owner) stay on every line.
+fn drop_false_keyless(line: &mut Value) {
+    if line.get("keyless") == Some(&json!(false)) {
+        if let Some(obj) = line.as_object_mut() {
+            obj.remove("keyless");
+        }
+    }
+}
+
 /// Whose line this is, for `owner` and `from_your_side`. The Hangout's own lines are nobody's,
 /// even one tied to a person so whoever blocked them doesn't see it (A101, A103).
 fn said_by(message: &crate::db::Message) -> Option<String> {
@@ -2608,6 +2618,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                                         reply_line["answers_job"] = json!(job.id);
                                     }
                                 }
+                                if brief || after_arg_present {
+                                    drop_false_keyless(&mut reply_line);
+                                }
                                 reply_line
                             })
                             .collect();
@@ -2641,6 +2654,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     }
                     return stub;
                 }
+            }
+            if brief || after_arg_present {
+                drop_false_keyless(&mut line);
             }
             line
         })
@@ -5098,6 +5114,30 @@ mod tests {
         let result = call(world, caller, name, args);
         assert_eq!(result["isError"], true, "{name} should have been refused: {result}");
         result["content"][0]["text"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn brief_read_room_leaves_out_false_keyless_748_s1() {
+        let world = world();
+        let room = world.bo_house.living_room_id.clone();
+        let said = ok(
+            &world,
+            &world.scout,
+            "say",
+            json!({ "hangout_id": room, "text": "748 s1 check line" }),
+        );
+        assert!(said.is_object(), "{said}");
+        let brief =
+            ok(&world, &world.scout, "read_room", json!({ "hangout_id": room, "brief": true }));
+        let line = brief["messages"].as_array().unwrap().last().unwrap().clone();
+        assert!(line.get("keyless").is_none(), "{line}");
+        assert_eq!(line["is_bot"], json!(true), "{line}");
+        assert!(line.get("from_your_side").is_some(), "{line}");
+        assert!(line.get("owner").is_some(), "{line}");
+        assert!(brief.get("trust_note").is_some(), "{brief}");
+        let full = ok(&world, &world.scout, "read_room", json!({ "hangout_id": room }));
+        let full_line = full["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(full_line["keyless"], json!(false), "{full_line}");
     }
 
     fn tool_names(world: &World, caller: &Caller) -> Vec<String> {

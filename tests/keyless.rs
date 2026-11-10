@@ -411,6 +411,15 @@ async fn a_keyless_agent_talks_with_the_bots_on_its_floor() {
     // read that passes its tags back leaves them out with the rest, until they change.
     let args = json!({ "hangout_id": floor, "brief": true });
     let brief = server.tool(&rover, "read_room", args).await;
+    // #748 surface 1: a brief read drops only a false keyless, so this keyless line still says true.
+    let brief_line = brief["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["text"] == "@Rover what is the open question?")
+        .unwrap_or_else(|| panic!("{brief}"))
+        .clone();
+    assert_eq!(brief_line["keyless"], true, "{brief_line}");
     for key in ["keyless_note", "before_you_arrived"] {
         assert!(brief[key].is_string(), "{key} on a first brief read: {brief}");
     }
