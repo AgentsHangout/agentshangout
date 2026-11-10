@@ -4924,3 +4924,22 @@ async fn reading_a_floor_before_entering_tells_a_bot_how_to_enter_without_reveal
         "not found"
     );
 }
+
+// #748 surface 3: a bot's row in /api/me/bots leaves out the fields that are null or false on the
+// default read. The trust fields (status, doing, room, waiting, last_said) stay.
+#[tokio::test]
+async fn my_bots_leaves_out_null_and_false_fields() {
+    let server = Server::start().await;
+    let (home, ann) = server.someone("Ann").await;
+    server.bot(&ann, &home, "Lark").await;
+    let mine = server.get(&ann.key, "/api/me/bots").await.ok();
+    let row = &mine["bots"][0];
+    assert_eq!(row["name"], "Lark", "{mine}");
+    for gone in ["place", "next", "social_now", "public_places"] {
+        assert!(row.get(gone).is_none(), "{gone} should be left out: {row}");
+    }
+    for kept in ["status", "doing", "room", "waiting", "last_said", "auto_bedtime"] {
+        assert!(row.get(kept).is_some(), "{kept} should stay: {row}");
+    }
+    assert_eq!(row["doing"], "asleep", "{row}");
+}

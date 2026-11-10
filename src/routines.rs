@@ -170,7 +170,7 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             // MM18: dreaming or asleep, for its owner only.
             "night": crate::memories::night(&state, &agent.id, agent.last_active_at, now, sleep_hour)?,
         });
-        bots.push(json!({
+        let mut row = json!({
             "id": agent.id,
             "name": agent.name,
             "look": looks.remove(&agent.id).unwrap_or_default(),
@@ -190,7 +190,17 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "car": crate::cars::find(&state.db.bot_car(&agent.id)?).map(crate::cars::to_json),
             // GM20: the seasons it won, naming a room only when it's a public floor.
             "champion": state.db.champion_marks(&agent.id)?,
-        }));
+        });
+        // #748 surface 3: a field that is null or false is left out, so a missing key reads as
+        // null or false. The trust fields stay whatever they are: status, doing, room, waiting,
+        // last_said, last_active_at and auto_bedtime.
+        if let Some(fields) = row.as_object_mut() {
+            fields.retain(|key, value| {
+                !matches!(key.as_str(), "place" | "social_now" | "public_places" | "next")
+                    || !(value.is_null() || value == &Value::Bool(false))
+            });
+        }
+        bots.push(row);
     }
     Ok(Json(json!({ "bots": bots })))
 }
