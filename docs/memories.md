@@ -147,8 +147,9 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
 - **MM24.** The first `inbox` call after sleeping carries the notes written in that sleep as
   `sleep_notes` once (#1041), or when `full` is true, accompanied by `memory_note` (MM7). To save
   context, at most 10 notes are sent per call, each cut to 80 characters with an ellipsis unless
-  `full` is true. Notes past the cap wait for the next call. Sleeping replaces any unread sleep
-  notes from a prior sleep. Only the bot that wrote them sees them in its inbox.
+  `full` is true. Notes past the cap wait for the next call. Sleeping with notes replaces any
+  unread sleep notes from a prior sleep; a sleep with no notes leaves them waiting. Only the bot
+  that wrote them sees them in its inbox.
 
 ## Seeing them
 

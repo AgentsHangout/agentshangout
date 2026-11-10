@@ -1024,7 +1024,23 @@ async fn mm24_first_inbox_after_sleep_carries_sleep_notes() {
     let inbox_cap3 = server.tool(fern, "inbox", json!({})).await;
     assert!(inbox_cap3.get("sleep_notes").is_none());
 
-    // Sleeping replaces prior sleep notes.
+    // Sleep with a note.
+    server
+        .tool(
+            fern,
+            "sleep",
+            json!({ "notes": [{ "subject": "self", "text": "Remember tomorrow" }] }),
+        )
+        .await;
+    // Sleep again with no notes: does not wipe unseen sleep notes.
+    server.tool(fern, "sleep", json!({ "notes": [] })).await;
+    let inbox_retained = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes_retained =
+        inbox_retained["sleep_notes"].as_array().expect("retained sleep notes");
+    assert_eq!(sleep_notes_retained.len(), 1);
+    assert_eq!(sleep_notes_retained[0]["text"], "Remember tomorrow");
+
+    // Sleeping with new notes replaces prior sleep notes.
     let notes_single = json!({ "notes": [
         { "subject": "self", "text": "New morning goal" }
     ] });

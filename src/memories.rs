@@ -1707,14 +1707,17 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         params![bot, now],
     )?;
     // MM12 (#1041): notes written in this sleep are recorded for the bot's next inbox call.
-    tx.execute("DELETE FROM bot_sleep_notes WHERE bot_id = ?", params![bot])?;
-    let mut insert_sleep_note = tx.prepare(
-        "INSERT OR REPLACE INTO bot_sleep_notes (bot_id, note_id, seen_at) VALUES (?1, ?2, NULL)",
-    )?;
-    for note_id in &ordered {
-        insert_sleep_note.execute(params![bot, note_id])?;
+    // A sleep with no notes never wipes unseen ones.
+    if !ordered.is_empty() {
+        tx.execute("DELETE FROM bot_sleep_notes WHERE bot_id = ?", params![bot])?;
+        let mut insert_sleep_note = tx.prepare(
+            "INSERT OR REPLACE INTO bot_sleep_notes (bot_id, note_id, seen_at) VALUES (?1, ?2, NULL)",
+        )?;
+        for note_id in &ordered {
+            insert_sleep_note.execute(params![bot, note_id])?;
+        }
+        drop(insert_sleep_note);
     }
-    drop(insert_sleep_note);
     tx.commit()?;
     let mut reply = json!({ "ok": true, "changed": changed, "slept_at": iso(now) });
     if !dropped.is_empty() {
