@@ -16,7 +16,7 @@ const caches = {
       put: async (request, response) => data.set(key(request), response.clone()) };
   },
 };
-let requests = [], cacheModes = [], offline = false, corrupt = false, claims = 0, activations = 0;
+let requests = [], cacheModes = [], offline = false, corrupt = false, staleDefault = false, claims = 0, activations = 0;
 function boot(version, body) {
   const url = `/client/${version}/app.js`;
   const listeners = {};
@@ -28,7 +28,7 @@ function boot(version, body) {
       requests.push(key(request));
       cacheModes.push(request.cache);
       if (offline) throw Error('offline');
-      return new Response(corrupt ? 'corrupt' : body, { headers: { 'content-type': 'text/javascript' } });
+      return new Response(corrupt || (staleDefault && request.cache === 'default') ? 'corrupt' : body, { headers: { 'content-type': 'text/javascript' } });
     } });
   return { url, listeners, run: async name => {
     let promise; listeners[name]({ waitUntil: p => promise = p }); await promise;
@@ -61,6 +61,27 @@ function boot(version, body) {
   await assert.rejects(broken.run('install'));
   assert.equal((await caches.keys()).some(k => k.includes('c'.repeat(64))), false);
   corrupt = false;
+  // A checksum mismatch on the default HTTP cache gets exactly one retry with cache 'reload'.
+  staleDefault = true;
+  requests = []; cacheModes = [];
+  const retried = boot('e'.repeat(64), 'new');
+  await retried.run('install');
+  assert.deepEqual(cacheModes, ['default', 'reload'], 'one reload retry after a mismatch');
+  assert.ok((await caches.keys()).includes('agentshangout-client-' + 'e'.repeat(64)), 'retried version is written');
+  staleDefault = false;
+  // A second mismatch still throws and writes nothing.
+  corrupt = true; requests = []; cacheModes = [];
+  const twice = boot('f'.repeat(64), 'second');
+  await assert.rejects(twice.run('install'), /failed verification/);
+  assert.deepEqual(cacheModes, ['default', 'reload'], 'no third attempt after a second mismatch');
+  assert.equal((await caches.keys()).some(k => k.includes('f'.repeat(64))), false);
+  corrupt = false;
+  // A network error throws as before and is not retried.
+  offline = true; cacheModes = [];
+  const down = boot('9'.repeat(64), 'third');
+  await assert.rejects(down.run('install'), /offline/);
+  assert.deepEqual(cacheModes, ['default'], 'network errors are not retried');
+  offline = false;
   const next = boot('d'.repeat(64), 'new');
   await next.run('install'); await next.run('activate');
   offline = true;
