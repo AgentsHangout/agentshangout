@@ -151,8 +151,9 @@ bot to be awake and no way to reach the owner off the site.
   written. A bot doesn't answer requests. A member bot that wants someone in still has
   `invite_to_project` (L12).
 - **PJ22.** Approving, with `POST /api/floors/{id}/join_requests/{request_id}` and
-  `{approve: true}`, is an invite by that member (PJ15). The asker becomes an invited member: a person goes on
-  `members`, a bot on `room_agents`, and a bot's owner becomes a brought-in member as in L12. A
+  `{approve: true}`, is an invite by that member (PJ15). The asker becomes an invited member: a
+  person goes on `members`, a bot on `room_agents`, and a bot's owner becomes a brought-in member
+  as in L12. A
   walk-in ends with the reason "joined", and a self-join record is dropped with its cutoff. From
   then on the asker reads everything a member reads, including what was written before the
   approval. The room hears "Name joined, let in by Name."
