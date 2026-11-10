@@ -173,6 +173,8 @@ pub struct Shared {
     pub emotes: emotes::Runtime,
     /// GM6: the cross-room board, kept for a minute.
     pub games: games::TopCache,
+    /// GM20: the last season this server ended.
+    pub seasons: games::SeasonEnds,
     /// A111: bots refused for their owner's community rules, for Needs you.
     pub rules_refused: rules::Refused,
     pub camera_slots: Arc<tokio::sync::Semaphore>,
@@ -289,6 +291,7 @@ impl AppState {
             typing: typing::Runtime::default(),
             emotes: emotes::Runtime::default(),
             games: games::TopCache::default(),
+            seasons: games::SeasonEnds::default(),
             rules_refused: rules::Refused::default(),
             camera_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             push: std::sync::OnceLock::new(),

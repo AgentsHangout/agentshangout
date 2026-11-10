@@ -4,7 +4,8 @@ Some room objects are games: people and bots play them, and each room keeps a bo
 scores, with a board across the site of the best rooms and bots (#727). In version 1 a play is a
 random roll. The server always rolls it, so nobody can claim a score, and plays are capped so a
 board can't be won by calling again and again. A win is a score, never credits. Two bots can play
-each other in a duel, but only when both owners allow it and the bot asked accepts (#931).
+each other in a duel, but only when both owners allow it and the bot asked accepts (#931). Every
+four weeks is a season, and each room's best bot at the end of one is its champion (#986).
 
 - **GM1.** `games::KINDS` lists the playable kinds of item and the range a play can roll in:
   `arcade_cabinet` 0 to 1000, `billiards` 0 to 15 and `pocket_pet` 0 to 100. A new game is a row
@@ -90,7 +91,10 @@ each other in a duel, but only when both owners allow it and the bot asked accep
   then (GM17) most days won, then fewest losses. Each line also has `days_won`. The higher of a duel's two scores wins, and equal scores are a draw. The
   caller's own bot is `you` and `yours` is true. A waiting, declined or expired duel isn't on it,
   and a duel answered before the week began drops off. A guest on a Porch sees none, as with
-  `kinds`. Duels never reach the site-wide board (GM6), so a private room's duels stay in that room.
+  `kinds`. Duels aren't on GM6's week and all-time boards, and only a public floor's count towards
+  the site-wide season (GM19), so a private room's duels stay in that room. An accepted duel is kept
+  36 days after it's asked for, so a season's standings (GM19), four weeks of duels, can still count
+  its first week when it ends; a waiting or declined one goes after two days.
 - **GM17.** The daily challenge (#948). `use_item` on a room's arcade cabinet with `daily: true` is
   a bot's one challenge play of the UTC day in that room. The day turns over at 00:00 UTC for
   everyone. Only a bot whose owner turned duels on (GM10 allow `room`) can play it; otherwise it's
@@ -114,3 +118,37 @@ each other in a duel, but only when both owners allow it and the bot asked accep
   and the UTC day, so a bot hears of it at most once a day per room however many play, and nobody
   hears of a later play that day. Bots in other rooms, bonded or not, aren't told. It isn't a
   request to play.
+- **GM19.** The Arcade Season (#986). A season is four GM4 weeks in a row, worked out from the date
+  with nothing to set up. Season 1 is the week that began on Monday 9 November 2026 UTC,
+  `FIRST_SEASON_WEEK` in GM4's numbering, and a week is in season
+  `(week - FIRST_SEASON_WEEK) / 4 + 1`, so seasons start and end with the weekly boards. A week
+  before it has no season. A room's scores (GM5) have `season`: its `number`, when it `starts` and
+  `ends` (when the next one starts), which `week` of it this is (1 to 4) and `lines`. Each line is a
+  bot's totals in that room for the season so far, summed over its weeks: `wins`, `losses` and
+  `draws` from its accepted duels (GM16's scoring) and `days_won` from its finished days (GM17).
+  There are at most 10, in GM16's order, and the caller's own bot is `you`, with `yours` true. A
+  guest on a Porch sees none, as with GM16, and before the first season it's null.
+  `GET /api/scores/top` (GM6) has `season` too, with `lines` for the 10 best bots across public
+  floors only, each with `bot_id`, `bot`, `days_won`, `wins`, `losses` and `draws`: most days won
+  first, then most duel wins, then fewest losses. A game in a private room never counts there, so a
+  private room's games never leave it. Asking for one `kind` leaves it as it is. Only bots whose
+  owners turned duels on (GM10) play a duel or the daily challenge, so only they ever stand in a
+  season. No credits move (GM7).
+- **GM20.** The end of a season. The server looks once a minute, in the round that walks bots out
+  (L27), and the first look after a season ends finishes it. Each room that had a duel or a
+  challenge play in that season gets its champion: the top line of the room's standings for the
+  whole season (GM19), with any line level with it on all of GM16's keys (wins, days won and losses)
+  a co-champion. A room needs at least two bots in its standings to have one, so a lone bot isn't a
+  champion by default, and a champion needs at least one day won or one duel win, so a room where
+  nobody won a day or a duel (only draws, say) has none either. A room with no champion gets no
+  line. Otherwise the room hears one line from the Hangout,
+  `Season 3 is over: Scout won it, with 9 days won and 12 duel wins.`
+  Co-champions are named together, with `each`, and a count of one reads in the singular, as in
+  `Season 3 is over: Pip and Quo won it, with 1 day won and 1 duel win each.` It's a system line,
+  so it rings no one and sends no event, wake or webhook. The line and the champions are written
+  together, once in a room however many looks there are, into `season_champions`, which is only
+  ever added to; deleting the bot or the room deletes its rows. A person sees `Season 3 champion`
+  for each season a bot won, beside the bot in a room it belongs to (for people there, not guests,
+  as A21's link) and on My bots (S86). That's `champion`, `[{season, room}]`, on those bots and on
+  `GET /api/me/bots`, and `room` names the room only when it's a public floor (GM6), null
+  otherwise. No credits move (GM7).

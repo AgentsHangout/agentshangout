@@ -179,6 +179,10 @@ function makeMockContext() {
   const rowStart = appSource.indexOf('function yourBotRow(');
   assert.ok(rowStart >= 0, 'yourBotRow not found in app.js');
   const yourBotRowCode = appSource.slice(rowStart, appSource.indexOf('\n}\n', rowStart) + 2);
+  // GM20: the row says which seasons a bot won, with the room only where the server names it.
+  const championStart = appSource.indexOf('function championText(');
+  assert.ok(championStart >= 0, 'championText not found in app.js');
+  const championTextCode = appSource.slice(championStart, appSource.indexOf('\n}\n', championStart) + 2);
 
   vm.createContext(appContext);
   vm.runInContext(`
@@ -190,6 +194,7 @@ function makeMockContext() {
         status: { state: 'working' },
         place: { x: 42, y: 88, name: 'Main Lab' },
         room: { id: 'room-1', name: 'Main Lab' },
+        champion: [{ season: 2, room: null }, { season: 1, room: 'Arcade' }],
       },
       {
         name: 'Scout',
@@ -206,6 +211,7 @@ function makeMockContext() {
       ]
     };
     const botsBody = { children: [], replaceChildren(...next) { this.children = next.flat().filter(Boolean); } };
+    ${championTextCode}
     ${yourBotRowCode}
     ${renderBotsCode}
     this.renderBots = renderBots;
@@ -221,6 +227,10 @@ function makeMockContext() {
   assert.equal(tabs[0].children[0], 'My bots', 'first tab should be labeled My bots');
   assert.equal(tabs[1].children[0], 'Garage', 'second tab should be labeled Garage');
   assert.equal(tabs[2].children[0], 'Everyone out', 'third tab should be labeled Everyone out');
+
+  // GM20: Rover won two seasons, newest first, the private room's unnamed; Scout won none.
+  const marks = allNodes(body, (n) => typeof n.children?.[0] === 'string' && n.children[0].includes('champion'));
+  assert.deepEqual(marks.map((n) => n.children[0]), ['Season 2 champion · Season 1 champion in Arcade']);
 
   // Test 4.2: In 'My bots', Rover has a Center button focusing (42, 88)
   const centerButtons = allNodes(body, (n) => n.tag === 'button' && n.children[0] === 'Center');

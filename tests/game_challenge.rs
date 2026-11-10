@@ -1,5 +1,6 @@
 //! GM8, GM10 to GM13 (#876, #931): a challenge asks another bot for a duel, which is played only
-//! when that bot accepts, inside both owners' allows. Written from docs/games.md.
+//! when that bot accepts, inside both owners' allows. GM16 to GM20 (#986): the week's board, the
+//! daily challenge and the seasons built on them. Written from docs/games.md.
 
 mod support;
 
@@ -7,9 +8,9 @@ use std::cmp::Ordering;
 
 use agenthangout::{
     auth::{hash_secret, Caller},
-    db::{Db, NewFloorItem, NewPlay, PlayCaps},
+    db::{Db, Duel, DuelAllow, NewFloorItem, NewPlay, PlayCaps},
     error::ApiError,
-    games, items, now, AppState, Config,
+    games, items, now, worlds, AppState, Config,
 };
 use futures_util::future::join_all;
 use reqwest::Method;
@@ -154,6 +155,65 @@ impl World {
             next.unwrap().is_some()
         };
         (1..=games::CAPS.per_hour).filter(|n| at_least(*n)).count()
+    }
+
+    /// Opens the Arcade to everyone, so it's a public floor (GM6).
+    async fn open_arcade(&self) {
+        let path = format!("/api/floors/{}", self.arcade);
+        let open = json!({ "access": "public", "create_code": CODE });
+        let (status, body) = send(&self.base, &self.key, Method::PUT, &path, Some(open)).await;
+        assert_eq!(status, 200, "{body}");
+    }
+
+    /// GM10: these bots' owner lets them duel.
+    fn allow_duels(&self, bots: &[&str]) {
+        for bot in bots {
+            let allow = DuelAllow { allow: "room".to_string(), daily_cap: 5 };
+            self.state.db.set_duel_allow(bot, &allow, now()).unwrap();
+        }
+    }
+
+    /// GM13: a duel in `room` accepted at `at`, the first bot having challenged the second, with
+    /// the rolls given in the same order. The clock can't be moved over HTTP, so it's written here.
+    fn duel_at(&self, room: &str, (a, b): (&str, &str), (roll_a, roll_b): (i64, i64), at: i64) {
+        let id = agenthangout::auth::new_id();
+        let asked = Duel {
+            id: id.clone(),
+            hangout_id: room.to_string(),
+            item_id: "cabinet-1".to_string(),
+            kind: "arcade_cabinet".to_string(),
+            challenger_id: a.to_string(),
+            challenged_id: b.to_string(),
+            status: "pending".to_string(),
+            quiet: false,
+            expires_at: at + 600,
+        };
+        self.state.db.ask_duel(&asked, at).unwrap();
+        let play = |bot, score| NewPlay {
+            hangout_id: room,
+            item_id: "cabinet-1",
+            kind: "arcade_cabinet",
+            agent_id: Some(bot),
+            person_id: &self.ann,
+            score,
+            week: games::week_of(at),
+            now: at,
+        };
+        let (accepting, asking) = (play(b, roll_b), play(a, roll_a));
+        let caps = PlayCaps { per_hour: 100, cooldown_secs: 0 };
+        self.state.db.accept_duel(&id, [&accepting, &asking], caps, at).unwrap().unwrap();
+    }
+
+    /// GM17: a bot's challenge play in `room` on UTC day `day`, an hour into it.
+    fn challenge_on(&self, room: &str, bot: &str, day: i64, roll: i64) {
+        let taken = self.state.db.take_daily_challenge(room, bot, day, roll, day * 86_400 + 3_600);
+        assert!(taken.unwrap(), "{bot} on day {day}");
+    }
+
+    /// The lines a room has heard that end a season.
+    fn season_lines(&self, room: &str) -> Vec<String> {
+        let said = self.state.db.messages(room, 0, 50).unwrap();
+        said.into_iter().map(|line| line.body).filter(|body| body.starts_with("Season")).collect()
     }
 }
 
@@ -537,6 +597,166 @@ async fn the_days_first_challenge_play_invites_opted_in_bots_once() {
     assert!(second["structuredContent"]["score"].is_i64(), "{second}");
     assert_eq!(invites(&rex_token).await.len(), 1);
     assert!(invites(&scout_token).await.is_empty());
+}
+
+// GM19, GM20: a room's season adds up its weeks, and a week before the first season counts for
+// none. The first housekeeping pass after it ends gives each room with two bots standing its
+// champion, co-champions when they're level, and one line, once however many passes there are. A
+// lone bot gets nothing, nor does a room where nobody won, and a private room's name stays off the
+// mark.
+#[tokio::test]
+async fn a_season_adds_up_its_weeks_and_ends_once_with_its_champions() {
+    let w = world().await;
+    w.open_arcade().await;
+    // Bo's Attic and Cellar, since Ann has as many spaces as anyone can.
+    let space = async |name: &str| {
+        let body = json!({ "name": name, "create_code": CODE });
+        text(&post(&w.base, &w.bo_key, "/api/hangouts", body).await["hangout"]["id"])
+    };
+    let (attic, cellar) = (space("Attic").await, space("Cellar").await);
+    let (scout, _, _) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, _, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    let (pip, _, pip_caller) = w.bot(&w.ann, &w.den, "Pip");
+    let (quo, _, _) = w.bot(&w.ann, &w.den, "Quo");
+    let (tad, _, _) = w.bot(&w.ann, &attic, "Tad");
+    let (uma, _, _) = w.bot(&w.ann, &cellar, "Uma");
+    let (vic, _, _) = w.bot(&w.ann, &cellar, "Vic");
+    w.allow_duels(&[&scout, &rex, &pip, &quo, &tad, &uma, &vic]);
+    let first = games::season_start(1);
+    let (day, noon) = (|n: i64| games::day_of(first) + n, |n: i64| first + n * 86_400 + 43_200);
+
+    // The Den: in the week before season 1, a duel and a day of Pip's. In its first two weeks, a
+    // win and a day each, so Pip and Quo end level on everything.
+    w.duel_at(&w.den, (&pip, &quo), (900, 100), noon(-5));
+    w.challenge_on(&w.den, &pip, day(-5), 500);
+    w.duel_at(&w.den, (&pip, &quo), (800, 200), noon(1));
+    w.duel_at(&w.den, (&quo, &pip), (700, 300), noon(8));
+    for (bot, on, roll) in [(&pip, 2, 600), (&quo, 2, 400), (&quo, 9, 900), (&pip, 9, 100)] {
+        w.challenge_on(&w.den, bot, day(on), roll);
+    }
+    // The public Arcade: Scout beats Rex and wins a day. The Attic: Tad plays alone. The Cellar:
+    // Uma and Vic only draw.
+    w.duel_at(&w.arcade, (&scout, &rex), (600, 100), noon(1));
+    w.challenge_on(&w.arcade, &scout, day(3), 700);
+    w.challenge_on(&attic, &tad, day(1), 300);
+    w.duel_at(&cellar, (&uma, &vic), (500, 500), noon(4));
+
+    // GM19: before season 1 there's no season. In its third week, the Den's has its first two
+    // weeks, the caller's own line as you.
+    assert!(games::room_season(&w.state, &pip_caller, &w.den, noon(-5)).unwrap().is_null());
+    let season = games::room_season(&w.state, &pip_caller, &w.den, noon(15)).unwrap();
+    let when = (&season["number"], &season["week"], &season["starts"], &season["ends"]);
+    let (starts, ends) = (json!("2026-11-09T00:00:00Z"), json!("2026-12-07T00:00:00Z"));
+    assert_eq!(when, (&json!(1), &json!(3), &starts, &ends), "{season}");
+    let lines = season["lines"].as_array().unwrap();
+    let totals = |name: &str| {
+        let line = lines.iter().find(|line| line["name"] == name).unwrap();
+        ["wins", "losses", "draws", "days_won", "yours"].map(|key| line[key].clone())
+    };
+    assert_eq!(lines.len(), 2, "{season}");
+    assert_eq!(totals("you"), [json!(1), json!(1), json!(0), json!(1), json!(true)]);
+    assert_eq!(totals("Quo"), [json!(1), json!(1), json!(0), json!(1), json!(false)]);
+
+    // GM20: the first pass of season 2 ends season 1, and later passes change nothing.
+    let ended = games::season_start(2) + 60;
+    worlds::housekeeping(&w.state, ended);
+    worlds::housekeeping(&w.state, ended + 60);
+    games::end_season(&w.state, 1, ended + 120).unwrap();
+    let won = "Season 1 is over: Scout won it, with 1 day won and 1 duel win.";
+    assert_eq!(w.season_lines(&w.arcade), [won]);
+    let tied = "Season 1 is over: Pip and Quo won it, with 1 day won and 1 duel win each.";
+    assert_eq!(w.season_lines(&w.den), [tied]);
+    assert!(w.season_lines(&attic).is_empty(), "a lone bot isn't a champion");
+    assert!(w.season_lines(&cellar).is_empty(), "nobody won a day or a duel");
+
+    // The mark names the public Arcade and never the private Den, on My bots and beside the bot in
+    // its room, for each season it won, recorded once.
+    let mine = send(&w.base, &w.key, Method::GET, "/api/me/bots", None).await.1;
+    let mark = |name: &str| {
+        let bots = mine["bots"].as_array().unwrap();
+        bots.iter().find(|bot| bot["name"] == name).unwrap()["champion"].clone()
+    };
+    assert_eq!(mark("Scout"), json!([{ "season": 1, "room": "Arcade" }]));
+    assert_eq!(mark("Pip"), json!([{ "season": 1, "room": null }]));
+    assert_eq!(mark("Quo"), json!([{ "season": 1, "room": null }]));
+    for (name, nothing) in ["Rex", "Tad", "Uma", "Vic"].map(|name| (name, mark(name))) {
+        assert_eq!(nothing, json!([]), "{name}");
+    }
+    for (room, name, shown) in [
+        (&w.arcade, "Scout", json!([{ "season": 1, "room": "Arcade" }])),
+        (&w.arcade, "Rex", Value::Null),
+        (&w.den, "Pip", json!([{ "season": 1, "room": null }])),
+    ] {
+        let path = format!("/api/hangouts/{room}");
+        let agents = send(&w.base, &w.key, Method::GET, &path, None).await.1["agents"].clone();
+        let bot = agents.as_array().unwrap().iter().find(|bot| bot["name"] == name).cloned();
+        assert_eq!(bot.unwrap()["champion"], shown, "{name}");
+    }
+}
+
+// GM19: the site-wide season counts public floors only, most days won first, so a private room's
+// games never leave it, and asking for one kind leaves it as it is. A guest on a Porch sees no
+// season at all.
+#[tokio::test]
+async fn the_site_wide_season_is_public_floors_only_and_a_porch_guest_sees_none() {
+    let w = world().await;
+    w.open_arcade().await;
+    let (scout, _, _) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, _, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    let (pip, _, _) = w.bot(&w.ann, &w.den, "Pip");
+    let (quo, _, _) = w.bot(&w.ann, &w.den, "Quo");
+    w.allow_duels(&[&scout, &rex, &pip, &quo]);
+    let now = now();
+    w.duel_at(&w.arcade, (&scout, &rex), (600, 100), now);
+    w.duel_at(&w.den, (&pip, &quo), (900, 50), now);
+    // GM17: yesterday, if it's in this season, Rex won the Arcade's day and Pip the Den's. Days won
+    // come first, so Rex goes above Scout's duel win; Pip's counts for nothing here.
+    let yesterday = games::day_of(now) - 1;
+    let had_a_day = games::season_of(yesterday * 86_400) == games::season_of(now);
+    if had_a_day {
+        w.challenge_on(&w.arcade, &rex, yesterday, 500);
+        w.challenge_on(&w.den, &pip, yesterday, 500);
+    }
+
+    let top = send(&w.base, "", Method::GET, "/api/scores/top", None).await.1;
+    let season = &top["season"];
+    assert_eq!(season["number"], json!(games::season_of(now)), "{top}");
+    let shown: Vec<(&str, &str)> = season["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| (line["bot"].as_str().unwrap(), line["bot_id"].as_str().unwrap()))
+        .collect();
+    let (scout_line, rex_line) = (("Scout", scout.as_str()), ("Rex", rex.as_str()));
+    let expected = if had_a_day { [rex_line, scout_line] } else { [scout_line, rex_line] };
+    assert_eq!(shown, expected, "{season}");
+    let kind = send(&w.base, "", Method::GET, "/api/scores/top?kind=arcade_cabinet", None).await;
+    assert_eq!(&kind.1["season"], season);
+
+    // A guest on a Porch: Kim's bot on a call at Cy's house, in a city of their own.
+    let city = json!({ "name": "Elm", "your_name": "Cy", "create_code": CODE });
+    let made = post(&w.base, "", "/api/cities", city).await;
+    let (cy_key, city) = (text(&made["owner_key"]), text(&made["city"]["id"]));
+    let code = text(&made["invite_url"]).rsplit('/').next().unwrap().to_string();
+    let rules = json!({ "rules_text": "Be kind" });
+    send(&w.base, &cy_key, Method::PUT, &format!("/api/cities/{city}/rules"), Some(rules)).await;
+    let houses = format!("/api/cities/{city}/houses");
+    let home = post(&w.base, &cy_key, &houses, json!({ "name": "Cy's" })).await;
+    let (house, porch) = (text(&home["house"]["id"]), text(&home["porch_id"]));
+    let join = json!({ "your_name": "Kim", "accept_rules": true });
+    let kim = post(&w.base, "", &format!("/api/city-invites/{code}/join"), join).await;
+    let (kim_key, kim) = (text(&kim["owner_key"]), text(&kim["person"]["id"]));
+    let kims = post(&w.base, &kim_key, &houses, json!({ "name": "Kim's" })).await;
+    let (visitor, visitor_token, _) = w.bot(&kim, &text(&kims["living_room_id"]), "Visitor");
+    let trip = json!({ "agent_id": visitor, "house_id": house, "kind": "call" });
+    let trip = text(&post(&w.base, &kim_key, "/api/trips", trip).await["id"]);
+    let yes = json!({ "response": "yes" });
+    post(&w.base, &cy_key, &format!("/api/trips/{trip}/answer"), yes).await;
+    let path = format!("/api/hangouts/{porch}/scores");
+    let (status, guest) = send(&w.base, &visitor_token, Method::GET, &path, None).await;
+    assert_eq!((status, &guest["season"]), (200, &Value::Null), "{guest}");
+    let resident = send(&w.base, &cy_key, Method::GET, &path, None).await.1;
+    assert_eq!(resident["season"]["number"], json!(games::season_of(now)), "{resident}");
 }
 
 // I161 (#963): an owner makes a bot a room's greeter, up to 3 a room. A speaker's first chat line

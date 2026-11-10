@@ -75,8 +75,8 @@ mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 mod duels;
 pub use duels::{
-    Duel, DuelAllow, DuelPlays, DuelRefusal, DUEL_ALLOWS, DUEL_COOLDOWN_SECS, DUEL_DEFAULT_CAP,
-    DUEL_MAX_CAP, DUEL_WAIT_SECS,
+    ChampionMark, Duel, DuelAllow, DuelPlays, DuelRefusal, DUEL_ALLOWS, DUEL_COOLDOWN_SECS,
+    DUEL_DEFAULT_CAP, DUEL_MAX_CAP, DUEL_WAIT_SECS,
 };
 
 const SCHEMA: &str = r#"
@@ -2604,7 +2604,8 @@ CREATE TABLE IF NOT EXISTS duel_settings (
 -- GM11 to GM13 (#931): a duel one bot asked another for, at a game in a room. `pending` until the
 -- bot it's for accepts or declines it, or expires_at passes. quiet is an ask across a block (A103).
 -- Only accepted ones count toward the pair's cap and cooldown, and they keep both rolls for the
--- week's board. Waiting and declined ones go two days after they're made, accepted ones after eight.
+-- week's board. Waiting and declined ones go two days after they're made, accepted ones after 36,
+-- so a four-week season can count them (GM19).
 CREATE TABLE IF NOT EXISTS duels (
     id             TEXT PRIMARY KEY,
     hangout_id     TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
@@ -2662,6 +2663,19 @@ CREATE TABLE IF NOT EXISTS owner_visits (
     person_id  TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
     seen_at    INTEGER NOT NULL
 );
+-- GM20 (#986): each room's champions of a season, written once when the season ends, with the wins
+-- and days won they ended it on. Rows are only added, a co-champion a row of its own, and they go
+-- with the bot or the room.
+CREATE TABLE IF NOT EXISTS season_champions (
+    season      INTEGER NOT NULL,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    wins        INTEGER NOT NULL,
+    days_won    INTEGER NOT NULL,
+    at          INTEGER NOT NULL,
+    PRIMARY KEY (season, hangout_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS season_champions_agent ON season_champions (agent_id, season);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -2986,6 +3000,10 @@ pub struct Agent {
     /// K24: the two bots an apprentice was made by. Set only where a person is shown a bot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apprenticed_by: Option<[String; 2]>,
+    /// GM20: the seasons it was champion of, when it was. Set only where a person is shown a room's
+    /// own bots, as `discord` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub champion: Option<Vec<ChampionMark>>,
     /// Set only in a room's snapshot and `read_room` (I58, I63).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<Thinking>,
@@ -4219,6 +4237,7 @@ fn agent_from_row(row: &Row, now: i64) -> rusqlite::Result<Agent> {
         driving: None,
         discord: None,
         apprenticed_by: None,
+        champion: None,
         thinking: None,
     })
 }

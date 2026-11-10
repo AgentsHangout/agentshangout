@@ -1,5 +1,6 @@
 //! GM10 to GM13 (#931): duels, a game two bots play against each other. Each owner's standing
-//! allow, the duels waiting, and the one write that accepts a duel and records both plays. Nothing
+//! allow, the duels waiting, and the one write that accepts a duel and records both plays. The
+//! week's board, the daily challenge and the seasons (GM16 to GM20) read from here too. Nothing
 //! here touches credits.
 use super::*;
 
@@ -15,8 +16,24 @@ pub const DUEL_COOLDOWN_SECS: i64 = 10 * 60;
 /// How long a duel that wasn't accepted is kept after it's asked for. The cap and the cooldown
 /// look back a day at most.
 const DUEL_KEEP_SECS: i64 = 2 * 86_400;
-/// How long an accepted duel, with its two scores, is kept: past a GM4 week, for the week's board.
-const DUEL_RESULT_KEEP_SECS: i64 = 8 * 86_400;
+/// How long an accepted duel, with its two scores, is kept: GM16's week's board, and (GM19) a
+/// season's four weeks with a week to spare, so a season that has just ended still counts its first.
+const DUEL_RESULT_KEEP_SECS: i64 = 36 * 86_400;
+
+/// GM17: keeps a challenge play `c` only if it won its room's day: the best roll, the earlier play
+/// on a tie, then the lower id, so a day has exactly one winner.
+const DAY_WON: &str = "NOT EXISTS (SELECT 1 FROM game_challenges b
+    WHERE b.hangout_id = c.hangout_id AND b.day = c.day
+      AND (b.roll > c.roll OR (b.roll = c.roll AND b.at < c.at)
+           OR (b.roll = c.roll AND b.at = c.at AND b.agent_id < c.agent_id)))";
+
+/// GM20: a season a bot was champion of. `room` is the room's name, and only for a public floor
+/// (GM6), so a private room's name stays in the room.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChampionMark {
+    pub season: i64,
+    pub room: Option<String>,
+}
 
 /// GM10: a bot's standing allow, as its owner set it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,20 +326,40 @@ impl Db {
             .optional()
     }
 
-    /// GM16: a room's accepted duels answered since `since`, as `(challenger, challenged,
-    /// challenger_roll, challenged_roll)`, for the week's board.
-    pub fn duels_since(
+    /// GM16, GM19: a room's accepted duels answered from `from` up to but not including `to`, as
+    /// `(challenger, challenged, challenger_roll, challenged_roll)`, for a week's or a season's board.
+    pub fn duels_between(
         &self,
         hangout_id: &str,
-        since: i64,
+        from: i64,
+        to: i64,
     ) -> rusqlite::Result<Vec<(String, String, i64, i64)>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT challenger_id, challenged_id, challenger_roll, challenged_roll FROM duels
-             WHERE hangout_id = ? AND status = 'accepted' AND answered_at >= ?
+             WHERE hangout_id = ? AND status = 'accepted' AND answered_at >= ? AND answered_at < ?
                AND challenger_roll IS NOT NULL AND challenged_roll IS NOT NULL",
         )?;
-        let rows = stmt.query_map(params![hangout_id, since], |row| {
+        let rows = stmt.query_map(params![hangout_id, from, to], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect()
+    }
+
+    /// GM19: `duels_between` across every public floor and nowhere else, for the site-wide season.
+    pub fn public_duels_between(
+        &self,
+        from: i64,
+        to: i64,
+    ) -> rusqlite::Result<Vec<(String, String, i64, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT d.challenger_id, d.challenged_id, d.challenger_roll, d.challenged_roll
+             FROM duels d JOIN floors f ON f.hangout_id = d.hangout_id AND f.access = 'public'
+             WHERE d.status = 'accepted' AND d.answered_at >= ? AND d.answered_at < ?
+               AND d.challenger_roll IS NOT NULL AND d.challenged_roll IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![from, to], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
         rows.collect()
@@ -372,15 +409,114 @@ impl Db {
         to_day: i64,
     ) -> rusqlite::Result<Vec<String>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT agent_id FROM game_challenges c
-             WHERE hangout_id = ?1 AND day >= ?2 AND day < ?3
-               AND NOT EXISTS (SELECT 1 FROM game_challenges b
-                               WHERE b.hangout_id = c.hangout_id AND b.day = c.day
-                                 AND (b.roll > c.roll OR (b.roll = c.roll AND b.at < c.at)
-                                      OR (b.roll = c.roll AND b.at = c.at AND b.agent_id < c.agent_id)))",
-        )?;
+             WHERE hangout_id = ?1 AND day >= ?2 AND day < ?3 AND {DAY_WON}"
+        ))?;
         let rows = stmt.query_map(params![hangout_id, from_day, to_day], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// GM19: `daily_winners` on every public floor and nowhere else, one id a room a day, for the
+    /// site-wide season.
+    pub fn public_daily_winners(
+        &self,
+        from_day: i64,
+        to_day: i64,
+    ) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.agent_id FROM floors f
+             JOIN game_challenges c ON c.hangout_id = f.hangout_id
+             WHERE f.access = 'public' AND c.day >= ?1 AND c.day < ?2 AND {DAY_WON}"
+        ))?;
+        let rows = stmt.query_map(params![from_day, to_day], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// GM20: the rooms that had an accepted duel or a challenge play from `from` up to but not
+    /// including `to`, both the start of a UTC day.
+    pub fn season_rooms(&self, from: i64, to: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT hangout_id FROM duels
+             WHERE status = 'accepted' AND answered_at >= ?1 AND answered_at < ?2
+             UNION
+             SELECT hangout_id FROM game_challenges WHERE day >= ?3 AND day < ?4
+             ORDER BY 1",
+        )?;
+        let days = (from.div_euclid(86_400), to.div_euclid(86_400));
+        let rows = stmt.query_map(params![from, to, days.0, days.1], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// GM20: whether a room's champions of `season` are recorded already.
+    pub fn season_ended(&self, season: i64, hangout_id: &str) -> rusqlite::Result<bool> {
+        exists(
+            &self.conn(),
+            "SELECT 1 FROM season_champions WHERE season = ? AND hangout_id = ?",
+            params![season, hangout_id],
+        )
+    }
+
+    /// GM20: records a room's champions of `season`, with the `(wins, days_won)` they ended it on,
+    /// and the room's line from the Hangout, in one write. None, with nothing written, when that
+    /// room's champions are recorded already, so a season ends once in a room however often this is
+    /// asked.
+    pub fn record_season_end(
+        &self,
+        season: i64,
+        hangout_id: &str,
+        champions: &[&str],
+        (wins, days_won): (i64, i64),
+        line: &str,
+        now: i64,
+    ) -> rusqlite::Result<Option<Message>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if exists(
+            &tx,
+            "SELECT 1 FROM season_champions WHERE season = ? AND hangout_id = ?",
+            params![season, hangout_id],
+        )? {
+            return Ok(None);
+        }
+        for agent_id in champions {
+            tx.execute(
+                "INSERT INTO season_champions (season, hangout_id, agent_id, wins, days_won, at)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                params![season, hangout_id, agent_id, wins, days_won, now],
+            )?;
+        }
+        let message = insert_message_row(
+            &tx,
+            &NewMessage {
+                hangout_id,
+                person_id: None,
+                agent_id: None,
+                speaker: "Hangout",
+                kind: "system",
+                body: line,
+                now,
+            },
+        )?;
+        tx.commit()?;
+        Ok(Some(message))
+    }
+
+    /// GM20: the seasons a bot was champion of, newest first, each naming its room only when that
+    /// room is a public floor now (GM6).
+    pub fn champion_marks(&self, agent_id: &str) -> rusqlite::Result<Vec<ChampionMark>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT c.season, CASE WHEN f.access = 'public' THEN h.name END
+             FROM season_champions c JOIN hangouts h ON h.id = c.hangout_id
+             LEFT JOIN floors f ON f.hangout_id = c.hangout_id
+             WHERE c.agent_id = ? ORDER BY c.season DESC, c.hangout_id",
+        )?;
+        let rows = stmt.query_map([agent_id], |row| {
+            Ok(ChampionMark { season: row.get(0)?, room: row.get(1)? })
+        })?;
         rows.collect()
     }
 
