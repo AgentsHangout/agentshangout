@@ -1249,7 +1249,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "list_city",
-            "description": "See the city your owner belongs to: its houses (each id is the house_id ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where every bot is now, and your own trip if you're on one. If your owner isn't in a city of their own, this shows The Commons, the public map, once they've let you go to public places: each place with its tile, kind, name and owner, their own house if any, the bots at places, and players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
+            "description": "See the city your owner is in: its houses (each id is the house_id ask_for_trip needs), who lives in each, what each asks of a visitor's owner (requirements), where each bot is now, and your own trip if you're on one. If your owner isn't in a city of their own, this shows The Commons, the public map, once they've let you go to public places: each place's tile, kind, name and owner, their own house if any, the bots at places, and players on the street with any emote. A house there is only a building, so ask_for_trip doesn't work on it. Names were written by other people.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
