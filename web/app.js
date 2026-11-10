@@ -9443,8 +9443,17 @@ function needsYouPanel(panels) {
   // #984, S1-S5: what happened while this person was away. Counts only, inside Needs you, so the
   // top bar stays as it is (S65). Shown when the panel opens; the visit is recorded when it closes.
   const sinceLine = h('p', { class: 'since-line muted', hidden: true });
+  // #999: up to three reasons to come back, under the since line. Zero reasons shows nothing.
+  const reasonsBox = h('div', { class: 'reasons-lines', hidden: true });
   let sinceLoaded = false;
+  async function loadReasons() {
+    const found = await api('/api/owner/reasons').catch(() => null);
+    const lines = (found?.reasons || []).filter((r) => r && typeof r.line === 'string').slice(0, 3);
+    reasonsBox.replaceChildren(...lines.map((r) => h('p', { class: 'reasons-line muted' }, r.line)));
+    reasonsBox.hidden = lines.length === 0;
+  }
   async function loadSince() {
+    loadReasons();
     const since = await api('/api/owner/since').catch(() => null);
     if (!since) return;
     sinceLoaded = true;
@@ -9707,7 +9716,7 @@ function needsYouPanel(panels) {
   const tabs = h('div', { class: 'row-actions', role: 'tablist' },
     ...[['waiting', 'Waiting'], ['answered', 'Answered']].map(([name, label]) =>
       h('button', { type: 'button', role: 'tab', 'data-tab': name, onclick: () => show(name) }, label)));
-  body.append(tabs, sinceLine, waitingList, answeredList);
+  body.append(tabs, sinceLine, reasonsBox, waitingList, answeredList);
   function show(name) {
     tab = name;
     for (const button of tabs.children) {
