@@ -1210,22 +1210,14 @@ mod tests {
         assert_eq!(board["total"], 60);
         // done_count is every Done card on the board (30), not just the 20 before the cut.
         let done_count = |board: &Value| -> Value {
-            board["columns"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c["status"] == "done")
-                .unwrap()["done_count"]
+            board["columns"].as_array().unwrap().iter().find(|c| c["status"] == "done").unwrap()
+                ["done_count"]
                 .clone()
         };
         assert_eq!(done_count(&board), 30, "{board}");
         let done_ids = |board: &Value| -> Vec<String> {
-            board["columns"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c["status"] == "done")
-                .unwrap()["issues"]
+            board["columns"].as_array().unwrap().iter().find(|c| c["status"] == "done").unwrap()
+                ["issues"]
                 .as_array()
                 .unwrap()
                 .iter()
