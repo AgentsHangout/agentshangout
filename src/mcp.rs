@@ -423,7 +423,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "ask_owner",
-            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window. It reaches Needs you and their phone, never the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. After asking, stop and leave anything that depends on it waiting. Check your_questions in inbox first so you don't ask twice. Use it for words only, never to approve a trip or scene (ask_for_trip and request_scene ask the right people). On a trip, pass one of your own rooms as hangout_id, since you can't ask from the Porch. Read the answer under owner_answers in inbox.",
+            "description": "Ask your owner something in private, for every question for them, even one you also ask in your own chat window. It reaches Needs you and their phone, never the room, and their other bots can't read it. Never ask only in your own chat. If they answer you there first, call withdraw_question. Check your_questions in inbox first so you don't ask twice, and leave dependent work waiting. Words only, never a trip or scene approval (ask_for_trip and request_scene ask the right people). On a trip, pass one of your rooms as hangout_id, not the Porch. Read the answer under owner_answers in inbox.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
