@@ -525,18 +525,21 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                 .unwrap_or(std::cmp::Ordering::Equal),
         )
     });
-    let total = issues.len();
-    let mut shown = issues[..total.min(MAX_SHOWN)].to_vec();
     // I149: Done is newest first, by when Lific last changed each card; a tie keeps board order.
-    let done_from = shown.iter().position(|row| status_of(row) == "done").unwrap_or(shown.len());
+    // Done is one run in the status order, so it's sorted before the MAX_SHOWN cut, not after it.
+    let done_from = issues.iter().position(|row| status_of(row) == "done").unwrap_or(issues.len());
     let done_to =
-        shown.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
-    shown[done_from..done_to].sort_by(|a, b| {
+        issues.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
+    issues[done_from..done_to].sort_by(|a, b| {
         b["updated_at"]
             .as_str()
             .unwrap_or_default()
             .cmp(a["updated_at"].as_str().unwrap_or_default())
     });
+    // done_count counts every Done card before the MAX_SHOWN cut, so the fold label is honest.
+    let done_total = issues.iter().filter(|row| status_of(row) == "done").count();
+    let total = issues.len();
+    let shown = issues[..total.min(MAX_SHOWN)].to_vec();
     let columns: Vec<Value> = STATUSES
         .iter()
         .map(|status| {
@@ -553,7 +556,7 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                 })
                 .collect();
             if *status == "done" {
-                return json!({ "status": status, "done_count": rows.len(), "issues": rows });
+                return json!({ "status": status, "done_count": done_total, "issues": rows });
             }
             json!({ "status": status, "issues": rows })
         })
@@ -1182,5 +1185,50 @@ mod tests {
         assert_eq!(cut.chars().count(), MAX_TITLE);
         assert!(cut.ends_with('…'));
         assert_eq!(clean_title("<b>bold</b>"), "<b>bold</b>", "kept as text; the page escapes it");
+    }
+
+    #[test]
+    fn done_keeps_the_newest_cards_even_past_the_cut() {
+        // 30 backlog cards, then 30 Done cards in board order, oldest first: the newest Done
+        // cards sit at the end of the board, past MAX_SHOWN (50).
+        let mut rows = Vec::new();
+        for i in 0..30 {
+            rows.push(json!({
+                "identifier": format!("B-{i}"), "title": "b", "status": "backlog",
+                "sort_order": i as f64, "updated_at": "2026-10-01T00:00:00Z", "deleted": false,
+            }));
+        }
+        for i in 0..30 {
+            rows.push(json!({
+                "identifier": format!("D-{i:02}"), "title": "d", "status": "done",
+                "sort_order": i as f64, "updated_at": format!("2026-11-01T00:00:{i:02}Z"),
+                "deleted": false,
+            }));
+        }
+        let index = json!({ "issues": rows });
+        let mut board = columns("item", "APP", &index, None);
+        assert_eq!(board["total"], 60);
+        // done_count is every Done card on the board (30), not just the 20 before the cut.
+        let done_count = |board: &Value| -> Value {
+            board["columns"].as_array().unwrap().iter().find(|c| c["status"] == "done").unwrap()
+                ["done_count"]
+                .clone()
+        };
+        assert_eq!(done_count(&board), 30, "{board}");
+        let done_ids = |board: &Value| -> Vec<String> {
+            board["columns"].as_array().unwrap().iter().find(|c| c["status"] == "done").unwrap()
+                ["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let before_fold = done_ids(&board);
+        assert_eq!(before_fold.first().map(String::as_str), Some("D-29"));
+        assert_eq!(before_fold.len(), MAX_SHOWN - 30);
+        fold_done(&mut board);
+        assert_eq!(done_count(&board), 30, "the fold keeps the count honest");
+        assert_eq!(done_ids(&board), ["D-29", "D-28", "D-27", "D-26", "D-25"]);
     }
 }
