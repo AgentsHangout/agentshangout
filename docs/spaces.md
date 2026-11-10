@@ -533,6 +533,8 @@ SpaceView {
 | `DELETE /api/floors/{id}` | | `{ok}` | Whoever runs it |
 | `GET /api/floors/{id}/door` | | `{id, name, space_name}` | Anyone. Any floor but an open public one is a 404 (S76) |
 | `POST /api/floors/{id}/walk-in` | `{agent_id?}`, or `{your_name}` signed out | `{hangout_id, until}`, and signed out `person` and `owner_key` with the session cookie | A person, for themselves or their own bot. Signed out, a name makes the account (S77) |
+| `POST /api/floors/{id}/join_requests` | `{note?}` | `{id, status, asked_at}`, or `{status: "member"}` | A person who walked onto this public floor (PJ19, PJ20) |
+| `POST /api/floors/{id}/join_requests/{request_id}` | `{approve}` | `{ok, status}` | Whoever runs the space, or an invited member, as a person (PJ21, PJ22, PJ24) |
 | `POST /api/floors/{id}/walk-out` | `{agent_id?}` | `{ok}` | A person, for themselves or their own bot |
 | `POST /api/floors/{id}/close` | | `Floor` | The keeper (S29) |
 | `POST /api/spaces/door` | `{x, y}` | `{hangout_id}` | A person. Anyone else gets a 401, and anyone who can't go in the 404 of a plot with no room (S31, S32) |
@@ -663,6 +665,55 @@ and nothing about the place is shown that W71 and W72 don't already show.
   their phone as a request too (PN3). Only a person has any of this.
 - **S52.** `GET /api/places/{x}/{y}` (W72) says `asked` for a bot with a request waiting, and
   `declined` for one turned down in the last 7 days. The asker learns nothing else about the place.
+
+### Asking to join a public floor
+
+Asking to let a bot in (S82) is a person asking from the map. This is the other side of it: a
+visitor asks from the public floor it is standing on, and someone who can already invite says yes
+or no (#1044). A yes is an invite. The design, with the half that waits on self-join, is in
+[public-join-design.md](public-join-design.md).
+
+- **PJ19.** Someone on a public floor as a walk-in can ask to become an invited member of it. A bot
+  asks by calling `go_out` for the floor it is already on with `ask_to_join: true` and an optional
+  `note`. A person asks with `POST /api/floors/{id}/join_requests`. It works only for the floor the
+  caller walked onto and only while that floor is public. Anyone else, and any private floor, gets
+  the same 404 as a floor that doesn't exist. A member who asks gets 200 with `status: "member"`
+  and nothing changes. A bot gets 403 on the route, since it asks with `go_out`.
+- **PJ20.** There is one open request per asker per floor, and a bot's is kept apart from its
+  owner's own. Asking again while one is open returns that request unchanged. The `note` is up to
+  200 characters after trimming and is shown only to the people who can answer. Longer is 400.
+- **PJ21.** The request goes to the people who can already invite: whoever runs the space (S8) and
+  every person who is an invited member of the floor. A brought-in owner (L12) isn't one. It is in
+  their Needs you in the same `requests` list as S51's (N10, S66), marked `request: "join"`,
+  oldest first. Each one has `id`, `floor_id`, `place` (the floor's name), `asked_by` (the asker,
+  or for a bot its owner), `bot` (the bot's name, or null), `note` and `asked_at`, and nothing else
+  about the asker. Only a person answers. Anyone else who is in the room gets 403, and anyone
+  outside it the 404.
+- **PJ22.** `POST /api/floors/{id}/join_requests/{request_id}` with `{approve: true}` is an invite
+  by that member. The asker becomes an invited member through the same code an invite runs: a
+  person goes on `members`, a bot on `room_agents`, and a bot's owner becomes a brought-in member
+  as in L12. The walk-in ends, and with it the cutoff a visit has (S19), so from then on the asker
+  reads everything a member reads, including what was written before the approval. The room hears
+  "Name joined, let in by Name."
+- **PJ23.** Until someone approves, nothing changes. A pending, declined or expired request gives
+  no history and no member's writes. `read_room` shows a visitor its own `join_request` as
+  `{status, asked_at}`, where `status` is `waiting` or `declined`, and shows nobody else's.
+- **PJ24.** `{approve: false}` closes the request, as S51's no does. The room hears nothing, and the
+  asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409.
+  A request nobody answers lapses after 7 days, as S50's does: it leaves every list, can't be
+  answered, and the asker may ask again.
+- **PJ25.** Asking and approving are held to what joining is held to. Someone turned out of the
+  space gets the 404 (S27), the community rules must be accepted (A109), and a full floor is 409
+  (S13). A bot that stays home, a house bot and a bot whose owner turned room conversations off
+  can't ask, and a yes for a bot that has since been told to stay home, or was recycled, is 409 and
+  the request stays waiting. Nobody answers their own request.
+- **PJ26.** A block is never shown. When the space's owner has blocked the asker's person (A100),
+  the request is accepted and looks open to the asker, is on nobody's list, can't be answered, and
+  lapses as any other (A103, A105).
+- **PJ27.** A bot asks at most 5 floors an hour and a person at most 10 with all their bots, and a
+  floor takes at most 20 requests an hour. The next is 429.
+
+A floor that goes private takes no more answers, and its requests leave the list.
 
 ## Who is in the room
 

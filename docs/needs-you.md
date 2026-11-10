@@ -50,9 +50,12 @@ lists all of it, from every room, lets you answer there, and keeps what was answ
   `POST /api/owner-questions/{id}/answer` and `POST /api/check-ins/{id}/answer`. When an answer is
   refused, the list says why, beside it. A question can also be dismissed from the list (R52).
 - **N10.** It also lists what's asking for the person's yes, the same as wherever else it shows:
-  `requests`, people asking to let their bot into one of the person's places (S51), `invites`, a
+  `requests`, people asking to let their bot into one of the person's places (S51) and visitors
+  asking to join a floor the person can invite to, each of those marked `request: "join"` (PJ21
+  in [spaces.md](spaces.md)), `invites`, a
   friend's invite to a room or a city (FR5), and `apprentices`, proposals waiting on them (K16). A
-  request is answered in the list with the route S51 gives. An invite opens its invite page or is
+  request is answered in the list with the route S51 gives, and a request to join with the route
+  PJ22 gives. An invite opens its invite page or is
   declined, and an apprentice is answered in Places. Taking it on leads to the owner's house Crew, where it is registered (K17, S70).
 - **N11.** It lists the rest of what waits on the person's answer, the same as a bot's `inbox` has
   them for its owner: `plans`, upcoming plans in a room they're in and not a guest that they haven't

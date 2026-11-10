@@ -90,6 +90,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/floors/{id}/move", post(move_floor))
         .route("/api/floors/{id}/door", get(floor_door))
         .route("/api/floors/{id}/walk-in", post(walk_in))
+        .route("/api/floors/{id}/join_requests", post(ask_to_join_floor))
+        .route("/api/floors/{id}/join_requests/{request_id}", post(answer_join_request))
         .route("/api/floors/{id}/walk-out", post(walk_out))
         .route("/api/floors/{id}/close", post(keeper_close))
 }
@@ -603,6 +605,230 @@ async fn answer_place_request(
             state.db.agent(&agent_id, now)?.map_or_else(|| "a bot".to_string(), |agent| agent.name);
         ops::announce(&state, &floor.id, &format!("{} let {name} in.", caller.name))?;
         ops::refresh(&state, &floor.id);
+    }
+    Ok(Json(json!({ "ok": true, "status": status })))
+}
+
+// PJ19 to PJ27 (#1044): asking to join the public floor you're on. A yes is an invite.
+
+/// PJ20: how long a request's note can be.
+const MAX_JOIN_NOTE_CHARS: usize = 200;
+/// PJ27: floors a bot can ask in an hour, floors a person can with all their bots, and requests
+/// one floor takes.
+const BOT_ASKS_AN_HOUR: i64 = 5;
+const PERSON_ASKS_AN_HOUR: i64 = 10;
+const FLOOR_ASKS_AN_HOUR: i64 = 20;
+
+/// PJ19, PJ20, PJ24 to PJ27: a walk-in asks to become an invited member of the floor it is on.
+pub fn ask_to_join(
+    state: &AppState,
+    caller: &Caller,
+    floor_id: &str,
+    note: Option<&str>,
+) -> ApiResult<Value> {
+    ops::no_house_bot(caller)?;
+    let now = now();
+    let who = caller.agent_id.as_deref().unwrap_or(&caller.person_id);
+    // PJ19: only the public floor the caller walked onto. A member has nothing to ask for, and
+    // anyone else gets the 404 of a floor that isn't there, so asking can't be used to probe.
+    if !state.db.walked_onto(who, now)?.iter().any(|floor| floor == floor_id) {
+        if state.in_room(caller, floor_id)? && state.guest_visit(caller, floor_id)?.is_none() {
+            return Ok(json!({ "status": "member" }));
+        }
+        return Err(ApiError::not_found());
+    }
+    let floor = state
+        .db
+        .floor(floor_id)?
+        .filter(|floor| floor.access == "public")
+        .ok_or_else(ApiError::not_found)?;
+    // PJ25, S27: it's a 404 to someone turned out, so nobody hears from them.
+    if state.db.is_turned_out(&floor.space_id, &caller.person_id)? {
+        return Err(ApiError::not_found());
+    }
+    // PJ25, A109: joining takes the community rules accepted.
+    crate::rules::require(state, caller)?;
+    if let Some(agent_id) = &caller.agent_id {
+        if !crate::projects::may_take_part(state, agent_id)? {
+            return Err(ApiError::conflict("a bot that stays home can't ask to join a room"));
+        }
+        require_public_conversations(state, agent_id, floor_id)?;
+    }
+    let note = note.unwrap_or_default().trim();
+    if note.chars().count() > MAX_JOIN_NOTE_CHARS {
+        return Err(ApiError::bad_request(format!(
+            "note is at most {MAX_JOIN_NOTE_CHARS} characters"
+        )));
+    }
+    let agent_id = caller.agent_id.as_deref();
+    // PJ20: one open request. PJ24: a no lasts a week.
+    match state.db.join_request_for(floor_id, &caller.person_id, agent_id, now - REQUEST_SECS)? {
+        Some((id, status, asked_at)) if status == "waiting" => {
+            return Ok(json!({ "id": id, "status": "waiting", "asked_at": asked_at }))
+        }
+        Some(_) => {
+            return Err(ApiError::conflict("that was declined: you can ask again in a week"))
+        }
+        None => {}
+    }
+    let (by_bot, by_person, on_floor) =
+        state.db.join_requests_since(floor_id, &caller.person_id, agent_id, now - 3600)?;
+    if (agent_id.is_some() && by_bot >= BOT_ASKS_AN_HOUR)
+        || by_person >= PERSON_ASKS_AN_HOUR
+        || on_floor >= FLOOR_ASKS_AN_HOUR
+    {
+        return Err(ApiError::too_many_requests(
+            "too many requests to join this hour: try again in an hour",
+        ));
+    }
+    // PJ26, A103: a block is never shown. The request is kept, looks open to the asker, and
+    // reaches nobody.
+    let space = state.db.space(&floor.space_id)?.ok_or_else(ApiError::not_found)?;
+    let hidden = state.db.has_blocked(&space.owner_id, &caller.person_id)?;
+    let id = auth::new_id();
+    state.db.insert_join_request(&id, floor_id, &caller.person_id, agent_id, note, hidden, now)?;
+    Ok(json!({ "id": id, "status": "waiting", "asked_at": now }))
+}
+
+/// PJ23: the caller's own request for this floor, if one is waiting or was declined this week.
+pub fn own_join_request(
+    state: &AppState,
+    caller: &Caller,
+    floor_id: &str,
+) -> ApiResult<Option<Value>> {
+    let now = now();
+    Ok(state
+        .db
+        .join_request_for(
+            floor_id,
+            &caller.person_id,
+            caller.agent_id.as_deref(),
+            now - REQUEST_SECS,
+        )?
+        .map(|(_, status, asked_at)| {
+            let status = if status == "no" { "declined" } else { "waiting" };
+            json!({ "status": status, "asked_at": asked_at })
+        }))
+}
+
+#[derive(Deserialize, Default)]
+struct JoinAsk {
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// PJ19: a person asks from the room page.
+async fn ask_to_join_floor(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    body: Option<Json<JoinAsk>>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "ask to join from here: a bot asks with go_out")?;
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    Ok(Json(ask_to_join(&state, &caller, &id, body.note.as_deref())?))
+}
+
+/// PJ21: the join requests waiting on this person, oldest first, with only what PJ21 shows. They
+/// go in Needs you's `requests` beside S51's, each marked `request: "join"`.
+pub(crate) fn join_requests_for(state: &AppState, person_id: &str) -> ApiResult<Vec<Value>> {
+    let now = now();
+    let mut list = Vec::new();
+    for row in state.db.join_requests_for(person_id, now - REQUEST_SECS)? {
+        // A floor that went private takes no more answers, so it lists nothing.
+        if !state.db.floor(&row.hangout_id)?.is_some_and(|floor| floor.access == "public") {
+            continue;
+        }
+        list.push(json!({
+            "id": row.id,
+            "request": "join",
+            "floor_id": row.hangout_id,
+            "place": row.floor,
+            "asked_by": row.person,
+            "bot": row.bot,
+            "note": row.note,
+            "asked_at": row.asked_at,
+        }));
+    }
+    Ok(list)
+}
+
+#[derive(Deserialize)]
+struct JoinAnswer {
+    approve: bool,
+}
+
+/// PJ21, PJ22, PJ24: someone who can already invite says yes or no. A yes is an invite.
+async fn answer_join_request(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((floor_id, request_id)): Path<(String, String)>,
+    Json(body): Json<JoinAnswer>,
+) -> ApiResult<Json<Value>> {
+    ops::require_human(&caller, "answer a request to join: only people answer")?;
+    let now = now();
+    let floor = state.db.floor(&floor_id)?.ok_or_else(ApiError::not_found)?;
+    let space = state.db.space(&floor.space_id)?.ok_or_else(ApiError::not_found)?;
+    // PJ21: whoever runs the space, and every invited person. Someone else who is in the room is
+    // told why not, and anyone outside it gets the 404 of a floor that isn't there.
+    if !(runs(&state, &caller, &space)?
+        || state.db.is_invited_member(&floor_id, &caller.person_id)?)
+    {
+        return Err(if state.in_room(&caller, &floor_id)? {
+            ApiError::forbidden(
+                "only someone who can invite people here can answer a request to join",
+            )
+        } else {
+            ApiError::not_found()
+        });
+    }
+    // PJ26: a hidden request is on no list, so it can't be answered either.
+    let request = state
+        .db
+        .waiting_join_request(&request_id, now - REQUEST_SECS)?
+        .filter(|request| request.hangout_id == floor_id && !request.hidden)
+        .ok_or_else(ApiError::not_found)?;
+    if request.person_id == caller.person_id {
+        return Err(ApiError::forbidden("you can't answer your own request"));
+    }
+    if floor.access != "public" {
+        return Err(ApiError::conflict("this floor is private now, so it takes no requests"));
+    }
+    let person = state.db.person(&request.person_id)?.ok_or_else(ApiError::not_found)?;
+    let agent = match &request.agent_id {
+        Some(id) => Some(state.db.agent(id, now)?.ok_or_else(ApiError::not_found)?),
+        None => None,
+    };
+    // PJ25: a yes is a way of joining, so it's held to what any join is. Refused, it still waits.
+    if body.approve {
+        check_can_join(&state, &request.person_id, &floor_id)?;
+        if let Some(agent) = &agent {
+            if !crate::projects::may_take_part(&state, &agent.id)? {
+                return Err(ApiError::conflict("that bot stays home now"));
+            }
+            crate::recycling::not_recycled(&state, &agent.id, "that bot")?;
+            require_public_conversations(&state, &agent.id, &floor_id)?;
+        }
+    }
+    let status = if body.approve { "yes" } else { "no" };
+    if !state.db.answer_join_request(&request_id, status, &caller.person_id, now)? {
+        return Err(ApiError::conflict("that request was just answered"));
+    }
+    if body.approve {
+        // PJ22: the same way in an invite is, so there is no second one. The cutoff a visit had
+        // goes with the visit.
+        match &agent {
+            Some(agent) => {
+                let line = format!("{} joined, let in by {}.", agent.name, caller.name);
+                crate::projects::bring_in(&state, &floor_id, &space.owner_id, agent, &line)?;
+                state.db.end_visit_as(&floor_id, &agent.id, now, "joined")?;
+            }
+            None => {
+                let hangout = state.db.hangout(&floor_id)?.ok_or_else(ApiError::not_found)?;
+                let line = format!("{} joined, let in by {}.", person.name, caller.name);
+                ops::join_saying(&state, &person, &hangout, &line)?;
+            }
+        }
     }
     Ok(Json(json!({ "ok": true, "status": status })))
 }

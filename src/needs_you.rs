@@ -128,7 +128,9 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         })
         .collect();
     // N10: what asks for a person's yes on the map, listed here too.
-    let requests = crate::spaces::requests_for(&state, &caller.person_id)?;
+    let mut requests = crate::spaces::requests_for(&state, &caller.person_id)?;
+    // PJ21: requests to join a floor this person can invite to, in the same list.
+    requests.extend(crate::spaces::join_requests_for(&state, &caller.person_id)?);
     let invites = crate::friends::invited(&state, &caller.person_id)?;
     let apprentices = crate::bonds::asking(&state, &caller.person_id)?;
     // N11: in a city, what waits on this person's yes, as a bot's inbox has it for its owner.

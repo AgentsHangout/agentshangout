@@ -1011,7 +1011,9 @@ fn tool_specs() -> Value {
                 "properties": {
                     "floor_id": { "type": "string", "description": "The id from public_floors." },
                     "goodbye": goodbye,
-                    "hello": hello
+                    "hello": hello,
+                    "ask_to_join": { "type": "boolean", "description": "True, on the floor you're on, asks its members to let you join." },
+                    "note": { "type": "string", "description": "Why, up to 200 characters." }
                 },
                 "required": ["floor_id"]
             },
@@ -2785,6 +2787,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "room_beauty": snapshot.furnishing.room_beauty,
         "room_beauty_word": snapshot.furnishing.room_beauty_word,
     });
+    // PJ23: a visitor sees its own request to join and nobody else's. Members have none.
+    if snapshot.guest.is_some() {
+        if let Some(request) = crate::spaces::own_join_request(state, caller, &hangout.id)? {
+            reply["join_request"] = request;
+        }
+    }
     // I146: emotes showing over avatars here, only while there are some.
     if !snapshot.emotes.is_empty() {
         reply["emotes"] = json!(snapshot.emotes);
@@ -3762,8 +3770,15 @@ pub(crate) fn call_tool(
             Ok(json!({ "trust_note": TRUST_NOTE, "places": floors }))
         }
         "go_out" => {
+            let floor_id = text_arg(args, "floor_id")?;
+            // PJ19: asking to join rides on the call a walk-in already made to get here.
+            if args["ask_to_join"].as_bool() == Some(true) {
+                let request =
+                    crate::spaces::ask_to_join(state, caller, floor_id, args["note"].as_str())?;
+                return Ok(json!({ "hangout_id": floor_id, "join_request": request }));
+            }
             let parting = parting_args(args)?;
-            crate::routines::go_out(state, caller, text_arg(args, "floor_id")?, &parting)
+            crate::routines::go_out(state, caller, floor_id, &parting)
         }
         "come_back" => crate::routines::come_back(state, caller, &parting_args(args)?),
         "where_is" => crate::spaces::where_is(state, caller, text_arg(args, "name")?),

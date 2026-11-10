@@ -2565,6 +2565,17 @@ pub fn hangout_for_invite(state: &AppState, code: &str) -> ApiResult<Hangout> {
 // Membership and bots: people only. A bot can't bring in other bots or widen its own access.
 
 pub fn join(state: &AppState, person: &Person, hangout: &Hangout) -> ApiResult<()> {
+    join_saying(state, person, hangout, &format!("{} joined the hangout.", person.name))
+}
+
+/// PJ22: the same join, with what the room is told, so a yes to a request is an invite and not a
+/// second way in.
+pub fn join_saying(
+    state: &AppState,
+    person: &Person,
+    hangout: &Hangout,
+    line: &str,
+) -> ApiResult<()> {
     if state.db.is_managed_room(&hangout.id)? {
         return Err(ApiError::not_found());
     }
@@ -2575,7 +2586,7 @@ pub fn join(state: &AppState, person: &Person, hangout: &Hangout) -> ApiResult<(
     state.db.add_member(&hangout.id, &person.id, now())?;
     // A member isn't a guest, so a walk-in ends here and isn't counted twice.
     state.db.end_visit(&hangout.id, &person.id)?;
-    announce(state, &hangout.id, &format!("{} joined the hangout.", person.name))?;
+    announce(state, &hangout.id, line)?;
     refresh(state, &hangout.id);
     Ok(())
 }

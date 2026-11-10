@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::{self, Caller},
-    db::Space,
+    db::{Agent, Space},
     error::{ApiError, ApiResult},
     now,
     ops::{self, MAX_NAME_CHARS},
@@ -175,19 +175,33 @@ pub fn invite_to_project(
     }
     spaces::require_public_conversations(state, &invitee.id, &space.id)?;
     ops::note_agent_write(state, caller)?;
+    let line = format!("{} brought in {}.", caller.name, invitee.name);
+    bring_in(state, &space.id, &space.owner_id, &invitee, &line)?;
+    Ok(json!({ "ok": true, "project_id": space.id, "bot": invitee.name }))
+}
+
+/// L12, PJ22: puts a bot into a room as a member, with its owner able to see where it went. An
+/// invite and a yes to a join request both end here, so there is one way in.
+pub(crate) fn bring_in(
+    state: &AppState,
+    room_id: &str,
+    space_owner: &str,
+    invitee: &Agent,
+    line: &str,
+) -> ApiResult<()> {
     // S13, S27: being brought in is a way of joining, so it's no way round either of them.
-    spaces::check_can_join(state, &invitee.owner_id, &space.id)?;
-    state.db.add_agent_to_room(&space.id, &invitee.id)?;
-    crate::events::note_place(state, &invitee.id, &space.id, "moved");
+    spaces::check_can_join(state, &invitee.owner_id, room_id)?;
+    state.db.add_agent_to_room(room_id, &invitee.id)?;
+    crate::events::note_place(state, &invitee.id, room_id, "moved");
     // Its owner can read where it went and take it back (S9, ops::remove_agent). Being brought in
     // isn't a tie to the room's people, so it can't open a way to invite them (FR1, #583).
-    if invitee.owner_id != space.owner_id {
-        state.db.add_brought_in_owner(&space.id, &invitee.owner_id, now())?;
+    if invitee.owner_id != space_owner {
+        state.db.add_brought_in_owner(room_id, &invitee.owner_id, now())?;
     }
-    ops::announce(state, &space.id, &format!("{} brought in {}.", caller.name, invitee.name))?;
+    ops::announce(state, room_id, line)?;
     state.worlds.mark_stale(COMMONS_ID);
-    ops::refresh(state, &space.id);
-    Ok(json!({ "ok": true, "project_id": space.id, "bot": invitee.name }))
+    ops::refresh(state, room_id);
+    Ok(())
 }
 
 fn change_text<'a>(args: &'a Value, name: &str) -> ApiResult<&'a str> {

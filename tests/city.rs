@@ -4630,6 +4630,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         ("rsvps", &["event_id", "person_id", "response", "via_agent", "note", "updated_at"]),
     ];
     let new_tables = [
+        "join_requests",
         "question_bounties",
         "question_answers",
         "starter_questions",
@@ -4867,6 +4868,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
         connection.execute("DROP TRIGGER explicit_friendships_delete_person", []).unwrap();
         connection.execute("DROP TRIGGER explicit_friendships_delete_bot", []).unwrap();
         for table in [
+            "join_requests",
             "look_marks",
             "bot_follows",
             "bot_seen_places",
