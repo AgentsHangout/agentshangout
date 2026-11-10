@@ -1175,6 +1175,9 @@ async fn oauth_consent_rejects_foreign_bot_and_session_swap_and_deny_issues_no_c
     let denied = s.consent(&a, &nonce, &bot, "deny").await;
     assert_eq!(denied.status(), StatusCode::SEE_OTHER);
     assert!(denied.headers()["location"].to_str().unwrap().contains("error=access_denied"));
+    // A120: the callback hears why in its query, the way it would hear the code.
+    let location = denied.headers()["location"].to_str().unwrap();
+    assert!(location.contains("&error_description=the+person+chose+Deny&"), "{location}");
     assert_eq!(s.consent(&a, &nonce, &bot, "allow").await.status(), StatusCode::BAD_REQUEST);
 }
 #[tokio::test]
@@ -1266,6 +1269,65 @@ async fn oauth_requests_validate_redirect_resource_scope_pkce_and_origin() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     assert_eq!(s.consent(&session, &nonce, &bot, "allow").await.status(), StatusCode::SEE_OTHER);
+}
+// A120 (#319): a refusal says which check failed, in fixed words that repeat nothing the caller
+// sent, and it still doesn't redirect.
+#[tokio::test]
+async fn oauth_refusals_say_which_check_failed_and_repeat_nothing_sent() {
+    let s = Server::start().await;
+    let (session, _, _, _) = s.setup().await;
+    let client = s.register().await;
+    let sent = "echo-check-319";
+    let registered = s
+        .client
+        .post(format!("{}/oauth/register", s.base))
+        .json(&json!({ "redirect_uris": [format!("http://{sent}.example/callback")] }))
+        .send()
+        .await
+        .unwrap();
+    let (callback, resource) =
+        (format!("https://{sent}.example/callback"), format!("{}/mcp", s.base));
+    let authorized = s
+        .client
+        .get(format!("{}/oauth/authorize", s.base))
+        .header("cookie", format!("ah_session={session}"))
+        .query(&[
+            ("client_id", client.as_str()),
+            ("redirect_uri", callback.as_str()),
+            ("response_type", "code"),
+            ("code_challenge", CHALLENGE),
+            ("code_challenge_method", "S256"),
+            ("resource", resource.as_str()),
+            ("scope", "mcp:bot"),
+            ("state", sent),
+        ])
+        .send()
+        .await
+        .unwrap();
+    let exchanged = s.exchange(&client, &format!("ah_code_{sent}"), VERIFIER).await;
+    for (response, error, description) in [
+        (
+            registered,
+            "invalid_client_metadata",
+            "each redirect_uri must be https, or http to a loopback address with a port, at most \
+             2048 characters, with no login or fragment",
+        ),
+        (authorized, "invalid_request", "redirect_uri is not registered for this client"),
+        (
+            exchanged,
+            "invalid_grant",
+            "the code is invalid, expired, used or revoked, or its client_id, redirect_uri or \
+             code_verifier doesn't match",
+        ),
+    ] {
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{error}");
+        assert!(response.headers().get("location").is_none(), "{error}");
+        let body = response.text().await.unwrap();
+        assert!(!body.contains(sent) && !body.contains(&client), "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], error, "{body}");
+        assert_eq!(body["error_description"], description, "{body}");
+    }
 }
 #[tokio::test]
 async fn oauth_preserves_restricted_social_login_and_validates_webhook_requests() {
