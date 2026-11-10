@@ -525,18 +525,21 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                 .unwrap_or(std::cmp::Ordering::Equal),
         )
     });
-    let total = issues.len();
-    let mut shown = issues[..total.min(MAX_SHOWN)].to_vec();
     // I149: Done is newest first, by when Lific last changed each card; a tie keeps board order.
-    let done_from = shown.iter().position(|row| status_of(row) == "done").unwrap_or(shown.len());
+    // Done is one run in the status order, so it's sorted before the MAX_SHOWN cut, not after it.
+    let done_from = issues.iter().position(|row| status_of(row) == "done").unwrap_or(issues.len());
     let done_to =
-        shown.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
-    shown[done_from..done_to].sort_by(|a, b| {
+        issues.iter().rposition(|row| status_of(row) == "done").map_or(done_from, |at| at + 1);
+    issues[done_from..done_to].sort_by(|a, b| {
         b["updated_at"]
             .as_str()
             .unwrap_or_default()
             .cmp(a["updated_at"].as_str().unwrap_or_default())
     });
+    // done_count counts every Done card before the MAX_SHOWN cut, so the fold label is honest.
+    let done_total = issues.iter().filter(|row| status_of(row) == "done").count();
+    let total = issues.len();
+    let shown = issues[..total.min(MAX_SHOWN)].to_vec();
     let columns: Vec<Value> = STATUSES
         .iter()
         .map(|status| {
@@ -553,7 +556,7 @@ fn columns(item_id: &str, project: &str, index: &Value, modules: Option<&Value>)
                 })
                 .collect();
             if *status == "done" {
-                return json!({ "status": status, "done_count": rows.len(), "issues": rows });
+                return json!({ "status": status, "done_count": done_total, "issues": rows });
             }
             json!({ "status": status, "issues": rows })
         })
