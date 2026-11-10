@@ -2688,7 +2688,7 @@ CREATE TABLE IF NOT EXISTS season_champions (
 );
 CREATE INDEX IF NOT EXISTS season_champions_agent ON season_champions (agent_id, season);
 -- MM12 (#1041): notes written during the bot's most recent sleep, to carry to the first inbox
--- after waking. Rows are replaced on each sleep with notes, and seen_at is set once inbox returns them.
+-- after waking. Rows are replaced on each sleep, and seen_at is set once inbox returns them.
 CREATE TABLE IF NOT EXISTS bot_sleep_notes (
     bot_id      TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     note_id     TEXT NOT NULL REFERENCES bot_memories(id) ON DELETE CASCADE,

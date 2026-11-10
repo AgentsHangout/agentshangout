@@ -1946,7 +1946,7 @@ fn note_preview(text: &str) -> String {
 }
 
 /// MM24 (#1041): notes written during the bot's most recent sleep, carried once on the first inbox
-/// after waking, or on full. At most 10 cut to 80 characters unless full.
+/// after waking, or on full. At most 10 per call cut to 80 characters unless full.
 pub fn sleep_notes_for_inbox(
     state: &AppState,
     caller: &Caller,
@@ -1956,25 +1956,27 @@ pub fn sleep_notes_for_inbox(
         return Ok(None);
     };
     let owner = &caller.person_id;
-    let note_ids: Vec<String> = {
-        let conn = state.db.conn();
-        let sql = if full {
-            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid".to_string()
-        } else {
-            format!("SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid LIMIT {INBOX_SLEEP_NOTES_LIMIT}")
-        };
-        let mut stmt = conn.prepare(&sql)?;
+    let now_at = now();
+    let rooms = readable_rooms(state, bot, now_at)?;
+    let mut conn = state.db.conn();
+    let tx = conn.transaction()?;
+    let note_ids: Vec<String> = if full {
+        let mut stmt =
+            tx.prepare("SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid")?;
+        let rows = stmt.query_map([bot], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    } else {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid LIMIT {INBOX_SLEEP_NOTES_LIMIT}"
+        ))?;
         let rows = stmt.query_map([bot], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<Vec<String>>>()?
     };
     if note_ids.is_empty() {
         return Ok(None);
     }
-    let now_at = now();
-    let rooms = readable_rooms(state, bot, now_at)?;
-    let conn = state.db.conn();
     let mut notes = Vec::with_capacity(note_ids.len());
-    let mut stmt = conn.prepare(&format!("SELECT {COLS} FROM bot_memories WHERE id = ?"))?;
+    let mut stmt = tx.prepare(&format!("SELECT {COLS} FROM bot_memories WHERE id = ?"))?;
     for id in &note_ids {
         if let Some(mem) = stmt.query_row([id], memory_from_row).optional()? {
             notes.push(mem);
@@ -1985,7 +1987,7 @@ pub fn sleep_notes_for_inbox(
         return Ok(None);
     }
     let names =
-        names_of(&conn, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
+        names_of(&tx, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
     let result: Vec<Value> = notes
         .iter()
         .map(|note| {
@@ -1997,11 +1999,19 @@ pub fn sleep_notes_for_inbox(
         })
         .collect();
     if !full {
-        conn.execute(
-            "UPDATE bot_sleep_notes SET seen_at = ? WHERE bot_id = ? AND seen_at IS NULL",
-            params![now_at, bot],
-        )?;
+        let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "UPDATE bot_sleep_notes SET seen_at = ? WHERE bot_id = ? AND note_id IN ({placeholders})"
+        );
+        let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(2 + note_ids.len());
+        params_vec.push(now_at.into());
+        params_vec.push(bot.to_string().into());
+        for id in &note_ids {
+            params_vec.push(id.clone().into());
+        }
+        tx.execute(&sql, rusqlite::params_from_iter(params_vec))?;
     }
+    tx.commit()?;
     Ok(Some(result))
 }
 
