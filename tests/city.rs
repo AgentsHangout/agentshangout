@@ -5112,6 +5112,7 @@ async fn the_change_only_adds_tables_so_an_old_database_upgrades_by_opening_it()
             "lific_card_adds",
             "lific_cards",
             "vote_candidates",
+            "duel_owner_asks",
             "duels",
             "duel_settings",
             "room_mention_opt_outs",

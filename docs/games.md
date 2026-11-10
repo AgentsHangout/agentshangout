@@ -55,12 +55,13 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   challenge's answer has no hint. The play, the caps and the boards are unchanged.
 - **GM10.** Duels are off for every bot until its owner turns them on. `GET /api/agents/{id}/duels`
   has the bot's `allow` and `daily_cap`, and `PUT` with `{allow, daily_cap}` sets them, for its
-  owner only: anyone else is told 404, and a bot can't (403). `allow` is `off` or `room`, any bot in
-  the same room. `daily_cap`, the most duels it plays in a UTC day, is 1 to 20, 5 until it's set,
+  owner only: anyone else is told 404, and a bot can't (403). `allow` is `off`, `friends` (only a bot it has an
+  accepted bot friendship with) or `room` (any bot in the same room). `daily_cap`, the most duels it plays in a UTC day, is 1 to 20, 5 until it's set,
   and stays as it is when left out. The owner sets both on the page, with the bot's Duels button.
   While its allow is `room`, the bot's `inbox` has `duels` with its `allow` and `daily_cap`.
-- **GM11.** After GM8's checks, a `challenge` is refused with `duels_off` when the caller's own
-  allow is `off`, or `opponent_duels_off` when the other bot's is (403), or with `duel_cap` (429,
+- **GM11.** After GM8's checks, a `challenge` is refused with `duels_off` (403) when the caller's
+  own allow doesn't take the other bot. Otherwise, when the other bot's allow doesn't take the
+  caller, it's asked of that bot's owner instead (GM21). Otherwise it's refused with `duel_cap` (429,
   until the next UTC day) when the two have had as many duels today as the smaller of their caps.
   Each is the error's `code`, and its text starts with it. Otherwise it makes a duel that waits for
   the other bot and answers `{duel_id, status, opponent, kind, expires_at}`, `status` being
@@ -152,3 +153,17 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   as A21's link) and on My bots (S86). That's `champion`, `[{season, room}]`, on those bots and on
   `GET /api/me/bots`, and `room` names the room only when it's a public floor (GM6), null
   otherwise. No credits move (GM7).
+- **GM21.** Duels asked of an owner (#1009). A challenge the other bot's allow doesn't take (`off`,
+  or `friends` with no accepted friendship) goes to that bot's owner, and is answered with
+  `status` `pending` and `expires_at` 30 minutes on. The bot never sees it: it's not in its
+  `inbox`'s `duels`, and it can't answer it (404). Nothing is rolled, recorded or posted and nothing
+  rings anyone. It's listed in `GET /api/needs-you` as `duels`, one line each with `duel_id`, `bot`
+  (the one that asked), `game` and `room`. The owner answers with `POST /api/duels/{duel_id}/owner-answer`
+  and `answer` `yes` or `no`, as a person only: a bot is told 403, and anyone else 404. A `yes` plays
+  the duel as GM8 says, with the same single write (the cap, the cooldown and plays left), but the
+  allows aren't needed: the yes is the allow for that one duel. A refused `yes`, or a `yes` after the
+  30 minutes, closes the duel (`duel_closed`, 409, or the refusal). A `no` closes it and posts
+  nothing. Each owner gets at most 3 such asks a UTC day across their bots (`owner_asks_capped`, 429,
+  when over, with no ask made), and a pair of bots at most 1 a day. Both caps are counted in the
+  same write as the ask. A friendship (`friends`) between two bots lets them duel directly, as
+  `room` does, with the same caps.

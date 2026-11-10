@@ -241,7 +241,7 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     assert_eq!(send(&w.base, &w.bo_key, Method::GET, &path, None).await.0, 404);
     assert_eq!(w.allow(&w.bo_key, &scout, json!({ "allow": "room" })).await.0, 404);
     for bad in [
-        json!({ "allow": "friends" }),
+        json!({ "allow": "sometimes" }),
         json!({ "allow": "room", "daily_cap": 0 }),
         json!({ "allow": "room", "daily_cap": 21 }),
     ] {
@@ -258,9 +258,11 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     assert_eq!(refused["structuredContent"]["code"], "duels_off", "{refused}");
     assert!(text(&refused["content"][0]["text"]).starts_with("duels_off: "), "{refused}");
     assert_eq!(w.allow(&w.key, &scout, json!({ "allow": "room" })).await.0, 200);
-    let refused = code(w.challenge(&scout_caller, "Rex").unwrap_err());
-    assert_eq!((refused.0, &refused.2), (403, &json!("opponent_duels_off")), "{}", refused.1);
-    assert!(refused.1.starts_with("opponent_duels_off: "));
+    // GM21: Rex's allow doesn't take Scout, so the ask goes to Rex's owner. Rex's inbox has nothing.
+    let to_owner = w.challenge(&scout_caller, "Rex").unwrap();
+    assert_eq!((&to_owner["status"], &to_owner["opponent"]), (&json!("pending"), &json!("Rex")));
+    assert!(w.inbox(&rex_token).await.get("duels").is_none());
+    assert!(w.lines().is_empty());
     let set = w.allow(&w.key, &rex, json!({ "allow": "room", "daily_cap": 2 })).await;
     assert_eq!(set, (200, json!({ "allow": "room", "daily_cap": 2 })));
     // A cap left out stays as it was.
@@ -331,6 +333,133 @@ async fn a_challenge_only_asks_and_an_accept_plays_it() {
     let capped = code(w.challenge(&scout_caller, "Rex").unwrap_err());
     assert_eq!((capped.0, &capped.2), (429, &json!("duel_cap")), "{}", capped.1);
     assert!(capped.1.starts_with("duel_cap: "));
+}
+
+/// GM21: the owner of a bot a duel was asked of says yes or no, through the site, not the bot.
+async fn owner_answer(base: &str, key: &str, duel: &str, answer: &str) -> (u16, Value) {
+    let path = format!("/api/duels/{duel}/owner-answer");
+    send(base, key, Method::POST, &path, Some(json!({ "answer": answer }))).await
+}
+
+// GM21 (#1009): a challenge a bot's allow doesn't take goes to its owner. Only that owner answers,
+// a yes plays it as an accept does, a refused yes or a late one closes it, and the owner's asks and
+// the pair's asks are capped a day.
+#[tokio::test]
+async fn a_challenge_the_owner_decides_is_asked_within_caps() {
+    let w = world().await;
+    let (scout, _, scout_caller) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, rex_token, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    let (pip, _, pip_caller) = w.bot(&w.ann, &w.arcade, "Pip");
+    let (quo, _, _) = w.bot(&w.ann, &w.arcade, "Quo");
+    let (_, tad_token, _) = w.bot(&w.bo, &w.arcade, "Tad");
+    assert_eq!(w.allow(&w.key, &scout, json!({ "allow": "room" })).await.0, 200);
+
+    // Rex, Pip and Quo are off, so Ann is asked three times today. Asking Rex again is the same ask.
+    let rex_duel = text(&w.challenge(&scout_caller, "Rex").unwrap()["duel_id"]);
+    assert_eq!(text(&w.challenge(&scout_caller, "Rex").unwrap()["duel_id"]), rex_duel);
+    let pip_duel = text(&w.challenge(&scout_caller, "Pip").unwrap()["duel_id"]);
+    let quo_duel = text(&w.challenge(&scout_caller, "Quo").unwrap()["duel_id"]);
+    assert!(w.inbox(&rex_token).await.get("duels").is_none());
+    // Pip's allow is opened, so it asks Quo, and Ann's fourth ask today is refused, with no ask made.
+    assert_eq!(w.allow(&w.key, &pip, json!({ "allow": "room" })).await.0, 200);
+    let capped = code(w.challenge(&pip_caller, "Quo").unwrap_err());
+    assert_eq!((capped.0, &capped.2), (429, &json!("owner_asks_capped")), "{}", capped.1);
+    assert!(capped.1.starts_with("owner_asks_capped: "));
+    assert!(w.lines().is_empty());
+
+    // Needs you lists the three asks to Ann, with the challenger, the game and the room, and
+    // Bo's Tad, asked of Bo, is his alone.
+    let needs = send(&w.base, &w.key, Method::GET, "/api/needs-you", None).await.1;
+    let asked: Vec<&str> = needs["duels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|duel| duel["duel_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(asked.len(), 3, "{needs}");
+    assert!(asked.contains(&rex_duel.as_str()) && asked.contains(&quo_duel.as_str()));
+    assert_eq!(
+        (&needs["duels"][0]["bot"], &needs["duels"][0]["room"]["name"]),
+        (&json!("Scout"), &json!("Arcade"))
+    );
+    let tad_duel = text(&w.challenge(&scout_caller, "Tad").unwrap()["duel_id"]);
+    let bo_needs = send(&w.base, &w.bo_key, Method::GET, "/api/needs-you", None).await.1;
+    assert_eq!(bo_needs["duels"][0]["duel_id"], tad_duel.as_str(), "{bo_needs}");
+
+    // The bot can't answer it, and Bo can't answer Ann's. Ann's yes plays Rex's duel.
+    assert_eq!(w.answer(&rex_token, &rex_duel, "accept").await.0, 404);
+    assert_eq!(owner_answer(&w.base, &w.bo_key, &rex_duel, "yes").await.0, 404);
+    assert_eq!(owner_answer(&w.base, &rex_token, &rex_duel, "yes").await.0, 403);
+    let (status, won) = owner_answer(&w.base, &w.key, &rex_duel, "yes").await;
+    assert_eq!(status, 200, "{won}");
+    assert_eq!(won["opponent"]["bot"], "Scout", "{won}");
+    assert_eq!(w.lines().len(), 1);
+    assert_eq!((w.plays(&scout), w.plays(&rex)), (1, 1));
+    let again = owner_answer(&w.base, &w.key, &rex_duel, "yes").await;
+    assert_eq!((again.0, &again.1["code"]), (409, &json!("duel_closed")));
+
+    // Pip's ask runs out: a yes that's too late is refused and writes nothing.
+    w.state.db.set_duel_expiry(&pip_duel, now() - 1).unwrap();
+    let late = owner_answer(&w.base, &w.key, &pip_duel, "yes").await;
+    assert_eq!((late.0, &late.1["status"]), (409, &json!("expired")), "{}", late.1);
+
+    // Quo has had its six plays this hour, so Ann's yes is refused and the duel is over.
+    for n in 0..6 {
+        let play = NewPlay {
+            hangout_id: &w.arcade,
+            item_id: "cabinet-1",
+            kind: "arcade_cabinet",
+            agent_id: Some(&quo),
+            person_id: &w.ann,
+            score: n,
+            week: games::week_of(now()),
+            now: now() - 3000 + n * 100,
+        };
+        w.state.db.record_play(&play, games::CAPS).unwrap();
+    }
+    assert_eq!(owner_answer(&w.base, &w.key, &quo_duel, "yes").await.0, 429);
+    let closed = owner_answer(&w.base, &w.key, &quo_duel, "yes").await;
+    assert_eq!((closed.0, &closed.1["status"]), (409, &json!("declined")));
+    assert_eq!(w.lines().len(), 1);
+
+    // Bo's no closes Tad's ask: nothing is played or posted, and Needs you is empty for Ann.
+    let (status, declined) = owner_answer(&w.base, &w.bo_key, &tad_duel, "no").await;
+    assert_eq!((status, &declined["status"]), (200, &json!("declined")));
+    assert_eq!(w.lines().len(), 1);
+    assert!(w.inbox(&tad_token).await.get("duels").is_none());
+    let needs = send(&w.base, &w.key, Method::GET, "/api/needs-you", None).await.1;
+    assert_eq!(needs["duels"], json!([]), "{needs}");
+    assert_eq!(w.plays(&pip), 0);
+}
+
+// GM10, GM11: a bot whose allow is `friends` takes a duel from a bot it's friends with directly,
+// and from anyone else only once its owner says yes.
+#[tokio::test]
+async fn a_friend_bot_duels_directly_and_a_stranger_waits_for_the_owner() {
+    let w = world().await;
+    let (scout, _, scout_caller) = w.bot(&w.ann, &w.arcade, "Scout");
+    let (rex, rex_token, _) = w.bot(&w.ann, &w.arcade, "Rex");
+    assert_eq!(w.allow(&w.key, &scout, json!({ "allow": "room" })).await.0, 200);
+    let set = w.allow(&w.key, &rex, json!({ "allow": "friends" })).await;
+    assert_eq!(set, (200, json!({ "allow": "friends", "daily_cap": 5 })));
+    let shown = w.inbox(&rex_token).await["duels"].clone();
+    assert_eq!((&shown["allow"], shown.get("waiting")), (&json!("friends"), None));
+
+    // Not friends yet: the ask goes to Ann, and nothing is waiting for Rex.
+    let stranger = text(&w.challenge(&scout_caller, "Rex").unwrap()["duel_id"]);
+    assert!(w.inbox(&rex_token).await["duels"].get("waiting").is_none());
+    let (status, _) = owner_answer(&w.base, &w.key, &stranger, "no").await;
+    assert_eq!(status, 200);
+
+    // Once the two bots are friends, the ask is a direct one that Rex sees and accepts.
+    w.state.db.request_explicit_friend("bot", &scout, &rex, now()).unwrap();
+    assert!(w.state.db.accept_explicit_friend("bot", &scout, &rex).unwrap());
+    let direct = text(&w.challenge(&scout_caller, "Rex").unwrap()["duel_id"]);
+    assert_ne!(direct, stranger);
+    assert_eq!(w.inbox(&rex_token).await["duels"]["waiting"][0]["duel_id"], direct.as_str());
+    let won = w.answer(&rex_token, &direct, "accept").await;
+    assert_eq!(won.0, 200, "{}", won.1);
+    assert_eq!(w.lines().len(), 1);
 }
 
 // GM11, GM13, A103: a duel whose time ran out is a no; GM3 still holds at the accept, which then
