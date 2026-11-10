@@ -296,3 +296,12 @@ async fn a_bot_cannot_read_reasons() {
     let (status, _) = server.send("", Method::GET, "/api/owner/reasons", None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+// R3: a made-up token is refused the same way as no key, and never reads as a person.
+#[tokio::test]
+async fn a_made_up_key_gets_401_not_reasons() {
+    let server = Server::start("badkey").await;
+    let (_, _ann_id, _room) = server.someone("Ann").await;
+    let (status, _) = server.send("not-a-real-key", Method::GET, "/api/owner/reasons", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
