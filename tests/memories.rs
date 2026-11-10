@@ -940,6 +940,69 @@ async fn mm12_sleep_with_notes_writes_them_all_or_none_and_marks_the_bot_as_slep
     assert_eq!(day["last_slept"], again["slept_at"]);
 }
 
+// MM12 (#1041)
+#[tokio::test]
+async fn mm12_first_inbox_after_sleep_carries_sleep_notes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let bo = format!("person:{}", town.bo.id);
+
+    // Before sleeping, inbox has no sleep_notes.
+    let inbox = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox.get("sleep_notes").is_none());
+
+    // Sleep with notes.
+    let notes = json!({ "notes": [
+        { "subject": room, "text": "Good day at cafe" },
+        { "subject": bo, "text": "Kind person", "feeling": "grateful", "closeness": 1 }
+    ] });
+    let slept = server.tool(fern, "sleep", notes).await;
+    assert_eq!(slept["changed"], 2);
+
+    // The first inbox after waking carries those sleep notes and memory_note.
+    let inbox = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes = inbox["sleep_notes"].as_array().expect("sleep_notes present");
+    assert_eq!(sleep_notes.len(), 2);
+    assert_eq!(sleep_notes[0]["subject"], room);
+    assert_eq!(sleep_notes[0]["text"], "Good day at cafe");
+    assert_eq!(sleep_notes[1]["subject"], bo);
+    assert_eq!(sleep_notes[1]["text"], "Kind person");
+    assert_eq!(sleep_notes[1]["feeling"], "grateful");
+    assert_eq!(sleep_notes[1]["closeness"], 1);
+    assert!(inbox["memory_note"].is_string());
+
+    // A second normal inbox call leaves them out (carried once).
+    let inbox2 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox2.get("sleep_notes").is_none());
+
+    // An inbox call with full: true carries them again.
+    let inbox_full = server.tool(fern, "inbox", json!({ "full": true })).await;
+    let sleep_notes_full =
+        inbox_full["sleep_notes"].as_array().expect("sleep_notes present with full");
+    assert_eq!(sleep_notes_full.len(), 2);
+
+    // Still not in normal inbox.
+    let inbox3 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox3.get("sleep_notes").is_none());
+
+    // Sleeping again replaces the sleep notes with the new sleep's notes.
+    let notes2 = json!({ "notes": [
+        { "subject": "self", "text": "New morning goal" }
+    ] });
+    server.tool(fern, "sleep", notes2).await;
+    let inbox4 = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes4 = inbox4["sleep_notes"].as_array().expect("new sleep notes present");
+    assert_eq!(sleep_notes4.len(), 1);
+    assert_eq!(sleep_notes4[0]["subject"], "self");
+    assert_eq!(sleep_notes4[0]["text"], "New morning goal");
+
+    // Once delivered, normal inbox leaves them out again.
+    let inbox5 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox5.get("sleep_notes").is_none());
+}
+
 // MM13
 #[tokio::test]
 async fn mm13_inbox_says_bedtime_in_a_home_hour_after_16_hours_with_a_day_to_sort_out() {

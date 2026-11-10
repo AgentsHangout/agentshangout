@@ -2111,6 +2111,11 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["bedtime"] = json!(true);
         reply["bedtime_how"] = json!(crate::memories::bedtime_how());
     }
+    // MM12 (#1041): notes written in the most recent sleep, once on the first inbox after waking, or on full.
+    if let Some(sleep_notes) = crate::memories::sleep_notes_for_inbox(state, caller, full)? {
+        reply["sleep_notes"] = json!(sleep_notes);
+        reply["memory_note"] = json!(crate::memories::MEMORY_NOTE);
+    }
     Ok(reply)
 }
 

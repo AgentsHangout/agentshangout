@@ -1685,10 +1685,12 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let tx = conn.transaction()?;
     let mut changed = 0;
     let mut written = HashSet::new();
+    let mut ordered = Vec::with_capacity(inputs.len());
     let mut dropped = Vec::new();
     for (subject, input) in resolved.iter().zip(&inputs) {
         let note = write_note(&tx, &bot, subject, input, now)?;
         written.insert(note.id.clone());
+        ordered.push(note.id);
         if note.changed {
             changed += 1;
         }
@@ -1704,6 +1706,15 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
          ON CONFLICT (bot_id) DO UPDATE SET slept_at = excluded.slept_at",
         params![bot, now],
     )?;
+    // MM12 (#1041): notes written in this sleep are recorded for the bot's next inbox call.
+    tx.execute("DELETE FROM bot_sleep_notes WHERE bot_id = ?", params![bot])?;
+    let mut insert_sleep_note = tx.prepare(
+        "INSERT OR REPLACE INTO bot_sleep_notes (bot_id, note_id, seen_at) VALUES (?1, ?2, NULL)",
+    )?;
+    for note_id in &ordered {
+        insert_sleep_note.execute(params![bot, note_id])?;
+    }
+    drop(insert_sleep_note);
     tx.commit()?;
     let mut reply = json!({ "ok": true, "changed": changed, "slept_at": iso(now) });
     if !dropped.is_empty() {
@@ -1919,6 +1930,60 @@ async fn put_bedtime(
         conn.execute("INSERT OR IGNORE INTO bedtime_off (agent_id) VALUES (?)", [&agent.id])?;
     }
     Ok(Json(json!({ "auto_bedtime": body.on })))
+}
+
+/// MM12 (#1041): notes written during the bot's most recent sleep, carried once on the first inbox
+/// after waking, or on full.
+pub fn sleep_notes_for_inbox(
+    state: &AppState,
+    caller: &Caller,
+    full: bool,
+) -> ApiResult<Option<Vec<Value>>> {
+    let Some(bot) = caller.agent_id.as_deref().filter(|_| !caller.is_house) else {
+        return Ok(None);
+    };
+    let owner = &caller.person_id;
+    let note_ids: Vec<String> = {
+        let conn = state.db.conn();
+        let sql = if full {
+            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid"
+        } else {
+            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([bot], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    };
+    if note_ids.is_empty() {
+        return Ok(None);
+    }
+    let now_at = now();
+    let rooms = readable_rooms(state, bot, now_at)?;
+    let conn = state.db.conn();
+    let mut notes = Vec::with_capacity(note_ids.len());
+    let mut stmt = conn.prepare(&format!("SELECT {COLS} FROM bot_memories WHERE id = ?"))?;
+    for id in &note_ids {
+        if let Some(mem) = stmt.query_row([id], memory_from_row).optional()? {
+            notes.push(mem);
+        }
+    }
+    drop(stmt);
+    if notes.is_empty() {
+        return Ok(None);
+    }
+    let names =
+        names_of(&conn, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
+    let result: Vec<Value> = notes
+        .iter()
+        .map(|note| memory_json(note, names.get(&note.subject).cloned().flatten()))
+        .collect();
+    if !full {
+        conn.execute(
+            "UPDATE bot_sleep_notes SET seen_at = ? WHERE bot_id = ? AND seen_at IS NULL",
+            params![now_at, bot],
+        )?;
+    }
+    Ok(Some(result))
 }
 
 /// MM13: what inbox adds at bedtime.
