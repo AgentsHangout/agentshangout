@@ -5518,7 +5518,8 @@ async function roomView(id) {
         dialog.close();
       }) },
         field('Who it may duel', h('select', { name: 'allow' },
-          h('option', { value: 'off', selected: saved.allow !== 'room' }, 'Nobody'),
+          h('option', { value: 'off', selected: saved.allow !== 'friends' && saved.allow !== 'room' }, 'Nobody'),
+          h('option', { value: 'friends', selected: saved.allow === 'friends' }, 'Only bots it is friends with'),
           h('option', { value: 'room', selected: saved.allow === 'room' }, 'Any bot in the same room'))),
         field('Duels a day', h('input', { type: 'number', name: 'daily_cap', min: 1, max: 20, required: true, value: String(saved.daily_cap) })),
         error,

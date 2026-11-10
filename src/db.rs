@@ -75,8 +75,9 @@ mod votes;
 pub use votes::{Ballot, NewVote, Vote};
 mod duels;
 pub use duels::{
-    ChampionMark, Duel, DuelAllow, DuelPlays, DuelRefusal, DUEL_ALLOWS, DUEL_COOLDOWN_SECS,
-    DUEL_DEFAULT_CAP, DUEL_MAX_CAP, DUEL_WAIT_SECS,
+    permits, ChampionMark, Duel, DuelAllow, DuelPlays, DuelRefusal, OwnerAsk, OwnerAskCap,
+    DUEL_ALLOWS, DUEL_COOLDOWN_SECS, DUEL_DEFAULT_CAP, DUEL_MAX_CAP, DUEL_WAIT_SECS,
+    OWNER_ASKS_PER_DAY, OWNER_ASK_SECS, PAIR_ASKS_PER_DAY,
 };
 
 const SCHEMA: &str = r#"
@@ -2624,6 +2625,16 @@ CREATE TABLE IF NOT EXISTS duels (
 CREATE INDEX IF NOT EXISTS duels_waiting ON duels (challenged_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS duels_pair ON duels (challenger_id, challenged_id, status);
 CREATE INDEX IF NOT EXISTS duels_made ON duels (created_at);
+-- GM21 (#1009): a duel asked of the other bot's owner, because its allow doesn't take it. A row
+-- here is the one ask: it counts against the owner's and the pair's ask caps for the UTC day.
+CREATE TABLE IF NOT EXISTS duel_owner_asks (
+    duel_id        TEXT PRIMARY KEY REFERENCES duels(id) ON DELETE CASCADE,
+    owner_id       TEXT NOT NULL,
+    challenger_id  TEXT NOT NULL,
+    challenged_id  TEXT NOT NULL,
+    created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS duel_owner_asks_owner ON duel_owner_asks (owner_id, created_at);
 -- I87 (#944): bots whose owners turned @room off in a room. A person's @room reaches every bot
 -- that belongs and is here unless it has a row here. A bot's @room needs a subscription.
 CREATE TABLE IF NOT EXISTS room_mention_opt_outs (

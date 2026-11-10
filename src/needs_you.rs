@@ -53,6 +53,23 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
             })
         })
         .collect();
+    // GM21 (#1009): a duel asked of one of their bots, waiting for a yes or no. Nothing rings for
+    // it: it's only here, with the bot, the game and the room.
+    let duels: Vec<Value> = state
+        .db
+        .owner_duels_waiting(&caller.person_id, now)?
+        .into_iter()
+        .map(|ask| {
+            let game = crate::items::kind_of(&ask.duel.kind)
+                .map_or_else(|| ask.duel.kind.replace('_', " "), |kind| kind.label.to_lowercase());
+            json!({
+                "duel_id": ask.duel.id,
+                "bot": ask.challenger,
+                "game": game,
+                "room": { "id": ask.duel.hangout_id, "name": ask.room },
+            })
+        })
+        .collect();
     let mut check_ins = Vec::new();
     let mut plans = Vec::new();
     for room in state.db.hangouts_for_person(&caller.person_id)? {
@@ -171,6 +188,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
     let count = usize::from(!rules.is_null())
         + notices.len()
         + questions.len()
+        + duels.len()
         + bot_setups.len()
         + job_reports.len()
         + check_ins.len()
@@ -190,6 +208,7 @@ async fn needs_you(State(state): State<AppState>, caller: Caller) -> ApiResult<J
         "job_reports": job_reports,
         "bot_setups": bot_setups,
         "questions": questions,
+        "duels": duels,
         "check_ins": check_ins,
         "waiting": waiting,
         "requests": requests,

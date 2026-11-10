@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 use crate::{
     auth::{self, Caller},
     db::{
-        Agent, Duel, DuelAllow, DuelRefusal, FloorItem, DUEL_ALLOWS, DUEL_COOLDOWN_SECS,
-        DUEL_MAX_CAP, DUEL_WAIT_SECS,
+        permits, Agent, Duel, DuelAllow, DuelRefusal, FloorItem, OwnerAskCap, DUEL_ALLOWS,
+        DUEL_COOLDOWN_SECS, DUEL_MAX_CAP, DUEL_WAIT_SECS, OWNER_ASK_SECS,
     },
     error::{ApiError, ApiResult},
     games::{self, GameKind},
@@ -30,6 +30,8 @@ pub const OPPONENT_OFF_CODE: &str = "opponent_duels_off";
 pub const CAP_CODE: &str = "duel_cap";
 pub const COOLDOWN_CODE: &str = "duel_cooldown";
 pub const CLOSED_CODE: &str = "duel_closed";
+/// GM21: an ask to a bot's owner, refused over the owner's or the pair's cap for the day.
+pub const OWNER_CAP_CODE: &str = "owner_asks_capped";
 
 /// GM12: said with the duels waiting for a bot.
 const HOW: &str = "Other bots asked you for a duel. Your owner lets you duel bots in the same room, \
@@ -76,6 +78,23 @@ fn cooling(next_at: i64, now: i64) -> ApiError {
     .with_details(json!({ "code": COOLDOWN_CODE, "next_at": iso(next_at) }))
 }
 
+fn owner_capped(cap: OwnerAskCap, now: i64) -> ApiError {
+    let (why, next_at) = match cap {
+        OwnerAskCap::Owner { next_at } => {
+            ("its owner has been asked as many duels today as they allow", next_at)
+        }
+        OwnerAskCap::Pair { next_at } => {
+            ("you two have already asked each other for a duel today", next_at)
+        }
+    };
+    ApiError::too_many_requests(format!(
+        "{OWNER_CAP_CODE}: {why}; the next can be at {}",
+        iso(next_at)
+    ))
+    .retry_after((next_at - now).max(1) as u64)
+    .with_details(json!({ "code": OWNER_CAP_CODE, "next_at": iso(next_at) }))
+}
+
 fn closed(status: &str) -> ApiError {
     let why = match status {
         "accepted" => "it was accepted",
@@ -98,8 +117,9 @@ fn refusal(refused: DuelRefusal, game: &GameKind, rival: &str, now: i64) -> ApiE
 }
 
 /// GM11: the caller asks `other`, a bot here, for a duel at `item`. Both were checked as players
-/// (GM8). Refused while either allow is off or the pair has had its cap today. Otherwise the duel
-/// waits for `other`, with nothing rolled or posted, or the one already waiting is given back.
+/// (GM8). The caller's own allow has to take `other` (GM10). If `other`'s allow takes the caller,
+/// the duel waits for `other`, with nothing rolled or posted, or the one already waiting is given
+/// back. If it doesn't, the ask goes to `other`'s owner instead (GM21), within their caps.
 pub(crate) fn ask(
     state: &AppState,
     caller: &Caller,
@@ -111,20 +131,48 @@ pub(crate) fn ask(
         return Err(ApiError::forbidden("only bots duel"));
     };
     let now = now();
-    let (mine, theirs) = (state.db.duel_allow(me)?, state.db.duel_allow(&other.id)?);
-    if mine.allow != "room" {
+    let friends = state.db.explicit_friends("bot", me, &other.id)?;
+    if !permits(&state.db.duel_allow(me)?.allow, friends) {
         return Err(off(true, &other.name));
     }
-    if theirs.allow != "room" {
-        return Err(off(false, &other.name));
+    let theirs = state.db.duel_allow(&other.id)?;
+    // A103: across a block it's kept and looks the same to the caller, but the other bot never
+    // sees it.
+    let quiet = crate::blocks::apart(state, &caller.person_id, &other.owner_id)?;
+    if !permits(&theirs.allow, friends) {
+        let duel = Duel {
+            id: auth::new_id(),
+            hangout_id: item.hangout_id.clone(),
+            item_id: item.id.clone(),
+            kind: game.kind.to_string(),
+            challenger_id: me.to_string(),
+            challenged_id: other.id.clone(),
+            status: "pending".to_string(),
+            quiet,
+            expires_at: now + OWNER_ASK_SECS,
+        };
+        let duel = state
+            .db
+            .ask_owner_duel(&duel, &other.owner_id, now)?
+            .map_err(|cap| owner_capped(cap, now))?;
+        return Ok(json!({
+            "duel_id": duel.id,
+            "status": "pending",
+            "opponent": other.name,
+            "kind": duel.kind,
+            "expires_at": iso(duel.expires_at),
+            "next": format!(
+                "{}'s allow doesn't take this duel, so it's asked of their owner. The owner has until \
+                 expires_at to say yes, and nothing is rolled or posted until then. No answer is a no.",
+                other.name
+            ),
+        }));
     }
+    let mine = state.db.duel_allow(me)?;
     let cap = mine.daily_cap.min(theirs.daily_cap);
     if state.db.duels_today(me, &other.id, now)? >= cap {
         return Err(at_cap(cap, (now.div_euclid(86_400) + 1) * 86_400, now));
     }
-    // A103: across a block it's kept and looks the same to the caller, but the other bot never
-    // sees it.
-    let quiet = crate::blocks::apart(state, &caller.person_id, &other.owner_id)?;
     let duel = state.db.ask_duel(
         &Duel {
             id: auth::new_id(),
@@ -173,6 +221,10 @@ pub fn answer(state: &AppState, caller: &Caller, duel_id: &str, answer: &str) ->
         .duel(duel_id)?
         .filter(|duel| duel.challenged_id == me && !duel.quiet)
         .ok_or_else(ApiError::not_found)?;
+    // GM21: a duel asked of its owner is theirs to answer, not the bot's.
+    if state.db.duel_is_owner_asked(&duel.id)? {
+        return Err(ApiError::not_found());
+    }
     let rival = state.db.agent(&duel.challenger_id, now)?.ok_or_else(ApiError::not_found)?;
     if crate::blocks::apart(state, &caller.person_id, &rival.owner_id)? {
         return Err(ApiError::not_found());
@@ -230,6 +282,93 @@ pub fn answer(state: &AppState, caller: &Caller, duel_id: &str, answer: &str) ->
     Ok(reply)
 }
 
+/// GM21: the owner of the bot a duel was asked of says yes or no to it, while it waits. Yes plays
+/// it as an accept does, in the same write with the same checks, but the allows aren't needed:
+/// the yes is the allow for that one duel. A refused yes closes the duel, and says why. No, or
+/// nothing by its time, is a no. Nothing is posted until it's played.
+pub fn owner_answer(
+    state: &AppState,
+    caller: &Caller,
+    duel_id: &str,
+    answer: &str,
+) -> ApiResult<Value> {
+    ops::require_human(caller, "answer a duel for one of your bots")?;
+    let accept = match answer.trim().to_ascii_lowercase().as_str() {
+        "accept" | "yes" => true,
+        "decline" | "no" => false,
+        _ => return Err(ApiError::bad_request("answer is yes or no")),
+    };
+    let now = now();
+    let duel =
+        state.db.duel(duel_id)?.filter(|duel| !duel.quiet).ok_or_else(ApiError::not_found)?;
+    if !state.db.duel_is_owner_asked(&duel.id)? {
+        return Err(ApiError::not_found());
+    }
+    let bot = state
+        .db
+        .agent(&duel.challenged_id, now)?
+        .filter(|bot| bot.owner_id == caller.person_id)
+        .ok_or_else(ApiError::not_found)?;
+    let rival = state.db.agent(&duel.challenger_id, now)?.ok_or_else(ApiError::not_found)?;
+    if crate::blocks::apart(state, &caller.person_id, &rival.owner_id)? {
+        return Err(ApiError::not_found());
+    }
+    if let Some(status) = duel.closed(now) {
+        return Err(closed(status));
+    }
+    if !accept {
+        if !state.db.decline_duel(&duel.id, now)? {
+            let status = state.db.duel(&duel.id)?.and_then(|duel| duel.closed(now));
+            return Err(closed(status.unwrap_or("expired")));
+        }
+        return Ok(json!({ "ok": true, "duel_id": duel.id, "status": "declined" }));
+    }
+    let item = state
+        .db
+        .floor_item(&duel.item_id)?
+        .filter(|item| item.hangout_id == duel.hangout_id)
+        .ok_or_else(|| ApiError::conflict("the game this duel was for isn't there any more"))?;
+    if !crate::items::bot_is_here(state, &duel.hangout_id, &rival.id, now)? {
+        return Err(ApiError::conflict(format!("{} isn't here any more", rival.name)));
+    }
+    if !crate::items::bot_is_here(state, &duel.hangout_id, &bot.id, now)? {
+        return Err(ApiError::conflict(format!("{} isn't here, so it can't play yet", bot.name)));
+    }
+    let mine = games::player(&bot);
+    let game = games::may_play(state, &mine, &item)?;
+    let theirs = games::player(&rival);
+    games::may_play(state, &theirs, &item).map_err(|_| games::cannot_play(&rival.name))?;
+    let (my_score, their_score) =
+        (rand::random_range(game.min..=game.max), rand::random_range(game.min..=game.max));
+    let plays = state.db.accept_duel(
+        &duel.id,
+        [
+            &games::new_play(&mine, &item, game, my_score, now),
+            &games::new_play(&theirs, &item, game, their_score, now),
+        ],
+        games::CAPS,
+        now,
+    )?;
+    let plays = match plays {
+        Ok(plays) => plays,
+        Err(refused) => {
+            // Its owner said yes, and the write refused it: the duel is over, and nothing is played.
+            state.db.decline_duel(&duel.id, now)?;
+            return Err(refusal(refused, game, &rival.name, now));
+        }
+    };
+    state.games.forget();
+    let line = games::result_line(&item, game, (&rival.name, their_score), (&bot.name, my_score));
+    ops::announce(state, &duel.hangout_id, &line)?;
+    let mut reply = games::play_answer(game, my_score, plays.mine, now)?;
+    let theirs = games::play_answer(game, their_score, plays.theirs, now)?;
+    reply["opponent"] = json!({ "bot": rival.name, "result": theirs });
+    reply["line"] = json!(line);
+    reply["duel_id"] = json!(duel.id);
+    reply["ok"] = json!(true);
+    Ok(reply)
+}
+
 /// GM10, GM12: what a bot's inbox says of duels. Nothing while its allow is off. Otherwise its
 /// allow and cap, and the duels waiting for it, with how to answer them.
 /// GM17: today's challenge, if the bot is in a room with an arcade cabinet and hasn't played it.
@@ -258,7 +397,7 @@ pub fn for_inbox(state: &AppState, caller: &Caller, now: i64) -> ApiResult<Optio
         return Ok(None);
     };
     let allow = state.db.duel_allow(me)?;
-    if allow.allow != "room" {
+    if allow.allow == "off" {
         return Ok(None);
     }
     let mut waiting = Vec::new();
@@ -319,7 +458,7 @@ async fn put_allow(
     let bot = ops::own_agent(&state, &caller, &id, "choose who a bot duels")?;
     let allow = body.allow.trim().to_ascii_lowercase();
     if !DUEL_ALLOWS.contains(&allow.as_str()) {
-        return Err(ApiError::bad_request("allow is off or room"));
+        return Err(ApiError::bad_request("allow is off, friends or room"));
     }
     let daily_cap = match body.daily_cap {
         None => state.db.duel_allow(&bot.id)?.daily_cap,
@@ -345,6 +484,16 @@ async fn answer_route(
     Json(body): Json<AnswerBody>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(answer(&state, &caller, &id, &body.answer)?))
+}
+
+/// GM21: `POST /api/duels/{id}/owner-answer`, the owner's yes or no to a duel asked of their bot.
+async fn owner_answer_route(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<AnswerBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(owner_answer(&state, &caller, &id, &body.answer)?))
 }
 
 /// I161: the most greeters one room has.
@@ -389,4 +538,5 @@ pub fn routes() -> Router<AppState> {
         .route("/api/agents/{id}/duels", get(get_allow).put(put_allow))
         .route("/api/agents/{id}/greeter", get(get_greeter).put(put_greeter))
         .route("/api/duels/{id}/answer", post(answer_route))
+        .route("/api/duels/{id}/owner-answer", post(owner_answer_route))
 }

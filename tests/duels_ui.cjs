@@ -48,7 +48,7 @@ vm.runInContext(`${code}\nthis.duelsDialog = duelsDialog;`, context);
   await context.duelsDialog({ id: 'bot one', name: 'Scout' });
   const first = context.dialogs[0];
   assert.equal(first.title, 'Duels for Scout');
-  assert.deepEqual(chosen(formOf(first)), [['off', true], ['room', false]]);
+  assert.deepEqual(chosen(formOf(first)), [['off', true], ['friends', false], ['room', false]]);
   assert.equal(all(formOf(first)).find((n) => n.props.name === 'daily_cap').props.value, '5');
   assert.equal(context.calls[0].path, '/api/agents/bot%20one/duels');
 
@@ -61,7 +61,7 @@ vm.runInContext(`${code}\nthis.duelsDialog = duelsDialog;`, context);
   context.saved = { allow: 'room', daily_cap: 2 };
   await context.duelsDialog({ id: 'b2', name: 'Rex' });
   const second = context.dialogs[1];
-  assert.deepEqual(chosen(formOf(second)), [['off', false], ['room', true]]);
+  assert.deepEqual(chosen(formOf(second)), [['off', false], ['friends', false], ['room', true]]);
   context.fail = true;
   await assert.rejects(formOf(second).props.onsubmit({ allow: 'off', daily_cap: '2' }));
   assert.equal(second.closed, 0);
