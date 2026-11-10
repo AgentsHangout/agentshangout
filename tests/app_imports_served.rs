@@ -47,7 +47,8 @@ async fn every_module_app_js_imports_is_served() {
     let source = page.text().await.unwrap();
 
     let modules = imported_modules(&source);
-    // app.js imports eight modules statically, plus the lazy ones. If this finds fewer, the parser is wrong.
+    // app.js imports six modules statically and five with import() (#913). If this finds fewer than
+    // eight, the parser is wrong.
     assert!(modules.len() >= 8, "found only {modules:?}");
     assert!(modules.iter().any(|m| m == "bug-report.js"), "{modules:?}");
     assert!(modules.iter().any(|m| m == "room.js"), "{modules:?}");
@@ -87,5 +88,16 @@ async fn every_module_app_js_imports_is_served() {
         }
     }
     assert!(graph.iter().any(|m| m == "bug-report.js"), "{graph:?}");
+
+    // #913: what app.js loads on demand comes from the same folder, and neither entry page names it,
+    // so nothing preloads it and a first visit to the map doesn't fetch it.
+    let map = http.get(format!("{base}/world/commons")).send().await.unwrap().text().await.unwrap();
+    assert!(map.contains(&format!("<link rel=\"modulepreload\" href=\"{dir}/app.js\">")), "{map}");
+    for lazy in ["passkey.js", "plan-invite.js", "bot-setup.js", "trust.js", "outside.js"] {
+        assert!(graph.iter().any(|m| m == lazy), "{lazy} isn't loaded from {dir}: {graph:?}");
+        for (name, page) in [("/", &home), ("/world/commons", &map)] {
+            assert!(!page.contains(&format!("/{lazy}\"")), "{name} names {lazy}");
+        }
+    }
     task.abort();
 }

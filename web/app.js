@@ -1,19 +1,74 @@
 import { EMOTE_GLYPHS, LOOK_COLOURS, Room, figurePicture, fitPicture, floorPicture, furniturePicture, itemPicture, roomPicture, wallPicture } from './room.js';
 import { City, PLOTS, homeOf, houseAccess, windowFrame } from './city.js';
 import { World, toolIcon, seenText } from './world.js';
-import { outsideBuilder } from './outside.js';
 import { tutorial } from './tutorial.js';
-import { trustPanel } from './trust.js';
 // #830 UI: sets globalThis.BugReport, the fixed-code report that the map's Report a problem button sends.
 import './bug-report.js';
 import { createClientUpdates } from './client-updates.js';
 
-// #913: the passkey code, the plan invite and the bot setup page load when something asks for them,
-// not with the map. Each wrapper keeps its call sites as they were, and the module is fetched once.
+// #913: the passkey code, the plan invite, the bot setup page, Trust in My bots and the outside builder
+// load when something asks for them, not with the map. Each wrapper has the name and arguments of what
+// it loads, so its callers read as before, and each module is fetched once. tests/lazy_modules_ui.cjs
+// runs every one of them.
 const loadPasskey = () => import('./passkey.js');
 const passkeyStatus = async () => (await loadPasskey()).passkeyStatus();
 const registerPasskey = async (options) => (await loadPasskey()).registerPasskey(options);
 const signInWithPasskey = async () => (await loadPasskey()).signInWithPasskey();
+const planInviteView = async (code, ui) => (await import('./plan-invite.js')).planInviteView(code, ui);
+const botSetupView = async (id, ui) => (await import('./bot-setup.js')).botSetupView(id, ui);
+
+// The first call fetches the module and later ones get the same one. After a failed fetch, the next
+// call tries again.
+function onDemand(load) {
+  let coming = null;
+  return () => (coming ||= load().catch((error) => {
+    coming = null;
+    throw error;
+  }));
+}
+
+// Trust in My bots, made when My bots first opens and calls load. It always has a host here, so it
+// has no button of its own, and until it's made there's nothing drawn for refreshLooks to redo.
+function trustPanel(options) {
+  const trustModule = onDemand(() => import('./trust.js'));
+  let panel = null;
+  return {
+    toggle: null,
+    open: () => options.panels.open(options.hostPanel),
+    refreshLooks: () => panel?.refreshLooks(),
+    load: () => {
+      trustModule().then((trust) => {
+        panel ||= trust.trustPanel(options);
+        panel.load();
+      }, () => options.host.replaceChildren(options.h('p', { class: 'error' }, 'This part of My bots didn\'t load. Check your connection, then reload the page.')));
+    },
+  };
+}
+
+// The outside builder, made the first time someone chooses Build outside. Until then nothing is open
+// or in hand. A map that's left before the module comes never makes it.
+function outsideBuilder(options) {
+  const outsideModule = onDemand(() => import('./outside.js'));
+  let builder = null;
+  let gone = false;
+  return {
+    open: (place) => outsideModule().then((outside) => {
+      if (gone) return undefined;
+      builder ||= outside.outsideBuilder(options);
+      return builder.open(place);
+    }, () => options.say('Build outside didn\'t load. Check your connection, then reload the page.')),
+    close: () => builder?.close(),
+    get isOpen() {
+      return builder?.isOpen ?? false;
+    },
+    takesEscape: () => builder?.takesEscape() ?? false,
+    row: () => builder?.row() ?? null,
+    destroy() {
+      gone = true;
+      builder?.destroy();
+    },
+  };
+}
 
 const app = document.getElementById('app');
 const startingTitle = document.title;
@@ -8983,7 +9038,8 @@ function createPanels(root) {
   let zoneArea = null, pendingSnap = null;
   function save() {
     try { localStorage.setItem(storageKey, JSON.stringify({ ratios,
-      zones: Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) })); } catch { /* storage can be blocked */ }
+      // A panel that registers later, like Build outside when it first opens, keeps its saved zone.
+      zones: { ...saved.zones, ...Object.fromEntries([...panels].map(([name, panel]) => [name, panel.zone])) } })); } catch { /* storage can be blocked */ }
   }
   const dockHandle = h('button', { type: 'button', class: 'wd-tbtn window-dock-handle',
     'aria-label': 'Move minimized windows (arrow keys or drag)', title: 'Drag to move; arrow keys also move' }, '⠿');
@@ -12070,11 +12126,11 @@ async function route() {
     else if (joinHouseMatch) view = await joinHouseView(decodeURIComponent(joinHouseMatch[1]));
     else if (worldMatch) view = await worldView(decodeURIComponent(worldMatch[1]));
     else if (planMatch) {
-      view = await (await import('./plan-invite.js')).planInviteView(decodeURIComponent(planMatch[1]), {
+      view = await planInviteView(decodeURIComponent(planMatch[1]), {
         h, api, field, formError, secretRow, spanText, googleCalendarUrl, startCity: startCityDialog,
       });
     }
-    else if (setupMatch) view = await (await import('./bot-setup.js')).botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
+    else if (setupMatch) view = await botSetupView(decodeURIComponent(setupMatch[1]), { h, api, field, formError, link });
     else if (path === '/worlds') view = await worldsView();
     else if (COMING_BACK[path]) {
       view = await backFromElsewhere(COMING_BACK[path]);
