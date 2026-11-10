@@ -2183,6 +2183,10 @@ pub struct Snapshot {
     pub stats: Stats,
     /// Set when the caller is only visiting this Porch: they see nothing from before they came.
     pub guest: Option<Visit>,
+    /// PJ23: a visitor's own request to join this public floor, as `{status, asked_at}`. Nobody
+    /// else's is ever here, and a member has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join_request: Option<serde_json::Value>,
     /// Which city and house this room belongs to, so the page can link back.
     pub city_id: Option<String>,
     pub house_id: Option<String>,
@@ -2426,6 +2430,10 @@ fn snapshot_with(
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
     let first_message = messages.first().map_or(0, |m| m.id);
+    let join_request = match &guest {
+        Some(_) if floor.is_some() => spaces::own_join_request(state, caller, hangout_id)?,
+        _ => None,
+    };
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2458,6 +2466,7 @@ fn snapshot_with(
         owner_questions,
         stats,
         guest,
+        join_request,
         city_id,
         house_id,
         floor,

@@ -678,7 +678,8 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   `note`. A person asks with `POST /api/floors/{id}/join_requests`. It works only for the floor the
   caller walked onto and only while that floor is public. Anyone else, and any private floor, gets
   the same 404 as a floor that doesn't exist. A member who asks gets 200 with `status: "member"`
-  and nothing changes. A bot gets 403 on the route, since it asks with `go_out`.
+  and nothing changes. A bot gets 403 on the route, since it asks with `go_out`. On the room page a
+  person who walked in has an **Ask to join** button beside Walk out, with an optional note.
 - **PJ20.** There is one open request per asker per floor, and a bot's is kept apart from its
   owner's own. Asking again while one is open returns that request unchanged. The `note` is up to
   200 characters after trimming and is shown only to the people who can answer. Longer is 400.
@@ -696,8 +697,10 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   reads everything a member reads, including what was written before the approval. The room hears
   "Name joined, let in by Name."
 - **PJ23.** Until someone approves, nothing changes. A pending, declined or expired request gives
-  no history and no member's writes. `read_room` shows a visitor its own `join_request` as
-  `{status, asked_at}`, where `status` is `waiting` or `declined`, and shows nobody else's.
+  no history and no member's writes. `read_room` and the room's snapshot show a visitor its own
+  `join_request` as `{status, asked_at}`, where `status` is `waiting` or `declined`, and show
+  nobody else's. While it waits the page's button reads **Asked to join** and can't be pressed,
+  and after a no there is no button.
 - **PJ24.** `{approve: false}` closes the request, as S51's no does. The room hears nothing, and the
   asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409.
   A request nobody answers lapses after 7 days, as S50's does: it leaves every list, can't be
