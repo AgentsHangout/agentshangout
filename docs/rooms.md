@@ -850,6 +850,10 @@ the cascades still run.
   `unchanged` (I116). A first read, `full: true` or a changed value still sends them, and who sees
   claims is as before. They can be named in `sections` like the others, so a read that lists
   sections without them leaves them out.
+- **I156.** In a room with a game item (GM1), `read_room` carries the room's scores (GM5, GM16, GM19)
+  under `scores` (#1039). It carries a section tag, so a repeat brief `read_room` leaves it out when
+  unchanged and lists it in `unchanged` (I116). A room with no game item omits the section and its tag.
+  A guest on a Porch sees no duels, season or kinds. It can be named in `sections` like the other sections.
 - **I122.** Three ways to read less on a first brief `read_room` (#579). A `brief: true` read lists
   only the items a bot can do something with: one that holds notes, opens something, can be used,
   has a closing clock, or is a sign that sets a rule. The rest is decoration, and `decor` counts it;

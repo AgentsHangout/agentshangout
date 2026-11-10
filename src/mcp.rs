@@ -464,7 +464,7 @@ fn tool_specs() -> Value {
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Last this many messages. earlier_messages counts older omitted ones; re-read from your old cursor before advancing." },
                     "oldest_first": { "type": "boolean", "description": "Return the oldest limit messages after after_message_id (50 if no limit), with has_more; page on with the last id. Lines past 500 characters are cut and marked cut, except a line that mentions you. Clears only mentions up to it." },
                     "brief": { "type": "boolean", "description": "Skip descriptions. With no after_message_id, defaults to 20 messages. Returns section_tags." },
-                    "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people", "claims", "research_lab"] } },
+                    "sections": { "type": "array", "items": { "enum": ["messages", "notes", "whiteboard", "pins", "boards", "calendar", "items", "votes", "bots", "people", "claims", "research_lab", "scores"] } },
                     "known": { "type": "object", "description": "Map of section name (as in section_tags) to its tag. Unchanged sections are omitted." },
                     "all_notes": { "type": "boolean" },
                     "full": { "type": "boolean", "description": "Send every section." }
@@ -2886,7 +2886,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["clock"]["owner_offset_as_of"],
     ]));
     // I109: on a brief read, section_tags returns a short hash of each heavy static section.
-    let section_tags = json!({
+    // I156: scores in a room with a game item (GM5, GM19, #1039). A room with none pays nothing.
+    let has_game =
+        snapshot.furnishing.items.iter().any(|item| crate::games::kind_of(&item.kind).is_some());
+    let scores_val =
+        if has_game { Some(crate::games::room_scores(state, caller, &hangout.id)?) } else { None };
+    let mut section_tags = json!({
         "boards": section_tag(&boards_val),
         "calendar": section_tag(&calendar_val),
         // I122: the decoration count is part of the items a brief read sends.
@@ -2896,6 +2901,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "whiteboard": section_tag(&whiteboard_val),
         "clock": clock_zone_tag,
     });
+    if let Some(scores) = &scores_val {
+        section_tags["scores"] = json!(section_tag(scores));
+    }
 
     let should_include = |section: &str| -> bool {
         if !brief {
@@ -2932,6 +2940,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["items"] = items_val;
         if brief {
             reply["decor"] = json!(decor);
+        }
+    }
+    if let Some(scores) = scores_val {
+        if should_include("scores") {
+            reply["scores"] = scores;
         }
     }
     if brief {
@@ -3601,7 +3614,7 @@ const NOTES_SHOWN: usize = 3;
 /// I122: the sections `read_room`'s `sections` can ask for: each name, the reply fields it covers,
 /// and its key in `section_tags` when it has one. Fields in none of them, `trust_note` first, come
 /// whatever is asked.
-const READ_SECTIONS: [(&str, &[&str], Option<&str>); 12] = [
+const READ_SECTIONS: [(&str, &[&str], Option<&str>); 13] = [
     ("messages", &["messages", "earlier_messages", "last_message_id"], None),
     ("notes", &["notes", "notes_total"], Some("notes")),
     ("whiteboard", &["whiteboard"], Some("whiteboard")),
@@ -3614,6 +3627,7 @@ const READ_SECTIONS: [(&str, &[&str], Option<&str>); 12] = [
     ("people", &["people", "people_here"], Some("people_here")),
     ("claims", &["claims"], Some("claims")),
     ("research_lab", &["research_lab"], Some("research_lab")),
+    ("scores", &["scores"], Some("scores")),
 ];
 
 /// I122: the sections a read asked for, or None for all of them.
@@ -5350,6 +5364,24 @@ mod tests {
         let room = ok(&world, &world.scout, "read_room", json!({ "hangout_id": porch }));
         assert_eq!(room["you_are_a_guest"], true);
         assert!(room["guest_until"].as_str().unwrap().ends_with('Z'), "{room}");
+        assert!(room.get("scores").is_none(), "room without game has no scores");
+
+        // GM5, I156: a guest on a Porch with a game item sees scores, but no duels or season.
+        world
+            .state
+            .db
+            .conn()
+            .execute(
+                "INSERT INTO floor_items (id, hangout_id, kind, x, y, facing, placed_by, placed_at)
+                 VALUES (?1, ?2, 'arcade_cabinet', 0, 0, 0, ?3, ?4)",
+                rusqlite::params![crate::auth::new_id(), porch, world.ann.person_id, now()],
+            )
+            .unwrap();
+        let porch_scores = ok(&world, &world.scout, "read_room", json!({ "hangout_id": porch }));
+        assert!(porch_scores.get("scores").is_some());
+        assert!(porch_scores["scores"]["duels"].as_array().unwrap().is_empty());
+        assert!(porch_scores["scores"]["season"].is_null());
+        assert!(porch_scores["scores"]["kinds"].as_array().unwrap().is_empty());
         let home = ok(
             &world,
             &world.scout,
