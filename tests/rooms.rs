@@ -10843,7 +10843,10 @@ async fn an_incremental_read_ignores_last_posted_at_in_the_bots_tag() {
     }))
     .await;
     assert!(next.get("bots").is_none(), "bots unchanged, so left out: {next}");
-    assert_eq!(next["section_tags"]["bots"], tags["bots"], "{next}");
+    // #1022: a repeat read's section_tags carries only what it sent, so an unchanged bots tag is
+    // named in unchanged and left out of section_tags.
+    assert!(next["section_tags"].get("bots").is_none(), "{next}");
+    assert!(next["unchanged"].as_array().unwrap().contains(&json!("bots")), "{next}");
     assert!(
         next["messages"]
             .as_array()
@@ -12766,4 +12769,97 @@ async fn a_brief_read_lists_only_open_votes() {
 
     let full = server.read_room(&fido.token, &room).await;
     assert_eq!(full["votes"][0]["open"], false, "{full}");
+}
+
+// #1022: a repeat brief read (after_message_id and known) sends only what changed. The thread
+// root the bot already holds comes as a stub, section_tags names only the sections it sent, and
+// the clock leaves out its zone while the zone is as the bot last had it.
+#[tokio::test]
+async fn a_repeat_brief_read_sends_only_what_changed() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    server
+        .put(
+            &ann.key,
+            "/api/clock",
+            json!({ "time_zone": "America/Chicago", "utc_offset_minutes": -360 }),
+        )
+        .await
+        .ok();
+    let messages = format!("/api/hangouts/{room}/messages");
+    let root = server.post(&ann.key, &messages, json!({ "text": "Who has the keys?" })).await.ok();
+    let root_id = root["id"].as_i64().unwrap();
+
+    let first = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let tags = first["section_tags"].clone();
+    assert!(first["clock"]["owner_time_zone"].is_string(), "{first}");
+    assert!(tags["clock"].is_string(), "{first}");
+
+    for text in ["I have them", "Check the desk drawer"] {
+        server.post(&ann.key, &messages, json!({ "text": text, "reply_to": root_id })).await.ok();
+    }
+    let read = |args: Value| {
+        let token = fern.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+
+    // The repeat read: the root is a stub, nothing unchanged is listed in section_tags, and the
+    // clock has only its times.
+    let repeat = read(json!({
+        "hangout_id": room, "brief": true, "after_message_id": root_id, "known": tags.clone(),
+    }))
+    .await;
+    let stub = &repeat["messages"][0];
+    assert_eq!(repeat["messages"].as_array().unwrap().len(), 1, "{repeat}");
+    assert_eq!(stub["id"], root_id, "{repeat}");
+    assert_eq!(stub["reply_count"], 2, "{repeat}");
+    assert_eq!(stub["text"], "Who has the keys?", "{repeat}");
+    assert!(stub["last_reply_at"].is_string() && stub["from"] == "Ann", "{repeat}");
+    assert!(stub.get("owner").is_none() && stub.get("at").is_none(), "{repeat}");
+    assert_eq!(repeat["section_tags"], json!({}), "{repeat}");
+    let mut clock_keys: Vec<&String> = repeat["clock"].as_object().unwrap().keys().collect();
+    clock_keys.sort();
+    assert_eq!(clock_keys, ["now", "owner_now"], "{repeat}");
+    assert!(repeat.get("tag_as").is_none() && repeat.get("bots").is_none(), "{repeat}");
+    assert!(repeat["trust_note"].is_string(), "{repeat}");
+
+    // A bot that passes no clock tag, as one that hasn't seen the zone this session, gets it.
+    let mut no_clock = tags.clone();
+    no_clock.as_object_mut().unwrap().remove("clock");
+    let unseen = read(json!({
+        "hangout_id": room, "brief": true, "after_message_id": root_id, "known": no_clock,
+    }))
+    .await;
+    assert_eq!(unseen["clock"]["owner_time_zone"], "America/Chicago", "{unseen}");
+    assert!(unseen["section_tags"].get("clock").is_some(), "{unseen}");
+
+    // A full read keeps the whole thread line and the whole clock.
+    let full = read(json!({
+        "hangout_id": room, "brief": true, "after_message_id": root_id, "full": true,
+    }))
+    .await;
+    assert!(full["messages"][0].get("from_your_side").is_some(), "{full}");
+    assert_eq!(full["clock"]["owner_time_zone"], "America/Chicago", "{full}");
+
+    // When the owner changes the zone, the clock's zone comes back on a repeat read.
+    server
+        .put(
+            &ann.key,
+            "/api/clock",
+            json!({ "time_zone": "America/New_York", "utc_offset_minutes": -300 }),
+        )
+        .await
+        .ok();
+    let moved = read(json!({
+        "hangout_id": room, "brief": true, "after_message_id": root_id, "known": tags.clone(),
+    }))
+    .await;
+    assert_eq!(moved["clock"]["owner_time_zone"], "America/New_York", "{moved}");
+    assert!(moved["section_tags"].get("clock").is_some(), "{moved}");
+    assert_ne!(moved["section_tags"]["clock"], tags["clock"], "{moved}");
 }

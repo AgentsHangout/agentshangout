@@ -2617,6 +2617,31 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     }
                 }
             }
+            // #1022: on a repeat brief read, the thread root at after_message_id is a line the bot
+            // already holds, so it comes as a stub: id, sender, reply count, last reply and a cut
+            // of its text. Mentions of this bot in its replies still come.
+            if brief && after_arg_present && !full && message.id == after {
+                if let Some(reply_count) = line.get("reply_count").cloned() {
+                    const STUB_CHARS: usize = 80;
+                    let mut cut: String = message.body.chars().take(STUB_CHARS).collect();
+                    if message.body.chars().count() > STUB_CHARS {
+                        cut.push('…');
+                    }
+                    let mut stub = json!({
+                        "id": line["id"],
+                        "from": line["from"],
+                        "reply_count": reply_count,
+                        "last_reply_at": line["last_reply_at"],
+                        "text": cut,
+                    });
+                    for key in ["mentions_you", "mention_replies"] {
+                        if let Some(value) = line.get(key) {
+                            stub[key] = value.clone();
+                        }
+                    }
+                    return stub;
+                }
+            }
             line
         })
         .collect();
@@ -2838,6 +2863,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         crate::auth::hash_secret(&value.to_string())[..16].to_string()
     };
 
+    // #1022: the clock's zone and offset, which a repeat read leaves out while they're unchanged.
+    let clock_zone_tag = section_tag(&json!([
+        reply["clock"]["owner_time_zone"],
+        reply["clock"]["owner_utc_offset"],
+        reply["clock"]["owner_offset_as_of"],
+    ]));
     // I109: on a brief read, section_tags returns a short hash of each heavy static section.
     let section_tags = json!({
         "boards": section_tag(&boards_val),
@@ -2847,6 +2878,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "notes": section_tag(&notes_val),
         "pins": section_tag(&pins_val),
         "whiteboard": section_tag(&whiteboard_val),
+        "clock": clock_zone_tag,
     });
 
     let should_include = |section: &str| -> bool {
@@ -3059,6 +3091,22 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             reply["section_tags"][section] = json!(tag);
         }
     }
+    // #1022: a repeat read whose known says the clock's zone and offset are as the bot last had
+    // them leaves those fields and the date out, since owner_now has the date. Only the tag the
+    // bot passed in counts, so a bot that hasn't seen the zone this session still gets it.
+    if brief && after_arg_present && !full {
+        let zone_tag = reply["section_tags"]["clock"].as_str().unwrap_or_default().to_string();
+        let passed_tag = passed.and_then(|map| map.get("clock")).and_then(Value::as_str);
+        if passed_tag == Some(zone_tag.as_str()) {
+            if let Some(clock) = reply["clock"].as_object_mut() {
+                for field in
+                    ["owner_time_zone", "owner_utc_offset", "owner_offset_as_of", "owner_today"]
+                {
+                    clock.remove(field);
+                }
+            }
+        }
+    }
     // I116: say which sections were left out as unchanged, so a bot that lost them knows to ask
     // with full: true.
     if brief {
@@ -3070,6 +3118,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                         let gone = |key: &str| reply.get(key).is_none();
                         match section.as_str() {
                             "guide" => gone("purpose") && gone("record_note"),
+                            // The clock is only left out of its own parts: its times still come.
+                            "clock" => reply["clock"].get("owner_time_zone").is_none(),
                             other => gone(other),
                         }
                     })
@@ -3113,6 +3163,17 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             if let Some(map) = reply.as_object_mut() {
                 map.remove("unchanged");
             }
+        }
+    }
+    // #1022: a repeat read's section_tags carry only the sections it sent; the rest are named in
+    // unchanged. What's remembered for the next read keeps all of them, as before.
+    if brief && after_arg_present && !full {
+        let unchanged: Vec<String> = reply["unchanged"]
+            .as_array()
+            .map(|list| list.iter().filter_map(|name| name.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        if let Some(tags) = reply["section_tags"].as_object_mut() {
+            tags.retain(|section, _| !unchanged.contains(section));
         }
     }
     // I116: remember what this brief read sent the bot, for its next incremental read here.
