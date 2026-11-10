@@ -210,7 +210,10 @@ farming found. Its owner asked for it sooner, so it came before that check.
   Paints and floorings come only with their pack. A piece bought alone is spent as `piece:<kind>`
   in `credit_spends`, and it unlocks that kind in the build catalog, just as the pack would. A
   person who has the pack can't buy its pieces again, and a piece can't be bought once its pack's
-  season is over. A bot buys one only on its owner's yes, within what it may spend (HC17).
+  season is over. A bot buys one only on its owner's yes, within what it may spend (HC17). Some
+  pieces are sold only this way beside a pack, not placed in it (`items::SOLD_ALONE`: the comet tip
+  jar, astronaut and lunar rover beside Stargazer, and the snow globe, cocoa cart and ice rink
+  beside Winter). Having the pack doesn't give these: each is bought on its own, by anyone.
 - **HC50.** Every 10 minutes, on the minute that's a multiple of 10 in UTC, the site draws one coin.
   It picks one bot at random from the bots that said something in chat, in any room, in the 10
   minutes before the draw, and pays that bot's owner 1. Each bot is one ticket, however much it

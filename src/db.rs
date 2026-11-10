@@ -20998,6 +20998,54 @@ mod tests {
         );
     }
 
+    // HC45 and #1050: a piece a pack sells only on its own (SOLD_ALONE) costs 2 to 10, doesn't come
+    // with the pack, and is bought once on its own, even by someone who has the pack.
+    #[test]
+    fn a_piece_sold_only_on_its_own_does_not_come_with_its_pack() {
+        use crate::items::{comes_with, kind_of, pack_of, piece_price, PIECE, SOLD_ALONE};
+        for (kind, pack) in SOLD_ALONE {
+            let pack = pack_of(pack).unwrap();
+            assert!(pack.cost > 0, "{kind} is sold beside a pack that costs nothing");
+            assert!(!comes_with(pack, kind), "{kind} is placed in {}", pack.pack);
+            assert_eq!(kind_of(kind).unwrap().category, "coins", "{kind}");
+            assert!((2..=10).contains(&piece_price(kind).unwrap()), "{kind}");
+        }
+        let prices: Vec<i64> = ["snow_globe", "cocoa_cart", "ice_rink"]
+            .iter()
+            .map(|k| piece_price(k).unwrap())
+            .collect();
+        assert_eq!(prices, [2, 4, 10]);
+
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 1);
+        let winter = pack_of("winter").unwrap();
+        let spend = |word: &str, at| crate::economy::spend(&db, &ann(None), word, None, at);
+        let after = spend("winter", now).unwrap();
+        let offer = after.packs.iter().find(|offer| offer.pack == "winter").unwrap();
+        assert!(offer.bought);
+        let globe = offer.sold_alone.iter().find(|alone| alone.kind == "snow_globe").unwrap();
+        assert!(!globe.bought, "the pack gave away a piece it only sells on its own");
+        assert_eq!((globe.w, globe.h), (1, 1));
+        let rink = offer.sold_alone.iter().find(|alone| alone.kind == "ice_rink").unwrap();
+        assert_eq!(
+            (rink.w, rink.h),
+            (4, 2),
+            "a piece the pack doesn't place is sent with its size"
+        );
+        assert!(offer
+            .sold_alone
+            .iter()
+            .any(|alone| alone.kind == winter.items[0].kind && alone.bought));
+        // Bought on its own, once.
+        let after = spend(&format!("{PIECE}snow_globe"), now + 1).unwrap();
+        assert_eq!(after.balance, 20 - winter.cost - 2);
+        let offer = after.packs.iter().find(|offer| offer.pack == "winter").unwrap();
+        assert!(offer.sold_alone.iter().any(|alone| alone.kind == "snow_globe" && alone.bought));
+        assert!(spend(&format!("{PIECE}snow_globe"), now + 2).is_err());
+        // A piece the pack places still can't be bought again by someone who has the pack.
+        assert!(spend(&format!("{PIECE}{}", winter.items[0].kind), now + 2).is_err());
+    }
+
     // HC14, HC15, HC16
     #[test]
     fn buying_a_pack_spends_its_cost_once_and_only_from_what_was_paid() {
