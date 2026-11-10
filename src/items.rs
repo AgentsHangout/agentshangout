@@ -254,7 +254,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 153] = [
+pub static CATALOG: [Kind; 156] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -439,6 +439,10 @@ pub static CATALOG: [Kind; 153] = [
     piece("comet_jar", "Comet tip jar", COINS, STARTER, 2, feels("playful"), (1, 1)),
     piece("astronaut", "Astronaut", COINS, STARTER, 3, feels("playful"), (1, 1)),
     piece("lunar_rover", "Lunar rover", COINS, STARTER, 3, feels("playful"), (2, 1)),
+    // #1050: winter coin sinks, sold one at a time beside the Winter pack and not placed in it.
+    piece("snow_globe", "Snow globe", COINS, STARTER, 3, feels("calm"), (1, 1)),
+    piece("cocoa_cart", "Cocoa cart", COINS, STARTER, 4, feels("cozy"), (2, 1)),
+    piece("ice_rink", "Ice rink", COINS, STARTER, 5, feels("playful"), (4, 2)).flat(),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -622,8 +626,15 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 3] =
-    [("comet_jar", "stargazer"), ("astronaut", "stargazer"), ("lunar_rover", "stargazer")];
+pub const SOLD_ALONE: [(&str, &str); 6] = [
+    ("comet_jar", "stargazer"),
+    ("astronaut", "stargazer"),
+    ("lunar_rover", "stargazer"),
+    // #1050.
+    ("snow_globe", "winter"),
+    ("cocoa_cart", "winter"),
+    ("ice_rink", "winter"),
+];
 
 /// The pack that sells `word` one at a time without placing it, if any.
 fn sold_in(word: &str) -> Option<&'static Pack> {
@@ -649,9 +660,16 @@ pub fn piece_price(word: &str) -> Option<i64> {
     Some((1 + kind.w * kind.h + kind.beauty / 4).clamp(2, 10))
 }
 
-/// HC45: whether this person may use `word` from a paid pack: they bought the pack, or that piece.
+/// #1050: whether buying `pack` gives `word`: its paint, its flooring or a piece it places. A piece
+/// it only sells one at a time (SOLD_ALONE) is bought on its own, even by someone with the pack.
+pub fn comes_with(pack: &Pack, word: &str) -> bool {
+    pack.paint == word || pack.flooring == word || pack.items.iter().any(|part| part.kind == word)
+}
+
+/// HC45: whether this person may use `word` from a paid pack: they bought the pack and it comes with
+/// it, or they bought that piece.
 pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> ApiResult<bool> {
-    Ok(state.db.has_bought(person_id, pack.pack)?
+    Ok((comes_with(pack, word) && state.db.has_bought(person_id, pack.pack)?)
         || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?)
 }
 
@@ -2418,7 +2436,10 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
             // HC45: the whole pack, or this piece bought on its own, unlocks it.
             let piece = format!("{PIECE}{}", kind.kind);
             let paid = paid_pack_with(kind.kind).filter(|pack| {
-                !god && !bought.iter().any(|word| word == pack.pack || *word == piece)
+                !god
+                    && !bought.iter().any(|word| {
+                        (word == pack.pack && comes_with(pack, kind.kind)) || *word == piece
+                    })
             });
             // I128: a Lific board only for someone with god mode on.
             let gods_only = kind.kind == "lific_board";

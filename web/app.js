@@ -1839,6 +1839,13 @@ function creditGlance(credits) {
   if (next) parts.push(credits.balance >= next.cost ? `You can buy the ${next.name.toLowerCase()} now` : `${next.name}: ${next.cost - credits.balance} more`);
   return parts.join(' · ');
 }
+// HC45 and #1050: the pieces a pack's card offers one at a time. Once you have the pack, that's
+// only the ones it doesn't come with that you haven't bought.
+function soldAlone(offer) {
+  const all = offer.sold_alone || [];
+  return offer.bought ? all.filter((piece) => !piece.bought) : all;
+}
+
 function creditsCard(credits) {
   const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
   const error = formError();
@@ -1902,11 +1909,12 @@ function creditsCard(credits) {
               onclick: () => { confirming = offer.pack; render(now); },
             }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
       h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
-      // HC45: without the pack, each piece can be bought on its own, shown with its picture.
-      !offer.bought && !offer.over && offer.sold_alone?.length ? h('div', { class: 'shop-pieces' },
-        h('p', { class: 'muted fine' }, 'Or buy one piece at a time:'),
-        h('ul', { class: 'piece-grid' }, offer.sold_alone.map((piece) => {
-          const size = offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
+      // HC45: without the pack, each piece can be bought on its own, shown with its picture. With
+      // the pack, only the pieces it doesn't come with are left to buy (#1050).
+      !offer.over && soldAlone(offer).length ? h('div', { class: 'shop-pieces' },
+        h('p', { class: 'muted fine' }, offer.bought ? 'Sold on their own, not in the pack:' : 'Or buy one piece at a time:'),
+        h('ul', { class: 'piece-grid' }, soldAlone(offer).map((piece) => {
+          const size = piece.w ? piece : offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
           const pieceKey = `piece:${piece.kind}`;
           return h('li', { class: 'piece-tile' },
             h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
