@@ -5231,6 +5231,63 @@ async fn pj25_asking_and_approving_are_held_to_what_joining_is() {
     server.ask_to_join(&cy, &room, json!({})).await.refused(StatusCode::NOT_FOUND);
 }
 
+// PJ25
+#[tokio::test]
+async fn pj25_a_yes_for_a_bot_told_to_stay_home_since_is_refused_and_it_stays_waiting() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Elm", "your_name": "Cy", "create_code": CODE }))
+        .await
+        .ok();
+    let cy = who(&made);
+    let city = text(&made["city"]["id"]);
+    let house = server
+        .post(&cy.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Cy's" }))
+        .await
+        .ok();
+    let (house, living_room) = (text(&house["house"]["id"]), text(&house["living_room_id"]));
+    let (scout, token) = server.bot(&cy, &living_room, "Scout").await;
+    server
+        .post(&cy.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let asked =
+        server.tool(&token, "go_out", json!({ "floor_id": room, "ask_to_join": true })).await;
+    let id = text(&asked["structuredContent"]["join_request"]["id"]);
+
+    let stays = json!({ "house_id": house, "stays_home": true });
+    server.put(&cy.key, &format!("/api/agents/{scout}/home"), stays).await.ok();
+
+    server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::CONFLICT);
+    assert_eq!(server.join_requests(&ann).await.len(), 1, "it stays waiting");
+    assert!(!server.state.db.is_member(&room, &cy.id).unwrap(), "and nobody joined");
+}
+
+// PJ27
+#[tokio::test]
+async fn pj27_a_bot_asks_at_most_five_floors_an_hour() {
+    let server = Server::start().await;
+    let (home, cy) = server.someone("Cy").await;
+    let (scout, token) = server.bot(&cy, &home, "Scout").await;
+    for i in 0..6 {
+        let (room, owner) = server.someone(&format!("Owner {i}")).await;
+        server.open(&owner, &room).await;
+        server
+            .post(&cy.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+            .await
+            .ok();
+        let ask = json!({ "floor_id": room, "ask_to_join": true });
+        if i < 5 {
+            let asked = server.tool(&token, "go_out", ask).await;
+            assert_eq!(asked["structuredContent"]["join_request"]["status"], "waiting", "{asked}");
+        } else {
+            let refused = server.tool_error(&token, "go_out", ask).await;
+            assert!(refused.contains("too many requests to join"), "{refused}");
+        }
+    }
+}
+
 // PJ26
 #[tokio::test]
 async fn pj26_a_blocked_askers_request_looks_open_and_reaches_nobody() {

@@ -17654,6 +17654,16 @@ impl Db {
         Ok(changed > 0)
     }
 
+    /// PJ22: a yes whose join then failed goes back to waiting, so it can be answered again.
+    pub fn reopen_join_request(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE join_requests SET status = 'waiting', answered_at = NULL, answered_by = NULL
+             WHERE id = ? AND status = 'yes'",
+            params![id],
+        )?;
+        Ok(())
+    }
+
     /// PJ21: whether this person is an invited member of the floor, and not only the owner of a
     /// bot that was brought in (L12).
     pub fn is_invited_member(&self, hangout_id: &str, person_id: &str) -> rusqlite::Result<bool> {

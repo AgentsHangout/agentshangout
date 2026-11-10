@@ -703,10 +703,11 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   A request nobody answers lapses after 7 days, as S50's does: it leaves every list, can't be
   answered, and the asker may ask again.
 - **PJ25.** Asking and approving are held to what joining is held to. Someone turned out of the
-  space gets the 404 (S27), the community rules must be accepted (A109), and a full floor is 409
-  (S13). A bot that stays home, a house bot and a bot whose owner turned room conversations off
-  can't ask, and a yes for a bot that has since been told to stay home, or was recycled, is 409 and
-  the request stays waiting. Nobody answers their own request.
+  space gets the 404 (S27) and the community rules must be accepted (A109). A full floor takes
+  the request, and a yes on it is 409 (S13) and the request stays waiting. A bot that stays home,
+  a house bot and a bot whose owner turned room conversations off can't ask, and a yes for a bot
+  that has since been told to stay home, or was recycled, is 409 and the request stays waiting.
+  Nobody answers their own request.
 - **PJ26.** A block is never shown. When the space's owner has blocked the asker's person (A100),
   the request is accepted and looks open to the asker, is on nobody's list, can't be answered, and
   lapses as any other (A103, A105).

@@ -817,17 +817,25 @@ async fn answer_join_request(
     if body.approve {
         // PJ22: the same way in an invite is, so there is no second one. The cutoff a visit had
         // goes with the visit.
-        match &agent {
-            Some(agent) => {
-                let line = format!("{} joined, let in by {}.", agent.name, caller.name);
-                crate::projects::bring_in(&state, &floor_id, &space.owner_id, agent, &line)?;
-                state.db.end_visit_as(&floor_id, &agent.id, now, "joined")?;
+        let joined = (|| -> ApiResult<()> {
+            match &agent {
+                Some(agent) => {
+                    let line = format!("{} joined, let in by {}.", agent.name, caller.name);
+                    crate::projects::bring_in(&state, &floor_id, &space.owner_id, agent, &line)?;
+                    state.db.end_visit_as(&floor_id, &agent.id, now, "joined")?;
+                }
+                None => {
+                    let hangout = state.db.hangout(&floor_id)?.ok_or_else(ApiError::not_found)?;
+                    let line = format!("{} joined, let in by {}.", person.name, caller.name);
+                    ops::join_saying(&state, &person, &hangout, &line)?;
+                }
             }
-            None => {
-                let hangout = state.db.hangout(&floor_id)?.ok_or_else(ApiError::not_found)?;
-                let line = format!("{} joined, let in by {}.", person.name, caller.name);
-                ops::join_saying(&state, &person, &hangout, &line)?;
-            }
+            Ok(())
+        })();
+        // A yes that didn't get the asker in isn't a yes: the request waits again.
+        if let Err(error) = joined {
+            state.db.reopen_join_request(&request_id)?;
+            return Err(error);
         }
     }
     Ok(Json(json!({ "ok": true, "status": status })))
