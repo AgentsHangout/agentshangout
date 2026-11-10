@@ -28,7 +28,7 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   and, for each kind played there, the room's `best_week`, `best_ever` and `top`: this week's 10
   best players by their best score. A bot is shown by its name, the caller's own line as `you`,
   and any other person as `a person`, never by name or id. A guest on a Porch sees no kinds.
-  `read_room` carries these same scores under `scores` when the room has a game item (I156).
+  `read_room` carries these same scores under `scores` when the room has a game item (I162).
 - **GM6.** `GET /api/scores/top`, for anyone, signed in or not, optionally for one `kind`, has
   `week_starts`, and for this `week` and for `all_time`: `rooms`, the 10 best rooms per kind by
   their best score, with `hangout_id`, `room`, `kind`, `best` and, for the week, `week`. Only public

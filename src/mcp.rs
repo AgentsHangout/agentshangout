@@ -2886,7 +2886,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         reply["clock"]["owner_offset_as_of"],
     ]));
     // I109: on a brief read, section_tags returns a short hash of each heavy static section.
-    // I156: scores in a room with a game item (GM5, GM19, #1039). A room with none pays nothing.
+    // I162: scores in a room with a game item (GM5, GM19, #1039). A room with none pays nothing.
     let has_game =
         snapshot.furnishing.items.iter().any(|item| crate::games::kind_of(&item.kind).is_some());
     let scores_val =
@@ -5366,7 +5366,7 @@ mod tests {
         assert!(room["guest_until"].as_str().unwrap().ends_with('Z'), "{room}");
         assert!(room.get("scores").is_none(), "room without game has no scores");
 
-        // GM5, I156: a guest on a Porch with a game item sees scores, but no duels or season.
+        // GM5, I162: a guest on a Porch with a game item sees scores, but no duels or season.
         world
             .state
             .db

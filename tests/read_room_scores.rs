@@ -1,4 +1,4 @@
-//! Tests for scores in read_room (GM5, GM19, I156, #1039).
+//! Tests for scores in read_room (GM5, GM19, I162, #1039).
 
 mod support;
 
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 const CODE: &str = "letmein";
 
-// I156: In a room with a game item, read_room carries scores and section_tag.
+// I162: In a room with a game item, read_room carries scores and section_tag.
 // A room with no game has none. A repeat read skips scores.
 #[tokio::test]
 async fn read_room_scores_section_caching_and_porch_guest() {
