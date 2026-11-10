@@ -271,13 +271,17 @@ async fn storage_keeps_no_index_of_memories_and_an_old_database_gets_the_tables(
     let path = path.to_str().unwrap().to_string();
     drop(Db::open(&path).unwrap());
     let old = rusqlite::Connection::open(&path).unwrap();
-    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
+    for table in
+        ["bot_note_checks", "bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"]
+    {
         old.execute(&format!("DROP TABLE {table}"), []).unwrap();
     }
     drop(old);
     drop(Db::open(&path).unwrap());
     let reopened = rusqlite::Connection::open(&path).unwrap();
-    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
+    for table in
+        ["bot_note_checks", "bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"]
+    {
         let there: i64 = reopened
             .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = ?", [table], |row| {
                 row.get(0)
@@ -1835,6 +1839,164 @@ async fn mm2_notes_on_itself_and_its_owner_stay_and_unseen_subjects_go_first() {
     for id in kept {
         assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &id), 1);
     }
+}
+
+/// Moves a note's change and its confirmation back by an hour, as if both happened then.
+fn an_hour_ago(server: &Server, id: &str) {
+    let conn = server.sql();
+    conn.execute(
+        "UPDATE bot_memories SET created_at = created_at - 3600, updated_at = updated_at - 3600
+         WHERE id = ?1",
+        [id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE bot_note_checks SET checked_at = checked_at - 3600 WHERE note_id = ?1",
+        [id],
+    )
+    .unwrap();
+}
+
+fn note_times(server: &Server, id: &str) -> (i64, i64) {
+    server
+        .sql()
+        .query_row(
+            "SELECT m.updated_at, c.checked_at FROM bot_memories m
+             JOIN bot_note_checks c ON c.note_id = m.id WHERE m.id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+// MM25: confirming a note an hour later, without changing it, is later than when it last changed.
+#[tokio::test]
+async fn mm25_an_unchanged_rewrite_an_hour_later_shows_checked_after_when() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let saved =
+        server.remember(fern, json!({ "text": "Still cozy", "subject": room, "note": true })).await;
+    let id = text(&saved["id"]);
+    // The write and the confirmation are the same moment, so recall has no checked yet.
+    let fresh = server.recall(fern, "cozy").await;
+    assert!(fresh[0].get("checked").is_none(), "{fresh:?}");
+
+    an_hour_ago(&server, &id);
+    let (updated, _) = note_times(&server, &id);
+    let again =
+        server.remember(fern, json!({ "text": "Still cozy", "subject": room, "note": true })).await;
+    assert_eq!(again["changed"], false);
+    let (updated_after, checked_at) = note_times(&server, &id);
+    assert_eq!(updated_after, updated, "confirming a note does not move when it changed");
+    assert!(checked_at > updated_after);
+
+    let found = server.recall(fern, "cozy").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    let when = text(&found[0]["when"]);
+    let checked = text(&found[0]["checked"]);
+    assert!(checked > when, "checked {checked} when {when}");
+
+    // MM12: saying the same note again while sleeping still changes nothing, and costs none of
+    // the 60 notes a day.
+    let uses = server.count(
+        "SELECT COUNT(*) FROM bot_memory_uses WHERE bot_id = ? AND what = 'sleep_note'",
+        &fern.id,
+    );
+    let slept = server
+        .tool(fern, "sleep", json!({ "notes": [{ "subject": room, "text": "Still cozy" }] }))
+        .await;
+    assert_eq!(slept["changed"], 0, "{slept}");
+    assert_eq!(
+        server.count(
+            "SELECT COUNT(*) FROM bot_memory_uses WHERE bot_id = ? AND what = 'sleep_note'",
+            &fern.id
+        ),
+        uses
+    );
+    let (updated_slept, checked_slept) = note_times(&server, &id);
+    assert_eq!(updated_slept, updated);
+    assert!(checked_slept >= checked_at);
+}
+
+// MM25: a write that changes the note leaves checked out. The confirmation moves with the change.
+#[tokio::test]
+async fn mm25_a_changed_write_shows_no_checked() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let saved = server
+        .remember(fern, json!({ "text": "Busy at noon", "subject": room, "note": true }))
+        .await;
+    let id = text(&saved["id"]);
+    an_hour_ago(&server, &id);
+    server
+        .remember(fern, json!({ "text": "Quiet after six", "subject": room, "note": true }))
+        .await;
+    let found = server.recall(fern, "quiet").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].get("checked").is_none(), "{found:?}");
+    let (updated, checked_at) = note_times(&server, &id);
+    assert_eq!(checked_at, updated);
+    assert!(updated > now() - 60, "the change is stamped now, not the old confirmation");
+}
+
+// MM25: deleting a note takes its check row with it.
+#[tokio::test]
+async fn mm25_deleting_a_note_drops_its_check_row() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let saved = server.remember(fern, json!({ "text": "A heron on the roof", "note": true })).await;
+    let id = text(&saved["id"]);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &id), 1);
+    server.tool(fern, "forget", json!({ "id": id })).await;
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &id), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &id), 0);
+}
+
+// MM2: eviction drops the note left unchanged longest, and its check row goes with it.
+#[tokio::test]
+async fn mm2_eviction_removes_the_check_row() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    let oldest = agenthangout::auth::new_id();
+    let mut kept = String::new();
+    for i in 0..200 {
+        let id = if i == 0 { oldest.clone() } else { agenthangout::auth::new_id() };
+        if i == 1 {
+            kept = id.clone();
+        }
+        let at = now() - if i == 0 { 30 * DAY } else { DAY };
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', ?4, 4, ?5, ?5)",
+            rusqlite::params![id, fern.id, format!("room:gone-{i}"), format!("note {i}"), at],
+        )
+        .unwrap();
+    }
+    for (id, at) in [(&oldest, now() - 30 * DAY), (&kept, now() - DAY)] {
+        conn.execute(
+            "INSERT INTO bot_note_checks (note_id, checked_at) VALUES (?1, ?2)",
+            rusqlite::params![id, at],
+        )
+        .unwrap();
+    }
+    let bo = format!("person:{}", town.bo.id);
+    let added =
+        server.remember(fern, json!({ "text": "Bo is kind", "subject": bo, "note": true })).await;
+    assert_eq!(added["dropped"], json!(oldest), "{added}");
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &oldest), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &oldest), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &kept), 1);
+    assert_eq!(
+        server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &text(&added["id"])),
+        1
+    );
 }
 
 /// The tables with a row holding these bytes in any column. Memories are kept in one table and no

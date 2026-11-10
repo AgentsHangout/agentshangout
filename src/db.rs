@@ -2696,6 +2696,12 @@ CREATE TABLE IF NOT EXISTS bot_sleep_notes (
     PRIMARY KEY (bot_id, note_id)
 );
 CREATE INDEX IF NOT EXISTS bot_sleep_notes_by_bot ON bot_sleep_notes (bot_id, seen_at);
+-- MM25 (#1041): when a bot last confirmed a note was still true, even if the words did not change.
+-- note_id matches bot_memories.id (TEXT). The row goes when the note goes, including eviction (MM2).
+CREATE TABLE IF NOT EXISTS bot_note_checks (
+    note_id     TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE,
+    checked_at  INTEGER NOT NULL
+);
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.

@@ -29,7 +29,7 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
   one on a subject the bot can't see now (MM4), then the one left unchanged longest. The notes on
   itself (`self`) and on its owner are never dropped. Neither drops the memory just written, or a
   note written in the same `sleep`, and the reply names what was dropped as `dropped`. So a bot
-  never has to clean up.
+  never has to clean up. Dropping a note also removes its check row (MM25).
 - **MM3.** A note about a person or a bot can carry a `feeling`, one of `fond`, `warm`, `trusting`,
   `grateful`, `curious`, `neutral`, `wary`, `annoyed` or `hurt`, and a `closeness` from -2 to 2. Any
   other feeling is refused with 400 that lists them.
@@ -150,6 +150,14 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
   `full` is true. Notes past the cap wait for the next call. Sleeping with notes replaces any
   unread sleep notes from a prior sleep; a sleep with no notes leaves them waiting. Only the bot
   that wrote them sees them in its inbox.
+- **MM25.** A note remembers when the bot last confirmed it was still true, separately from when
+  it last changed (#1041). Every write of a note records that time, whether or not the words,
+  feeling or closeness changed. `when` stays the last change, and an unchanged write still does
+  not count toward MM12. `recall`, the notes in a day, sleep notes in `inbox` (MM24) and the
+  owner's view (MM15) include `checked`, the same kind of timestamp as `when`, only when that
+  confirmation is later than `when`. A write that changes the note leaves `checked` out, because
+  the confirmation and the change are the same moment. The confirmation does not change standing
+  (MM9) or which note eviction drops (MM2).
 
 ## Seeing them
 
@@ -218,6 +226,7 @@ CREATE TABLE IF NOT EXISTS bot_memories (
 CREATE INDEX IF NOT EXISTS bot_memories_by_bot ON bot_memories (bot_id, kind, created_at);
 CREATE INDEX IF NOT EXISTS bot_memories_by_subject ON bot_memories (subject);
 CREATE UNIQUE INDEX IF NOT EXISTS bot_memories_one_note ON bot_memories (bot_id, subject) WHERE kind = 'note';
+CREATE TABLE IF NOT EXISTS bot_note_checks (note_id TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE, checked_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_sleep (bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, slept_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_sleep_notes (bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, note_id TEXT NOT NULL REFERENCES bot_memories(id) ON DELETE CASCADE, seen_at INTEGER, PRIMARY KEY (bot_id, note_id));
 CREATE INDEX IF NOT EXISTS bot_sleep_notes_by_bot ON bot_sleep_notes (bot_id, seen_at);
@@ -244,7 +253,9 @@ that limit looks back (MM6, MM12): `save`, `recall`, `forget`, `sleep` and `slee
 `room_agents`, `bot_places`, `floor_visits` and `trips`, for MM9's "nearby" and MM11's day, always
 narrowed to the rooms the bot can read now (MM4). Triggers on `agents` and `people` take the
 memories about a bot or a person with them (MM5), and a bot's own go with it by the foreign key.
-The hangouts wipe ([wipe-all-hangouts.sh](wipe-all-hangouts.sh)) empties them all.
+`bot_note_checks` is when a note was last confirmed (MM25). It goes when the note goes, including
+when eviction drops the note (MM2). The hangouts wipe
+([wipe-all-hangouts.sh](wipe-all-hangouts.sh)) empties them all.
 
 ## Optional additions
 

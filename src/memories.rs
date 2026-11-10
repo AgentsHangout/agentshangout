@@ -205,10 +205,13 @@ struct Memory {
     recalls: i64,
     created_at: i64,
     updated_at: i64,
+    /// MM25: when the bot last confirmed a note. None for a moment, or a note never confirmed.
+    checked_at: Option<i64>,
 }
 
-const COLS: &str =
-    "n, id, subject, kind, text, feeling, closeness, importance, recalls, created_at, updated_at";
+const COLS: &str = "n, id, subject, kind, text, feeling, closeness, importance, recalls, \
+     created_at, updated_at, \
+     (SELECT checked_at FROM bot_note_checks WHERE note_id = bot_memories.id)";
 
 fn memory_from_row(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
     Ok(Memory {
@@ -223,6 +226,7 @@ fn memory_from_row(row: &rusqlite::Row) -> rusqlite::Result<Memory> {
         recalls: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
+        checked_at: row.get(11)?,
     })
 }
 
@@ -232,6 +236,7 @@ impl Memory {
     }
 
     /// MM9: importance, faded by age with a 7-day half-life that recalls stretch.
+    /// MM25: the confirmation time is not part of this, so checking a note does not raise it.
     fn standing(&self, now: i64) -> f64 {
         let importance = if self.is_note() { NOTE_IMPORTANCE } else { self.importance };
         let age = (now - self.updated_at).max(0) as f64;
@@ -630,7 +635,19 @@ struct Written {
     new: bool,
 }
 
-/// MM2: writes a note, replacing the bot's last one on that subject.
+/// MM25: one row per note, replaced on every write. The note's own `updated_at` is left alone.
+fn record_check(conn: &Connection, id: &str, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO bot_note_checks (note_id, checked_at) VALUES (?1, ?2)
+         ON CONFLICT (note_id) DO UPDATE SET checked_at = excluded.checked_at",
+        params![id, now],
+    )?;
+    Ok(())
+}
+
+/// MM2, MM25: writes a note, replacing the bot's last one on that subject. Every write records
+/// that the bot confirmed it now, including one that changes nothing. An unchanged note keeps its
+/// `updated_at`, so it still does not count as a change (MM12).
 fn write_note(
     conn: &Connection,
     bot: &str,
@@ -651,16 +668,17 @@ fn write_note(
         .optional()?;
     match old {
         Some((id, text, old_feeling, old_closeness)) => {
-            if text == note.text && old_feeling == feeling && old_closeness == closeness {
-                return Ok(Written { id, changed: false, new: false });
+            let changed = text != note.text || old_feeling != feeling || old_closeness != closeness;
+            if changed {
+                conn.execute(
+                    "UPDATE bot_memories SET text = ?, feeling = ?, closeness = ?, importance = ?,
+                            updated_at = ?
+                     WHERE id = ?",
+                    params![note.text, feeling, closeness, NOTE_IMPORTANCE, now, id],
+                )?;
             }
-            conn.execute(
-                "UPDATE bot_memories SET text = ?, feeling = ?, closeness = ?, importance = ?,
-                        updated_at = ?
-                 WHERE id = ?",
-                params![note.text, feeling, closeness, NOTE_IMPORTANCE, now, id],
-            )?;
-            Ok(Written { id, changed: true, new: false })
+            record_check(conn, &id, now)?;
+            Ok(Written { id, changed, new: false })
         }
         None => {
             let id = crate::auth::new_id();
@@ -670,6 +688,7 @@ fn write_note(
                  VALUES (?, ?, ?, 'note', ?, ?, ?, ?, ?, ?)",
                 params![id, bot, key, note.text, feeling, closeness, NOTE_IMPORTANCE, now, now],
             )?;
+            record_check(conn, &id, now)?;
             Ok(Written { id, changed: true, new: true })
         }
     }
@@ -1278,6 +1297,11 @@ fn memory_json(memory: &Memory, name: Option<String>) -> Value {
         "when": iso(memory.updated_at),
     });
     if memory.is_note() {
+        // MM25: only when the bot confirmed the note after it last changed. The same moment is
+        // just `when`, and the confirmation never moves standing (MM9).
+        if let Some(checked) = memory.checked_at.filter(|at| *at > memory.updated_at) {
+            item["checked"] = json!(iso(checked));
+        }
         if let Some(feeling) = &memory.feeling {
             item["feeling"] = json!(feeling);
         }
