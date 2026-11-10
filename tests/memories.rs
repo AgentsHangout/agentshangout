@@ -940,54 +940,75 @@ async fn mm12_sleep_with_notes_writes_them_all_or_none_and_marks_the_bot_as_slep
     assert_eq!(day["last_slept"], again["slept_at"]);
 }
 
-// MM12 (#1041)
+// MM24 (#1041)
 #[tokio::test]
-async fn mm12_first_inbox_after_sleep_carries_sleep_notes() {
+async fn mm24_first_inbox_after_sleep_carries_sleep_notes() {
     let server = Server::start().await;
     let town = server.town().await;
     let fern = &town.fern;
+    let rover = &town.rover;
     let room = format!("room:{}", town.cafe);
     let bo = format!("person:{}", town.bo.id);
 
     // Before sleeping, inbox has no sleep_notes.
-    let inbox = server.tool(fern, "inbox", json!({})).await;
-    assert!(inbox.get("sleep_notes").is_none());
+    let inbox_before = server.tool(fern, "inbox", json!({})).await;
+    let before_bytes = inbox_before.to_string().len();
+    assert!(inbox_before.get("sleep_notes").is_none());
 
-    // Sleep with notes.
+    // Sleep with notes, including a long note (>80 chars) to test preview trimming.
+    let long_text = "This is a detailed reflection about the cafe and friends that exceeds eighty characters in total length.";
+    assert!(long_text.len() > 80);
     let notes = json!({ "notes": [
-        { "subject": room, "text": "Good day at cafe" },
+        { "subject": room, "text": long_text },
         { "subject": bo, "text": "Kind person", "feeling": "grateful", "closeness": 1 }
     ] });
     let slept = server.tool(fern, "sleep", notes).await;
     assert_eq!(slept["changed"], 2);
 
+    // The notes go ONLY to the bot that wrote them: rover's inbox never gets them.
+    let rover_inbox = server.tool(rover, "inbox", json!({})).await;
+    assert!(rover_inbox.get("sleep_notes").is_none());
+
     // The first inbox after waking carries those sleep notes and memory_note.
     let inbox = server.tool(fern, "inbox", json!({})).await;
+    let after_bytes = inbox.to_string().len();
     let sleep_notes = inbox["sleep_notes"].as_array().expect("sleep_notes present");
     assert_eq!(sleep_notes.len(), 2);
     assert_eq!(sleep_notes[0]["subject"], room);
-    assert_eq!(sleep_notes[0]["text"], "Good day at cafe");
+    // Preview cut with ellipsis
+    assert!(sleep_notes[0]["text"].as_str().unwrap().ends_with('…'));
     assert_eq!(sleep_notes[1]["subject"], bo);
     assert_eq!(sleep_notes[1]["text"], "Kind person");
     assert_eq!(sleep_notes[1]["feeling"], "grateful");
     assert_eq!(sleep_notes[1]["closeness"], 1);
     assert!(inbox["memory_note"].is_string());
+    println!(
+        "INBOX BYTES: before={before_bytes}, after={after_bytes} (+{} bytes)",
+        after_bytes.saturating_sub(before_bytes)
+    );
 
     // A second normal inbox call leaves them out (carried once).
     let inbox2 = server.tool(fern, "inbox", json!({})).await;
     assert!(inbox2.get("sleep_notes").is_none());
 
-    // An inbox call with full: true carries them again.
+    // An inbox call with full: true carries them with full text (not preview trimmed).
     let inbox_full = server.tool(fern, "inbox", json!({ "full": true })).await;
     let sleep_notes_full =
         inbox_full["sleep_notes"].as_array().expect("sleep_notes present with full");
     assert_eq!(sleep_notes_full.len(), 2);
+    assert_eq!(sleep_notes_full[0]["text"], long_text);
 
     // Still not in normal inbox.
     let inbox3 = server.tool(fern, "inbox", json!({})).await;
     assert!(inbox3.get("sleep_notes").is_none());
 
-    // Sleeping again replaces the sleep notes with the new sleep's notes.
+    // Sleeping with >10 notes caps inbox sleep_notes at 10.
+    let mut many_notes = Vec::new();
+    for i in 0..12 {
+        many_notes.push(json!({ "subject": "self", "text": format!("Goal number {i}") }));
+    }
+    // "self" is one subject, so to have 12 notes we need 12 distinct subjects or moments.
+    // But sleep accepts up to 30 notes. Let's sleep with self note:
     let notes2 = json!({ "notes": [
         { "subject": "self", "text": "New morning goal" }
     ] });

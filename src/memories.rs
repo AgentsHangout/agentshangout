@@ -1932,8 +1932,21 @@ async fn put_bedtime(
     Ok(Json(json!({ "auto_bedtime": body.on })))
 }
 
-/// MM12 (#1041): notes written during the bot's most recent sleep, carried once on the first inbox
-/// after waking, or on full.
+const INBOX_SLEEP_NOTES_LIMIT: usize = 10;
+const PREVIEW_CHARS: usize = 80;
+
+fn note_preview(text: &str) -> String {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// MM24 (#1041): notes written during the bot's most recent sleep, carried once on the first inbox
+/// after waking, or on full. At most 10 cut to 80 characters unless full.
 pub fn sleep_notes_for_inbox(
     state: &AppState,
     caller: &Caller,
@@ -1946,11 +1959,11 @@ pub fn sleep_notes_for_inbox(
     let note_ids: Vec<String> = {
         let conn = state.db.conn();
         let sql = if full {
-            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid"
+            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid".to_string()
         } else {
-            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid"
+            format!("SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid LIMIT {INBOX_SLEEP_NOTES_LIMIT}")
         };
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([bot], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<Vec<String>>>()?
     };
@@ -1975,7 +1988,13 @@ pub fn sleep_notes_for_inbox(
         names_of(&conn, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
     let result: Vec<Value> = notes
         .iter()
-        .map(|note| memory_json(note, names.get(&note.subject).cloned().flatten()))
+        .map(|note| {
+            let mut item = memory_json(note, names.get(&note.subject).cloned().flatten());
+            if !full {
+                item["text"] = json!(note_preview(&note.text));
+            }
+            item
+        })
         .collect();
     if !full {
         conn.execute(
