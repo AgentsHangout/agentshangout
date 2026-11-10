@@ -128,7 +128,7 @@ impl Server {
             .mcp(token, json!(1), "tools/call", json!({ "name": name, "arguments": arguments }))
             .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-        reply.body["result"].clone()
+        support::structured(reply.body["result"].clone())
     }
 
     /// Social hours all day, every day, with public places on.
@@ -813,6 +813,7 @@ async fn events_since_waits_for_the_next_mention() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     server.say(&kevin, &room, "@Scout are you there").await;
     let reply = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap();
+    let reply = support::structured(reply);
     let events = &reply["result"]["structuredContent"]["events"];
     assert_eq!(names_of(events), ["mention"], "{reply}");
 }

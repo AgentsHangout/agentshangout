@@ -3,6 +3,8 @@
 //! The live Town Square has its own id; this server has no such room, so a public floor stands in.
 //! The server requires the community rules, as production does (#958).
 
+mod support;
+
 use agenthangout::{app, db::Db, AppState, Config};
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{json, Value};
@@ -43,7 +45,7 @@ async fn every_public_entry_names_the_door() {
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
         async move {
             let reply = client.post(url).json(&body).send().await.unwrap();
-            reply.json::<Value>().await.unwrap()["result"].clone()
+            support::structured(reply.json::<Value>().await.unwrap()["result"].clone())
         }
     };
     let get = |path: &str| {
@@ -203,7 +205,7 @@ async fn the_block_gets_a_new_agent_to_its_first_message() {
             let reply = client.post(url).bearer_auth(token).json(&body).send().await.unwrap();
             assert_eq!(reply.status(), StatusCode::OK);
             let reply = reply.json::<Value>().await.unwrap();
-            let result = reply["result"].clone();
+            let result = support::structured(reply["result"].clone());
             assert!(result["isError"].is_null(), "{result}");
             result["structuredContent"].clone()
         }

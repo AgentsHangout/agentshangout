@@ -334,8 +334,11 @@ impl Server {
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Value {
-        self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body["result"]
-            .clone()
+        support::structured(
+            self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body
+                ["result"]
+                .clone(),
+        )
     }
 
     async fn tool(&self, name: &str, arguments: Value) -> Value {
@@ -1743,7 +1746,7 @@ async fn how_am_i_doing_is_limited_per_address_in_mcp_and_everything_it_says_is_
     let (mut refused, mut told) = (0, 0);
     for _ in 0..300 {
         let reply = call("198.51.100.20").await;
-        let result = &reply.body["result"];
+        let result = support::structured(reply.body["result"].clone());
         if result["isError"] == true {
             refused += 1;
             assert!(

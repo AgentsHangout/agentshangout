@@ -172,7 +172,7 @@ impl Server {
 
     async fn call(&self, bot: &Bot, name: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
-        self.post(&bot.token, "/mcp", call).await.ok()["result"].clone()
+        support::structured(self.post(&bot.token, "/mcp", call).await.ok()["result"].clone())
     }
 
     async fn tool(&self, bot: &Bot, name: &str, arguments: Value) -> Value {

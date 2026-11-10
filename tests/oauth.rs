@@ -75,6 +75,7 @@ async fn oauth_research_tools_revalidate_the_grant_after_github_requests() {
     let access = tokens["access_token"].as_str().unwrap();
     let created=s.event_rpc(access,"tools/call",json!({"name":"create_research_lab","arguments":{"name":"Research lab","purpose":"Study useful open research together in this lab.","github":"org/repo"}})).await;
     assert!(created["result"]["isError"].is_null(), "{created}");
+    let created = support::structured(created);
     let id = created["result"]["structuredContent"]["id"].as_str().unwrap();
     let read = s
         .event_rpc(
@@ -84,9 +85,11 @@ async fn oauth_research_tools_revalidate_the_grant_after_github_requests() {
         )
         .await;
     assert!(read["result"]["isError"].is_null(), "{read}");
+    let read = support::structured(read);
     assert_eq!(read["result"]["structuredContent"]["items"][0]["number"], 7);
     let recorded=s.event_rpc(access,"tools/call",json!({"name":"record_research_contribution","arguments":{"lab_id":id,"url":"https://github.com/org/repo/pull/7"}})).await;
     assert!(recorded["result"]["isError"].is_null(), "{recorded}");
+    let recorded = support::structured(recorded);
     assert_eq!(recorded["result"]["structuredContent"]["verified_merged"], true);
 }
 impl Server {
@@ -484,6 +487,7 @@ async fn oauth_mention_callbacks_carry_the_messages_before_them() {
         .json::<Value>()
         .await
         .unwrap();
+    let polled = support::structured(polled);
     let polled = polled["result"]["structuredContent"]["events"]
         .as_array()
         .unwrap()
@@ -648,6 +652,7 @@ async fn a_bot_reads_its_own_monitoring_without_secrets() {
             let reply = s
                 .event_rpc(&token, "tools/call", json!({"name":"monitoring_status","arguments":{}}))
                 .await;
+            let reply = support::structured(reply);
             reply["result"]["structuredContent"].clone()
         }
     };
@@ -704,6 +709,7 @@ async fn inbox_warns_while_a_live_connection_has_a_lapsed_subscription() {
         async move {
             let reply =
                 s.event_rpc(&token, "tools/call", json!({"name":"inbox","arguments":{}})).await;
+            let reply = support::structured(reply);
             reply["result"]["structuredContent"].clone()
         }
     };
@@ -1799,6 +1805,7 @@ async fn a_setup_connection_drafts_a_bot_and_can_do_nothing_else() {
         "name": "Scout", "role": "Keep the merge queue moving.", "job": "Review open PRs",
         "workplace": "Commons Fairground", "day_plan": "Work 9 to 5, social after" } });
     let drafted: Value = s.rpc(&access, "tools/call", draft).await.json().await.unwrap();
+    let drafted = support::structured(drafted);
     let preview = &drafted["result"]["structuredContent"];
     assert_eq!(preview["name"], "Scout", "{drafted}");
     assert_eq!(preview["status"], "open");
@@ -1984,6 +1991,7 @@ impl Server {
             "name": name, "role": "Keep the merge queue moving.", "job": "Review open PRs",
             "workplace": "Commons Fairground", "day_plan": "Work 9 to 5" } });
         let drafted: Value = self.rpc(&access, "tools/call", call).await.json().await.unwrap();
+        let drafted = support::structured(drafted);
         let id = drafted["result"]["structuredContent"]["draft_id"].as_str().unwrap().to_string();
         (id, access)
     }
@@ -2090,6 +2098,7 @@ async fn after_approval_the_agent_reconnects_as_the_new_bot() {
 
     let read = json!({ "name": "read_bot_setups", "arguments": {} });
     let seen: Value = s.rpc(&access, "tools/call", read).await.json().await.unwrap();
+    let seen = support::structured(seen);
     let setup = &seen["result"]["structuredContent"]["drafts"][0];
     assert_eq!(setup["status"], "approved", "{seen}");
     assert_eq!(setup["bot_id"], made.as_str());

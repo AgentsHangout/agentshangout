@@ -18,7 +18,9 @@ impl Server {
             "params": { "name": name, "arguments": arguments },
         });
         let reply = self.client.post(format!("{}/mcp", self.base)).bearer_auth(token).json(&call);
-        reply.send().await.unwrap().json::<Value>().await.unwrap()["result"].clone()
+        support::structured(
+            reply.send().await.unwrap().json::<Value>().await.unwrap()["result"].clone(),
+        )
     }
 
     async fn mention(&self, pip: &str, room: &str, words: &str) -> i64 {

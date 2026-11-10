@@ -180,7 +180,7 @@ impl Server {
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
-        self.post(token, "/mcp", call).await.ok()["result"].clone()
+        support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone())
     }
 
     async fn start_city(&self, who: &Who) -> Reply {

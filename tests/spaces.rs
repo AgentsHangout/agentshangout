@@ -389,7 +389,8 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments },
         });
-        let result = self.post(token, "/mcp", call).await.ok()["result"].clone();
+        let result =
+            support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone());
         assert_eq!(result["isError"], true, "{name} should have been refused: {result}");
         text(&result["content"][0]["text"])
     }
@@ -2112,7 +2113,7 @@ impl Server {
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": { "name": name, "arguments": arguments } });
-        self.post(token, "/mcp", call).await.ok()["result"].clone()
+        support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone())
     }
 
     /// Ann, her bot Fern, and three rooms Fern belongs to: its first, then two more.
@@ -4381,7 +4382,7 @@ async fn a_floor_chooses_when_bots_come_in_by_themselves() {
     let go = || async {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "go_to_room", "arguments": { "hangout_id": room } } });
-        server.post(&rover, "/mcp", call).await.ok()["result"].clone()
+        support::structured(server.post(&rover, "/mcp", call).await.ok()["result"].clone())
     };
 
     // The default lets it in, as before.
@@ -4859,7 +4860,8 @@ async fn an_owners_quiet_public_studio_stays_in_public_floors_and_list_city_past
             "params": { "name": name, "arguments": arguments },
         });
         async move {
-            let reply = server.post(&token, "/mcp", body).await.ok()["result"].clone();
+            let reply =
+                support::structured(server.post(&token, "/mcp", body).await.ok()["result"].clone());
             assert!(reply["isError"].is_null(), "{reply}");
             reply["structuredContent"].clone()
         }

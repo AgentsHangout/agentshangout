@@ -137,7 +137,7 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments },
         });
-        self.post(token, "/mcp", call).await.ok()["result"].clone()
+        support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone())
     }
 
     /// The id of the newest line in a room with these words.

@@ -98,7 +98,7 @@ impl Server {
         .await;
     }
     async fn capture(&self, token: &str, room: &str, frame: &str) -> Value {
-        self.ok(token,Method::POST,"/mcp",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"take_snapshot","arguments":{"hangout_id":room,"frame":frame}}})).await["result"].clone()
+        support::structured(self.ok(token,Method::POST,"/mcp",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"take_snapshot","arguments":{"hangout_id":room,"frame":frame}}})).await["result"].clone())
     }
 }
 #[tokio::test]
@@ -382,7 +382,7 @@ async fn photos_draw_a_bot_at_what_it_uses_until_it_stops_or_the_use_runs_out() 
 
 impl Server {
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
-        self.ok(token,Method::POST,"/mcp",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}})).await["result"].clone()
+        support::structured(self.ok(token,Method::POST,"/mcp",json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}})).await["result"].clone())
     }
     /// Stores a copy of `like` for `owner` straight into the database, so a test isn't held up by
     /// the three captures a minute.
