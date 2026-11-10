@@ -1685,10 +1685,12 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let tx = conn.transaction()?;
     let mut changed = 0;
     let mut written = HashSet::new();
+    let mut ordered = Vec::with_capacity(inputs.len());
     let mut dropped = Vec::new();
     for (subject, input) in resolved.iter().zip(&inputs) {
         let note = write_note(&tx, &bot, subject, input, now)?;
         written.insert(note.id.clone());
+        ordered.push(note.id);
         if note.changed {
             changed += 1;
         }
@@ -1704,6 +1706,18 @@ pub fn sleep(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
          ON CONFLICT (bot_id) DO UPDATE SET slept_at = excluded.slept_at",
         params![bot, now],
     )?;
+    // MM12 (#1041): notes written in this sleep are recorded for the bot's next inbox call.
+    // A sleep with no notes never wipes unseen ones.
+    if !ordered.is_empty() {
+        tx.execute("DELETE FROM bot_sleep_notes WHERE bot_id = ?", params![bot])?;
+        let mut insert_sleep_note = tx.prepare(
+            "INSERT OR REPLACE INTO bot_sleep_notes (bot_id, note_id, seen_at) VALUES (?1, ?2, NULL)",
+        )?;
+        for note_id in &ordered {
+            insert_sleep_note.execute(params![bot, note_id])?;
+        }
+        drop(insert_sleep_note);
+    }
     tx.commit()?;
     let mut reply = json!({ "ok": true, "changed": changed, "slept_at": iso(now) });
     if !dropped.is_empty() {
@@ -1919,6 +1933,89 @@ async fn put_bedtime(
         conn.execute("INSERT OR IGNORE INTO bedtime_off (agent_id) VALUES (?)", [&agent.id])?;
     }
     Ok(Json(json!({ "auto_bedtime": body.on })))
+}
+
+const INBOX_SLEEP_NOTES_LIMIT: usize = 10;
+const PREVIEW_CHARS: usize = 80;
+
+fn note_preview(text: &str) -> String {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(PREVIEW_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// MM24 (#1041): notes written during the bot's most recent sleep, carried once on the first inbox
+/// after waking, or on full. At most 10 per call cut to 80 characters unless full.
+pub fn sleep_notes_for_inbox(
+    state: &AppState,
+    caller: &Caller,
+    full: bool,
+) -> ApiResult<Option<Vec<Value>>> {
+    let Some(bot) = caller.agent_id.as_deref().filter(|_| !caller.is_house) else {
+        return Ok(None);
+    };
+    let owner = &caller.person_id;
+    let now_at = now();
+    let rooms = readable_rooms(state, bot, now_at)?;
+    let mut conn = state.db.conn();
+    let tx = conn.transaction()?;
+    let note_ids: Vec<String> = if full {
+        let mut stmt =
+            tx.prepare("SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? ORDER BY rowid")?;
+        let rows = stmt.query_map([bot], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    } else {
+        let mut stmt = tx.prepare(&format!(
+            "SELECT note_id FROM bot_sleep_notes WHERE bot_id = ? AND seen_at IS NULL ORDER BY rowid LIMIT {INBOX_SLEEP_NOTES_LIMIT}"
+        ))?;
+        let rows = stmt.query_map([bot], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+    };
+    if note_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut notes = Vec::with_capacity(note_ids.len());
+    let mut stmt = tx.prepare(&format!("SELECT {COLS} FROM bot_memories WHERE id = ?"))?;
+    for id in &note_ids {
+        if let Some(mem) = stmt.query_row([id], memory_from_row).optional()? {
+            notes.push(mem);
+        }
+    }
+    drop(stmt);
+    if notes.is_empty() {
+        return Ok(None);
+    }
+    let names =
+        names_of(&tx, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
+    let result: Vec<Value> = notes
+        .iter()
+        .map(|note| {
+            let mut item = memory_json(note, names.get(&note.subject).cloned().flatten());
+            if !full {
+                item["text"] = json!(note_preview(&note.text));
+            }
+            item
+        })
+        .collect();
+    if !full {
+        let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "UPDATE bot_sleep_notes SET seen_at = ? WHERE bot_id = ? AND note_id IN ({placeholders})"
+        );
+        let mut params_vec: Vec<rusqlite::types::Value> = Vec::with_capacity(2 + note_ids.len());
+        params_vec.push(now_at.into());
+        params_vec.push(bot.to_string().into());
+        for id in &note_ids {
+            params_vec.push(id.clone().into());
+        }
+        tx.execute(&sql, rusqlite::params_from_iter(params_vec))?;
+    }
+    tx.commit()?;
+    Ok(Some(result))
 }
 
 /// MM13: what inbox adds at bedtime.
