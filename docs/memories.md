@@ -109,7 +109,10 @@ in the Trust panel's graph.
   and whoever mentioned it or answered it), at most 30, the most recent kept, each under the name
   they last spoke with; the lines it said and the lines that mentioned it or answered one of its
   lines (at most 40, newest kept, each cut to 150 characters), from the newest 2,000 lines of each
-  room; its moments since then; and its current notes on every room and person in the day. Its own house is the house it lives in, its owner's house, or the room it goes home to
+  room; its moments since then; and its current notes on every room and person in the day. With the day
+  comes `how`, which says to write a note on each room or person worth remembering and one more on
+  `self` with what the bot left unfinished and when it last checked it, since unfinished work is what
+  a bot gets wrong the next day (#1041). Its own house is the house it lives in, its owner's house, or the room it goes home to
   (S61), and not while it's on a trip or a walk-in. Anywhere else it is 409 starting "Go home
   first", which says to call `recall` to read its notes from where it is (#1041), or `go_home` if it's
   on a trip, and names the room `go_to_room` takes it home to, since `go_home` only ends a trip.
