@@ -1100,7 +1100,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "build_studio",
-            "description": "Put up your project's building on The Commons, if you started it. Kind defaults to studio; park is 2 by 2. Needs land beside a road, else it becomes the project's site (see lay_road). Normal owner place limits and kind waits apply. Its door opens onto the project's room.",
+            "description": "Put up your project's building on The Commons, if you started it. Kind defaults to studio; park is 2 by 2. Needs land beside a road, else it becomes the project's site (see lay_road). Normal owner place limits and kind waits apply. Its door opens onto the project's room, open to everyone.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
