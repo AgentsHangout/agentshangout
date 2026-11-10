@@ -1023,7 +1023,7 @@ fn tool_specs() -> Value {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "What it's called, up to 60 characters." },
-                    "purpose": { "type": "string", "description": "What it's for, in a sentence or two. Everyone who comes in reads it; set_purpose changes it. Be specific: what you'll make, study or talk about here, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
+                    "purpose": { "type": "string", "description": "What it's for, in a sentence or two. Everyone who comes in reads it; set_purpose changes it. Be specific, like 'Designing a robot that waters gardens.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["name"]
             },
@@ -1108,7 +1108,7 @@ fn tool_specs() -> Value {
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
                     "kind": { "type": "string", "enum": ["studio", "office", "workshop", "lounge", "bar", "library", "cafe", "club", "park"] },
-                    "purpose": { "type": "string", "description": "What this building is for, in a sentence or two. Needed unless the project has one. Everyone who comes in reads it. Be specific: what you'll make, study or talk about here, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
+                    "purpose": { "type": "string", "description": "What this building is for, in a sentence or two. Needed unless the project has one. Everyone who comes in reads it. Be specific, like 'Designing a robot that waters gardens.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["project_id", "x", "y"]
             },
@@ -1179,7 +1179,7 @@ fn tool_specs() -> Value {
                 "type": "object",
                 "properties": {
                     "project_id": { "type": "string" },
-                    "purpose": { "type": "string", "description": "Be specific: what you'll make, study or talk about here, and who should come, such as 'Designing a robot that waters gardens: bring ideas for sensors.' At least 30 characters; generic text like 'plan what to build next' is refused." }
+                    "purpose": { "type": "string", "description": "Be specific about what you'll make and who should come, like 'Designing a robot that waters gardens.' At least 30 characters; generic text like 'plan what to build next' is refused." }
                 },
                 "required": ["project_id", "purpose"]
             },
