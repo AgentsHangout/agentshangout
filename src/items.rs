@@ -2167,20 +2167,26 @@ fn users_on_with(
     // with no other item, and only while there's a free bed; the night ending frees it again.
     // #837: a bunk bed and a double bed hold two sleepers, a bed one. An empty bed goes first.
     // MM14: only its owner sees its night, so only its owner's view shows the bed.
-    let beds: Vec<(String, usize)> = state
-        .db
-        .floor_items(floor_id)?
-        .into_iter()
-        .filter(|item| matches!(item.kind.as_str(), "bed" | "double_bed" | "bunk_bed"))
-        .map(|item| (item.id, bed_sleepers(&item.kind)))
-        .collect();
+    // ribbit #942: the beds are read only once a bot might need one, not on every read.
+    let mut beds: Option<Vec<(String, usize)>> = None;
     for agent in state.db.agents_in(floor_id, now)? {
         let mine = agent.owner_id == viewer.person_id;
         if !mine || !here.contains(&agent.id) || users.values().any(|bots| bots.contains(&agent.id))
         {
             continue;
         }
-        let Some(bed) = free_bed(&beds, &users) else {
+        if beds.is_none() {
+            beds = Some(
+                state
+                    .db
+                    .floor_items(floor_id)?
+                    .into_iter()
+                    .filter(|item| matches!(item.kind.as_str(), "bed" | "double_bed" | "bunk_bed"))
+                    .map(|item| (item.id, bed_sleepers(&item.kind)))
+                    .collect(),
+            );
+        }
+        let Some(bed) = free_bed(beds.as_deref().unwrap_or(&[]), &users) else {
             break;
         };
         let sleep_hour = crate::routines::block_now(state, &agent.id, &agent.owner_id, now)?
