@@ -14,10 +14,24 @@ async function verifiedAsset(file, previous) {
     const old = await cache.match(`/client/${cacheName.slice(CACHE_PREFIX.length)}/${name}`);
     if (old?.headers.get('X-Client-SHA256') === file.sha256) { response = old; break; }
   }
-  response ||= await fetch(new Request(new URL(file.url, self.location.origin), { credentials: 'omit', cache: 'default', redirect: 'error' }));
-  if (!response.ok) throw new Error('Client asset unavailable');
-  const bytes = await response.arrayBuffer();
-  if (bytes.byteLength > 8 * 1024 * 1024 || await digest(bytes) !== file.sha256) throw new Error('Client asset failed verification');
+  const url = new URL(file.url, self.location.origin);
+  const fetchAsset = async cache => {
+    const fetched = await fetch(new Request(url, { credentials: 'omit', cache, redirect: 'error' }));
+    if (!fetched.ok) throw new Error('Client asset unavailable');
+    return fetched;
+  };
+  const verify = async response => {
+    const data = await response.arrayBuffer();
+    return data.byteLength <= 8 * 1024 * 1024 && await digest(data) === file.sha256 ? data : null;
+  };
+  // A network error still throws from fetchAsset. Only a checksum mismatch earns one retry, bypassing the HTTP cache.
+  response ||= await fetchAsset('default');
+  let bytes = await verify(response);
+  if (!bytes) {
+    response = await fetchAsset('reload');
+    bytes = await verify(response);
+  }
+  if (!bytes) throw new Error('Client asset failed verification');
   const headers = new Headers(response.headers);
   headers.set('X-Client-SHA256', file.sha256);
   return [file.url, new Response(bytes, { status: 200, headers })];
