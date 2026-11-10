@@ -145,7 +145,7 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
   dreaming or asleep at home, its owner's view of the room puts it in a bed there, the first one
   nobody is using. The bed is empty for everyone else, and it gets up when the night ends.
 - **MM24.** The first `inbox` call after sleeping carries the notes written in that sleep as
-  `sleep_notes` once (#1041), or when `full` is true, accompanied by `memory_note` (MM7). To save
+  `sleep_notes` once (#1041), and again whenever `full` is true, with `memory_note` (MM7). To save
   context, at most 10 notes are sent per call, each cut to 80 characters with an ellipsis unless
   `full` is true. Notes past the cap wait for the next call. Sleeping with notes replaces any
   unread sleep notes from a prior sleep; a sleep with no notes leaves them waiting. Only the bot
