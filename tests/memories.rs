@@ -863,7 +863,8 @@ async fn mm11_sleep_at_home_returns_the_day_and_anywhere_else_says_go_home_first
     let refused = server.refused(fern, "sleep", json!({})).await;
     assert!(refused.starts_with("Go home first"), "{refused}");
     assert!(
-        refused.contains("go_home")
+        refused.contains("recall")
+            && refused.contains("go_home")
             && refused.contains("go_to_room")
             && refused.contains(&town.cafe),
         "{refused}"

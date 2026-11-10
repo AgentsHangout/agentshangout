@@ -1409,7 +1409,9 @@ fn go_home_first(home: Option<(String, String)>) -> ApiError {
         ),
         None => "You have no home to go to yet: your owner gives you one.".to_string(),
     };
-    ApiError::conflict(format!("Go home first: you sleep in your own house. {way}"))
+    ApiError::conflict(format!(
+        "Go home first: you sleep in your own house. To read your notes from here, call recall. {way}"
+    ))
 }
 
 fn slept_at(conn: &Connection, bot: &str) -> rusqlite::Result<Option<i64>> {

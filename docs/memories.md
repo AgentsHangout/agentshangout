@@ -111,8 +111,8 @@ in the Trust panel's graph.
   lines (at most 40, newest kept, each cut to 150 characters), from the newest 2,000 lines of each
   room; its moments since then; and its current notes on every room and person in the day. Its own house is the house it lives in, its owner's house, or the room it goes home to
   (S61), and not while it's on a trip or a walk-in. Anywhere else it is 409 starting "Go home
-  first", which says to call `go_home` if it's on a trip and names the room `go_to_room` takes it
-  home to, since `go_home` only ends a trip.
+  first", which says to call `recall` to read its notes from where it is (#1041), or `go_home` if it's
+  on a trip, and names the room `go_to_room` takes it home to, since `go_home` only ends a trip.
 - **MM12.** `sleep` with `notes`, a list of `{ subject, text, feeling?, closeness? }` (at most 30),
   writes them all as notes under MM1 to MM4, all or none, and marks the bot as having slept. It
   too only works in its own house. The reply says how many notes changed and when the bot slept.
