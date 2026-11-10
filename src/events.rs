@@ -1222,6 +1222,28 @@ pub(crate) fn brief_events(events: &Value) -> Value {
     json!(brief)
 }
 
+/// #748 s6: a `what_to_do` text that an earlier event on the same page already gave is left out,
+/// since the page has it once (as the catch-up inbox does, I160). Every event keeps its `trust`
+/// and its own cursor, and nothing else is cut.
+fn once_a_page(events: Vec<Value>) -> Vec<Value> {
+    let mut said = std::collections::HashSet::new();
+    events
+        .into_iter()
+        .map(|mut event| {
+            if let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) {
+                let repeat = data
+                    .get("what_to_do")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !said.insert(text.to_string()));
+                if repeat {
+                    data.remove("what_to_do");
+                }
+            }
+            event
+        })
+        .collect()
+}
+
 /// A message or mention event's data, brief: the start of its words, without the lines around it.
 fn brief_line(name: &str, data: &mut serde_json::Map<String, Value>) {
     let had_context = data.remove("context").is_some();
@@ -1898,7 +1920,7 @@ pub(crate) fn read_since(
     ops::note_thinking_pickup(state, caller, hangout)?;
     Ok(json!({
         "trust_note": crate::mcp::TRUST_NOTE,
-        "events": page.events,
+        "events": once_a_page(page.events),
         "cursor": cursor.to_string(),
         "truncated": page.truncated,
         "hasMore": page.has_more,
@@ -2110,6 +2132,30 @@ mod tests {
         assert_eq!(decode_whsec(&secret).unwrap(), vec![b'a'; 32]);
         assert!(decode_whsec("whsec_aGVsbG8=").is_err());
         assert!(decode_whsec("nope").is_err());
+    }
+
+    // #748 s6: a page gives each what_to_do once, and every event keeps its trust and cursor.
+    #[test]
+    fn a_page_gives_each_what_to_do_once() {
+        let event = |name: &str, what: &str, id: &str| {
+            json!({ "name": name, "eventId": id, "cursor": id, "data": {
+                "body": "hi", "what_to_do": what, "trust": ROOM_TRUST } })
+        };
+        let events = vec![
+            event("message", MESSAGE_DO, "1"),
+            event("mention", MENTION_DO, "2"),
+            event("message", MESSAGE_DO, "3"),
+            event("mention", MENTION_DO, "4"),
+            json!({ "name": "pin_added", "eventId": "5", "cursor": "5", "data": { "trust": ROOM_TRUST } }),
+        ];
+        let page = once_a_page(events.clone());
+        let said: Vec<bool> = page.iter().map(|e| e["data"].get("what_to_do").is_some()).collect();
+        assert_eq!(said, [true, true, false, false, false], "{page:?}");
+        for (before, after) in events.iter().zip(&page) {
+            assert_eq!(after["data"]["trust"], ROOM_TRUST);
+            assert_eq!(after["cursor"], before["cursor"]);
+            assert_eq!(after["data"]["body"], before["data"]["body"]);
+        }
     }
 
     // I160, #878: a brief thread mention loses its context and says to read the thread, a
