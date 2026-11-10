@@ -16,7 +16,7 @@ const caches = {
       put: async (request, response) => data.set(key(request), response.clone()) };
   },
 };
-let requests = [], offline = false, corrupt = false, claims = 0, activations = 0;
+let requests = [], cacheModes = [], offline = false, corrupt = false, claims = 0, activations = 0;
 function boot(version, body) {
   const url = `/client/${version}/app.js`;
   const listeners = {};
@@ -26,6 +26,7 @@ function boot(version, body) {
   vm.runInNewContext(source, { CLIENT_MANIFEST: manifest, self, caches, crypto: webcrypto,
     URL, Request, Response, Headers, fetch: async request => {
       requests.push(key(request));
+      cacheModes.push(request.cache);
       if (offline) throw Error('offline');
       return new Response(corrupt ? 'corrupt' : body, { headers: { 'content-type': 'text/javascript' } });
     } });
@@ -37,6 +38,9 @@ function boot(version, body) {
   const first = boot('a'.repeat(64), 'first');
   await first.run('install');
   assert.equal(activations, 0, 'install never replaces an active worker');
+  // Files the page just loaded are already in the HTTP cache; a no-cache fetch would download them twice.
+  assert.ok(cacheModes.length > 0, 'install fetches the manifest files');
+  for (const mode of cacheModes) assert.ok(['default', 'force-cache'].includes(mode), `install fetch used cache mode ${mode}`);
   await first.run('activate');
   offline = true;
   let response;

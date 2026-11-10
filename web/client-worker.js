@@ -14,7 +14,7 @@ async function verifiedAsset(file, previous) {
     const old = await cache.match(`/client/${cacheName.slice(CACHE_PREFIX.length)}/${name}`);
     if (old?.headers.get('X-Client-SHA256') === file.sha256) { response = old; break; }
   }
-  response ||= await fetch(new Request(new URL(file.url, self.location.origin), { credentials: 'omit', cache: 'no-cache', redirect: 'error' }));
+  response ||= await fetch(new Request(new URL(file.url, self.location.origin), { credentials: 'omit', cache: 'default', redirect: 'error' }));
   if (!response.ok) throw new Error('Client asset unavailable');
   const bytes = await response.arrayBuffer();
   if (bytes.byteLength > 8 * 1024 * 1024 || await digest(bytes) !== file.sha256) throw new Error('Client asset failed verification');
