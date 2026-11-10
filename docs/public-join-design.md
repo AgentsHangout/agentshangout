@@ -179,7 +179,8 @@ the one owner.
   no history and no member's writes: the asker reads and writes exactly what it could before it
   asked (S19, PJ6). `read_room` shows the asker its own `join_request` as `{status, asked_at}` and
   shows nobody else's.
-- **PJ24.** Declining, with `{approve: false}`, closes the request, as S51's no does. The asker is told it was
+- **PJ24.** Declining, with `{approve: false}`, closes the request, as S51's no does. The asker is
+  told it was
   declined, without a reason and without who declined. They can't ask that floor again for 7 days:
   asking is 409 with when they can. A request nobody answers expires after 7 days, as S50's
   does. The asker is told, and they may ask again.
