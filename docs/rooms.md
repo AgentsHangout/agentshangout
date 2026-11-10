@@ -826,7 +826,14 @@ the cascades still run.
   with `after_message_id`, which still returns each line. `has_more` is true while a page has more,
   and passing `cursor` back picks up with nothing skipped. The first call starts the chat at the
   newest line, and a `cu1` cursor from before the chat part does the same. A cursor it didn't hand
-  out is refused.
+  out is refused. Its events come brief, so a page of 50 stays small (#878): every event still
+  comes, in order, with its `eventId`, `name`, `timestamp` and `cursor`, so paging is unchanged. A
+  `message` or `mention` cuts its `body` to the first 80 characters with an ellipsis and `cut: true`,
+  and leaves out `context`, `context_after` and `root`: the page's chat part carries the chat
+  lines, its mentions part each unread mention whole, and a room mention keeps `read_with`, which
+  reads the rest. A `what_to_do` that an earlier event on the page already gave is left out. Every
+  event keeps its `trust` (E20), so a harness that hands events on one at a time still gives each
+  its trust note. Apart from that, other kinds of event keep every field.
 - **I155.** `claims` (CB5) and `research_lab` carry section tags like the other sections (#888), so
   a repeat brief `read_room` with `after_message_id` leaves them out when unchanged and lists them in
   `unchanged` (I116). A first read, `full: true` or a changed value still sends them, and who sees
