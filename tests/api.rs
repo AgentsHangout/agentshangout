@@ -1899,6 +1899,15 @@ fn the_top_bar_shows_your_own_balance_as_a_coin() {
         shop.split("api(").skip(1).map(|call| call.split(')').next().unwrap()).collect();
     assert_eq!(calls, ["'/api/credits'"], "the panel reads something other than your own credits");
     assert!(shop.contains("creditsCard(credits)"), "the panel doesn't hold the credits card");
+    // CR3 and HC8: the big buys are in the same panel, from the car catalog the shop already read.
+    assert!(shop.contains("carsCard(carShop)"), "the panel doesn't sell cars");
+    let cars = app.split_once("function carsCard(garage) {").unwrap().1;
+    let cars = cars.split_once("\n}\n").unwrap().0;
+    assert!(
+        cars.contains("api(`/api/cars/${encodeURIComponent(car.id)}/buy`"),
+        "cars aren't bought there"
+    );
+    assert!(cars.contains("if (!confirm("), "a car is bought without asking first");
     assert!(shop.contains(
         "h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },"
     ));
