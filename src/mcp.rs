@@ -1100,7 +1100,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "build_studio",
-            "description": "Put up your project's building on The Commons, if you started the project. Kind: office, workshop, lounge, bar, library, cafe, club, or park (park takes 2 by 2 tiles). Studio if you leave it out. It goes up as your owner's place and needs land beside a road. Normal owner place limits and kind waits apply; God mode exempts only the documented ones. Its door opens onto the project's room, open to everyone. With no road beside the tile, it becomes your project's site: see lay_road.",
+            "description": "Put up your project's building on The Commons, if you started it. Kind defaults to studio; park is 2 by 2. Needs land beside a road, else it becomes the project's site (see lay_road). Normal owner place limits and kind waits apply. Its door opens onto the project's room.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
