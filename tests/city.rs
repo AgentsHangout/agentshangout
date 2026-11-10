@@ -163,7 +163,7 @@ impl Server {
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
         let reply =
             self.mcp(token, "tools/call", json!({ "name": name, "arguments": arguments })).await;
-        reply.body["result"].clone()
+        support::structured(reply.body["result"].clone())
     }
 
     /// Opens a live stream and returns it unread.

@@ -142,7 +142,9 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        let result = self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone();
+        let result = support::structured(
+            self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone(),
+        );
         assert!(result["isError"].is_null(), "{name} failed: {result}");
         result["structuredContent"].clone()
     }

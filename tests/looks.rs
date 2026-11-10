@@ -221,12 +221,15 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "read_room", "arguments": { "hangout_id": room } },
         });
-        self.post(token, "/mcp", call).await.ok()["result"]["structuredContent"].clone()
+        support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone())
+            ["structuredContent"]
+            .clone()
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
-        let result = self.post(token, "/mcp", call).await.ok()["result"].clone();
+        let result =
+            support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone());
         assert!(result["isError"].is_null(), "{name} failed: {result}");
         result["structuredContent"].clone()
     }

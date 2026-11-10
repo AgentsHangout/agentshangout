@@ -73,6 +73,7 @@ async fn a_repeat_brief_read_skips_claims_until_a_claim_changes() {
                 .json()
                 .await
                 .unwrap();
+            let reply = support::structured(reply);
             let result = &reply["result"];
             assert!(result["isError"].is_null(), "{result}");
             result["structuredContent"].clone()

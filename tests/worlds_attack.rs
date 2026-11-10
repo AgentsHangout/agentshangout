@@ -471,8 +471,11 @@ impl Server {
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Value {
-        self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body["result"]
-            .clone()
+        support::structured(
+            self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body
+                ["result"]
+                .clone(),
+        )
     }
 
     /// A tool that worked: its structured result.
@@ -5599,6 +5602,7 @@ async fn list_city_showing_the_commons_counts_as_a_view() {
     let seen =
         server.post("/mcp", call.clone()).token(&bot.token).header("x-forwarded-for", address);
     let seen = seen.send().await.ok();
+    let seen = support::structured(seen);
     assert_eq!(seen["result"]["structuredContent"]["city"]["id"], "commons", "{seen}");
     for _ in 0..239 {
         let view = server.get("/api/worlds/commons").header("x-forwarded-for", address);

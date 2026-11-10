@@ -4594,17 +4594,20 @@ fn dispatch(
                             }
                         }
                     }
-                    let text =
+                    // S7: the text block carries the JSON. Only a tool whose text is words for
+                    // a reader (read_room's Markdown) and open_collaboration_board also send
+                    // structuredContent.
+                    let (text, keep_structured) =
                         if let Some(t) = value.as_object_mut().and_then(|o| o.remove("_text")) {
-                            t.as_str().unwrap_or_default().to_string()
+                            (t.as_str().unwrap_or_default().to_string(), true)
                         } else {
-                            value.to_string()
+                            (value.to_string(), false)
                         };
                     sent = text.chars().count();
-                    let mut res = json!({
-                        "content": [{ "type": "text", "text": text }],
-                        "structuredContent": value,
-                    });
+                    let mut res = json!({ "content": [{ "type": "text", "text": text }] });
+                    if keep_structured || name == "open_collaboration_board" {
+                        res["structuredContent"] = value;
+                    }
                     if name == "open_collaboration_board" {
                         res["_meta"] = json!({
                             "ui": {
@@ -4784,10 +4787,7 @@ pub async fn handle(
             false,
         );
         let result = match waited {
-            Ok(value) => json!({
-                "content": [{ "type": "text", "text": value.to_string() }],
-                "structuredContent": value,
-            }),
+            Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
             Err(error) => json!({
                 "content": [{ "type": "text", "text": error.message }],
                 "isError": true,
@@ -4813,7 +4813,7 @@ pub async fn handle(
         );
         let result = match result {
             Ok((metadata, png)) => {
-                json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}],"structuredContent":metadata})
+                json!({"content":[{"type":"text","text":metadata.to_string()},{"type":"image","mimeType":"image/png","data":crate::events::b64_encode(&png)}]})
             }
             // CP15: a refusal's code, and for a full quota when it frees, to branch on.
             Err(error) => match error.details {
@@ -4839,10 +4839,7 @@ pub async fn handle(
         .await;
         track(&state, &caller, "pin", timer, pinned.as_ref().err().map(|e| e.status), true);
         let result = match pinned {
-            Ok(value) => json!({
-                "content": [{ "type": "text", "text": value.to_string() }],
-                "structuredContent": value,
-            }),
+            Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
             Err(error) => json!({
                 "content": [{ "type": "text", "text": error.message }],
                 "isError": true,
@@ -4870,9 +4867,7 @@ pub async fn handle(
             };
             track(&state, &caller, name, timer, result.as_ref().err().map(|e| e.status), true);
             let result = match result {
-                Ok(value) => {
-                    json!({ "content": [{ "type": "text", "text": value.to_string() }], "structuredContent": value })
-                }
+                Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
                 Err(error) => {
                     json!({ "content": [{ "type": "text", "text": error.message }], "isError": true })
                 }
@@ -4947,9 +4942,7 @@ pub async fn handle(
             .await;
             track(&state, &caller, name, timer, result.as_ref().err().map(|e| e.status), true);
             let result = match result {
-                Ok(value) => {
-                    json!({ "content": [{ "type": "text", "text": value.to_string() }], "structuredContent": value })
-                }
+                Ok(value) => json!({ "content": [{ "type": "text", "text": value.to_string() }] }),
                 Err(error) => {
                     json!({ "content": [{ "type": "text", "text": error.message }], "isError": true })
                 }
@@ -5102,11 +5095,15 @@ mod tests {
             .clone()
     }
 
-    /// A tool that worked: its structured result.
+    /// A tool that worked: its result, read from the JSON in its text block.
     fn ok(world: &World, caller: &Caller, name: &str, args: Value) -> Value {
         let result = call(world, caller, name, args);
         assert!(result["isError"].is_null(), "{name} failed: {result}");
-        result["structuredContent"].clone()
+        assert!(
+            result.get("structuredContent").is_none(),
+            "{name} sent structuredContent: {result}"
+        );
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
     }
 
     /// A tool that was refused: the message the model reads.

@@ -74,7 +74,9 @@ impl Server {
     async fn remember(&self, token: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "remember", "arguments": arguments } });
-        let result = self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone();
+        let result = support::structured(
+            self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone(),
+        );
         assert!(result["isError"].is_null(), "remember failed: {result}");
         result["structuredContent"].clone()
     }

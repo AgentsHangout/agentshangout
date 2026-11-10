@@ -329,7 +329,7 @@ impl Server {
             "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        self.post_json(token, "/mcp", call).await.ok()["result"].clone()
+        support::structured(self.post_json(token, "/mcp", call).await.ok()["result"].clone())
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {

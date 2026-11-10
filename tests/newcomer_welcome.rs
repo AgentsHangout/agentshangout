@@ -123,7 +123,7 @@ impl Server {
         });
         let reply = self.send("POST", token, "/mcp", call).await;
         assert!(reply["result"]["isError"].is_null(), "{name}: {reply}");
-        reply["result"]["structuredContent"].clone()
+        support::structured(reply)["result"]["structuredContent"].clone()
     }
 
     fn welcomes(&self, floor: &str) -> Vec<String> {

@@ -51,7 +51,7 @@ impl Server {
                         "params": { "name": name, "arguments": arguments } }),
             )
             .await;
-        reply["result"]["structuredContent"].clone()
+        support::structured(reply)["result"]["structuredContent"].clone()
     }
 }
 

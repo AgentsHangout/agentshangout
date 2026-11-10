@@ -230,7 +230,6 @@ pub fn handle_mcp(state: &AppState, person_id: &str, body: &Bytes) -> Response {
             Ok(match called {
                 Ok(value) => json!({
                     "content": [{ "type": "text", "text": value.to_string() }],
-                    "structuredContent": value,
                 }),
                 Err(error) => json!({
                     "content": [{ "type": "text", "text": error.message }],

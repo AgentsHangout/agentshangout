@@ -206,6 +206,26 @@ impl Authenticator {
     }
 }
 
+/// S7: a tool's result is the JSON in its `content[0].text` block. A `tools/call` result (or the
+/// whole reply holding it) comes back with `structuredContent` filled from that block, so a test
+/// reads a tool's answer the same way a bot does. Text that isn't a JSON object or array (a
+/// refusal's words, a Markdown room) leaves the result as it was.
+pub fn structured(mut reply: Value) -> Value {
+    let target = if reply.get("content").is_none() && reply.get("result").is_some() {
+        &mut reply["result"]
+    } else {
+        &mut reply
+    };
+    if target.get("structuredContent").is_none() {
+        if let Some(text) = target["content"][0]["text"].as_str() {
+            if let Ok(value @ (Value::Object(_) | Value::Array(_))) = serde_json::from_str(text) {
+                target["structuredContent"] = value;
+            }
+        }
+    }
+    reply
+}
+
 /// Changes one byte of a base64url field in a response, so what it says no longer matches what
 /// was signed.
 pub fn tamper(credential: &mut Value, field: &str) {

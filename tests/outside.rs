@@ -375,7 +375,8 @@ impl Server {
             "method": "tools/call",
             "params": { "name": name, "arguments": arguments },
         });
-        let result = self.post(token, "/mcp", call).await.ok()["result"].clone();
+        let result =
+            support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone());
         assert!(result["isError"].is_null(), "{name} failed: {result}");
         result["structuredContent"].clone()
     }

@@ -92,6 +92,7 @@ async fn read_room_oldest_first_pages_forward_without_skipping_or_clearing_unrea
                 .json()
                 .await
                 .unwrap();
+            let reply = support::structured(reply);
             let result = &reply["result"];
             assert!(result["isError"].is_null(), "{result}");
             result["structuredContent"].clone()
@@ -272,6 +273,7 @@ async fn read_room_catch_up_pages_fifty_at_a_time_and_cuts_long_lines_unless_the
                 .json()
                 .await
                 .unwrap();
+            let reply = support::structured(reply);
             let result = &reply["result"];
             assert!(result["isError"].is_null(), "{result}");
             result["structuredContent"].clone()

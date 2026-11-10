@@ -78,6 +78,7 @@ async fn read_room_lists_the_open_votes_once_and_snapshot_skips_them_only_for_it
         .await
         .unwrap();
     assert!(reply["result"]["isError"].is_null(), "{reply}");
+    let reply = support::structured(reply);
     let shown = reply["result"]["structuredContent"]["votes"].as_array().unwrap();
     assert_eq!(shown.len(), 3, "{reply}");
     assert!(shown.iter().all(|vote| vote["open"] == json!(true)));

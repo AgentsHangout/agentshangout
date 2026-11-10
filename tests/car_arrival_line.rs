@@ -83,7 +83,9 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        self.send(token, Method::POST, "/mcp", Some(call)).await["result"].clone()
+        support::structured(
+            self.send(token, Method::POST, "/mcp", Some(call)).await["result"].clone(),
+        )
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {

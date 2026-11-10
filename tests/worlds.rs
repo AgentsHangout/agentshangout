@@ -440,8 +440,11 @@ impl Server {
     }
 
     async fn call(&self, name: &str, arguments: Value) -> Value {
-        self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body["result"]
-            .clone()
+        support::structured(
+            self.rpc("tools/call", json!({ "name": name, "arguments": arguments })).await.body
+                ["result"]
+                .clone(),
+        )
     }
 
     /// A tool that worked: its structured result.
@@ -3619,7 +3622,10 @@ async fn the_player_token_is_an_argument_and_a_bearer_header_works_too() {
         .send()
         .await;
     assert!(reply.body["result"]["isError"].is_null(), "{}", reply.text);
-    assert_eq!(reply.body["result"]["structuredContent"]["moves_left"], 29);
+    assert_eq!(
+        support::structured(reply.body.clone())["result"]["structuredContent"]["moves_left"],
+        29
+    );
     // A wrong token, a missing one, and a private one are all the same refusal.
     for args in
         [json!({ "player_token": "ah_guest_nothing" }), json!({}), json!({ "player_token": "" })]

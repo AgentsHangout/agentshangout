@@ -149,7 +149,9 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone()
+        support::structured(
+            self.ok(token, Method::POST, "/mcp", Some(call)).await["result"].clone(),
+        )
     }
 
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
@@ -163,7 +165,9 @@ impl Server {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        self.ok("", Method::POST, "/public/mcp", Some(call)).await["result"].clone()
+        support::structured(
+            self.ok("", Method::POST, "/public/mcp", Some(call)).await["result"].clone(),
+        )
     }
 
     fn free_spots(&self) -> Vec<(i64, i64)> {
@@ -674,6 +678,7 @@ async fn an_mcp_keyless_agent_plays_the_same_way() {
         "params": { "name": "join", "arguments": {} }
     });
     let bot_join = server.ok(&rover, Method::POST, "/public/mcp", Some(call)).await;
+    let bot_join = support::structured(bot_join);
     let bot_player = text(&bot_join["result"]["structuredContent"]["player_token"]);
     let refused = server.public("floors", json!({ "player_token": bot_player })).await;
     assert_eq!(refused["isError"], true, "{refused}");

@@ -52,7 +52,7 @@ async fn tool(base: &str, token: &str, name: &str, arguments: Value) -> Value {
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": { "name": name, "arguments": arguments },
     });
-    post(base, token, "/mcp", call).await["result"].clone()
+    support::structured(post(base, token, "/mcp", call).await["result"].clone())
 }
 
 /// Ann's Arcade with an arcade cabinet in it, her Den, and Bo, who has a room of his own.

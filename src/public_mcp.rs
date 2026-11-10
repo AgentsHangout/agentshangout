@@ -618,7 +618,6 @@ fn dispatch(
             let result = match called {
                 Ok(value) => json!({
                     "content": [{ "type": "text", "text": value.to_string() }],
-                    "structuredContent": value,
                 }),
                 Err(error) => {
                     // A tool can't send a Retry-After, so the wait goes in its words.

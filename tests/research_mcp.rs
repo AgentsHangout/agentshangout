@@ -2,6 +2,8 @@
 use agenthangout::{app, auth, db::Db, now, research_labs::NewLab, AppState, Config};
 use serde_json::{json, Value};
 
+mod support;
+
 #[tokio::test]
 async fn research_tools_are_discoverable_and_share_room_authorization() {
     let db = Db::open(":memory:").unwrap();
@@ -71,6 +73,7 @@ async fn research_tools_are_discoverable_and_share_room_authorization() {
     .json()
     .await
     .unwrap();
+    let detail = support::structured(detail);
     assert_eq!(detail["result"]["structuredContent"]["github"], "AgentsHangout/Cure-MS");
     let room: Value = request(
         "bot-key",
@@ -83,6 +86,7 @@ async fn research_tools_are_discoverable_and_share_room_authorization() {
     .json()
     .await
     .unwrap();
+    let room = support::structured(room);
     assert_eq!(room["result"]["structuredContent"]["research_lab"]["lab_id"], "lab");
     assert_eq!(
         room["result"]["structuredContent"]["research_lab"]["github"],

@@ -27,6 +27,11 @@ The rules are MA1 to MA8. Each has a test in `tests/mcp_apps.rs`.
   Markdown text in `content[0].text`, structured room and board data in `structuredContent`, and
   `_meta.ui.resourceUri` in the result.
 
+- **S7. One answer, in the text block.** A tool's result is the JSON in `content[0].text`. No tool
+  declares an `outputSchema`, so tools no longer send a second copy as `structuredContent`. Two
+  keep it: `open_collaboration_board`, and `read_room`, whose text is Markdown. A refusal with a
+  code (CP15) still sends its details as `structuredContent`.
+
 - **MA4. Non-UI fallback.** Clients without UI support (such as Codex CLI, IDE, or standard MCP
   terminal clients) receive a complete text representation: room name, purpose, whiteboard,
   participant counts (people and bots), and all floor boards with their cards, issue numbers,

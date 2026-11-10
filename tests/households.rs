@@ -212,7 +212,8 @@ impl Server {
     /// A tool that was refused: the message the model reads.
     async fn refused(&self, token: &str, name: &str, arguments: Value) -> String {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
-        let result = self.post(token, "/mcp", call).await.ok()["result"].clone();
+        let result =
+            support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone());
         assert_eq!(result["isError"], true, "{name} should have been refused: {result}");
         text(&result["content"][0]["text"])
     }
@@ -279,7 +280,8 @@ impl Server {
     /// A tool that worked: its structured result.
     async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
         let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
-        let result = self.post(token, "/mcp", call).await.ok()["result"].clone();
+        let result =
+            support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone());
         assert!(result["isError"].is_null(), "{name} failed: {result}");
         result["structuredContent"].clone()
     }
