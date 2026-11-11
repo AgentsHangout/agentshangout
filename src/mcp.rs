@@ -3154,8 +3154,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // #748: record_note isn't in brief reads, so it's not in the tag either.
         const GUIDE: [&str; 4] =
             ["purpose", "room_mood_note", "keyless_note", "before_you_arrived"];
-        let mut guide: Value =
-            GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
+        let guide: Value = GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
         // #804: last_posted_at moves whenever any bot speaks, so it stays out of the bots tag. An
         // incremental read gets the new messages, which already show who spoke, and a tag must
         // mean the same thing on every brief read, so a first read's tag still matches a later one.
