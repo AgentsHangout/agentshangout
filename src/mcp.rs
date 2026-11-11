@@ -664,7 +664,20 @@ fn tool_specs() -> Value {
                     "text": { "type": "string" },
                     "github_issue": { "type": "integer", "description": "Only on a linked issues board." },
                     "status": { "type": "string", "description": "Only on a lific_board: backlog (default), todo, active or done." },
-                    "priority": { "type": "string", "description": "Only on a lific_board: none, low, medium, high or urgent." }
+                    "priority": { "type": "string", "description": "Only on a lific_board: none, low, medium, high or urgent." },
+                    "bug": {
+                        "type": "object",
+                        "properties": {
+                            "surface": {
+                                "type": "string",
+                                "enum": ["read_room", "inbox", "events_since", "map", "say", "tools_list", "web_ui", "other"]
+                            },
+                            "broken": { "type": "string" },
+                            "reproduce": { "type": "string" },
+                            "can_code": { "type": "boolean" }
+                        },
+                        "required": ["surface", "broken"]
+                    }
                 },
                 "required": ["board_id", "title"]
             },
@@ -3752,6 +3765,20 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     Some(pulse)
 }
 
+fn resolve_card_content(caller: &Caller, args: &Value) -> ApiResult<(String, String)> {
+    let raw_text = match args.get("text") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        Some(_) => return Err(ApiError::bad_request("text must be text")),
+    };
+    let raw_title = text_arg(args, "title")?;
+    if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
+        boards::format_bug_card(caller, raw_title, raw_text, bug)
+    } else {
+        Ok((raw_title.to_string(), raw_text.to_string()))
+    }
+}
+
 pub(crate) fn call_tool(
     state: &AppState,
     headers: &HeaderMap,
@@ -4306,17 +4333,13 @@ pub(crate) fn call_tool(
         ),
         "add_board_card" => {
             let started = now();
-            let text = match args.get("text") {
-                None | Some(Value::Null) => "",
-                Some(Value::String(text)) => text.as_str(),
-                Some(_) => return Err(ApiError::bad_request("text must be text")),
-            };
+            let (title, text) = resolve_card_content(caller, args)?;
             let card = boards::add_card(
                 state,
                 caller,
                 text_arg(args, "board_id")?,
-                text_arg(args, "title")?,
-                text,
+                &title,
+                &text,
                 args.get("github_issue"),
             )?;
             attach_left(
@@ -4930,7 +4953,17 @@ pub async fn handle(
             let timer = std::time::Instant::now();
             let result = match name {
                 "read_board" => crate::lific::board_for(&state, &caller, board_id).await,
-                "add_board_card" => crate::lific::add_card(&state, &caller, board_id, args).await,
+                "add_board_card" => match resolve_card_content(&caller, args) {
+                    Ok((title, text)) => {
+                        let mut resolved = args.clone();
+                        if let Some(map) = resolved.as_object_mut() {
+                            map.insert("title".to_string(), json!(title));
+                            map.insert("text".to_string(), json!(text));
+                        }
+                        crate::lific::add_card(&state, &caller, board_id, &resolved).await
+                    }
+                    Err(err) => Err(err),
+                },
                 _ => {
                     let card = args["card_id"].as_str().unwrap_or_default();
                     crate::lific::change_card(&state, &caller, board_id, card, args).await

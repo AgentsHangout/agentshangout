@@ -1174,3 +1174,184 @@ async fn a_person_tips_someone_elses_bot_within_caps_and_both_histories_show_it(
     server.state.db.delete_person(&ann.id, "Ann").unwrap();
     assert_eq!(server.state.db.bot_tip_count().unwrap(), 0);
 }
+
+// K18 (#770): add_board_card with bug helper formats title and body, validates surface enum, length caps, quiet sign, and guest
+#[tokio::test]
+async fn add_board_card_bug_helper_formats_title_body_and_validates_surface_and_caps() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let jobs = text(&server.board(&ann.key, &room, "jobs", "Jobs").await.ok()["id"]);
+
+    // 1. Success case: formatted title BUG: [surface] title, structured body, plain reporter
+    let added = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": jobs,
+                "title": "payload bloat",
+                "bug": {
+                    "surface": "read_room",
+                    "broken": "returns null closing keys",
+                    "reproduce": "call read_room on ordinary room",
+                    "can_code": true
+                }
+            }),
+        )
+        .await;
+    assert!(added["isError"].is_null(), "{added}");
+    let card_id = added["structuredContent"]["card_id"].as_str().unwrap();
+
+    let boards = server.get(&ann.key, &format!("/api/hangouts/{room}/boards")).await.ok();
+    let card =
+        listed(&boards, "BUG: [read_room] payload bloat").expect("card exists with BUG prefix");
+    assert_eq!(card["id"], card_id);
+    let card_text = card["text"].as_str().unwrap();
+    assert!(card_text.contains("**Surface:** read_room"));
+    assert!(card_text.contains("**Broken:** returns null closing keys"));
+    assert!(card_text.contains("**Reproduction:** call read_room on ordinary room"));
+    assert!(card_text.contains("**Can code fix:** yes"));
+    assert!(card_text.contains("**Reported by:** Scout"));
+    assert!(!card_text.contains("@Scout"), "must not ping reporter with @");
+
+    // 2. Bad surface: rejected with 400 naming allowed surfaces
+    let bad_surface = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": jobs,
+                "title": "bad surface",
+                "bug": {
+                    "surface": "nonexistent_surface",
+                    "broken": "something"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(bad_surface["isError"], true, "{bad_surface}");
+    assert!(
+        bad_surface["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("surface must be one of: read_room, inbox, events_since, map, say, tools_list, web_ui, other"),
+        "{bad_surface}"
+    );
+
+    // 3. Length caps: title over 120 and text over 2000 are rejected
+    let long_title = "a".repeat(110);
+    let title_cap = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": jobs,
+                "title": long_title,
+                "bug": {
+                    "surface": "read_room",
+                    "broken": "something"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(title_cap["isError"], true, "{title_cap}");
+    assert!(
+        title_cap["content"][0]["text"].as_str().unwrap().contains("title is too long"),
+        "{title_cap}"
+    );
+
+    let long_broken = "b".repeat(2000);
+    let text_cap = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": jobs,
+                "title": "text cap",
+                "bug": {
+                    "surface": "read_room",
+                    "broken": long_broken
+                }
+            }),
+        )
+        .await;
+    assert_eq!(text_cap["isError"], true, "{text_cap}");
+    assert!(
+        text_cap["content"][0]["text"].as_str().unwrap().contains("text is too long"),
+        "{text_cap}"
+    );
+
+    // 4. Quiet sign still stops a bot even with bug helper
+    server
+        .post(
+            &ann.key,
+            &format!("/api/floors/{room}/items"),
+            json!({ "kind": items::QUIET, "x": 32, "y": 3 }),
+        )
+        .await
+        .ok();
+    let quiet_refusal = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": jobs,
+                "title": "quiet bug",
+                "bug": {
+                    "surface": "inbox",
+                    "broken": "something"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(quiet_refusal["isError"], true, "{quiet_refusal}");
+    assert_eq!(quiet_refusal["content"][0]["text"], items::QUIET_REASON);
+
+    // 5. Guest refusal still holds when bug is set
+    let (_home, eve) = server.someone("Eve").await;
+    let guest_bot = server.bot(&eve, &room, "GuestBot").await;
+    let second_room = text(
+        &server
+            .post(&ann.key, "/api/hangouts", json!({ "name": "Public Floor", "create_code": CODE }))
+            .await
+            .ok()["hangout"]["id"],
+    );
+    let public_jobs =
+        text(&server.board(&ann.key, &second_room, "jobs", "PublicJobs").await.ok()["id"]);
+    server
+        .put(
+            &ann.key,
+            &format!("/api/floors/{second_room}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    server
+        .post(
+            &eve.key,
+            &format!("/api/floors/{second_room}/walk-in"),
+            json!({ "agent_id": guest_bot.id }),
+        )
+        .await
+        .ok();
+    let guest_refusal = server
+        .tool(
+            &guest_bot.token,
+            "add_board_card",
+            json!({
+                "board_id": public_jobs,
+                "title": "guest bug",
+                "bug": {
+                    "surface": "inbox",
+                    "broken": "something"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(guest_refusal["isError"], true, "{guest_refusal}");
+    assert!(guest_refusal["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("guests can't add to a board"));
+}

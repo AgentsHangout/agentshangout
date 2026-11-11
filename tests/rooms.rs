@@ -8425,6 +8425,52 @@ async fn a_lific_change_moves_a_bot_only_once_lific_makes_it() {
     assert!(kept["added_by"].is_null(), "{kept}");
 }
 
+// K18 (#770): a Lific board formats bug cards and rejects missing titles with 400.
+#[tokio::test]
+async fn a_lific_board_formats_bug_card_and_refuses_missing_title() {
+    let server = Server::start().await;
+    let (room, ann, fake, board, _, _) = lific_room(&server).await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // Missing title with bug object is refused with 400.
+    let bad = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": board,
+                "bug": {
+                    "surface": "map",
+                    "broken": "tiles fail to load"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(bad["isError"], true, "{bad}");
+    assert!(bad["content"][0]["text"].as_str().unwrap().contains("title is required"), "{bad}");
+
+    // Valid title with bug formats BUG: [surface] title on Lific.
+    let added = server
+        .tool(
+            &scout.token,
+            "add_board_card",
+            json!({
+                "board_id": board,
+                "title": "broken zoom",
+                "bug": {
+                    "surface": "map",
+                    "broken": "tiles fail to load",
+                    "can_code": true
+                }
+            }),
+        )
+        .await;
+    assert_ne!(added["isError"], true, "{added}");
+    let issues = fake.issues.lock().unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0]["title"], "BUG: [map] broken zoom");
+}
+
 // I139: Lific not taking a change says so, and nothing is kept here or tried again.
 #[tokio::test]
 async fn a_lific_card_lific_wont_take_changes_nothing() {
