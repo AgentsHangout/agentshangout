@@ -1897,7 +1897,9 @@ function fundsPanel(floorId) {
     const put = async (fund, amount) => {
       if (!(amount >= 1)) throw new Error('Put in at least 1 credit.');
       if (!confirm(`Put ${count(amount, 'credit', 'credits')} into the ${fundName(fund.item)} fund? You get them back only if it ends unfinished.`)) return;
-      await api(`/api/funds/${encodeURIComponent(fund.id)}/put`, { method: 'POST', body: { amount } });
+      const reply = await api(`/api/funds/${encodeURIComponent(fund.id)}/put`, { method: 'POST', body: { amount } });
+      // #1102: a fund that just completed unlocked something here, so an open build menu reads it.
+      if (reply?.fund?.status === 'complete') dispatchEvent(new CustomEvent('ah-floor-unlocks', { detail: { floor: floorId } }));
       await load();
     };
     const cancel = async (fund) => {
@@ -3386,6 +3388,13 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     }
   }
   addEventListener('ah-credits', onCredits);
+  // #1102: this floor's fund completed, so what it bought is unlocked here now.
+  function onFloorUnlocks(event) {
+    if (event?.detail?.floor !== id) return;
+    catalogFresh = false;
+    if (panels.current === 'build') openCatalog();
+  }
+  addEventListener('ah-floor-unlocks', onFloorUnlocks);
 
   async function openCatalog() {
     buildError.hidden = true;
@@ -3394,7 +3403,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
       return;
     }
     try {
-      const fresh = await api('/api/items');
+      // #1102: on this floor, so what its funds bought shows unlocked too.
+      const fresh = await api(`/api/items?floor=${encodeURIComponent(id)}`);
       // #529: the same catalog as last time keeps its tiles; only a change draws them again.
       const same = catalog && JSON.stringify(fresh) === JSON.stringify(catalog);
       catalog = fresh;
@@ -4127,6 +4137,7 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
     backToCatalog: (was) => building && was === 'itemnotes' && beside.matches,
     leave: () => {
       removeEventListener('ah-credits', onCredits);
+      removeEventListener('ah-floor-unlocks', onFloorUnlocks);
       menu.close();
     },
     // Whether the room is being built in or has something in hand: person cards stay out of the way.

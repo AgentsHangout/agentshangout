@@ -17,8 +17,10 @@ const state = { funds: [
   { id: 'f1', item: 'winter', target: 15, total: 6, yours: 2, started_by_you: true, status: 'open', ends_at: 1800000000 },
   { id: 'f2', item: 'piece:koi_pond', target: 150, total: 150, yours: 0, started_by_you: false, status: 'complete', ends_at: 1800000000 },
 ], can_start: true };
-const api = async (path, opts) => { calls.push([path, opts?.method || 'GET', JSON.stringify(opts?.body || null)]); if (path === '/api/credits') return { grand: [{ kind: 'koi_pond', label: 'Koi pond', cost: 150 }], packs: [{ pack: 'beach', cost: 25, over: false, sold_alone: [{ kind: 'crab', label: 'Crab', cost: 2 }] }, { pack: 'halloween', cost: 1, over: true }] }; if (path.endsWith('/funds') && !opts) return state; return {}; };
-const ctx = { h, api, confirm: () => true, alert: () => {}, Date, Math, Number, String, JSON };
+let completeNext = false;
+const api = async (path, opts) => { if (path.endsWith('/put') && completeNext) { completeNext = false; return { put: 9, fund: { status: 'complete' } }; } calls.push([path, opts?.method || 'GET', JSON.stringify(opts?.body || null)]); if (path === '/api/credits') return { grand: [{ kind: 'koi_pond', label: 'Koi pond', cost: 150 }], packs: [{ pack: 'beach', cost: 25, over: false, sold_alone: [{ kind: 'crab', label: 'Crab', cost: 2 }] }, { pack: 'halloween', cost: 1, over: true }] }; if (path.endsWith('/funds') && !opts) return state; return {}; };
+const events = [];
+const ctx = { h, api, confirm: () => true, alert: () => {}, Date, Math, Number, String, JSON, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, dispatchEvent: (event) => events.push(event) };
 vm.createContext(ctx);
 vm.runInContext(helpers + actSrc + src + '\nthis.panel = fundsPanel("room1"); this.fundName = fundName;', ctx);
 await ctx.panel.load();
@@ -33,6 +35,12 @@ amount.value = '4';
 await actions.kids[1].attrs.onclick({ currentTarget: {} });
 const put = calls.find((c) => c[0] === '/api/funds/f1/put');
 if (!put || put[2] !== '{"amount":4}') throw new Error(JSON.stringify(calls));
+if (events.length) throw new Error('an unfinished put announced an unlock');
+// #1102: a put that completes the fund tells an open build menu on this floor.
+completeNext = true;
+amount.value = '9';
+await actions.kids[1].attrs.onclick({ currentTarget: {} });
+if (events.length !== 1 || events[0].type !== 'ah-floor-unlocks' || events[0].detail.floor !== 'room1') throw new Error(JSON.stringify(events));
 await actions.kids[2].attrs.onclick({ currentTarget: {} });
 if (!calls.find((c) => c[0] === '/api/funds/f1/cancel')) throw new Error('no cancel');
 const startRow = list.kids[2];

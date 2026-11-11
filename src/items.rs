@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use axum::{
-    extract::{rejection::JsonRejection, Path, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -2595,12 +2595,30 @@ fn body_of<T>(body: Result<Json<T>, JsonRejection>) -> ApiResult<T> {
 /// I22: what a person can use and what each locked thing needs. A bot gets 403 as for `/api/friends`
 /// (FR2), because a count of its owner's friends is no more its business than their names, and
 /// nothing here is anything a bot can do (I20).
-async fn catalog(State(state): State<AppState>, caller: Caller) -> ApiResult<Json<Value>> {
+async fn catalog(
+    State(state): State<AppState>,
+    caller: Caller,
+    Query(on): Query<CatalogFloor>,
+) -> ApiResult<Json<Value>> {
     ops::require_human(&caller, "see the catalog")?;
     let friends = state.db.friend_count(&caller.person_id)?;
     let god = god_mode::is_on_for(&state, &caller)?;
-    let bought = state.db.bought_packs(&caller.person_id)?;
+    let mut bought = state.db.bought_packs(&caller.person_id)?;
+    // #1102: on a floor the caller is in, what its funds bought counts too (HC61), as placing it
+    // does. A floor they aren't in is ignored, so this never says what another floor has.
+    if let Some(floor) = on.floor.as_deref().filter(|floor| !floor.is_empty()) {
+        if state.in_room(&caller, floor)? {
+            bought.extend(state.db.floor_unlock_items(floor)?);
+        }
+    }
     Ok(Json(catalog_json(friends, god, &bought)))
+}
+
+/// #1102: the floor build mode is on, if any.
+#[derive(Deserialize)]
+struct CatalogFloor {
+    #[serde(default)]
+    floor: Option<String>,
 }
 
 /// L40: the catalog for a bot furnishing its project's room, unlocked as its owner has it (I19).
