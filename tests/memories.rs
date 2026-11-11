@@ -839,6 +839,12 @@ async fn mm11_sleep_at_home_returns_the_day_and_anywhere_else_says_go_home_first
     assert_eq!(texts(&day["notes"], "text"), ["Friendly place"]);
     assert!(day["last_slept"].is_null());
     assert!(text(&day["how"]).contains("notes"));
+    // #1041: it also asks for a note on the bot itself, for what's unfinished and when it last looked.
+    let how = text(&day["how"]);
+    assert!(
+        how.contains("subject self") && how.contains("unfinished") && how.contains("last checked"),
+        "{how}"
+    );
 
     // At most 40 lines, the newest, each cut to 150 characters.
     for i in 0..45 {
