@@ -845,18 +845,20 @@ fn floor_grants(state: &AppState, floor_id: &str, word: &str) -> ApiResult<bool>
 
 /// HC14: a kind, paint or flooring from a pack that costs credits is only for someone who bought
 /// that pack, and their bots, or someone with God mode on (W79), which unlocks everything, or for
-/// anyone who may build on a floor whose fund unlocked it (HC61). A grand piece is only for someone
-/// who bought it, or with God mode on (HC65). Taking one down or out never needs it.
+/// anyone who may build on a floor whose fund unlocked it (HC61). A grand piece is for someone who
+/// bought it, a floor whose fund bought it (#1097), or God mode (HC65). Taking one down or out never
+/// needs it.
 pub fn may_use_paid(
     state: &AppState,
     person_id: &str,
     floor_id: &str,
     word: &str,
 ) -> ApiResult<()> {
-    // HC65: a grand piece is for someone who bought it, or with God mode on. A fund does not
-    // unlock one: piece_price is None, so it is not a fund target (HC59).
+    // HC65: a grand piece is for someone who bought it, or with God mode on, or for anyone who may
+    // build on a floor whose fund bought it (#1097).
     if let Some(price) = grand_price(word) {
         if !state.db.has_bought(person_id, &format!("{PIECE}{word}"))?
+            && !state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))?
             && !god_mode::is_on(state, person_id)?
         {
             return Err(ApiError::forbidden(format!(

@@ -1844,14 +1844,20 @@ const FUND_STATUS = {
   refunded: 'Ended: everyone got their credits back',
   cancelled: 'Cancelled: everyone got their credits back',
 };
-// What a member can start a fund for: packs on sale, and the pieces sold on their own.
+// What a member can start a fund for: the grand pieces first (#1097), then packs on sale and the
+// pieces sold on their own.
 function fundChoices(credits) {
-  return (credits?.packs || []).filter((offer) => !offer.over).flatMap((offer) => [
-    { item: offer.pack, label: `${fundName(offer.pack)} · ${count(offer.cost, 'credit', 'credits')}` },
-    ...(offer.sold_alone || []).map((piece) => ({
-      item: `piece:${piece.kind}`, label: `${piece.label} · ${count(piece.cost, 'credit', 'credits')}`,
+  return [
+    ...(credits?.grand || []).map((piece) => ({
+      item: `piece:${piece.kind}`, label: `${piece.label} (grand) · ${count(piece.cost, 'credit', 'credits')}`,
     })),
-  ]);
+    ...(credits?.packs || []).filter((offer) => !offer.over).flatMap((offer) => [
+      { item: offer.pack, label: `${fundName(offer.pack)} · ${count(offer.cost, 'credit', 'credits')}` },
+      ...(offer.sold_alone || []).map((piece) => ({
+        item: `piece:${piece.kind}`, label: `${piece.label} · ${count(piece.cost, 'credit', 'credits')}`,
+      })),
+    ]),
+  ];
 }
 function fundRow(fund, { put, cancel, error }) {
   const left = Math.max(0, fund.target - fund.total);
