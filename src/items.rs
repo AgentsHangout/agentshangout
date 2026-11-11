@@ -132,6 +132,7 @@ const ART: &str = "art";
 const WORK: &str = "work";
 const FALL: &str = "fall";
 const WINTER: &str = "winter";
+const BEACH: &str = "beach";
 const STARGAZER: &str = "stargazer";
 const COINS: &str = "coins";
 const GRAND: &str = "grand";
@@ -141,7 +142,7 @@ const SIGNS: &str = "signs";
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 21] = [
+pub const CATEGORIES: [(&str, &str); 22] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -158,6 +159,7 @@ pub const CATEGORIES: [(&str, &str); 21] = [
     (WORK, "Work and study"),
     (FALL, "Fall"),
     (WINTER, "Winter"),
+    (BEACH, "Beach shack"),
     (STARGAZER, "Stargazer"),
     (COINS, "Coin sinks"),
     (GRAND, "Grand pieces"),
@@ -256,7 +258,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 166] = [
+pub static CATALOG: [Kind; 179] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -426,6 +428,17 @@ pub static CATALOG: [Kind; 166] = [
     piece("knit_blanket", "Knitted blanket", WINTER, STARTER, 3, feels("cozy"), (1, 1)),
     piece("wood_stove", "Wood stove", WINTER, STARTER, 5, feels("cozy"), (2, 1)),
     piece("log_pile", "Log pile", WINTER, STARTER, 2, None, (2, 1)),
+    // #1065: the Beach shack pack. All starter, like the other packs (I29).
+    piece("palm_tree", "Palm tree", BEACH, STARTER, 4, feels("calm"), (2, 1)),
+    piece("surfboard", "Surfboard", BEACH, STARTER, 3, feels("playful"), (1, 1)),
+    piece("beach_umbrella", "Beach umbrella", BEACH, STARTER, 3, feels("calm"), (1, 1)),
+    piece("tiki_bar", "Tiki bar", BEACH, STARTER, 6, feels("playful"), (3, 2)),
+    piece("hammock", "Hammock", BEACH, STARTER, 4, feels("calm"), (3, 1)),
+    piece("sandcastle", "Sandcastle", BEACH, STARTER, 3, feels("playful"), (1, 1)),
+    piece("seashells", "Seashells", BEACH, STARTER, 2, feels("calm"), (1, 1)),
+    piece("tiki_torch", "Tiki torch", BEACH, STARTER, 3, feels("cozy"), (1, 1)),
+    piece("cooler", "Cooler", BEACH, STARTER, 1, None, (1, 1)),
+    piece("beach_towel", "Beach towel", BEACH, STARTER, 2, feels("calm"), (2, 1)).flat(),
     piece("orrery", "Brass orrery", STARGAZER, STARTER, 4, feels("inspired"), (1, 1)),
     piece("star_globe", "Star globe", STARGAZER, STARTER, 3, feels("inspired"), (1, 1)),
     piece("rocket_model", "Model rocket", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
@@ -452,6 +465,10 @@ pub static CATALOG: [Kind; 166] = [
     piece("igloo", "Igloo", COINS, STARTER, 5, feels("cozy"), (3, 2)),
     piece("reindeer", "Reindeer", COINS, STARTER, 4, feels("playful"), (2, 1)),
     piece("snowball_pile", "Snowball pile", COINS, STARTER, 2, feels("playful"), (1, 1)),
+    // #1065: coin sinks beside the Beach shack pack.
+    piece("crab", "Crab", COINS, STARTER, 3, feels("playful"), (1, 1)),
+    piece("bottle_message", "Message in a bottle", COINS, STARTER, 4, feels("inspired"), (1, 1)),
+    piece("lifeguard_tower", "Lifeguard tower", COINS, STARTER, 6, feels("playful"), (2, 2)),
     // HC65: grand pieces, one-of-a-kind showpieces priced in GRAND_PIECES, not by piece_price.
     piece("koi_pond", "Koi pond", GRAND, STARTER, 9, feels("calm"), (4, 2)).flat(),
     piece("grand_piano", "Grand piano", GRAND, STARTER, 10, feels("inspired"), (3, 2))
@@ -498,7 +515,7 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 4] = [
+pub const PACKS: [Pack; 5] = [
     Pack {
         pack: "fall",
         paint: "harvest",
@@ -590,6 +607,35 @@ pub const PACKS: [Pack; 4] = [
         ],
     },
     Pack {
+        pack: "beach",
+        paint: "ocean",
+        flooring: "sand",
+        over: false,
+        cost: 25,
+        items: &[
+            // Either side of the door.
+            at("tiki_torch", 17, 13),
+            at("tiki_torch", 22, 13),
+            // The palm and the umbrella, in the gaps either side of the whiteboard.
+            at("palm_tree", 10, 0),
+            at("beach_umbrella", 28, 0),
+            // Kept low along the back wall between them.
+            at("seashells", 13, 0),
+            at("cooler", 15, 0),
+            at("surfboard", 24, 0),
+            at("sandcastle", 26, 0),
+            // Round the table, where the bots can see it.
+            at("seashells", 11, 2),
+            at("sandcastle", 10, 7),
+            at("beach_towel", 12, 10),
+            // Somewhere to lie about, on the open side of the room.
+            at("hammock", 30, 4),
+            at("tiki_bar", 30, 8),
+            at("cooler", 34, 9),
+            at("palm_tree", 25, 12),
+        ],
+    },
+    Pack {
         pack: "stargazer",
         paint: "nebula",
         flooring: "starfield",
@@ -641,7 +687,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 12] = [
+pub const SOLD_ALONE: [(&str, &str); 15] = [
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -655,6 +701,10 @@ pub const SOLD_ALONE: [(&str, &str); 12] = [
     ("igloo", "winter"),
     ("reindeer", "winter"),
     ("snowball_pile", "winter"),
+    // #1065.
+    ("crab", "beach"),
+    ("bottle_message", "beach"),
+    ("lifeguard_tower", "beach"),
 ];
 
 /// HC65: grand pieces and their prices, 25 to 100. These are bought only on their own, as

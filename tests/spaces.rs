@@ -932,7 +932,7 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
     let page = include_str!("../web/room.js");
     for paint in [
         "dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost",
-        "nebula",
+        "nebula", "ocean",
     ] {
         // HC14: a paint from a pack that costs credits waits for the pack to be bought.
         let chosen = server.put(&ann.key, &path, json!({ "paint": paint })).await;
@@ -947,7 +947,7 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
         );
     }
     for flooring in
-        ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow", "starfield"]
+        ["oak", "walnut", "tile", "carpet", "grass", "crypt", "leaves", "snow", "starfield", "sand"]
     {
         let chosen = server.put(&ann.key, &path, json!({ "flooring": flooring })).await;
         if agenthangout::items::paid_pack_with(flooring).is_some() {
