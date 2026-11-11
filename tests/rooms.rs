@@ -3298,6 +3298,38 @@ async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
     server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
 }
 
+// The 4x2 planetarium dome, sold on its own beside Stargazer, fits the placing grid once bought.
+// A starter is at most 2 deep, so the biggest coin piece is 4 wide rather than 3x3.
+#[tokio::test]
+async fn the_planetarium_dome_is_bought_on_its_own_and_placed_on_four_by_two_cells() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 20,
+            100,
+            now(),
+        )
+        .unwrap();
+    server.place(&ann.key, &room, "planetarium", (30, 2)).await.refused(StatusCode::FORBIDDEN);
+    let bought = server
+        .post(&ann.key, "/api/credits/spend", json!({ "pack": "piece:planetarium" }))
+        .await
+        .ok();
+    assert_eq!(bought["balance"], 20 - items::piece_price("planetarium").unwrap(), "{bought}");
+    server.place(&ann.key, &room, "planetarium", (30, 2)).await.ok();
+    // Its cells are taken now.
+    server.place(&ann.key, &room, items::QUIET, (33, 3)).await.refused(StatusCode::CONFLICT);
+}
+
 // I27
 
 #[tokio::test]

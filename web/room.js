@@ -4137,6 +4137,68 @@ function paintIceRink(g, x, y, t, wide, deep) {
   r(g, '#dff2fb', left + Math.round(w * 0.5), top + Math.round(h * 0.6), Math.round(w * 0.3), 1);
   r(g, '#9ccbe3', left + Math.round(w / 2), top + 2, 1, h - 4);
 }
+// More coin sinks beside Stargazer and Winter.
+function paintUfo(g, x, y, t) {
+  const blink = Math.floor((t || 0) / 300) % 3;
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#8a8f9e', x - 3, y - 8, 1, 6);
+  r(g, '#8a8f9e', x + 2, y - 8, 1, 6);
+  r(g, '#9aa3b5', x - 12, y - 14, 24, 5);
+  r(g, '#c9ced8', x - 12, y - 14, 24, 1);
+  r(g, '#9bd0ff', x - 6, y - 21, 12, 7);
+  r(g, '#cfe9ff', x - 4, y - 20, 3, 2);
+  for (let i = 0; i < 3; i++) r(g, i === blink ? '#ffd24d' : '#5a6070', x - 8 + i * 7, y - 11, 2, 1);
+}
+function paintPlanetarium(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#d9d4c5', x - 16, y - 14, 32, 12);
+  r(g, '#b9b3a2', x - 16, y - 4, 32, 2);
+  r(g, '#1b2030', x - 3, y - 11, 6, 9);
+  r(g, '#e8e4d8', x - 14, y - 22, 28, 8);
+  r(g, '#e8e4d8', x - 10, y - 28, 20, 6);
+  r(g, '#e8e4d8', x - 5, y - 31, 10, 3);
+  r(g, '#1b2030', x - 2, y - 30, 4, 12);
+  r(g, '#ffd24d', x - 1, y - 27, 1, 1);
+  r(g, '#ffffff', x - 10, y - 21, 1, 1);
+}
+function paintSatellite(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#8a8f9e', x - 1, y - 5, 2, 4);
+  r(g, '#c9ced8', x - 2, y - 9, 4, 4);
+  r(g, '#3a6fb0', x - 7, y - 9, 4, 3);
+  r(g, '#3a6fb0', x + 3, y - 9, 4, 3);
+  r(g, '#f2f4f8', x - 1, y - 12, 2, 3);
+}
+function paintIgloo(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#eaf4fb', x - 16, y - 12, 32, 10);
+  r(g, '#eaf4fb', x - 12, y - 18, 24, 6);
+  r(g, '#eaf4fb', x - 6, y - 21, 12, 3);
+  r(g, '#bcd6e6', x - 16, y - 8, 32, 1);
+  r(g, '#bcd6e6', x - 12, y - 14, 24, 1);
+  r(g, '#bcd6e6', x - 4, y - 18, 1, 4);
+  r(g, '#bcd6e6', x + 5, y - 12, 1, 4);
+  r(g, '#2c3a48', x - 4, y - 8, 8, 6);
+}
+function paintReindeer(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#8a5a34', x - 7, y - 10, 12, 5);
+  r(g, '#6b4a2e', x - 6, y - 5, 2, 4);
+  r(g, '#6b4a2e', x + 2, y - 5, 2, 4);
+  r(g, '#8a5a34', x + 4, y - 15, 4, 6);
+  r(g, '#c0392b', x + 8, y - 13, 2, 2);
+  r(g, '#d9c08a', x + 3, y - 19, 1, 4);
+  r(g, '#d9c08a', x + 7, y - 19, 1, 4);
+  r(g, '#d9c08a', x + 2, y - 19, 2, 1);
+  r(g, '#d9c08a', x + 7, y - 19, 2, 1);
+}
+function paintSnowballPile(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#f5f9fc', x - 5, y - 4, 4, 3);
+  r(g, '#f5f9fc', x + 1, y - 4, 4, 3);
+  r(g, '#f5f9fc', x - 2, y - 7, 4, 3);
+  r(g, '#cfe0ec', x - 5, y - 2, 10, 1);
+}
 function paintLunarRover(g, x, y) {
   r(g, SHADOW, x - 9, y - 1, 18, 1);
   r(g, '#8a8f9e', x - 8, y - 6, 16, 3);
@@ -4503,6 +4565,12 @@ const ITEMS = {
   snow_globe: { paint: paintSnowGlobe, rise: 14 },
   cocoa_cart: { paint: paintCocoaCart, side: paintCocoaCart, rise: 18 },
   ice_rink: { paint: paintIceRink, rise: 0, flat: true },
+  ufo: { paint: paintUfo, rise: 22 },
+  planetarium: { paint: paintPlanetarium, side: paintPlanetarium, rise: 32 },
+  satellite: { paint: paintSatellite, rise: 13 },
+  igloo: { paint: paintIgloo, side: paintIgloo, rise: 22 },
+  reindeer: { paint: paintReindeer, side: paintReindeer, rise: 20 },
+  snowball_pile: { paint: paintSnowballPile, rise: 8 },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.
