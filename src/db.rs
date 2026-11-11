@@ -41,6 +41,18 @@ pub use contributions::{
     PAIR_CONTRIBUTIONS_A_WEEK,
 };
 pub use funds::{FundHead, FundView, NewFund, NewPut, PutIn, FUND_DAYS};
+
+pub fn balance_sql(person: &str) -> String {
+    Db::balance_sql(person)
+}
+
+pub fn paid_on_day_sql(person: &str, day: &str) -> String {
+    Db::paid_on_day_sql(person, day)
+}
+
+pub fn held_credits_sql(person: &str, first_gathering_pattern: &str) -> String {
+    Db::held_credits_sql(person, first_gathering_pattern)
+}
 mod bridge;
 pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
@@ -4128,6 +4140,13 @@ pub struct CreditTotals {
     pub coins: i64,
 }
 
+impl CreditTotals {
+    /// Total paid minus total spent.
+    pub fn balance(&self) -> i64 {
+        self.paid - self.spent
+    }
+}
+
 /// HC20: the open bounty on `card` that `bot` may answer, or why it can't. One answer per bot, so
 /// one bot can't fill a question's 20 answers by itself.
 fn answer_refusal(
@@ -5651,7 +5670,7 @@ impl Db {
         })
     }
 
-    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
@@ -14126,6 +14145,52 @@ impl Db {
         tx.commit()
     }
 
+    /// HC15: the spendable-balance SQL expression for a person bound to parameter `person`.
+    /// Aggregates all credit earnings across every rule that pays, minus spends.
+    pub(crate) fn balance_sql(person: &str) -> String {
+        format!(
+            "(SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = {person})
+           + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = {person})
+           - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = {person})
+           + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties
+               WHERE (sponsor_id = {person} AND status = 'refunded'
+                      AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id = question_bounties.id))
+                  OR (recipient_id = {person} AND status = 'paid'))
+           + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = {person})
+           + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE recipient_id = {person})
+           + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops WHERE person_id = {person})"
+        )
+    }
+
+    /// HC6: everything that paid `person` on UTC day `day`, from every rule that pays.
+    pub(crate) fn paid_on_day_sql(person: &str, day: &str) -> String {
+        format!(
+            "(SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = {person} AND day = {day})
+           + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = {person} AND day = {day})
+           + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE recipient_id = {person} AND day = {day})
+           + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops WHERE person_id = {person} AND day = {day})
+           + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = {person} AND day = {day})"
+        )
+    }
+
+    /// HC25, HC28, HC35, HC42, HC53, HC55: credits held back from funding questions or tips.
+    pub(crate) fn held_credits_sql(person: &str, first_gathering_pattern: &str) -> String {
+        format!(
+            "MAX(0, (SELECT COALESCE(SUM(amount), 0) FROM credit_paid
+                     WHERE person_id = {person} AND source_id LIKE {first_gathering_pattern})
+                  + (SELECT COALESCE(SUM(q.amount), 0) FROM question_bounties q
+                     JOIN starter_questions s ON s.bounty_id = q.id
+                     WHERE q.recipient_id = {person} AND q.status = 'paid')
+                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = {person})
+                  + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = {person})
+                  + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE recipient_id = {person})
+                  + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops WHERE person_id = {person})
+                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends
+                     WHERE person_id = {person} AND pack NOT LIKE 'question:%'
+                       AND pack NOT LIKE 'tip:%' AND pack NOT LIKE 'burn:%'))"
+        )
+    }
+
     /// HC11 and HC15: what someone has been paid and has spent, and what paid on `today`.
     pub fn credit_totals(&self, person_id: &str, today: i64) -> rusqlite::Result<CreditTotals> {
         let conn = self.conn();
@@ -14315,7 +14380,8 @@ impl Db {
         if open >= OPEN_QUESTIONS {
             return Ok(Some("you have 3 funded questions open; cancel or award one first"));
         }
-        let balance: i64 = tx.query_row(&format!("SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1) - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1) + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid')) + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1) + {} + {}", contributions::CONTRIBUTIONS_PAID, coin_drops::COIN_DROPS_PAID), [sponsor], |r| r.get(0))?;
+        let balance: i64 =
+            tx.query_row(&format!("SELECT {}", Self::balance_sql("?1")), [sponsor], |r| r.get(0))?;
         if balance < amount {
             return Ok(Some("not enough credits"));
         }
@@ -14325,24 +14391,7 @@ impl Db {
         // it all to one person. Packs are paid for from them first, so only what packs haven't used
         // is held back.
         let held: i64 = tx.query_row(
-            &format!(
-                "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
-                                WHERE person_id=?1 AND source_id LIKE ?2)
-                             + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
-                                JOIN starter_questions s ON s.bounty_id=q.id
-                                WHERE q.recipient_id=?1 AND q.status='paid')
-                             + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts
-                                WHERE person_id=?1)
-                             + (SELECT COALESCE(SUM(amount),0) FROM bot_tips
-                                WHERE recipient_id=?1)
-                             + {}
-                             + {}
-                             - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
-                                WHERE person_id=?1 AND pack NOT LIKE 'question:%'
-                                  AND pack NOT LIKE 'tip:%' AND pack NOT LIKE 'burn:%'))",
-                contributions::CONTRIBUTIONS_PAID,
-                coin_drops::COIN_DROPS_PAID
-            ),
+            &format!("SELECT {}", held_credits_sql("?1", "?2")),
             params![sponsor, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
@@ -14415,42 +14464,15 @@ impl Db {
         if old_enough < 2 {
             return Ok(Err("both accounts have to be at least 7 days old to tip"));
         }
-        let balance: i64 = tx.query_row(
-            &format!(
-                "SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1)
-                      + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1)
-                      - (SELECT COALESCE(SUM(amount),0) FROM credit_spends WHERE person_id=?1)
-                      + (SELECT COALESCE(SUM(amount),0) FROM question_bounties WHERE (sponsor_id=?1 AND status='refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id=?1 AND status='paid'))
-                      + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1)
-                      + {} + {}",
-                contributions::CONTRIBUTIONS_PAID,
-                coin_drops::COIN_DROPS_PAID
-            ),
-            [tipper_id],
-            |r| r.get(0),
-        )?;
+        let balance: i64 =
+            tx.query_row(&format!("SELECT {}", Self::balance_sql("?1")), [tipper_id], |r| {
+                r.get(0)
+            })?;
         if balance < amount {
             return Ok(Err("not enough credits"));
         }
         let held: i64 = tx.query_row(
-            &format!(
-                "SELECT MAX(0, (SELECT COALESCE(SUM(amount),0) FROM credit_paid
-                                WHERE person_id=?1 AND source_id LIKE ?2)
-                             + (SELECT COALESCE(SUM(q.amount),0) FROM question_bounties q
-                                JOIN starter_questions s ON s.bounty_id=q.id
-                                WHERE q.recipient_id=?1 AND q.status='paid')
-                             + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts
-                                WHERE person_id=?1)
-                             + (SELECT COALESCE(SUM(amount),0) FROM bot_tips
-                                WHERE recipient_id=?1)
-                             + {}
-                             + {}
-                             - (SELECT COALESCE(SUM(amount),0) FROM credit_spends
-                                WHERE person_id=?1 AND pack NOT LIKE 'question:%'
-                                  AND pack NOT LIKE 'tip:%' AND pack NOT LIKE 'burn:%'))",
-                contributions::CONTRIBUTIONS_PAID,
-                coin_drops::COIN_DROPS_PAID
-            ),
+            &format!("SELECT {}", held_credits_sql("?1", "?2")),
             params![tipper_id, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
@@ -14479,11 +14501,7 @@ impl Db {
             return Ok(Err("you two have tipped each other 3 times this week"));
         }
         let paid_today: i64 = tx.query_row(
-            "SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
-                  + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1 AND day=?2)
-                  + (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2)
-                  + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)
-                  + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1 AND day=?2)",
+            &format!("SELECT {}", Self::paid_on_day_sql("?1", "?2")),
             params![recipient, today],
             |r| r.get(0),
         )?;
@@ -14697,16 +14715,10 @@ impl Db {
         )? {
             return Ok(Spend::AlreadyHave);
         }
-        let balance: i64 = tx.query_row(
-            &format!("SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
-                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties WHERE (sponsor_id = ?1 AND status = 'refunded' AND NOT EXISTS (SELECT 1 FROM starter_questions s WHERE s.bounty_id=question_bounties.id)) OR (recipient_id = ?1 AND status = 'paid'))
-                  + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = ?1)
-                  + {} + {}", contributions::CONTRIBUTIONS_PAID, coin_drops::COIN_DROPS_PAID),
-            [person_id],
-            |row| row.get(0),
-        )?;
+        let balance: i64 =
+            tx.query_row(&format!("SELECT {}", Self::balance_sql("?1")), [person_id], |row| {
+                row.get(0)
+            })?;
         if balance < amount {
             return Ok(Spend::TooFew { balance });
         }

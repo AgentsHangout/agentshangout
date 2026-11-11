@@ -15,10 +15,6 @@ pub const CONTRIBUTIONS_A_DAY: i64 = 3;
 /// HC40: how many payouts there are between the same two people in 7 days, whichever way.
 pub const PAIR_CONTRIBUTIONS_A_WEEK: i64 = 2;
 
-/// HC37: what accepted contributions have paid the person bound to `?1`, for every balance.
-pub(super) const CONTRIBUTIONS_PAID: &str =
-    "(SELECT COALESCE(SUM(amount),0) FROM contribution_payouts WHERE recipient_id=?1)";
-
 /// HC36: why `bot` can't offer a contribution on `card` now, if it can't.
 fn offer_refusal(
     conn: &Connection,
@@ -116,12 +112,11 @@ fn accept_refusal(
     // HC39: a few a day for each person, and HC6's cap with everything else that paid that day.
     let today = now.div_euclid(day);
     let (count_today, paid_today): (i64, i64) = conn.query_row(
-        "SELECT (SELECT COUNT(*) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2),
-                (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
-                  WHERE recipient_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1 AND day=?2)",
+        &format!(
+            "SELECT (SELECT COUNT(*) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2),
+                    {}",
+            super::paid_on_day_sql("?1", "?2")
+        ),
         params![recipient, today],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;

@@ -100,26 +100,8 @@ fn is_constraint(error: &rusqlite::Error) -> bool {
 
 /// The same balance `spend_credits` reads, so held credits (a first gathering, a merged pull
 /// request, a drawn coin) can go in, and credits already held by a put cannot go in twice.
-/// Contributions and coins use the shared sums, so a change there can't leave this behind.
 fn balance_of(conn: &Connection, person_id: &str) -> rusqlite::Result<i64> {
-    conn.query_row(
-        &format!(
-            "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
-                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties
-                      WHERE (sponsor_id = ?1 AND status = 'refunded'
-                             AND NOT EXISTS (SELECT 1 FROM starter_questions s
-                                              WHERE s.bounty_id = question_bounties.id))
-                         OR (recipient_id = ?1 AND status = 'paid'))
-                  + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = ?1)
-                  + {} + {}",
-            super::contributions::CONTRIBUTIONS_PAID,
-            super::coin_drops::COIN_DROPS_PAID
-        ),
-        [person_id],
-        |row| row.get(0),
-    )
+    conn.query_row(&format!("SELECT {}", super::balance_sql("?1")), [person_id], |row| row.get(0))
 }
 
 fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<Option<FundView>> {
