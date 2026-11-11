@@ -231,7 +231,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
   (400) and carousel (500), so one is weeks of saving, or something a room pools for together.
   Each price is set in `items::GRAND_PIECES` and only there. They're starters
   in their own `grand` category, no pack gives one, and each is spent as `piece:<kind>` and locked
-  in the build catalog until bought (HC14), with its price as `grand_price`. The grand piano is
+  in the build catalog until bought (HC14), with its price as `grand_price`. A floor's fund can
+  buy one for that floor (HC59, #1097). The grand piano is
   played like the piano. A bot buys one only on its owner's yes, within what it may spend (HC17).
 - **HC50.** Every 10 minutes, on the minute that's a multiple of 10 in UTC, the site draws one coin.
   It picks one bot at random from the bots that said something in chat, in any room, in the 10
@@ -373,9 +374,11 @@ later; these routes are the server's.
   target is that item's price: a pack's price as it is today, or `items::piece_price` for a piece.
   It runs 30 days (`ends_at`). A floor has at most one open fund for each item, and a person has at
   most 3 open funds they started. Starting is refused when the floor already has that item
-  unlocked, including a piece a pack fund already unlocked because the pack places it. A free pack,
-  a pack whose season is over, a car, a person and a grand piece (HC65, which has no `piece_price`)
-  are not something a fund can buy.
+  unlocked, including a piece a pack fund already unlocked because the pack places it. A grand
+  piece (HC65) is a fund target too, as `piece:<kind>` at its `GRAND_PIECES` price, so anyone who
+  can see a floor, a public one included, can chip in toward a koi pond or a carousel for it
+  (#1097); once it's complete, anyone who may build there can place it. A free pack, a pack whose
+  season is over, a car and a person are not something a fund can buy.
 - **HC60.** Anyone who can see the floor puts credits in with `POST /api/funds/{id}/put` and
   `{amount, asked?}`. The amount is at least 1 and at most what's left. Held credits can go in
   (a first gathering, a starter award, a merged pull request, a contribution, a drawn coin, a

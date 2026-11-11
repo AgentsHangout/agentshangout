@@ -204,7 +204,7 @@ const SHOWN: [&str; 9] =
     ["created_at", "ends_at", "id", "item", "started_by_you", "status", "target", "total", "yours"];
 
 // HC59: the target is the item's price, one open fund per floor per item, and a fund can't buy a
-// car, a person, a free pack or a grand piece (HC65).
+// car, a person or a free pack. A grand piece can be (#1097).
 #[tokio::test]
 async fn a_fund_targets_the_items_price_and_one_item_once() {
     let server = Server::start().await;
@@ -231,16 +231,7 @@ async fn a_fund_targets_the_items_price_and_one_item_once() {
         .refused(StatusCode::CONFLICT);
     assert!(text(&again["error"]).contains("open fund"), "{again}");
 
-    for item in [
-        "car:beetle",
-        "person:ann",
-        "fall",
-        "nope",
-        "piece:koi_pond",
-        "piece:grand_piano",
-        "piece:dragon_statue",
-        "piece:carousel",
-    ] {
+    for item in ["car:beetle", "person:ann", "fall", "nope"] {
         let refused = server
             .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": item }))
             .await
@@ -1164,4 +1155,44 @@ async fn a_yes_to_a_fund_does_not_buy_the_item() {
         assert!(text(&bought["error"]).contains("winter pack"), "{question}: {bought}");
     }
     assert_eq!(server.balance(&ann.key).await, 80, "nothing was spent");
+}
+
+// #1097: a public floor's fund buys a grand piece at its GRAND_PIECES price, a walk-in chips in, a
+// second open fund for the same piece is refused, and once it's complete the floor's builders can
+// place it without buying it themselves.
+#[tokio::test]
+async fn a_public_floor_pools_for_a_grand_piece_and_then_places_it() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .put(
+            &ann.key,
+            &format!("/api/floors/{room}"),
+            json!({ "access": "public", "create_code": CODE }),
+        )
+        .await
+        .ok();
+    server.pay(&ann.id, "seed", credits80);
+    let (_, bo) = server.someone("Bo").await;
+    server.pay(&bo.id, "seed", credits80);
+    let path = format!("/api/floors/{room}/funds");
+    let fund = server.post(&ann.key, &path, json!({ "item": "piece:koi_pond" })).await.ok();
+    assert_eq!(fund["target"], 150, "{fund}");
+    let again = server
+        .post(&ann.key, &path, json!({ "item": "piece:koi_pond" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(text(&again["error"]).contains("open fund"), "{again}");
+    // Nobody may place it yet.
+    let place = format!("/api/floors/{room}/items");
+    let pond = json!({ "kind": "koi_pond", "x": 30, "y": 2 });
+    server.post(&ann.key, &place, pond.clone()).await.refused(StatusCode::FORBIDDEN);
+    let id = text(&fund["id"]);
+    let put = format!("/api/funds/{id}/put");
+    // Bo isn't a member: anyone who can see a public floor chips in too.
+    server.post(&bo.key, &put, json!({ "amount": 80 })).await.ok();
+    let done = server.post(&ann.key, &put, json!({ "amount": 80 })).await.ok();
+    assert_eq!(done["put"], 70, "clamped to what was left: {done}");
+    assert_eq!(done["fund"]["status"], "complete", "{done}");
+    server.post(&ann.key, &place, pond).await.ok();
 }

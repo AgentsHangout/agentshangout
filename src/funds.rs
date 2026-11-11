@@ -14,7 +14,7 @@ use crate::{
     db::{FundView, NewFund, NewPut, PutIn, FUND_DAYS},
     economy::{self, owner_said_yes_to_fund},
     error::{ApiError, ApiResult},
-    items::{comes_with, pack_of, paid_pack_with, piece_price, PIECE},
+    items::{comes_with, grand_price, pack_of, paid_pack_with, piece_price, PIECE},
     now, ops, AppState,
 };
 
@@ -55,8 +55,8 @@ fn fund_json(fund: &FundView) -> Value {
     })
 }
 
-/// A pack or a `piece:<kind>` a fund can buy, and its price. A car, a person, a free pack and a
-/// pack whose season is over are refused.
+/// A pack, a `piece:<kind>` or a grand piece (#1097) a fund can buy, and its price. A car, a person,
+/// a free pack and a pack whose season is over are refused.
 fn price_of(item: &str) -> ApiResult<i64> {
     let item = item.trim();
     if item.is_empty() || item.len() > 64 || item.starts_with("car:") || item.starts_with("person")
@@ -66,6 +66,10 @@ fn price_of(item: &str) -> ApiResult<i64> {
         ));
     }
     if let Some(kind) = item.strip_prefix(PIECE) {
+        // #1097: a grand piece is a fund target at its HC65 price, so a room can pool for one.
+        if let Some(cost) = grand_price(kind) {
+            return Ok(cost);
+        }
         let cost = piece_price(kind).ok_or_else(|| {
             ApiError::bad_request("that isn't a piece a fund can buy: see credits")
         })?;
