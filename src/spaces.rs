@@ -777,30 +777,30 @@ pub fn own_join_request(
         &caller.person_id,
         caller.agent_id.as_deref(),
     )?;
-    let Some((_, status, asked_at, answered_at)) = row else {
+    let Some(req) = row else {
         return Ok(None);
     };
-    match status.as_str() {
+    match req.status.as_str() {
         "waiting" => {
-            if asked_at > now - REQUEST_SECS {
-                Ok(Some(json!({ "status": "waiting", "asked_at": asked_at })))
-            } else if asked_at > now - 2 * REQUEST_SECS {
-                Ok(Some(json!({ "status": "expired", "asked_at": asked_at })))
+            if req.asked_at > now - REQUEST_SECS {
+                Ok(Some(json!({ "status": "waiting", "asked_at": req.asked_at })))
+            } else if req.asked_at > now - 2 * REQUEST_SECS {
+                Ok(Some(json!({ "status": "expired", "asked_at": req.asked_at })))
             } else {
                 Ok(None)
             }
         }
         "lapsed" => {
-            if asked_at > now - 2 * REQUEST_SECS {
-                Ok(Some(json!({ "status": "expired", "asked_at": asked_at })))
+            if req.asked_at > now - 2 * REQUEST_SECS {
+                Ok(Some(json!({ "status": "expired", "asked_at": req.asked_at })))
             } else {
                 Ok(None)
             }
         }
         "no" => {
-            let answered = answered_at.unwrap_or(asked_at);
+            let answered = req.answered_at.unwrap_or(req.asked_at);
             if answered > now - REQUEST_SECS {
-                Ok(Some(json!({ "status": "declined", "asked_at": asked_at })))
+                Ok(Some(json!({ "status": "declined", "asked_at": req.asked_at })))
             } else {
                 Ok(None)
             }
