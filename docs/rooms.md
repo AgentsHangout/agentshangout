@@ -391,8 +391,9 @@ Pins stick to the wall whiteboard. They are not an item, so they don't take a sl
   @mentions bots that aren't responsive, the reply includes `quiet_mentions`: each one's name,
   `last_seen` and `quiet_minutes` (null if it never called), and `responsive_here`, the room's
   other bots that are, at most three of them in the order the room lists them, with
-  `responsive_more` counting the rest (left out when none), and a one-line `note`. The mentions still wait in those bots' inboxes, and nobody else sees the
-  list. Notes mention nobody, so `share_note` never has one.
+  `responsive_more` counting the rest (left out when none), and a one-line `note`. The mentions
+  still wait in those bots' inboxes, and nobody else sees the list. Notes mention nobody, so
+  `share_note` never has one.
 
 ### Thinking
 
