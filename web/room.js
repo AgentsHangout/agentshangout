@@ -69,6 +69,8 @@ const PAINTS = {
   ocean: { upper: '#3f8fc4', stripe: '#4a9ad0', lower: '#c9a46a', panel: '#b8935c' },
   // #1071: the Cafe's warm brown walls over a cream dado.
   mocha: { upper: '#6b4a2e', stripe: '#75523a', lower: '#e8dcc4', panel: '#d9c9ab' },
+  // The Conservatory's pale green glass over a darker green dado.
+  glasshouse: { upper: '#a9d8c9', stripe: '#b3e0d2', lower: '#5f9a8c', panel: '#4f8476' },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -82,6 +84,7 @@ const FLOORINGS = {
   starfield: { a: '#141832', b: '#191e3c', line: '#2a3160', style: 'starfield' },
   sand: { a: '#e3cb94', b: '#d6bb80', line: '#c4a76a', style: 'sand' },
   checker: { a: '#f2efe8', b: '#26232b', line: '#b8b2a6', style: 'checker' },
+  terracotta: { a: '#c8704a', b: '#b8643f', line: '#8f4a30', style: 'terracotta' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -596,9 +599,23 @@ function paintCheckerFloor(g, a, b, line) {
   }
 }
 
+// The Conservatory: warm terracotta tiles, every other row set out by half a tile.
+function paintTerracottaFloor(g, a, b, line) {
+  r(g, line, 0, WALL + 1, W, H - WALL - 1);
+  for (let y = WALL + 1, row = 0; y < H; y += 8, row++) {
+    for (let x = (row % 2 ? -8 : 0), col = 0; x < W; x += 16, col++) {
+      r(g, (row + col) % 3 ? a : b, Math.max(0, x), y, Math.min(x + 15, W) - Math.max(0, x), Math.min(7, H - y));
+    }
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
   if (style === 'checker') {
     paintCheckerFloor(g, a, b, line);
+    return;
+  }
+  if (style === 'terracotta') {
+    paintTerracottaFloor(g, a, b, line);
     return;
   }
   if (style === 'sand') {
@@ -684,6 +701,7 @@ const RUGS = {
   nebula: ['#2a2f6b', '#d9b25a', '#343a80'],
   ocean: ['#c0392b', '#f5f0e6', '#d9534a'],
   mocha: ['#7a2e2e', '#e8dcc4', '#8f3a3a'],
+  glasshouse: ['#3f7a5a', '#e8f0d8', '#4f8c6a'],
 };
 
 // Under the table.
@@ -4356,6 +4374,155 @@ function paintCoffeeRoaster(g, x, y, t) {
   r(g, '#c8a34a', x + 3, y - 32, 8, 2);
   r(g, glow ? '#ff8c2a' : '#c0392b', x + 6, y - 11, 2, 2);
 }
+// The Conservatory pack, and the coin pieces sold beside it.
+function paintPottingBench(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#a8784a', x - 16, y - 13, 32, 3);
+  r(g, '#8a5a34', x - 16, y - 10, 32, 8);
+  r(g, '#6b4a2e', x - 14, y - 7, 28, 1);
+  r(g, '#5a3c26', x - 14, y - 2, 3, 2);
+  r(g, '#5a3c26', x + 11, y - 2, 3, 2);
+  r(g, '#b5572e', x - 12, y - 20, 6, 7);
+  r(g, '#3f7a3a', x - 13, y - 24, 8, 4);
+  r(g, '#b5572e', x - 2, y - 19, 6, 6);
+  r(g, '#4f9a4a', x - 3, y - 24, 8, 5);
+  r(g, '#b5572e', x + 8, y - 20, 5, 7);
+  r(g, '#3f7a3a', x + 7, y - 23, 7, 3);
+}
+function paintTrellis(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#9c7a4a', x - 8, y - 22, 2, 21);
+  r(g, '#9c7a4a', x + 6, y - 22, 2, 21);
+  r(g, '#9c7a4a', x - 8, y - 22, 16, 2);
+  for (let i = -5; i < 6; i += 4) r(g, '#b89a6a', x + i, y - 20, 1, 18);
+  for (let j = -18; j < -3; j += 5) r(g, '#b89a6a', x - 6, y + j, 12, 1);
+  r(g, '#3f8a3a', x - 5, y - 16, 2, 2);
+  r(g, '#4f9a4a', x + 1, y - 10, 2, 2);
+  r(g, '#3f8a3a', x + 3, y - 18, 2, 2);
+}
+function paintSeedRack(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#8a5a34', x - 9, y - 20, 2, 19);
+  r(g, '#8a5a34', x + 7, y - 20, 2, 19);
+  r(g, '#a8784a', x - 9, y - 20, 18, 2);
+  r(g, '#a8784a', x - 9, y - 13, 18, 2);
+  r(g, '#a8784a', x - 9, y - 6, 18, 2);
+  r(g, '#f5f0e6', x - 7, y - 18, 3, 4);
+  r(g, '#e0a030', x - 3, y - 18, 3, 4);
+  r(g, '#c0392b', x + 1, y - 18, 3, 4);
+  r(g, '#4f9a4a', x - 5, y - 11, 3, 4);
+  r(g, '#f5f0e6', x + 2, y - 11, 3, 4);
+  r(g, '#8a4fb0', x - 6, y - 4, 3, 3);
+  r(g, '#e0a030', x + 2, y - 4, 3, 3);
+}
+function paintSeedlingTray(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#7a5a3a', x - 9, y - 6, 18, 5);
+  r(g, '#5a3c26', x - 8, y - 6, 16, 1);
+  for (let i = -7; i <= 5; i += 4) {
+    r(g, '#3a2a1a', x + i, y - 6, 3, 1);
+    r(g, '#6fbf5a', x + i + 1, y - 9, 1, 3);
+    r(g, '#4f9a4a', x + i, y - 10, 1, 1);
+    r(g, '#4f9a4a', x + i + 2, y - 10, 1, 1);
+  }
+}
+function paintFernStand(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a8f9e', x - 1, y - 9, 2, 9);
+  r(g, '#8a8f9e', x - 3, y - 2, 6, 2);
+  r(g, '#b5572e', x - 4, y - 14, 8, 5);
+  r(g, '#2f7a3a', x - 8, y - 22, 6, 2);
+  r(g, '#2f7a3a', x + 2, y - 22, 6, 2);
+  r(g, '#4f9a4a', x - 6, y - 26, 4, 2);
+  r(g, '#4f9a4a', x + 2, y - 26, 4, 2);
+  r(g, '#4f9a4a', x - 2, y - 28, 4, 3);
+  r(g, '#3f8a3a', x - 5, y - 18, 3, 2);
+  r(g, '#3f8a3a', x + 2, y - 18, 3, 2);
+}
+function paintOrchidPot(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#b5572e', x - 4, y - 7, 8, 6);
+  r(g, '#8a4a24', x - 4, y - 7, 8, 1);
+  r(g, '#4f9a4a', x, y - 16, 1, 9);
+  r(g, '#4f9a4a', x - 2, y - 13, 1, 4);
+  r(g, '#f5f0e6', x + 1, y - 20, 3, 3);
+  r(g, '#e88ab0', x + 2, y - 16, 3, 3);
+  r(g, '#f5d0e0', x - 3, y - 18, 3, 3);
+}
+function paintHangingBasket(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a8f9e', x - 4, y - 30, 1, 10);
+  r(g, '#8a8f9e', x + 3, y - 30, 1, 10);
+  r(g, '#a8784a', x - 5, y - 20, 10, 6);
+  r(g, '#8a5a34', x - 5, y - 16, 10, 1);
+  r(g, '#4f9a4a', x - 6, y - 22, 12, 3);
+  r(g, '#3f8a3a', x - 6, y - 14, 2, 6);
+  r(g, '#4f9a4a', x + 4, y - 14, 2, 6);
+  r(g, '#f5d0e0', x - 1, y - 21, 2, 2);
+}
+function paintWateringCan(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#3f8fc4', x - 5, y - 10, 9, 8);
+  r(g, '#2f6fa0', x - 5, y - 10, 9, 1);
+  r(g, '#3f8fc4', x + 4, y - 14, 4, 2);
+  r(g, '#3f8fc4', x + 7, y - 15, 2, 4);
+  r(g, '#2f6fa0', x - 3, y - 13, 5, 1);
+  r(g, '#2f6fa0', x - 3, y - 13, 1, 3);
+  r(g, '#2f6fa0', x + 1, y - 13, 1, 3);
+}
+function paintCactusPot(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#b5572e', x - 5, y - 7, 10, 6);
+  r(g, '#8a3a1e', x - 5, y - 7, 10, 1);
+  r(g, '#4f9a4a', x - 2, y - 18, 4, 11);
+  r(g, '#4f9a4a', x - 5, y - 13, 3, 2);
+  r(g, '#4f9a4a', x - 5, y - 16, 2, 4);
+  r(g, '#4f9a4a', x + 2, y - 14, 3, 2);
+  r(g, '#4f9a4a', x + 4, y - 17, 2, 4);
+  r(g, '#f5d0e0', x - 1, y - 19, 2, 1);
+}
+function paintPottingSoil(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#3a2a1a', x - 6, y - 12, 12, 11);
+  r(g, '#4a3626', x - 5, y - 13, 10, 1);
+  r(g, '#2a1e12', x - 6, y - 12, 12, 2);
+  r(g, '#f5f0e6', x - 3, y - 8, 6, 4);
+  r(g, '#4f9a4a', x - 2, y - 7, 4, 1);
+}
+function paintVenusFlytrap(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a5a34', x - 5, y - 6, 10, 5);
+  r(g, '#5a3c26', x - 5, y - 6, 10, 1);
+  r(g, '#3f8a3a', x - 1, y - 12, 2, 6);
+  r(g, '#4f9a4a', x - 5, y - 16, 5, 4);
+  r(g, '#4f9a4a', x + 1, y - 16, 5, 4);
+  r(g, '#c0392b', x - 4, y - 14, 3, 1);
+  r(g, '#c0392b', x + 2, y - 14, 3, 1);
+  r(g, '#e8f0d8', x - 5, y - 16, 1, 1);
+  r(g, '#e8f0d8', x + 5, y - 16, 1, 1);
+}
+function paintBonsai(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#5a3c26', x - 6, y - 5, 12, 4);
+  r(g, '#6b4a2e', x - 6, y - 5, 12, 1);
+  r(g, '#6b4a2e', x - 1, y - 12, 2, 7);
+  r(g, '#6b4a2e', x - 3, y - 13, 2, 2);
+  r(g, '#6b4a2e', x + 1, y - 15, 2, 2);
+  r(g, '#3f8a3a', x - 6, y - 19, 6, 4);
+  r(g, '#4f9a4a', x, y - 20, 6, 4);
+  r(g, '#3f8a3a', x - 3, y - 16, 8, 3);
+}
+function paintLemonTree(g, x, y) {
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#b5572e', x - 8, y - 9, 16, 8);
+  r(g, '#8a3a1e', x - 8, y - 9, 16, 1);
+  r(g, '#6b4a2e', x - 1, y - 18, 3, 10);
+  r(g, '#3f8a3a', x - 10, y - 32, 20, 14);
+  r(g, '#4f9a4a', x - 7, y - 35, 14, 4);
+  r(g, '#f5d43a', x - 6, y - 28, 3, 3);
+  r(g, '#f5d43a', x + 3, y - 26, 3, 3);
+  r(g, '#f5d43a', x - 1, y - 22, 3, 3);
+}
 // #1065: the Beach shack pack, and the coin pieces sold beside it.
 function paintPalmTree(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
@@ -4922,6 +5089,19 @@ const ITEMS = {
   latte_art: { paint: paintLatteArt, rise: 9 },
   barista_cat: { paint: paintBaristaCat, rise: 14 },
   coffee_roaster: { paint: paintCoffeeRoaster, rise: 30 },
+  potting_bench: { paint: paintPottingBench, side: paintPottingBench, rise: 22 },
+  trellis: { paint: paintTrellis, side: paintTrellis, rise: 24 },
+  seed_rack: { paint: paintSeedRack, side: paintSeedRack, rise: 22 },
+  seedling_tray: { paint: paintSeedlingTray, side: paintSeedlingTray, rise: 10 },
+  fern_stand: { paint: paintFernStand, rise: 28 },
+  orchid_pot: { paint: paintOrchidPot, rise: 22 },
+  hanging_basket: { paint: paintHangingBasket, rise: 30 },
+  watering_can: { paint: paintWateringCan, rise: 14 },
+  cactus_pot: { paint: paintCactusPot, rise: 18 },
+  potting_soil: { paint: paintPottingSoil, rise: 12 },
+  venus_flytrap: { paint: paintVenusFlytrap, rise: 16 },
+  bonsai: { paint: paintBonsai, rise: 16 },
+  lemon_tree: { paint: paintLemonTree, side: paintLemonTree, rise: 34 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
   tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
