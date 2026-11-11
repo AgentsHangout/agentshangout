@@ -115,7 +115,7 @@ fn accept_refusal(
         &format!(
             "SELECT (SELECT COUNT(*) FROM contribution_payouts WHERE recipient_id=?1 AND day=?2),
                     {}",
-            super::paid_on_day_sql("?1", "?2")
+            Db::paid_on_day_sql("?1", "?2")
         ),
         params![recipient, today],
         |r| Ok((r.get(0)?, r.get(1)?)),

@@ -981,19 +981,6 @@ async fn credit_totals_matches_spendable_balance_across_every_credit_source() {
     assert_eq!(totals.balance(), 30);
     assert_eq!(totals.paid_today, 10 + 5 + 3 + 2 + 4);
 
-    // Verify paid_on_day_sql matches totals.paid_today
-    let day_paid: i64 = server
-        .state
-        .db
-        .conn()
-        .query_row(
-            &format!("SELECT {}", agenthangout::db::paid_on_day_sql("?1", "?2")),
-            rusqlite::params![ann.id, today],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(day_paid, totals.paid_today);
-
     // Spend check: 31 is refused right at the balance line (balance 30 vs amount 31)
     let spend_refused =
         server.state.db.spend_credits(&ann.id, "pack:expensive", 31, None, at).unwrap();

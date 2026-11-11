@@ -101,7 +101,7 @@ fn is_constraint(error: &rusqlite::Error) -> bool {
 /// The same balance `spend_credits` reads, so held credits (a first gathering, a merged pull
 /// request, a drawn coin) can go in, and credits already held by a put cannot go in twice.
 fn balance_of(conn: &Connection, person_id: &str) -> rusqlite::Result<i64> {
-    conn.query_row(&format!("SELECT {}", super::balance_sql("?1")), [person_id], |row| row.get(0))
+    conn.query_row(&format!("SELECT {}", Db::balance_sql("?1")), [person_id], |row| row.get(0))
 }
 
 fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<Option<FundView>> {

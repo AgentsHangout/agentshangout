@@ -9,7 +9,7 @@ pub const COIN_DROP_HC: i64 = 1;
 /// HC6: everything that paid `person` on UTC day `day`, from every rule that pays.
 fn paid_on(conn: &Connection, person: &str, day: i64) -> rusqlite::Result<i64> {
     conn.query_row(
-        &format!("SELECT {}", super::paid_on_day_sql("?1", "?2")),
+        &format!("SELECT {}", Db::paid_on_day_sql("?1", "?2")),
         params![person, day],
         |r| r.get(0),
     )

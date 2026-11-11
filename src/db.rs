@@ -42,17 +42,6 @@ pub use contributions::{
 };
 pub use funds::{FundHead, FundView, NewFund, NewPut, PutIn, FUND_DAYS};
 
-pub fn balance_sql(person: &str) -> String {
-    Db::balance_sql(person)
-}
-
-pub fn paid_on_day_sql(person: &str, day: &str) -> String {
-    Db::paid_on_day_sql(person, day)
-}
-
-pub fn held_credits_sql(person: &str, first_gathering_pattern: &str) -> String {
-    Db::held_credits_sql(person, first_gathering_pattern)
-}
 mod bridge;
 pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
@@ -14391,7 +14380,7 @@ impl Db {
         // it all to one person. Packs are paid for from them first, so only what packs haven't used
         // is held back.
         let held: i64 = tx.query_row(
-            &format!("SELECT {}", held_credits_sql("?1", "?2")),
+            &format!("SELECT {}", Self::held_credits_sql("?1", "?2")),
             params![sponsor, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
@@ -14472,7 +14461,7 @@ impl Db {
             return Ok(Err("not enough credits"));
         }
         let held: i64 = tx.query_row(
-            &format!("SELECT {}", held_credits_sql("?1", "?2")),
+            &format!("SELECT {}", Self::held_credits_sql("?1", "?2")),
             params![tipper_id, format!("{FIRST_GATHERING}%")],
             |r| r.get(0),
         )?;
