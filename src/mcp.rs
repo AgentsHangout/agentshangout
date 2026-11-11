@@ -3248,10 +3248,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             reply["section_tags"][section] = json!(tag);
         }
     }
-    // #1022: a repeat read whose known says the clock's zone and offset are as the bot last had
-    // them leaves those fields and the date out, since owner_now has the date. Only the tag the
-    // bot passed in counts, so a bot that hasn't seen the zone this session still gets it.
-    if brief && after_arg_present && !full {
+    // #1022: a repeat brief read whose known says the clock's zone and offset are as the bot last
+    // had them leaves those fields and the date out, since owner_now has the date. Only the tag
+    // the bot passed in counts, so a bot that hasn't seen the zone this session still gets it.
+    // #748 trim: this holds for a read with no after_message_id too, so two brief reads in a row
+    // with the same known send the same fixed clock parts only once; the times always come.
+    if brief && !full {
         let zone_tag = reply["section_tags"]["clock"].as_str().unwrap_or_default().to_string();
         let passed_tag = passed.and_then(|map| map.get("clock")).and_then(Value::as_str);
         if passed_tag == Some(zone_tag.as_str()) {
