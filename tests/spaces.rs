@@ -5581,3 +5581,118 @@ async fn pj27_a_person_asks_at_most_ten_floors_an_hour() {
     }
     last.unwrap().refused(StatusCode::TOO_MANY_REQUESTS);
 }
+
+// PJ21: a brought-in owner (L12) isn't an invited member, so they can't answer (403); someone outside gets 404.
+#[tokio::test]
+async fn pj21_a_brought_in_owner_cannot_answer_a_join_request() {
+    let server = Server::start().await;
+    let (room, _ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, dee) = server.someone("Dee").await;
+    let (_, eve) = server.someone("Eve").await;
+
+    // Cy walks in and asks to join.
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
+
+    // Dee is brought in as an owner (L12) via members table: in_room is true via is_member, but Dee is not an invited member.
+    server.state.db.add_brought_in_owner(&room, &dee.id, now()).unwrap();
+    assert!(server.state.db.is_member(&room, &dee.id).unwrap(), "Dee is in the room via members");
+    assert!(
+        !server.state.db.is_invited_member(&room, &dee.id).unwrap(),
+        "Dee is not an invited member"
+    );
+
+    // Dee sees no join requests in Needs you.
+    assert!(server.join_requests(&dee).await.is_empty(), "brought-in owner gets no requests");
+
+    // Dee is a brought-in member in the room, so answering gets 403.
+    let refused = server.answer_join(&dee, &room, &id, true).await.refused(StatusCode::FORBIDDEN);
+    assert!(
+        refused["error"].as_str().unwrap().contains("only someone who can invite"),
+        "{refused}"
+    );
+
+    // Eve is completely outside the room and gets 404.
+    server.answer_join(&eve, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
+}
+
+// PJ25, S13: a yes on a full floor is refused 409, and the request stays waiting.
+#[tokio::test]
+async fn pj25_a_yes_on_a_full_floor_is_refused_and_the_request_stays_waiting() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    server.put(&ann.key, &format!("/api/floors/{room}"), json!({ "size": "small" })).await.ok();
+    let (_, cy) = server.someone("Cy").await;
+
+    // Cy walks in and asks to join.
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
+
+    // Fill the floor to its capacity (8) with friends. Ann is 1, Cy is 2. Add 6 more to reach 8.
+    for n in 0..6 {
+        server.join(&ann, &room, &format!("Friend {n}")).await;
+    }
+    assert_eq!(server.snapshot(&ann.key, &room).await.ok()["floor"]["here"], 8);
+
+    // Ann approves: refused 409 conflict ("this floor is full").
+    let refused = server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::CONFLICT);
+    assert!(refused["error"].as_str().unwrap().contains("this floor is full"), "{refused}");
+
+    // Request stays waiting in Needs you and on Cy's snapshot.
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+    let own = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(own["join_request"]["status"], "waiting");
+}
+
+// PJ25: a floor that goes private takes no more answers, and its requests leave the list.
+#[tokio::test]
+async fn pj25_a_floor_that_goes_private_takes_no_more_answers_and_requests_leave_the_list() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+
+    // Cy walks in and asks to join while floor is public.
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+
+    // Ann sets the floor to private.
+    server.put(&ann.key, &format!("/api/floors/{room}"), json!({ "access": "private" })).await.ok();
+
+    // The requests leave everyone's Needs you list.
+    assert!(server.join_requests(&ann).await.is_empty(), "requests leave the list when private");
+
+    // Answering gets 409 conflict ("this floor is private now, so it takes no requests").
+    let refused = server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::CONFLICT);
+    assert!(refused["error"].as_str().unwrap().contains("this floor is private now"), "{refused}");
+}
+
+// PJ26: a block made after the ask lifts when the block does, restoring the request.
+#[tokio::test]
+async fn pj26_a_block_lifted_after_the_ask_restores_the_request_to_needs_you() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_, cy) = server.someone("Cy").await;
+
+    // Cy asks to join.
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({ "note": "hello" })).await.ok()["id"]);
+    assert_eq!(server.join_requests(&bo).await.len(), 1);
+
+    // Ann blocks Cy: request is hidden from both Ann and Bo.
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": cy.id })).await.ok();
+    assert!(server.join_requests(&ann).await.is_empty());
+    assert!(server.join_requests(&bo).await.is_empty());
+    server.answer_join(&bo, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
+
+    // Ann removes the block: request restores to Needs you for both.
+    server.delete(&ann.key, &format!("/api/blocks/{}", cy.id)).await.ok();
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+    assert_eq!(server.join_requests(&bo).await.len(), 1);
+
+    // Bo can now approve the request.
+    server.answer_join(&bo, &room, &id, true).await.ok();
+    assert!(server.sees_the_past(&cy.key, &room).await);
+}
