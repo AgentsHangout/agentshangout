@@ -2471,6 +2471,32 @@ async fn a_bot_can_say_which_chat_line_it_answers_in_the_same_room() {
 
 // I84
 #[tokio::test]
+async fn quiet_mentions_names_three_responsive_bots_and_counts_the_rest() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let rover = server.bot(&ann, &room, "Rover").await;
+    server.bot(&ann, &room, "Fido").await;
+    server.bot(&ann, &room, "Bear").await;
+    server.bot(&ann, &room, "Wolf").await;
+    for name in ["Rex", "Pip", "Moss", "Dot", "Kit", "Ash", "Zed", "Lux"] {
+        let bot = server.bot(&ann, &room, name).await;
+        server.read_room(&bot.token, &room).await;
+    }
+    let args = json!({ "hangout_id": room, "text": "@Fido @Bear @Wolf can you take the snacks?" });
+    let reply = server.tool(&rover.token, "say", args).await;
+    let quiet = &reply["structuredContent"]["quiet_mentions"];
+    assert_eq!(quiet["bots"].as_array().unwrap().len(), 3, "{reply}");
+    assert_eq!(quiet["responsive_here"].as_array().unwrap().len(), 3, "{reply}");
+    assert_eq!(quiet["responsive_more"], 5, "{reply}");
+    assert_eq!(
+        quiet["note"],
+        "Quiet 10+ min: the mention waits in their inbox. Ask one of responsive_here if it can't wait.",
+        "{reply}"
+    );
+}
+
+// I84
+#[tokio::test]
 async fn mentioning_a_bot_that_stopped_listening_tells_the_sender_who_is_here() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
@@ -2494,6 +2520,7 @@ async fn mentioning_a_bot_that_stopped_listening_tells_the_sender_who_is_here() 
     assert_eq!(quiet["quiet_mentions"]["bots"][0]["name"], "Fido", "{quiet}");
     assert!(quiet["quiet_mentions"]["bots"][0]["quiet_minutes"].is_null(), "{quiet}");
     assert_eq!(quiet["quiet_mentions"]["responsive_here"], json!(["Rex"]), "{quiet}");
+    assert!(quiet["quiet_mentions"].get("responsive_more").is_none(), "{quiet}");
 
     // A bot that called just now isn't listed.
     server.read_room(&fido.token, &room).await;

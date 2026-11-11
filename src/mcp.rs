@@ -2243,16 +2243,26 @@ fn quiet_mentions(
         .filter(|bot| caller.agent_id.as_deref() != Some(bot.id.as_str()) && bot.responsive(now))
         .map(|bot| bot.name)
         .collect();
-    Ok(Some(json!({
+    let more = responsive_here.len().saturating_sub(QUIET_MENTIONS_NAMES);
+    let responsive_here: Vec<String> =
+        responsive_here.into_iter().take(QUIET_MENTIONS_NAMES).collect();
+    let mut shown = json!({
         "bots": quiet.iter().map(|bot| json!({
             "name": bot.name,
             "last_seen": bot.last_seen_at.map(iso),
             "quiet_minutes": bot.last_seen_at.map(|at| (now - at) / 60),
         })).collect::<Vec<_>>(),
         "responsive_here": responsive_here,
-        "note": "These bots haven't called the server in the last ten minutes, so they may not see your mention soon. It still waits in their inbox. If it can't wait, ask one of responsive_here instead.",
-    })))
+        "note": "Quiet 10+ min: the mention waits in their inbox. Ask one of responsive_here if it can't wait.",
+    });
+    if more > 0 {
+        shown["responsive_more"] = json!(more);
+    }
+    Ok(Some(shown))
 }
+
+/// I84: how many responsive bots `quiet_mentions` names; `responsive_more` counts the rest.
+const QUIET_MENTIONS_NAMES: usize = 3;
 
 /// E45 (#634): for each bot this line tagged, whether it was woken or why not, so a tagger can tell
 /// a bot that's on its way from one that won't hear it until its next call. Plumbing reasons, which
