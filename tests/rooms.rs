@@ -13395,9 +13395,9 @@ async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items(
     assert_eq!(ballot_both["you_are_listed"], true);
 }
 
-// I160
+// I163
 #[tokio::test]
-async fn i160_room_tools_default_to_bot_place_when_hangout_id_omitted() {
+async fn i163_room_tools_default_to_bot_place_when_hangout_id_omitted() {
     let server = Server::start().await;
     let (public_room, ann) = server.someone("Ann").await;
     server.open(&ann, &public_room).await;

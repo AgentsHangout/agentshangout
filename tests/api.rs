@@ -1525,7 +1525,7 @@ async fn a_bots_question_and_its_answer_work_over_mcp() {
     let note = inbox["owner_answers_note"].as_str().unwrap();
     assert!(note.contains("your owner") && note.contains("not the room"), "{note}");
 
-    // Under I160 (#1092), bringing the bot into a second room sets its place there, so
+    // Under I163 (#1092), bringing the bot into a second room sets its place there, so
     // ask_owner with no hangout_id defaults to where the bot is now (the second room).
     let second = server.post(&room.justin, "/api/hangouts", json!({ "name": "Second" })).await;
     let second = second.body["hangout"]["id"].as_str().unwrap();

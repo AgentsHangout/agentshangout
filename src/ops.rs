@@ -1038,6 +1038,7 @@ pub fn set_thinking(
         Some(id) => require_room(state, caller, id)?,
         None => {
             let now = now();
+            // I163 (#1092): a bot acts where it is now, if it may still be there.
             let placed = match state.db.bot_place(agent_id, now)? {
                 Some(place_id) => require_room(state, caller, &place_id).ok(),
                 None => None,
