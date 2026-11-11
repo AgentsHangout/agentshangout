@@ -4597,9 +4597,17 @@ function paintAirHockey(g, x, y, t) {
 function paintSkeeBall(g, x, y, t) {
   const roll = Math.floor(t / 250) % 3;
   r(g, SHADOW, x - 11, y - 2, 22, 2);
-  r(g, '#26233f', x - 10, y - 20, 20, 18);
-  r(g, '#ff7ad9', x - 11, y - 23, 22, 3);
-  r(g, '#ffd24d', x - 8, y - 14, 16, 2);
+  // The cabinet, then a long lane running along its top toward a scoring pocket at the far end.
+  r(g, '#26233f', x - 10, y - 14, 20, 12);
+  r(g, '#ff7ad9', x - 11, y - 16, 22, 2);
+  r(g, '#c98a4a', x - 11, y - 20, 22, 4);
+  r(g, '#ffd24d', x - 11, y - 20, 22, 1);
+  r(g, '#6a3a1a', x - 11, y - 17, 22, 1);
+  for (let i = -9; i <= 5; i += 3) r(g, '#e8b070', x + i, y - 19, 1, 2);
+  r(g, '#0d0d12', x + 7, y - 21, 4, 5);
+  r(g, '#ff5d7a', x + 8, y - 20, 2, 2);
+  // A gold stripe across the cabinet face, then the ball rolling up the lane.
+  r(g, '#ffd24d', x - 8, y - 12, 16, 2);
   r(g, '#ff5d7a', x - 6 + roll * 4, y - 11, 3, 3);
   r(g, '#2fe6ff', x + 2, y - 8, 3, 3);
 }
@@ -4669,19 +4677,32 @@ function paintBeanBag(g, x, y) {
 }
 function paintVinylCrate(g, x, y) {
   r(g, SHADOW, x - 7, y - 1, 14, 2);
-  r(g, '#3a2a4a', x - 7, y - 12, 14, 11);
-  r(g, '#2a1e38', x - 7, y - 12, 14, 1);
-  for (let i = -5; i <= 3; i += 2) r(g, '#0d0d12', x + i, y - 17, 2, 5);
-  r(g, '#ff3ea5', x - 5, y - 16, 1, 1);
+  r(g, '#8a5fb8', x - 7, y - 12, 14, 11);
+  r(g, '#ffd24d', x - 7, y - 13, 14, 1);
+  // Records stand up in the crate, black with a lit grey edge and a pink label, so they show on the carpet.
+  for (let i = -5; i <= 2; i += 3) {
+    r(g, '#1b1b26', x + i, y - 18, 2, 6);
+    r(g, '#c0c8d8', x + i, y - 18, 2, 1);
+  }
+  r(g, '#ff3ea5', x - 5, y - 15, 1, 1);
+  r(g, '#2fe6ff', x + 1, y - 15, 1, 1);
 }
 function paintDiscoBall(g, x, y, t) {
   const spark = Math.floor(t / 200) % 4;
+  const cy = y - 22;
   r(g, SHADOW, x - 4, y - 1, 8, 1);
   r(g, '#3a3560', x - 4, y - 4, 8, 3);
-  r(g, '#8a8f9e', x, y - 14, 1, 10);
-  r(g, '#c0c8d8', x - 4, y - 24, 9, 9);
-  r(g, '#ffffff', x - 2 + spark, y - 22, 2, 2);
-  r(g, '#8a8f9e', x - 3, y - 15, 1, 1);
+  r(g, '#8a8f9e', x, y - 17, 1, 13);
+  r(g, '#8a8f9e', x, y - 30, 1, 3);
+  // A round mirror ball: each row of the circle is a run of silver, with a few darker facets.
+  for (let dy = -5; dy <= 5; dy++) {
+    const half = Math.round(Math.sqrt(25 - dy * dy));
+    r(g, '#c0c8d8', x - half, cy + dy, half * 2 + 1, 1);
+  }
+  r(g, '#8a8f9e', x - 3, cy - 2, 1, 1);
+  r(g, '#8a8f9e', x + 2, cy + 1, 1, 1);
+  r(g, '#8a8f9e', x - 1, cy + 3, 1, 1);
+  r(g, '#ffffff', x - 2 + spark, cy - 2, 2, 2);
 }
 function paintGlowstickJar(g, x, y) {
   r(g, SHADOW, x - 5, y - 1, 10, 1);
