@@ -10716,6 +10716,84 @@ async fn a_room_the_bot_is_not_in_is_not_named() {
     assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
 }
 
+// I164, #748: a brief or incremental read leaves out `kind` on a chat line (no kind means chat).
+// A system line keeps its kind, and a full read keeps kind on every line.
+#[tokio::test]
+async fn brief_chat_lines_have_no_kind_and_system_lines_keep_it() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Hello there" })).await;
+    server
+        .state
+        .db
+        .insert_message(&agenthangout::db::NewMessage {
+            hangout_id: &room,
+            person_id: None,
+            agent_id: None,
+            speaker: "Hangout",
+            kind: "system",
+            body: "Ann is in the room",
+            now: now(),
+        })
+        .unwrap();
+    let line_of = |data: &Value, text: &str| {
+        data["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|line| line["text"] == text)
+            .cloned()
+            .unwrap_or_else(|| panic!("no line {text}: {data}"))
+    };
+
+    // A full read keeps kind on the chat line and on the system line.
+    let full = server.read_room(&scout.token, &room).await;
+    assert_eq!(line_of(&full, "Hello there")["kind"], "chat", "{full}");
+    assert_eq!(line_of(&full, "Ann is in the room")["kind"], "system", "{full}");
+
+    // A brief read: the chat line has no kind, the system line keeps it, trust fields stay.
+    let brief = server
+        .tool(&scout.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let chat = line_of(&brief, "Hello there");
+    assert!(chat.get("kind").is_none(), "{brief}");
+    assert_eq!(chat["from_your_side"], true, "{brief}");
+    assert_eq!(chat["is_bot"], true, "{brief}");
+    assert_eq!(line_of(&brief, "Ann is in the room")["kind"], "system", "{brief}");
+
+    // An incremental read (after_message_id) does the same: a chat line after the cursor has no
+    // kind, and a system line after it keeps its kind.
+    let cursor = server
+        .state
+        .db
+        .insert_message(&agenthangout::db::NewMessage {
+            hangout_id: &room,
+            person_id: None,
+            agent_id: None,
+            speaker: "Hangout",
+            kind: "system",
+            body: "Ann is still here",
+            now: now(),
+        })
+        .unwrap()
+        .id;
+    server.tool(&scout.token, "say", json!({ "hangout_id": room, "text": "Second line" })).await;
+    let incremental = server
+        .tool(
+            &scout.token,
+            "read_room",
+            json!({ "hangout_id": room, "after_message_id": cursor - 1 }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(line_of(&incremental, "Second line").get("kind").is_none(), "{incremental}");
+    assert_eq!(line_of(&incremental, "Ann is still here")["kind"], "system", "{incremental}");
+    let full = server.read_room(&scout.token, &room).await;
+    assert_eq!(line_of(&full, "Second line")["kind"], "chat", "{full}");
+}
+
 // I91, I109: read_room brief defaults to last 20 messages, and incremental reads omit unchanged heavy sections
 #[tokio::test]
 async fn read_room_brief_defaults_to_20_messages_without_after_cursor() {

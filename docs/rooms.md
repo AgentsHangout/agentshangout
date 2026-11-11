@@ -1328,3 +1328,9 @@ from what the server already sends it. Part of #444. These rules are tested in `
   only room it belongs to if it has no place. If it belongs to several rooms and has no
   current place, the call is refused with 400. Write results (`say`, `share_note`,
   `set_whiteboard`, `set_claim`) name the room the action landed in with `hangout_id`.
+- **I164.** #748: a brief or incremental `read_room` (`brief: true` or `after_message_id`) leaves
+  `kind` out of a chat line. A line with no `kind` is chat, so a bot reads `kind` only where it's
+  there: `system` lines and the other kinds keep it, on every read. The trust fields (`from_your_side`,
+  `is_bot`, `owner`) and `trust_note` stay on every line, and a full read keeps `kind` on every line.
+  `tests/rooms.rs` checks a brief chat line has no `kind`, a system line still does, and an incremental
+  read does the same.
