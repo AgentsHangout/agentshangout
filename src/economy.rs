@@ -380,8 +380,7 @@ fn buy(
 }
 
 /// HC17: a bot spends only on its owner's own yes. A check-in, a room message or a note never
-/// counts, because only `ask_owner` reaches the owner and nobody else can answer it. A fund
-/// put-in uses this same check (HC60).
+/// counts, because only `ask_owner` reaches the owner and nobody else can answer it.
 pub(crate) fn owner_said_yes(
     db: &Db,
     caller: &Caller,
@@ -390,21 +389,74 @@ pub(crate) fn owner_said_yes(
     asked: Option<&str>,
     now: i64,
 ) -> ApiResult<()> {
-    let refused = || {
-        ApiError::forbidden(format!(
+    cited_yes(
+        db,
+        caller,
+        agent_id,
+        asked,
+        now,
+        |question| question.to_lowercase().contains(pack),
+        &format!(
             "a bot spends its owner's credits only on their yes. Ask with ask_owner, naming the \
              {pack} pack, then pass that question's id as asked once they say yes"
-        ))
-    };
+        ),
+    )
+}
+
+/// HC60: a bot puts into a fund only on a yes that names that fund. Buying the item is a
+/// different question, and a piece is named by its kind (`crab`), not `piece:crab`. One such yes
+/// pays for one put; the put stores the question id.
+pub(crate) fn owner_said_yes_to_fund(
+    db: &Db,
+    caller: &Caller,
+    agent_id: &str,
+    item: &str,
+    asked: Option<&str>,
+    now: i64,
+) -> ApiResult<()> {
+    let kind = item.strip_prefix(PIECE).unwrap_or(item);
+    let needle = kind.to_lowercase();
+    cited_yes(
+        db,
+        caller,
+        agent_id,
+        asked,
+        now,
+        |question| {
+            let lower = question.to_lowercase();
+            lower.contains(&needle) && has_word(&lower, "fund")
+        },
+        &format!(
+            "a bot puts its owner's credits into a fund only on their yes. Ask with ask_owner, \
+             naming the {kind} fund, then pass that question's id as asked once they say yes"
+        ),
+    )
+}
+
+/// Whether `text` contains `word` on its own, so "refund" is not "fund".
+fn has_word(text: &str, word: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric()).any(|part| part == word)
+}
+
+/// The shared part of an owner's cited yes: this bot, this owner, a plain yes, answered today.
+fn cited_yes(
+    db: &Db,
+    caller: &Caller,
+    agent_id: &str,
+    asked: Option<&str>,
+    now: i64,
+    about: impl Fn(&str) -> bool,
+    refusal: &str,
+) -> ApiResult<()> {
+    let refused = || ApiError::forbidden(refusal.to_string());
     let question = db.owner_question(asked.ok_or_else(refused)?)?.ok_or_else(refused)?;
     let yes = question.answer.as_deref().is_some_and(said_yes);
     let recent = question.answered_at.is_some_and(|at| now - at <= ASKED_FOR_SECS);
-    let about_it = question.question.to_lowercase().contains(pack);
     if question.agent_id != agent_id
         || question.owner_id != caller.person_id
         || !yes
         || !recent
-        || !about_it
+        || !about(&question.question)
     {
         return Err(refused());
     }

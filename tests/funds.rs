@@ -396,14 +396,185 @@ async fn a_bot_puts_in_only_on_its_owners_cited_yes() {
         .ok();
     let taken = server.post(&scout.token, &put, json!({ "amount": 3, "asked": yes })).await.ok();
     assert_eq!(taken["put"], 3);
-    // The limit is 4 a day, and 3 are already in, so 3 more is over it.
+    // The limit is 4 a day, and 3 are already in, so 3 more is over it. A fresh yes: the one
+    // above already paid for the put that landed.
+    let again = ask("May I put 3 more credits into the winter fund?".to_string()).await;
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{again}/answer"), json!({ "answer": "Yes" }))
+        .await
+        .ok();
     let over = server
-        .post(&scout.token, &put, json!({ "amount": 3, "asked": yes }))
+        .post(&scout.token, &put, json!({ "amount": 3, "asked": again }))
         .await
         .refused(StatusCode::FORBIDDEN);
     assert!(text(&over["error"]).contains("may spend today"), "{over}");
     // The owner still can.
     server.post(&ann.key, &put, json!({ "amount": 1 })).await.ok();
+}
+
+// HC60: one yes pays for one put. A second put needs its own yes.
+#[tokio::test]
+async fn a_yes_pays_for_one_put_and_a_second_put_needs_another() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 10 }))
+        .await
+        .ok();
+    let fund = server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "winter" }))
+        .await
+        .ok();
+    let id = text(&fund["id"]);
+    let put = format!("/api/funds/{id}/put");
+    let ask = |question: &str| {
+        let server = &server;
+        let room = room.clone();
+        let token = scout.token.clone();
+        let question = question.to_string();
+        async move {
+            text(
+                &server
+                    .post(
+                        &token,
+                        &format!("/api/hangouts/{room}/owner-questions"),
+                        json!({ "question": question }),
+                    )
+                    .await
+                    .ok()["id"],
+            )
+        }
+    };
+    let yes = ask("May I put credits into the winter fund?").await;
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{yes}/answer"), json!({ "answer": "yes" }))
+        .await
+        .ok();
+    let first = server.post(&scout.token, &put, json!({ "amount": 2, "asked": yes })).await.ok();
+    assert_eq!(first["put"], 2);
+
+    let again = server
+        .post(&scout.token, &put, json!({ "amount": 1, "asked": yes }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(text(&again["error"]).contains("already used"), "{again}");
+    assert_eq!(fund_body(&first)["total"], 2, "a reused yes adds nothing");
+
+    let fresh = ask("May I put more credits into the winter fund?").await;
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{fresh}/answer"), json!({ "answer": "yes" }))
+        .await
+        .ok();
+    let second = server.post(&scout.token, &put, json!({ "amount": 1, "asked": fresh })).await.ok();
+    assert_eq!(second["put"], 1);
+    assert_eq!(fund_body(&second)["total"], 3);
+}
+
+// HC60: a yes to buying the item is not a yes to the fund.
+#[tokio::test]
+async fn a_yes_to_buying_the_item_does_not_pay_for_a_fund() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 10 }))
+        .await
+        .ok();
+    let fund = server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "winter" }))
+        .await
+        .ok();
+    let id = text(&fund["id"]);
+    let put = format!("/api/funds/{id}/put");
+    let asked = text(
+        &server
+            .post(
+                &scout.token,
+                &format!("/api/hangouts/{room}/owner-questions"),
+                json!({ "question": "May I buy the winter pack?" }),
+            )
+            .await
+            .ok()["id"],
+    );
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{asked}/answer"), json!({ "answer": "yes" }))
+        .await
+        .ok();
+    let buy_yes = server
+        .post(&scout.token, &put, json!({ "amount": 2, "asked": asked }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    assert!(text(&buy_yes["error"]).contains("winter fund"), "{buy_yes}");
+    let listed = server.get(&ann.key, &format!("/api/floors/{room}/funds")).await.ok();
+    assert_eq!(listed["funds"][0]["total"], 0, "the buy-yes put nothing in");
+}
+
+// HC60: a piece fund matches the kind on its own, and the refusal names that fund.
+#[tokio::test]
+async fn a_bot_puts_into_a_piece_fund_by_its_kind() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 10 }))
+        .await
+        .ok();
+    let fund = server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "piece:crab" }))
+        .await
+        .ok();
+    let id = text(&fund["id"]);
+    let put = format!("/api/funds/{id}/put");
+    let ask = |question: &str| {
+        let server = &server;
+        let room = room.clone();
+        let token = scout.token.clone();
+        let question = question.to_string();
+        async move {
+            text(
+                &server
+                    .post(
+                        &token,
+                        &format!("/api/hangouts/{room}/owner-questions"),
+                        json!({ "question": question }),
+                    )
+                    .await
+                    .ok()["id"],
+            )
+        }
+    };
+
+    // Naming the stored key, the way a pack purchase does, is not how a piece fund is asked.
+    let literal = ask("May I buy the piece:crab pack?").await;
+    server
+        .post(
+            &ann.key,
+            &format!("/api/owner-questions/{literal}/answer"),
+            json!({ "answer": "yes" }),
+        )
+        .await
+        .ok();
+    let refused = server
+        .post(&scout.token, &put, json!({ "amount": 1, "asked": literal }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let error = text(&refused["error"]);
+    assert!(error.contains("the crab fund"), "{refused}");
+    assert!(!error.contains("piece:crab"), "{refused}");
+
+    let yes = ask("May I put credits into the crab fund?").await;
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{yes}/answer"), json!({ "answer": "yes" }))
+        .await
+        .ok();
+    let taken = server.post(&scout.token, &put, json!({ "amount": 1, "asked": yes })).await.ok();
+    assert_eq!(taken["put"], 1);
+    assert_eq!(fund_body(&taken)["item"], "piece:crab");
+    assert_eq!(fund_body(&taken)["total"], 1);
 }
 
 // HC61: two puts at once clamp to what's left and complete the fund once.
@@ -439,6 +610,7 @@ async fn a_race_clamps_each_put_and_completes_the_fund_once() {
                 person_id: &ann_id,
                 agent_id: None,
                 amount: 6,
+                asked: None,
                 now: now(),
             })
         });
@@ -449,6 +621,7 @@ async fn a_race_clamps_each_put_and_completes_the_fund_once() {
                 person_id: &bo_id,
                 agent_id: None,
                 amount: 6,
+                asked: None,
                 now: now(),
             })
         });

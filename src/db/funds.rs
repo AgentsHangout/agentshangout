@@ -60,6 +60,8 @@ pub struct NewPut<'a> {
     pub person_id: &'a str,
     pub agent_id: Option<&'a str>,
     pub amount: i64,
+    /// The `ask_owner` question id, when a bot is putting in. One id pays for one put.
+    pub asked: Option<&'a str>,
     pub now: i64,
 }
 
@@ -84,6 +86,8 @@ pub enum PutIn {
     },
     /// Clamped to what's left, and nothing was left.
     NothingLeft,
+    /// HC60: this `asked` id already paid for a put.
+    YesUsed,
 }
 
 fn is_constraint(error: &rusqlite::Error) -> bool {
@@ -96,19 +100,23 @@ fn is_constraint(error: &rusqlite::Error) -> bool {
 
 /// The same balance `spend_credits` reads, so held credits (a first gathering, a merged pull
 /// request, a drawn coin) can go in, and credits already held by a put cannot go in twice.
+/// Contributions and coins use the shared sums, so a change there can't leave this behind.
 fn balance_of(conn: &Connection, person_id: &str) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
-              + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
-              - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
-              + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties
-                  WHERE (sponsor_id = ?1 AND status = 'refunded'
-                         AND NOT EXISTS (SELECT 1 FROM starter_questions s
-                                          WHERE s.bounty_id = question_bounties.id))
-                     OR (recipient_id = ?1 AND status = 'paid'))
-              + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = ?1)
-              + (SELECT COALESCE(SUM(amount), 0) FROM contribution_payouts WHERE recipient_id = ?1)
-              + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops WHERE person_id = ?1)",
+        &format!(
+            "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid WHERE person_id = ?1)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts WHERE person_id = ?1)
+                  - (SELECT COALESCE(SUM(amount), 0) FROM credit_spends WHERE person_id = ?1)
+                  + (SELECT COALESCE(SUM(amount), 0) FROM question_bounties
+                      WHERE (sponsor_id = ?1 AND status = 'refunded'
+                             AND NOT EXISTS (SELECT 1 FROM starter_questions s
+                                              WHERE s.bounty_id = question_bounties.id))
+                         OR (recipient_id = ?1 AND status = 'paid'))
+                  + (SELECT COALESCE(SUM(amount), 0) FROM bot_tips WHERE recipient_id = ?1)
+                  + {} + {}",
+            super::contributions::CONTRIBUTIONS_PAID,
+            super::coin_drops::COIN_DROPS_PAID
+        ),
         [person_id],
         |row| row.get(0),
     )
@@ -250,6 +258,12 @@ impl Db {
         if left < 1 {
             return Ok(PutIn::NothingLeft);
         }
+        // HC60: one yes, one put. Checked in this transaction, with the unique index behind it.
+        if let Some(asked) = put.asked {
+            if exists(&tx, "SELECT 1 FROM fund_puts WHERE asked = ?1", [asked])? {
+                return Ok(PutIn::YesUsed);
+            }
+        }
         // HC61: never more than what's left, so two puts at once can't overfill or complete twice.
         let taken = put.amount.min(left);
         let balance = balance_of(&tx, put.person_id)?;
@@ -269,11 +283,21 @@ impl Db {
                 return Ok(PutIn::OverBotLimit { left_today: (limit - spent_today).max(0) });
             }
         }
-        tx.execute(
-            "INSERT INTO fund_puts (id, fund_id, person_id, agent_id, amount, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![put.id, put.fund_id, put.person_id, put.agent_id, taken, put.now],
-        )?;
+        if let Err(error) = tx.execute(
+            "INSERT INTO fund_puts (id, fund_id, person_id, agent_id, amount, asked, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![put.id, put.fund_id, put.person_id, put.agent_id, taken, put.asked, put.now],
+        ) {
+            // The check above and this index agree. A race that passes the check still stops here.
+            if is_constraint(&error) {
+                if let Some(asked) = put.asked {
+                    if exists(&tx, "SELECT 1 FROM fund_puts WHERE asked = ?1", [asked])? {
+                        return Ok(PutIn::YesUsed);
+                    }
+                }
+            }
+            return Err(error);
+        }
         tx.execute(
             "INSERT INTO credit_spends (person_id, pack, amount, agent_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -468,6 +492,7 @@ mod tests {
                 person_id: "p1",
                 agent_id: None,
                 amount: 6,
+                asked: None,
                 now: at,
             })
             .unwrap(),
@@ -483,6 +508,7 @@ mod tests {
                 person_id: "p1",
                 agent_id: None,
                 amount: 9,
+                asked: None,
                 now: at,
             })
             .unwrap(),

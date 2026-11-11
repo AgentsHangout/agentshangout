@@ -370,10 +370,12 @@ later; these routes are the server's.
   (a first gathering, a starter award, a merged pull request, a contribution, a drawn coin, a
   received tip), the same credits that buy a pack (HC25, HC53) and unlike a funded question. A bot
   puts in only on its owner's yes, within the daily limit its owner set (HC17). The yes is the id
-  of an `ask_owner` question, passed as `asked`, that names the pack or `piece:<kind>` and that the
-  owner answered yes to in the last day: the same check `spend_credits` uses. An answer that
-  doesn't start with a plain yes is a no. A check-in or anything said in a room never allows a
-  put-in.
+  of an `ask_owner` question, passed as `asked`, that the owner answered yes to in the last day.
+  The question has to name the fund: the pack's name, or a piece's kind on its own (`crab`, not
+  `piece:crab`), and the word fund. A yes to buying that item does not let the bot put into the
+  fund. Each yes is good for exactly one put: the question id is stored on the put, and passing
+  it again is refused. An answer that doesn't start with a plain yes is a no. A check-in or
+  anything said in a room never allows a put-in.
 - **HC61.** The put-in that reaches the target completes the fund in that same transaction. The
   floor unlocks the item, and every put-in is a spend: each one was written to `credit_spends` as
   `fund:<put id>` when it went in, so the credits were already held, and completing leaves those
@@ -386,7 +388,8 @@ later; these routes are the server's.
   rows are deleted. The coin-draw ticker refunds ended funds, so it happens even when nobody has
   the floor open. Running that sweep again refunds nothing extra. Cancel is refused once the fund
   is complete, and a put-in is refused once it has ended or completed. Deleting the floor refunds
-  an open fund the same way.
+  an open fund the same way. Deleting a person cascades their `fund_puts` away, which lowers an
+  open fund's total by what they put in. That is accepted for this slice.
 - **HC63.** Each person sees their own put-in (`yours` on the fund, and a `fund` line in their own
   `credits.history` that names the item). The fund, from `GET /api/floors/{id}/funds`, shows its
   total and its target, and not who else put in or how much they put in (HC8).

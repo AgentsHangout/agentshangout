@@ -2753,10 +2753,15 @@ CREATE TABLE IF NOT EXISTS fund_puts (
     person_id   TEXT REFERENCES people(id) ON DELETE CASCADE,
     agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
     amount      INTEGER NOT NULL CHECK (amount > 0),
+    -- HC60: the ask_owner question a bot cited. One yes pays for one put. A person's own put
+    -- leaves this null. Deleting the person cascades the row, so an open fund's total drops (HC62).
+    asked       TEXT,
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fund_puts_by_fund ON fund_puts (fund_id);
 CREATE INDEX IF NOT EXISTS fund_puts_by_person ON fund_puts (person_id, fund_id);
+-- HC60: the same yes can't pay for a second put. Nulls are a person's own puts, and there can be many.
+CREATE UNIQUE INDEX IF NOT EXISTS fund_puts_one_yes ON fund_puts (asked) WHERE asked IS NOT NULL;
 -- What a completed fund unlocked on its floor. A pack row covers what that pack places (HC61);
 -- a piece row covers that piece. Deleting the floor takes the unlock with it.
 CREATE TABLE IF NOT EXISTS floor_unlocks (

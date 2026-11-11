@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::{
     auth::{self, Caller},
     db::{FundView, NewFund, NewPut, PutIn, FUND_DAYS},
-    economy::{self, owner_said_yes},
+    economy::{self, owner_said_yes_to_fund},
     error::{ApiError, ApiResult},
     items::{comes_with, pack_of, paid_pack_with, piece_price, PIECE},
     now, ops, AppState,
@@ -189,16 +189,19 @@ async fn put_in(
     see_floor(&state, &caller, &hangout)?;
     let at = now();
     if let Some(agent_id) = &caller.agent_id {
-        // HC60: the same `asked` check as spend_credits. A room message is not a yes.
-        owner_said_yes(&state.db, &caller, agent_id, &item, body.asked.as_deref(), at)?;
+        // HC60: a yes that names this fund, not a yes to buying the item. A room message is not a yes.
+        owner_said_yes_to_fund(&state.db, &caller, agent_id, &item, body.asked.as_deref(), at)?;
     }
     economy::credits(&state.db, &caller.person_id, at)?;
+    // A person's own put cites no question. Only a bot's yes is stored, and only once.
+    let asked = caller.agent_id.as_deref().and(body.asked.as_deref());
     let put = state.db.put_in_fund(&NewPut {
         id: &auth::new_id(),
         fund_id: &id,
         person_id: &caller.person_id,
         agent_id: caller.agent_id.as_deref(),
         amount: body.amount,
+        asked,
         now: at,
     })?;
     match put {
@@ -214,6 +217,10 @@ async fn put_in(
             "that's more than this bot may spend today ({left_today} left). Its owner sets the \
              limit on their Your credits card"
         ))),
+        PutIn::YesUsed => Err(ApiError::conflict(
+            "that yes was already used for a put-in. Ask again, and pass the new question's id \
+             as asked",
+        )),
     }
 }
 
