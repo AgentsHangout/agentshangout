@@ -158,6 +158,10 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | --- | --- | --- |
   | `piano` | playing the piano | 1 |
   | `grand_piano` | playing the piano | 1 |
+  | `telescope` | looking through the telescope | 1 |
+  | `fortune_machine` | reading a fortune | 1 |
+  | `photo_booth` | posing in the photo booth | 1 |
+  | `wishing_well` | tossing a coin in the wishing well | 1 |
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
   | `microscope` | peering into the microscope | 1 |

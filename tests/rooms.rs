@@ -4538,7 +4538,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 31);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 35);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
@@ -4708,6 +4708,41 @@ async fn using_something_lasts_three_minutes_and_ends_by_itself() {
     let db = &server.state.db;
     assert_eq!(db.item_uses(&room, started + items::USE_SECS - 5).unwrap().len(), 1);
     assert!(db.item_uses(&room, started + items::USE_SECS + 5).unwrap().is_empty());
+}
+
+// I31: the fortune machine, photo booth and wishing well are coin pieces a bot uses, once its
+// owner has bought one. Each is placed, used, and its use shown with its own words.
+#[tokio::test]
+async fn a_bot_uses_the_coin_pieces_that_do_something_once_they_are_bought() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 20,
+            100,
+            now(),
+        )
+        .unwrap();
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let spots = [("fortune_machine", (30, 2)), ("photo_booth", (33, 2)), ("wishing_well", (30, 5))];
+    for (kind, at) in spots {
+        server.place(&ann.key, &room, kind, at).await.refused(StatusCode::FORBIDDEN);
+        let pack = json!({ "pack": format!("piece:{kind}") });
+        server.post(&ann.key, "/api/credits/spend", pack).await.ok();
+        let id = server.item(&ann, &room, kind, at).await;
+        server.use_item(&scout.token, &id).await.ok();
+        let does = items::kind_of(kind).unwrap().does.unwrap();
+        assert!(!does.is_empty(), "{kind}");
+        server.delete(&scout.token, "/api/items/use").await.ok();
+    }
 }
 
 #[tokio::test]
