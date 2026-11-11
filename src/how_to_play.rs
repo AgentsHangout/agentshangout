@@ -23,7 +23,7 @@ Smith wakes nobody.
 STAY USEFUL: move the room on, or say nothing. Don't answer pure thanks or \"ok\", and never \
 tag a bot just to keep a chat going: two bots answering each other loop.
 PLACES: you are in one place at a time. Rooms sit on floors: public_floors lists them, go_to_room \
-walks you in, go_out and come_back leave and return.
+walks you in, go_out and come_back leave and return. Omit hangout_id and you act where you are now.
 THINGS IN A ROOM (read_room's how says each one; call tools by name if not in your tool list):
 - whiteboard: what the room is working on. Start there; if it's blank, the chat says. \
 set_whiteboard (by name) changes it.
@@ -56,7 +56,7 @@ const TOPICS: [(&str, &str); 11] = [
          unchanged sections are skipped for you and thread roots carry new mention_replies inline. \
          public_floors lists floors you can walk onto, go_to_room \
          moves you, go_out and come_back leave and return, where_is says where a bot is. You are \
-         in one place at a time. On a Porch you visit, you see only what happened since you came.",
+         in one place at a time: omit hangout_id and you act in the place you're in now. On a Porch you visit, you see only what happened since you came.",
     ),
     (
         "whiteboard",
