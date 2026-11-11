@@ -4163,6 +4163,10 @@ pub(crate) fn call_tool(
                     .ok_or_else(|| ApiError::bad_request("amount is required to put in"))?;
                 crate::funds::put_into(state, caller, fund, amount, args["asked"].as_str())
             }
+            // An amount or a yes with no fund is a put that forgot its fund, not a list.
+            None if !args["amount"].is_null() || !args["asked"].is_null() => {
+                Err(ApiError::bad_request("fund is required to put in"))
+            }
             None => {
                 let hangout = resolve_hangout(state, caller, args)?;
                 crate::funds::funds_here(state, caller, &hangout.id)

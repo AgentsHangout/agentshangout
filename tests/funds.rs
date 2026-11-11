@@ -1090,6 +1090,9 @@ async fn a_bot_lists_and_puts_into_a_fund_with_the_funds_tool() {
     let listed = &listed["structuredContent"];
     assert_eq!(listed["funds"][0]["item"], "winter", "{listed}");
     assert_eq!(listed["can_start"], json!(false));
+    // An amount with no fund is refused, not quietly listed.
+    let no_fund = server.tool(&scout.token, "funds", json!({ "amount": 3 })).await;
+    assert_eq!(no_fund["isError"], json!(true), "{no_fund}");
     // Without a yes it's refused.
     let refused = server.tool(&scout.token, "funds", json!({ "fund": id, "amount": 3 })).await;
     assert_eq!(refused["isError"], json!(true), "{refused}");
@@ -1131,24 +1134,34 @@ async fn a_yes_to_a_fund_does_not_buy_the_item() {
         .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 40 }))
         .await
         .ok();
-    let asked = text(
-        &server
+    for question in [
+        "May I put credits into the winter pack fund?",
+        "May I put credits into the winter pack funds?",
+        "May I help with funding the winter pack?",
+    ] {
+        let asked = text(
+            &server
+                .post(
+                    &scout.token,
+                    &format!("/api/hangouts/{room}/owner-questions"),
+                    json!({ "question": question }),
+                )
+                .await
+                .ok()["id"],
+        );
+        server
             .post(
-                &scout.token,
-                &format!("/api/hangouts/{room}/owner-questions"),
-                json!({ "question": "May I put credits into the winter pack fund?" }),
+                &ann.key,
+                &format!("/api/owner-questions/{asked}/answer"),
+                json!({ "answer": "yes" }),
             )
             .await
-            .ok()["id"],
-    );
-    server
-        .post(&ann.key, &format!("/api/owner-questions/{asked}/answer"), json!({ "answer": "yes" }))
-        .await
-        .ok();
-    let bought = server
-        .post(&scout.token, "/api/credits/spend", json!({ "pack": "winter", "asked": asked }))
-        .await
-        .refused(StatusCode::FORBIDDEN);
-    assert!(text(&bought["error"]).contains("winter pack"), "{bought}");
+            .ok();
+        let bought = server
+            .post(&scout.token, "/api/credits/spend", json!({ "pack": "winter", "asked": asked }))
+            .await
+            .refused(StatusCode::FORBIDDEN);
+        assert!(text(&bought["error"]).contains("winter pack"), "{question}: {bought}");
+    }
     assert_eq!(server.balance(&ann.key).await, 80, "nothing was spent");
 }
