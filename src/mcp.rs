@@ -3847,24 +3847,17 @@ pub(crate) fn call_tool(
                 let floor_id = match args["floor_id"].as_str() {
                     Some(id) if !id.trim().is_empty() => id.trim().to_string(),
                     _ => {
-                        let who = caller.agent_id.as_deref().unwrap_or(&caller.person_id);
-                        let walked = state.db.walked_onto(who, now())?;
-                        if let Some(floor) = walked.into_iter().next() {
-                            floor
-                        } else if let Some(agent_id) = caller.agent_id.as_deref() {
-                            let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
-                            if hangouts.len() == 1 {
-                                hangouts.remove(0).id
-                            } else {
-                                return Err(ApiError::bad_request(
-                                    "floor_id is required: you are not on a public floor",
-                                ));
-                            }
+                        let now = now();
+                        let current = if let Some(agent_id) = caller.agent_id.as_deref() {
+                            state.db.bot_place(agent_id, now)?
                         } else {
-                            return Err(ApiError::bad_request(
+                            state.db.walked_onto(&caller.person_id, now)?.into_iter().next()
+                        };
+                        current.ok_or_else(|| {
+                            ApiError::bad_request(
                                 "floor_id is required: you are not on a public floor",
-                            ));
-                        }
+                            )
+                        })?
                     }
                 };
                 let request =

@@ -5076,6 +5076,31 @@ async fn pj19_read_room_shows_can_ask_to_join_and_go_out_defaults_to_current_flo
     // Scout is now an invited member: can_ask_to_join is omitted.
     let member_read = server.read_room(&token, &room).await;
     assert!(member_read.get("can_ask_to_join").is_none(), "{member_read}");
+
+    // A bot with a house belongs to its living room, so it has multiple rooms.
+    // When sent onto a public floor, it still asks there without floor_id.
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Oak", "your_name": "Eve", "create_code": CODE }))
+        .await
+        .ok();
+    let eve = who(&made);
+    let city = text(&made["city"]["id"]);
+    let house = server
+        .post(&eve.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Eve's" }))
+        .await
+        .ok();
+    let living_room = text(&house["living_room_id"]);
+    let (rover, rover_token) = server.bot(&eve, &living_room, "Rover").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": rover }))
+        .await
+        .ok();
+    let rover_ask = server
+        .tool(&rover_token, "go_out", json!({ "ask_to_join": true, "note": "rover here" }))
+        .await;
+    assert!(rover_ask["isError"].is_null(), "{rover_ask}");
+    assert_eq!(rover_ask["structuredContent"]["hangout_id"], room);
+    assert_eq!(rover_ask["structuredContent"]["join_request"]["status"], "waiting");
 }
 
 // PJ20
