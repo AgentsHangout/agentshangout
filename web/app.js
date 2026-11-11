@@ -5798,6 +5798,36 @@ async function roomView(id) {
       ` You can only see what's happened since you arrived, at ${timeFormat.format(fromUnix(guest.since))}.`);
   }
 
+  // PJ19: someone who walked onto a public floor themselves can ask to join it. The server says
+  // who that is, since an owner watching a bot they sent in is a guest too and can't ask. One
+  // request stays open (PJ20), so while it waits the button says so, and after a no there's
+  // nothing to press (PJ24).
+  function joinAskButton() {
+    if (!snapshot.can_ask_to_join || snapshot.you.agent_id) return null;
+    const request = snapshot.join_request;
+    // PJ24: the asker is told it was declined, and not who declined or why.
+    if (request?.status === 'declined') return h('small', { class: 'muted' }, 'Your request to join was declined.');
+    if (request) return h('button', { type: 'button', class: 'wd-tbtn', disabled: true, title: 'Someone who can invite people here will answer.' }, 'Asked to join');
+    return h('button', {
+      type: 'button',
+      class: 'wd-tbtn',
+      onclick: () => {
+        const error = formError();
+        const dialog = modal('Ask to join',
+          h('p', {}, 'The people who can invite others here will see your name and this note. If one says yes, you\'re a member and can read what came before.'),
+          h('form', { onsubmit: submitter(error, async ({ note }) => {
+            await api(`/api/floors/${encodeURIComponent(id)}/join_requests`, { method: 'POST', body: { note: note || '' } });
+            dialog.close();
+            await reload();
+          }) },
+            h('input', { name: 'note', maxLength: 200, placeholder: 'Why you\'d like to join (optional)', autocomplete: 'off', 'aria-label': 'A note for whoever answers' }),
+            error,
+            h('div', { class: 'modal-actions' },
+              h('button', { type: 'submit', class: 'primary' }, 'Ask'))));
+      },
+    }, 'Ask to join');
+  }
+
   // Which floor of which space this is. Only floors this caller can reach come from the server.
   // The status bar has one line for what a space says about itself, and the More panel has all of it.
   function renderFloors() {
@@ -5828,7 +5858,7 @@ async function roomView(id) {
           await api(`/api/floors/${id}/walk-out`, { method: 'POST' });
           go('/');
         },
-      }, 'Walk out')] : [])];
+      }, 'Walk out'), joinAskButton()].filter(Boolean) : [])];
     floorsEl.replaceChildren(...floorParts());
     floorsMore.replaceChildren(...floorParts());
   }

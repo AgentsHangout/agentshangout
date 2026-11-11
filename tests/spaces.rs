@@ -5185,6 +5185,48 @@ async fn pj23_a_pending_declined_or_expired_request_gives_no_history() {
     }
 }
 
+// PJ23
+#[tokio::test]
+async fn pj23_the_snapshot_shows_a_visitor_only_their_own_request() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+    let (_, dee) = server.someone("Dee").await;
+    server.walk_in(&cy, &room).await.ok();
+    server.walk_in(&dee, &room).await.ok();
+    let none = server.snapshot(&cy.key, &room).await.ok();
+    assert!(none.get("join_request").is_none(), "nothing asked yet: {none}");
+    assert_eq!(none["can_ask_to_join"], true, "Cy walked in himself: {none}");
+    assert!(server.snapshot(&ann.key, &room).await.ok().get("can_ask_to_join").is_none());
+    // An owner watching a bot they sent in is a guest, but can't ask: the ask would be a 404.
+    let (home, eve) = server.someone("Eve").await;
+    let (scout, _) = server.bot(&eve, &home, "Scout").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let watching = server.snapshot(&eve.key, &room).await.ok();
+    assert!(!watching["guest"].is_null(), "{watching}");
+    assert!(watching.get("can_ask_to_join").is_none(), "{watching}");
+    server.ask_to_join(&eve, &room, json!({})).await.refused(StatusCode::NOT_FOUND);
+
+    let id =
+        text(&server.ask_to_join(&cy, &room, json!({ "note": "private words" })).await.ok()["id"]);
+    let own = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(own["join_request"]["status"], "waiting", "{own}");
+    assert_eq!(own["join_request"].as_object().unwrap().len(), 2, "status and asked_at: {own}");
+    // Another visitor and a member see nothing of it.
+    for key in [&dee.key, &ann.key] {
+        let other = server.snapshot(key, &room).await.ok();
+        assert!(other.get("join_request").is_none(), "{other}");
+        assert!(!other.to_string().contains("private words"), "{other}");
+    }
+
+    server.answer_join(&ann, &room, &id, false).await.ok();
+    let declined = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(declined["join_request"]["status"], "declined", "{declined}");
+}
+
 // PJ24
 #[tokio::test]
 async fn pj24_a_no_closes_the_request_and_lasts_a_week() {

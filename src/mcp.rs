@@ -2793,10 +2793,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "room_beauty_word": snapshot.furnishing.room_beauty_word,
     });
     // PJ23: a visitor sees its own request to join and nobody else's. Members have none.
-    if snapshot.guest.is_some() {
-        if let Some(request) = crate::spaces::own_join_request(state, caller, &hangout.id)? {
-            reply["join_request"] = request;
-        }
+    if let Some(request) = &snapshot.join_request {
+        reply["join_request"] = request.clone();
     }
     // I146: emotes showing over avatars here, only while there are some.
     if !snapshot.emotes.is_empty() {
