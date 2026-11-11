@@ -2495,7 +2495,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             if root_visible {
                 // #1106: an old root (before the cursor) that a new reply touched doesn't come
                 // back; the reply comes as its own line with reply_to.
-                if root_id < after {
+                if root_id <= after {
                     all_roots.push(msg.clone());
                 } else if !pool.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
                     missing_root_ids.insert(root_id);
@@ -2547,7 +2547,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         all_roots
             .iter()
             .filter(|message| conversation_activity(message) > after)
-            .filter(|message| !(message.reply_to.is_none() && message.id < after))
+            .filter(|message| !(message.reply_to.is_none() && message.id <= after))
             .collect()
     };
     if !oldest_first {

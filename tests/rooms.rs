@@ -10508,10 +10508,10 @@ async fn threads_limited_incremental_read_retains_active_thread() {
         )
         .await;
     let msgs = read_lim["structuredContent"]["messages"].as_array().unwrap();
-    assert_eq!(msgs.len(), 1, "active root A returned: {read_lim}");
-    assert_eq!(msgs[0]["id"], a_id, "Root A returned because its reply Z is newest: {read_lim}");
-    assert_eq!(msgs[0]["reply_count"], 1);
-    assert_eq!(read_lim["structuredContent"]["earlier_messages"], 1);
+    assert_eq!(msgs.len(), 1, "newest reply Z returned alone: {read_lim}");
+    assert_eq!(msgs[0]["id"], z_id, "reply Z is the newest line: {read_lim}");
+    assert_eq!(msgs[0]["reply_to"], a_id, "{read_lim}");
+    assert!(msgs.iter().all(|m| m["id"] != a_id), "root A at the cursor came back: {read_lim}");
     let cursor = read_lim["structuredContent"]["last_message_id"].as_i64().unwrap();
     assert_eq!(cursor, z_id, "last_message_id reflects seen reply Z: {read_lim}");
 
@@ -13437,13 +13437,13 @@ async fn a_repeat_brief_read_sends_only_what_changed() {
         "hangout_id": room, "brief": true, "after_message_id": root_id, "known": tags.clone(),
     }))
     .await;
-    let stub = &repeat["messages"][0];
-    assert_eq!(repeat["messages"].as_array().unwrap().len(), 1, "{repeat}");
-    assert_eq!(stub["id"], root_id, "{repeat}");
-    assert_eq!(stub["reply_count"], 2, "{repeat}");
-    assert_eq!(stub["text"], "Who has the keys?", "{repeat}");
-    assert!(stub["last_reply_at"].is_string() && stub["from"] == "Ann", "{repeat}");
-    assert!(stub.get("owner").is_none() && stub.get("at").is_none(), "{repeat}");
+    // #1106: the root at the cursor doesn't come back; each new reply comes as its own line.
+    let lines = repeat["messages"].as_array().unwrap();
+    assert!(!lines.iter().any(|m| m["id"] == root_id), "{repeat}");
+    assert_eq!(lines.len(), 2, "{repeat}");
+    assert!(lines.iter().all(|m| m["reply_to"] == root_id), "{repeat}");
+    assert_eq!(lines[0]["text"], "I have them", "{repeat}");
+    assert_eq!(lines[1]["text"], "Check the desk drawer", "{repeat}");
     assert_eq!(repeat["section_tags"], json!({}), "{repeat}");
     let mut clock_keys: Vec<&String> = repeat["clock"].as_object().unwrap().keys().collect();
     clock_keys.sort();
@@ -13731,6 +13731,30 @@ async fn an_untagged_reply_to_an_old_root_comes_back_alone() {
         .clone();
     let lines = read["messages"].as_array().unwrap();
     assert!(!lines.iter().any(|m| m["id"] == root_id), "old root came back: {read}");
+    let line = lines.iter().find(|m| m["id"] == reply_id).expect("reply line");
+    assert_eq!(line["reply_to"], root_id, "{read}");
+}
+
+// #1106 edge: the cursor is the old root itself (you read the room, then someone replies to the last line you saw).
+#[tokio::test]
+async fn a_reply_to_the_root_at_the_cursor_comes_back_alone() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let root = server.post(&ann.key, &messages, json!({ "text": "Last line I saw" })).await.ok();
+    let root_id = root["id"].as_i64().unwrap();
+    let reply = server
+        .post(&ann.key, &messages, json!({ "text": "Reply to the cursor line", "reply_to": root_id }))
+        .await
+        .ok();
+    let reply_id = reply["id"].as_i64().unwrap();
+    let read = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "after_message_id": root_id }))
+        .await["structuredContent"]
+        .clone();
+    let lines = read["messages"].as_array().unwrap();
+    assert!(!lines.iter().any(|m| m["id"] == root_id), "root at the cursor came back: {read}");
     let line = lines.iter().find(|m| m["id"] == reply_id).expect("reply line");
     assert_eq!(line["reply_to"], root_id, "{read}");
 }
