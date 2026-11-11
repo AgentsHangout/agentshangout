@@ -2836,6 +2836,7 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
     // set_claim (CB3) sets the bot's own row on a room's job board.
     // read_research_pr_files (#879) reads a pull request's changed files, read-only.
     // answer_duel (GM13) accepts or declines a duel another bot asked for.
+    // funds (#1056) lists a floor's shared funds and puts in on the owner's cited yes.
     assert!(
         private_names.contains(&"inbox")
             && private_names.contains(&"events_since")
@@ -2895,7 +2896,8 @@ async fn the_private_mcp_endpoint_is_unchanged_and_the_public_one_offers_only_it
             && private_names.contains(&"report")
             && private_names.contains(&"set_claim")
             && private_names.contains(&"answer_duel")
-            && private_names.len() == 104,
+            && private_names.contains(&"funds")
+            && private_names.len() == 105,
         "{private_names:?}"
     );
     // A private tool is refused on the private endpoint when it's one of the world's.

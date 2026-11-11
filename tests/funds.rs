@@ -171,6 +171,14 @@ impl Server {
         self.get(token, "/api/credits").await.ok()["balance"].as_i64().unwrap()
     }
 
+    async fn tool(&self, token: &str, name: &str, arguments: Value) -> Value {
+        let call = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        });
+        support::structured(self.post(token, "/mcp", call).await.ok()["result"].clone())
+    }
+
     async fn credits(&self, token: &str) -> Value {
         self.get(token, "/api/credits").await.ok()
     }
@@ -192,8 +200,8 @@ fn fund_body(body: &Value) -> &Value {
     body.get("fund").unwrap_or(body)
 }
 
-const SHOWN: [&str; 8] =
-    ["created_at", "ends_at", "id", "item", "status", "target", "total", "yours"];
+const SHOWN: [&str; 9] =
+    ["created_at", "ends_at", "id", "item", "started_by_you", "status", "target", "total", "yours"];
 
 // HC59: the target is the item's price, one open fund per floor per item, and a fund can't buy a
 // car, a person, a free pack or a grand piece (HC65).
@@ -1033,4 +1041,127 @@ async fn credit_totals_matches_spendable_balance_across_every_credit_source() {
     // Refused at balance line 0 vs 1:
     let refused_zero = server.state.db.spend_credits(&ann.id, "pack:one", 1, None, at).unwrap();
     assert_eq!(refused_zero, Spend::TooFew { balance: 0 });
+}
+
+// #1056 1b: the list says who may start one and which fund the reader started, for the page.
+#[tokio::test]
+async fn the_list_says_who_may_start_a_fund_and_who_started_each() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "winter" }))
+        .await
+        .ok();
+    let path = format!("/api/floors/{room}/funds");
+    let mine = server.get(&ann.key, &path).await.ok();
+    assert_eq!(mine["can_start"], json!(true));
+    assert_eq!(mine["funds"][0]["started_by_you"], json!(true));
+    // A bot can't start one. Like yours, started_by_you speaks for its owner, who started this.
+    let bots = server.get(&scout.token, &path).await.ok();
+    assert_eq!(bots["can_start"], json!(false));
+    assert_eq!(bots["funds"][0]["started_by_you"], json!(true));
+    // Someone else on the floor didn't start it.
+    let bo = server.join(&ann, &room, "Bo").await;
+    let theirs = server.get(&bo.key, &path).await.ok();
+    assert_eq!(theirs["funds"][0]["started_by_you"], json!(false));
+    assert_eq!(theirs["can_start"], json!(true), "Bo is a member");
+}
+
+// #1056 1b: the funds tool lists a floor's funds, and puts in only on a yes naming that fund,
+// used once, like the HTTP route.
+#[tokio::test]
+async fn a_bot_lists_and_puts_into_a_fund_with_the_funds_tool() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 10 }))
+        .await
+        .ok();
+    let fund = server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "winter" }))
+        .await
+        .ok();
+    let id = text(&fund["id"]);
+    let listed = server.tool(&scout.token, "funds", json!({ "hangout_id": room })).await;
+    let listed = &listed["structuredContent"];
+    assert_eq!(listed["funds"][0]["item"], "winter", "{listed}");
+    assert_eq!(listed["can_start"], json!(false));
+    // An amount with no fund is refused, not quietly listed.
+    let no_fund = server.tool(&scout.token, "funds", json!({ "amount": 3 })).await;
+    assert_eq!(no_fund["isError"], json!(true), "{no_fund}");
+    // Without a yes it's refused.
+    let refused = server.tool(&scout.token, "funds", json!({ "fund": id, "amount": 3 })).await;
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    let asked = text(
+        &server
+            .post(
+                &scout.token,
+                &format!("/api/hangouts/{room}/owner-questions"),
+                json!({ "question": "May I put 3 credits into the winter fund?" }),
+            )
+            .await
+            .ok()["id"],
+    );
+    server
+        .post(&ann.key, &format!("/api/owner-questions/{asked}/answer"), json!({ "answer": "yes" }))
+        .await
+        .ok();
+    let put = server
+        .tool(&scout.token, "funds", json!({ "fund": id, "amount": 3, "asked": asked }))
+        .await;
+    assert_eq!(put["structuredContent"]["put"], 3, "{put}");
+    // The same yes doesn't pay for a second put.
+    let again = server
+        .tool(&scout.token, "funds", json!({ "fund": id, "amount": 3, "asked": asked }))
+        .await;
+    assert_eq!(again["isError"], json!(true), "{again}");
+    let after = server.get(&ann.key, &format!("/api/floors/{room}/funds")).await.ok();
+    assert_eq!(after["funds"][0]["total"], 3);
+}
+
+// #1056 1b: a yes to putting credits into a fund doesn't buy the item, even when it names the pack.
+#[tokio::test]
+async fn a_yes_to_a_fund_does_not_buy_the_item() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let scout = server.bot(&ann, &room, "Scout");
+    server
+        .put(&ann.key, &format!("/api/credits/bots/{}", scout.id), json!({ "daily": 40 }))
+        .await
+        .ok();
+    for question in [
+        "May I put credits into the winter pack fund?",
+        "May I put credits into the winter pack funds?",
+        "May I help with funding the winter pack?",
+    ] {
+        let asked = text(
+            &server
+                .post(
+                    &scout.token,
+                    &format!("/api/hangouts/{room}/owner-questions"),
+                    json!({ "question": question }),
+                )
+                .await
+                .ok()["id"],
+        );
+        server
+            .post(
+                &ann.key,
+                &format!("/api/owner-questions/{asked}/answer"),
+                json!({ "answer": "yes" }),
+            )
+            .await
+            .ok();
+        let bought = server
+            .post(&scout.token, "/api/credits/spend", json!({ "pack": "winter", "asked": asked }))
+            .await
+            .refused(StatusCode::FORBIDDEN);
+        assert!(text(&bought["error"]).contains("winter pack"), "{question}: {bought}");
+    }
+    assert_eq!(server.balance(&ann.key).await, 80, "nothing was spent");
 }

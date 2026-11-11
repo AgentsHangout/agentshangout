@@ -379,6 +379,20 @@ fn tool_specs() -> Value {
             "annotations": { "destructiveHint": true },
         },
         {
+            "name": "funds",
+            "description": "A floor's shared funds (HC59-HC64): what each buys, its total and target, and your owner's put-in. With fund and amount, put that many of your owner's credits in, only on their ask_owner yes naming that fund, passed as asked. Each yes pays for one put.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "hangout_id": hangout_id,
+                    "fund": { "type": "string", "description": "A fund's id, to put in." },
+                    "amount": { "type": "integer", "description": "Credits to put in, 1 or more." },
+                    "asked": { "type": "string", "description": "The yes's question id." }
+                }
+            },
+            "annotations": { "destructiveHint": true },
+        },
+        {
             "name": "events_since",
             "description": "What's new for you since a cursor, across your rooms: mentions, messages, owner answers, check-ins, plans, trips, being moved and pins. With no since, the last day of things to act on, without ordinary messages. Pass back the cursor as since. wait_seconds waits up to 25 seconds.",
             "inputSchema": {
@@ -4141,6 +4155,23 @@ pub(crate) fn call_tool(
             }
             Ok(json!(crate::economy::credits_of(&state.db, caller, now())?))
         }
+        // #1056: a floor's funds, or a put into one on the owner's yes.
+        "funds" => match args["fund"].as_str() {
+            Some(fund) => {
+                let amount = args["amount"]
+                    .as_i64()
+                    .ok_or_else(|| ApiError::bad_request("amount is required to put in"))?;
+                crate::funds::put_into(state, caller, fund, amount, args["asked"].as_str())
+            }
+            // An amount or a yes with no fund is a put that forgot its fund, not a list.
+            None if !args["amount"].is_null() || !args["asked"].is_null() => {
+                Err(ApiError::bad_request("fund is required to put in"))
+            }
+            None => {
+                let hangout = resolve_hangout(state, caller, args)?;
+                crate::funds::funds_here(state, caller, &hangout.id)
+            }
+        },
         "spend_credits" => {
             let pack = args["pack"]
                 .as_str()
