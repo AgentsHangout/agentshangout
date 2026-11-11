@@ -5389,7 +5389,7 @@ const USES = {
   // The Neon Nights pack: air hockey seats two, and the skee-ball and dance pad one each.
   air_hockey: { spots: 2, pose: 'stand', hands: true },
   skee_ball: { spots: 1, pose: 'stand', hands: true },
-  dance_pad: { spots: 1, pose: 'stand', hands: true },
+  dance_pad: { spots: 1, pose: 'stand', on: true },
 };
 
 // Where an item stands, in the room's own pixels. `w` and `h` are cells as it's turned now, and
