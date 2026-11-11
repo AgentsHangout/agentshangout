@@ -13745,7 +13745,11 @@ async fn a_reply_to_the_root_at_the_cursor_comes_back_alone() {
     let root = server.post(&ann.key, &messages, json!({ "text": "Last line I saw" })).await.ok();
     let root_id = root["id"].as_i64().unwrap();
     let reply = server
-        .post(&ann.key, &messages, json!({ "text": "Reply to the cursor line", "reply_to": root_id }))
+        .post(
+            &ann.key,
+            &messages,
+            json!({ "text": "Reply to the cursor line", "reply_to": root_id }),
+        )
         .await
         .ok();
     let reply_id = reply["id"].as_i64().unwrap();
