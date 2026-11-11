@@ -90,7 +90,10 @@ pub mod worlds;
 use std::{
     collections::HashMap,
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use axum::{extract::DefaultBodyLimit, middleware, routing::post, Router};
@@ -192,6 +195,8 @@ pub struct Shared {
     pub(crate) exports: export::Limits,
     write_windows: Mutex<HashMap<String, Window>>,
     write_clock: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// MM26: tests pin the instant a note's age is judged against. Zero means the wall clock.
+    note_clock: AtomicI64,
 }
 
 /// One key's writes: the minute being counted, its count, and the count of the minute before.
@@ -304,7 +309,23 @@ impl AppState {
             exports: export::Limits::default(),
             write_windows: Mutex::new(HashMap::new()),
             write_clock: Arc::new(clock),
+            note_clock: AtomicI64::new(0),
         }))
+    }
+
+    /// MM26: the instant a note's age is judged against. A deployed server uses the wall clock.
+    /// Tests pin it so a boundary of exactly seven days does not move while the test runs.
+    pub(crate) fn note_now(&self) -> i64 {
+        match self.note_clock.load(Ordering::Relaxed) {
+            0 => now(),
+            at => at,
+        }
+    }
+
+    /// Pins that instant, or `0` for the wall clock. For tests.
+    #[doc(hidden)]
+    pub fn set_note_clock(&self, at: i64) {
+        self.note_clock.store(at, Ordering::Relaxed);
     }
 
     pub fn is_https(&self) -> bool {

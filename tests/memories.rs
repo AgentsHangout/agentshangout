@@ -214,6 +214,34 @@ impl Server {
         id
     }
 
+    /// Puts a note straight into the table, stamped at `updated_at`. `checked_at` records a
+    /// confirmation; leave it out for a note that has never been confirmed.
+    fn put_note(
+        &self,
+        bot: &Bot,
+        subject: &str,
+        words: &str,
+        updated_at: i64,
+        checked_at: Option<i64>,
+    ) -> String {
+        let id = agenthangout::auth::new_id();
+        let conn = self.sql();
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', ?4, 4, ?5, ?5)",
+            rusqlite::params![id, bot.id, subject, words, updated_at],
+        )
+        .unwrap();
+        if let Some(checked_at) = checked_at {
+            conn.execute(
+                "INSERT INTO bot_note_checks (note_id, checked_at) VALUES (?1, ?2)",
+                rusqlite::params![id, checked_at],
+            )
+            .unwrap();
+        }
+        id
+    }
+
     /// Puts a chat line straight into a room, `ago` seconds back.
     fn line(
         &self,
@@ -2003,6 +2031,174 @@ async fn mm2_eviction_removes_the_check_row() {
         server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &text(&added["id"])),
         1
     );
+}
+
+fn by_text<'a>(found: &'a [Value], words: &str) -> &'a Value {
+    found
+        .iter()
+        .find(|item| item["text"] == words)
+        .unwrap_or_else(|| panic!("no {words} in {found:?}"))
+}
+
+// MM26: a note last confirmed 8 days ago includes stale_days. Confirming it, or rewriting it, clears
+// the field. The owner's view uses the same note JSON.
+#[tokio::test]
+async fn mm26_a_note_eight_days_old_includes_stale_days_until_it_is_confirmed() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let clock = now();
+    server.state.set_note_clock(clock);
+    let room = format!("room:{}", town.cafe);
+    let bo = format!("person:{}", town.bo.id);
+    let old = clock - 8 * DAY;
+    server.put_note(fern, &room, "Still the zircon door", old, Some(old));
+    // No confirmation row: last confirmed is when the note last changed.
+    server.put_note(fern, &bo, "Bo mentioned feldspar once", old, None);
+
+    let found = server.recall(fern, "zircon feldspar").await;
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(by_text(&found, "Still the zircon door")["stale_days"], json!(8));
+    let unchecked = by_text(&found, "Bo mentioned feldspar once");
+    assert_eq!(unchecked["stale_days"], json!(8));
+    assert!(unchecked.get("checked").is_none(), "{unchecked}");
+
+    let view = server.view(&town.ann, fern).await;
+    let notes = view["notes"].as_array().unwrap();
+    assert_eq!(by_text(notes, "Still the zircon door")["stale_days"], json!(8));
+    assert_eq!(by_text(notes, "Bo mentioned feldspar once")["stale_days"], json!(8));
+
+    // Saying it again, unchanged, confirms it now. when stays, and stale_days goes.
+    let again = server
+        .remember(fern, json!({ "text": "Still the zircon door", "subject": room, "note": true }))
+        .await;
+    assert_eq!(again["changed"], false);
+    let found = server.recall(fern, "zircon").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].get("stale_days").is_none(), "{found:?}");
+    let when = text(&found[0]["when"]);
+    let checked = text(&found[0]["checked"]);
+    assert!(checked > when, "checked {checked} when {when}");
+
+    // A rewrite that changes the words confirms it at the same moment, so stale_days stays absent.
+    server
+        .remember(
+            fern,
+            json!({ "text": "Bo mentioned feldspar twice", "subject": bo, "note": true }),
+        )
+        .await;
+    let found = server.recall(fern, "feldspar").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].get("stale_days").is_none(), "{found:?}");
+    assert!(found[0].get("checked").is_none(), "{found:?}");
+}
+
+// MM26: exactly 7 days is still fresh. A moment past that, stale_days is the whole days since the
+// note was last confirmed. A later confirmation at exactly 7 days keeps an older note fresh.
+#[tokio::test]
+async fn mm26_exactly_seven_days_is_not_stale_and_a_moment_later_is() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let clock = now();
+    server.state.set_note_clock(clock);
+    let room = format!("room:{}", town.cafe);
+    let bo = format!("person:{}", town.bo.id);
+    let edge = clock - 7 * DAY;
+    server.put_note(fern, "self", "exact cedar boundary", edge, Some(edge));
+    server.put_note(fern, &room, "late cedar boundary", edge - 1, Some(edge - 1));
+    // The words are 8 days old, but it was confirmed at exactly 7 days, so it is still fresh.
+    server.put_note(fern, &bo, "checked cedar boundary", clock - 8 * DAY, Some(edge));
+
+    let found = server.recall(fern, "cedar").await;
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(by_text(&found, "exact cedar boundary").get("stale_days").is_none(), "{found:?}");
+    assert_eq!(by_text(&found, "late cedar boundary")["stale_days"], json!(7));
+    assert!(by_text(&found, "checked cedar boundary").get("stale_days").is_none(), "{found:?}");
+}
+
+// MM26: a note just written has no stale_days. An old moment has none either: the field is for notes.
+#[tokio::test]
+async fn mm26_a_fresh_note_has_no_stale_days() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    server.remember(fern, json!({ "text": "A fresh kettle", "note": true })).await;
+    server.moment(fern, "self", "an old quince moment", 3, 8 * DAY);
+    let note = server.recall(fern, "kettle").await;
+    assert_eq!(note.len(), 1, "{note:?}");
+    assert!(note[0].get("stale_days").is_none(), "{note:?}");
+    let moment = server.recall(fern, "quince").await;
+    assert_eq!(moment.len(), 1, "{moment:?}");
+    assert_eq!(moment[0]["kind"], "moment");
+    assert!(moment[0].get("stale_days").is_none(), "{moment:?}");
+    let view = server.view(&town.ann, fern).await;
+    assert!(view["notes"][0].get("stale_days").is_none(), "{view}");
+    let old =
+        view["moments"].as_array().unwrap().iter().find(|m| m["text"] == "an old quince moment");
+    assert!(old.unwrap().get("stale_days").is_none(), "{view}");
+}
+
+// MM26: standing (MM9) and eviction (MM2) follow when the note last changed. A fresh confirmation
+// does not save an old note, and stale_days does not sink a newer one.
+#[tokio::test]
+async fn mm26_staleness_does_not_change_ranking_or_eviction() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let clock = now();
+    server.state.set_note_clock(clock);
+    let conn = server.sql();
+    let victim = agenthangout::auth::new_id();
+    let stale = agenthangout::auth::new_id();
+    let same = "the ledger holds";
+    for i in 0..200 {
+        let id = if i == 0 {
+            victim.clone()
+        } else if i == 1 {
+            stale.clone()
+        } else {
+            agenthangout::auth::new_id()
+        };
+        let (at, checked) = if i == 0 {
+            (clock - 30 * DAY, clock)
+        } else if i == 1 {
+            (clock - 8 * DAY, clock - 8 * DAY)
+        } else {
+            let at = clock - DAY;
+            (at, at)
+        };
+        let words = if i <= 1 { same } else { "a filler note" };
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', ?4, 4, ?5, ?5)",
+            rusqlite::params![id, fern.id, format!("room:gone-{i}"), words, at],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bot_note_checks (note_id, checked_at) VALUES (?1, ?2)",
+            rusqlite::params![id, checked],
+        )
+        .unwrap();
+    }
+
+    // The words match equally. The stale note changed more recently, so it ranks first even
+    // though the other one was confirmed just now.
+    let found = server.recall(fern, "ledger").await;
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[0]["id"], json!(stale));
+    assert_eq!(found[0]["stale_days"], json!(8));
+    assert_eq!(found[1]["id"], json!(victim));
+    assert!(found[1].get("stale_days").is_none(), "a fresh confirmation is not stale: {found:?}");
+
+    let bo = format!("person:{}", town.bo.id);
+    let added = server
+        .remember(fern, json!({ "text": "Bo keeps the ledger", "subject": bo, "note": true }))
+        .await;
+    assert_eq!(added["dropped"], json!(victim), "{added}");
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &victim), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &stale), 1);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &stale), 1);
 }
 
 /// The tables with a row holding these bytes in any column. Memories are kept in one table and no
