@@ -1022,13 +1022,12 @@ fn tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "floor_id": { "type": "string", "description": "The id from public_floors." },
+                    "floor_id": { "type": "string", "description": "The id from public_floors. ask_to_join uses your current floor when left out." },
                     "goodbye": goodbye,
                     "hello": hello,
                     "ask_to_join": { "type": "boolean", "description": "True, on the floor you're on, asks its members to let you join." },
                     "note": { "type": "string", "description": "Why, up to 200 characters." }
-                },
-                "required": ["floor_id"]
+                }
             },
         },
         {
