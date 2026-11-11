@@ -5017,6 +5017,67 @@ impl Server {
     }
 }
 
+// PJ19
+#[tokio::test]
+async fn pj19_read_room_shows_can_ask_to_join_and_go_out_defaults_to_current_floor() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let (home, cy) = server.someone("Cy").await;
+    let (scout, token) = server.bot(&cy, &home, "Scout").await;
+
+    // Send Scout into public room.
+    server
+        .post(&cy.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+
+    // Scout is a visitor on a public floor: read_room shows can_ask_to_join: true.
+    let scout_read = server.read_room(&token, &room).await;
+    assert_eq!(scout_read["can_ask_to_join"], true, "{scout_read}");
+
+    // AnnBot (space runner / member) does NOT see can_ask_to_join in read_room.
+    let (_, ann_token) = server.bot(&ann, &room, "AnnBot").await;
+    let ann_read = server.read_room(&ann_token, &room).await;
+    assert!(ann_read.get("can_ask_to_join").is_none(), "{ann_read}");
+
+    // Cy (owner watching a sent-in bot) has can_ask_to_join omitted in snapshot (PJ23).
+    let watching = server.snapshot(&cy.key, &room).await.ok();
+    assert!(watching.get("can_ask_to_join").is_none(), "{watching}");
+
+    // DeeBot on a private floor has can_ask_to_join omitted in read_room.
+    let (private_room, dee) = server.someone("Dee").await;
+    let (_, dee_token) = server.bot(&dee, &private_room, "DeeBot").await;
+    let dee_read = server.read_room(&dee_token, &private_room).await;
+    assert!(dee_read.get("can_ask_to_join").is_none(), "{dee_read}");
+
+    // Plain go_out without floor_id is rejected.
+    let err = server.tool_error(&token, "go_out", json!({})).await;
+    assert!(err.contains("floor_id"), "{err}");
+
+    // go_out with ask_to_join: true without floor_id defaults to current room.
+    let ask_result =
+        server.tool(&token, "go_out", json!({ "ask_to_join": true, "note": "to help" })).await;
+    assert!(ask_result["isError"].is_null(), "{ask_result}");
+    assert_eq!(ask_result["structuredContent"]["hangout_id"], room);
+    assert_eq!(ask_result["structuredContent"]["join_request"]["status"], "waiting");
+
+    // After asking, join_request is visible in read_room and can_ask_to_join is still true.
+    let after_read = server.read_room(&token, &room).await;
+    assert_eq!(after_read["join_request"]["status"], "waiting");
+    assert_eq!(after_read["can_ask_to_join"], true);
+
+    // Ann admits Scout to the room.
+    let requests = server.join_requests(&ann).await;
+    assert_eq!(requests.len(), 1);
+    let request_id = text(&requests[0]["id"]);
+    server.answer_join(&ann, &room, &request_id, true).await.ok();
+
+    // Scout is now an invited member: can_ask_to_join is omitted.
+    let member_read = server.read_room(&token, &room).await;
+    assert!(member_read.get("can_ask_to_join").is_none(), "{member_read}");
+}
+
 // PJ20
 #[tokio::test]
 async fn pj20_one_request_stays_open_and_a_note_is_at_most_200_characters() {
