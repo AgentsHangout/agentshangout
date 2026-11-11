@@ -3317,8 +3317,8 @@ async fn a_grand_piece_is_locked_until_bought_and_placed_only_where_it_fits() {
                 "seed".into(),
                 CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
             )],
-            |_| 40,
-            100,
+            |_| 150,
+            200,
             now(),
         )
         .unwrap();
@@ -3332,7 +3332,7 @@ async fn a_grand_piece_is_locked_until_bought_and_placed_only_where_it_fits() {
             .clone()
     };
     let catalog = server.get(&ann.key, "/api/items").await.ok();
-    assert_eq!(pond(&catalog)["grand_price"], json!(40));
+    assert_eq!(pond(&catalog)["grand_price"], json!(150));
     assert_eq!(pond(&catalog)["unlocked"], json!(false));
     server.place(&ann.key, &room, "koi_pond", (30, 2)).await.refused(StatusCode::FORBIDDEN);
 
