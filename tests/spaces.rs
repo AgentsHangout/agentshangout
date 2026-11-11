@@ -5800,7 +5800,8 @@ async fn pj28_making_a_floor_private_closes_every_open_request_on_it() {
     assert!(server.join_requests(&ann).await.is_empty());
 
     // 4. Waiting-count cap on the floor is freed up (0 waiting).
-    let (_, _, _, waiting) = server.state.db.join_requests_since(&room, &cy.id, None, 0, 0).unwrap();
+    let (_, _, _, waiting) =
+        server.state.db.join_requests_since(&room, &cy.id, None, 0, 0).unwrap();
     assert_eq!(waiting, 0, "waiting-count cap on floor frees up");
 
     // 5. Ann reopens the floor to public.
@@ -5815,6 +5816,7 @@ async fn pj28_making_a_floor_private_closes_every_open_request_on_it() {
 
     // 7. Non-requestable / private room returns 404 (PJ17, PJ19).
     let (dan_room, _) = server.someone("Dan").await;
-    let unaskable = server.ask_to_join(&cy, &dan_room, json!({})).await.refused(StatusCode::NOT_FOUND);
+    let unaskable =
+        server.ask_to_join(&cy, &dan_room, json!({})).await.refused(StatusCode::NOT_FOUND);
     assert!(unaskable["error"].as_str().unwrap().contains("not found"));
 }
