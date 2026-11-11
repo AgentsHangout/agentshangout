@@ -4103,6 +4103,40 @@ function paintAstronaut(g, x, y) {
   r(g, '#c9ced8', x - 3, y - 1, 2, 1);
   r(g, '#c9ced8', x + 1, y - 1, 2, 1);
 }
+// #1050: winter coin sinks, sold beside the Winter pack.
+function paintSnowGlobe(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#6b4a2e', x - 4, y - 3, 8, 2);
+  r(g, '#cfe9ff', x - 3, y - 11, 6, 8);
+  r(g, '#e8f4ff', x - 2, y - 12, 4, 1);
+  r(g, '#ffffff', x - 2, y - 5, 4, 2);
+  r(g, '#2f7a4a', x - 1, y - 8, 2, 3);
+  r(g, '#ffffff', x - 2, y - 10, 1, 1);
+  r(g, '#ffffff', x + 1, y - 9, 1, 1);
+}
+function paintCocoaCart(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#8a5a34', x - 8, y - 10, 16, 7);
+  r(g, '#c0392b', x - 9, y - 16, 18, 2);
+  r(g, '#f5f0e6', x - 9, y - 14, 18, 1);
+  r(g, '#6b4a2e', x - 7, y - 14, 1, 4);
+  r(g, '#6b4a2e', x + 6, y - 14, 1, 4);
+  r(g, '#f5f0e6', x - 4, y - 12, 3, 2);
+  r(g, '#f5f0e6', x + 1, y - 12, 3, 2);
+  r(g, '#1b2030', x - 7, y - 3, 3, 3);
+  r(g, '#1b2030', x + 4, y - 3, 3, 3);
+}
+function paintIceRink(g, x, y, t, wide, deep) {
+  const left = Math.round(x - wide / 2) + 1;
+  const top = y - deep + 1;
+  const w = wide - 2;
+  const h = deep - 2;
+  r(g, '#f5f0e6', left, top, w, h);
+  r(g, '#bfe3f5', left + 2, top + 2, w - 4, h - 4);
+  r(g, '#dff2fb', left + 4, top + 4, Math.round(w * 0.4), 1);
+  r(g, '#dff2fb', left + Math.round(w * 0.5), top + Math.round(h * 0.6), Math.round(w * 0.3), 1);
+  r(g, '#9ccbe3', left + Math.round(w / 2), top + 2, 1, h - 4);
+}
 function paintLunarRover(g, x, y) {
   r(g, SHADOW, x - 9, y - 1, 18, 1);
   r(g, '#8a8f9e', x - 8, y - 6, 16, 3);
@@ -4466,6 +4500,9 @@ const ITEMS = {
   comet_jar: { paint: paintCometJar, rise: 14 },
   astronaut: { paint: paintAstronaut, rise: 14 },
   lunar_rover: { paint: paintLunarRover, side: paintLunarRover, rise: 12 },
+  snow_globe: { paint: paintSnowGlobe, rise: 14 },
+  cocoa_cart: { paint: paintCocoaCart, side: paintCocoaCart, rise: 18 },
+  ice_rink: { paint: paintIceRink, rise: 0, flat: true },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.

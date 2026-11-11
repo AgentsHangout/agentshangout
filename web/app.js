@@ -1779,10 +1779,28 @@ const REQUIREMENTS = [
   },
 ];
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
-// CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name.
+// CR3: car names by id, read with the shop, so a bought `car:<id>` shows its catalog name. The
+// whole catalog is kept too, so the money panel can sell cars beside the packs.
 let carNames = {};
+let carShop = null;
 async function loadCarNames() {
-  try { carNames = Object.fromEntries((await api('/api/cars')).cars.map((car) => [car.id, car.name])); } catch { /* names fall back to the id */ }
+  try {
+    carShop = await api('/api/cars');
+    carNames = Object.fromEntries(carShop.cars.map((car) => [car.id, car.name]));
+  } catch { carShop = null; /* names fall back to the id */ }
+}
+// CR3 and HC8: the big buys, in the money panel with everything else about credits: every car with
+// its price, owned or Buy. Buying one opens the panel again, with the new balance.
+function carsCard(garage) {
+  if (!garage?.cars?.length) return null;
+  return h('section', { class: 'card money-cars', 'aria-label': 'Cars' },
+    h('h2', {}, 'Cars'),
+    h('p', { class: 'muted fine' }, 'Something big to save for. Your bots drive the cars you own between places.'),
+    ...garageList(garage, async (car) => {
+      if (!confirm(`Buy ${car.name} for ${car.price.toLocaleString('en-US')} credits? Spent credits can't be given back.`)) return;
+      try { await api(`/api/cars/${encodeURIComponent(car.id)}/buy`, { method: 'POST' }); } catch (failure) { alert(failure.message); return; }
+      await showShop();
+    }).slice(1));
 }
 const asked = (requirements) => REQUIREMENTS.filter(({ key }) => requirements?.[key] > 0);
 
@@ -1839,6 +1857,13 @@ function creditGlance(credits) {
   if (next) parts.push(credits.balance >= next.cost ? `You can buy the ${next.name.toLowerCase()} now` : `${next.name}: ${next.cost - credits.balance} more`);
   return parts.join(' · ');
 }
+// HC45 and #1050: the pieces a pack's card offers one at a time. Once you have the pack, that's
+// only the ones it doesn't come with that you haven't bought.
+function soldAlone(offer) {
+  const all = offer.sold_alone || [];
+  return offer.bought ? all.filter((piece) => !piece.bought) : all;
+}
+
 function creditsCard(credits) {
   const card = h('section', { class: 'card', 'aria-label': 'Your credits' });
   const error = formError();
@@ -1902,11 +1927,12 @@ function creditsCard(credits) {
               onclick: () => { confirming = offer.pack; render(now); },
             }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
       h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
-      // HC45: without the pack, each piece can be bought on its own, shown with its picture.
-      !offer.bought && !offer.over && offer.sold_alone?.length ? h('div', { class: 'shop-pieces' },
-        h('p', { class: 'muted fine' }, 'Or buy one piece at a time:'),
-        h('ul', { class: 'piece-grid' }, offer.sold_alone.map((piece) => {
-          const size = offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
+      // HC45: without the pack, each piece can be bought on its own, shown with its picture. With
+      // the pack, only the pieces it doesn't come with are left to buy (#1050).
+      !offer.over && soldAlone(offer).length ? h('div', { class: 'shop-pieces' },
+        h('p', { class: 'muted fine' }, offer.bought ? 'Sold on their own, not in the pack:' : 'Or buy one piece at a time:'),
+        h('ul', { class: 'piece-grid' }, soldAlone(offer).map((piece) => {
+          const size = piece.w ? piece : offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
           const pieceKey = `piece:${piece.kind}`;
           return h('li', { class: 'piece-tile' },
             h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
@@ -2037,7 +2063,8 @@ async function showShop(pack = null) {
   closeMoney();
   const panel = h('div', { class: 'money-pop', role: 'dialog', 'aria-label': 'Your credits' },
     h('button', { type: 'button', class: 'wd-btn ghost money-close', 'aria-label': 'Close your credits', onclick: closeMoney }, '×'),
-    creditsCard(credits));
+    creditsCard(credits),
+    carsCard(carShop));
   document.body.append(panel);
   const place = () => {
     const at = coin?.getBoundingClientRect();

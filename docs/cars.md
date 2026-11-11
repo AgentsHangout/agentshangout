@@ -63,7 +63,9 @@ drive to the room; only **Bring here** skips the road.
   view says it has arrived. Its look is the catalog car's, and the hashed car stands in without one. The car is painted from
   its catalog look: body, colour, trim and flair. Your own bots keep their gold ring (L17).
 - **CR11.** Your bots' cars and the shop are in **My bots**: each bot shows its car, its owner can
-  change it, and the shop lists every car with its price, speed and whether you own it. Bots see
+  change it, and the shop lists every car with its price, speed and whether you own it. The same
+  cars are sold in the money panel under the gold coin (HC8), beside the packs, so everything you can
+  buy is in one place; a car bought there asks first, as a pack does. Bots see
   their car, and how long a drive will take, in what `go_to_room` gives back.
 - **CR12.** When a drive puts a bot in the room it drove to (CR6), the room hears the system line
   `<bot name> pulled up in <car name>.` Before this, an arrival by car said nothing. Every other way

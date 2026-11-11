@@ -3259,6 +3259,45 @@ async fn a_piece_bought_on_its_own_unlocks_only_that_piece() {
     server.post(&ann.key, &path, json!({})).await.refused(StatusCode::FORBIDDEN);
 }
 
+// #1050: a piece a pack only sells on its own stays locked for someone who has the pack, until they
+// buy it too.
+#[tokio::test]
+async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 20,
+            100,
+            now(),
+        )
+        .unwrap();
+    server.post(&ann.key, "/api/credits/spend", json!({ "pack": "winter" })).await.ok();
+    let pack_needed = |catalog: &Value, word: &str| {
+        catalog["items"].as_array().unwrap().iter().find(|kind| kind["kind"] == word).unwrap()
+            ["pack_needed"]
+            .clone()
+    };
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    assert_eq!(pack_needed(&catalog, "snowman"), Value::Null, "the pack gives what it places");
+    assert_eq!(pack_needed(&catalog, "snow_globe"), json!("winter"));
+    server.place(&ann.key, &room, "snow_globe", (31, 2)).await.refused(StatusCode::FORBIDDEN);
+
+    server.post(&ann.key, "/api/credits/spend", json!({ "pack": "piece:snow_globe" })).await.ok();
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    assert_eq!(pack_needed(&catalog, "snow_globe"), Value::Null);
+    assert_eq!(pack_needed(&catalog, "cocoa_cart"), json!("winter"));
+    server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
+}
+
 // I27
 
 #[tokio::test]
