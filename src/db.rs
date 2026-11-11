@@ -13916,15 +13916,10 @@ impl Db {
         tx.execute("INSERT OR IGNORE INTO merged_pr_start(id, since) VALUES(1, ?)", [now])?;
         let start: i64 =
             tx.query_row("SELECT since FROM merged_pr_start WHERE id = 1", [], |row| row.get(0))?;
-        // HC6: everything that paid this person today, from gatherings, trips, pull requests and
-        // drawn coins.
+        // HC6: everything that paid this person today, from gatherings, trips, pull requests,
+        // contributions, drawn coins and bot tips.
         let mut paid_today: i64 = tx.query_row(
-            "SELECT (SELECT COALESCE(SUM(amount), 0) FROM credit_paid
-                      WHERE person_id = ?1 AND day = ?2)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM merged_pr_payouts
-                      WHERE person_id = ?1 AND day = ?2)
-                  + (SELECT COALESCE(SUM(amount), 0) FROM coin_drops
-                      WHERE person_id = ?1 AND day = ?2)",
+            &format!("SELECT {}", Self::paid_on_day_sql("?1", "?2")),
             params![person, day],
             |row| row.get(0),
         )?;
@@ -21008,6 +21003,45 @@ mod tests {
             .query_row("SELECT amount FROM credit_paid WHERE source_id='late'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(late, 10, "60 + 30 from pull requests leaves 10");
+    }
+
+    // HC35 and HC6: bot tips and accepted contributions count toward the 100-credit daily cap
+    // when paying merged pull requests (#1086)
+    #[test]
+    fn merged_pull_requests_count_bot_tips_and_contributions_toward_daily_cap() {
+        let db = Db::open(":memory:").unwrap();
+        two_houses(&db);
+        link_github(&db, "p1", "gh-ann");
+        prs_pay_from(&db, 0);
+        let day = 40 * CREDIT_DAY;
+        let today = day.div_euclid(CREDIT_DAY);
+
+        // p1 received 5 credits from a bot tip and 90 credits from an accepted contribution today:
+        db.conn()
+            .execute(
+                "INSERT INTO bot_tips(id, hangout_id, tipper_id, recipient_id, amount, reason, day, created_at)
+                 VALUES('tip_1', 'h1', 'p2', 'p1', 5, 'review', ?1, ?2)",
+                rusqlite::params![today, day],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO contribution_payouts(card_id, contribution_id, acceptor_id, recipient_id, amount, day, created_at)
+                 VALUES('card1', 'c1', 'p2', 'p1', 90, ?1, ?2)",
+                rusqlite::params![today, day],
+            )
+            .unwrap();
+
+        // 5 + 90 = 95 credits paid today.
+        // PR_CREDIT_HC is 10. 95 + 10 = 105 > 100 (DAILY_CAP_HC), so it pays 0 today.
+        assert_eq!(
+            db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day).unwrap(),
+            0,
+            "95 + 10 exceeds the 100-credit daily cap"
+        );
+
+        // On the next day, the PRs pay normally (up to 3 a day):
+        assert_eq!(db.pay_merged_prs("p1", "gh-ann", &merged(1..4), day + CREDIT_DAY).unwrap(), 3);
     }
 
     // HC35: deleting an account keeps what its pull requests paid, but no longer names the GitHub
