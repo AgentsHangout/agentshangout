@@ -2769,8 +2769,11 @@ async fn starter_items_are_for_everyone_and_the_rest_unlock_with_friends() {
     // bought, which a_pack_that_costs_credits_and_everything_in_it_waits_for_someone_to_buy_it covers.
     // I128: a Lific board is starter but only for someone with god mode on, which
     // only_someone_with_god_mode_on_puts_up_a_lific_board (tests/god_mode.rs) covers.
+    // HC65: a grand piece waits for it to be bought, which
+    // a_grand_piece_is_locked_until_bought_and_placed_only_where_it_fits covers.
     let free = |kind: &&items::Kind| {
         items::paid_pack_with(kind.kind).is_none()
+            && items::grand_price(kind.kind).is_none()
             && kind.kind != "lific_board"
             && kind.kind != "mayor_ballot_box"
     };
@@ -3296,6 +3299,52 @@ async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
     assert_eq!(pack_needed(&catalog, "snow_globe"), Value::Null);
     assert_eq!(pack_needed(&catalog, "cocoa_cart"), json!("winter"));
     server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
+}
+
+// HC65: a grand piece is locked in the catalog with its price until it's bought, then placed where
+// its 4x2 cells fit, and refused where they don't.
+#[tokio::test]
+async fn a_grand_piece_is_locked_until_bought_and_placed_only_where_it_fits() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 40,
+            100,
+            now(),
+        )
+        .unwrap();
+    let pond = |catalog: &Value| {
+        catalog["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|kind| kind["kind"] == "koi_pond")
+            .unwrap()
+            .clone()
+    };
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    assert_eq!(pond(&catalog)["grand_price"], json!(40));
+    assert_eq!(pond(&catalog)["unlocked"], json!(false));
+    server.place(&ann.key, &room, "koi_pond", (30, 2)).await.refused(StatusCode::FORBIDDEN);
+
+    let bought =
+        server.post(&ann.key, "/api/credits/spend", json!({ "pack": "piece:koi_pond" })).await.ok();
+    assert_eq!(bought["balance"], 0, "{bought}");
+    let catalog = server.get(&ann.key, "/api/items").await.ok();
+    assert_eq!(pond(&catalog)["grand_price"], Value::Null);
+    assert_eq!(pond(&catalog)["unlocked"], json!(true));
+    // Four wide doesn't fit at the far wall.
+    server.place(&ann.key, &room, "koi_pond", (39, 2)).await.refused(StatusCode::CONFLICT);
+    server.place(&ann.key, &room, "koi_pond", (30, 2)).await.ok();
 }
 
 // The 4x2 planetarium dome, sold on its own beside Stargazer, fits the placing grid once bought.
@@ -4009,6 +4058,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "winter",
             "stargazer",
             "coins",
+            "grand",
             "spooky",
             "signs"
         ]
@@ -4202,7 +4252,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 30);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 31);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.

@@ -4199,6 +4199,67 @@ function paintSnowballPile(g, x, y) {
   r(g, '#f5f9fc', x - 2, y - 7, 4, 3);
   r(g, '#cfe0ec', x - 5, y - 2, 10, 1);
 }
+// HC65: grand pieces, one-of-a-kind showpieces.
+function paintKoiPond(g, x, y, t, wide, deep) {
+  const left = Math.round(x - wide / 2) + 1;
+  const top = y - deep + 1;
+  const w = wide - 2;
+  const h = deep - 2;
+  const swim = Math.floor((t || 0) / 250) % Math.max(1, w - 16);
+  r(g, '#8d8a80', left, top, w, h);
+  r(g, '#2f6f8f', left + 2, top + 2, w - 4, h - 4);
+  r(g, '#3f8fc4', left + 4, top + 4, w - 8, 2);
+  r(g, '#3a8a4a', left + 4, top + h - 8, 6, 4);
+  r(g, '#f4f1e8', left + w - 12, top + 5, 5, 3);
+  r(g, '#ff8c2a', left + 6 + swim, top + Math.round(h / 2) - 1, 5, 2);
+  r(g, '#f4f1e8', left + 8 + ((swim * 2) % Math.max(1, w - 16)), top + Math.round(h / 2) + 3, 4, 2);
+  r(g, '#ff8c2a', left + 9 + ((swim * 2) % Math.max(1, w - 16)), top + Math.round(h / 2) + 3, 2, 1);
+}
+function paintGrandPiano(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#1b1820', x - 16, y - 22, 32, 14);
+  r(g, '#3a3342', x - 16, y - 22, 32, 2);
+  r(g, '#1b1820', x + 2, y - 30, 14, 8);
+  r(g, '#3a3342', x + 4, y - 29, 1, 7);
+  r(g, '#f4f1e8', x - 14, y - 10, 28, 3);
+  for (let key = 0; key < 28; key += 3) r(g, '#1b1820', x - 13 + key, y - 10, 1, 2);
+  r(g, '#1b1820', x - 14, y - 7, 2, 6);
+  r(g, '#1b1820', x + 12, y - 7, 2, 6);
+  r(g, '#c8a34a', x - 2, y - 16, 4, 1);
+}
+function paintDragonStatue(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#8d8a80', x - 11, y - 7, 22, 5);
+  r(g, '#c9c4b5', x - 11, y - 7, 22, 1);
+  r(g, '#2f7a4a', x - 8, y - 18, 14, 11);
+  r(g, '#3a9a5a', x - 6, y - 26, 6, 8);
+  r(g, '#3a9a5a', x - 9, y - 30, 7, 5);
+  r(g, '#ffd24d', x - 7, y - 29, 1, 1);
+  r(g, '#c0392b', x - 11, y - 28, 2, 1);
+  r(g, '#245e39', x + 2, y - 26, 9, 7);
+  r(g, '#245e39', x + 6, y - 30, 5, 4);
+  r(g, '#2f7a4a', x + 6, y - 12, 6, 3);
+  r(g, '#c8a34a', x - 2, y - 6, 4, 2);
+}
+function paintCarousel(g, x, y, t) {
+  const turn = Math.floor((t || 0) / 200) % 4;
+  const colors = ['#c0392b', '#3a6fb0', '#ffd24d', '#2f7a4a'];
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#c9a46a', x - 11, y - 6, 22, 4);
+  r(g, '#f5f0e6', x - 11, y - 6, 22, 1);
+  r(g, '#c8a34a', x - 1, y - 30, 2, 24);
+  for (let i = 0; i < 4; i++) {
+    const at = x - 10 + ((i * 6 + turn * 2) % 20);
+    r(g, '#8a8f9e', at + 1, y - 22, 1, 10);
+    r(g, colors[i], at - 1, y - 14, 5, 4);
+  }
+  r(g, '#c0392b', x - 12, y - 28, 24, 4);
+  r(g, '#f5f0e6', x - 10, y - 28, 4, 4);
+  r(g, '#f5f0e6', x - 2, y - 28, 4, 4);
+  r(g, '#f5f0e6', x + 6, y - 28, 4, 4);
+  r(g, '#c0392b', x - 6, y - 32, 12, 4);
+  r(g, '#ffd24d', x - 1, y - 34, 2, 2);
+}
 function paintLunarRover(g, x, y) {
   r(g, SHADOW, x - 9, y - 1, 18, 1);
   r(g, '#8a8f9e', x - 8, y - 6, 16, 3);
@@ -4571,6 +4632,10 @@ const ITEMS = {
   igloo: { paint: paintIgloo, side: paintIgloo, rise: 22 },
   reindeer: { paint: paintReindeer, side: paintReindeer, rise: 20 },
   snowball_pile: { paint: paintSnowballPile, rise: 8 },
+  koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
+  grand_piano: { paint: paintGrandPiano, side: paintGrandPiano, rise: 30 },
+  dragon_statue: { paint: paintDragonStatue, rise: 32 },
+  carousel: { paint: paintCarousel, rise: 34 },
 };
 
 // Notes going up from whoever's making the music, drifting apart as they go.
@@ -4607,6 +4672,8 @@ function paintPlaying(g, bot, t) {
 // `pose` is how they are there, `hands` keeps theirs moving, and `busy` is painted over them.
 const USES = {
   piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
+  // HC65: the grand piano is played like the piano.
+  grand_piano: { spots: 1, pose: 'sit', hands: true, busy: paintPlaying },
   // #790: a bot that's dreaming or asleep at home lies on a free bed (the server gives it one).
   bed: { spots: 1, pose: 'sleep', on: true },
   // #838: a double bed holds two, side by side, like the server's room_for.

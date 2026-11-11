@@ -14,7 +14,8 @@ use crate::{
     db::{CreditKind, CreditLine, CreditSource, Db, Spend, FIRST_GATHERING},
     error::{ApiError, ApiResult},
     items::{
-        comes_with, kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds, PACKS, PIECE,
+        comes_with, grand_price, kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds,
+        GRAND_PIECES, PACKS, PIECE,
     },
     ops::DAY_SECS,
 };
@@ -57,6 +58,8 @@ pub struct Credits {
     pub cities_not_earning: Vec<String>,
     /// HC14: every pack that costs credits, and whether they have it.
     pub packs: Vec<PackOffer>,
+    /// HC65: the grand pieces, each with its price and whether it's theirs.
+    pub grand: Vec<PieceOffer>,
     /// HC17: their bots, and how much each may spend a day.
     pub bots: Vec<BotLimit>,
     /// HC22: the latest things that paid them and that they spent, newest first.
@@ -265,6 +268,20 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
             },
         })
         .collect();
+    out.grand = GRAND_PIECES
+        .iter()
+        .filter_map(|(kind, cost)| {
+            let found = kind_of(kind)?;
+            Some(PieceOffer {
+                kind,
+                label: found.label,
+                cost: *cost,
+                bought: bought.iter().any(|word| *word == format!("{PIECE}{kind}")),
+                w: found.w,
+                h: found.h,
+            })
+        })
+        .collect();
     out.bots = db
         .spend_limits(person_id, now)?
         .into_iter()
@@ -298,6 +315,10 @@ pub fn spend(
     }
     // HC45: a piece on its own is bought as `piece:<kind>`, at its own price.
     if let Some(kind) = word.strip_prefix(PIECE) {
+        // HC65: a grand piece, at its price in GRAND_PIECES. No pack gives one.
+        if let Some(cost) = grand_price(kind) {
+            return buy(db, caller, word, cost, asked, now, "piece");
+        }
         let cost = piece_price(kind)
             .ok_or_else(|| ApiError::bad_request("that isn't a piece you can buy: see credits"))?;
         let pack = paid_pack_with(kind).ok_or_else(ApiError::not_found)?;

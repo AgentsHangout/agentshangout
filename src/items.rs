@@ -134,13 +134,14 @@ const FALL: &str = "fall";
 const WINTER: &str = "winter";
 const STARGAZER: &str = "stargazer";
 const COINS: &str = "coins";
+const GRAND: &str = "grand";
 const SPOOKY: &str = "spooky";
 const SIGNS: &str = "signs";
 
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 20] = [
+pub const CATEGORIES: [(&str, &str); 21] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -159,6 +160,7 @@ pub const CATEGORIES: [(&str, &str); 20] = [
     (WINTER, "Winter"),
     (STARGAZER, "Stargazer"),
     (COINS, "Coin sinks"),
+    (GRAND, "Grand pieces"),
     (SPOOKY, "Spooky"),
     (SIGNS, "Signs"),
 ];
@@ -254,7 +256,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 162] = [
+pub static CATALOG: [Kind; 166] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -450,6 +452,12 @@ pub static CATALOG: [Kind; 162] = [
     piece("igloo", "Igloo", COINS, STARTER, 5, feels("cozy"), (3, 2)),
     piece("reindeer", "Reindeer", COINS, STARTER, 4, feels("playful"), (2, 1)),
     piece("snowball_pile", "Snowball pile", COINS, STARTER, 2, feels("playful"), (1, 1)),
+    // HC65: grand pieces, one-of-a-kind showpieces priced in GRAND_PIECES, not by piece_price.
+    piece("koi_pond", "Koi pond", GRAND, STARTER, 9, feels("calm"), (4, 2)).flat(),
+    piece("grand_piano", "Grand piano", GRAND, STARTER, 10, feels("inspired"), (3, 2))
+        .used("playing the piano", 1),
+    piece("dragon_statue", "Dragon statue", GRAND, STARTER, 10, feels("inspired"), (2, 2)),
+    piece("carousel", "Carousel", GRAND, STARTER, 10, feels("playful"), (2, 2)),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -649,6 +657,16 @@ pub const SOLD_ALONE: [(&str, &str); 12] = [
     ("snowball_pile", "winter"),
 ];
 
+/// HC65: grand pieces and their prices, 25 to 100. These are bought only on their own, as
+/// `piece:<kind>`, once per person, and no pack gives one. Their price is set here and only here.
+pub const GRAND_PIECES: [(&str, i64); 4] =
+    [("koi_pond", 40), ("grand_piano", 60), ("dragon_statue", 80), ("carousel", 100)];
+
+/// HC65: what a grand piece costs, if `word` is one.
+pub fn grand_price(word: &str) -> Option<i64> {
+    GRAND_PIECES.iter().find(|(kind, _)| *kind == word).map(|(_, price)| *price)
+}
+
 /// The pack that sells `word` one at a time without placing it, if any.
 fn sold_in(word: &str) -> Option<&'static Pack> {
     SOLD_ALONE.iter().find(|(kind, _)| *kind == word).and_then(|(_, pack)| pack_of(pack))
@@ -690,6 +708,17 @@ pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> 
 /// that pack, and their bots, or someone with God mode on (W79), which unlocks everything. Taking
 /// one down or out never needs it.
 pub fn may_use_paid(state: &AppState, person_id: &str, word: &str) -> ApiResult<()> {
+    // HC65: a grand piece is for someone who bought it, or with God mode on.
+    if let Some(price) = grand_price(word) {
+        if !state.db.has_bought(person_id, &format!("{PIECE}{word}"))?
+            && !god_mode::is_on(state, person_id)?
+        {
+            return Err(ApiError::forbidden(format!(
+                "{word} is a grand piece that costs {price} credits: buy it on your Your credits card first"
+            )));
+        }
+        return Ok(());
+    }
     match paid_pack_with(word) {
         Some(pack)
             if !owns_paid(state, person_id, pack, word)?
@@ -2454,9 +2483,11 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                         (word == pack.pack && comes_with(pack, kind.kind)) || *word == piece
                     })
             });
+            // HC65: a grand piece until it's bought.
+            let grand = grand_price(kind.kind).filter(|_| !god && !bought.contains(&piece));
             // I128: a Lific board only for someone with god mode on.
             let gods_only = kind.kind == "lific_board";
-            let unlocked = (god || kind.friends <= friends) && paid.is_none() && (god || !gods_only);
+            let unlocked = (god || kind.friends <= friends) && paid.is_none() && grand.is_none() && (god || !gods_only);
             json!({
                 "kind": kind.kind,
                 "label": kind.label,
@@ -2474,6 +2505,7 @@ fn catalog_json(friends: i64, god: bool, bought: &[String]) -> Value {
                 "unlocked": unlocked,
                 "friends_needed": (kind.friends > friends && !god).then_some(kind.friends),
                 "pack_needed": paid.map(|pack| pack.pack),
+                "grand_price": grand,
                 "god_needed": (gods_only && !god).then_some(true),
             })
         }).collect::<Vec<_>>(),
