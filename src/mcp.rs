@@ -147,7 +147,7 @@ fn drop_false_keyless(line: &mut Value) {
     }
 }
 
-/// I164, #1110: a brief or incremental read leaves out `kind` on a chat line. A line with no
+/// I164, #748: a brief or incremental read leaves out `kind` on a chat line. A line with no
 /// `kind` is chat; system lines and the other kinds keep theirs. The trust fields stay on every line.
 fn drop_chat_kind(line: &mut Value) {
     if line.get("kind") == Some(&json!("chat")) {

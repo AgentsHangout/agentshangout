@@ -10622,7 +10622,7 @@ async fn a_room_the_bot_is_not_in_is_not_named() {
     assert!(!pulse.to_string().contains("Ann's room"), "{pulse}");
 }
 
-// I164, #1110: a brief or incremental read leaves out `kind` on a chat line (no kind means chat).
+// I164, #748: a brief or incremental read leaves out `kind` on a chat line (no kind means chat).
 // A system line keeps its kind, and a full read keeps kind on every line.
 #[tokio::test]
 async fn brief_chat_lines_have_no_kind_and_system_lines_keep_it() {
