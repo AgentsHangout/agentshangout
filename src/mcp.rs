@@ -655,7 +655,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "add_board_card",
-            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't. bug formats a bug report card.",
+            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

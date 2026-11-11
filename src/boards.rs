@@ -557,15 +557,17 @@ pub fn format_bug_card(
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| ApiError::bad_request("broken is required"))?;
     let reproduce = bug_obj.get("reproduce").and_then(Value::as_str);
-    let can_code = bug_obj.get("can_code").and_then(Value::as_bool).unwrap_or(false);
+    let can_code = bug_obj.get("can_code").and_then(Value::as_bool);
 
     let formatted_title = format!("BUG: [{surface}] {title}");
     let mut formatted_text = format!("**Surface:** {surface}\n**Broken:** {broken}");
     if let Some(r) = reproduce.filter(|s| !s.trim().is_empty()) {
         formatted_text.push_str(&format!("\n**Reproduction:** {r}"));
     }
-    formatted_text
-        .push_str(&format!("\n**Can code fix:** {}", if can_code { "yes" } else { "no" }));
+    if let Some(can_code) = can_code {
+        formatted_text
+            .push_str(&format!("\n**Can code fix:** {}", if can_code { "yes" } else { "no" }));
+    }
     formatted_text.push_str(&format!("\n**Reported by:** {}", caller.name));
     if !text.trim().is_empty() {
         formatted_text.push_str(&format!("\n\n{text}"));
