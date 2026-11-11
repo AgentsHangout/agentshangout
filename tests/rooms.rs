@@ -11925,6 +11925,60 @@ async fn a_repeat_brief_read_skips_messages_that_have_not_changed() {
     assert_eq!(changed["messages"].as_array().unwrap().len(), 2, "{changed}");
 }
 
+// #1116: the messages tag leaves out mentions_you and mention_replies, which a read clears, so two
+// brief reads with nothing new in between share a tag. A reply that moves reply_count moves the tag,
+// including a reply by the root's own author, which reply_count counts too.
+#[tokio::test]
+async fn messages_tag_ignores_mentions_but_follows_reply_count() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let root = server.post(&ann.key, &messages, json!({ "text": "a topic" })).await.ok()["id"]
+        .as_i64()
+        .unwrap();
+    let read = || {
+        let token = scout.token.clone();
+        let room = room.clone();
+        let server = &server;
+        async move {
+            server.tool(&token, "read_room", json!({ "hangout_id": room, "brief": true })).await
+                ["structuredContent"]
+                .clone()
+        }
+    };
+    let tag = |reply: &Value| reply["section_tags"]["messages"].as_str().unwrap().to_string();
+    let root_line = |reply: &Value| {
+        reply["messages"].as_array().unwrap().iter().find(|m| m["id"] == root).unwrap().clone()
+    };
+
+    let quiet = read().await;
+    let before = tag(&quiet);
+    assert!(root_line(&quiet).get("reply_count").is_none(), "{quiet}");
+
+    // Ann's own reply counts in reply_count, so the tag moves with it.
+    server.post(&ann.key, &messages, json!({ "text": "a note", "reply_to": root })).await.ok();
+    let own = read().await;
+    assert_eq!(root_line(&own)["reply_count"], 1, "{own}");
+    let after_own = tag(&own);
+    assert_ne!(after_own, before, "a reply moves reply_count, so it moves the tag");
+
+    // A mention in a reply shows as mentions_you on the root in this read, and the next read,
+    // with nothing new, has cleared it. The tag matches across the two reads.
+    server
+        .post(&ann.key, &messages, json!({ "text": "@Scout what do you think?", "reply_to": root }))
+        .await
+        .ok();
+    let named = read().await;
+    assert_eq!(root_line(&named)["reply_count"], 2, "{named}");
+    assert!(root_line(&named).get("mentions_you").is_some(), "{named}");
+    let tag_named = tag(&named);
+    let cleared = read().await;
+    assert!(root_line(&cleared).get("mentions_you").is_none(), "{cleared}");
+    assert_eq!(tag(&cleared), tag_named, "the cleared mention doesn't move the tag");
+    assert_ne!(tag_named, after_own, "the new reply moved reply_count, so the tag moved too");
+}
+
 // #612, #748: the clock's note changes when the owner sets a time zone. It comes on full reads
 // only, so a brief read never carries it, and the full read shows the new one.
 #[tokio::test]

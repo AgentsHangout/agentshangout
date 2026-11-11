@@ -3003,8 +3003,17 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     });
     // #748: a brief read with no after_message_id tags the messages it sends, so a repeat read of
     // the same messages leaves them out. An incremental read's messages are new, so it isn't tagged.
+    // #1116: mentions_you and mention_replies are per-reader and a read clears them, so they stay
+    // out of the hash. reply_count and last_reply_at stay in, so a new thread reply moves the tag.
     if brief && !after_arg_present {
-        section_tags["messages"] = json!(section_tag(&reply["messages"]));
+        let mut hashed = reply["messages"].clone();
+        if let Some(lines) = hashed.as_array_mut() {
+            for line in lines.iter_mut().filter_map(Value::as_object_mut) {
+                line.remove("mentions_you");
+                line.remove("mention_replies");
+            }
+        }
+        section_tags["messages"] = json!(section_tag(&hashed));
     }
     if let Some(scores) = &scores_val {
         section_tags["scores"] = json!(section_tag(scores));

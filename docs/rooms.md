@@ -1123,7 +1123,8 @@ the cascades still run.
   the fixed notes until they change (#494). A brief read never sends `record_note` or the clock's
   `note` (#748): those come on a full read only. A brief read with no `after_message_id` also tags
   its `messages`, and a repeat with the same tag leaves them out. The `messages` tag is only
-  for a read without `after_message_id`; an incremental read's lines are new, so it has none. A brief read also has `section_tags_hint`, one line saying to pass
+  for a read without `after_message_id`; an incremental read's lines are new, so it has none. The
+  per-reader mention markers (`mentions_you`, `mention_replies`) aren't part of that tag (#1116). A brief read also has `section_tags_hint`, one line saying to pass
   the tags back as `known` with `after_message_id` (#494), unless it passed a non-empty `known`
   or `after_message_id` already (#612).
 
