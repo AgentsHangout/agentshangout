@@ -5820,3 +5820,148 @@ async fn pj28_making_a_floor_private_closes_every_open_request_on_it() {
         server.ask_to_join(&cy, &dan_room, json!({})).await.refused(StatusCode::NOT_FOUND);
     assert!(unaskable["error"].as_str().unwrap().contains("not found"));
 }
+
+struct SpacesPushCapture(std::sync::Mutex<Vec<agenthangout::push::Message>>);
+impl agenthangout::push::Transport for SpacesPushCapture {
+    fn deliver<'a>(
+        &'a self,
+        _: &'a str,
+        m: &'a agenthangout::push::Message,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = agenthangout::push::Outcome> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(m.clone());
+            agenthangout::push::Outcome::Delivered
+        })
+    }
+}
+
+async fn settle_push(state: &AppState) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state.push_slots.available_permits() != 64 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("push queue did not drain");
+}
+
+fn register_push_device(server: &Server, person_id: &str, device_id: &str) {
+    let now = agenthangout::now();
+    let session_hash = agenthangout::auth::hash_secret(&format!("session-{person_id}"));
+    server.state.db.create_session(&session_hash, person_id, now + 3600, now).unwrap();
+    server
+        .state
+        .db
+        .put_push_device(
+            person_id,
+            &session_hash,
+            &agenthangout::db::PushDevice {
+                id: device_id.to_string(),
+                person_id: person_id.to_string(),
+                token: format!("token-{device_id}"),
+                enabled: true,
+                mentions: true,
+                requests: true,
+                announcements: false,
+            },
+        )
+        .unwrap();
+}
+
+// PJ21, PN3, PN4: a join request sends a phone ping and webhook to runners and invited members.
+// Capped at at most one ping per floor every 30 minutes; later asks wait silently in Needs you.
+// Self-join, re-ask, asker, and blocks either way receive no ping.
+#[tokio::test]
+async fn pj21_join_ask_phone_ping_delivery_exclusions_and_floor_cooldown() {
+    let server = Server::start().await;
+    let capture = std::sync::Arc::new(SpacesPushCapture(std::sync::Mutex::new(vec![])));
+    assert!(server.state.push.set(capture.clone()).is_ok());
+
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    server.open(&ann, &room).await;
+
+    let (_, cy) = server.someone("Cy").await;
+    let (_, dee) = server.someone("Dee").await;
+
+    // Register push devices for Ann (runner), Bo (invited member), and Cy (visitor).
+    register_push_device(&server, &ann.id, "11111111-1111-1111-1111-111111111111");
+    register_push_device(&server, &bo.id, "22222222-2222-2222-2222-222222222222");
+    register_push_device(&server, &cy.id, "33333333-3333-3333-3333-333333333333");
+
+    // 1. Cy walks in and asks to join.
+    server.walk_in(&cy, &room).await.ok();
+    let asked = server.ask_to_join(&cy, &room, json!({ "note": "please let me in" })).await.ok();
+    assert_eq!(asked["status"], "waiting");
+
+    settle_push(&server.state).await;
+    {
+        let messages = capture.0.lock().unwrap();
+        assert_eq!(messages.len(), 2, "exactly Ann and Bo pinged");
+        let owners: Vec<&str> = messages.iter().map(|m| m.owner_id.as_str()).collect();
+        assert!(owners.contains(&ann.id.as_str()), "runner Ann pinged");
+        assert!(owners.contains(&bo.id.as_str()), "invited member Bo pinged");
+        assert!(!owners.contains(&cy.id.as_str()), "asker Cy excluded from ping (PJ25)");
+        for m in messages.iter() {
+            assert_eq!(m.category, "request");
+            assert_eq!(m.path, format!("/h/{room}"));
+            assert_eq!(m.body, "A request is waiting for your response.");
+        }
+    }
+
+    // 2. Re-ask while open sends no duplicate ping.
+    let re_ask = server.ask_to_join(&cy, &room, json!({})).await.ok();
+    assert_eq!(re_ask["status"], "waiting");
+    settle_push(&server.state).await;
+    assert_eq!(capture.0.lock().unwrap().len(), 2, "no new ping on re-ask");
+
+    // 3. Second ask within 30-minute floor cooldown (Dee asks to join).
+    server.walk_in(&dee, &room).await.ok();
+    let dee_ask = server.ask_to_join(&dee, &room, json!({ "note": "me too" })).await.ok();
+    assert_eq!(dee_ask["status"], "waiting");
+    assert_eq!(server.join_requests(&ann).await.len(), 2, "both asks wait in Needs you");
+    settle_push(&server.state).await;
+    assert_eq!(capture.0.lock().unwrap().len(), 2, "floor cooldown suppresses second ping");
+
+    // 4. After 30 minutes, a new ask pings again.
+    server.state.db.age_join_requests(&room, 1801).unwrap();
+    let (_, ev) = server.someone("Ev").await;
+    server.walk_in(&ev, &room).await.ok();
+    let ev_ask = server.ask_to_join(&ev, &room, json!({})).await.ok();
+    assert_eq!(ev_ask["status"], "waiting");
+    settle_push(&server.state).await;
+    assert_eq!(capture.0.lock().unwrap().len(), 4, "cooldown expired: Ann and Bo pinged again");
+
+    // 5. Block exclusion: Ann blocks Guy. Guy walks in and asks.
+    // The ask is hidden from the space, so zero pings are sent.
+    server.state.db.age_join_requests(&room, 1801).unwrap();
+    let (_, guy) = server.someone("Guy").await;
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": guy.id })).await.ok();
+    server.walk_in(&guy, &room).await.ok();
+    let guy_ask = server.ask_to_join(&guy, &room, json!({})).await.ok();
+    assert_eq!(guy_ask["status"], "waiting");
+    settle_push(&server.state).await;
+    assert_eq!(capture.0.lock().unwrap().len(), 4, "hidden ask sends zero pings");
+
+    // 6. Block exclusion: Bo blocks Hal. Hal walks in and asks.
+    // Hal is not blocked by space runner Ann, so ask is not hidden. Ann gets pinged, Bo is excluded.
+    server.state.db.age_join_requests(&room, 1801).unwrap();
+    let (_, hal) = server.someone("Hal").await;
+    server.post(&bo.key, "/api/blocks", json!({ "person_id": hal.id })).await.ok();
+    server.walk_in(&hal, &room).await.ok();
+    let hal_ask = server.ask_to_join(&hal, &room, json!({})).await.ok();
+    assert_eq!(hal_ask["status"], "waiting");
+    settle_push(&server.state).await;
+    {
+        let messages = capture.0.lock().unwrap();
+        assert_eq!(messages.len(), 5, "one new ping (Ann only)");
+        assert_eq!(messages.last().unwrap().owner_id, ann.id, "only unblocked runner Ann pinged");
+    }
+
+    // 7. Self-join / member ask sends no ping.
+    let member_ask = server.ask_to_join(&ann, &room, json!({})).await.ok();
+    assert_eq!(member_ask["status"], "member");
+    settle_push(&server.state).await;
+    assert_eq!(capture.0.lock().unwrap().len(), 5, "member self-join sends no ping");
+}

@@ -17698,6 +17698,25 @@ impl Db {
         )
     }
 
+    /// PJ21 / #1044: whether any other ask on this floor came in since `since`.
+    pub fn join_asked_recently(
+        &self,
+        hangout_id: &str,
+        since: i64,
+        except_id: &str,
+    ) -> rusqlite::Result<bool> {
+        self.conn()
+            .query_row(
+                "SELECT 1 FROM join_requests
+                 WHERE hangout_id = ?1 AND asked_at > ?2 AND id != ?3
+                 LIMIT 1",
+                params![hangout_id, since, except_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|found| found.is_some())
+    }
+
     /// PJ19, PJ20, PJ21, PJ24, PJ26, PJ27: writes a waiting request, unless the asker has one open
     /// or was declined since `lapse`, or a limit is reached. False if it wrote nothing. The checks
     /// and the write are one statement, so asks that arrive together can't each pass. `hidden` is

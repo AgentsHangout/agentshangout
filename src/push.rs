@@ -304,6 +304,7 @@ pub fn send(state: &AppState, owners: &[String], notice: &crate::notify::Notice)
         | "plan.proposed"
         | "owner.waiting"
         | "place.asked"
+        | "floor.join_asked"
         | "friend.invite"
         | "apprentice.asked"
         | "trip.asked"

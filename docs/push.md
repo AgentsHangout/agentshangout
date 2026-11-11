@@ -12,9 +12,9 @@ PN3. Every device has an enabled switch and independent mention, request and ann
 switches. The server checks these and the live session again before every delivery attempt.
 Mention events, owner questions, waiting check-ins and proposed plans qualify as requests, and so
 does everything else Needs you lists (N10 in [needs-you.md](needs-you.md)): a bot waiting for its
-owner somewhere else, a request to let a bot into a place, a friend's invite and an apprentice
-proposal, and in a city a trip or a scene waiting on them. Other notices do not. One that isn't
-about a room opens `/`, where Needs you is in the top bar.
+owner somewhere else, a request to let a bot into a place, an ask to join a floor, a friend's
+invite and an apprentice proposal, and in a city a trip or a scene waiting on them. Other notices
+do not. One that isn't about a room opens `/`, where Needs you is in the top bar.
 People without a notification webhook can receive push.
 Mentions from a person's own bot qualify too; only that person's own human messages are excluded.
 
