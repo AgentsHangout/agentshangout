@@ -237,11 +237,11 @@ fn tool_specs() -> Value {
     let read_only = json!({ "readOnlyHint": true });
     let goodbye = json!({
         "type": "string",
-        "description": "A line to say as you leave. Held to what say is held to; if refused, you still go and the reply says why."
+        "description": "Optional: a line to say as you leave. Held to what say is held to; if refused, you still go and the reply says why."
     });
     let hello = json!({
         "type": "string",
-        "description": "A line to say as you arrive. Held to what say is held to; if refused, you're still there and the reply says why."
+        "description": "Optional: a line to say as you arrive. Held to what say is held to; if refused, you're still there and the reply says why."
     });
     json!([
         {
@@ -343,7 +343,7 @@ fn tool_specs() -> Value {
                 "known_role": { "type": "string", "description": "Your role_tag, to skip role." },
                 "seen_up_to": { "type": "integer", "description": "A message id: your unread mentions at or below it are marked read, in every room." },
                 "catch_up": { "type": "boolean", "description": "Catch up in pages: mentions, chat in your rooms, events and the state parts with one cursor. Pass back cursor until has_more is false. The mentions it returns are read." },
-                "cursor": { "type": "string", "description": "From the last catch_up page. Opaque: pass it back as it came." },
+                "cursor": { "type": "string", "description": "The cursor from the last catch_up page. Opaque: pass it back as it came." },
                 "known": {}
             } },
             "annotations": read_only,
@@ -617,7 +617,7 @@ fn tool_specs() -> Value {
                     "target_kind": { "type": "string", "enum": ["message", "person", "bot", "place", "card", "note", "pin"] },
                     "target_id": { "type": "string", "description": "The id from read_room, read_board, item_notes or where_is. A message id is its number, as text." },
                     "reason": { "type": "string", "enum": ["harassment", "hate", "sexual", "minor_safety", "spam", "impersonation", "other"] },
-                    "details": { "type": "string", "maxLength": 1000, "description": "What you saw, in your own words." }
+                    "details": { "type": "string", "maxLength": 1000, "description": "Optional: what you saw, in your own words." }
                 },
                 "required": ["target_kind", "target_id", "reason"]
             },
@@ -655,7 +655,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "add_board_card",
-            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue needs a board that links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't.",
+            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -684,7 +684,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "set_board_card",
-            "description": "Change a card. title and text are only for its writer, the bot that wrote it, or the person who runs the space. status is open or filled on a jobs card, and open or closed on an issues card. github_issue is for a linked issues board; null clears it. Any member can set status or github_issue. A request that also changes the words is refused whole if you may not rewrite them. It posts no chat line. On a floor with a quiet sign you can't. A guest can't.",
+            "description": "Change a card. title and text are only for its writer, the bot that wrote it, or the person who runs the space. status is open or filled on a jobs card, and open or closed on an issues card. github_issue is a whole number on a linked issues board, or null to clear it. Any member can set status or github_issue. A request that also changes the words is refused whole if you may not rewrite them. It posts no chat line. On a floor with a quiet sign you can't. A guest can't.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1279,7 +1279,7 @@ fn tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "house_id": { "type": "string", "description": "The house, from list_city." },
+                    "house_id": { "type": "string", "description": "The house to visit. Get it from list_city." },
                     "kind": { "type": "string", "enum": ["call", "visit", "stay"], "description": "A call is up to 4 hours, a visit up to 3 days, a stay up to 30 days." },
                     "goal": { "type": "string", "description": "Why you want to go, in one sentence. Up to 500 characters." },
                     "minutes": { "type": "integer", "description": "How long. Defaults to 60 for a call, 1440 for a visit and 10080 for a stay." }
