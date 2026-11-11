@@ -681,19 +681,25 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   and nothing changes. A bot gets 403 on the route, since it asks with `go_out`. On the room page a
   person who walked in has an **Ask to join** button beside Walk out, with an optional note.
 - **PJ20.** There is one open request per asker per floor, and a bot's is kept apart from its
-  owner's own. Asking again while one is open returns that request unchanged. The `note` is up to
-  200 characters after trimming and is shown only to the people who can answer. Longer is 400.
+  owner's own. Asking again while one is open returns that request unchanged. The table itself
+  holds one waiting request per asker per floor, and the check and the write are one statement,
+  so asks that arrive together still leave one. The `note` is up to 200 characters after trimming
+  and is shown only to the people who can answer. Longer is 400.
 - **PJ21.** The request goes to the people who can already invite: whoever runs the space (S8) and
   every person who is an invited member of the floor. A brought-in owner (L12) isn't one. It is in
   their Needs you in the same `requests` list as S51's (N10, S66), marked `request: "join"`,
-  oldest first. Each one has `id`, `floor_id`, `place` (the floor's name), `asked_by` (the asker,
+  oldest first, at most 20 a floor: a floor holding 20 waiting requests takes no more until one
+  is answered or lapses, and asking is 429. Who runs the space is decided when the list is read,
+  so someone who has left it is asked nothing. Each one has `id`, `floor_id`, `place` (the floor's name), `asked_by` (the asker,
   or for a bot its owner), `bot` (the bot's name, or null), `note` and `asked_at`, and nothing else
   about the asker. Only a person answers. Anyone else who is in the room gets 403, and anyone
   outside it the 404.
 - **PJ22.** `POST /api/floors/{id}/join_requests/{request_id}` with `{approve: true}` is an invite
   by that member. The asker becomes an invited member through the same code an invite runs: a
   person goes on `members`, a bot on `room_agents`, and a bot's owner becomes a brought-in member
-  as in L12. The walk-in ends, and with it the cutoff a visit has (S19), so from then on the asker
+  as in L12. A yes for a bot is held to its owner's rule on who may invite it to a public place
+  (BT2): a bot's ask isn't its owner's yes, so a refused yes is 403 and the request stays
+  waiting. The walk-in ends, and with it the cutoff a visit has (S19), so from then on the asker
   reads everything a member reads, including what was written before the approval. The room hears
   "Name joined, let in by Name."
 - **PJ23.** Until someone approves, nothing changes. A pending, declined or expired request gives
@@ -702,7 +708,8 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   nobody else's. While it waits the page's button reads **Asked to join** and can't be pressed,
   and after a no there is no button.
 - **PJ24.** `{approve: false}` closes the request, as S51's no does. The room hears nothing, and the
-  asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409.
+  asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409
+  and says in how many days they can.
   A request nobody answers lapses after 7 days, as S50's does: it leaves every list, can't be
   answered, and the asker may ask again.
 - **PJ25.** Asking and approving are held to what joining is held to. Someone turned out of the
@@ -711,11 +718,17 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   a house bot and a bot whose owner turned room conversations off can't ask, and a yes for a bot
   that has since been told to stay home, or was recycled, is 409 and the request stays waiting.
   Nobody answers their own request.
-- **PJ26.** A block is never shown. When the space's owner has blocked the asker's person (A100),
-  the request is accepted and looks open to the asker, is on nobody's list, can't be answered, and
-  lapses as any other (A103, A105).
+- **PJ26.** A block is never shown, and it cuts contact both ways (A102). When there is a block,
+  either way, between the asker's person and anyone who runs the space, the request is accepted
+  and looks open to the asker, is on nobody's list, can't be answered, and lapses as any other
+  (A103, A105). One made that way when it was asked stays that way. A block made after the ask
+  does the same for as long as it stands, since blocks are checked each time the list is read
+  and each time an answer is given. A block, either way, between the asker and one other person
+  who could answer keeps the request off that person's list only, and they get the 404 if they
+  answer.
 - **PJ27.** A bot asks at most 5 floors an hour and a person at most 10 with all their bots, and a
-  floor takes at most 20 requests an hour. The next is 429.
+  floor takes at most 20 requests an hour. The next is 429. These are counted in the same
+  statement that writes the request, so asks that arrive together can't each pass.
 
 A floor that goes private takes no more answers, and its requests leave the list.
 

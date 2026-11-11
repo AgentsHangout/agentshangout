@@ -180,10 +180,22 @@ struct SpaceView {
 /// S7, S8: the owner, or once they've left, any member of the floor the space began with. Never a
 /// bot.
 pub(crate) fn runs(state: &AppState, caller: &Caller, space: &Space) -> ApiResult<bool> {
-    Ok(!caller.is_agent()
-        && state.db.is_member(&space.id, &caller.person_id)?
-        && (space.owner_id == caller.person_id
-            || !state.db.is_member(&space.id, &space.owner_id)?))
+    Ok(!caller.is_agent() && person_runs(state, &caller.person_id, space)?)
+}
+
+/// S8, for a person by id: `runs` without a caller.
+fn person_runs(state: &AppState, person_id: &str, space: &Space) -> ApiResult<bool> {
+    Ok(state.db.is_member(&space.id, person_id)?
+        && (space.owner_id == person_id || !state.db.is_member(&space.id, &space.owner_id)?))
+}
+
+/// S8: everyone who runs the space now: its owner, or once they've left, the members of the
+/// floor it began with.
+fn runners(state: &AppState, space: &Space) -> ApiResult<Vec<String>> {
+    if state.db.is_member(&space.id, &space.owner_id)? {
+        return Ok(vec![space.owner_id.clone()]);
+    }
+    Ok(state.db.people_in(&space.id)?.into_iter().map(|person| person.id).collect())
 }
 
 /// The space, if this caller runs it. S7: anyone in it is told only its owner can, and anyone else
@@ -618,6 +630,19 @@ const MAX_JOIN_NOTE_CHARS: usize = 200;
 const BOT_ASKS_AN_HOUR: i64 = 5;
 const PERSON_ASKS_AN_HOUR: i64 = 10;
 const FLOOR_ASKS_AN_HOUR: i64 = 20;
+/// PJ21: requests one floor holds waiting, so nobody's list grows without end.
+const FLOOR_ASKS_WAITING: i64 = 20;
+
+/// PJ26: whether a block stands between the asker and anyone who runs the space, either way
+/// (A102). Such a request reaches nobody, for as long as the block stands.
+fn cut_off_from_space(state: &AppState, space: &Space, asker: &str) -> ApiResult<bool> {
+    for runner in runners(state, space)? {
+        if crate::blocks::apart(state, &runner, asker)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 /// PJ19, PJ20, PJ24 to PJ27: a walk-in asks to become an invited member of the floor it is on.
 pub fn ask_to_join(
@@ -661,32 +686,80 @@ pub fn ask_to_join(
         )));
     }
     let agent_id = caller.agent_id.as_deref();
+    let lapse = now - REQUEST_SECS;
     // PJ20: one open request. PJ24: a no lasts a week.
-    match state.db.join_request_for(floor_id, &caller.person_id, agent_id, now - REQUEST_SECS)? {
-        Some((id, status, asked_at)) if status == "waiting" => {
-            return Ok(json!({ "id": id, "status": "waiting", "asked_at": asked_at }))
+    let open = |state: &AppState| -> ApiResult<Option<Value>> {
+        match state.db.join_request_for(floor_id, &caller.person_id, agent_id, lapse)? {
+            Some((id, status, asked_at, _)) if status == "waiting" => {
+                Ok(Some(json!({ "id": id, "status": "waiting", "asked_at": asked_at })))
+            }
+            Some((_, _, _, declined_at)) => {
+                let days = ((declined_at + REQUEST_SECS - now) as f64 / 86_400.0).ceil().max(1.0);
+                Err(ApiError::conflict(format!(
+                    "that was declined: you can ask again in {days} day{}",
+                    if days > 1.0 { "s" } else { "" }
+                )))
+            }
+            None => Ok(None),
         }
-        Some(_) => {
-            return Err(ApiError::conflict("that was declined: you can ask again in a week"))
-        }
-        None => {}
+    };
+    if let Some(request) = open(state)? {
+        return Ok(request);
     }
-    let (by_bot, by_person, on_floor) =
-        state.db.join_requests_since(floor_id, &caller.person_id, agent_id, now - 3600)?;
-    if (agent_id.is_some() && by_bot >= BOT_ASKS_AN_HOUR)
-        || by_person >= PERSON_ASKS_AN_HOUR
-        || on_floor >= FLOOR_ASKS_AN_HOUR
-    {
-        return Err(ApiError::too_many_requests(
-            "too many requests to join this hour: try again in an hour",
-        ));
-    }
-    // PJ26, A103: a block is never shown. The request is kept, looks open to the asker, and
+    let too_many = |state: &AppState| -> ApiResult<ApiError> {
+        let (by_bot, by_person, on_floor, waiting) = state.db.join_requests_since(
+            floor_id,
+            &caller.person_id,
+            agent_id,
+            now - 3600,
+            lapse,
+        )?;
+        Ok(
+            if (agent_id.is_some() && by_bot >= BOT_ASKS_AN_HOUR)
+                || by_person >= PERSON_ASKS_AN_HOUR
+                || on_floor >= FLOOR_ASKS_AN_HOUR
+            {
+                ApiError::too_many_requests(
+                    "too many requests to join this hour: try again in an hour",
+                )
+            } else if waiting >= FLOOR_ASKS_WAITING {
+                ApiError::too_many_requests(
+                    "this floor has as many requests waiting as it holds: try again later",
+                )
+            } else {
+                ApiError::too_many_requests("too many requests to join just now: try again shortly")
+            },
+        )
+    };
+    // PJ26, A102, A103: a block is never shown. The request is kept, looks open to the asker, and
     // reaches nobody.
     let space = state.db.space(&floor.space_id)?.ok_or_else(ApiError::not_found)?;
-    let hidden = state.db.has_blocked(&space.owner_id, &caller.person_id)?;
+    let hidden = cut_off_from_space(state, &space, &caller.person_id)?;
     let id = auth::new_id();
-    state.db.insert_join_request(&id, floor_id, &caller.person_id, agent_id, note, hidden, now)?;
+    // PJ20, PJ21, PJ27: the limits and the write are one statement, so asks that arrive together
+    // can't each pass.
+    let written = state.db.insert_join_request(&crate::db::NewJoinRequest {
+        id: &id,
+        hangout_id: floor_id,
+        person_id: &caller.person_id,
+        agent_id,
+        note,
+        hidden,
+        now,
+        lapse,
+        hour_ago: now - 3600,
+        bot_max: BOT_ASKS_AN_HOUR,
+        person_max: PERSON_ASKS_AN_HOUR,
+        floor_max: FLOOR_ASKS_AN_HOUR,
+        waiting_max: FLOOR_ASKS_WAITING,
+    })?;
+    if !written {
+        // Another ask got there first, or a limit was reached.
+        return match open(state)? {
+            Some(request) => Ok(request),
+            None => Err(too_many(state)?),
+        };
+    }
     Ok(json!({ "id": id, "status": "waiting", "asked_at": now }))
 }
 
@@ -705,7 +778,7 @@ pub fn own_join_request(
             caller.agent_id.as_deref(),
             now - REQUEST_SECS,
         )?
-        .map(|(_, status, asked_at)| {
+        .map(|(_, status, asked_at, _)| {
             let status = if status == "no" { "declined" } else { "waiting" };
             json!({ "status": status, "asked_at": asked_at })
         }))
@@ -734,9 +807,23 @@ async fn ask_to_join_floor(
 pub(crate) fn join_requests_for(state: &AppState, person_id: &str) -> ApiResult<Vec<Value>> {
     let now = now();
     let mut list = Vec::new();
-    for row in state.db.join_requests_for(person_id, now - REQUEST_SECS)? {
+    for row in state.db.join_request_candidates(person_id, now - REQUEST_SECS)? {
         // A floor that went private takes no more answers, so it lists nothing.
-        if !state.db.floor(&row.hangout_id)?.is_some_and(|floor| floor.access == "public") {
+        let Some(floor) = state.db.floor(&row.hangout_id)?.filter(|f| f.access == "public") else {
+            continue;
+        };
+        let Some(space) = state.db.space(&floor.space_id)? else { continue };
+        // PJ21: whoever runs the space now (S8), and every invited person.
+        if !(person_runs(state, person_id, &space)?
+            || state.db.is_invited_member(&row.hangout_id, person_id)?)
+        {
+            continue;
+        }
+        // PJ26: a block between the asker and this person, or anyone who runs the space, either
+        // way, keeps the request off the list for as long as it stands.
+        if crate::blocks::apart(state, person_id, &row.person_id)?
+            || cut_off_from_space(state, &space, &row.person_id)?
+        {
             continue;
         }
         list.push(json!({
@@ -791,6 +878,12 @@ async fn answer_join_request(
     if request.person_id == caller.person_id {
         return Err(ApiError::forbidden("you can't answer your own request"));
     }
+    // PJ26: a request a block keeps off this person's list can't be answered by them either.
+    if crate::blocks::apart(&state, &caller.person_id, &request.person_id)?
+        || cut_off_from_space(&state, &space, &request.person_id)?
+    {
+        return Err(ApiError::not_found());
+    }
     if floor.access != "public" {
         return Err(ApiError::conflict("this floor is private now, so it takes no requests"));
     }
@@ -803,6 +896,9 @@ async fn answer_join_request(
     if body.approve {
         check_can_join(&state, &request.person_id, &floor_id)?;
         if let Some(agent) = &agent {
+            // BT1, BT2: a bot's ask isn't its owner's yes, so the owner's rule on who may invite
+            // it holds here as it does for any invite.
+            crate::bot_trust::check_invite(&state, &caller, agent, &floor_id, false)?;
             if !crate::projects::may_take_part(&state, &agent.id)? {
                 return Err(ApiError::conflict("that bot stays home now"));
             }
