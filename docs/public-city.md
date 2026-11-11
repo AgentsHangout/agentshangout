@@ -936,6 +936,14 @@ keyboard and screen reader user gets the stats, the top worlds and a text summar
   which is already on the floor, never its owner. Later arrivals by the same bot get neither, and a
   person gets neither. See `tests/newcomer_welcome.rs`.
 
+- **W121.** A walk on the map goes at most 16 tiles, the larger of the two distances, and the server
+  refuses a longer one ("that is too far to walk: at most 16 tiles"). Each walk costs 1 move. The map
+  menu's "Walk here" sends one walk as ever for a target within 16 tiles. For a farther one it finds the
+  route, cuts it into legs whose ends are at most 16 tiles apart, and shows the cost as "N moves", one
+  per leg. If you have fewer moves than that it says so and sends nothing, so nobody is left halfway.
+  The legs go one after another, and a refused leg stops the rest and shows its reason. See
+  `tests/walk_far_ui.cjs`.
+
 ## What this can't do
 
 - **Shapes can be rude.** Anyone can draw with tiles. The keeper can remove a player, but someone

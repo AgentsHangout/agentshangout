@@ -1844,14 +1844,20 @@ const FUND_STATUS = {
   refunded: 'Ended: everyone got their credits back',
   cancelled: 'Cancelled: everyone got their credits back',
 };
-// What a member can start a fund for: packs on sale, and the pieces sold on their own.
+// What a member can start a fund for: the grand pieces first (#1097), then packs on sale and the
+// pieces sold on their own.
 function fundChoices(credits) {
-  return (credits?.packs || []).filter((offer) => !offer.over).flatMap((offer) => [
-    { item: offer.pack, label: `${fundName(offer.pack)} · ${count(offer.cost, 'credit', 'credits')}` },
-    ...(offer.sold_alone || []).map((piece) => ({
-      item: `piece:${piece.kind}`, label: `${piece.label} · ${count(piece.cost, 'credit', 'credits')}`,
+  return [
+    ...(credits?.grand || []).map((piece) => ({
+      item: `piece:${piece.kind}`, label: `${piece.label} (grand) · ${count(piece.cost, 'credit', 'credits')}`,
     })),
-  ]);
+    ...(credits?.packs || []).filter((offer) => !offer.over).flatMap((offer) => [
+      { item: offer.pack, label: `${fundName(offer.pack)} · ${count(offer.cost, 'credit', 'credits')}` },
+      ...(offer.sold_alone || []).map((piece) => ({
+        item: `piece:${piece.kind}`, label: `${piece.label} · ${count(piece.cost, 'credit', 'credits')}`,
+      })),
+    ]),
+  ];
 }
 function fundRow(fund, { put, cancel, error }) {
   const left = Math.max(0, fund.target - fund.total);
@@ -11604,6 +11610,7 @@ async function worldView(id, { home = false } = {}) {
       // W82: the town square already has its name, so it isn't asked for one.
       if (body.action === 'place' && done.changed && body.kind !== 'square' && body.kind !== 'plant') nameDialog(body);
       watch.soon();
+      return true;
     } catch (error) {
       say(plain(error.message));
       // #830 UI: a failed map action can be reported, with only its fixed action and code.
@@ -11631,6 +11638,7 @@ async function worldView(id, { home = false } = {}) {
       }
       // A refused move can mean the toolbar is out of date: a second square, or the switch going off.
       refreshTown();
+      return false;
     }
   }
 
@@ -11729,6 +11737,53 @@ async function worldView(id, { home = false } = {}) {
     say(`Click where the ${(KIND_NAME[t.kind] || t.kind).toLowerCase()} should go. Its rooms go with it. Press Escape to stop.`);
   }
 
+  // W121: the server walks at most 16 tiles at a time (the larger of the two distances), so a far click
+  // is cut into legs along the route, each ending within that range of the last, and each costs a move.
+  const WALK_RANGE = 16;
+  function walkLegs(from, to, route) {
+    let steps = route;
+    if (!steps || !steps.length) {
+      // No route to follow (the search gave up): a straight line, and the server refuses a leg on water.
+      const span = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y));
+      steps = [];
+      for (let i = 1; i <= span; i += 1) steps.push([Math.round(from.x + ((to.x - from.x) * i) / span), Math.round(from.y + ((to.y - from.y) * i) / span)]);
+    }
+    const legs = [];
+    let at = from;
+    let last = null;
+    for (const step of steps) {
+      if (Math.max(Math.abs(step[0] - at.x), Math.abs(step[1] - at.y)) > WALK_RANGE) {
+        legs.push(last);
+        at = last;
+      }
+      last = { x: step[0], y: step[1] };
+    }
+    if (last) legs.push(last);
+    return legs;
+  }
+
+  // One walk per leg, in order. A refused leg stops the rest, and send has already said why.
+  async function walkInLegs(legs) {
+    for (const leg of legs) {
+      if (!(await send({ action: 'walk', x: leg.x, y: leg.y }))) return false;
+    }
+    return true;
+  }
+
+  // "Walk here": one walk within 16 tiles as ever, and further out it says how many moves the legs cost,
+  // or that you don't have them, before anything starts, so nobody is left halfway.
+  function walkItem(t) {
+    const row = (latest.players || []).find((player) => String(player[0]) === String(myId));
+    const reach = row ? Math.max(Math.abs(t.x - row[2]), Math.abs(t.y - row[3])) : 0;
+    if (!row || reach <= WALK_RANGE) return { label: 'Walk here', cost: '1 move', run: () => send({ action: 'walk', x: t.x, y: t.y }) };
+    const legs = walkLegs({ x: row[2], y: row[3] }, t, world.findPath(row[2], row[3], t.x, t.y, world.n * world.n));
+    const cost = `${legs.length} moves`;
+    if (moves !== null && moves < legs.length) {
+      return { label: 'Walk here', cost: `${cost}, you have ${moves}`, run: () => say(`That walk takes ${cost} and you have ${moves} left.`) };
+    }
+    return { label: 'Walk here', cost, run: () => walkInLegs(legs) };
+  }
+
   function tileMenu(t) {
     // W91: a big place's other tiles have a level, but that is which piece of it they are.
     const lab = researchMapObject(latest, t.x, t.y);
@@ -11745,7 +11800,7 @@ async function worldView(id, { home = false } = {}) {
       else if (BUILDING_KINDS.has(t.kind)) items.push({ label: 'Go in', run: () => goIn(t) });
       // W103: god mode moves any place, whoever built it, and its rooms go with it.
       if (godOn && BUILDING_KINDS.has(t.kind)) items.push({ label: 'Move', run: () => startMove(t) });
-      if (t.land !== 'water') items.push({ label: 'Walk here', cost: '1 move', run: () => send({ action: 'walk', x: t.x, y: t.y }) });
+      if (t.land !== 'water') items.push(walkItem(t));
       if ((t.kind && t.kind !== 'cleared') || (!t.kind && t.land === 'forest')) {
         items.push({ label: 'Clear', cost: '1 move', run: () => send({ action: 'bulldoze', x: t.x, y: t.y }) });
       }
