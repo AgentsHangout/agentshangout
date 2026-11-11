@@ -5595,14 +5595,23 @@ async fn pj21_a_brought_in_owner_cannot_answer_a_join_request() {
     server.walk_in(&cy, &room).await.ok();
     let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
 
-    // Dee is brought in as an owner (L12), not an invited member.
+    // Dee is brought in as an owner (L12) via members table: in_room is true via is_member, but Dee is not an invited member.
     server.state.db.add_brought_in_owner(&room, &dee.id, now()).unwrap();
+    assert!(server.state.db.is_member(&room, &dee.id).unwrap(), "Dee is in the room via members");
+    assert!(
+        !server.state.db.is_invited_member(&room, &dee.id).unwrap(),
+        "Dee is not an invited member"
+    );
 
     // Dee sees no join requests in Needs you.
     assert!(server.join_requests(&dee).await.is_empty(), "brought-in owner gets no requests");
 
     // Dee is a brought-in member in the room, so answering gets 403.
-    server.answer_join(&dee, &room, &id, true).await.refused(StatusCode::FORBIDDEN);
+    let refused = server.answer_join(&dee, &room, &id, true).await.refused(StatusCode::FORBIDDEN);
+    assert!(
+        refused["error"].as_str().unwrap().contains("only someone who can invite"),
+        "{refused}"
+    );
 
     // Eve is completely outside the room and gets 404.
     server.answer_join(&eve, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
@@ -5626,9 +5635,9 @@ async fn pj25_a_yes_on_a_full_floor_is_refused_and_the_request_stays_waiting() {
     }
     assert_eq!(server.snapshot(&ann.key, &room).await.ok()["floor"]["here"], 8);
 
-    // Ann approves: refused 409 conflict.
-    let refused = server.answer_join(&ann, &room, &id, true).await;
-    refused.refused(StatusCode::CONFLICT);
+    // Ann approves: refused 409 conflict ("this floor is full").
+    let refused = server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::CONFLICT);
+    assert!(refused["error"].as_str().unwrap().contains("this floor is full"), "{refused}");
 
     // Request stays waiting in Needs you and on Cy's snapshot.
     assert_eq!(server.join_requests(&ann).await.len(), 1);
@@ -5654,9 +5663,9 @@ async fn pj25_a_floor_that_goes_private_takes_no_more_answers_and_requests_leave
     // The requests leave everyone's Needs you list.
     assert!(server.join_requests(&ann).await.is_empty(), "requests leave the list when private");
 
-    // Answering gets 409 conflict.
-    let refused = server.answer_join(&ann, &room, &id, true).await;
-    refused.refused(StatusCode::CONFLICT);
+    // Answering gets 409 conflict ("this floor is private now, so it takes no requests").
+    let refused = server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::CONFLICT);
+    assert!(refused["error"].as_str().unwrap().contains("this floor is private now"), "{refused}");
 }
 
 // PJ26: a block made after the ask lifts when the block does, restoring the request.
