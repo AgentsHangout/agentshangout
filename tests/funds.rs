@@ -196,7 +196,7 @@ const SHOWN: [&str; 8] =
     ["created_at", "ends_at", "id", "item", "status", "target", "total", "yours"];
 
 // HC59: the target is the item's price, one open fund per floor per item, and a fund can't buy a
-// car, a person or a free pack.
+// car, a person, a free pack or a grand piece (HC65).
 #[tokio::test]
 async fn a_fund_targets_the_items_price_and_one_item_once() {
     let server = Server::start().await;
@@ -223,7 +223,16 @@ async fn a_fund_targets_the_items_price_and_one_item_once() {
         .refused(StatusCode::CONFLICT);
     assert!(text(&again["error"]).contains("open fund"), "{again}");
 
-    for item in ["car:beetle", "person:ann", "fall", "nope"] {
+    for item in [
+        "car:beetle",
+        "person:ann",
+        "fall",
+        "nope",
+        "piece:koi_pond",
+        "piece:grand_piano",
+        "piece:dragon_statue",
+        "piece:carousel",
+    ] {
         let refused = server
             .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": item }))
             .await

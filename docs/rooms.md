@@ -157,6 +157,7 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | Kind | `does` | `room_for` |
   | --- | --- | --- |
   | `piano` | playing the piano | 1 |
+  | `grand_piano` | playing the piano | 1 |
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
   | `microscope` | peering into the microscope | 1 |

@@ -2183,6 +2183,14 @@ pub struct Snapshot {
     pub stats: Stats,
     /// Set when the caller is only visiting this Porch: they see nothing from before they came.
     pub guest: Option<Visit>,
+    /// PJ23: a visitor's own request to join this public floor, as `{status, asked_at}`. Nobody
+    /// else's is ever here, and a member has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join_request: Option<serde_json::Value>,
+    /// PJ19: whether this caller walked onto this public floor themselves, so they can ask to
+    /// join it. Left out when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub can_ask_to_join: bool,
     /// Which city and house this room belongs to, so the page can link back.
     pub city_id: Option<String>,
     pub house_id: Option<String>,
@@ -2426,6 +2434,16 @@ fn snapshot_with(
     let (room_mention_policy, room_mention_bots) =
         crate::room_mentions::settings_for(state, caller, hangout_id)?;
     let first_message = messages.first().map_or(0, |m| m.id);
+    let join_request = match &guest {
+        Some(_) if floor.is_some() => spaces::own_join_request(state, caller, hangout_id)?,
+        _ => None,
+    };
+    // PJ19: only someone who walked onto the floor themselves can ask. An owner watching a bot
+    // they sent in is a guest too, and has nothing to ask with.
+    let who = caller.agent_id.as_deref().unwrap_or(&caller.person_id);
+    let can_ask_to_join = guest.is_some()
+        && floor.as_ref().is_some_and(|place| place.floor.access == "public")
+        && state.db.walked_onto(who, now)?.iter().any(|id| id == hangout_id);
     Ok(Snapshot {
         hangout,
         you: You { person_id: caller.person_id.clone(), agent_id: caller.agent_id.clone() },
@@ -2458,6 +2476,8 @@ fn snapshot_with(
         owner_questions,
         stats,
         guest,
+        join_request,
+        can_ask_to_join,
         city_id,
         house_id,
         floor,
