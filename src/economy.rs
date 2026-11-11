@@ -449,7 +449,7 @@ fn buy(
     }
 }
 
-/// HC17: a bot spends only on its owner's own yes. A check-in, a room message or a note never
+/// HC17 (#1094): a bot spends only on its owner's own yes. A check-in, a room message or a note never
 /// counts, because only `ask_owner` reaches the owner and nobody else can answer it.
 pub(crate) fn owner_said_yes(
     db: &Db,
@@ -459,18 +459,78 @@ pub(crate) fn owner_said_yes(
     asked: Option<&str>,
     now: i64,
 ) -> ApiResult<()> {
+    enum KindWord {
+        Piece,
+        Paint,
+        Flooring,
+        Car,
+        Pack,
+    }
+    let (needle, label, kind_word) = if let Some(paint) = pack.strip_prefix(crate::items::PAINT) {
+        (paint, format!("{paint} paint"), KindWord::Paint)
+    } else if let Some(flooring) = pack.strip_prefix(crate::items::FLOORING) {
+        (flooring, format!("{flooring} flooring"), KindWord::Flooring)
+    } else if let Some(kind) = pack.strip_prefix(PIECE) {
+        (kind, format!("{kind} piece"), KindWord::Piece)
+    } else if let Some(car) = pack.strip_prefix("car:") {
+        (car, format!("{car} car"), KindWord::Car)
+    } else {
+        (pack, format!("{pack} pack"), KindWord::Pack)
+    };
+    let needle = needle.to_lowercase();
+    let spaced = needle.replace('_', " ");
     cited_yes(
         db,
         caller,
         agent_id,
         asked,
         now,
-        |question| question.to_lowercase().contains(pack),
+        |question| {
+            let lower = question.to_lowercase();
+            if pack.contains(':') && matches_word_boundary(&lower, pack) {
+                return true;
+            }
+            let has_name =
+                matches_word_boundary(&lower, &needle) || matches_word_boundary(&lower, &spaced);
+            if !has_name {
+                return false;
+            }
+            match kind_word {
+                KindWord::Piece => matches_word_boundary(&lower, "piece"),
+                KindWord::Paint => {
+                    matches_word_boundary(&lower, "paint")
+                        || matches_word_boundary(&lower, "wall")
+                        || matches_word_boundary(&lower, "walls")
+                }
+                KindWord::Flooring => {
+                    matches_word_boundary(&lower, "flooring")
+                        || matches_word_boundary(&lower, "floor")
+                }
+                KindWord::Car => matches_word_boundary(&lower, "car"),
+                KindWord::Pack => matches_word_boundary(&lower, "pack"),
+            }
+        },
         &format!(
             "a bot spends its owner's credits only on their yes. Ask with ask_owner, naming the \
-             {pack} pack, then pass that question's id as asked once they say yes"
+             {label}, then pass that question's id as asked once they say yes"
         ),
     )
+}
+
+/// Whether `needle` appears in `text` bounded by non-alphanumeric characters or string ends.
+fn matches_word_boundary(text: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    for (start, matched) in text.match_indices(needle) {
+        let left_ok = text[..start].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+        let end = start + matched.len();
+        let right_ok = text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+        if left_ok && right_ok {
+            return true;
+        }
+    }
+    false
 }
 
 /// HC60: a bot puts into a fund only on a yes that names that fund. Buying the item is a
@@ -562,7 +622,7 @@ pub fn set_bot_limit(
 
 #[cfg(test)]
 mod tests {
-    use super::said_yes;
+    use super::{matches_word_boundary, said_yes};
 
     #[test]
     fn only_a_plain_yes_lets_a_bot_spend() {
@@ -572,5 +632,21 @@ mod tests {
         for no in ["no", "not yet", "hold", "", "maybe yes", "nope", "yesterday"] {
             assert!(!said_yes(no), "{no}");
         }
+    }
+
+    #[test]
+    fn word_boundary_matching_rejects_accidental_substrings() {
+        assert!(matches_word_boundary("May I buy the snowman for 2 credits?", "snowman"));
+        assert!(matches_word_boundary("Buy the pine tree please", "pine tree"));
+        assert!(matches_word_boundary("Buy the pine_tree please", "pine_tree"));
+        assert!(matches_word_boundary("car:toaster", "toaster"));
+        assert!(matches_word_boundary("frost!", "frost"));
+        // Substring inside another word is rejected
+        assert!(!matches_word_boundary("I bought a cargo van", "go"));
+        assert!(!matches_word_boundary("snowmans everywhere", "snowman"));
+        assert!(!matches_word_boundary("I love beaches", "beach"));
+        assert!(matches_word_boundary("May I buy the beach pack?", "beach"));
+        assert!(matches_word_boundary("May I buy car:toaster?", "car:toaster"));
+        assert!(!matches_word_boundary("", "snowman"));
     }
 }

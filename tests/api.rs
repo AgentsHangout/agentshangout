@@ -2273,3 +2273,166 @@ fn the_money_panel_uses_the_brand_kits_warm_paper_bevels_and_phone_sheet() {
         "creditsCard must use an inline .shop-confirm row with .wd-btn controls instead of browser confirm()"
     );
 }
+
+// HC17 (#1094): a bot spends its owner's credits only on an ask_owner yes.
+// The question may name the bare item, style, or car name, or the full key, matching on word boundaries.
+#[tokio::test]
+async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() {
+    use agenthangout::db::{CreditKind, CreditSource};
+
+    let server = Server::start().await;
+    let room = server.room().await;
+    let (scout, scout_id) = server.bot(&room.justin, &room.id, "Scout").await;
+    let owner = server.state.db.agent(&scout_id, now()).unwrap().unwrap().owner_id;
+    server
+        .state
+        .db
+        .settle_credits(
+            &owner,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 200,
+            1000,
+            now(),
+        )
+        .unwrap();
+
+    // Allow scout up to 100 credits a day.
+    server
+        .put(&room.justin, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 100 }))
+        .await;
+
+    // 1. Piece with kind word (e.g. "snowman piece", costing 2 credits from winter pack).
+    let asked =
+        server.ask_owner(&scout, &room.id, "May I buy the snowman piece for 2 credits?").await;
+    let q_snowman = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_snowman, "yes").await;
+
+    // A yes for snowman cannot buy pine_tree: refused and names the label.
+    let wrong = server
+        .tool(&scout, "spend_credits", json!({ "pack": "piece:pine_tree", "asked": q_snowman }))
+        .await;
+    assert_eq!(wrong["isError"], true, "{wrong}");
+    assert!(
+        wrong["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the pine_tree piece"),
+        "{wrong}"
+    );
+
+    // Buying snowman piece succeeds.
+    let bought_piece = server
+        .tool(&scout, "spend_credits", json!({ "pack": "piece:snowman", "asked": q_snowman }))
+        .await;
+    assert!(bought_piece["isError"].is_null(), "{bought_piece}");
+
+    // 2. Multi-word piece with spaced name and kind word ("pine tree piece" for piece:pine_tree).
+    let asked =
+        server.ask_owner(&scout, &room.id, "Can I buy the pine tree piece for 4 coins?").await;
+    let q_pine = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_pine, "yes").await;
+    let bought_pine = server
+        .tool(&scout, "spend_credits", json!({ "pack": "piece:pine_tree", "asked": q_pine }))
+        .await;
+    assert!(bought_pine["isError"].is_null(), "{bought_pine}");
+
+    // 3. Paint style with kind word ("frost paint" or "frost walls" for paint:frost, 5 coins).
+    let asked = server.ask_owner(&scout, &room.id, "Should we get frost walls for the room?").await;
+    let q_frost = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_frost, "yes").await;
+    let bought_paint = server
+        .tool(&scout, "spend_credits", json!({ "pack": "paint:frost", "asked": q_frost }))
+        .await;
+    assert!(bought_paint["isError"].is_null(), "{bought_paint}");
+
+    // 4. Flooring style with kind word ("snow flooring" or "snow floor" for flooring:snow, 5 coins).
+    let asked = server.ask_owner(&scout, &room.id, "Let's put down a snow floor").await;
+    let q_snow = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_snow, "yes").await;
+    let bought_flooring = server
+        .tool(&scout, "spend_credits", json!({ "pack": "flooring:snow", "asked": q_snow }))
+        .await;
+    assert!(bought_flooring["isError"].is_null(), "{bought_flooring}");
+
+    // 5. Car with kind word ("dinky car" for car:dinky, 50 credits).
+    let asked = server.ask_owner(&scout, &room.id, "May I buy the dinky car?").await;
+    let q_car = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_car, "yes").await;
+    let bought_car =
+        server.tool(&scout, "spend_credits", json!({ "pack": "car:dinky", "asked": q_car })).await;
+    assert!(bought_car["isError"].is_null(), "{bought_car}");
+
+    // 6. Everyday words in an unrelated question are refused (e.g. "snow fort" for flooring:snow).
+    let asked = server.ask_owner(&scout, &room.id, "can I build a snow fort?").await;
+    let q_fort = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_fort, "yes").await;
+    let fort_refused = server
+        .tool(&scout, "spend_credits", json!({ "pack": "flooring:snow", "asked": q_fort }))
+        .await;
+    assert_eq!(fort_refused["isError"], true, "{fort_refused}");
+    assert!(
+        fort_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the snow flooring"),
+        "{fort_refused}"
+    );
+
+    // 7. Accidental substring inside another word is refused.
+    // Question mentions "eating toast" which contains "toast", but car is "toaster".
+    let asked = server.ask_owner(&scout, &room.id, "I like eating toast for breakfast").await;
+    let q_toast = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_toast, "yes").await;
+    let sub_refused = server
+        .tool(&scout, "spend_credits", json!({ "pack": "car:toaster", "asked": q_toast }))
+        .await;
+    assert_eq!(sub_refused["isError"], true, "{sub_refused}");
+    assert!(
+        sub_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the toaster car"),
+        "{sub_refused}"
+    );
+
+    // 8. Packs: requires kind word "pack" alongside bare name on word boundaries.
+    // Substrings like "beaches" and everyday questions like "can I go to the beach?" are refused.
+    let asked = server.ask_owner(&scout, &room.id, "I love visiting beaches in summer").await;
+    let q_beaches = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_beaches, "yes").await;
+    let beach_refused =
+        server.tool(&scout, "spend_credits", json!({ "pack": "beach", "asked": q_beaches })).await;
+    assert_eq!(beach_refused["isError"], true, "{beach_refused}");
+    assert!(
+        beach_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the beach pack"),
+        "{beach_refused}"
+    );
+
+    let asked = server.ask_owner(&scout, &room.id, "can I go to the beach?").await;
+    let q_trip = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_trip, "yes").await;
+    let trip_refused =
+        server.tool(&scout, "spend_credits", json!({ "pack": "beach", "asked": q_trip })).await;
+    assert_eq!(trip_refused["isError"], true, "{trip_refused}");
+    assert!(
+        trip_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the beach pack"),
+        "{trip_refused}"
+    );
+
+    // Buying the beach pack succeeds when naming the pack on word boundaries.
+    let asked = server.ask_owner(&scout, &room.id, "May I buy the beach pack?").await;
+    let q_beach = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_beach, "yes").await;
+    let bought_beach =
+        server.tool(&scout, "spend_credits", json!({ "pack": "beach", "asked": q_beach })).await;
+    assert!(bought_beach["isError"].is_null(), "{bought_beach}");
+}
