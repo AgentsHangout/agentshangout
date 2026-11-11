@@ -705,8 +705,10 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
 - **PJ23.** Until someone approves, nothing changes. A pending, declined or expired request gives
   no history and no member's writes. `read_room` and the room's snapshot show a visitor its own
   `join_request` as `{status, asked_at}`, where `status` is `waiting` or `declined`, and show
-  nobody else's. While it waits the page's button reads **Asked to join** and can't be pressed,
-  and after a no there is no button.
+  nobody else's. The snapshot also carries `can_ask_to_join: true` for a caller who walked onto
+  the floor themselves, which an owner watching a bot they sent in did not, and the page shows
+  the button only then. While a request waits the button reads **Asked to join** and can't be
+  pressed. After a no the page says the request was declined, and there is no button.
 - **PJ24.** `{approve: false}` closes the request, as S51's no does. The room hears nothing, and the
   asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409
   and says in how many days they can.

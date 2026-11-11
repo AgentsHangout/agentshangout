@@ -5790,12 +5790,15 @@ async function roomView(id) {
       ` You can only see what's happened since you arrived, at ${timeFormat.format(fromUnix(guest.since))}.`);
   }
 
-  // PJ19: someone who walked onto a public floor can ask to join it. One request stays open
-  // (PJ20), so while it waits the button says so, and after a no there's nothing to press (PJ24).
+  // PJ19: someone who walked onto a public floor themselves can ask to join it. The server says
+  // who that is, since an owner watching a bot they sent in is a guest too and can't ask. One
+  // request stays open (PJ20), so while it waits the button says so, and after a no there's
+  // nothing to press (PJ24).
   function joinAskButton() {
-    if (!snapshot.guest || snapshot.you.agent_id || snapshot.floor?.floor.access !== 'public') return null;
+    if (!snapshot.can_ask_to_join || snapshot.you.agent_id) return null;
     const request = snapshot.join_request;
-    if (request?.status === 'declined') return null;
+    // PJ24: the asker is told it was declined, and not who declined or why.
+    if (request?.status === 'declined') return h('small', { class: 'muted' }, 'Your request to join was declined.');
     if (request) return h('button', { type: 'button', class: 'wd-tbtn', disabled: true, title: 'Someone who can invite people here will answer.' }, 'Asked to join');
     return h('button', {
       type: 'button',

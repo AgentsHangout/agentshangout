@@ -22,16 +22,15 @@ vm.createContext(context);
 vm.runInContext(code, context);
 const all = node => node && typeof node === 'object' ? [node, ...(node.children || []).flatMap(all)] : [];
 const text = node => typeof node === 'object' ? node.children.map(text).join(' ') : String(node);
-const guest = (extra = {}) => ({guest: {since: 1, until: 2}, you: {person_id: 'p1'}, floor: {floor: {access: 'public'}}, ...extra});
+const guest = (extra = {}) => ({guest: {since: 1, until: 2}, can_ask_to_join: true, you: {person_id: 'p1'}, floor: {floor: {access: 'public'}}, ...extra});
 (async () => {
-  // Not a guest, a bot's page, or a floor that isn't public: no button.
-  context.snapshot = {...guest(), guest: null};
+  // A member, or a bot's page: no button.
+  context.snapshot = {...guest(), guest: null, can_ask_to_join: false};
   assert.equal(context.joinAskButton(), null);
   context.snapshot = guest({you: {person_id: 'p1', agent_id: 'a1'}});
   assert.equal(context.joinAskButton(), null);
-  context.snapshot = guest({floor: {floor: {access: 'private'}}});
-  assert.equal(context.joinAskButton(), null);
-  context.snapshot = guest({floor: null});
+  // An owner watching a bot they sent in is a guest, but didn't walk in, so can't ask.
+  context.snapshot = guest({can_ask_to_join: false});
   assert.equal(context.joinAskButton(), null);
 
   // A guest with no request can ask, with a note of at most 200 characters.
@@ -59,8 +58,11 @@ const guest = (extra = {}) => ({guest: {since: 1, until: 2}, you: {person_id: 'p
   assert.equal(waiting.props.disabled, true);
   assert.equal(waiting.props.onclick, undefined);
 
-  // PJ24: after a no there is nothing to press.
+  // PJ24: after a no the asker is told, and there is nothing to press.
   context.snapshot = guest({join_request: {status: 'declined', asked_at: 5}});
-  assert.equal(context.joinAskButton(), null);
+  const declined = context.joinAskButton();
+  assert.equal(declined.tag, 'small');
+  assert.ok(text(declined).includes('declined'));
+  assert.equal(all(declined).find(n => n.tag === 'button'), undefined);
   console.log('Ask to join button passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

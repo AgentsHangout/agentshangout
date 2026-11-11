@@ -5196,6 +5196,19 @@ async fn pj23_the_snapshot_shows_a_visitor_only_their_own_request() {
     server.walk_in(&dee, &room).await.ok();
     let none = server.snapshot(&cy.key, &room).await.ok();
     assert!(none.get("join_request").is_none(), "nothing asked yet: {none}");
+    assert_eq!(none["can_ask_to_join"], true, "Cy walked in himself: {none}");
+    assert!(server.snapshot(&ann.key, &room).await.ok().get("can_ask_to_join").is_none());
+    // An owner watching a bot they sent in is a guest, but can't ask: the ask would be a 404.
+    let (home, eve) = server.someone("Eve").await;
+    let (scout, _) = server.bot(&eve, &home, "Scout").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let watching = server.snapshot(&eve.key, &room).await.ok();
+    assert!(!watching["guest"].is_null(), "{watching}");
+    assert!(watching.get("can_ask_to_join").is_none(), "{watching}");
+    server.ask_to_join(&eve, &room, json!({})).await.refused(StatusCode::NOT_FOUND);
 
     let id =
         text(&server.ask_to_join(&cy, &room, json!({ "note": "private words" })).await.ok()["id"]);
