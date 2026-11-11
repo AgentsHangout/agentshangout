@@ -487,6 +487,11 @@ pub(crate) fn owner_said_yes(
         now,
         |question| {
             let lower = question.to_lowercase();
+            // #1056: a yes to putting credits into a fund is not a yes to buying the item, so
+            // "May I put credits into the winter pack fund?" can't buy the winter pack.
+            if has_word(&lower, "fund") {
+                return false;
+            }
             if pack.contains(':') && matches_word_boundary(&lower, pack) {
                 return true;
             }

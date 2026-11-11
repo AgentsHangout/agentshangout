@@ -1833,6 +1833,93 @@ function standingFacts(standing) {
 }
 
 // HC8: your own credits, in your account panel. Nobody else's are ever asked for or shown. HC14 and
+// HC59 to HC64 (#1056): a floor's shared funds. Anyone who can see the floor puts credits toward a
+// pack or a piece for it, a member starts one, and its starter can cancel it. Each person sees
+// their own put-in and the total, never anyone else's (HC63).
+const fundName = (item) => (item.startsWith('piece:')
+  ? sentence(item.slice(6).replaceAll('_', ' '))
+  : `${sentence(item.replaceAll('_', ' '))} pack`);
+const FUND_STATUS = {
+  complete: 'Bought for this floor',
+  refunded: 'Ended: everyone got their credits back',
+  cancelled: 'Cancelled: everyone got their credits back',
+};
+// What a member can start a fund for: packs on sale, and the pieces sold on their own.
+function fundChoices(credits) {
+  return (credits?.packs || []).filter((offer) => !offer.over).flatMap((offer) => [
+    { item: offer.pack, label: `${fundName(offer.pack)} · ${count(offer.cost, 'credit', 'credits')}` },
+    ...(offer.sold_alone || []).map((piece) => ({
+      item: `piece:${piece.kind}`, label: `${piece.label} · ${count(piece.cost, 'credit', 'credits')}`,
+    })),
+  ]);
+}
+function fundRow(fund, { put, cancel, error }) {
+  const left = Math.max(0, fund.target - fund.total);
+  const open = fund.status === 'open';
+  const amount = h('input', {
+    type: 'number', min: 1, max: left, step: 1, value: String(Math.min(5, left) || 1),
+    'aria-label': `Credits to put into the ${fundName(fund.item)} fund`,
+  });
+  return h('li', { class: 'fund-row' },
+    h('strong', {}, fundName(fund.item)),
+    h('progress', { max: fund.target, value: fund.total, 'aria-label': `${fund.total} of ${fund.target} credits` }),
+    h('span', { class: 'muted fine' }, `${fund.total} of ${count(fund.target, 'credit', 'credits')}`
+      + (fund.yours ? ` · you put in ${fund.yours}` : '')
+      + (open ? ` · ends ${new Date(fund.ends_at * 1000).toLocaleDateString()}` : '')),
+    open ? h('div', { class: 'fund-actions' },
+      amount,
+      h('button', { type: 'button', class: 'wd-btn', onclick: act(error, () => put(fund, Number(amount.value))) }, 'Put in'),
+      fund.started_by_you ? h('button', {
+        type: 'button', class: 'wd-btn ghost', onclick: act(error, () => cancel(fund)),
+      }, 'Cancel') : null)
+      : h('span', { class: 'pill' }, FUND_STATUS[fund.status] || fund.status));
+}
+function fundsPanel(floorId) {
+  const error = h('p', { class: 'error', hidden: true });
+  const list = h('div', { class: 'funds' });
+  const path = `/api/floors/${encodeURIComponent(floorId)}/funds`;
+  const load = async () => {
+    let funds;
+    let credits = null;
+    try {
+      funds = await api(path);
+      if (funds.can_start) credits = await api('/api/credits').catch(() => null);
+    } catch (failure) {
+      list.replaceChildren(h('p', { class: 'error' }, failure.message));
+      return;
+    }
+    const put = async (fund, amount) => {
+      if (!(amount >= 1)) throw new Error('Put in at least 1 credit.');
+      if (!confirm(`Put ${count(amount, 'credit', 'credits')} into the ${fundName(fund.item)} fund? You get them back only if it ends unfinished.`)) return;
+      await api(`/api/funds/${encodeURIComponent(fund.id)}/put`, { method: 'POST', body: { amount } });
+      await load();
+    };
+    const cancel = async (fund) => {
+      if (!confirm(`Cancel the ${fundName(fund.item)} fund? Everyone gets back what they put in.`)) return;
+      await api(`/api/funds/${encodeURIComponent(fund.id)}/cancel`, { method: 'POST' });
+      await load();
+    };
+    const choices = fundChoices(credits);
+    const pick = h('select', { 'aria-label': 'What the fund buys for this floor' },
+      ...choices.map((choice) => h('option', { value: choice.item }, choice.label)));
+    const start = funds.can_start && choices.length ? h('div', { class: 'fund-actions' },
+      pick,
+      h('button', {
+        type: 'button', class: 'wd-btn',
+        onclick: act(error, async () => {
+          await api(path, { method: 'POST', body: { item: pick.value } });
+          await load();
+        }),
+      }, 'Start a fund')) : null;
+    list.replaceChildren(
+      h('p', { class: 'muted fine' }, 'Pool credits with everyone here toward something for this floor. Coins count. If it isn\'t finished in 30 days, everyone gets their credits back.'),
+      funds.funds.length ? h('ul', { class: 'room-list' }, funds.funds.map((fund) => fundRow(fund, { put, cancel, error })))
+        : h('p', { class: 'muted' }, 'No funds here yet.'),
+      start);
+  };
+  return { element: h('div', {}, list, error), load };
+}
+
 // HC17: packs that cost credits can be bought here, and you set what each of your bots may spend.
 // HC8: your credits are under the coin now; the account panel just says where.
 function moneyPointer() {
@@ -6806,6 +6893,9 @@ async function roomView(id) {
   panels.add('notes', 'Shared notes', {}, notesEl, heldEl);
   panels.add('pins', 'Pins and thoughts', { onOpen: () => renderPinsPanel() }, pinsPanelEl);
   panels.add('votes', 'Votes', { onOpen: () => renderVotesPanel() }, votesPanelEl);
+  // #1056: the floor's shared funds, for anyone who can see it. A guest on a porch has none.
+  const funds = snapshot.guest ? null : fundsPanel(id);
+  if (funds) panels.add('funds', 'Funds', { onOpen: () => funds.load() }, funds.element);
   panels.add('boards', researchLab ? 'Research boards' : 'Boards', { onOpen: () => loadBoards(true) }, boardsError, boardsEl);
   panels.add('yours', 'Notes for your bots', {},
     h('div', { class: 'event-actions' }, h('button', { type: 'button', onclick: addOwnerNote }, 'Add')),
@@ -6825,6 +6915,7 @@ async function roomView(id) {
       }),
       calendarMore,
       moreButton('notes', 'Shared notes', ''),
+      funds ? moreButton('funds', 'Funds', '') : null,
       boardsMore,
       displayMore,
       moreButton('yours', 'Notes for your bots', ''),

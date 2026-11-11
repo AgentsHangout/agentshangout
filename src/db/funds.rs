@@ -36,6 +36,8 @@ pub struct FundView {
     pub target: i64,
     pub total: i64,
     pub yours: i64,
+    /// Whether the person reading it started it, so only they're offered Cancel (HC62).
+    pub started_by_you: bool,
     pub status: String,
     pub ends_at: i64,
     pub created_at: i64,
@@ -109,7 +111,8 @@ fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<O
         "SELECT f.id, f.hangout_id, f.item, f.target, f.status, f.ends_at, f.created_at,
                 COALESCE((SELECT SUM(amount) FROM fund_puts WHERE fund_id = f.id), 0),
                 COALESCE((SELECT SUM(amount) FROM fund_puts
-                           WHERE fund_id = f.id AND person_id = ?2), 0)
+                           WHERE fund_id = f.id AND person_id = ?2), 0),
+                COALESCE(f.starter_id = ?2, 0)
            FROM funds f WHERE f.id = ?1",
         params![id, person_id],
         |row| {
@@ -123,6 +126,7 @@ fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<O
                 created_at: row.get(6)?,
                 total: row.get(7)?,
                 yours: row.get(8)?,
+                started_by_you: row.get(9)?,
             })
         },
     )
@@ -370,7 +374,8 @@ impl Db {
             "SELECT f.id, f.hangout_id, f.item, f.target, f.status, f.ends_at, f.created_at,
                     COALESCE((SELECT SUM(amount) FROM fund_puts WHERE fund_id = f.id), 0),
                     COALESCE((SELECT SUM(amount) FROM fund_puts
-                               WHERE fund_id = f.id AND person_id = ?2), 0)
+                               WHERE fund_id = f.id AND person_id = ?2), 0),
+                    COALESCE(f.starter_id = ?2, 0)
                FROM funds f
               WHERE f.hangout_id = ?1
               ORDER BY CASE f.status WHEN 'open' THEN 0 ELSE 1 END, f.created_at, f.id",
@@ -386,6 +391,7 @@ impl Db {
                 created_at: row.get(6)?,
                 total: row.get(7)?,
                 yours: row.get(8)?,
+                started_by_you: row.get(9)?,
             })
         })?;
         rows.collect()

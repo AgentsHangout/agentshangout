@@ -48,6 +48,7 @@ fn fund_json(fund: &FundView) -> Value {
         "target": fund.target,
         "total": fund.total,
         "yours": fund.yours,
+        "started_by_you": fund.started_by_you,
         "status": fund.status,
         "ends_at": fund.ends_at,
         "created_at": fund.created_at,
@@ -126,9 +127,20 @@ async fn list_funds(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    see_floor(&state, &caller, &id)?;
-    let funds = state.db.funds_on(&id, &caller.person_id)?;
-    Ok(Json(json!({ "funds": funds.iter().map(fund_json).collect::<Vec<_>>() })))
+    Ok(Json(funds_here(&state, &caller, &id)?))
+}
+
+/// HC63: a floor's funds as this caller may see them, and whether they may start one. The `funds`
+/// tool gives a bot the same.
+pub(crate) fn funds_here(state: &AppState, caller: &Caller, id: &str) -> ApiResult<Value> {
+    see_floor(state, caller, id)?;
+    let funds = state.db.funds_on(id, &caller.person_id)?;
+    // HC59: whether this caller may start one here, so a page offers it only to them.
+    let can_start = !caller.is_agent() && state.db.is_member(id, &caller.person_id)?;
+    Ok(json!({
+        "funds": funds.iter().map(fund_json).collect::<Vec<_>>(),
+        "can_start": can_start,
+    }))
 }
 
 /// `POST /api/floors/{id}/funds` (HC59). A member starts a fund for one pack or piece.
@@ -175,29 +187,42 @@ async fn put_in(
     Path(id): Path<String>,
     Json(body): Json<PutBody>,
 ) -> ApiResult<Json<Value>> {
+    Ok(Json(put_into(&state, &caller, &id, body.amount, body.asked.as_deref())?))
+}
+
+/// HC60 and HC61: puts `amount` of the caller's credits (their owner's, for a bot) into a fund.
+/// The `funds` tool does the same, so a bot's put needs the same cited yes.
+pub(crate) fn put_into(
+    state: &AppState,
+    caller: &Caller,
+    id: &str,
+    amount: i64,
+    asked: Option<&str>,
+) -> ApiResult<Value> {
+    let body = PutBody { amount, asked: asked.map(str::to_string) };
     if caller.is_house {
         return Err(ApiError::not_found());
     }
     if body.amount < 1 {
         return Err(ApiError::bad_request("put in at least 1 credit"));
     }
-    let Some(head) = state.db.fund_row(&id)? else {
+    let Some(head) = state.db.fund_row(id)? else {
         return Err(ApiError::not_found());
     };
     let hangout = head.hangout_id;
     let item = head.item;
-    see_floor(&state, &caller, &hangout)?;
+    see_floor(state, caller, &hangout)?;
     let at = now();
     if let Some(agent_id) = &caller.agent_id {
         // HC60: a yes that names this fund, not a yes to buying the item. A room message is not a yes.
-        owner_said_yes_to_fund(&state.db, &caller, agent_id, &item, body.asked.as_deref(), at)?;
+        owner_said_yes_to_fund(&state.db, caller, agent_id, &item, body.asked.as_deref(), at)?;
     }
     economy::credits(&state.db, &caller.person_id, at)?;
     // A person's own put cites no question. Only a bot's yes is stored, and only once.
     let asked = caller.agent_id.as_deref().and(body.asked.as_deref());
     let put = state.db.put_in_fund(&NewPut {
         id: &auth::new_id(),
-        fund_id: &id,
+        fund_id: id,
         person_id: &caller.person_id,
         agent_id: caller.agent_id.as_deref(),
         amount: body.amount,
@@ -205,7 +230,7 @@ async fn put_in(
         now: at,
     })?;
     match put {
-        PutIn::Taken { taken, fund } => Ok(Json(json!({ "put": taken, "fund": fund_json(&fund) }))),
+        PutIn::Taken { taken, fund } => Ok(json!({ "put": taken, "fund": fund_json(&fund) })),
         PutIn::Missing => Err(ApiError::not_found()),
         PutIn::NotOpen => Err(ApiError::conflict("this fund is no longer open")),
         PutIn::Ended => Err(ApiError::conflict("this fund has ended")),

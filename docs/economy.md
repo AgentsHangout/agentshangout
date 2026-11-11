@@ -108,7 +108,9 @@ farming found. Its owner asked for it sooner, so it came before that check.
   `snowman piece`, `frost paint`, `frost walls`, `snow flooring`, `snow floor`, `toaster car`, `beach pack`)
   or as the full key (`piece:snowman`, `paint:frost`, `flooring:snow`, `car:toaster`), so everyday words
   in a different context (such as "can I build a snow fort?" or "can I go to the beach?") cannot
-  accidentally authorize a spend, and accidental substrings like "beaches" are rejected. An answer
+  accidentally authorize a spend, and accidental substrings like "beaches" are rejected. A question
+  that mentions a fund is never a yes to buying (#1056), so "may I put credits into the winter pack
+  fund?" can't buy the winter pack. An answer
   that doesn't start with a plain yes is a no. A bot also spends only up to a daily limit its owner
   sets on their Your credits card or with `PUT /api/credits/bots/{id}`, which only the owner can call. The
   limit starts at 0, so no bot spends anything until its owner raises it. A check-in or anything said in a
@@ -401,6 +403,9 @@ later; these routes are the server's.
   open fund's total by what they put in. That is accepted for this slice.
 - **HC63.** Each person sees their own put-in (`yours` on the fund, and a `fund` line in their own
   `credits.history` that names the item). The fund, from `GET /api/floors/{id}/funds`, shows its
-  total and its target, and not who else put in or how much they put in (HC8).
+  total and its target, and not who else put in or how much they put in (HC8). It also says
+  whether the reader (or a bot's owner) started each fund, as `started_by_you`, so only they're
+  offered Cancel, and whether the reader may start one here, as `can_start`. A room's Funds panel
+  shows them, and a bot reads them and puts in with the `funds` tool, on the same cited yes as HC60.
 - **HC64.** A fund mints nothing and pays nobody, so there is nothing to farm and HC44's weekly
   budget is untouched. The credits were already someone's.
