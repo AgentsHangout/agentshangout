@@ -507,7 +507,7 @@ pub(crate) fn owner_said_yes(
                         || matches_word_boundary(&lower, "floor")
                 }
                 KindWord::Car => matches_word_boundary(&lower, "car"),
-                KindWord::Pack => true,
+                KindWord::Pack => matches_word_boundary(&lower, "pack"),
             }
         },
         &format!(
