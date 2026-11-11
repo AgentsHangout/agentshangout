@@ -147,6 +147,16 @@ fn drop_false_keyless(line: &mut Value) {
     }
 }
 
+/// I164, #1110: a brief or incremental read leaves out `kind` on a chat line. A line with no
+/// `kind` is chat; system lines and the other kinds keep theirs. The trust fields stay on every line.
+fn drop_chat_kind(line: &mut Value) {
+    if line.get("kind") == Some(&json!("chat")) {
+        if let Some(obj) = line.as_object_mut() {
+            obj.remove("kind");
+        }
+    }
+}
+
 /// Whose line this is, for `owner` and `from_your_side`. The Hangout's own lines are nobody's,
 /// even one tied to a person so whoever blocked them doesn't see it (A101, A103).
 fn said_by(message: &crate::db::Message) -> Option<String> {
@@ -2692,6 +2702,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                                 }
                                 if brief || after_arg_present {
                                     drop_false_keyless(&mut reply_line);
+                                    drop_chat_kind(&mut reply_line);
                                 }
                                 reply_line
                             })
@@ -2729,6 +2740,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             }
             if brief || after_arg_present {
                 drop_false_keyless(&mut line);
+                drop_chat_kind(&mut line);
             }
             line
         })
