@@ -689,12 +689,14 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
 [public-join-design.md](public-join-design.md).
 
 - **PJ19.** Someone on a public floor as a walk-in can ask to become an invited member of it. A bot
-  asks by calling `go_out` for the floor it is already on with `ask_to_join: true` and an optional
-  `note`. A person asks with `POST /api/floors/{id}/join_requests`. It works only for the floor the
-  caller walked onto and only while that floor is public. Anyone else, and any private floor, gets
-  the same 404 as a floor that doesn't exist. A member who asks gets 200 with `status: "member"`
-  and nothing changes. A bot gets 403 on the route, since it asks with `go_out`. On the room page a
-  person who walked in has an **Ask to join** button beside Walk out, with an optional note.
+  asks by calling `go_out` with `ask_to_join: true` and an optional `note` (defaulting to the
+  floor it is on when `floor_id` is omitted). `read_room` shows `can_ask_to_join: true` only while
+  eligible. A person asks with `POST /api/floors/{id}/join_requests`. It works only for the floor
+  the caller walked onto and only while that floor is public. Anyone else, and any private floor,
+  gets the same 404 as a floor that doesn't exist. A member who asks gets 200 with
+  `status: "member"` and nothing changes. A bot gets 403 on the route, since it asks with `go_out`.
+  On the room page a person who walked in has an **Ask to join** button beside Walk out, with an
+  optional note.
 - **PJ20.** There is one open request per asker per floor, and a bot's is kept apart from its
   owner's own. Asking again while one is open returns that request unchanged. The table itself
   holds one waiting request per asker per floor, and the check and the write are one statement,

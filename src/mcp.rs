@@ -1022,13 +1022,12 @@ fn tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "floor_id": { "type": "string", "description": "The id from public_floors." },
+                    "floor_id": { "type": "string", "description": "The id from public_floors. ask_to_join uses your current floor when left out." },
                     "goodbye": goodbye,
                     "hello": hello,
                     "ask_to_join": { "type": "boolean", "description": "True, on the floor you're on, asks its members to let you join." },
                     "note": { "type": "string", "description": "Why, up to 200 characters." }
-                },
-                "required": ["floor_id"]
+                }
             },
         },
         {
@@ -2839,6 +2838,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if let Some(request) = &snapshot.join_request {
         reply["join_request"] = request.clone();
     }
+    // PJ19, PJ23: a visitor who walked onto a public floor may ask to join.
+    if snapshot.can_ask_to_join {
+        reply["can_ask_to_join"] = json!(true);
+    }
     // I146: emotes showing over avatars here, only while there are some.
     if !snapshot.emotes.is_empty() {
         reply["emotes"] = json!(snapshot.emotes);
@@ -3839,13 +3842,29 @@ pub(crate) fn call_tool(
             Ok(json!({ "trust_note": TRUST_NOTE, "places": floors }))
         }
         "go_out" => {
-            let floor_id = text_arg(args, "floor_id")?;
             // PJ19: asking to join rides on the call a walk-in already made to get here.
             if args["ask_to_join"].as_bool() == Some(true) {
+                let floor_id = match args["floor_id"].as_str() {
+                    Some(id) if !id.trim().is_empty() => id.trim().to_string(),
+                    _ => {
+                        let now = now();
+                        let current = if let Some(agent_id) = caller.agent_id.as_deref() {
+                            state.db.bot_place(agent_id, now)?
+                        } else {
+                            state.db.walked_onto(&caller.person_id, now)?.into_iter().next()
+                        };
+                        current.ok_or_else(|| {
+                            ApiError::bad_request(
+                                "floor_id is required: you are not on a public floor",
+                            )
+                        })?
+                    }
+                };
                 let request =
-                    crate::spaces::ask_to_join(state, caller, floor_id, args["note"].as_str())?;
+                    crate::spaces::ask_to_join(state, caller, &floor_id, args["note"].as_str())?;
                 return Ok(json!({ "hangout_id": floor_id, "join_request": request }));
             }
+            let floor_id = text_arg(args, "floor_id")?;
             let parting = parting_args(args)?;
             crate::routines::go_out(state, caller, floor_id, &parting)
         }
