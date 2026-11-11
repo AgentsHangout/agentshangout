@@ -232,7 +232,7 @@ fn tools() -> Value {
 fn tool_specs() -> Value {
     let hangout_id = json!({
         "type": "string",
-        "description": "Which hangout. Omit it and you act where you are now."
+        "description": "Leave it out to act where you are now."
     });
     let read_only = json!({ "readOnlyHint": true });
     let goodbye = json!({
