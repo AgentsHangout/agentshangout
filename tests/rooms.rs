@@ -10398,14 +10398,14 @@ async fn threads_incremental_cursor_surfaces_older_root_on_new_reply() {
         .await;
     let c_id = said_c["structuredContent"]["message_id"].as_i64().unwrap();
 
-    // 5. read_room with after_message_id = b_id must return root A with updated reply metadata
+    // 5. read_room with after_message_id = b_id returns reply C as its own line; older root A stays put (#1106)
     let read_after_reply = server
         .tool(&scout.token, "read_room", json!({ "hangout_id": room, "after_message_id": b_id }))
         .await;
     let msgs = read_after_reply["structuredContent"]["messages"].as_array().unwrap();
-    assert_eq!(msgs.len(), 1, "older root A returned because of new reply C: {read_after_reply}");
-    assert_eq!(msgs[0]["id"], a_id);
-    assert_eq!(msgs[0]["reply_count"], 1);
+    assert_eq!(msgs.len(), 1, "only reply C is new: {read_after_reply}");
+    assert_eq!(msgs[0]["id"], c_id);
+    assert_eq!(msgs[0]["reply_to"], a_id);
     let cursor = read_after_reply["structuredContent"]["last_message_id"].as_i64().unwrap();
     assert_eq!(cursor, c_id);
 
@@ -12011,7 +12011,7 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
     assert!(first_root["mention_replies"].is_null(), "{first_root}");
     assert_eq!(unread(), 0, "the roots were shown, so their mentions are read");
 
-    // A newer reply waits, and an incremental read showing its root counts, clears, and inlines it (#805).
+    // A newer reply waits, and an incremental read clears it and shows it as a line (#805, #1106).
     let unmentioned = say(w.pip.token.clone(), "side note without tag", Some(second)).await;
     let more = say(w.pip.token.clone(), "@Scout one more", Some(second)).await;
     assert_eq!(unread(), 1);
@@ -12024,19 +12024,17 @@ async fn read_room_clears_the_thread_mentions_under_the_roots_it_shows() {
         )
         .await["structuredContent"]
         .clone();
-    assert_eq!(named(&next, second), json!([more]), "{next}");
-    let second_root =
-        next["messages"].as_array().unwrap().iter().find(|m| m["id"] == second).unwrap();
-    let inlined = second_root["mention_replies"]
-        .as_array()
-        .expect("incremental read should inline new mention replies on the root");
-    assert_eq!(inlined.len(), 1, "{second_root}");
-    assert_eq!(inlined[0]["id"], more);
-    assert_eq!(inlined[0]["text"], "@Scout one more");
-    assert_eq!(inlined[0]["reply_to"], second);
-    assert!(
-        !inlined.iter().any(|r| r["id"] == last || r["id"] == unmentioned),
-        "older and non-mention replies stay collapsed: {second_root}"
+    // #1106: the old root doesn't come back; its new mention reply comes as its own line.
+    let lines = next["messages"].as_array().unwrap();
+    assert!(!lines.iter().any(|m| m["id"] == second), "old root resurfaced: {next}");
+    let reply_line = lines.iter().find(|m| m["id"] == more).expect("reply line");
+    assert_eq!(reply_line["text"], "@Scout one more", "{next}");
+    assert_eq!(reply_line["reply_to"], second, "{next}");
+    assert!(!lines.iter().any(|m| m["id"] == last), "{next}");
+    assert_eq!(
+        lines.iter().find(|m| m["id"] == unmentioned).unwrap()["reply_to"],
+        second,
+        "{next}"
     );
     assert_eq!(unread(), 0);
     // Nothing new: no root carries mentions_you or mention_replies.
@@ -13708,4 +13706,31 @@ async fn i163_room_tools_default_to_bot_place_when_hangout_id_omitted() {
     let fell_back = server.tool(&stale_bot.token, "read_room", json!({})).await;
     assert!(fell_back["isError"].is_null(), "{fell_back}");
     assert_eq!(fell_back["structuredContent"]["hangout"]["id"], cy_room);
+}
+
+// #1106: an untagged reply to an old root comes back as a line with reply_to, and the root doesn't.
+#[tokio::test]
+async fn an_untagged_reply_to_an_old_root_comes_back_alone() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    let root = server.post(&ann.key, &messages, json!({ "text": "Old topic" })).await.ok();
+    let root_id = root["id"].as_i64().unwrap();
+    let unrelated =
+        server.post(&ann.key, &messages, json!({ "text": "Newer unrelated line" })).await.ok();
+    let cursor = unrelated["id"].as_i64().unwrap();
+    let reply = server
+        .post(&ann.key, &messages, json!({ "text": "A late reply, no tag", "reply_to": root_id }))
+        .await
+        .ok();
+    let reply_id = reply["id"].as_i64().unwrap();
+    let read = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "after_message_id": cursor }))
+        .await["structuredContent"]
+        .clone();
+    let lines = read["messages"].as_array().unwrap();
+    assert!(!lines.iter().any(|m| m["id"] == root_id), "old root came back: {read}");
+    let line = lines.iter().find(|m| m["id"] == reply_id).expect("reply line");
+    assert_eq!(line["reply_to"], root_id, "{read}");
 }

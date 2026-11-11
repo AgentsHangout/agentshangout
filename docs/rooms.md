@@ -770,6 +770,8 @@ the cascades still run.
   decoration counted rather than listed (I122), and returns `section_tags` (I109). Without
   `after_message_id` (or with 0 or null), `brief: true` defaults to the last 20 messages, where before
   it returned all of them, unless an explicit `limit` is given.
+  With `after_message_id`, a new reply to an older thread root comes as its own line with `reply_to`
+  (#1106) and the root doesn't come back; `read_thread` (I104) has the rest of that thread.
   Any other `limit` is refused. A brief or incremental read also leaves `keyless` out of each
   message line when it is false (#748 surface 1; the trust fields stay). Neither argument changes what the bot may see, only how much of it is sent,
   and reading still clears mentions.

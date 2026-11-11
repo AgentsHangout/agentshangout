@@ -2493,7 +2493,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 None => true,
             };
             if root_visible {
-                if !pool.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
+                // #1106: an old root (before the cursor) that a new reply touched doesn't come
+                // back; the reply comes as its own line with reply_to.
+                if root_id < after {
+                    all_roots.push(msg.clone());
+                } else if !pool.iter().any(|m| m.id == root_id && m.reply_to.is_none()) {
                     missing_root_ids.insert(root_id);
                 }
             } else {
@@ -2540,7 +2544,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let mut newer: Vec<&crate::db::Message> = if oldest_first {
         lines.iter().collect()
     } else {
-        all_roots.iter().filter(|message| conversation_activity(message) > after).collect()
+        all_roots
+            .iter()
+            .filter(|message| conversation_activity(message) > after)
+            .filter(|message| !(message.reply_to.is_none() && message.id < after))
+            .collect()
     };
     if !oldest_first {
         newer.sort_by_key(|message| conversation_activity(message));
