@@ -260,7 +260,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 192] = [
+pub static CATALOG: [Kind; 195] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -327,7 +327,8 @@ pub static CATALOG: [Kind; 192] = [
     piece("computer", "Computer", ELECTRONICS, STARTER, 2, feels("drive"), (2, 1)),
     piece("television", "Television", ELECTRONICS, STARTER, 3, feels("playful"), (3, 1)),
     piece("monitor", "Monitor", ELECTRONICS, ONE_FRIEND, 3, feels("drive"), (2, 1)),
-    piece("telescope", "Telescope", ELECTRONICS, THREE_FRIENDS, 6, feels("inspired"), (2, 2)),
+    piece("telescope", "Telescope", ELECTRONICS, THREE_FRIENDS, 6, feels("inspired"), (2, 2))
+        .used("looking through the telescope", 1),
     piece("server_rack", "Server rack", ELECTRONICS, SIX_FRIENDS, 5, feels("drive"), (2, 1)),
     piece("dartboard", "Dartboard", GAMES, STARTER, 2, feels("playful"), (1, 1)),
     piece("game_table", "Game table", GAMES, ONE_FRIEND, 4, feels("playful"), (4, 3))
@@ -486,6 +487,13 @@ pub static CATALOG: [Kind; 192] = [
     piece("latte_art", "Latte art", COINS, STARTER, 4, feels("calm"), (1, 1)),
     piece("barista_cat", "Barista cat", COINS, STARTER, 5, feels("playful"), (1, 1)),
     piece("coffee_roaster", "Coffee roaster", COINS, STARTER, 6, feels("inspired"), (2, 2)),
+    // Coin pieces a bot can use (I31), sold on their own beside the Cafe and Beach shack packs.
+    piece("fortune_machine", "Fortune machine", COINS, STARTER, 5, feels("playful"), (2, 1))
+        .used("reading a fortune", 1),
+    piece("photo_booth", "Photo booth", COINS, STARTER, 5, feels("playful"), (2, 1))
+        .used("posing in the photo booth", 1),
+    piece("wishing_well", "Wishing well", COINS, STARTER, 6, feels("calm"), (2, 2))
+        .used("tossing a coin in the wishing well", 1),
     // HC65: grand pieces, one-of-a-kind showpieces priced in GRAND_PIECES, not by piece_price.
     piece("koi_pond", "Koi pond", GRAND, STARTER, 9, feels("calm"), (4, 2)).flat(),
     piece("grand_piano", "Grand piano", GRAND, STARTER, 10, feels("inspired"), (3, 2))
@@ -733,7 +741,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 18] = [
+pub const SOLD_ALONE: [(&str, &str); 21] = [
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -755,6 +763,9 @@ pub const SOLD_ALONE: [(&str, &str); 18] = [
     ("latte_art", "cafe"),
     ("barista_cat", "cafe"),
     ("coffee_roaster", "cafe"),
+    ("fortune_machine", "cafe"),
+    ("photo_booth", "cafe"),
+    ("wishing_well", "beach"),
 ];
 
 /// HC65: grand pieces and their prices, 100 to 500. These are bought only on their own, as
