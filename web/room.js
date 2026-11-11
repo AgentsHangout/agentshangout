@@ -67,6 +67,8 @@ const PAINTS = {
   nebula: { upper: '#1e1a3c', stripe: '#221d43', lower: '#17132e', panel: '#1f1838', starry: true },
   // #1065: the Beach shack's sea-blue walls over a sandy dado.
   ocean: { upper: '#3f8fc4', stripe: '#4a9ad0', lower: '#c9a46a', panel: '#b8935c' },
+  // #1071: the Cafe's warm brown walls over a cream dado.
+  mocha: { upper: '#6b4a2e', stripe: '#75523a', lower: '#e8dcc4', panel: '#d9c9ab' },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -79,6 +81,7 @@ const FLOORINGS = {
   snow: { a: '#e8eef5', b: '#d6e0eb', line: '#b9c8d9', style: 'snow' },
   starfield: { a: '#141832', b: '#191e3c', line: '#2a3160', style: 'starfield' },
   sand: { a: '#e3cb94', b: '#d6bb80', line: '#c4a76a', style: 'sand' },
+  checker: { a: '#f2efe8', b: '#26232b', line: '#b8b2a6', style: 'checker' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -583,7 +586,21 @@ function paintSandFloor(g, a, b, line) {
   }
 }
 
+// #1071: black and white tiles, with a thin grout line.
+function paintCheckerFloor(g, a, b, line) {
+  r(g, line, 0, WALL + 1, W, H - WALL - 1);
+  for (let y = WALL + 1, row = 0; y < H; y += 16, row++) {
+    for (let x = 0, col = 0; x < W; x += 16, col++) {
+      r(g, (row + col) % 2 ? b : a, x, y, Math.min(15, W - x), Math.min(15, H - y));
+    }
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
+  if (style === 'checker') {
+    paintCheckerFloor(g, a, b, line);
+    return;
+  }
   if (style === 'sand') {
     paintSandFloor(g, a, b, line);
     return;
@@ -666,6 +683,7 @@ const RUGS = {
   frost: ['#8c2a2e', '#f4f1e8', '#a8343a'],
   nebula: ['#2a2f6b', '#d9b25a', '#343a80'],
   ocean: ['#c0392b', '#f5f0e6', '#d9534a'],
+  mocha: ['#7a2e2e', '#e8dcc4', '#8f3a3a'],
 };
 
 // Under the table.
@@ -4221,6 +4239,123 @@ function paintSnowballPile(g, x, y) {
   r(g, '#f5f9fc', x - 2, y - 7, 4, 3);
   r(g, '#cfe0ec', x - 5, y - 2, 10, 1);
 }
+// #1071: the Cafe pack, and the coin pieces sold beside it.
+function paintCafeCounter(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#6b4a2e', x - 16, y - 18, 32, 16);
+  r(g, '#8a5a34', x - 16, y - 18, 32, 2);
+  r(g, '#e8dcc4', x - 17, y - 21, 34, 3);
+  for (let i = -14; i < 16; i += 6) r(g, '#5a3c26', x + i, y - 15, 4, 11);
+  r(g, '#c8a34a', x + 8, y - 26, 6, 5);
+  r(g, '#f5f0e6', x - 10, y - 24, 3, 3);
+  r(g, '#f5f0e6', x - 5, y - 24, 3, 3);
+}
+function paintEspressoMachine(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#6b4a2e', x - 9, y - 5, 18, 4);
+  r(g, '#c9ced8', x - 7, y - 18, 14, 13);
+  r(g, '#8a8f9e', x - 7, y - 18, 14, 2);
+  r(g, '#1b2030', x - 4, y - 12, 2, 3);
+  r(g, '#1b2030', x + 2, y - 12, 2, 3);
+  r(g, '#f5f0e6', x - 5, y - 8, 3, 3);
+  r(g, '#c0392b', x + 4, y - 16, 2, 2);
+}
+function paintPastryCase(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#6b4a2e', x - 9, y - 6, 18, 5);
+  r(g, '#cfe9ff', x - 8, y - 16, 16, 10);
+  r(g, '#e8f4ff', x - 8, y - 16, 16, 1);
+  r(g, '#c8a34a', x - 6, y - 11, 4, 3);
+  r(g, '#f5d0c0', x - 1, y - 11, 4, 3);
+  r(g, '#8a5a34', x + 4, y - 11, 3, 3);
+}
+function paintCoffeeSacks(g, x, y) {
+  r(g, SHADOW, x - 9, y - 1, 18, 1);
+  r(g, '#b89a6a', x - 9, y - 10, 9, 9);
+  r(g, '#a88a5a', x, y - 9, 9, 8);
+  r(g, '#6b4a2e', x - 7, y - 7, 5, 2);
+  r(g, '#6b4a2e', x + 2, y - 6, 5, 2);
+  r(g, '#8a5a34', x - 6, y - 11, 3, 1);
+}
+function paintChalkboardMenu(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a5a34', x - 4, y - 8, 1, 7);
+  r(g, '#8a5a34', x + 3, y - 8, 1, 7);
+  r(g, '#8a5a34', x - 6, y - 26, 12, 18);
+  r(g, '#2a2f2a', x - 5, y - 25, 10, 16);
+  r(g, '#f5f0e6', x - 3, y - 22, 6, 1);
+  r(g, '#f5f0e6', x - 3, y - 18, 5, 1);
+  r(g, '#f5f0e6', x - 3, y - 14, 6, 1);
+}
+function paintCakeStand(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#c9ced8', x - 1, y - 6, 2, 5);
+  r(g, '#c9ced8', x - 5, y - 7, 10, 1);
+  r(g, '#f5d0c0', x - 4, y - 13, 8, 6);
+  r(g, '#f5f0e6', x - 4, y - 13, 8, 1);
+  r(g, '#c0392b', x - 1, y - 15, 2, 2);
+}
+function paintCafeTable(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#1b1820', x - 1, y - 10, 2, 9);
+  r(g, '#1b1820', x - 3, y - 2, 6, 1);
+  r(g, '#e8dcc4', x - 6, y - 12, 12, 2);
+  r(g, '#f5f0e6', x - 2, y - 14, 3, 2);
+}
+function paintBistroChair(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#1b1820', x - 4, y - 8, 1, 7);
+  r(g, '#1b1820', x + 3, y - 8, 1, 7);
+  r(g, '#7a2e2e', x - 4, y - 9, 8, 2);
+  r(g, '#1b1820', x - 4, y - 18, 1, 9);
+  r(g, '#1b1820', x + 3, y - 18, 1, 9);
+  r(g, '#1b1820', x - 4, y - 18, 8, 1);
+}
+function paintTeapot(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#f5f0e6', x - 4, y - 8, 8, 7);
+  r(g, '#3a6fb0', x - 4, y - 5, 8, 1);
+  r(g, '#f5f0e6', x + 4, y - 7, 3, 1);
+  r(g, '#f5f0e6', x - 6, y - 6, 2, 3);
+  r(g, '#f5f0e6', x - 1, y - 10, 2, 2);
+}
+function paintCroissantBasket(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#a8784a', x - 5, y - 5, 10, 4);
+  r(g, '#8a5a34', x - 5, y - 3, 10, 1);
+  r(g, '#d9a050', x - 4, y - 8, 4, 3);
+  r(g, '#c88a3a', x, y - 8, 4, 3);
+}
+function paintLatteArt(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#f5f0e6', x - 4, y - 7, 8, 6);
+  r(g, '#a8784a', x - 3, y - 7, 6, 2);
+  r(g, '#f5f0e6', x - 1, y - 7, 2, 1);
+  r(g, '#f5f0e6', x + 4, y - 5, 2, 2);
+}
+function paintBaristaCat(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#3a3342', x - 4, y - 8, 8, 7);
+  r(g, '#3a3342', x - 3, y - 13, 6, 5);
+  r(g, '#3a3342', x - 3, y - 15, 1, 2);
+  r(g, '#3a3342', x + 2, y - 15, 1, 2);
+  r(g, '#ffd24d', x - 2, y - 11, 1, 1);
+  r(g, '#ffd24d', x + 1, y - 11, 1, 1);
+  r(g, '#f5f0e6', x - 3, y - 7, 6, 3);
+  r(g, '#3a3342', x + 4, y - 6, 3, 1);
+}
+function paintCoffeeRoaster(g, x, y, t) {
+  const glow = Math.floor((t || 0) / 300) % 2;
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#1b1820', x - 10, y - 8, 20, 6);
+  r(g, '#7a2e2e', x - 9, y - 20, 14, 12);
+  r(g, '#c8a34a', x - 9, y - 20, 14, 1);
+  r(g, '#c9ced8', x - 5, y - 16, 6, 6);
+  r(g, '#3a3342', x - 4, y - 15, 4, 4);
+  r(g, '#c8a34a', x + 5, y - 30, 4, 10);
+  r(g, '#c8a34a', x + 3, y - 32, 8, 2);
+  r(g, glow ? '#ff8c2a' : '#c0392b', x + 6, y - 11, 2, 2);
+}
 // #1065: the Beach shack pack, and the coin pieces sold beside it.
 function paintPalmTree(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
@@ -4774,6 +4909,19 @@ const ITEMS = {
   snowball_pile: { paint: paintSnowballPile, rise: 8 },
   koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
   palm_tree: { paint: paintPalmTree, side: paintPalmTree, rise: 40 },
+  cafe_counter: { paint: paintCafeCounter, side: paintCafeCounter, rise: 30 },
+  espresso_machine: { paint: paintEspressoMachine, side: paintEspressoMachine, rise: 22 },
+  pastry_case: { paint: paintPastryCase, side: paintPastryCase, rise: 20 },
+  coffee_sacks: { paint: paintCoffeeSacks, side: paintCoffeeSacks, rise: 14 },
+  chalkboard_menu: { paint: paintChalkboardMenu, rise: 30 },
+  cake_stand: { paint: paintCakeStand, rise: 18 },
+  cafe_table: { paint: paintCafeTable, rise: 18 },
+  bistro_chair: { paint: paintBistroChair, rise: 20 },
+  teapot: { paint: paintTeapot, rise: 12 },
+  croissant_basket: { paint: paintCroissantBasket, rise: 10 },
+  latte_art: { paint: paintLatteArt, rise: 9 },
+  barista_cat: { paint: paintBaristaCat, rise: 14 },
+  coffee_roaster: { paint: paintCoffeeRoaster, rise: 30 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
   tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
