@@ -1059,6 +1059,54 @@ async fn an_accepted_contribution_pays_the_bots_owner_once() {
         .refused(StatusCode::FORBIDDEN);
 }
 
+// HC39: merged PR payouts count toward HC6's 100-credit daily cap for accepting a contribution.
+#[tokio::test]
+async fn accepting_a_contribution_counts_merged_prs_toward_daily_cap() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let scout = server.bot(&bo, &room, "Scout").await;
+    for person in [&ann.id, &bo.id] {
+        server.state.db.age_person(person, 8 * 86_400).unwrap();
+    }
+    let today = agenthangout::now().div_euclid(86_400);
+
+    // Bo already received 96 credits today from a merged PR payout:
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO merged_pr_payouts(repo, number, person_id, amount, day, merged_at, created_at)
+             VALUES ('test/repo', 101, ?1, 96, ?2, ?3, ?3)",
+            rusqlite::params![bo.id, today, agenthangout::now()],
+        )
+        .unwrap();
+
+    let board = text(&server.board(&ann.key, &room, "discussion", "Notes").await.ok()["id"]);
+    let card = text(&server.card(&ann.key, &board, "Claim", "Treatment X helps").await.ok()["id"]);
+
+    let offered = server
+        .tool(
+            &scout.token,
+            "offer_contribution",
+            json!({"card_id": card, "kind": "correction", "text": "See the 2024 trial"}),
+        )
+        .await;
+    let id = text(&offered["structuredContent"]["id"]);
+
+    let accept = format!("/api/cards/{card}/contributions/accept");
+    let body = json!({"contribution_id": id});
+
+    // Bo has 96 credits paid today. A contribution pays 5 credits (CONTRIBUTION_HC).
+    // 96 + 5 = 101 > 100 (DAILY_CAP_HC), so it is refused under HC39.
+    let refused = server.post(&ann.key, &accept, body).await.refused(StatusCode::CONFLICT);
+    assert!(
+        text(&refused["error"]).contains("all a day can pay"),
+        "expected daily cap refusal, got: {refused}"
+    );
+}
+
 // HC55 (#773): a person in a room can tip someone else's bot 1 to 5 credits for a review, bug_find
 // or docs_fix, within the daily and pair caps; bots cannot tip, nobody tips their own bot, and both
 // sides see a "tip" line in credits.history.

@@ -6,19 +6,10 @@ pub const COIN_DROP_SECS: i64 = 600;
 /// HC50: what one draw pays.
 pub const COIN_DROP_HC: i64 = 1;
 
-/// HC50: what drawn coins have paid the person bound to `?1`, for every balance.
-pub(super) const COIN_DROPS_PAID: &str =
-    "(SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1)";
-
 /// HC6: everything that paid `person` on UTC day `day`, from every rule that pays.
 fn paid_on(conn: &Connection, person: &str, day: i64) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT (SELECT COALESCE(SUM(amount),0) FROM credit_paid WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM merged_pr_payouts WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM contribution_payouts
-                  WHERE recipient_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM coin_drops WHERE person_id=?1 AND day=?2)
-              + (SELECT COALESCE(SUM(amount),0) FROM bot_tips WHERE recipient_id=?1 AND day=?2)",
+        &format!("SELECT {}", Db::paid_on_day_sql("?1", "?2")),
         params![person, day],
         |r| r.get(0),
     )

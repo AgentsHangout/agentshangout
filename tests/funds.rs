@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use agenthangout::{
     app, auth,
-    db::{CreditKind, CreditSource, Db, NewPut, PutIn},
+    db::{CreditKind, CreditSource, Db, NewPut, PutIn, Spend},
     items, now, AppState, Config,
 };
 use reqwest::{Client, Method, StatusCode};
@@ -890,4 +890,147 @@ impl Server {
     async fn place_ok(&self, token: &str, room: &str, kind: &str, at: (i64, i64)) {
         self.place(token, room, kind, at).await.ok();
     }
+}
+
+// Issue #1070: credit_totals equals spend_credits balance across every credit source,
+// including fund puts and refunds from #1066.
+#[tokio::test]
+async fn credit_totals_matches_spendable_balance_across_every_credit_source() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.open(&ann, &room).await;
+    let (_, cy) = server.someone("Cy").await;
+    let today = now().div_euclid(86_400);
+    let at = now();
+
+    // 1. Ann earns credits through every possible credit channel:
+    // a) credit_paid (gathering): 10 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO credit_paid(person_id, kind, source_id, city_id, amount, day, created_at)
+             VALUES (?1, 'gathering', 'g1', 'c1', 10, ?2, ?3)",
+            rusqlite::params![ann.id, today, at],
+        )
+        .unwrap();
+
+    // b) merged_pr_payouts: 5 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO merged_pr_payouts(repo, number, person_id, amount, day, merged_at, created_at)
+             VALUES ('org/repo', 101, ?1, 5, ?2, ?3, ?3)",
+            rusqlite::params![ann.id, today, at],
+        )
+        .unwrap();
+
+    // c) contribution_payouts: 3 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO contribution_payouts(card_id, contribution_id, recipient_id, acceptor_id, amount, day, created_at)
+             VALUES ('card101', 'contrib101', ?1, ?2, 3, ?3, ?4)",
+            rusqlite::params![ann.id, cy.id, today, at],
+        )
+        .unwrap();
+
+    // d) coin_drops: 2 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO coin_drops(slot, person_id, amount, day, created_at)
+             VALUES (99999, ?1, 2, ?2, ?3)",
+            rusqlite::params![ann.id, today, at],
+        )
+        .unwrap();
+
+    // e) bot_tips: 4 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO bot_tips(id, hangout_id, tipper_id, recipient_id, amount, reason, day, created_at)
+             VALUES ('tip101', ?1, ?2, ?3, 4, 'docs_fix', ?4, ?5)",
+            rusqlite::params![room, cy.id, ann.id, today, at],
+        )
+        .unwrap();
+
+    // f) question_bounties (refunded non-starter): 6 credits
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO question_bounties(id, sponsor_id, amount, status)
+             VALUES ('qb101', ?1, 6, 'refunded')",
+            rusqlite::params![ann.id],
+        )
+        .unwrap();
+
+    // Total earned: 10 + 5 + 3 + 2 + 4 + 6 = 30 credits.
+    let totals = server.state.db.credit_totals(&ann.id, today).unwrap();
+    assert_eq!(totals.balance(), 30);
+    assert_eq!(totals.paid_today, 10 + 5 + 3 + 2 + 4);
+
+    // Spend check: 31 is refused right at the balance line (balance 30 vs amount 31)
+    let spend_refused =
+        server.state.db.spend_credits(&ann.id, "pack:expensive", 31, None, at).unwrap();
+    assert_eq!(spend_refused, Spend::TooFew { balance: 30 });
+
+    // 2. Put into a fund (#1066):
+    // Start a fund on the floor and put 7 credits into it.
+    let fund = server
+        .post(&ann.key, &format!("/api/floors/{room}/funds"), json!({ "item": "winter" }))
+        .await
+        .ok();
+    let fund_id = text(&fund["id"]);
+    server.post(&ann.key, &format!("/api/funds/{fund_id}/put"), json!({ "amount": 7 })).await.ok();
+
+    // Spendable balance is now 30 - 7 = 23
+    let totals_after_put = server.state.db.credit_totals(&ann.id, today).unwrap();
+    assert_eq!(totals_after_put.balance(), 23);
+
+    // Spend check right at the balance line: 24 refused, 23 covers it.
+    let refused_at_24 = server.state.db.spend_credits(&ann.id, "pack:p24", 24, None, at).unwrap();
+    assert_eq!(refused_at_24, Spend::TooFew { balance: 23 });
+
+    // Spend 3 credits for a pack:
+    let spent = server.state.db.spend_credits(&ann.id, "pack:p3", 3, None, at).unwrap();
+    assert_eq!(spent, Spend::Spent { balance: 20 });
+
+    // Balance is now 20.
+    let totals_after_spend = server.state.db.credit_totals(&ann.id, today).unwrap();
+    assert_eq!(totals_after_spend.balance(), 20);
+
+    // 3. Cancel the fund to verify refund (#1066):
+    server.post(&ann.key, &format!("/api/funds/{fund_id}/cancel"), json!({})).await.ok();
+
+    // The 7 credits are refunded, so balance restores to 20 + 7 = 27!
+    let totals_after_refund = server.state.db.credit_totals(&ann.id, today).unwrap();
+    assert_eq!(totals_after_refund.balance(), 27);
+
+    // Spend check: 28 refused right at the balance line
+    let refused_at_28 = server.state.db.spend_credits(&ann.id, "pack:p28", 28, None, at).unwrap();
+    assert_eq!(refused_at_28, Spend::TooFew { balance: 27 });
+
+    // Spend exactly 27 credits:
+    let spend_all = server.state.db.spend_credits(&ann.id, "pack:all", 27, None, at).unwrap();
+    assert_eq!(spend_all, Spend::Spent { balance: 0 });
+
+    // Balance is now 0.
+    let totals_final = server.state.db.credit_totals(&ann.id, today).unwrap();
+    assert_eq!(totals_final.balance(), 0);
+
+    // Refused at balance line 0 vs 1:
+    let refused_zero = server.state.db.spend_credits(&ann.id, "pack:one", 1, None, at).unwrap();
+    assert_eq!(refused_zero, Spend::TooFew { balance: 0 });
 }
