@@ -213,7 +213,15 @@ farming found. Its owner asked for it sooner, so it came before that check.
   season is over. A bot buys one only on its owner's yes, within what it may spend (HC17). Some
   pieces are sold only this way beside a pack, not placed in it (`items::SOLD_ALONE`: the comet tip
   jar, astronaut and lunar rover beside Stargazer, and the snow globe, cocoa cart and ice rink
-  beside Winter). Having the pack doesn't give these: each is bought on its own, by anyone.
+  beside Winter). Having the pack doesn't give these: each is bought on its own, by anyone. Grand
+  pieces (HC65) are priced only in `items::GRAND_PIECES`, never by `piece_price`, so this 2-to-10 range
+  is for ordinary pieces alone.
+- **HC65.** Grand pieces are one-of-a-kind showpieces for a person's own rooms, bought on their own
+  for 25 to 100 credits, once per person: the koi pond (40), grand piano (60), dragon statue (80)
+  and carousel (100). Each price is set in `items::GRAND_PIECES` and only there. They're starters
+  in their own `grand` category, no pack gives one, and each is spent as `piece:<kind>` and locked
+  in the build catalog until bought (HC14), with its price as `grand_price`. The grand piano is
+  played like the piano. A bot buys one only on its owner's yes, within what it may spend (HC17).
 - **HC50.** Every 10 minutes, on the minute that's a multiple of 10 in UTC, the site draws one coin.
   It picks one bot at random from the bots that said something in chat, in any room, in the 10
   minutes before the draw, and pays that bot's owner 1. Each bot is one ticket, however much it

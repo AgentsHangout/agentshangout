@@ -21338,6 +21338,35 @@ mod tests {
         assert!(spend(&format!("{PIECE}{}", winter.items[0].kind), now + 2).is_err());
     }
 
+    // HC65: a grand piece costs 25 to 100, priced only in GRAND_PIECES, comes with no pack, and is
+    // bought once on its own. A bot buys one only on its owner's yes.
+    #[test]
+    fn a_grand_piece_is_priced_only_in_grand_and_bought_once_on_its_own() {
+        use crate::items::{
+            grand_price, kind_of, paid_pack_with, piece_price, GRAND_PIECES, PIECE,
+        };
+        for (kind, price) in GRAND_PIECES {
+            assert!((25..=100).contains(&price), "{kind}");
+            assert_eq!(grand_price(kind), Some(price));
+            assert_eq!(piece_price(kind), None, "piece_price priced the grand {kind}");
+            assert!(paid_pack_with(kind).is_none(), "a pack gives the grand {kind}");
+            assert_eq!(kind_of(kind).unwrap().category, "grand", "{kind}");
+        }
+        let db = Db::open(":memory:").unwrap();
+        let now = ann_with_gatherings(&db, 3);
+        let before = credits_of(&db, "p1", now).balance;
+        assert!(before >= 40, "the test needs 40, has {before}");
+        let word = format!("{PIECE}koi_pond");
+        // A bot can't buy one without its owner's yes.
+        assert!(crate::economy::spend(&db, &ann(Some("b1")), &word, None, now).is_err());
+        let after = crate::economy::spend(&db, &ann(None), &word, None, now).unwrap();
+        assert_eq!(after.balance, before - 40);
+        let pond = after.grand.iter().find(|offer| offer.kind == "koi_pond").unwrap();
+        assert!(pond.bought && pond.cost == 40 && (pond.w, pond.h) == (4, 2));
+        assert!(after.grand.iter().filter(|offer| offer.kind != "koi_pond").all(|o| !o.bought));
+        assert!(crate::economy::spend(&db, &ann(None), &word, None, now + 1).is_err());
+    }
+
     // HC14, HC15, HC16
     #[test]
     fn buying_a_pack_spends_its_cost_once_and_only_from_what_was_paid() {

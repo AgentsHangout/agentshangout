@@ -1899,6 +1899,36 @@ function creditsCard(credits) {
         onclick: act(error, async () => { done.textContent = ` ${await putUp(offer.pack)}`; }),
       }, 'Put it up here'), done);
     };
+    // HC45 and HC65: one piece for sale on its own, with its picture, price and Buy, which asks first.
+    const pieceTile = (piece, size) => {
+      const pieceKey = `piece:${piece.kind}`;
+      return h('li', { class: 'piece-tile' },
+        h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
+        h('span', { class: 'piece-name' }, piece.label),
+        h('span', { class: 'muted fine' }, count(piece.cost, 'credit', 'credits')),
+        piece.bought ? h('span', { class: 'pill on' }, 'Yours')
+          : confirming === pieceKey ? h('div', { class: 'shop-confirm', role: 'group', 'aria-label': `Confirm buying ${piece.label}` },
+            h('span', { class: 'muted fine' }, `Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`),
+            h('button', {
+              type: 'button',
+              class: 'wd-btn',
+              onclick: act(error, async () => {
+                confirming = null;
+                render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+              }),
+            }, 'Confirm'),
+            h('button', {
+              type: 'button',
+              class: 'wd-btn ghost',
+              onclick: () => { confirming = null; render(now); },
+            }, 'Cancel'))
+            : h('button', {
+              type: 'button',
+              class: 'wd-btn ghost',
+              disabled: now.balance < piece.cost,
+              onclick: () => { confirming = pieceKey; render(now); },
+            }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'));
+    };
     const packRow = (offer) => h('li', { class: 'shop-item', 'data-pack': offer.pack },
       h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
@@ -1933,33 +1963,7 @@ function creditsCard(credits) {
         h('p', { class: 'muted fine' }, offer.bought ? 'Sold on their own, not in the pack:' : 'Or buy one piece at a time:'),
         h('ul', { class: 'piece-grid' }, soldAlone(offer).map((piece) => {
           const size = piece.w ? piece : offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
-          const pieceKey = `piece:${piece.kind}`;
-          return h('li', { class: 'piece-tile' },
-            h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
-            h('span', { class: 'piece-name' }, piece.label),
-            h('span', { class: 'muted fine' }, count(piece.cost, 'credit', 'credits')),
-            piece.bought ? h('span', { class: 'pill on' }, 'Yours')
-              : confirming === pieceKey ? h('div', { class: 'shop-confirm', role: 'group', 'aria-label': `Confirm buying ${piece.label}` },
-                h('span', { class: 'muted fine' }, `Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`),
-                h('button', {
-                  type: 'button',
-                  class: 'wd-btn',
-                  onclick: act(error, async () => {
-                    confirming = null;
-                    render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
-                  }),
-                }, 'Confirm'),
-                h('button', {
-                  type: 'button',
-                  class: 'wd-btn ghost',
-                  onclick: () => { confirming = null; render(now); },
-                }, 'Cancel'))
-                : h('button', {
-                  type: 'button',
-                  class: 'wd-btn ghost',
-                  disabled: now.balance < piece.cost,
-                  onclick: () => { confirming = pieceKey; render(now); },
-                }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'));
+          return pieceTile(piece, size);
         }))) : null);
     const botRow = (bot) => {
       const input = h('input', {
@@ -2023,6 +2027,10 @@ function creditsCard(credits) {
         'Nothing has paid you yet. Join a city and say yes to a gathering there: your first one pays 20 straight away.') : null,
       now.packs.length ? h('h3', {}, 'Shop') : null,
       now.packs.length ? h('ul', { class: 'room-list shop' }, now.packs.map(packRow)) : null,
+      // HC65: grand pieces, one-of-a-kind showpieces bought on their own, with no pack.
+      now.grand?.length ? h('h3', {}, 'Grand pieces') : null,
+      now.grand?.length ? h('p', { class: 'muted fine' }, 'One-of-a-kind showpieces for your rooms. Something big to save your coins for.') : null,
+      now.grand?.length ? h('ul', { class: 'piece-grid grand-grid' }, now.grand.map((piece) => pieceTile(piece, piece))) : null,
       now.bots.length ? h('h3', {}, 'What your bots may spend') : null,
       now.bots.length ? h('p', { class: 'muted fine' }, 'A bot spends only after you say yes to it in Needs you, and never more than this in a day. 0 means it spends nothing.') : null,
       now.bots.length ? h('ul', { class: 'room-list' }, now.bots.map(botRow)) : null,
