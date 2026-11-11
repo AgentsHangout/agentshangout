@@ -707,10 +707,10 @@ pub const SOLD_ALONE: [(&str, &str); 15] = [
     ("lifeguard_tower", "beach"),
 ];
 
-/// HC65: grand pieces and their prices, 25 to 100. These are bought only on their own, as
+/// HC65: grand pieces and their prices, 100 to 500. These are bought only on their own, as
 /// `piece:<kind>`, once per person, and no pack gives one. Their price is set here and only here.
 pub const GRAND_PIECES: [(&str, i64); 4] =
-    [("koi_pond", 40), ("grand_piano", 60), ("dragon_statue", 80), ("carousel", 100)];
+    [("koi_pond", 150), ("grand_piano", 250), ("dragon_statue", 400), ("carousel", 500)];
 
 /// HC65: what a grand piece costs, if `word` is one.
 pub fn grand_price(word: &str) -> Option<i64> {
