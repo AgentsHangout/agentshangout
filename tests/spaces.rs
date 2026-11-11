@@ -5057,7 +5057,7 @@ async fn pj21_people_who_can_invite_see_who_asks_and_nothing_else_about_them() {
     assert_eq!(asked["structuredContent"]["join_request"]["status"], "waiting", "{asked}");
     // Dee walks in and asks for herself.
     server.walk_in(&dee, &room).await.ok();
-    server.ask_to_join(&dee, &room, json!({})).await.ok();
+    server.ask_to_join(&dee, &room, json!({ "note": "only for whoever answers" })).await.ok();
 
     // The owner and an invited member see both, oldest first, with only what PJ21 names.
     for person in [&ann, &bo] {
@@ -5083,7 +5083,7 @@ async fn pj21_people_who_can_invite_see_who_asks_and_nothing_else_about_them() {
     // Scout reads its own, and Dee's isn't in what it reads.
     let read = server.read_room(&token, &room).await;
     assert_eq!(read["join_request"]["status"], "waiting", "{read}");
-    assert!(!read.to_string().contains("Dee asks"), "{read}");
+    assert!(!read.to_string().contains("only for whoever answers"), "{read}");
 }
 
 // PJ21: someone who can't invite can't answer.
@@ -5200,7 +5200,7 @@ async fn pj24_a_no_closes_the_request_and_lasts_a_week() {
     // Answered once, it can't be answered again.
     server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
     let again = server.ask_to_join(&cy, &room, json!({})).await.refused(StatusCode::CONFLICT);
-    assert!(text(&again["error"]).contains("ask again in a week"), "{again}");
+    assert!(text(&again["error"]).contains("ask again in 7 days"), "{again}");
     // The room heard nothing, and the asker is told nothing about who or why.
     let snapshot = server.snapshot(&ann.key, &room).await.ok();
     assert!(!Server::lines(&snapshot).iter().any(|line| line.contains("Cy")), "{snapshot}");
@@ -5286,6 +5286,183 @@ async fn pj27_a_bot_asks_at_most_five_floors_an_hour() {
             assert!(refused.contains("too many requests to join"), "{refused}");
         }
     }
+}
+
+// PJ22, BT2: a bot's ask isn't its owner's yes.
+#[tokio::test]
+async fn pj22_a_yes_keeps_to_the_bot_owners_rule_on_who_may_invite_it() {
+    use agenthangout::bot_trust::{Permission, Trust};
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let (home, cy) = server.someone("Cy").await;
+    let (scout, token) = server.bot(&cy, &home, "Scout").await;
+    let only_me = Permission { mode: "owner".into(), people: vec![], bots: vec![] };
+    let trust = Trust { invite_public: only_me, ..Trust::default() };
+    server.state.db.save_bot_trust(&scout, &trust).unwrap();
+
+    server
+        .post(&cy.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    let asked =
+        server.tool(&token, "go_out", json!({ "floor_id": room, "ask_to_join": true })).await;
+    let id = text(&asked["structuredContent"]["join_request"]["id"]);
+
+    server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::FORBIDDEN);
+    assert_eq!(server.join_requests(&ann).await.len(), 1, "it stays waiting");
+    let read = server.read_room(&token, &room).await;
+    assert_eq!(read["you_are_a_guest"], true, "Scout is still a visitor: {read}");
+    assert!(!server.state.db.is_member(&room, &cy.id).unwrap(), "and its owner wasn't brought in");
+}
+
+// PJ20, PJ27: the limits hold when asks arrive together.
+#[tokio::test]
+async fn pj20_the_database_takes_one_open_request_per_asker_however_they_arrive() {
+    use agenthangout::db::NewJoinRequest;
+    let path = support::db_path("spaces-join-one-open");
+    let path_text = path.to_str().unwrap().to_string();
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{path_text}{suffix}"));
+    }
+    let server = Server::on(Db::open(&path_text).unwrap()).await;
+    let (room, _ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+    let now = agenthangout::now();
+    let ask = |id: &'static str| {
+        server
+            .state
+            .db
+            .insert_join_request(&NewJoinRequest {
+                id,
+                hangout_id: &room,
+                person_id: &cy.id,
+                agent_id: None,
+                note: "",
+                hidden: false,
+                now,
+                lapse: now - WEEK,
+                hour_ago: now - 3600,
+                bot_max: 5,
+                person_max: 10,
+                floor_max: 20,
+                waiting_max: 20,
+            })
+            .unwrap()
+    };
+    // Two asks that both saw nothing open: the write itself takes only the first.
+    assert!(ask("first"));
+    assert!(!ask("second"));
+    // And a row written around the check is refused by the table.
+    let direct = Connection::open(&path).unwrap().execute(
+        "INSERT INTO join_requests (id, hangout_id, person_id, asker, status, asked_at)
+         VALUES ('third', ?1, ?2, 'person', 'waiting', ?3)",
+        rusqlite::params![room, cy.id, now],
+    );
+    assert!(direct.is_err(), "one waiting request per asker per floor");
+}
+
+// PJ27, PJ21
+#[tokio::test]
+async fn pj27_a_floor_takes_twenty_requests_an_hour_and_holds_twenty_waiting() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    for i in 0..20 {
+        let (_, asker) = server.someone(&format!("Asker {i}")).await;
+        server.walk_in(&asker, &room).await.ok();
+        server.ask_to_join(&asker, &room, json!({})).await.ok();
+    }
+    let (_, late) = server.someone("Late").await;
+    server.walk_in(&late, &room).await.ok();
+    let hour =
+        server.ask_to_join(&late, &room, json!({})).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    assert!(text(&hour["error"]).contains("this hour"), "{hour}");
+
+    // Two hours on the hour's count is clear, but the floor still holds 20 waiting (PJ21).
+    server.state.db.age_join_requests(&room, 7200).unwrap();
+    let full =
+        server.ask_to_join(&late, &room, json!({})).await.refused(StatusCode::TOO_MANY_REQUESTS);
+    assert!(text(&full["error"]).contains("waiting"), "{full}");
+    assert_eq!(server.join_requests(&ann).await.len(), 20);
+
+    // One answered makes room for one more.
+    let first = text(&server.join_requests(&ann).await[0]["id"]);
+    server.answer_join(&ann, &room, &first, false).await.ok();
+    server.ask_to_join(&late, &room, json!({})).await.ok();
+}
+
+// PJ21, S8: whoever runs the space now, not whoever started it.
+#[tokio::test]
+async fn pj21_requests_go_to_whoever_runs_the_space_now() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_, cy) = server.someone("Cy").await;
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+
+    // Ann leaves, so Bo runs it (S8, S9). Ann is shown nothing she can no longer answer.
+    server.post(&ann.key, &format!("/api/hangouts/{room}/leave"), json!({})).await.ok();
+    assert!(server.join_requests(&ann).await.is_empty(), "Ann left, so she isn't asked");
+    server.answer_join(&ann, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
+    assert_eq!(server.join_requests(&bo).await.len(), 1);
+    server.answer_join(&bo, &room, &id, true).await.ok();
+    assert!(server.sees_the_past(&cy.key, &room).await);
+}
+
+// PJ26, A102: a block is checked when the list is read and when an answer is given, both ways.
+#[tokio::test]
+async fn pj26_a_block_made_after_the_ask_takes_the_request_off_every_list() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_, cy) = server.someone("Cy").await;
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({ "note": "hello" })).await.ok()["id"]);
+    assert_eq!(server.join_requests(&bo).await.len(), 1);
+
+    server.post(&ann.key, "/api/blocks", json!({ "person_id": cy.id })).await.ok();
+    for person in [&ann, &bo] {
+        assert!(server.join_requests(person).await.is_empty(), "it reaches nobody now");
+    }
+    server.answer_join(&bo, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
+    // To Cy it still looks open.
+    let again = server.ask_to_join(&cy, &room, json!({})).await.ok();
+    assert_eq!(text(&again["id"]), id);
+    assert!(!server.sees_the_past(&cy.key, &room).await);
+}
+
+#[tokio::test]
+async fn pj26_an_asker_who_blocked_whoever_runs_the_space_reaches_nobody() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_, cy) = server.someone("Cy").await;
+    server.walk_in(&cy, &room).await.ok();
+    server.post(&cy.key, "/api/blocks", json!({ "person_id": ann.id })).await.ok();
+
+    let asked = server.ask_to_join(&cy, &room, json!({ "note": "read me" })).await.ok();
+    assert_eq!(asked["status"], "waiting", "{asked}");
+    for person in [&ann, &bo] {
+        assert!(server.join_requests(person).await.is_empty(), "contact is cut both ways");
+    }
+}
+
+#[tokio::test]
+async fn pj26_an_approver_who_blocked_the_asker_isnt_shown_the_request() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let bo = server.join(&ann, &room, "Bo").await;
+    let (_, cy) = server.someone("Cy").await;
+    server.walk_in(&cy, &room).await.ok();
+    server.post(&bo.key, "/api/blocks", json!({ "person_id": cy.id })).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({ "note": "hello" })).await.ok()["id"]);
+
+    assert!(server.join_requests(&bo).await.is_empty(), "Bo blocked Cy");
+    server.answer_join(&bo, &room, &id, true).await.refused(StatusCode::NOT_FOUND);
+    // Ann didn't, so it's hers to answer.
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+    server.answer_join(&ann, &room, &id, true).await.ok();
 }
 
 // PJ26

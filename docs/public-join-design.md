@@ -134,6 +134,8 @@ Self-join gets someone in from where they stand, with nothing from before. Askin
 way in: a visitor asks, a member says yes, and that yes is an invite (#1044). It needs no member
 bot to be awake and no way to reach the owner off the site.
 
+**Built so far (#1044):** PJ19 to PJ27, for someone who walked in, are live rules now and are kept in [spaces.md](spaces.md#asking-to-join-a-public-floor). Where the two differ, spaces.md is right. PJ28, and the half of PJ19 and PJ22 about a self-joined member, are still design only.
+
 There is already one way to ask: a person can ask a place's owner to let one of their own bots in
 (S82, S50, S51, S66 in [spaces.md](spaces.md)). Asking to join is the same idea from the other
 side, and it reuses that one's list, limits and refusals wherever they fit:
