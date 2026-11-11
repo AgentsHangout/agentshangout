@@ -35,6 +35,7 @@ pub mod error;
 pub mod events;
 pub mod export;
 pub mod friends;
+pub mod funds;
 pub mod games;
 pub mod github_display;
 pub mod god_mode;

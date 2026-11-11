@@ -754,11 +754,30 @@ pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> 
         || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?)
 }
 
+/// HC61: this floor's fund unlocked `word`, either as that piece or as a pack that places it.
+/// A piece the pack only sells (`SOLD_ALONE`) is not unlocked by the pack.
+fn floor_grants(state: &AppState, floor_id: &str, word: &str) -> ApiResult<bool> {
+    if state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))? {
+        return Ok(true);
+    }
+    Ok(match paid_pack_with(word) {
+        Some(pack) if comes_with(pack, word) => state.db.has_floor_unlock(floor_id, pack.pack)?,
+        _ => false,
+    })
+}
+
 /// HC14: a kind, paint or flooring from a pack that costs credits is only for someone who bought
-/// that pack, and their bots, or someone with God mode on (W79), which unlocks everything. Taking
-/// one down or out never needs it.
-pub fn may_use_paid(state: &AppState, person_id: &str, word: &str) -> ApiResult<()> {
-    // HC65: a grand piece is for someone who bought it, or with God mode on.
+/// that pack, and their bots, or someone with God mode on (W79), which unlocks everything, or for
+/// anyone who may build on a floor whose fund unlocked it (HC61). A grand piece is only for someone
+/// who bought it, or with God mode on (HC65). Taking one down or out never needs it.
+pub fn may_use_paid(
+    state: &AppState,
+    person_id: &str,
+    floor_id: &str,
+    word: &str,
+) -> ApiResult<()> {
+    // HC65: a grand piece is for someone who bought it, or with God mode on. A fund does not
+    // unlock one: piece_price is None, so it is not a fund target (HC59).
     if let Some(price) = grand_price(word) {
         if !state.db.has_bought(person_id, &format!("{PIECE}{word}"))?
             && !god_mode::is_on(state, person_id)?
@@ -772,6 +791,7 @@ pub fn may_use_paid(state: &AppState, person_id: &str, word: &str) -> ApiResult<
     match paid_pack_with(word) {
         Some(pack)
             if !owns_paid(state, person_id, pack, word)?
+                && !floor_grants(state, floor_id, word)?
                 && !god_mode::is_on(state, person_id)? =>
         {
             Err(ApiError::forbidden(format!(
@@ -1814,7 +1834,7 @@ fn place_item(
     {
         return Err(ApiError::forbidden(format!("that needs {}", friends_text(kind.friends))));
     }
-    may_use_paid(state, &caller.person_id, kind.kind)?;
+    may_use_paid(state, &caller.person_id, &place.floor.id, kind.kind)?;
     let id = store_item(state, caller, &place.floor.id, kind, (body.x, body.y, body.facing))??;
     ops::refresh(state, &place.floor.id);
     let item = state.db.floor_item(&id)?.ok_or_else(ApiError::not_found)?;
@@ -1967,10 +1987,11 @@ fn set_look(
 
 /// I28: anything that doesn't fit is left out, so what's there stays and doing this twice adds nothing.
 fn put_up(state: &AppState, caller: &Caller, place: &Place, pack: &Pack) -> ApiResult<Value> {
-    // HC14: a pack that costs credits goes up only for someone who bought it, or their bots, or
-    // with God mode on.
+    // HC14 and HC61: a pack that costs credits goes up for someone who bought it, or their bots,
+    // or with God mode on, or on a floor whose fund unlocked that pack.
     if pack.cost > 0
         && !state.db.has_bought(&caller.person_id, pack.pack)?
+        && !state.db.has_floor_unlock(&place.floor.id, pack.pack)?
         && !god_mode::is_on(state, &caller.person_id)?
     {
         return Err(ApiError::forbidden(format!(
@@ -2677,7 +2698,7 @@ pub fn furnish_for_project(
                 friends_text(kind.friends)
             )));
         }
-        may_use_paid(state, &caller.person_id, kind.kind)?;
+        may_use_paid(state, &caller.person_id, floor_id, kind.kind)?;
         placed_ids.push(store_item(state, caller, floor_id, kind, (item.x, item.y, item.facing))??);
     }
     ops::refresh(state, floor_id);

@@ -51,6 +51,7 @@ pub fn routes() -> Router<AppState> {
         .merge(crate::recycling::routes())
         .merge(crate::cadence::routes())
         .merge(crate::claims::routes())
+        .merge(crate::funds::routes())
         .route("/api/research-labs/{id}/work", get(research_work))
         .route("/api/research-labs/{id}/work/{number}/status", get(research_pr_status))
         .route(

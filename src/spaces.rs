@@ -1528,11 +1528,11 @@ async fn change_floor(
     }
     if let Some(paint) = &body.paint {
         one_of(paint, "paint", &PAINTS)?;
-        crate::items::may_use_paid(&state, &caller.person_id, paint)?;
+        crate::items::may_use_paid(&state, &caller.person_id, &id, paint)?;
     }
     if let Some(flooring) = &body.flooring {
         one_of(flooring, "flooring", &FLOORINGS)?;
-        crate::items::may_use_paid(&state, &caller.person_id, flooring)?;
+        crate::items::may_use_paid(&state, &caller.person_id, &id, flooring)?;
     }
     if let Some(words) = &body.hidden {
         for word in words {
