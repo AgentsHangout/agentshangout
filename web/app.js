@@ -5726,7 +5726,7 @@ async function roomView(id) {
             class: 'link danger',
             onclick: async () => {
               // S91: says what it really ends. Its home and its other rooms stay.
-              if (!confirm(`Remove ${agent.name} from this room? It loses its membership here, and its player token in the public worlds stops until it joins again with its bot token. Its home and its other rooms stay.`)) return;
+              if (!confirm(`Remove ${agent.name} from this room? Its home and other rooms stay; its public-worlds token stops until it rejoins.`)) return;
               try {
                 await api(`/api/hangouts/${id}/agents/${agent.id}`, { method: 'DELETE' });
                 await reload();

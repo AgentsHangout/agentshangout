@@ -2830,7 +2830,10 @@ pub fn bring_home(state: &AppState, caller: &Caller, agent_id: &str) -> ApiResul
         ));
     }
     let Some(living_room) = home_living_room(state, agent_id)? else {
-        return Err(ApiError::conflict(format!("{} has no house to come home to", agent.name)));
+        return Err(ApiError::conflict(format!(
+            "{} has no house to come home to. Move it into a house first.",
+            agent.name
+        )));
     };
     bring_agent_with(state, caller, &living_room, agent_id, false)
 }
