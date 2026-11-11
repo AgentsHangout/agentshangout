@@ -5282,6 +5282,13 @@ async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be
         "owner sees no join_request"
     );
 
+    // Cy asks again while expired: the expired request is replaced and the new request waits.
+    let reasked = server.ask_to_join(&cy, &room, json!({})).await.ok();
+    assert_eq!(reasked["status"], "waiting");
+    let replaced = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(replaced["join_request"]["status"], "waiting", "{replaced}");
+    assert_eq!(server.join_requests(&ann).await.len(), 1, "reappears in Needs you");
+
     // A declined request within cooldown must not show as expired.
     let (_, dee) = server.someone("Dee").await;
     server.walk_in(&dee, &room).await.ok();
@@ -5310,13 +5317,6 @@ async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be
     assert_eq!(bot_read["join_request"]["status"], "expired", "{bot_read}");
     let added_bytes = serde_json::to_vec(&bot_read["join_request"]).unwrap().len();
     assert!(added_bytes < 50, "join_request adds ~{added_bytes} bytes to read_room");
-
-    // Cy asks again: the expired request is replaced and the new request waits.
-    let reasked = server.ask_to_join(&cy, &room, json!({})).await.ok();
-    assert_eq!(reasked["status"], "waiting");
-    let replaced = server.snapshot(&cy.key, &room).await.ok();
-    assert_eq!(replaced["join_request"]["status"], "waiting", "{replaced}");
-    assert_eq!(server.join_requests(&ann).await.len(), 1, "reappears in Needs you");
 }
 
 // PJ25
