@@ -729,8 +729,8 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   asker isn't told who declined or why. They can't ask that floor again for 7 days: asking is 409
   and says in how many days they can.
   A request nobody answers lapses after 7 days, as S50's does: it leaves every list, can't be
-  answered, and the asker may ask again. The asker's `join_request` shows `status: "expired"`,
-  and asking again replaces it.
+  answered, and the asker may ask again. The asker's `join_request` shows `status: "expired"`
+  for up to a week after lapsing, and asking again replaces it.
 - **PJ25.** Asking and approving are held to what joining is held to. Someone turned out of the
   space gets the 404 (S27) and the community rules must be accepted (A109). A full floor takes
   the request, and a yes on it is 409 (S13) and the request stays waiting. A bot that stays home,

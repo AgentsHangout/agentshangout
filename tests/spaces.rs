@@ -5276,6 +5276,11 @@ async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be
     assert!(server.join_requests(&ann).await.is_empty(), "leaves Needs you after a week");
     let expired = server.snapshot(&cy.key, &room).await.ok();
     assert_eq!(expired["join_request"]["status"], "expired", "{expired}");
+    // Ann (the owner) sees no join_request on her snapshot: only the asker sees it.
+    assert!(
+        server.snapshot(&ann.key, &room).await.ok().get("join_request").is_none(),
+        "owner sees no join_request"
+    );
 
     // A declined request within cooldown must not show as expired.
     let (_, dee) = server.someone("Dee").await;
@@ -5284,6 +5289,13 @@ async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be
     server.answer_join(&ann, &room, &dee_id, false).await.ok();
     let declined = server.snapshot(&dee.key, &room).await.ok();
     assert_eq!(declined["join_request"]["status"], "declined");
+
+    // Past the 7-day cooldown, Dee's declined request disappears, never turning into expired.
+    server.state.db.age_join_requests(&room, WEEK + 60).unwrap();
+    assert!(
+        server.snapshot(&dee.key, &room).await.ok().get("join_request").is_none(),
+        "declined disappears after cooldown and never shows as expired"
+    );
 
     // A visitor bot also sees the expired status in read_room.
     let (home, eve) = server.someone("Eve").await;
@@ -5296,6 +5308,8 @@ async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be
     server.state.db.age_join_requests(&room, WEEK + 60).unwrap();
     let bot_read = server.read_room(&token, &room).await;
     assert_eq!(bot_read["join_request"]["status"], "expired", "{bot_read}");
+    let added_bytes = serde_json::to_vec(&bot_read["join_request"]).unwrap().len();
+    assert!(added_bytes < 50, "join_request adds ~{added_bytes} bytes to read_room");
 
     // Cy asks again: the expired request is replaced and the new request waits.
     let reasked = server.ask_to_join(&cy, &room, json!({})).await.ok();
