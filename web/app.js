@@ -9589,6 +9589,19 @@ function needsYouPanel(panels) {
 
   function requestItem(request) {
     const error = formError();
+    // PJ21: someone asking to join a public floor. A yes is an invite (PJ22), and a no is quiet (PJ24).
+    if (request.request === 'join') {
+      const decide = (approve) => act(error, done(() =>
+        api(`/api/floors/${encodeURIComponent(request.floor_id)}/join_requests/${encodeURIComponent(request.id)}`, { method: 'POST', body: { approve } })));
+      return item(
+        h('p', {}, h('strong', {}, request.asked_by), request.bot ? ` asks for ${request.bot} to join ` : ' asks to join ', h('strong', {}, request.place)),
+        request.note ? h('p', {}, request.note) : null,
+        h('small', { class: 'muted' }, 'A yes makes them a member, so they can read the room\'s earlier chat.'),
+        h('div', { class: 'event-actions' },
+          h('button', { type: 'button', class: 'primary', onclick: decide(true) }, 'Yes'),
+          h('button', { type: 'button', onclick: decide(false) }, 'No')),
+        error);
+    }
     const answer = (response) => act(error, done(() =>
       api(`/api/place-requests/${encodeURIComponent(request.id)}/answer`, { method: 'POST', body: { response } })));
     return item(

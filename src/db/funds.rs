@@ -1,4 +1,4 @@
-//! HC59 to HC64 (#1062): a floor pools credits for one pack or one coin piece.
+//! HC59 to HC64 (#1056): a floor pools credits for one pack or one coin piece.
 //!
 //! A put-in is written to `credit_spends` as `fund:<put id>` in the same transaction, so the
 //! credits are held (and an older binary still subtracts them) and a second put can't spend them

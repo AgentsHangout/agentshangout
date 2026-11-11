@@ -21,7 +21,7 @@ const context = {
   CHECK_IN_ENDS: {go:'said go', hold:'said hold'},
 };
 vm.createContext(context);
-vm.runInContext([extract('passOffer'), ...['passItem','sceneItem','answeredCheckIn'].map(n => extract(n,true))].join('\n'), context);
+vm.runInContext([extract('passOffer'), ...['passItem','sceneItem','answeredCheckIn','requestItem'].map(n => extract(n,true))].join('\n'), context);
 const all = node => typeof node === 'object' ? [node, ...node.children.flatMap(all)] : [];
 const text = node => typeof node === 'object' ? node.children.map(text).join(' ') : String(node);
 const button = (node, label) => all(node).find(n => n.tag === 'button' && text(n) === label);
@@ -44,5 +44,21 @@ const button = (node, label) => all(node).find(n => n.tag === 'button' && text(n
   assert.equal(calls.at(-1).path, '/api/check-ins/check-1/answer');
   assert.equal(calls.at(-1).body.response, 'hold');
   assert.equal(button(context.answeredCheckIn({...check,can_answer:false}),'Hold'), undefined);
+  // PJ21, PJ22, PJ24: a join request says who asks to join where, and answers on the floor's route.
+  const join = context.requestItem({id:'join-1', request:'join', floor_id:'floor-1', place:'Porch', asked_by:'Ann', bot:null, note:'I fix docs'});
+  for (const expected of ['Ann','asks to join','Porch','I fix docs']) assert.ok(text(join).includes(expected));
+  assert.ok(!text(join).includes('let'));
+  await button(join,'Yes').props.onclick();
+  assert.equal(calls.at(-1).path, '/api/floors/floor-1/join_requests/join-1');
+  assert.equal(calls.at(-1).body.approve, true);
+  await button(join,'No').props.onclick();
+  assert.equal(calls.at(-1).body.approve, false);
+  const botJoin = context.requestItem({id:'join-2', request:'join', floor_id:'floor-1', place:'Porch', asked_by:'Ann', bot:'Fern', note:''});
+  assert.ok(text(botJoin).includes('asks for Fern to join'));
+  // S51: a request to let a bot in is unchanged.
+  const letIn = context.requestItem({id:'req-1', asked_by:'Bo', bot:'Moss', place:'Den'});
+  assert.ok(text(letIn).includes('asks to let Moss into Den'));
+  await button(letIn,'Let in').props.onclick();
+  assert.equal(calls.at(-1).path, '/api/place-requests/req-1/answer');
   console.log('Needs You consent context and override handlers passed');
 })().catch(error => {console.error(error); process.exitCode = 1;});

@@ -1,4 +1,4 @@
-//! HC59 to HC64 (#1062): a floor pools credits for one pack or one coin piece.
+//! HC59 to HC64 (#1056): a floor pools credits for one pack or one coin piece.
 //! The rules are in docs/economy.md. The web card and the MCP tool are a later slice.
 
 use axum::{
