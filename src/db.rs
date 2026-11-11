@@ -21302,11 +21302,14 @@ mod tests {
             "igloo",
             "reindeer",
             "snowball_pile",
+            "crab",
+            "bottle_message",
+            "lifeguard_tower",
         ]
         .iter()
         .map(|k| piece_price(k).unwrap())
         .collect();
-        assert_eq!(prices, [2, 4, 10, 6, 10, 3, 8, 4, 2]);
+        assert_eq!(prices, [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6]);
 
         let db = Db::open(":memory:").unwrap();
         let now = ann_with_gatherings(&db, 1);
