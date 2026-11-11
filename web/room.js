@@ -4257,6 +4257,44 @@ function paintSnowballPile(g, x, y) {
   r(g, '#f5f9fc', x - 2, y - 7, 4, 3);
   r(g, '#cfe0ec', x - 5, y - 2, 10, 1);
 }
+// Coin pieces a bot can use (I31): a fortune machine, a photo booth and a wishing well.
+function paintFortuneMachine(g, x, y, t) {
+  const flicker = Math.floor((t || 0) / 220) % 3;
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  r(g, '#6b3a2e', x - 8, y - 30, 16, 28);
+  r(g, '#c8a34a', x - 8, y - 30, 16, 2);
+  r(g, '#c8a34a', x - 8, y - 4, 16, 2);
+  r(g, '#2a1f33', x - 6, y - 26, 12, 12);
+  r(g, flicker ? '#ffd24d' : '#ff8c2a', x - 2, y - 22, 4, 4);
+  r(g, '#9a7cc0', x - 3, y - 18, 6, 3);
+  r(g, '#f5f0e6', x - 3, y - 10, 6, 2);
+  r(g, '#c8a34a', x + 4, y - 12, 2, 2);
+}
+function paintPhotoBooth(g, x, y, t) {
+  const flash = Math.floor((t || 0) / 900) % 4 === 0;
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  r(g, '#3a6fb0', x - 9, y - 34, 18, 32);
+  r(g, '#2c5a92', x - 9, y - 34, 18, 3);
+  r(g, '#c0392b', x - 7, y - 28, 8, 24);
+  r(g, '#d9534a', x - 7, y - 28, 2, 24);
+  r(g, '#f5f0e6', x + 3, y - 26, 4, 6);
+  r(g, flash ? '#ffffff' : '#c9ced8', x + 4, y - 31, 2, 2);
+  r(g, '#ffd24d', x + 3, y - 14, 4, 2);
+}
+function paintWishingWell(g, x, y, t) {
+  const ripple = Math.floor((t || 0) / 400) % 3;
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#8d8a80', x - 11, y - 12, 22, 10);
+  r(g, '#c9c4b5', x - 11, y - 12, 22, 2);
+  r(g, '#77746b', x - 11, y - 6, 22, 1);
+  r(g, '#2f6f8f', x - 8, y - 11, 16, 3);
+  r(g, '#7fd4ff', x - 6 + ripple * 3, y - 10, 3, 1);
+  r(g, '#6b4a2e', x - 10, y - 30, 2, 18);
+  r(g, '#6b4a2e', x + 8, y - 30, 2, 18);
+  r(g, '#8a5a34', x - 12, y - 33, 24, 4);
+  r(g, '#6b4a2e', x - 1, y - 29, 2, 10);
+  r(g, '#c8a34a', x - 1, y - 20, 2, 2);
+}
 // #1071: the Cafe pack, and the coin pieces sold beside it.
 function paintCafeCounter(g, x, y) {
   r(g, SHADOW, x - 17, y - 2, 34, 2);
@@ -5077,6 +5115,9 @@ const ITEMS = {
   koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
   palm_tree: { paint: paintPalmTree, side: paintPalmTree, rise: 40 },
   cafe_counter: { paint: paintCafeCounter, side: paintCafeCounter, rise: 30 },
+  fortune_machine: { paint: paintFortuneMachine, side: paintFortuneMachine, rise: 34 },
+  photo_booth: { paint: paintPhotoBooth, side: paintPhotoBooth, rise: 36 },
+  wishing_well: { paint: paintWishingWell, rise: 26 },
   espresso_machine: { paint: paintEspressoMachine, side: paintEspressoMachine, rise: 22 },
   pastry_case: { paint: paintPastryCase, side: paintPastryCase, rise: 20 },
   coffee_sacks: { paint: paintCoffeeSacks, side: paintCoffeeSacks, rise: 14 },
@@ -5184,6 +5225,11 @@ const USES = {
   dining_chair: { spots: 1, pose: 'sit', on: true },
   bench: { spots: 2, pose: 'sit', on: true },
   throne: { spots: 1, pose: 'sit', on: true },
+  // Pieces a bot stands at and uses (I31).
+  telescope: { spots: 1, pose: 'stand' },
+  fortune_machine: { spots: 1, pose: 'stand' },
+  photo_booth: { spots: 1, pose: 'stand' },
+  wishing_well: { spots: 1, pose: 'stand' },
   armchair: { spots: 1, pose: 'sit', on: true },
   love_seat: { spots: 2, pose: 'sit', on: true },
   sofa: { spots: 3, pose: 'sit', on: true },
