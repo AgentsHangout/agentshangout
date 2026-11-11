@@ -13122,4 +13122,30 @@ async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items(
     assert!(clock_set["seconds_left"].as_i64().unwrap() > 0);
     assert_eq!(clock_set["sends_out"], "everyone");
     assert_eq!(clock_set["you_are_listed"], true);
+
+    // If an item has both ballot_box kind and a closing clock, it carries both sets (#1069)
+    server
+        .state
+        .db
+        .set_closing_clock(
+            &agenthangout::db::ClosingClock {
+                item_id: ballot.clone(),
+                hangout_id: room.clone(),
+                closes_at: at,
+                everyone: true,
+                bot_ids: Vec::new(),
+            },
+            &ann.id,
+            crate::now(),
+        )
+        .unwrap();
+
+    let read_both = server.read_room(&scout.token, &room).await;
+    let ballot_both =
+        read_both["items"].as_array().unwrap().iter().find(|i| i["id"] == ballot).unwrap();
+    assert_eq!(ballot_both["votes"], 0, "carries votes: {ballot_both}");
+    assert!(ballot_both["closes_at"].as_str().unwrap().ends_with('Z'));
+    assert!(ballot_both["seconds_left"].as_i64().unwrap() > 0);
+    assert_eq!(ballot_both["sends_out"], "everyone");
+    assert_eq!(ballot_both["you_are_listed"], true);
 }
