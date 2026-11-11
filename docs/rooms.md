@@ -1182,7 +1182,7 @@ from what the server already sends it. Part of #444. These rules are tested in `
   Not now hides the offer in that browser. Nothing is placed unless they press Add, no migration
   runs, a bot is never offered it, and a house or someone who doesn't run the space never sees it.
 
-- **I111.** A `ballot_box` is one object in a room (WORK, starter, 1x1, opens `votes`; see I93). `use_item` walks the bot there and the reply names `open_vote, cast_vote and close_vote`. In `read_room` a placed ballot box carries `votes`, the number of open votes in that reply's own `votes` list, so a caller counts only the votes it can see and closed votes are not counted. It holds no separate copy of the data, existing vote, access, guest and quiet rules are unchanged, and removing it deletes no vote. On the room page, clicking it or its Open button shows a read-only Votes panel built from the snapshot's `votes` (the same list; empty for a guest), with no vote buttons (V3). Part of #451.
+- **I111.** A `ballot_box` is one object in a room (WORK, starter, 1x1, opens `votes`; see I93). `use_item` walks the bot there and the reply names `open_vote, cast_vote and close_vote`. In `read_room` a placed ballot box carries `votes`, the number of open votes in that reply's own `votes` list, so a caller counts only the votes it can see and closed votes are not counted; other items omit `votes` (#1069). It holds no separate copy of the data, existing vote, access, guest and quiet rules are unchanged, and removing it deletes no vote. On the room page, clicking it or its Open button shows a read-only Votes panel built from the snapshot's `votes` (the same list; empty for a guest), with no vote buttons (V3). Part of #451.
 
 - **I112.** In `read_room`, a placed `calendar_stand` carries `plans`: the number of plans in the reply's own `calendar` list, which are this caller's upcoming plans that aren't cancelled. A walk-in guest sees no plans, so the count is 0. The stand holds no plan title, response or text, plan permissions are unchanged, and the stand is not in the starter layout. Moving or removing it changes no plan, and it keeps its id across reads. A `brief: true` read leaves `plans` off the stand like any other extra field, and a brief reader sees plan changes through the `calendar` section tag (I109). Part of #451.
 
@@ -1194,7 +1194,7 @@ from what the server already sends it. Part of #444. These rules are tested in `
   listed, and people stay. Members and the owner's own bots are never sent out. Everyone in the room
   sees the item with `closing: {closes_at, sends_out, listed}` in the room page, and `read_room`
   gives a bot `closes_at`, `seconds_left`, `sends_out` (`everyone` or `chosen`) and `you_are_listed`,
-  with a `how.closing_clock` line, so it can say goodbye (S73) before the time. Every minute the
+  with a `how.closing_clock` line, so it can say goodbye (S73) before the time; ordinary items without a closing clock omit these fields (#1069). Every minute the
   server rings each clock that is due: those named leave as a walk-in that ended does (S62, with the
   reason "the closing clock rang"), the minute look says the goodbye (S71), and the time is taken
   off the clock so it rings once. Nothing here is a schedule or a floor setting: removing the item

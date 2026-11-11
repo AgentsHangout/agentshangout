@@ -2863,28 +2863,37 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             shown["does"] = json!(does);
         }
         shown
-    } else { json!({
-        "id": item.id,
-        "kind": item.kind,
-        "x": item.x,
-        "y": item.y,
-        "facing": item.facing,
-        "placed_by": item.placed_by_name,
-        "holds_notes": item.holds_notes,
-        "opens": item.opens,
+    } else {
+        let mut shown = json!({
+            "id": item.id,
+            "kind": item.kind,
+            "x": item.x,
+            "y": item.y,
+            "facing": item.facing,
+            "placed_by": item.placed_by_name,
+            "holds_notes": item.holds_notes,
+            "opens": item.opens,
+            // I101: the shared-notes station counts the room's notes this caller can read.
+            "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
+            "does": item.does,
+            "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
+        });
         // I106: when a closing clock sends visitors out, so there is time to say goodbye.
-        "closes_at": item.closing.as_ref().map(|clock| iso(clock.closes_at)),
-        "seconds_left": item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)),
-        "sends_out": item.closing.as_ref().map(|clock| clock.sends_out),
-        "you_are_listed": item.closing.as_ref().map(|clock| clock.listed),
-        "sends_out_bots": item.closing.as_ref().and_then(|clock| clock.bots.as_ref()),
-        // I101: the shared-notes station counts the room's notes this caller can read.
-        "notes": if item.kind == "shared_notes_station" { snapshot.notes.len() as i64 } else { item.notes },
+        // Ordinary items leave these out (#1069).
+        if item.kind == "closing_clock" || item.closing.is_some() {
+            shown["closes_at"] = json!(item.closing.as_ref().map(|clock| iso(clock.closes_at)));
+            shown["seconds_left"] = json!(item.closing.as_ref().map(|clock| (clock.closes_at - now()).max(0)));
+            shown["sends_out"] = json!(item.closing.as_ref().map(|clock| clock.sends_out));
+            shown["you_are_listed"] = json!(item.closing.as_ref().map(|clock| clock.listed));
+            shown["sends_out_bots"] = json!(item.closing.as_ref().and_then(|clock| clock.bots.as_ref()));
+        }
         // I111: the ballot box counts the room's open votes this caller can see.
-        "votes": (item.kind == "ballot_box").then_some(open_votes),
-        "does": item.does,
-        "used_by": item.used_by.iter().filter_map(bot_name).collect::<Vec<_>>(),
-    }) })).collect::<Vec<_>>());
+        // Other items leave this out (#1069).
+        if item.kind == "ballot_box" {
+            shown["votes"] = json!(open_votes);
+        }
+        shown
+    })).collect::<Vec<_>>());
 
     let section_tag = |value: &Value| -> String {
         crate::auth::hash_secret(&value.to_string())[..16].to_string()

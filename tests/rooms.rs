@@ -13027,3 +13027,99 @@ async fn a_repeat_brief_read_sends_only_what_changed() {
     assert!(moved["section_tags"].get("clock").is_some(), "{moved}");
     assert_ne!(moved["section_tags"]["clock"], tags["clock"], "{moved}");
 }
+
+#[tokio::test]
+async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let scout = server.bot(&ann, &room, "Scout").await;
+
+    // Place an ordinary item, a ballot box, and a closing clock.
+    let plant = server.item(&ann, &room, "plant", (30, 0)).await;
+    let ballot = server.item(&ann, &room, "ballot_box", (32, 0)).await;
+    let clock = server.item(&ann, &room, "closing_clock", (34, 0)).await;
+
+    let read = server.read_room(&scout.token, &room).await;
+    let items = read["items"].as_array().expect("items list");
+
+    let ordinary = items.iter().find(|i| i["id"] == plant).expect("plant item");
+    let ballot_item = items.iter().find(|i| i["id"] == ballot).expect("ballot item");
+    let clock_item = items.iter().find(|i| i["id"] == clock).expect("clock item");
+
+    // Ordinary item omits all 6 keys (#1069)
+    assert!(ordinary.get("closes_at").is_none(), "ordinary item must omit closes_at: {ordinary}");
+    assert!(
+        ordinary.get("seconds_left").is_none(),
+        "ordinary item must omit seconds_left: {ordinary}"
+    );
+    assert!(ordinary.get("sends_out").is_none(), "ordinary item must omit sends_out: {ordinary}");
+    assert!(
+        ordinary.get("you_are_listed").is_none(),
+        "ordinary item must omit you_are_listed: {ordinary}"
+    );
+    assert!(
+        ordinary.get("sends_out_bots").is_none(),
+        "ordinary item must omit sends_out_bots: {ordinary}"
+    );
+    assert!(ordinary.get("votes").is_none(), "ordinary item must omit votes: {ordinary}");
+
+    // Ballot box has votes, but omits closing fields
+    assert_eq!(ballot_item["votes"], 0, "ballot box carries votes count: {ballot_item}");
+    assert!(
+        ballot_item.get("closes_at").is_none(),
+        "ballot box must omit closes_at: {ballot_item}"
+    );
+    assert!(
+        ballot_item.get("seconds_left").is_none(),
+        "ballot box must omit seconds_left: {ballot_item}"
+    );
+    assert!(
+        ballot_item.get("sends_out").is_none(),
+        "ballot box must omit sends_out: {ballot_item}"
+    );
+    assert!(
+        ballot_item.get("you_are_listed").is_none(),
+        "ballot box must omit you_are_listed: {ballot_item}"
+    );
+    assert!(
+        ballot_item.get("sends_out_bots").is_none(),
+        "ballot box must omit sends_out_bots: {ballot_item}"
+    );
+
+    // Closing clock has closing fields, but omits votes
+    assert!(clock_item.get("closes_at").is_some(), "closing clock carries closes_at: {clock_item}");
+    assert!(
+        clock_item.get("seconds_left").is_some(),
+        "closing clock carries seconds_left: {clock_item}"
+    );
+    assert!(clock_item.get("sends_out").is_some(), "closing clock carries sends_out: {clock_item}");
+    assert!(
+        clock_item.get("you_are_listed").is_some(),
+        "closing clock carries you_are_listed: {clock_item}"
+    );
+    assert!(
+        clock_item.get("sends_out_bots").is_some(),
+        "closing clock carries sends_out_bots: {clock_item}"
+    );
+    assert!(clock_item.get("votes").is_none(), "closing clock must omit votes: {clock_item}");
+
+    // Set closing time on the clock; closing fields become populated
+    let at = crate::now() + 600;
+    server
+        .put(
+            &ann.key,
+            &format!("/api/items/{clock}/closing"),
+            json!({ "closes_at": at, "everyone": true }),
+        )
+        .await
+        .ok();
+
+    let read_set = server.read_room(&scout.token, &room).await;
+    let clock_set =
+        read_set["items"].as_array().unwrap().iter().find(|i| i["id"] == clock).unwrap();
+
+    assert!(clock_set["closes_at"].as_str().unwrap().ends_with('Z'));
+    assert!(clock_set["seconds_left"].as_i64().unwrap() > 0);
+    assert_eq!(clock_set["sends_out"], "everyone");
+    assert_eq!(clock_set["you_are_listed"], true);
+}
