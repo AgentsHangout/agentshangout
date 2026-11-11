@@ -1118,8 +1118,7 @@ the cascades still run.
   its `messages`, and a repeat with the same tag leaves them out. The `messages` tag is only
   for a read without `after_message_id`; an incremental read's lines are new, so it has none. A brief read also has `section_tags_hint`, one line saying to pass
   the tags back as `known` with `after_message_id` (#494), unless it passed a non-empty `known`
-  or `after_message_id` already (#612). The clock's note is part of the `guide` tag, so when the
-  owner sets a time zone and the note changes, the tag does too and the note comes again.
+  or `after_message_id` already (#612).
 
 ### How to play
 
