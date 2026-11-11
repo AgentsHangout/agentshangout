@@ -2780,7 +2780,6 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     };
     let mut reply = json!({
         "trust_note": TRUST_NOTE,
-        "record_note": RECORD_NOTE,
         "clock": clock_json(clock.as_ref()),
         "hangout": { "id": hangout.id, "name": hangout.name },
         "you": caller.name,
@@ -3002,6 +3001,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         "whiteboard": section_tag(&whiteboard_val),
         "clock": clock_zone_tag,
     });
+    // #748: a brief read with no after_message_id tags the messages it sends, so a repeat read of
+    // the same messages leaves them out. An incremental read's messages are new, so it isn't tagged.
+    if brief && !after_arg_present {
+        section_tags["messages"] = json!(section_tag(&reply["messages"]));
+    }
     if let Some(scores) = &scores_val {
         section_tags["scores"] = json!(section_tag(scores));
     }
@@ -3019,6 +3023,12 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     };
 
+    // #748: skip the messages when the bot passed back a messages tag matching what this read has.
+    if !should_include("messages") {
+        if let Some(map) = reply.as_object_mut() {
+            map.remove("messages");
+        }
+    }
     if should_include("notes") {
         reply["notes"] = notes_val;
         if snapshot.notes.len() > shown_notes {
@@ -3060,10 +3070,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         }
     }
     // #612: the clock's note, for the `guide` tag, as it is before a read leaves it out.
-    let clock_note = reply["clock"]["note"].clone();
-    // I116: an incremental brief read leaves out the clock's fixed note, which the first read
-    // gave; the clock's times still come.
-    if brief && after_arg_present {
+    // #748: a brief read leaves out the clock's fixed note, first read or not; full reads keep it.
+    if brief {
         if let Some(clock) = reply["clock"].as_object_mut() {
             clock.remove("note");
         }
@@ -3132,6 +3140,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     if snapshot.hidden > 0 {
         reply["hidden"] = json!(snapshot.hidden);
     }
+    // #748: record_note and the clock's note come on full reads only, not on brief ones.
+    if !brief {
+        reply["record_note"] = json!(RECORD_NOTE);
+    }
     if snapshot.guest.is_some() {
         reply["before_you_arrived"] = json!(if snapshot.visitor_history {
             BEFORE_YOU_ARRIVED_WITH_HISTORY
@@ -3151,12 +3163,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     // trust_note is never in it: it comes on every read, as in inbox, since a bot that passes
     // known back may have lost it, and it is what keeps room text from reading as instructions.
     if brief {
-        const GUIDE: [&str; 5] =
-            ["purpose", "record_note", "room_mood_note", "keyless_note", "before_you_arrived"];
-        let mut guide: Value =
-            GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
-        // #612: the clock's note changes once the owner sets a time zone, so it's in the tag too.
-        guide["clock_note"] = clock_note;
+        // #748: record_note isn't in brief reads, so it's not in the tag either.
+        const GUIDE: [&str; 4] =
+            ["purpose", "room_mood_note", "keyless_note", "before_you_arrived"];
+        let guide: Value = GUIDE.iter().map(|key| (key.to_string(), reply[*key].clone())).collect();
         // #804: last_posted_at moves whenever any bot speaks, so it stays out of the bots tag. An
         // incremental read gets the new messages, which already show who spoke, and a tag must
         // mean the same thing on every brief read, so a first read's tag still matches a later one.
@@ -3247,7 +3257,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                     .filter(|section| {
                         let gone = |key: &str| reply.get(key).is_none();
                         match section.as_str() {
-                            "guide" => gone("purpose") && gone("record_note"),
+                            "guide" => gone("purpose"),
                             // The clock is only left out of its own parts: its times still come.
                             "clock" => reply["clock"].get("owner_time_zone").is_none(),
                             other => gone(other),
@@ -3716,7 +3726,7 @@ const NOTES_SHOWN: usize = 3;
 /// and its key in `section_tags` when it has one. Fields in none of them, `trust_note` first, come
 /// whatever is asked.
 const READ_SECTIONS: [(&str, &[&str], Option<&str>); 13] = [
-    ("messages", &["messages", "earlier_messages", "last_message_id"], None),
+    ("messages", &["messages", "earlier_messages", "last_message_id"], Some("messages")),
     ("notes", &["notes", "notes_total"], Some("notes")),
     ("whiteboard", &["whiteboard"], Some("whiteboard")),
     ("pins", &["pins"], Some("pins")),

@@ -11673,7 +11673,7 @@ async fn an_incremental_brief_read_of_a_busy_room_stays_small() {
     );
     assert!(small * 2 < big, "it saves most of a read: {small} vs {big}");
     // The first read explains; the repeat leaves out what it already said.
-    assert!(first["section_tags_hint"].is_string() && first["clock"]["note"].is_string());
+    assert!(first["section_tags_hint"].is_string() && first["clock"].get("note").is_none());
     assert!(again.get("section_tags_hint").is_none(), "{again}");
     assert!(again["clock"].get("note").is_none() && again["clock"]["now"].is_string(), "{again}");
 }
@@ -11836,24 +11836,54 @@ async fn read_room_looks_up_each_thread_once() {
     assert!(reply.get("messages").is_none());
 }
 
-// #612: the clock's note changes when the owner sets a time zone, so a bot that has `guide` gets
-// the new note, with a new tag, rather than keeping the old one out.
+// #748: a repeat brief read with no after_message_id leaves out the messages it already sent when
+// they're the same, and sends them again once one changes.
+#[tokio::test]
+async fn a_repeat_brief_read_skips_messages_that_have_not_changed() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &messages, json!({ "text": "Who has the keys?" })).await.ok();
+    let read = |args: Value| {
+        let token = fern.token.clone();
+        let server = &server;
+        async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
+    };
+    let first = read(json!({ "hangout_id": room, "brief": true })).await;
+    assert_eq!(first["messages"].as_array().unwrap().len(), 1, "{first}");
+    let tags = first["section_tags"].clone();
+    assert!(tags["messages"].is_string(), "{first}");
+    let repeat = read(json!({ "hangout_id": room, "brief": true, "known": tags.clone() })).await;
+    assert!(repeat.get("messages").is_none(), "unchanged, left out: {repeat}");
+    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("messages")), "{repeat}");
+    server.post(&ann.key, &messages, json!({ "text": "Keys are in the bowl" })).await.ok();
+    let changed = read(json!({ "hangout_id": room, "brief": true, "known": tags })).await;
+    assert_eq!(changed["messages"].as_array().unwrap().len(), 2, "{changed}");
+}
+
+// #612, #748: the clock's note changes when the owner sets a time zone. It comes on full reads
+// only, so a brief read never carries it, and the full read shows the new one.
 #[tokio::test]
 async fn a_new_clock_note_comes_back_despite_a_known_guide() {
     let server = Server::start().await;
     let (room, ann) = server.someone("Ann").await;
     let scout = server.bot(&ann, &room, "Scout").await;
-    let read = |known: Value| {
-        let args = json!({ "hangout_id": room, "brief": true, "known": known });
+    let read = |args: Value| {
         let token = scout.token.clone();
         let server = &server;
         async move { server.tool(&token, "read_room", args).await["structuredContent"].clone() }
     };
-    let first = read(json!({})).await;
-    let before = first["clock"]["note"].clone();
-    assert!(before.is_string(), "{first}");
+    let brief = |known: Value| json!({ "hangout_id": room, "brief": true, "known": known });
+    let first = read(brief(json!({}))).await;
+    assert!(first["clock"].get("note").is_none(), "a brief read leaves the note out: {first}");
+    assert!(first.get("record_note").is_none(), "{first}");
+    let full = read(json!({ "hangout_id": room, "full": true })).await;
+    let before = full["clock"]["note"].clone();
+    assert!(before.is_string(), "{full}");
+    assert!(full["record_note"].is_string(), "{full}");
     let known = first["section_tags"].clone();
-    assert!(read(known.clone()).await["clock"].get("note").is_none(), "unchanged, left out");
+    assert!(read(brief(known.clone())).await["clock"].get("note").is_none());
     server
         .put(
             &ann.key,
@@ -11862,10 +11892,11 @@ async fn a_new_clock_note_comes_back_despite_a_known_guide() {
         )
         .await
         .ok();
-    let after = read(known.clone()).await;
+    let after = read(json!({ "hangout_id": room, "full": true })).await;
     assert!(after["clock"]["note"].is_string(), "the new note comes: {after}");
     assert_ne!(after["clock"]["note"], before);
-    assert_ne!(after["section_tags"]["guide"], known["guide"]);
+    let again = read(brief(known)).await;
+    assert!(again["clock"].get("note").is_none(), "{again}");
 }
 
 // I122: a read that leaves out messages shows none, so it marks none read and gives no cursor to
