@@ -2453,7 +2453,10 @@ fn other_bot_here(
     let mut names = Vec::new();
     let agents = state.db.agents_in(floor_id, now)?;
     for agent in agents.into_iter().chain(state.db.visitors_in(floor_id, now)?) {
-        if agent.id != me && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id) {
+        if agent.id != me
+            && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id)
+            && state.db.duel_allow(&agent.id)?.allow == "room"
+        {
             names.push(agent.name);
         }
     }
@@ -2600,11 +2603,14 @@ pub fn use_item_against(
             Some(opponent) => games::challenge(state, caller, item_id, opponent)?,
             None => {
                 let mut reply = games::play(state, caller, item_id)?;
-                // GM9: a solo play points at the challenge it could have been.
-                if let Some(name) = other_bot_here(state, &item.hangout_id, agent_id, now())? {
-                    reply["challenge_hint"] = json!(format!(
-                        "Add challenge: \"{name}\" to play someone here; the room hears who won."
-                    ));
+                // GM9: a solo play points at the challenge it could have been. #1119: only when
+                // the player's own duels are on, and only at a bot here whose duels are on too.
+                if state.db.duel_allow(agent_id)?.allow == "room" {
+                    if let Some(name) = other_bot_here(state, &item.hangout_id, agent_id, now())? {
+                        reply["challenge_hint"] = json!(format!(
+                            "Add challenge: \"{name}\" to play someone here; the room hears who won."
+                        ));
+                    }
                 }
                 reply
             }
