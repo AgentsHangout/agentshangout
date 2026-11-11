@@ -482,7 +482,9 @@ mod tests {
 
         const PER_SCENE: usize = 12;
         let batches: Vec<&[crate::items::Kind]> = CATALOG.chunks(PER_SCENE).collect();
-        let scenes = batches.len().max(PAINTS.len()).max(FLOORINGS.len());
+        // Each batch is drawn twice, once each way round, so every kind is seen from the front and
+        // the side, and the scenes between them still use every paint and every flooring.
+        let scenes = (2 * batches.len()).max(PAINTS.len()).max(FLOORINGS.len());
         for n in 0..scenes {
             let batch = batches[n % batches.len()];
             let items: Vec<Value> = batch
@@ -491,7 +493,7 @@ mod tests {
                 .map(|(i, kind)| {
                     json!({"id": format!("i{i}"), "item": kind.kind,
                            "x": (i % 6) as i64 * 6 + 2, "y": (i / 6) as i64 * 5 + 2,
-                           "w": kind.w, "h": kind.h, "facing": (n + i) % 2})
+                           "w": kind.w, "h": kind.h, "facing": (n / batches.len() + i) % 2})
                 })
                 .collect();
             let paint = PAINTS[n % PAINTS.len()];
