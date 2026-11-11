@@ -13394,3 +13394,102 @@ async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items(
     assert_eq!(ballot_both["sends_out"], "everyone");
     assert_eq!(ballot_both["you_are_listed"], true);
 }
+
+// I163
+#[tokio::test]
+async fn i163_room_tools_default_to_bot_place_when_hangout_id_omitted() {
+    let server = Server::start().await;
+    let (public_room, ann) = server.someone("Ann").await;
+    server.open(&ann, &public_room).await;
+
+    // 1. Create a citizen with a house (so the bot has its house's Living Room in room_agents).
+    let made = server
+        .post("", "/api/cities", json!({ "name": "Oak", "your_name": "Cy", "create_code": CODE }))
+        .await
+        .ok();
+    let cy = who(&made);
+    let city = text(&made["city"]["id"]);
+    let house = server
+        .post(&cy.key, &format!("/api/cities/{city}/houses"), json!({ "name": "Cy's" }))
+        .await
+        .ok();
+    let living_room = text(&house["living_room_id"]);
+    let rover = server.bot(&cy, &living_room, "Rover").await;
+
+    // Send Rover onto the public floor.
+    server
+        .post(
+            &cy.key,
+            &format!("/api/floors/{public_room}/walk-in"),
+            json!({ "agent_id": rover.id }),
+        )
+        .await
+        .ok();
+
+    // Rover is now out on the public floor: bot_place is public_room, but Rover also belongs to living_room.
+    // read_room with NO hangout_id defaults to public_room (where Rover is now).
+    let read = server.tool(&rover.token, "read_room", json!({})).await;
+    assert!(read["isError"].is_null(), "{read}");
+    assert_eq!(read["structuredContent"]["hangout"]["id"], public_room);
+
+    // say with NO hangout_id posts to public_room, and names hangout_id in reply.
+    let said = server.tool(&rover.token, "say", json!({ "text": "hello from public floor" })).await;
+    assert!(said["isError"].is_null(), "{said}");
+    assert_eq!(said["structuredContent"]["posted"], true);
+    assert_eq!(said["structuredContent"]["hangout_id"], public_room);
+
+    // share_note with NO hangout_id posts to public_room, and names hangout_id in reply.
+    let shared =
+        server.tool(&rover.token, "share_note", json!({ "text": "fact on public floor" })).await;
+    assert!(shared["isError"].is_null(), "{shared}");
+    assert_eq!(shared["structuredContent"]["posted"], true);
+    assert_eq!(shared["structuredContent"]["hangout_id"], public_room);
+
+    // Verify the message landed in public_room, not living_room.
+    let public_view = server.read_room(&rover.token, &public_room).await;
+    assert!(public_view["messages"].to_string().contains("hello from public floor"));
+    let living_view = server.read_room(&rover.token, &living_room).await;
+    assert!(!living_view["messages"].to_string().contains("hello from public floor"));
+
+    // 2. Bot with several rooms and no current place still gets 400.
+    // Create an unhoused bot under Cy in Bo's room, then add it to Ann's room too.
+    let (bo_room, _bo) = server.someone("Bo").await;
+    let guest_bot = server.bot(&cy, &bo_room, "GuestBot").await;
+    let (ann_room, _) = server.someone("AnnTwo").await;
+    server.state.db.add_agent_to_room(&ann_room, &guest_bot.id).unwrap();
+    // Clear bot_places so guest_bot has no current place.
+    server
+        .state
+        .db
+        .conn()
+        .execute("DELETE FROM bot_places WHERE agent_id = ?", [&guest_bot.id])
+        .unwrap();
+
+    let read_err = server.tool(&guest_bot.token, "read_room", json!({})).await;
+    assert_eq!(read_err["isError"], true, "{read_err}");
+    assert!(
+        text(&read_err["content"][0]["text"])
+            .contains("you're in several hangouts, so hangout_id is required"),
+        "{read_err}"
+    );
+
+    let say_err = server.tool(&guest_bot.token, "say", json!({ "text": "lost" })).await;
+    assert_eq!(say_err["isError"], true, "{say_err}");
+    assert!(
+        text(&say_err["content"][0]["text"])
+            .contains("you're in several hangouts, so hangout_id is required"),
+        "{say_err}"
+    );
+
+    // 3. Stale bot_place: when a bot's bot_place is a room it no longer belongs to
+    // (e.g. removed from the room), omitting hangout_id never reaches that room
+    // and falls back to its remaining hangouts.
+    let (bo_room, _bo) = server.someone("Bo").await;
+    let (cy_room, _) = server.someone("CyTwo").await;
+    let stale_bot = server.bot(&cy, &bo_room, "StaleBot").await;
+    server.state.db.add_agent_to_room(&cy_room, &stale_bot.id).unwrap();
+    server.state.db.remove_agent_from_room(&bo_room, &stale_bot.id).unwrap();
+    let fell_back = server.tool(&stale_bot.token, "read_room", json!({})).await;
+    assert!(fell_back["isError"].is_null(), "{fell_back}");
+    assert_eq!(fell_back["structuredContent"]["hangout"]["id"], cy_room);
+}

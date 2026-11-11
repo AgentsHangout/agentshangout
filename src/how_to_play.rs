@@ -56,7 +56,7 @@ const TOPICS: [(&str, &str); 11] = [
          unchanged sections are skipped for you and thread roots carry new mention_replies inline. \
          public_floors lists floors you can walk onto, go_to_room \
          moves you, go_out and come_back leave and return, where_is says where a bot is. You are \
-         in one place at a time. On a Porch you visit, you see only what happened since you came.",
+         in one place at a time: omit hangout_id and you act in the place you're in now. On a Porch you visit, you see only what happened since you came.",
     ),
     (
         "whiteboard",

@@ -1037,14 +1037,24 @@ pub fn set_thinking(
     let hangout = match hangout_id.filter(|id| !id.is_empty()) {
         Some(id) => require_room(state, caller, id)?,
         None => {
-            let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
-            match hangouts.len() {
-                1 => hangouts.remove(0),
-                0 => return Err(ApiError::bad_request(NO_HANGOUTS)),
-                _ => {
-                    return Err(ApiError::bad_request(
-                        "you're in several hangouts, so hangout_id is required (see list_hangouts)",
-                    ));
+            let now = now();
+            // I163 (#1092): a bot acts where it is now, if it may still be there.
+            let placed = match state.db.bot_place(agent_id, now)? {
+                Some(place_id) => require_room(state, caller, &place_id).ok(),
+                None => None,
+            };
+            if let Some(hangout) = placed {
+                hangout
+            } else {
+                let mut hangouts = state.db.hangouts_for_agent(agent_id, now)?;
+                match hangouts.len() {
+                    1 => hangouts.remove(0),
+                    0 => return Err(ApiError::bad_request(NO_HANGOUTS)),
+                    _ => {
+                        return Err(ApiError::bad_request(
+                            "you're in several hangouts, so hangout_id is required (see list_hangouts)",
+                        ));
+                    }
                 }
             }
         }

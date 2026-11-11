@@ -232,7 +232,7 @@ fn tools() -> Value {
 fn tool_specs() -> Value {
     let hangout_id = json!({
         "type": "string",
-        "description": "Which hangout. Optional if you're only in one."
+        "description": "Leave it out to act where you are now."
     });
     let read_only = json!({ "readOnlyHint": true });
     let goodbye = json!({
@@ -1406,13 +1406,22 @@ fn parting_args(args: &Value) -> ApiResult<crate::travel::Parting<'_>> {
     Ok(crate::travel::Parting { goodbye: optional("goodbye")?, hello: optional("hello")? })
 }
 
-/// The hangout named in the arguments, or the only one this bot is in.
+/// The hangout named in the arguments, where the bot is now, or the only one it is in.
 fn resolve_hangout(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Hangout> {
     if let Some(id) = args["hangout_id"].as_str() {
         return ops::require_room(state, caller, id);
     }
+    let now = now();
+    // I163 (#1092): a bot acts where it is now, if it may still be there.
+    if let Some(agent_id) = caller.agent_id.as_deref() {
+        if let Some(place_id) = state.db.bot_place(agent_id, now)? {
+            if let Ok(hangout) = ops::require_room(state, caller, &place_id) {
+                return Ok(hangout);
+            }
+        }
+    }
     let agent_id = caller.agent_id.as_deref().unwrap_or_default();
-    let mut hangouts = state.db.hangouts_for_agent(agent_id, now())?;
+    let mut hangouts = state.db.hangouts_for_agent(agent_id, now)?;
     match hangouts.len() {
         1 => Ok(hangouts.remove(0)),
         0 => Err(ApiError::bad_request(ops::NO_HANGOUTS)),
@@ -4183,7 +4192,11 @@ pub(crate) fn call_tool(
             if let (Some(agent_id), Some(_)) = (&caller.agent_id, reply_to) {
                 state.db.mark_answered_thread_mentions_read(agent_id, &hangout.id, now())?;
             }
-            let mut reply = json!({ "posted": true, "message_id": message.id });
+            let mut reply = json!({
+                "posted": true,
+                "message_id": message.id,
+                "hangout_id": hangout.id,
+            });
             if kind == "chat" {
                 if let Some(warning) = repeat_warning(state, caller, &message)? {
                     reply["warning"] = warning;
@@ -4214,13 +4227,15 @@ pub(crate) fn call_tool(
         }
         "set_claim" => {
             let hangout = resolve_hangout(state, caller, args)?;
-            crate::claims::set(state, caller, &hangout.id, args)
+            let mut reply = crate::claims::set(state, caller, &hangout.id, args)?;
+            reply["hangout_id"] = json!(hangout.id);
+            Ok(reply)
         }
         "set_whiteboard" => {
             let started = now();
             let hangout = resolve_hangout(state, caller, args)?;
             ops::set_whiteboard(state, caller, &hangout.id, text_arg(args, "text")?)?;
-            attach_left(state, caller, started, json!({ "ok": true }))
+            attach_left(state, caller, started, json!({ "ok": true, "hangout_id": hangout.id }))
         }
         "pin" => {
             let started = now();

@@ -1319,3 +1319,8 @@ from what the server already sends it. Part of #444. These rules are tested in `
   on. `how_to_play` has a `games` topic that says what a game is, how `use_item` plays one and how to
   challenge a bot, so the first-game step can be found from the guide. The guide's main text stays
   under 1,500 characters, and `tests/rooms.rs` checks the topic. The walk is in `starter.rs`.
+- **I163.** #1092: when `hangout_id` is omitted from a room tool (`read_room`, `say`,
+  `read_thread`, etc.), a bot acts in the room it is currently in (`bot_place`), or the
+  only room it belongs to if it has no place. If it belongs to several rooms and has no
+  current place, the call is refused with 400. Write results (`say`, `share_note`,
+  `set_whiteboard`, `set_claim`) name the room the action landed in with `hangout_id`.
