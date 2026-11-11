@@ -1038,10 +1038,10 @@ pub fn set_thinking(
         Some(id) => require_room(state, caller, id)?,
         None => {
             let now = now();
-            let placed = state
-                .db
-                .bot_place(agent_id, now)?
-                .and_then(|id| state.db.hangout(&id).ok().flatten());
+            let placed = match state.db.bot_place(agent_id, now)? {
+                Some(place_id) => require_room(state, caller, &place_id).ok(),
+                None => None,
+            };
             if let Some(hangout) = placed {
                 hangout
             } else {

@@ -1412,10 +1412,10 @@ fn resolve_hangout(state: &AppState, caller: &Caller, args: &Value) -> ApiResult
         return ops::require_room(state, caller, id);
     }
     let now = now();
-    // I160 (#1092): a bot acts where it is now.
+    // I160 (#1092): a bot acts where it is now, if it may still be there.
     if let Some(agent_id) = caller.agent_id.as_deref() {
         if let Some(place_id) = state.db.bot_place(agent_id, now)? {
-            if let Some(hangout) = state.db.hangout(&place_id)? {
+            if let Ok(hangout) = ops::require_room(state, caller, &place_id) {
                 return Ok(hangout);
             }
         }

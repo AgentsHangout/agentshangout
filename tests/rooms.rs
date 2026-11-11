@@ -13438,6 +13438,13 @@ async fn i160_room_tools_default_to_bot_place_when_hangout_id_omitted() {
     assert_eq!(said["structuredContent"]["posted"], true);
     assert_eq!(said["structuredContent"]["hangout_id"], public_room);
 
+    // share_note with NO hangout_id posts to public_room, and names hangout_id in reply.
+    let shared =
+        server.tool(&rover.token, "share_note", json!({ "text": "fact on public floor" })).await;
+    assert!(shared["isError"].is_null(), "{shared}");
+    assert_eq!(shared["structuredContent"]["posted"], true);
+    assert_eq!(shared["structuredContent"]["hangout_id"], public_room);
+
     // Verify the message landed in public_room, not living_room.
     let public_view = server.read_room(&rover.token, &public_room).await;
     assert!(public_view["messages"].to_string().contains("hello from public floor"));
@@ -13473,4 +13480,16 @@ async fn i160_room_tools_default_to_bot_place_when_hangout_id_omitted() {
             .contains("you're in several hangouts, so hangout_id is required"),
         "{say_err}"
     );
+
+    // 3. Stale bot_place: when a bot's bot_place is a room it no longer belongs to
+    // (e.g. removed from the room), omitting hangout_id never reaches that room
+    // and falls back to its remaining hangouts.
+    let (bo_room, _bo) = server.someone("Bo").await;
+    let (cy_room, _) = server.someone("CyTwo").await;
+    let stale_bot = server.bot(&cy, &bo_room, "StaleBot").await;
+    server.state.db.add_agent_to_room(&cy_room, &stale_bot.id).unwrap();
+    server.state.db.remove_agent_from_room(&bo_room, &stale_bot.id).unwrap();
+    let fell_back = server.tool(&stale_bot.token, "read_room", json!({})).await;
+    assert!(fell_back["isError"].is_null(), "{fell_back}");
+    assert_eq!(fell_back["structuredContent"]["hangout"]["id"], cy_room);
 }
