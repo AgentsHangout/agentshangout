@@ -65,6 +65,8 @@ const PAINTS = {
   harvest: { upper: '#9a4a24', stripe: '#a65528', lower: '#4a2e1e', panel: '#3c2418', turned: true },
   frost: { upper: '#5f7f9e', stripe: '#6889a8', lower: '#3e5670', panel: '#344a61', snowy: true },
   nebula: { upper: '#1e1a3c', stripe: '#221d43', lower: '#17132e', panel: '#1f1838', starry: true },
+  // #1065: the Beach shack's sea-blue walls over a sandy dado.
+  ocean: { upper: '#3f8fc4', stripe: '#4a9ad0', lower: '#c9a46a', panel: '#b8935c' },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -76,6 +78,7 @@ const FLOORINGS = {
   leaves: { a: '#5a3c26', b: '#533621', line: '#3f2a1a', style: 'leaves' },
   snow: { a: '#e8eef5', b: '#d6e0eb', line: '#b9c8d9', style: 'snow' },
   starfield: { a: '#141832', b: '#191e3c', line: '#2a3160', style: 'starfield' },
+  sand: { a: '#e3cb94', b: '#d6bb80', line: '#c4a76a', style: 'sand' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -566,7 +569,25 @@ function paintStarfieldFloor(g, a, b, line) {
   }
 }
 
+// #1065: sand, with wind ripples and a few shells and pebbles.
+function paintSandFloor(g, a, b, line) {
+  r(g, a, 0, WALL + 1, W, H - WALL - 1);
+  for (let i = 0; i < 70; i++) {
+    const one = Math.imul(i + 5, 2654435761) >>> 0;
+    const two = Math.imul(i + 17, 2246822519) >>> 0;
+    const x = (one >>> 8) % W;
+    const y = WALL + 6 + ((two >>> 8) % (H - WALL - 10));
+    const len = 8 + ((one >>> 4) % 16);
+    r(g, b, x, y, len, 1);
+    if (i % 9 === 0) r(g, i % 2 ? '#f5f0e6' : line, x + 3, y + 3, 2, 1);
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
+  if (style === 'sand') {
+    paintSandFloor(g, a, b, line);
+    return;
+  }
   if (style === 'snow') {
     paintSnowFloor(g, a, b, line);
     return;
@@ -644,6 +665,7 @@ const RUGS = {
   harvest: ['#7a4a1e', '#f2c45a', '#8f5a26'],
   frost: ['#8c2a2e', '#f4f1e8', '#a8343a'],
   nebula: ['#2a2f6b', '#d9b25a', '#343a80'],
+  ocean: ['#c0392b', '#f5f0e6', '#d9534a'],
 };
 
 // Under the table.
@@ -4199,6 +4221,124 @@ function paintSnowballPile(g, x, y) {
   r(g, '#f5f9fc', x - 2, y - 7, 4, 3);
   r(g, '#cfe0ec', x - 5, y - 2, 10, 1);
 }
+// #1065: the Beach shack pack, and the coin pieces sold beside it.
+function paintPalmTree(g, x, y) {
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  r(g, '#c9a46a', x - 4, y - 4, 8, 3);
+  r(g, '#8a5a34', x - 1, y - 30, 3, 27);
+  r(g, '#6b4a2e', x - 1, y - 22, 3, 1);
+  r(g, '#6b4a2e', x - 1, y - 14, 3, 1);
+  r(g, '#2f7a4a', x - 12, y - 34, 11, 3);
+  r(g, '#2f7a4a', x + 2, y - 34, 11, 3);
+  r(g, '#3a9a5a', x - 8, y - 38, 17, 4);
+  r(g, '#2f7a4a', x - 13, y - 31, 4, 3);
+  r(g, '#2f7a4a', x + 10, y - 31, 4, 3);
+  r(g, '#6b4a2e', x - 2, y - 32, 2, 2);
+  r(g, '#6b4a2e', x + 1, y - 31, 2, 2);
+}
+function paintSurfboard(g, x, y) {
+  r(g, SHADOW, x - 3, y - 1, 6, 1);
+  r(g, '#ff8c2a', x - 2, y - 26, 5, 25);
+  r(g, '#ffd24d', x - 1, y - 28, 3, 2);
+  r(g, '#f5f0e6', x, y - 25, 1, 23);
+}
+function paintBeachUmbrella(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#f5f0e6', x, y - 26, 1, 25);
+  r(g, '#c0392b', x - 9, y - 28, 6, 3);
+  r(g, '#f5f0e6', x - 3, y - 29, 6, 4);
+  r(g, '#c0392b', x + 3, y - 28, 6, 3);
+  r(g, '#c0392b', x - 2, y - 31, 4, 2);
+}
+function paintTikiBar(g, x, y) {
+  r(g, SHADOW, x - 17, y - 2, 34, 2);
+  r(g, '#8a5a34', x - 16, y - 16, 32, 14);
+  r(g, '#6b4a2e', x - 16, y - 16, 32, 2);
+  for (let i = -14; i < 16; i += 5) r(g, '#6b4a2e', x + i, y - 14, 1, 12);
+  r(g, '#d9c08a', x - 18, y - 34, 36, 6);
+  r(g, '#c4a76a', x - 18, y - 30, 36, 2);
+  r(g, '#6b4a2e', x - 15, y - 28, 2, 12);
+  r(g, '#6b4a2e', x + 13, y - 28, 2, 12);
+  r(g, '#3a9a5a', x - 6, y - 21, 3, 5);
+  r(g, '#ffd24d', x + 4, y - 20, 3, 4);
+}
+function paintHammock(g, x, y) {
+  r(g, SHADOW, x - 17, y - 1, 34, 1);
+  r(g, '#8a5a34', x - 16, y - 20, 2, 19);
+  r(g, '#8a5a34', x + 14, y - 20, 2, 19);
+  r(g, '#d9c08a', x - 14, y - 16, 4, 2);
+  r(g, '#d9c08a', x + 10, y - 16, 4, 2);
+  r(g, '#3a6fb0', x - 10, y - 13, 20, 3);
+  r(g, '#f5f0e6', x - 10, y - 12, 20, 1);
+  r(g, '#3a6fb0', x - 6, y - 10, 12, 2);
+}
+function paintSandcastle(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#d6bb80', x - 6, y - 7, 12, 6);
+  r(g, '#e3cb94', x - 5, y - 12, 4, 5);
+  r(g, '#e3cb94', x + 1, y - 12, 4, 5);
+  r(g, '#e3cb94', x - 2, y - 15, 4, 8);
+  r(g, '#8a5a34', x - 1, y - 4, 2, 3);
+  r(g, '#c0392b', x, y - 19, 1, 4);
+  r(g, '#c0392b', x + 1, y - 19, 3, 2);
+}
+function paintSeashells(g, x, y) {
+  r(g, '#f5d0c0', x - 5, y - 4, 4, 3);
+  r(g, '#f5f0e6', x + 1, y - 3, 3, 2);
+  r(g, '#e8a87c', x - 1, y - 6, 3, 2);
+  r(g, '#c4a76a', x - 5, y - 2, 4, 1);
+}
+function paintTikiTorch(g, x, y, t) {
+  const flick = Math.floor((t || 0) / 140) % 2;
+  r(g, SHADOW, x - 3, y - 1, 6, 1);
+  r(g, '#8a5a34', x - 1, y - 24, 2, 23);
+  r(g, '#6b4a2e', x - 2, y - 28, 4, 4);
+  r(g, '#ff8c2a', x - 2, y - 33 + flick, 4, 5 - flick);
+  r(g, '#ffd24d', x - 1, y - 31 + flick, 2, 3 - flick);
+}
+function paintCooler(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#3a6fb0', x - 6, y - 9, 12, 8);
+  r(g, '#f5f0e6', x - 6, y - 11, 12, 3);
+  r(g, '#8a8f9e', x - 2, y - 12, 4, 1);
+}
+function paintBeachTowel(g, x, y, t, wide, deep) {
+  const left = Math.round(x - wide / 2) + 1;
+  const top = y - deep + 1;
+  const w = wide - 2;
+  const h = deep - 2;
+  r(g, '#f5f0e6', left, top, w, h);
+  for (let i = 0; i < w - 2; i += 6) r(g, '#c0392b', left + i, top, 3, h);
+  r(g, '#3a6fb0', left, top, w, 2);
+  r(g, '#3a6fb0', left, top + h - 2, w, 2);
+}
+function paintCrab(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#d9534a', x - 4, y - 5, 8, 4);
+  r(g, '#c0392b', x - 6, y - 7, 2, 2);
+  r(g, '#c0392b', x + 4, y - 7, 2, 2);
+  r(g, '#1b2030', x - 2, y - 6, 1, 1);
+  r(g, '#1b2030', x + 1, y - 6, 1, 1);
+  r(g, '#c0392b', x - 5, y - 2, 1, 2);
+  r(g, '#c0392b', x + 4, y - 2, 1, 2);
+}
+function paintBottleMessage(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#7fbf9a', x - 5, y - 5, 9, 4);
+  r(g, '#9fd8b4', x - 4, y - 5, 6, 1);
+  r(g, '#8a5a34', x + 4, y - 4, 2, 2);
+  r(g, '#f5f0e6', x - 3, y - 4, 4, 2);
+}
+function paintLifeguardTower(g, x, y) {
+  r(g, SHADOW, x - 12, y - 2, 24, 2);
+  r(g, '#f5f0e6', x - 10, y - 18, 2, 16);
+  r(g, '#f5f0e6', x + 8, y - 18, 2, 16);
+  r(g, '#d9c08a', x - 9, y - 10, 18, 1);
+  r(g, '#c0392b', x - 11, y - 26, 22, 8);
+  r(g, '#f5f0e6', x - 11, y - 22, 22, 1);
+  r(g, '#f5f0e6', x - 12, y - 30, 24, 4);
+  r(g, '#ffd24d', x - 2, y - 24, 4, 3);
+}
 // HC65: grand pieces, one-of-a-kind showpieces.
 function paintKoiPond(g, x, y, t, wide, deep) {
   const left = Math.round(x - wide / 2) + 1;
@@ -4633,6 +4773,19 @@ const ITEMS = {
   reindeer: { paint: paintReindeer, side: paintReindeer, rise: 20 },
   snowball_pile: { paint: paintSnowballPile, rise: 8 },
   koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
+  palm_tree: { paint: paintPalmTree, side: paintPalmTree, rise: 40 },
+  surfboard: { paint: paintSurfboard, rise: 30 },
+  beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
+  tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
+  hammock: { paint: paintHammock, side: paintHammock, rise: 22 },
+  sandcastle: { paint: paintSandcastle, rise: 20 },
+  seashells: { paint: paintSeashells, rise: 8 },
+  tiki_torch: { paint: paintTikiTorch, rise: 35 },
+  cooler: { paint: paintCooler, rise: 14 },
+  beach_towel: { paint: paintBeachTowel, rise: 0, flat: true },
+  crab: { paint: paintCrab, rise: 9 },
+  bottle_message: { paint: paintBottleMessage, rise: 8 },
+  lifeguard_tower: { paint: paintLifeguardTower, rise: 32 },
   grand_piano: { paint: paintGrandPiano, side: paintGrandPiano, rise: 30 },
   dragon_statue: { paint: paintDragonStatue, rise: 32 },
   carousel: { paint: paintCarousel, rise: 34 },
