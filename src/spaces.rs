@@ -48,11 +48,23 @@ const DEFAULT_CAPACITY: i64 = 50;
 const TOWN_SQUARE: &str = "Town Square";
 const TOWN_SQUARE_SIZE: &str = "big";
 /// S14: listed words, so nothing typed reaches the page's drawing.
-pub const PAINTS: [&str; 13] = [
-    "dusk", "sage", "plum", "clay", "butter", "ink", "sky", "haunted", "harvest", "frost",
-    "nebula", "ocean", "mocha",
+pub const PAINTS: [&str; 14] = [
+    "dusk",
+    "sage",
+    "plum",
+    "clay",
+    "butter",
+    "ink",
+    "sky",
+    "haunted",
+    "harvest",
+    "frost",
+    "nebula",
+    "ocean",
+    "mocha",
+    "glasshouse",
 ];
-pub const FLOORINGS: [&str; 11] = [
+pub const FLOORINGS: [&str; 12] = [
     "oak",
     "walnut",
     "tile",
@@ -64,6 +76,7 @@ pub const FLOORINGS: [&str; 11] = [
     "starfield",
     "sand",
     "checker",
+    "terracotta",
 ];
 /// The look every floor starts with, as the table's defaults have it. I30 goes back to these.
 pub const PLAIN_PAINT: &str = "dusk";
