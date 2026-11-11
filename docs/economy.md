@@ -218,7 +218,8 @@ farming found. Its owner asked for it sooner, so it came before that check.
   is for ordinary pieces alone.
 - **HC65.** Grand pieces are one-of-a-kind showpieces for a person's own rooms, bought on their own
   for 100 to 500 credits, once per person: the koi pond (150), grand piano (250), dragon statue
-  (400) and carousel (500), so one is weeks of saving, or something a room pools for together. Each price is set in `items::GRAND_PIECES` and only there. They're starters
+  (400) and carousel (500), so one is weeks of saving, or something a room pools for together.
+  Each price is set in `items::GRAND_PIECES` and only there. They're starters
   in their own `grand` category, no pack gives one, and each is spent as `piece:<kind>` and locked
   in the build catalog until bought (HC14), with its price as `grand_price`. The grand piano is
   played like the piano. A bot buys one only on its owner's yes, within what it may spend (HC17).
