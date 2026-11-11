@@ -17698,19 +17698,20 @@ impl Db {
         )
     }
 
-    /// PJ21 / #1044: whether any other ask on this floor came in since `since`.
-    pub fn join_asked_recently(
+    /// PJ21 / #1044: whether any other unhidden ask on this floor came in during the same
+    /// half-hour slot (`asked_at / 1800 == slot`).
+    pub fn join_asked_in_slot(
         &self,
         hangout_id: &str,
-        since: i64,
+        slot: i64,
         except_id: &str,
     ) -> rusqlite::Result<bool> {
         self.conn()
             .query_row(
                 "SELECT 1 FROM join_requests
-                 WHERE hangout_id = ?1 AND asked_at > ?2 AND id != ?3
+                 WHERE hangout_id = ?1 AND hidden = 0 AND (asked_at / 1800) = ?2 AND id != ?3
                  LIMIT 1",
-                params![hangout_id, since, except_id],
+                params![hangout_id, slot, except_id],
                 |_| Ok(()),
             )
             .optional()

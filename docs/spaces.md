@@ -709,8 +709,9 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   or for a bot its owner), `bot` (the bot's name, or null), `note` and `asked_at`, and nothing else
   about the asker. Only a person answers. Anyone else who is in the room gets 403, and anyone
   outside it the 404. Writing an ask sends a phone ping and webhook (`floor.join_asked`) to those
-  members, capped at at most one ping per floor every 30 minutes; later asks within the window
-  wait silently in Needs you. A hidden ask (PJ26) reaches nobody, and self-joins send no ping.
+  members, capped at at most one ping per floor per half-hour slot; later asks within the slot
+  wait silently in Needs you. A hidden ask (PJ26) reaches nobody and starts no cooldown, and
+  self-joins send no ping.
 - **PJ22.** `POST /api/floors/{id}/join_requests/{request_id}` with `{approve: true}` is an invite
   by that member. The asker becomes an invited member through the same code an invite runs: a
   person goes on `members`, a bot on `room_agents`, and a bot's owner becomes a brought-in member

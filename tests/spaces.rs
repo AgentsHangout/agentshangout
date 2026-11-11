@@ -5933,8 +5933,9 @@ async fn pj21_join_ask_phone_ping_delivery_exclusions_and_floor_cooldown() {
     settle_push(&server.state).await;
     assert_eq!(capture.0.lock().unwrap().len(), 4, "cooldown expired: Ann and Bo pinged again");
 
-    // 5. Block exclusion: Ann blocks Guy. Guy walks in and asks.
+    // 5. Block exclusion & hidden asks: Ann blocks Guy. Guy walks in and asks.
     // The ask is hidden from the space, so zero pings are sent.
+    // A hidden ask must NOT start the slot cooldown: a subsequent real ask in the same slot still pings.
     server.state.db.age_join_requests(&room, 1801).unwrap();
     let (_, guy) = server.someone("Guy").await;
     server.post(&ann.key, "/api/blocks", json!({ "person_id": guy.id })).await.ok();
@@ -5943,6 +5944,18 @@ async fn pj21_join_ask_phone_ping_delivery_exclusions_and_floor_cooldown() {
     assert_eq!(guy_ask["status"], "waiting");
     settle_push(&server.state).await;
     assert_eq!(capture.0.lock().unwrap().len(), 4, "hidden ask sends zero pings");
+
+    // Ian (unblocked) asks in the same slot: not silenced by Guy's hidden ask.
+    let (_, ian) = server.someone("Ian").await;
+    server.walk_in(&ian, &room).await.ok();
+    let ian_ask = server.ask_to_join(&ian, &room, json!({})).await.ok();
+    assert_eq!(ian_ask["status"], "waiting");
+    settle_push(&server.state).await;
+    assert_eq!(
+        capture.0.lock().unwrap().len(),
+        6,
+        "real ask in same slot as hidden ask still pings Ann and Bo"
+    );
 
     // 6. Block exclusion: Bo blocks Hal. Hal walks in and asks.
     // Hal is not blocked by space runner Ann, so ask is not hidden. Ann gets pinged, Bo is excluded.
@@ -5955,7 +5968,7 @@ async fn pj21_join_ask_phone_ping_delivery_exclusions_and_floor_cooldown() {
     settle_push(&server.state).await;
     {
         let messages = capture.0.lock().unwrap();
-        assert_eq!(messages.len(), 5, "one new ping (Ann only)");
+        assert_eq!(messages.len(), 7, "one new ping (Ann only)");
         assert_eq!(messages.last().unwrap().owner_id, ann.id, "only unblocked runner Ann pinged");
     }
 
@@ -5963,5 +5976,5 @@ async fn pj21_join_ask_phone_ping_delivery_exclusions_and_floor_cooldown() {
     let member_ask = server.ask_to_join(&ann, &room, json!({})).await.ok();
     assert_eq!(member_ask["status"], "member");
     settle_push(&server.state).await;
-    assert_eq!(capture.0.lock().unwrap().len(), 5, "member self-join sends no ping");
+    assert_eq!(capture.0.lock().unwrap().len(), 7, "member self-join sends no ping");
 }

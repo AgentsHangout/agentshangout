@@ -762,9 +762,9 @@ pub fn ask_to_join(
         };
     }
     // PJ21, PJ26, PN3: notify people who can answer (runners and invited members).
-    // A hidden ask (block with anyone who runs the space) reaches nobody.
-    // At most one ping per floor every 30 minutes; later asks wait silently in Needs you.
-    if !hidden && !state.db.join_asked_recently(floor_id, now - 1800, &id)? {
+    // A hidden ask (block with anyone who runs the space) reaches nobody and starts no cooldown.
+    // At most one ping per floor per half-hour slot; later asks wait silently in Needs you.
+    if !hidden && !state.db.join_asked_in_slot(floor_id, now / 1800, &id)? {
         let mut recipients = runners(state, &space)?;
         for person in state.db.people_in(floor_id)? {
             if !recipients.contains(&person.id)
