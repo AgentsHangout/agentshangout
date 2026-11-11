@@ -21471,11 +21471,17 @@ mod tests {
             "venus_flytrap",
             "bonsai",
             "lemon_tree",
+            "disco_ball",
+            "glowstick_jar",
+            "retro_cabinet",
         ]
         .iter()
         .map(|k| piece_price(k).unwrap())
         .collect();
-        assert_eq!(prices, [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6, 3, 3, 6, 4, 4, 6, 3, 3, 6]);
+        assert_eq!(
+            prices,
+            [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6, 3, 3, 6, 4, 4, 6, 3, 3, 6, 3, 2, 4]
+        );
 
         let db = Db::open(":memory:").unwrap();
         let now = ann_with_gatherings(&db, 1);

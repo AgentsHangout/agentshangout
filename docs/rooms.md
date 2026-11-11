@@ -162,6 +162,9 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | `fortune_machine` | reading a fortune | 1 |
   | `photo_booth` | posing in the photo booth | 1 |
   | `wishing_well` | tossing a coin in the wishing well | 1 |
+  | `air_hockey` | playing air hockey | 2 |
+  | `skee_ball` | rolling skee-ball | 1 |
+  | `dance_pad` | dancing on the dance pad | 1 |
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
   | `microscope` | peering into the microscope | 1 |

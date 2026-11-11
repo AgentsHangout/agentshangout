@@ -3118,7 +3118,16 @@ fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
     assert_eq!(
         names,
-        ["fall", "halloween", "winter", "beach", "cafe", "conservatory", "stargazer"]
+        [
+            "fall",
+            "halloween",
+            "winter",
+            "beach",
+            "cafe",
+            "conservatory",
+            "neon_nights",
+            "stargazer"
+        ]
     );
     assert!(items::pack_of("<script>").is_none());
 
@@ -3329,6 +3338,59 @@ async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
     assert_eq!(pack_needed(&catalog, "snow_globe"), Value::Null);
     assert_eq!(pack_needed(&catalog, "cocoa_cart"), json!("winter"));
     server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
+}
+
+// The Neon nights pack costs 25. Its synthwave walls and glow_carpet floor are refused until it's bought
+// and apply after, and the coin pieces beside it stay locked for someone who has the pack.
+#[tokio::test]
+async fn the_neon_nights_pack_is_bought_for_its_walls_and_floor_but_not_its_coin_pieces() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 30,
+            100,
+            now(),
+        )
+        .unwrap();
+    let path = format!("/api/floors/{room}");
+    server
+        .put(&ann.key, &path, json!({ "paint": "synthwave" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &path, json!({ "flooring": "glow_carpet" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let credits = server.get(&ann.key, "/api/credits").await.ok();
+    let pack =
+        credits["packs"].as_array().unwrap().iter().find(|p| p["pack"] == "neon_nights").unwrap();
+    assert_eq!((pack["cost"].clone(), pack["bought"].clone()), (json!(25), json!(false)));
+
+    let bought =
+        server.post(&ann.key, "/api/credits/spend", json!({ "pack": "neon_nights" })).await.ok();
+    assert_eq!(bought["balance"], 5, "{bought}");
+    assert_eq!(
+        server.put(&ann.key, &path, json!({ "paint": "synthwave" })).await.ok()["paint"],
+        "synthwave"
+    );
+    let laid = server.put(&ann.key, &path, json!({ "flooring": "glow_carpet" })).await.ok();
+    assert_eq!(laid["flooring"], "glow_carpet");
+    server.place(&ann.key, &room, "neon_sign", (30, 2)).await.ok();
+    server.place(&ann.key, &room, "disco_ball", (34, 2)).await.refused(StatusCode::FORBIDDEN);
+    // The dance pad is one a bot uses (I31), once the pack is bought.
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let pad = server.item(&ann, &room, "dance_pad", (30, 4)).await;
+    let done = server.use_item(&scout.token, &pad).await.ok();
+    assert_eq!(done["doing"], "dancing on the dance pad");
 }
 
 // The Conservatory pack costs 25. Its glasshouse walls and terracotta floor are refused until it's bought
@@ -4394,6 +4456,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "beach",
             "cafe",
             "conservatory",
+            "neon_nights",
             "stargazer",
             "coins",
             "grand",
@@ -4590,7 +4653,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 35);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 38);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
