@@ -13104,15 +13104,15 @@ async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items(
     assert!(clock_item.get("votes").is_none(), "closing clock must omit votes: {clock_item}");
 
     // Set closing time on the clock; closing fields become populated
-    let at = crate::now() + 600;
-    server
+    let at = now() + 600;
+    let put_res = server
         .put(
             &ann.key,
             &format!("/api/items/{clock}/closing"),
             json!({ "closes_at": at, "everyone": true }),
         )
-        .await
-        .ok();
+        .await;
+    assert_eq!(put_res.status, StatusCode::OK, "{}", put_res.body);
 
     let read_set = server.read_room(&scout.token, &room).await;
     let clock_set =
@@ -13136,7 +13136,7 @@ async fn i1069_read_room_omits_null_closing_and_ballot_fields_on_ordinary_items(
                 bot_ids: Vec::new(),
             },
             &ann.id,
-            crate::now(),
+            now(),
         )
         .unwrap();
 
