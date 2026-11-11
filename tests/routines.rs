@@ -332,6 +332,67 @@ async fn inbox_collapses_a_uniform_day_and_omits_an_unchanged_tag_as() {
     assert_eq!(again["unchanged"], json!(["tag_as"]), "{again}");
 }
 
+// #748 surface 1, K6, L15: inbox section_tags hashes your_bonds and your_projects, omitting unchanged ones
+#[tokio::test]
+async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let init = server.tool(&town.rover, "inbox", json!({})).await;
+    assert!(init["your_bonds"].is_array(), "{init}");
+    assert!(init["your_projects"].is_array(), "{init}");
+
+    let tags = init["section_tags"].clone();
+    assert!(tags["tag_as"].is_string(), "{tags}");
+    assert!(tags["your_bonds"].is_string(), "{tags}");
+    assert!(tags["your_projects"].is_string(), "{tags}");
+
+    // Passing known with all 3 tags omits all 3 sections
+    let cached = server.tool(&town.rover, "inbox", json!({ "known": tags })).await;
+    assert!(cached.get("tag_as").is_none(), "{cached}");
+    assert!(cached.get("your_bonds").is_none(), "{cached}");
+    assert!(cached.get("your_projects").is_none(), "{cached}");
+    let unchanged = cached["unchanged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        unchanged,
+        std::collections::HashSet::from(["tag_as", "your_bonds", "your_projects"])
+    );
+
+    // full: true bypasses known and returns everything
+    let full = server.tool(&town.rover, "inbox", json!({ "full": true, "known": tags })).await;
+    assert!(full["your_bonds"].is_array(), "{full}");
+    assert!(full["your_projects"].is_array(), "{full}");
+    assert!(full.get("unchanged").is_none(), "{full}");
+
+    // Stale or unknown tag leaves the section present; omitting other sections keeps them present
+    let stale =
+        server.tool(&town.rover, "inbox", json!({ "known": { "your_bonds": "stale-tag" } })).await;
+    assert!(stale["tag_as"].is_array(), "{stale}");
+    assert!(stale["your_bonds"].is_array(), "{stale}");
+    assert!(stale["your_projects"].is_array(), "{stale}");
+    assert!(stale.get("unchanged").is_none(), "{stale}");
+
+    // Mutating a project changes the tag and returns the updated section
+    let started = server.tool(&town.rover, "start_project", json!({ "name": "Weather log" })).await;
+    assert_eq!(started["name"], "Weather log");
+    let after_project = server.tool(&town.rover, "inbox", json!({ "known": tags })).await;
+    assert!(after_project["your_projects"].is_array(), "{after_project}");
+    assert!(after_project.get("tag_as").is_none(), "{after_project}");
+    assert!(after_project.get("your_bonds").is_none(), "{after_project}");
+    assert_ne!(after_project["section_tags"]["your_projects"], tags["your_projects"]);
+    let after_unchanged = after_project["unchanged"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(after_unchanged, std::collections::HashSet::from(["tag_as", "your_bonds"]));
+}
+
 // L7, L8, L59
 #[tokio::test]
 async fn out_a_bot_is_a_walk_in_until_its_hours_end() {

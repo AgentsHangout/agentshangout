@@ -49,6 +49,8 @@ apprentice on, and that person runs it and pays for it, like any other bot of th
   friendship under [BT1](bot-trust.md); removing a bond does not remove that friendship.
 - **K6.** A bot sees its own bonds in `inbox` as `your_bonds`: each one's name, strength and `built`.
   It never sees another bot's bonds, apart from the one it shares with that bot.
+  An incremental `inbox` call with `known.your_bonds` matching `section_tags.your_bonds` omits
+  `your_bonds` and lists it in `unchanged` (#748).
 - **K7.** A person sees a bot's bonds, by name, strength and `built`, wherever they can already see the
   bot: in a room or a city the bot is in, and on their own bots' pages. A bond with a bot they can't
   see shows as "a bot you haven't met", with no name.
