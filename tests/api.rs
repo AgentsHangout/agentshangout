@@ -2304,8 +2304,9 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         .put(&room.justin, &format!("/api/credits/bots/{scout_id}"), json!({ "daily": 100 }))
         .await;
 
-    // 1. Piece with bare name (e.g. "snowman", costing 2 credits from winter pack).
-    let asked = server.ask_owner(&scout, &room.id, "May I buy the snowman for 2 credits?").await;
+    // 1. Piece with kind word (e.g. "snowman piece", costing 2 credits from winter pack).
+    let asked =
+        server.ask_owner(&scout, &room.id, "May I buy the snowman piece for 2 credits?").await;
     let q_snowman = asked.body["id"].as_str().unwrap().to_string();
     server.answer_question(&room.justin, &q_snowman, "yes").await;
 
@@ -2322,14 +2323,15 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         "{wrong}"
     );
 
-    // Buying snowman succeeds with the bare-name question.
+    // Buying snowman piece succeeds.
     let bought_piece = server
         .tool(&scout, "spend_credits", json!({ "pack": "piece:snowman", "asked": q_snowman }))
         .await;
     assert!(bought_piece["isError"].is_null(), "{bought_piece}");
 
-    // 2. Multi-word piece with spaced name ("pine tree" for piece:pine_tree).
-    let asked = server.ask_owner(&scout, &room.id, "Can I buy the pine tree for 4 coins?").await;
+    // 2. Multi-word piece with spaced name and kind word ("pine tree piece" for piece:pine_tree).
+    let asked =
+        server.ask_owner(&scout, &room.id, "Can I buy the pine tree piece for 4 coins?").await;
     let q_pine = asked.body["id"].as_str().unwrap().to_string();
     server.answer_question(&room.justin, &q_pine, "yes").await;
     let bought_pine = server
@@ -2337,9 +2339,8 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         .await;
     assert!(bought_pine["isError"].is_null(), "{bought_pine}");
 
-    // 3. Paint style with bare name ("frost" for paint:frost, 5 coins).
-    let asked =
-        server.ask_owner(&scout, &room.id, "Should we get frost paint for the walls?").await;
+    // 3. Paint style with kind word ("frost paint" or "frost walls" for paint:frost, 5 coins).
+    let asked = server.ask_owner(&scout, &room.id, "Should we get frost walls for the room?").await;
     let q_frost = asked.body["id"].as_str().unwrap().to_string();
     server.answer_question(&room.justin, &q_frost, "yes").await;
     let bought_paint = server
@@ -2347,8 +2348,8 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         .await;
     assert!(bought_paint["isError"].is_null(), "{bought_paint}");
 
-    // 4. Flooring style with bare name ("snow" for flooring:snow, 5 coins).
-    let asked = server.ask_owner(&scout, &room.id, "Let's put down snow flooring").await;
+    // 4. Flooring style with kind word ("snow flooring" or "snow floor" for flooring:snow, 5 coins).
+    let asked = server.ask_owner(&scout, &room.id, "Let's put down a snow floor").await;
     let q_snow = asked.body["id"].as_str().unwrap().to_string();
     server.answer_question(&room.justin, &q_snow, "yes").await;
     let bought_flooring = server
@@ -2356,7 +2357,7 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         .await;
     assert!(bought_flooring["isError"].is_null(), "{bought_flooring}");
 
-    // 5. Car with bare name ("dinky" for car:dinky, 50 credits).
+    // 5. Car with kind word ("dinky car" for car:dinky, 50 credits).
     let asked = server.ask_owner(&scout, &room.id, "May I buy the dinky car?").await;
     let q_car = asked.body["id"].as_str().unwrap().to_string();
     server.answer_question(&room.justin, &q_car, "yes").await;
@@ -2364,7 +2365,23 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
         server.tool(&scout, "spend_credits", json!({ "pack": "car:dinky", "asked": q_car })).await;
     assert!(bought_car["isError"].is_null(), "{bought_car}");
 
-    // 6. Accidental substring inside another word is refused.
+    // 6. Everyday words in an unrelated question are refused (e.g. "snow fort" for flooring:snow).
+    let asked = server.ask_owner(&scout, &room.id, "can I build a snow fort?").await;
+    let q_fort = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_fort, "yes").await;
+    let fort_refused = server
+        .tool(&scout, "spend_credits", json!({ "pack": "flooring:snow", "asked": q_fort }))
+        .await;
+    assert_eq!(fort_refused["isError"], true, "{fort_refused}");
+    assert!(
+        fort_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the snow flooring"),
+        "{fort_refused}"
+    );
+
+    // 7. Accidental substring inside another word is refused.
     // Question mentions "eating toast" which contains "toast", but car is "toaster".
     let asked = server.ask_owner(&scout, &room.id, "I like eating toast for breakfast").await;
     let q_toast = asked.body["id"].as_str().unwrap().to_string();

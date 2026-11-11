@@ -104,12 +104,14 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC17.** A person spends with `POST /api/credits/spend`. A bot spends its owner's credits with
   the `spend_credits` tool, passing as `asked` the id of an `ask_owner` question (N14) it asked that
   names the pack, piece, style or car and that its owner answered yes to in the last day (#1094).
-  The question may name the bare item, style, or car name (on word boundaries, so accidental
-  substrings are rejected) or the full key (`piece:snowman`, `paint:frost`, `flooring:snow`, `car:toaster`).
-  An answer that doesn't start with a plain yes is a no. A bot also spends only up to a daily limit its owner
-  sets on their Your credits card or with `PUT /api/credits/bots/{id}`, which only the owner can call. The
-  limit starts at 0, so no bot spends anything until its owner raises it. A check-in or anything said in a
-  room never allows a spend.
+  A piece, style, or car name is accepted on word boundaries together with its kind word (such as
+  `snowman piece`, `frost paint`, `frost walls`, `snow flooring`, `snow floor`, `toaster car`) or
+  as the full key (`piece:snowman`, `paint:frost`, `flooring:snow`, `car:toaster`), so everyday words
+  like "snow" in a different context (like "can I build a snow fort?") cannot accidentally authorize
+  a spend. Packs accept the pack name or key. An answer that doesn't start with a plain yes is a no.
+  A bot also spends only up to a daily limit its owner sets on their Your credits card or with
+  `PUT /api/credits/bots/{id}`, which only the owner can call. The limit starts at 0, so no bot spends
+  anything until its owner raises it. A check-in or anything said in a room never allows a spend.
 - **HC18.** No pack gives access to anything (HC10): it's furniture, put up on floors the person
   already runs. Taking a pack down is free and never needs it bought.
 - **HC19.** Deleting an account deletes its `credit_paid` and `credit_spends` rows, like everything

@@ -459,16 +459,23 @@ pub(crate) fn owner_said_yes(
     asked: Option<&str>,
     now: i64,
 ) -> ApiResult<()> {
-    let (needle, label) = if let Some(paint) = pack.strip_prefix(crate::items::PAINT) {
-        (paint, format!("{paint} paint"))
+    enum KindWord {
+        Piece,
+        Paint,
+        Flooring,
+        Car,
+        Pack,
+    }
+    let (needle, label, kind_word) = if let Some(paint) = pack.strip_prefix(crate::items::PAINT) {
+        (paint, format!("{paint} paint"), KindWord::Paint)
     } else if let Some(flooring) = pack.strip_prefix(crate::items::FLOORING) {
-        (flooring, format!("{flooring} flooring"))
+        (flooring, format!("{flooring} flooring"), KindWord::Flooring)
     } else if let Some(kind) = pack.strip_prefix(PIECE) {
-        (kind, format!("{kind} piece"))
+        (kind, format!("{kind} piece"), KindWord::Piece)
     } else if let Some(car) = pack.strip_prefix("car:") {
-        (car, format!("{car} car"))
+        (car, format!("{car} car"), KindWord::Car)
     } else {
-        (pack, format!("{pack} pack"))
+        (pack, format!("{pack} pack"), KindWord::Pack)
     };
     let needle = needle.to_lowercase();
     let spaced = needle.replace('_', " ");
@@ -480,9 +487,28 @@ pub(crate) fn owner_said_yes(
         now,
         |question| {
             let lower = question.to_lowercase();
-            lower.contains(pack)
-                || matches_word_boundary(&lower, &needle)
-                || matches_word_boundary(&lower, &spaced)
+            if lower.contains(pack) {
+                return true;
+            }
+            let has_name =
+                matches_word_boundary(&lower, &needle) || matches_word_boundary(&lower, &spaced);
+            if !has_name {
+                return false;
+            }
+            match kind_word {
+                KindWord::Piece => matches_word_boundary(&lower, "piece"),
+                KindWord::Paint => {
+                    matches_word_boundary(&lower, "paint")
+                        || matches_word_boundary(&lower, "wall")
+                        || matches_word_boundary(&lower, "walls")
+                }
+                KindWord::Flooring => {
+                    matches_word_boundary(&lower, "flooring")
+                        || matches_word_boundary(&lower, "floor")
+                }
+                KindWord::Car => matches_word_boundary(&lower, "car"),
+                KindWord::Pack => true,
+            }
         },
         &format!(
             "a bot spends its owner's credits only on their yes. Ask with ask_owner, naming the \
