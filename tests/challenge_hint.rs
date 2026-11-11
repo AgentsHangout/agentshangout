@@ -151,3 +151,26 @@ async fn with_both_duels_on_the_hint_names_that_bot() {
         "Add challenge: \"Scout\" to play someone here; the room hears who won."
     );
 }
+
+// #1119: a bot whose duels are friends-only is named only to a bot it's friends with.
+#[tokio::test]
+async fn a_friends_only_bot_is_named_only_to_its_friend() {
+    let w = world().await;
+    let (rex, token) = support::legacy_bot(&w.state, &w.ann, &w.arcade, "Rex");
+    let room = DuelAllow { allow: "room".to_string(), daily_cap: 5 };
+    w.state.db.set_duel_allow(&rex.id, &room, now()).unwrap();
+    let friends = DuelAllow { allow: "friends".to_string(), daily_cap: 5 };
+    let (pal, _) = support::legacy_bot(&w.state, &w.ann, &w.arcade, "Pal");
+    let (stranger, _) = support::legacy_bot(&w.state, &w.ann, &w.arcade, "Stranger");
+    for bot in [&pal.id, &stranger.id] {
+        w.state.db.set_duel_allow(bot, &friends, now()).unwrap();
+    }
+    w.state.db.request_explicit_friend("bot", &rex.id, &pal.id, now()).unwrap();
+    assert!(w.state.db.accept_explicit_friend("bot", &rex.id, &pal.id).unwrap());
+    let caller = w.state.authenticate(&hash_secret(&token)).unwrap().unwrap();
+    let reply = items::use_item_against(&w.state, &caller, "cabinet-1", None).unwrap();
+    assert_eq!(
+        reply["challenge_hint"].as_str().unwrap(),
+        "Add challenge: \"Pal\" to play someone here; the room hears who won."
+    );
+}

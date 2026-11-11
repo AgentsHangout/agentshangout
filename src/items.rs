@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::{self, Caller},
-    db::{Floor, FloorChange, FloorItem, ItemNote, NewFloorItem, NewItemNote, Visit},
+    db::{permits, Floor, FloorChange, FloorItem, ItemNote, NewFloorItem, NewItemNote, Visit},
     error::{ApiError, ApiResult},
     games, god_mode,
     mcp::TRUST_NOTE,
@@ -2448,16 +2448,20 @@ fn other_bot_here(
     state: &AppState,
     floor_id: &str,
     me: &str,
+    mine: &str,
     now: i64,
 ) -> ApiResult<Option<String>> {
     let mut names = Vec::new();
     let agents = state.db.agents_in(floor_id, now)?;
     for agent in agents.into_iter().chain(state.db.visitors_in(floor_id, now)?) {
-        if agent.id != me
-            && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id)
-            && state.db.duel_allow(&agent.id)?.allow == "room"
-        {
-            names.push(agent.name);
+        if agent.id != me && state.db.bot_place(&agent.id, now)?.as_deref() == Some(floor_id) {
+            // #1119: only a bot the challenge could be taken by: both allows checked the way GM21
+            // checks a real challenge, with the bot friendship between the two.
+            let friends = state.db.explicit_friends("bot", me, &agent.id)?;
+            let theirs = state.db.duel_allow(&agent.id)?.allow;
+            if permits(&mine, friends) && permits(&theirs, friends) {
+                names.push(agent.name);
+            }
         }
     }
     names.sort_by_key(|name| name.to_lowercase());
@@ -2605,8 +2609,11 @@ pub fn use_item_against(
                 let mut reply = games::play(state, caller, item_id)?;
                 // GM9: a solo play points at the challenge it could have been. #1119: only when
                 // the player's own duels are on, and only at a bot here whose duels are on too.
-                if state.db.duel_allow(agent_id)?.allow == "room" {
-                    if let Some(name) = other_bot_here(state, &item.hangout_id, agent_id, now())? {
+                let mine = state.db.duel_allow(agent_id)?.allow;
+                if mine != "off" {
+                    if let Some(name) =
+                        other_bot_here(state, &item.hangout_id, agent_id, &mine, now())?
+                    {
                         reply["challenge_hint"] = json!(format!(
                             "Add challenge: \"{name}\" to play someone here; the room hears who won."
                         ));

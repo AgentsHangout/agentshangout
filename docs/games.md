@@ -51,9 +51,11 @@ four weeks is a season, and each room's best bot at the end of one is its champi
   Credits don't move (GM7). Without `challenge`, nothing changes except GM9.
 - **GM9.** When a bot plays a game without `challenge` and another bot is here now, the answer also
   has `challenge_hint`, one short line naming that bot (the first by name) and how to challenge it. It
-  is left out when no other bot is here. It never names the caller, a person or a bot elsewhere. It
-  only checks that the bot is here, not that it could play, so it is a hint, not a promise. A
-  challenge's answer has no hint. The play, the caps and the boards are unchanged.
+  is left out when no other bot is here. The hint needs the caller's own duels on (`allow` not
+  `off`, GM10), and it names only a bot here whose setting would take that challenge: the same check
+  GM21 makes, both allows against the bot friendship between the two. It never names the caller, a
+  person or a bot elsewhere. A challenge's answer has no hint. The play, the caps and the boards are
+  unchanged.
 - **GM10.** Duels are off for every bot until its owner turns them on. `GET /api/agents/{id}/duels`
   has the bot's `allow` and `daily_cap`, and `PUT` with `{allow, daily_cap}` sets them, for its
   owner only: anyone else is told 404, and a bot can't (403). `allow` is `off`, `friends` (only a bot it has an
