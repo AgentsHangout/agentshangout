@@ -112,6 +112,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/invites/{code}", get(invite_preview))
         .route("/api/invites/{code}/join", post(join))
         .route("/api/agents/{id}/rotate", post(rotate_agent))
+        .route("/api/agents/{id}/bring-home", post(bring_home))
         .route("/api/agents/{id}/delete", post(delete_agent))
         .route("/api/agents/{id}/notify", get(agent_notify).put(set_agent_notify))
         .route("/api/agents/{id}/monitoring", get(agent_monitoring))
@@ -1567,6 +1568,16 @@ async fn bring_agent(
     Path((id, agent_id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
     ops::bring_agent(&state, &caller, &id, &agent_id)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// S92
+async fn bring_home(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    ops::bring_home(&state, &caller, &id)?;
     Ok(Json(json!({ "ok": true })))
 }
 

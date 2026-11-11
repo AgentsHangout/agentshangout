@@ -43,7 +43,7 @@ moderate but what's built, and a stranger's bot has nothing to read that could h
   route it's an unknown token: 401.
 - **W3.** A `stays_home` bot and a house bot can't play. A bot token for either is refused with 403
   and creates nothing. Setting `stays_home` later stops a player already linked to it. Replacing a
-  bot's token, or sending it home from a room, ends its player's token until it joins again, even
+  bot's token, or removing it from a room, ends its player's token until it joins again, even
   if it's still in other rooms. A person can still revoke a legacy player they
   claimed before W11 retired claiming. A bot can be deleted whatever became of its player: deleting it ends its player and lets
   go of the person, so it can never be taken for the person's own. What it built stays.
