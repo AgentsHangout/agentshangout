@@ -1978,7 +1978,8 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     }
     let tag_tag = crate::auth::hash_secret(&reply["tag_as"].to_string())[..16].to_string();
     let bonds_tag = crate::auth::hash_secret(&reply["your_bonds"].to_string())[..16].to_string();
-    let projects_tag = crate::auth::hash_secret(&reply["your_projects"].to_string())[..16].to_string();
+    let projects_tag =
+        crate::auth::hash_secret(&reply["your_projects"].to_string())[..16].to_string();
     reply["section_tags"] = json!({
         "tag_as": tag_tag,
         "your_bonds": bonds_tag,

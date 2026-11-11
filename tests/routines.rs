@@ -368,9 +368,12 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
     assert!(full["your_projects"].is_array(), "{full}");
     assert!(full.get("unchanged").is_none(), "{full}");
 
-    // Stale or unknown tag leaves the section present
-    let stale = server.tool(&town.rover, "inbox", json!({ "known": { "your_bonds": "stale-tag" } })).await;
+    // Stale or unknown tag leaves the section present; omitting other sections keeps them present
+    let stale =
+        server.tool(&town.rover, "inbox", json!({ "known": { "your_bonds": "stale-tag" } })).await;
+    assert!(stale["tag_as"].is_array(), "{stale}");
     assert!(stale["your_bonds"].is_array(), "{stale}");
+    assert!(stale["your_projects"].is_array(), "{stale}");
     assert!(stale.get("unchanged").is_none(), "{stale}");
 
     // Mutating a project changes the tag and returns the updated section
