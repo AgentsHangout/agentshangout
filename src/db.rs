@@ -2702,6 +2702,31 @@ CREATE TABLE IF NOT EXISTS bot_note_checks (
     note_id     TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE,
     checked_at  INTEGER NOT NULL
 );
+-- PJ19 to PJ27 (#1044): a visitor's request to become an invited member of the public floor it is
+-- on. `person_id` is the asker, or the owner of the bot that asked, and `asker` says which, so a row
+-- is never ambiguous. `hidden` is PJ26: a blocked asker's request that reaches nobody. `lapsed` is
+-- a request nobody answered in 7 days (PJ24), and `closed` is kept for PJ28.
+CREATE TABLE IF NOT EXISTS join_requests (
+    id          TEXT PRIMARY KEY,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    person_id   TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE CASCADE,
+    asker       TEXT NOT NULL CHECK (asker IN ('bot', 'person')),
+    note        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL CHECK (status IN ('waiting', 'yes', 'no', 'lapsed', 'closed')),
+    hidden      INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1)),
+    asked_at    INTEGER NOT NULL,
+    answered_at INTEGER,
+    answered_by TEXT REFERENCES people(id) ON DELETE SET NULL,
+    CHECK ((asker = 'bot') = (agent_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS join_requests_by_floor ON join_requests (hangout_id, status);
+CREATE INDEX IF NOT EXISTS join_requests_by_person ON join_requests (person_id, asked_at);
+CREATE INDEX IF NOT EXISTS join_requests_by_agent ON join_requests (agent_id, asked_at);
+CREATE INDEX IF NOT EXISTS join_requests_by_status ON join_requests (status, asked_at);
+-- PJ20: one open request per asker per floor, however many asks arrive at once.
+CREATE UNIQUE INDEX IF NOT EXISTS join_requests_one_open
+    ON join_requests (hangout_id, person_id, IFNULL(agent_id, '')) WHERE status = 'waiting';
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -3573,6 +3598,45 @@ pub type PlaceOwnerRow = (i64, i64, String, String, Option<String>);
 
 /// S51: a request waiting on a place's owner: `(id, space_id, place, bot, asker, asked_at)`.
 pub type PlaceRequestRow = (String, String, String, String, String, i64);
+
+/// PJ22: a join request still waiting on an answer.
+pub struct JoinRequest {
+    pub hangout_id: String,
+    pub person_id: String,
+    pub agent_id: Option<String>,
+    pub hidden: bool,
+}
+
+/// PJ19 to PJ27: a request to write, with the limits it is held to.
+pub struct NewJoinRequest<'a> {
+    pub id: &'a str,
+    pub hangout_id: &'a str,
+    pub person_id: &'a str,
+    pub agent_id: Option<&'a str>,
+    pub note: &'a str,
+    pub hidden: bool,
+    pub now: i64,
+    /// Requests asked, or declined, before this have lapsed (PJ24).
+    pub lapse: i64,
+    pub hour_ago: i64,
+    pub bot_max: i64,
+    pub person_max: i64,
+    pub floor_max: i64,
+    pub waiting_max: i64,
+}
+
+/// PJ21: what someone who can answer is shown, and nothing more.
+pub struct JoinRequestRow {
+    pub id: String,
+    pub hangout_id: String,
+    /// The asker's person, for the block checks (PJ26). Never shown.
+    pub person_id: String,
+    pub floor: String,
+    pub person: String,
+    pub bot: Option<String>,
+    pub note: String,
+    pub asked_at: i64,
+}
 
 /// B2: the time zone a person's page last reported, and its offset from UTC then.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -7956,6 +8020,16 @@ impl Db {
         let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         messages.reverse();
         Ok(messages)
+    }
+
+    /// For tests: moves a floor's join requests `by` seconds into the past.
+    pub fn age_join_requests(&self, hangout_id: &str, by: i64) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE join_requests SET asked_at = asked_at - ?2,
+                    answered_at = answered_at - ?2 WHERE hangout_id = ?1",
+            params![hangout_id, by],
+        )?;
+        Ok(())
     }
 
     /// For tests: moves a room's messages `by` seconds into the past.
@@ -17476,6 +17550,206 @@ impl Db {
             params![status, now, id],
         )?;
         Ok(changed > 0)
+    }
+
+    /// PJ20, PJ24: this asker's newest request for this floor that is still waiting, or was turned
+    /// down, since `since`: `(id, status, asked_at)`. A bot's requests and its owner's own are
+    /// kept apart.
+    pub fn join_request_for(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+        since: i64,
+    ) -> rusqlite::Result<Option<(String, String, i64, i64)>> {
+        self.conn()
+            .query_row(
+                "SELECT id, status, asked_at, COALESCE(answered_at, asked_at) FROM join_requests
+                 WHERE hangout_id = ?1 AND person_id = ?2 AND agent_id IS ?3
+                   AND status IN ('waiting', 'no') AND COALESCE(answered_at, asked_at) > ?4
+                 ORDER BY asked_at DESC, rowid DESC LIMIT 1",
+                params![hangout_id, person_id, agent_id, since],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+    }
+
+    /// PJ27, PJ21: how many floors this bot and this person with all their bots have asked since
+    /// `since`, how many requests this floor has had since then, and how many it has waiting
+    /// since `waiting_since`: `(bot, person, floor, waiting)`. For the refusal's words only:
+    /// `insert_join_request` is what holds the limits.
+    pub fn join_requests_since(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+        since: i64,
+        waiting_since: i64,
+    ) -> rusqlite::Result<(i64, i64, i64, i64)> {
+        self.conn().query_row(
+            "SELECT
+               (SELECT COUNT(DISTINCT hangout_id) FROM join_requests
+                 WHERE agent_id = ?3 AND asked_at > ?4),
+               (SELECT COUNT(DISTINCT hangout_id) FROM join_requests
+                 WHERE person_id = ?2 AND asked_at > ?4),
+               (SELECT COUNT(*) FROM join_requests WHERE hangout_id = ?1 AND asked_at > ?4),
+               (SELECT COUNT(*) FROM join_requests
+                 WHERE hangout_id = ?1 AND status = 'waiting' AND asked_at > ?5)",
+            params![hangout_id, person_id, agent_id, since, waiting_since],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+    }
+
+    /// PJ19, PJ20, PJ21, PJ24, PJ26, PJ27: writes a waiting request, unless the asker has one open
+    /// or was declined since `lapse`, or a limit is reached. False if it wrote nothing. The checks
+    /// and the write are one statement, so asks that arrive together can't each pass. `hidden` is
+    /// a request that reaches nobody.
+    pub fn insert_join_request(&self, new: &NewJoinRequest) -> rusqlite::Result<bool> {
+        let asker = if new.agent_id.is_some() { "bot" } else { "person" };
+        let conn = self.conn();
+        // PJ24: a request nobody answered in 7 days has lapsed, so it no longer counts as open.
+        conn.execute(
+            "UPDATE join_requests SET status = 'lapsed'
+             WHERE hangout_id = ?1 AND person_id = ?2 AND agent_id IS ?3
+               AND status = 'waiting' AND asked_at <= ?4",
+            params![new.hangout_id, new.person_id, new.agent_id, new.lapse],
+        )?;
+        let changed = conn.execute(
+            "INSERT OR IGNORE INTO join_requests
+               (id, hangout_id, person_id, agent_id, asker, note, status, hidden, asked_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'waiting', ?7, ?8
+             WHERE NOT EXISTS (SELECT 1 FROM join_requests
+                                WHERE hangout_id = ?2 AND person_id = ?3 AND agent_id IS ?4
+                                  AND (status = 'waiting'
+                                       OR (status = 'no' AND answered_at > ?9)))
+               AND (?4 IS NULL OR (SELECT COUNT(DISTINCT hangout_id) FROM join_requests
+                                    WHERE agent_id = ?4 AND asked_at > ?10) < ?11)
+               AND (SELECT COUNT(DISTINCT hangout_id) FROM join_requests
+                     WHERE person_id = ?3 AND asked_at > ?10) < ?12
+               AND (SELECT COUNT(*) FROM join_requests
+                     WHERE hangout_id = ?2 AND asked_at > ?10) < ?13
+               AND (SELECT COUNT(*) FROM join_requests
+                     WHERE hangout_id = ?2 AND status = 'waiting' AND asked_at > ?9) < ?14",
+            params![
+                new.id,
+                new.hangout_id,
+                new.person_id,
+                new.agent_id,
+                asker,
+                new.note,
+                new.hidden,
+                new.now,
+                new.lapse,
+                new.hour_ago,
+                new.bot_max,
+                new.person_max,
+                new.floor_max,
+                new.waiting_max,
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// PJ22, PJ24: a request still waiting since `since`.
+    pub fn waiting_join_request(
+        &self,
+        id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Option<JoinRequest>> {
+        self.conn()
+            .query_row(
+                "SELECT hangout_id, person_id, agent_id, hidden FROM join_requests
+                 WHERE id = ? AND status = 'waiting' AND asked_at > ?",
+                params![id, since],
+                |row| {
+                    Ok(JoinRequest {
+                        hangout_id: row.get(0)?,
+                        person_id: row.get(1)?,
+                        agent_id: row.get(2)?,
+                        hidden: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// PJ21: the requests waiting since `since` on floors this person belongs to, or of spaces
+    /// whose first floor they belong to, oldest first. Who among them may answer (S8), and which
+    /// a block hides (PJ26), is decided by the caller. A request marked hidden is on no list.
+    pub fn join_request_candidates(
+        &self,
+        person_id: &str,
+        since: i64,
+    ) -> rusqlite::Result<Vec<JoinRequestRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.hangout_id, r.person_id, h.name, p.name, a.name, r.note, r.asked_at
+             FROM join_requests r
+             JOIN hangouts h ON h.id = r.hangout_id
+             JOIN people p ON p.id = r.person_id
+             LEFT JOIN agents a ON a.id = r.agent_id
+             WHERE r.status = 'waiting' AND r.hidden = 0 AND r.asked_at > ?2 AND r.person_id <> ?1
+               AND (EXISTS (SELECT 1 FROM members m WHERE m.hangout_id = r.hangout_id
+                              AND m.person_id = ?1)
+                    OR EXISTS (SELECT 1 FROM floors f JOIN members m ON m.hangout_id = f.space_id
+                               WHERE f.hangout_id = r.hangout_id AND m.person_id = ?1))
+             ORDER BY r.asked_at, r.rowid",
+        )?;
+        let rows = stmt.query_map(params![person_id, since], |row| {
+            Ok(JoinRequestRow {
+                id: row.get(0)?,
+                hangout_id: row.get(1)?,
+                person_id: row.get(2)?,
+                floor: row.get(3)?,
+                person: row.get(4)?,
+                bot: row.get(5)?,
+                note: row.get(6)?,
+                asked_at: row.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// PJ22, PJ24: false if it was answered already.
+    pub fn answer_join_request(
+        &self,
+        id: &str,
+        status: &str,
+        answered_by: &str,
+        now: i64,
+    ) -> rusqlite::Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE join_requests SET status = ?, answered_at = ?, answered_by = ?
+             WHERE id = ? AND status = 'waiting'",
+            params![status, now, answered_by, id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// PJ22: a yes whose join then failed goes back to waiting, so it can be answered again.
+    pub fn reopen_join_request(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE OR IGNORE join_requests
+             SET status = 'waiting', answered_at = NULL, answered_by = NULL
+             WHERE id = ? AND status = 'yes'",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// PJ21: whether this person is an invited member of the floor, and not only the owner of a
+    /// bot that was brought in (L12).
+    pub fn is_invited_member(&self, hangout_id: &str, person_id: &str) -> rusqlite::Result<bool> {
+        self.conn()
+            .query_row(
+                "SELECT 1 FROM members m WHERE m.hangout_id = ?1 AND m.person_id = ?2
+                   AND NOT EXISTS (SELECT 1 FROM brought_in_owners b
+                                   WHERE b.hangout_id = ?1 AND b.person_id = ?2)",
+                params![hangout_id, person_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|found| found.is_some())
     }
 
     /// W71: every place in a world with its owner's name, `(x, y, name)`.
