@@ -199,6 +199,7 @@ async fn pn3_what_needs_you_lists_is_a_request_on_the_phone() {
     for event in [
         "owner.waiting",
         "place.asked",
+        "floor.join_asked",
         "friend.invite",
         "apprentice.asked",
         "trip.asked",
@@ -216,7 +217,7 @@ async fn pn3_what_needs_you_lists_is_a_request_on_the_phone() {
     }
     settle(&s).await;
     let messages = capture.0.lock().unwrap();
-    assert_eq!(messages.len(), 6);
+    assert_eq!(messages.len(), 7);
     for m in messages.iter() {
         assert_eq!(m.category, "request");
         assert_eq!(m.path, "/");

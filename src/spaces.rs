@@ -761,6 +761,34 @@ pub fn ask_to_join(
             None => Err(too_many(state)?),
         };
     }
+    // PJ21, PJ26, PN3: notify people who can answer (runners and invited members).
+    // A hidden ask (block with anyone who runs the space) reaches nobody and starts no cooldown.
+    // At most one ping per floor per half-hour slot; later asks wait silently in Needs you.
+    if !hidden && !state.db.join_asked_in_slot(floor_id, now / 1800, &id)? {
+        let mut recipients = runners(state, &space)?;
+        for person in state.db.people_in(floor_id)? {
+            if !recipients.contains(&person.id)
+                && state.db.is_invited_member(floor_id, &person.id)?
+            {
+                recipients.push(person.id);
+            }
+        }
+        let ping_recipients: Vec<String> = recipients
+            .into_iter()
+            .filter(|recipient| {
+                recipient != &caller.person_id
+                    && !crate::blocks::apart(state, recipient, &caller.person_id).unwrap_or(true)
+            })
+            .collect();
+        if !ping_recipients.is_empty() {
+            let notice = crate::notify::Notice {
+                event: "floor.join_asked",
+                hangout_id: floor_id.to_string(),
+                text: "A request to join a floor is waiting. Answer it in Needs you.".to_string(),
+            };
+            crate::notify::send(state, &ping_recipients, &notice);
+        }
+    }
     Ok(json!({ "id": id, "status": "waiting", "asked_at": now }))
 }
 
