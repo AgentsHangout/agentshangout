@@ -3116,7 +3116,7 @@ async fn look_of(server: &Server, who: &Who, room: &str) -> (Value, Value) {
 #[test]
 fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
     let names: Vec<&str> = items::PACKS.iter().map(|pack| pack.pack).collect();
-    assert_eq!(names, ["fall", "halloween", "winter", "beach", "stargazer"]);
+    assert_eq!(names, ["fall", "halloween", "winter", "beach", "cafe", "stargazer"]);
     assert!(items::pack_of("<script>").is_none());
 
     let page = include_str!("../web/room.js");
@@ -3326,6 +3326,49 @@ async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
     assert_eq!(pack_needed(&catalog, "snow_globe"), Value::Null);
     assert_eq!(pack_needed(&catalog, "cocoa_cart"), json!("winter"));
     server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
+}
+
+// #1071: the Cafe pack costs 25. Its mocha walls and checker floor are refused until it's bought
+// and apply after, and the coin pieces beside it stay locked for someone who has the pack.
+#[tokio::test]
+async fn the_cafe_pack_is_bought_for_its_walls_and_floor_but_not_its_coin_pieces() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 30,
+            100,
+            now(),
+        )
+        .unwrap();
+    let path = format!("/api/floors/{room}");
+    server.put(&ann.key, &path, json!({ "paint": "mocha" })).await.refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &path, json!({ "flooring": "checker" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let credits = server.get(&ann.key, "/api/credits").await.ok();
+    let cafe = credits["packs"].as_array().unwrap().iter().find(|p| p["pack"] == "cafe").unwrap();
+    assert_eq!((cafe["cost"].clone(), cafe["bought"].clone()), (json!(25), json!(false)));
+
+    let bought = server.post(&ann.key, "/api/credits/spend", json!({ "pack": "cafe" })).await.ok();
+    assert_eq!(bought["balance"], 5, "{bought}");
+    assert_eq!(
+        server.put(&ann.key, &path, json!({ "paint": "mocha" })).await.ok()["paint"],
+        "mocha"
+    );
+    let laid = server.put(&ann.key, &path, json!({ "flooring": "checker" })).await.ok();
+    assert_eq!(laid["flooring"], "checker");
+    server.place(&ann.key, &room, "espresso_machine", (30, 2)).await.ok();
+    server.place(&ann.key, &room, "barista_cat", (34, 2)).await.refused(StatusCode::FORBIDDEN);
 }
 
 // #1065: the Beach shack pack costs 25. Its ocean walls and sand floor are refused until it's
@@ -4298,6 +4341,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "fall",
             "winter",
             "beach",
+            "cafe",
             "stargazer",
             "coins",
             "grand",

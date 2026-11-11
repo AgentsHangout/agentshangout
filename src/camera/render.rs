@@ -464,6 +464,51 @@ mod tests {
         assert_eq!(board(&svg(json!("  "))), 0);
         assert_eq!(board(&svg(Value::Null)), 0);
     }
+    /// Every kind in the catalog has art in room.js, and the art of every kind, both facings, and
+    /// every paint and flooring actually draws: a new pack's pieces, walls and floor are run here,
+    /// not only named.
+    #[test]
+    fn every_catalog_kind_paint_and_flooring_draws() {
+        use crate::items::CATALOG;
+        use crate::spaces::{FLOORINGS, PAINTS};
+        let kinds: Vec<&str> = CATALOG.iter().map(|kind| kind.kind).collect();
+        let check = format!(
+            "JSON.stringify({}.filter(k=>!Object.hasOwn(ITEMS,k)))",
+            serde_json::to_string(&kinds).unwrap()
+        );
+        let missing: Vec<String> =
+            serde_json::from_str(&run(&whole_room(), Some(&check)).unwrap()).unwrap();
+        assert!(missing.is_empty(), "no art in room.js for {missing:?}");
+
+        const PER_SCENE: usize = 12;
+        let batches: Vec<&[crate::items::Kind]> = CATALOG.chunks(PER_SCENE).collect();
+        let scenes = batches.len().max(PAINTS.len()).max(FLOORINGS.len());
+        for n in 0..scenes {
+            let batch = batches[n % batches.len()];
+            let items: Vec<Value> = batch
+                .iter()
+                .enumerate()
+                .map(|(i, kind)| {
+                    json!({"id": format!("i{i}"), "item": kind.kind,
+                           "x": (i % 6) as i64 * 6 + 2, "y": (i / 6) as i64 * 5 + 2,
+                           "w": kind.w, "h": kind.h, "facing": (n + i) % 2})
+                })
+                .collect();
+            let paint = PAINTS[n % PAINTS.len()];
+            let flooring = FLOORINGS[n % FLOORINGS.len()];
+            let scene = json!({
+                "look": {"paint": paint, "flooring": flooring, "hidden": [], "outdoors": false, "table": null},
+                "items": items, "bots": [], "people": [], "frame": whole(),
+            });
+            let photo =
+                png(&scene).unwrap_or_else(|e| panic!("{paint}, {flooring}, {batch:?}: {e}"));
+            assert!(photo.png.starts_with(b"\x89PNG"), "{paint}, {flooring}: not a PNG");
+        }
+    }
+    fn whole_room() -> Value {
+        room(json!([]), json!([]), whole())
+    }
+
     #[test]
     fn room_art_renders_as_a_bounded_png() {
         let image = png(&serde_json::json!({

@@ -133,6 +133,7 @@ const WORK: &str = "work";
 const FALL: &str = "fall";
 const WINTER: &str = "winter";
 const BEACH: &str = "beach";
+const CAFE: &str = "cafe";
 const STARGAZER: &str = "stargazer";
 const COINS: &str = "coins";
 const GRAND: &str = "grand";
@@ -142,7 +143,7 @@ const SIGNS: &str = "signs";
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 22] = [
+pub const CATEGORIES: [(&str, &str); 23] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -160,6 +161,7 @@ pub const CATEGORIES: [(&str, &str); 22] = [
     (FALL, "Fall"),
     (WINTER, "Winter"),
     (BEACH, "Beach shack"),
+    (CAFE, "Cafe"),
     (STARGAZER, "Stargazer"),
     (COINS, "Coin sinks"),
     (GRAND, "Grand pieces"),
@@ -258,7 +260,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 179] = [
+pub static CATALOG: [Kind; 192] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -439,6 +441,17 @@ pub static CATALOG: [Kind; 179] = [
     piece("tiki_torch", "Tiki torch", BEACH, STARTER, 3, feels("cozy"), (1, 1)),
     piece("cooler", "Cooler", BEACH, STARTER, 1, None, (1, 1)),
     piece("beach_towel", "Beach towel", BEACH, STARTER, 2, feels("calm"), (2, 1)).flat(),
+    // #1071: the Cafe pack. All starter, like the other packs (I29).
+    piece("cafe_counter", "Cafe counter", CAFE, STARTER, 6, feels("cozy"), (3, 2)),
+    piece("espresso_machine", "Espresso machine", CAFE, STARTER, 5, feels("cozy"), (2, 1)),
+    piece("pastry_case", "Pastry case", CAFE, STARTER, 5, feels("cozy"), (2, 1)),
+    piece("coffee_sacks", "Coffee sacks", CAFE, STARTER, 2, None, (2, 1)),
+    piece("chalkboard_menu", "Chalkboard menu", CAFE, STARTER, 4, feels("inspired"), (1, 1)),
+    piece("cake_stand", "Cake stand", CAFE, STARTER, 4, feels("cozy"), (1, 1)),
+    piece("cafe_table", "Cafe table", CAFE, STARTER, 3, feels("cozy"), (1, 1)),
+    piece("bistro_chair", "Bistro chair", CAFE, STARTER, 2, None, (1, 1)),
+    piece("teapot", "Teapot", CAFE, STARTER, 3, feels("calm"), (1, 1)),
+    piece("croissant_basket", "Croissant basket", CAFE, STARTER, 3, feels("cozy"), (1, 1)),
     piece("orrery", "Brass orrery", STARGAZER, STARTER, 4, feels("inspired"), (1, 1)),
     piece("star_globe", "Star globe", STARGAZER, STARTER, 3, feels("inspired"), (1, 1)),
     piece("rocket_model", "Model rocket", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
@@ -469,6 +482,10 @@ pub static CATALOG: [Kind; 179] = [
     piece("crab", "Crab", COINS, STARTER, 3, feels("playful"), (1, 1)),
     piece("bottle_message", "Message in a bottle", COINS, STARTER, 4, feels("inspired"), (1, 1)),
     piece("lifeguard_tower", "Lifeguard tower", COINS, STARTER, 6, feels("playful"), (2, 2)),
+    // #1071: coin sinks beside the Cafe pack.
+    piece("latte_art", "Latte art", COINS, STARTER, 4, feels("calm"), (1, 1)),
+    piece("barista_cat", "Barista cat", COINS, STARTER, 5, feels("playful"), (1, 1)),
+    piece("coffee_roaster", "Coffee roaster", COINS, STARTER, 6, feels("inspired"), (2, 2)),
     // HC65: grand pieces, one-of-a-kind showpieces priced in GRAND_PIECES, not by piece_price.
     piece("koi_pond", "Koi pond", GRAND, STARTER, 9, feels("calm"), (4, 2)).flat(),
     piece("grand_piano", "Grand piano", GRAND, STARTER, 10, feels("inspired"), (3, 2))
@@ -515,7 +532,7 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 5] = [
+pub const PACKS: [Pack; 6] = [
     Pack {
         pack: "fall",
         paint: "harvest",
@@ -636,6 +653,35 @@ pub const PACKS: [Pack; 5] = [
         ],
     },
     Pack {
+        pack: "cafe",
+        paint: "mocha",
+        flooring: "checker",
+        over: false,
+        cost: 25,
+        items: &[
+            // Either side of the door.
+            at("bistro_chair", 17, 13),
+            at("bistro_chair", 22, 13),
+            // The espresso machine and the menu, in the gaps either side of the whiteboard.
+            at("espresso_machine", 10, 0),
+            at("chalkboard_menu", 28, 0),
+            // Kept low along the back wall between them.
+            at("teapot", 13, 0),
+            at("croissant_basket", 15, 0),
+            at("cake_stand", 24, 0),
+            at("teapot", 26, 0),
+            // Round the table, where the bots can see it.
+            at("cafe_table", 11, 2),
+            at("croissant_basket", 10, 7),
+            at("coffee_sacks", 12, 10),
+            // The counter, on the open side of the room.
+            at("pastry_case", 30, 4),
+            at("cafe_counter", 30, 8),
+            at("cafe_table", 34, 9),
+            at("coffee_sacks", 25, 12),
+        ],
+    },
+    Pack {
         pack: "stargazer",
         paint: "nebula",
         flooring: "starfield",
@@ -687,7 +733,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 15] = [
+pub const SOLD_ALONE: [(&str, &str); 18] = [
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -705,6 +751,10 @@ pub const SOLD_ALONE: [(&str, &str); 15] = [
     ("crab", "beach"),
     ("bottle_message", "beach"),
     ("lifeguard_tower", "beach"),
+    // #1071.
+    ("latte_art", "cafe"),
+    ("barista_cat", "cafe"),
+    ("coffee_roaster", "cafe"),
 ];
 
 /// HC65: grand pieces and their prices, 100 to 500. These are bought only on their own, as
