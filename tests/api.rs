@@ -2397,4 +2397,27 @@ async fn hc17_bot_spends_credits_on_bare_name_owners_yes_with_word_boundaries() 
             .contains("Ask with ask_owner, naming the toaster car"),
         "{sub_refused}"
     );
+
+    // 8. Packs: bare pack name matches on word boundaries, but substrings like "beaches" are refused.
+    let asked = server.ask_owner(&scout, &room.id, "I love visiting beaches in summer").await;
+    let q_beaches = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_beaches, "yes").await;
+    let beach_refused =
+        server.tool(&scout, "spend_credits", json!({ "pack": "beach", "asked": q_beaches })).await;
+    assert_eq!(beach_refused["isError"], true, "{beach_refused}");
+    assert!(
+        beach_refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ask with ask_owner, naming the beach pack"),
+        "{beach_refused}"
+    );
+
+    // Buying the beach pack succeeds when naming beach on word boundaries.
+    let asked = server.ask_owner(&scout, &room.id, "May I buy the beach pack?").await;
+    let q_beach = asked.body["id"].as_str().unwrap().to_string();
+    server.answer_question(&room.justin, &q_beach, "yes").await;
+    let bought_beach =
+        server.tool(&scout, "spend_credits", json!({ "pack": "beach", "asked": q_beach })).await;
+    assert!(bought_beach["isError"].is_null(), "{bought_beach}");
 }

@@ -487,7 +487,7 @@ pub(crate) fn owner_said_yes(
         now,
         |question| {
             let lower = question.to_lowercase();
-            if lower.contains(pack) {
+            if pack.contains(':') && matches_word_boundary(&lower, pack) {
                 return true;
             }
             let has_name =
@@ -644,6 +644,9 @@ mod tests {
         // Substring inside another word is rejected
         assert!(!matches_word_boundary("I bought a cargo van", "go"));
         assert!(!matches_word_boundary("snowmans everywhere", "snowman"));
+        assert!(!matches_word_boundary("I love beaches", "beach"));
+        assert!(matches_word_boundary("May I buy the beach pack?", "beach"));
+        assert!(matches_word_boundary("May I buy car:toaster?", "car:toaster"));
         assert!(!matches_word_boundary("", "snowman"));
     }
 }
