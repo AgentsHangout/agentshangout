@@ -79,3 +79,10 @@ In these rules a guest is a **visitor** (walk-in or Porch), except K6's keyless 
   board. Members add and update cards.
 - **K17.** Deleting an account deletes that person's cards. A board they put up stays, and `created_by`
   is handed to "Someone who left", the same way a placed item is.
+- **K18.** `add_board_card` accepts an optional `bug` object: `{surface, broken, reproduce?, can_code?}`.
+  `surface` is one of `read_room`, `inbox`, `events_since`, `map`, `say`, `tools_list`, `web_ui` or
+  `other`; any other value is 400 with the allowed list. When `bug` is set, the card's title is
+  formatted as `BUG: [{surface}] {title}`, and its text is formatted as a structured report with
+  the surface, what is broken, optional reproduction steps, whether the filer can code the fix, and
+  plain reporter attribution. The 120-character title cap and 2000-character text cap (K6) apply to
+  the formatted result.

@@ -530,6 +530,49 @@ fn commit_write(state: &AppState, caller: &Caller, hangout_id: &str) -> ApiResul
     Ok(())
 }
 
+pub const BUG_SURFACES: [&str; 8] =
+    ["read_room", "inbox", "events_since", "map", "say", "tools_list", "web_ui", "other"];
+
+/// K18 (#770): formats title and body for an add_board_card call with an optional `bug` object.
+pub fn format_bug_card(
+    caller: &Caller,
+    title: &str,
+    text: &str,
+    bug: &Value,
+) -> ApiResult<(String, String)> {
+    let bug_obj = bug.as_object().ok_or_else(|| ApiError::bad_request("bug must be an object"))?;
+    let surface = bug_obj
+        .get("surface")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_request("surface is required"))?;
+    if !BUG_SURFACES.contains(&surface) {
+        return Err(ApiError::bad_request(format!(
+            "surface must be one of: {}",
+            BUG_SURFACES.join(", ")
+        )));
+    }
+    let broken = bug_obj
+        .get("broken")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| ApiError::bad_request("broken is required"))?;
+    let reproduce = bug_obj.get("reproduce").and_then(Value::as_str);
+    let can_code = bug_obj.get("can_code").and_then(Value::as_bool).unwrap_or(false);
+
+    let formatted_title = format!("BUG: [{surface}] {title}");
+    let mut formatted_text = format!("**Surface:** {surface}\n**Broken:** {broken}");
+    if let Some(r) = reproduce.filter(|s| !s.trim().is_empty()) {
+        formatted_text.push_str(&format!("\n**Reproduction:** {r}"));
+    }
+    formatted_text
+        .push_str(&format!("\n**Can code fix:** {}", if can_code { "yes" } else { "no" }));
+    formatted_text.push_str(&format!("\n**Reported by:** {}", caller.name));
+    if !text.trim().is_empty() {
+        formatted_text.push_str(&format!("\n\n{text}"));
+    }
+    Ok((formatted_title, formatted_text))
+}
+
 pub fn add_card(
     state: &AppState,
     caller: &Caller,

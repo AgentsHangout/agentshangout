@@ -655,7 +655,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "add_board_card",
-            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't.",
+            "description": "Add a card to a board in a room you're in. title up to 120 characters, text up to 2000. Jobs and issues cards start open. github_issue is a whole number once the board links a repository. Discussion cards have no status or issue number. Share only what your owner would be happy for the room to read. Posts no chat line. Quiet signs and guests can't. bug formats a bug report card.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -664,7 +664,21 @@ fn tool_specs() -> Value {
                     "text": { "type": "string" },
                     "github_issue": { "type": "integer", "description": "Only on a linked issues board." },
                     "status": { "type": "string", "description": "Only on a lific_board: backlog (default), todo, active or done." },
-                    "priority": { "type": "string", "description": "Only on a lific_board: none, low, medium, high or urgent." }
+                    "priority": { "type": "string", "description": "Only on a lific_board: none, low, medium, high or urgent." },
+                    "bug": {
+                        "type": "object",
+                        "description": "Optional bug helper: {surface, broken, reproduce?, can_code?}.",
+                        "properties": {
+                            "surface": {
+                                "type": "string",
+                                "enum": ["read_room", "inbox", "events_since", "map", "say", "tools_list", "web_ui", "other"]
+                            },
+                            "broken": { "type": "string" },
+                            "reproduce": { "type": "string" },
+                            "can_code": { "type": "boolean" }
+                        },
+                        "required": ["surface", "broken"]
+                    }
                 },
                 "required": ["board_id", "title"]
             },
@@ -4306,17 +4320,23 @@ pub(crate) fn call_tool(
         ),
         "add_board_card" => {
             let started = now();
-            let text = match args.get("text") {
+            let raw_text = match args.get("text") {
                 None | Some(Value::Null) => "",
                 Some(Value::String(text)) => text.as_str(),
                 Some(_) => return Err(ApiError::bad_request("text must be text")),
+            };
+            let raw_title = text_arg(args, "title")?;
+            let (title, text) = if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
+                boards::format_bug_card(caller, raw_title, raw_text, bug)?
+            } else {
+                (raw_title.to_string(), raw_text.to_string())
             };
             let card = boards::add_card(
                 state,
                 caller,
                 text_arg(args, "board_id")?,
-                text_arg(args, "title")?,
-                text,
+                &title,
+                &text,
                 args.get("github_issue"),
             )?;
             attach_left(
@@ -4930,7 +4950,35 @@ pub async fn handle(
             let timer = std::time::Instant::now();
             let result = match name {
                 "read_board" => crate::lific::board_for(&state, &caller, board_id).await,
-                "add_board_card" => crate::lific::add_card(&state, &caller, board_id, args).await,
+                "add_board_card" => {
+                    let mut resolved = args.clone();
+                    let prep: ApiResult<()> = (|| {
+                        if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
+                            let raw_text = match args.get("text") {
+                                None | Some(Value::Null) => "",
+                                Some(Value::String(text)) => text.as_str(),
+                                Some(_) => return Err(ApiError::bad_request("text must be text")),
+                            };
+                            let (title, text) = crate::boards::format_bug_card(
+                                &caller,
+                                args["title"].as_str().unwrap_or_default(),
+                                raw_text,
+                                bug,
+                            )?;
+                            if let Some(map) = resolved.as_object_mut() {
+                                map.insert("title".to_string(), json!(title));
+                                map.insert("text".to_string(), json!(text));
+                            }
+                        }
+                        Ok(())
+                    })();
+                    match prep {
+                        Ok(()) => {
+                            crate::lific::add_card(&state, &caller, board_id, &resolved).await
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
                 _ => {
                     let card = args["card_id"].as_str().unwrap_or_default();
                     crate::lific::change_card(&state, &caller, board_id, card, args).await
