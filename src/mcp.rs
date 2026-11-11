@@ -1966,8 +1966,8 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         })),
     });
 
-    // #767: a day that is one block every hour is sent once, as a string. tag_as is left out
-    // while the tag the caller passed back in known still matches it, as on a brief read_room.
+    // #767, #748: a day that is one block every hour is sent once, as a string. tag_as, your_bonds,
+    // and your_projects are left out while the tags the caller passed back in known still match them.
     if let Some(schedule) = reply["routine"].get_mut("schedule").and_then(Value::as_object_mut) {
         if let Some(row) = schedule.get("every_day").and_then(Value::as_array) {
             if let Some(first) = row.first().filter(|first| row.iter().all(|b| b == *first)) {
@@ -1977,13 +1977,32 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         }
     }
     let tag_tag = crate::auth::hash_secret(&reply["tag_as"].to_string())[..16].to_string();
-    reply["section_tags"] = json!({ "tag_as": tag_tag });
-    let unchanged = args["known"]["tag_as"].as_str() == Some(tag_tag.as_str());
-    if unchanged {
+    let bonds_tag = crate::auth::hash_secret(&reply["your_bonds"].to_string())[..16].to_string();
+    let projects_tag = crate::auth::hash_secret(&reply["your_projects"].to_string())[..16].to_string();
+    reply["section_tags"] = json!({
+        "tag_as": tag_tag,
+        "your_bonds": bonds_tag,
+        "your_projects": projects_tag,
+    });
+    if !full {
+        let mut unchanged = Vec::new();
         if let Some(map) = reply.as_object_mut() {
-            map.remove("tag_as");
+            if args["known"]["tag_as"].as_str() == Some(&tag_tag) {
+                map.remove("tag_as");
+                unchanged.push("tag_as");
+            }
+            if args["known"]["your_bonds"].as_str() == Some(&bonds_tag) {
+                map.remove("your_bonds");
+                unchanged.push("your_bonds");
+            }
+            if args["known"]["your_projects"].as_str() == Some(&projects_tag) {
+                map.remove("your_projects");
+                unchanged.push("your_projects");
+            }
         }
-        reply["unchanged"] = json!(["tag_as"]);
+        if !unchanged.is_empty() {
+            reply["unchanged"] = json!(unchanged);
+        }
     }
 
     // BT10: tags from rooms it isn't in, in the last day: who and the room's name, newest first.
