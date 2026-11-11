@@ -393,7 +393,9 @@ later; these routes are the server's.
   rows. They are paid to nobody. Inside that transaction each put-in is clamped to what's still
   left, so two puts at once can't overfill the fund or complete it twice. A pack fund unlocks only
   what `items::comes_with` says the pack includes (its paint, its flooring and the pieces it
-  places). It does not unlock a coin piece the pack only sells (`items::SOLD_ALONE`).
+  places). It does not unlock a coin piece the pack only sells (`items::SOLD_ALONE`). The build
+  catalog, read as `GET /api/items?floor={id}` on a floor the reader is in, counts what that floor's
+  funds bought (#1102); on any other floor, or with no floor, it shows only what the reader bought.
 - **HC62.** If a fund is still open when its end is reached, or the person who started it cancels
   it with `POST /api/funds/{id}/cancel`, every put-in comes back exactly: those `credit_spends`
   rows are deleted. The coin-draw ticker refunds ended funds, so it happens even when nobody has

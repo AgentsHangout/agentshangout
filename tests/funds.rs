@@ -1165,3 +1165,39 @@ async fn a_yes_to_a_fund_does_not_buy_the_item() {
     }
     assert_eq!(server.balance(&ann.key).await, 80, "nothing was spent");
 }
+
+// #1102: on a floor you're in, the build catalog counts what its funds bought. A pack fund unlocks
+// what the pack places, not the coin pieces it sells on their own, and a piece fund unlocks that
+// piece. Plain /api/items, and a floor you aren't in, still show them locked.
+#[tokio::test]
+async fn the_catalog_on_a_floor_counts_what_its_funds_bought() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server.pay(&ann.id, "seed", credits80);
+    let (_, eve) = server.someone("Eve").await;
+    let path = format!("/api/floors/{room}/funds");
+    for item in ["winter", "piece:snow_globe"] {
+        let fund = server.post(&ann.key, &path, json!({ "item": item })).await.ok();
+        let id = text(&fund["id"]);
+        let target = fund["target"].as_i64().unwrap();
+        let done = server
+            .post(&ann.key, &format!("/api/funds/{id}/put"), json!({ "amount": target }))
+            .await
+            .ok();
+        assert_eq!(done["fund"]["status"], "complete", "{done}");
+    }
+    let locked = |catalog: &Value, kind: &str| {
+        let found =
+            catalog["items"].as_array().unwrap().iter().find(|k| k["kind"] == kind).unwrap();
+        found["unlocked"] == json!(false)
+    };
+    let here = server.get(&ann.key, &format!("/api/items?floor={room}")).await.ok();
+    assert!(!locked(&here, "snowman"), "the pack fund unlocked what it places");
+    assert!(!locked(&here, "snow_globe"), "the piece fund unlocked its piece");
+    assert!(locked(&here, "cocoa_cart"), "a pack fund doesn't give its coin pieces");
+    let plain = server.get(&ann.key, "/api/items").await.ok();
+    assert!(locked(&plain, "snowman") && locked(&plain, "snow_globe"));
+    // Eve isn't in the room, so the floor is ignored for her and nothing about it shows.
+    let theirs = server.get(&eve.key, &format!("/api/items?floor={room}")).await.ok();
+    assert!(locked(&theirs, "snowman") && locked(&theirs, "snow_globe"));
+}

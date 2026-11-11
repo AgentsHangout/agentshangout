@@ -51,6 +51,7 @@ const onCreditsStart = source.indexOf('  function onCredits(');
 assert.ok(onCreditsStart >= 0, 'onCredits is defined in buildMode');
 const onCreditsCode = extractInner('onCredits');
 const openCatalogCode = extractInner('openCatalog');
+const onFloorUnlocksCode = extractInner('onFloorUnlocks');
 
 (async () => {
   let fetches = 0;
@@ -64,15 +65,17 @@ const openCatalogCode = extractInner('openCatalog');
     placedKey: 'p1',
     buildError: { hidden: true, textContent: '' },
     panels: { current: null },
+    id: 'room1',
     api: async (path) => {
-      assert.equal(path, '/api/items');
+      // #1102: the catalog is read for the floor build mode is on.
+      assert.equal(path, '/api/items?floor=room1');
       fetches += 1;
       return JSON.parse(JSON.stringify(catalogPayload));
     },
     render: () => { renders += 1; },
   };
   vm.createContext(catalogCtx);
-  vm.runInContext(`${onCreditsCode}\n${openCatalogCode}\nthis.onCredits = onCredits; this.openCatalog = openCatalog;`, catalogCtx);
+  vm.runInContext(`${onCreditsCode}\n${onFloorUnlocksCode}\n${openCatalogCode}\nthis.onCredits = onCredits; this.onFloorUnlocks = onFloorUnlocks; this.openCatalog = openCatalog;`, catalogCtx);
 
   // 1. Opening Build the first time fetches /api/items once.
   await catalogCtx.openCatalog();
@@ -103,6 +106,15 @@ const openCatalogCode = extractInner('openCatalog');
   catalogCtx.onCredits({ detail: { spent: 15 } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(fetches, 3, 'spending while Build is open refreshes the catalog');
+
+  // 6. #1102: a fund completing on another floor changes nothing here; on this floor, the open
+  // Build panel reads the catalog again, so what the fund bought shows unlocked.
+  catalogCtx.onFloorUnlocks({ detail: { floor: 'elsewhere' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetches, 3, 'another floor\'s fund makes no fetch');
+  catalogCtx.onFloorUnlocks({ detail: { floor: 'room1' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fetches, 4, 'this floor\'s completed fund refreshes the open catalog');
 
   console.log('Build pictures: painted once, copied per tile, bounded, and openCatalog skips redundant session fetches unless credits are spent.');
 })().catch((err) => {

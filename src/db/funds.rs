@@ -415,6 +415,15 @@ impl Db {
             .optional()
     }
 
+    /// #1102: every item this floor's funds unlocked, by key (`winter`, `piece:snowman`).
+    pub fn floor_unlock_items(&self, hangout_id: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT item FROM floor_unlocks WHERE hangout_id = ?1 ORDER BY item")?;
+        let rows = stmt.query_map([hangout_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
     /// Whether this floor has `item` unlocked, by that exact key (`winter`, or `piece:snowman`).
     pub fn has_floor_unlock(&self, hangout_id: &str, item: &str) -> rusqlite::Result<bool> {
         exists(
