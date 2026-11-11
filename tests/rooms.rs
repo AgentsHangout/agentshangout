@@ -3370,6 +3370,138 @@ async fn the_beach_shack_pack_is_bought_for_its_walls_and_floor_but_not_its_coin
     server.place(&ann.key, &room, "crab", (34, 2)).await.refused(StatusCode::FORBIDDEN);
 }
 
+// HC45 (#1057): paid wall and floor styles are sold individually for 5 coins beside their pack.
+// You can buy without the pack and apply, but someone who owns neither is refused, a buy with too few
+// coins is refused, and owning the pack gives both styles and refuses duplicate single purchases.
+#[tokio::test]
+async fn walls_and_floors_sold_on_their_own_for_coins() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (bo_room, bo) = server.someone("Bo").await;
+    let path = format!("/api/floors/{room}");
+
+    // Give Ann 10 credits (enough for two 5-coin style purchases):
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 10,
+            100,
+            now(),
+        )
+        .unwrap();
+
+    // 1. Someone who owns neither the pack nor the individual style is refused when applying:
+    server.put(&ann.key, &path, json!({ "paint": "frost" })).await.refused(StatusCode::FORBIDDEN);
+    server.put(&ann.key, &path, json!({ "flooring": "snow" })).await.refused(StatusCode::FORBIDDEN);
+
+    // 2. Buying a free default paint or flooring is refused as a bad request:
+    server
+        .post(&ann.key, "/api/credits/spend", json!({ "pack": "paint:dusk" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+    server
+        .post(&ann.key, "/api/credits/spend", json!({ "pack": "flooring:oak" }))
+        .await
+        .refused(StatusCode::BAD_REQUEST);
+
+    // 3. Buying with too few coins is refused: Bo has 0 credits.
+    let too_few = server
+        .post(&bo.key, "/api/credits/spend", json!({ "pack": "paint:frost" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(text(&too_few["error"]).contains("costs 5 credits and the balance is 0"), "{too_few}");
+
+    // 4. Buy paint:frost without the Winter pack:
+    let bought_paint =
+        server.post(&ann.key, "/api/credits/spend", json!({ "pack": "paint:frost" })).await.ok();
+    assert_eq!(bought_paint["balance"], 5);
+
+    // Applying paint:frost now succeeds:
+    assert_eq!(
+        server.put(&ann.key, &path, json!({ "paint": "frost" })).await.ok()["paint"],
+        "frost"
+    );
+
+    // But flooring:snow is still refused because only paint:frost was bought:
+    server.put(&ann.key, &path, json!({ "flooring": "snow" })).await.refused(StatusCode::FORBIDDEN);
+    // Pieces of the Winter pack are also still refused:
+    server.place(&ann.key, &room, "snowman", (31, 2)).await.refused(StatusCode::FORBIDDEN);
+
+    // 5. Trying to buy paint:frost again is refused (already have):
+    server
+        .post(&ann.key, "/api/credits/spend", json!({ "pack": "paint:frost" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+
+    // 6. Buy flooring:snow on its own for the remaining 5 credits:
+    let bought_floor =
+        server.post(&ann.key, "/api/credits/spend", json!({ "pack": "flooring:snow" })).await.ok();
+    assert_eq!(bought_floor["balance"], 0);
+
+    // Applying flooring:snow now succeeds:
+    assert_eq!(
+        server.put(&ann.key, &path, json!({ "flooring": "snow" })).await.ok()["flooring"],
+        "snow"
+    );
+
+    // 7. Owning a pack gives both styles for free and refuses buying them individually:
+    // Give Bo 30 credits and buy the Beach pack (costs 25):
+    server
+        .state
+        .db
+        .settle_credits(
+            &bo.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed2".into(), at: now() },
+            )],
+            |_| 30,
+            100,
+            now(),
+        )
+        .unwrap();
+
+    let bo_path = format!("/api/floors/{bo_room}");
+
+    server.post(&bo.key, "/api/credits/spend", json!({ "pack": "beach" })).await.ok();
+
+    // Owning the Beach pack gives both ocean paint and sand flooring for free:
+    assert_eq!(
+        server.put(&bo.key, &bo_path, json!({ "paint": "ocean" })).await.ok()["paint"],
+        "ocean"
+    );
+    assert_eq!(
+        server.put(&bo.key, &bo_path, json!({ "flooring": "sand" })).await.ok()["flooring"],
+        "sand"
+    );
+
+    // Since Bo already has the Beach pack, buying paint:ocean or flooring:sand individually is refused:
+    let dup_paint = server
+        .post(&bo.key, "/api/credits/spend", json!({ "pack": "paint:ocean" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(
+        text(&dup_paint["error"]).contains("already have that paint in its pack"),
+        "{dup_paint}"
+    );
+
+    let dup_floor = server
+        .post(&bo.key, "/api/credits/spend", json!({ "pack": "flooring:sand" }))
+        .await
+        .refused(StatusCode::CONFLICT);
+    assert!(
+        text(&dup_floor["error"]).contains("already have that flooring in its pack"),
+        "{dup_floor}"
+    );
+}
+
 // HC65: a grand piece is locked in the catalog with its price until it's bought, then placed where
 // its 4x2 cells fit, and refused where they don't.
 #[tokio::test]

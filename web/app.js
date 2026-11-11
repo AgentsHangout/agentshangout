@@ -1881,8 +1881,8 @@ function creditsCard(credits) {
       ['Trips you let in', String(now.hosted_trips)],
     ];
     if (now.spent) rows.push(['Spent', count(now.spent, 'credit', 'credits')]);
-    // HC45: a piece bought on its own is spent as `piece:<kind>`.
-    const packName = (word) => word.startsWith('car:') ? (carNames[word.slice(4)] || sentence(word.slice(4))) : word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : `${sentence(word)} pack`;
+    // HC45 & #1057: a piece, paint or flooring bought on its own is spent as `piece:<kind>`, `paint:<name>` or `flooring:<name>`.
+    const packName = (word) => word.startsWith('car:') ? (carNames[word.slice(4)] || sentence(word.slice(4))) : word.startsWith('piece:') ? sentence(word.slice(6).replaceAll('_', ' ')) : word.startsWith('paint:') ? `${sentence(word.slice(6).replaceAll('_', ' '))} paint` : word.startsWith('flooring:') ? `${sentence(word.slice(9).replaceAll('_', ' '))} floor` : `${sentence(word)} pack`;
     // HC24: the shop shows each pack as it comes, on its own paint and flooring, before it's bought.
     const packPicture = (offer) => roomPicture({ paint: offer.paint, flooring: offer.flooring, hidden: [] },
       offer.pieces.map(({ kind, x, y, w, h: deep }) => ({ item: kind, x, y, w, h: deep })));

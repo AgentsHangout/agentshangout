@@ -732,8 +732,27 @@ pub fn sold_alone_kinds(pack: &Pack) -> Vec<&'static str> {
 /// HC45: how a piece bought on its own is written in `credit_spends.pack`.
 pub const PIECE: &str = "piece:";
 
+/// #1057: how a paint bought on its own is written in `credit_spends.pack`.
+pub const PAINT: &str = "paint:";
+
+/// #1057: how a flooring bought on its own is written in `credit_spends.pack`.
+pub const FLOORING: &str = "flooring:";
+
+/// #1057: what a paid paint or flooring style costs when bought on its own for coins.
+pub const STYLE_PRICE_HC: i64 = 5;
+
+/// #1057: the paid pack that includes paint `name`, if any.
+pub fn pack_for_paint(name: &str) -> Option<&'static Pack> {
+    PACKS.iter().find(|p| p.cost > 0 && p.paint == name)
+}
+
+/// #1057: the paid pack that includes flooring `name`, if any.
+pub fn pack_for_flooring(name: &str) -> Option<&'static Pack> {
+    PACKS.iter().find(|p| p.cost > 0 && p.flooring == name)
+}
+
 /// HC45: what a piece from a paid pack costs on its own, 2 to 10: more for one that takes more floor
-/// and is more beautiful. Paints and floorings come only with their pack, so they have no price.
+/// and is more beautiful. Paints and floorings are priced separately by STYLE_PRICE_HC (#1057).
 pub fn piece_price(word: &str) -> Option<i64> {
     let kind = kind_of(word)?;
     let pack = paid_pack_with(word)?;
@@ -747,17 +766,22 @@ pub fn comes_with(pack: &Pack, word: &str) -> bool {
     pack.paint == word || pack.flooring == word || pack.items.iter().any(|part| part.kind == word)
 }
 
-/// HC45: whether this person may use `word` from a paid pack: they bought the pack and it comes with
-/// it, or they bought that piece.
+/// HC45 & #1057: whether this person may use `word` from a paid pack: they bought the pack and it comes with
+/// it, or they bought that piece, paint or flooring.
 pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> ApiResult<bool> {
     Ok((comes_with(pack, word) && state.db.has_bought(person_id, pack.pack)?)
-        || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?)
+        || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?
+        || state.db.has_bought(person_id, &format!("{PAINT}{word}"))?
+        || state.db.has_bought(person_id, &format!("{FLOORING}{word}"))?)
 }
 
 /// HC61: this floor's fund unlocked `word`, either as that piece or as a pack that places it.
 /// A piece the pack only sells (`SOLD_ALONE`) is not unlocked by the pack.
 fn floor_grants(state: &AppState, floor_id: &str, word: &str) -> ApiResult<bool> {
-    if state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))? {
+    if state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))?
+        || state.db.has_floor_unlock(floor_id, &format!("{PAINT}{word}"))?
+        || state.db.has_floor_unlock(floor_id, &format!("{FLOORING}{word}"))?
+    {
         return Ok(true);
     }
     Ok(match paid_pack_with(word) {
@@ -3004,5 +3028,21 @@ mod collection_tests {
                 assert_eq!(kind.category == category, in_pack, "{} in {}", kind.kind, paid.pack);
             }
         }
+    }
+
+    // #1057: each paid pack's paint and flooring is sold individually for 5 coins, and free defaults
+    // or free packs have no pack_for_paint/pack_for_flooring
+    #[test]
+    fn paid_paints_and_floorings_are_derived_dynamically_from_packs() {
+        assert_eq!(STYLE_PRICE_HC, 5);
+        for pack in PACKS.iter().filter(|p| p.cost > 0) {
+            assert_eq!(pack_for_paint(pack.paint).map(|p| p.pack), Some(pack.pack));
+            assert_eq!(pack_for_flooring(pack.flooring).map(|p| p.pack), Some(pack.pack));
+        }
+        // Free packs (fall, cost 0) and default plain styles have no paid pack:
+        assert!(pack_for_paint("harvest").is_none());
+        assert!(pack_for_flooring("leaves").is_none());
+        assert!(pack_for_paint("dusk").is_none());
+        assert!(pack_for_flooring("oak").is_none());
     }
 }

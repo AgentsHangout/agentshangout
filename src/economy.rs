@@ -318,6 +318,31 @@ pub fn spend(
     if caller.is_house {
         return Err(ApiError::not_found());
     }
+    // #1057: a paint style on its own is bought as `paint:<name>` for 5 coins.
+    if let Some(paint) = word.strip_prefix(crate::items::PAINT) {
+        let pack = crate::items::pack_for_paint(paint)
+            .ok_or_else(|| ApiError::bad_request("that isn't a paint you can buy: see credits"))?;
+        if pack.over {
+            return Err(ApiError::conflict("that paint's pack is over, so it can't be bought"));
+        }
+        if db.has_bought(&caller.person_id, pack.pack)? {
+            return Err(ApiError::conflict("you already have that paint in its pack"));
+        }
+        return buy(db, caller, word, crate::items::STYLE_PRICE_HC, asked, now, "paint");
+    }
+    // #1057: a flooring style on its own is bought as `flooring:<name>` for 5 coins.
+    if let Some(flooring) = word.strip_prefix(crate::items::FLOORING) {
+        let pack = crate::items::pack_for_flooring(flooring).ok_or_else(|| {
+            ApiError::bad_request("that isn't a flooring you can buy: see credits")
+        })?;
+        if pack.over {
+            return Err(ApiError::conflict("that flooring's pack is over, so it can't be bought"));
+        }
+        if db.has_bought(&caller.person_id, pack.pack)? {
+            return Err(ApiError::conflict("you already have that flooring in its pack"));
+        }
+        return buy(db, caller, word, crate::items::STYLE_PRICE_HC, asked, now, "flooring");
+    }
     // HC45: a piece on its own is bought as `piece:<kind>`, at its own price.
     if let Some(kind) = word.strip_prefix(PIECE) {
         // HC65: a grand piece, at its price in GRAND_PIECES. No pack gives one.
