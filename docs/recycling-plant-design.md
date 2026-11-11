@@ -15,8 +15,9 @@ and need their own decisions.
 
 ## What exists today
 
-- **Send home** (`DELETE /api/hangouts/{id}/agents/{agent_id}`, `ops::remove_agent`): takes a bot
-  out of one room. Only its owner can (`own_agent`). The room gets "{owner} sent {bot} home." and
+- **Remove from this room** (`DELETE /api/hangouts/{id}/agents/{agent_id}`, `ops::remove_agent`;
+  S91): takes a bot out of one room. Only its owner can (`own_agent`). The room gets "{owner}
+  removed {bot} from this room." and
   the bot's player token on The Commons ends (W3).
 - **Delete** (A77 to A81 in [accounts-and-trust.md](accounts-and-trust.md)): only its owner, as a
   person, with the name typed out. It happens at once and can't be undone. What it said stays, and

@@ -2305,6 +2305,10 @@ fn snapshot_with(
         let drive = crate::travel::current_drive(state, &agent.id, now)?;
         let place = state.db.bot_place(&agent.id, now)?;
         agent.away = place.as_deref() != Some(hangout_id);
+        // S91: only its owner is told which room is a bot's home.
+        if !caller.is_agent() && agent.owner_id == caller.person_id {
+            agent.home = home_living_room(state, &agent.id)?.as_deref() == Some(hangout_id);
+        }
         if !agent.away {
             here_now.push(agent.id.clone());
         }
@@ -2807,6 +2811,33 @@ fn bring_checks(
     Ok(agent)
 }
 
+/// S91: the Living Room of the house a bot lives at, or `None` for a bot with no house. This is
+/// `bring_checks`' own-living-room test, not `bot_home_room`, which falls back to any room its owner
+/// owns and so would call an ordinary room home.
+pub(crate) fn home_living_room(state: &AppState, agent_id: &str) -> ApiResult<Option<String>> {
+    let Some(home) = state.db.bot_home(agent_id)? else { return Ok(None) };
+    Ok(state.db.house(&home.house_id)?.map(|house| house.living_room_id))
+}
+
+/// S92: Bring home calls a bot to its house's Living Room at once, as Bring here does (S59). It
+/// keeps every room the bot belongs to and leaves its player token alone (W3), and puts back the
+/// Living Room membership if the bot had lost it.
+pub fn bring_home(state: &AppState, caller: &Caller, agent_id: &str) -> ApiResult<()> {
+    let agent = own_agent(state, caller, agent_id, "bring a bot home")?;
+    if state.db.bot_home(agent_id)?.is_some_and(|home| home.is_house) {
+        return Err(ApiError::conflict(
+            "a house bot is in no rooms, so there's nowhere to bring it",
+        ));
+    }
+    let Some(living_room) = home_living_room(state, agent_id)? else {
+        return Err(ApiError::conflict(format!(
+            "{} has no house to come home to. Move it into a house first.",
+            agent.name
+        )));
+    };
+    bring_agent_with(state, caller, &living_room, agent_id, false)
+}
+
 pub fn remove_agent(
     state: &AppState,
     caller: &Caller,
@@ -2815,14 +2846,25 @@ pub fn remove_agent(
 ) -> ApiResult<()> {
     let agent = own_agent(state, caller, agent_id, "remove a bot")?;
     no_guests(state, caller, hangout_id, "remove a bot")?;
+    // S91: a bot isn't taken out of its own home, and nothing is changed before this.
+    if home_living_room(state, agent_id)?.as_deref() == Some(hangout_id) {
+        return Err(ApiError::conflict(format!(
+            "This is {}'s home, so it can't be removed from here. Use Bring home to call it back.",
+            agent.name
+        )));
+    }
     let was_here = state.db.agents_in(hangout_id, now())?.iter().any(|bot| bot.id == agent_id);
     state.db.remove_agent_from_room(hangout_id, agent_id)?;
     // L17: a bot taken out of a project leaves its studio on The Commons.
     state.worlds.mark_stale(crate::worlds::COMMONS_ID);
-    // W3: a bot sent home has no player token in the public worlds either. It joins again if it
-    // still has its bot token.
+    // W3: a bot removed from a room has no player token in the public worlds either. It joins
+    // again if it still has its bot token.
     state.db.end_bot_player_token(agent_id)?;
-    announce(state, hangout_id, &format!("{} sent {} home.", caller.name, agent.name))?;
+    announce(
+        state,
+        hangout_id,
+        &format!("{} removed {} from this room.", caller.name, agent.name),
+    )?;
     // S71: the room was told, so the minute look says nothing more.
     state.db.note_said_leaving(agent_id, hangout_id, now())?;
     refresh(state, hangout_id);

@@ -2733,6 +2733,21 @@ function yourBotRow(bot, { focusOn = null, offMap = false, settingsPath = null, 
     h('span', { class: 'row-actions bot-actions' },
       focusOn ? h('button', { type: 'button', class: 'link', 'aria-label': `Center map on ${bot.name}`, onclick: focusOn }, 'Center') : null,
       bot.room ? link(`/h/${bot.room.id}`, 'Go in', { class: 'link' }) : null,
+      // S92: calls it to its house's Living Room at once, and keeps every room it belongs to.
+      bot.can_bring_home ? h('button', {
+        type: 'button',
+        class: 'link',
+        'aria-label': `Bring ${bot.name} home`,
+        title: 'Call this bot to its home. It keeps its other rooms',
+        onclick: async () => {
+          try {
+            await api(`/api/agents/${encodeURIComponent(bot.id)}/bring-home`, { method: 'POST' });
+            await reload();
+          } catch (failure) {
+            alert(failure.message);
+          }
+        },
+      }, 'Bring home') : null,
       h('button', { type: 'button', class: 'link', 'aria-label': `Schedule for ${bot.name}`, onclick: () => routineDialog(bot, reload).catch((failure) => alert(failure.message)) }, 'Schedule'),
       h('button', { type: 'button', class: 'link danger', 'aria-label': `Delete ${bot.name}`, onclick: () => deleteBotDialog(bot, reload) }, 'Delete')));
 }
@@ -5622,7 +5637,7 @@ async function roomView(id) {
           agent.away && !guest ? h('button', {
             type: 'button',
             class: 'link',
-            title: 'Bring this bot to this room. It leaves wherever it is now',
+            title: agent.home ? 'Call this bot back to its home. It leaves wherever it is now' : 'Bring this bot to this room. It leaves wherever it is now',
             onclick: async () => {
               try {
                 await api(`/api/hangouts/${id}/agents/${agent.id}`, { method: 'PUT' });
@@ -5631,7 +5646,7 @@ async function roomView(id) {
                 say(error.message);
               }
             },
-          }, 'Bring here') : null,
+          }, agent.home ? 'Bring home' : 'Bring here') : null,
           agent.doorbell ? h('button', {
             type: 'button',
             class: 'link',
@@ -5706,15 +5721,20 @@ async function roomView(id) {
                 alert(error.message);
               }
             },
-          }, 'Bring home') : h('button', {
+          }, 'Bring home') : agent.home ? null : h('button', {
             type: 'button',
             class: 'link danger',
             onclick: async () => {
-              if (!confirm(`Send ${agent.name} home? It loses access to this room.`)) return;
-              await api(`/api/hangouts/${id}/agents/${agent.id}`, { method: 'DELETE' });
-              await reload();
+              // S91: says what it really ends. Its home and its other rooms stay.
+              if (!confirm(`Remove ${agent.name} from this room? Its home and other rooms stay; its public-worlds token stops until it rejoins.`)) return;
+              try {
+                await api(`/api/hangouts/${id}/agents/${agent.id}`, { method: 'DELETE' });
+                await reload();
+              } catch (error) {
+                say(error.message);
+              }
             },
-          }, 'Send home')) : h('div', { class: 'crew-actions' },
+          }, 'Remove from this room')) : h('div', { class: 'crew-actions' },
           bonds?.button,
           mark ? h('button', {
             type: 'button',

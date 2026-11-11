@@ -3096,6 +3096,9 @@ pub struct Agent {
     pub visitor_until_why: Option<&'static str>,
     /// It belongs to this room but it's somewhere else (S55). Set only in a room's snapshot.
     pub away: bool,
+    /// S91: this room is its house's Living Room. Set only on the caller's own bots, in a room's snapshot.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
     /// CR6: seconds left on its drive here. Set only in a room's snapshot, and only while it's on its way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub driving: Option<i64>,
@@ -4378,6 +4381,7 @@ fn agent_from_row(row: &Row, now: i64) -> rusqlite::Result<Agent> {
         visitor_until: None,
         visitor_until_why: None,
         away: false,
+        home: false,
         driving: None,
         discord: None,
         apprenticed_by: None,

@@ -8188,3 +8188,96 @@ async fn a_residents_quiet_trip_doesnt_keep_the_bots_person_from_moving_in() {
     let moved = server.post(&cal.key, &format!("/api/house-invites/{code}/join"), json!({})).await;
     assert_ok(&moved);
 }
+
+/// A room Ann owns that isn't a house room, and a bot of hers living at her house, brought there.
+async fn bot_at_home_and_in_a_studio(server: &Server, w: &World) -> (Bot, String) {
+    let at = now();
+    let studio = server.state.db.create_hangout("studio", "Studio", "studio-code", &w.ann.id, at);
+    let studio = studio.unwrap().id;
+    let rover = server.bot(&w.ann, &w.ann_home.living, "Rover").await;
+    assert_ok(
+        &server
+            .put(&w.ann.key, &format!("/api/hangouts/{studio}/agents/{}", rover.id), json!({}))
+            .await,
+    );
+    (rover, studio)
+}
+
+// S91, W3: a bot can't be removed from its own home and nothing changes, but it can be from any
+// other room, which still ends its player token.
+#[tokio::test]
+async fn a_bot_is_kept_in_its_own_home_and_removed_from_other_rooms() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let (rover, studio) = bot_at_home_and_in_a_studio(&server, &w).await;
+    let joined = server.post(&rover.token, "/api/public/join", json!({})).await;
+    assert_ok(&joined);
+    let player = text(&joined.body["player_token"]);
+    let in_room = |room: &str| {
+        let bots = server.state.db.agents_in(room, now()).unwrap();
+        bots.iter().any(|bot| bot.id == rover.id)
+    };
+    let path = |room: &str| format!("/api/hangouts/{room}/agents/{}", rover.id);
+    // Home: refused with a reason that says what to do, and nothing was ended.
+    let refused = server.delete(&w.ann.key, &path(&w.ann_home.living)).await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
+    assert!(refused.body.to_string().contains("Use Bring home"), "{}", refused.body);
+    assert!(in_room(&w.ann_home.living));
+    assert_ok(&server.get(&player, "/api/worlds/commons/me").await);
+    // Anywhere else it's removed, the room is told so, and its player token ends.
+    assert_ok(&server.delete(&w.ann.key, &path(&studio)).await);
+    assert!(!in_room(&studio));
+    assert!(in_room(&w.ann_home.living));
+    let told = server.state.db.messages(&studio, 0, 10).unwrap();
+    assert!(told.iter().any(|said| said.body == "Ann removed Rover from this room."));
+    assert_denied(&server.get(&player, "/api/worlds/commons/me").await);
+}
+
+// S91: only a bot's owner is told which room is its home.
+#[tokio::test]
+async fn only_the_owner_is_told_which_room_is_a_bots_home() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let (rover, studio) = bot_at_home_and_in_a_studio(&server, &w).await;
+    let homes = |snapshot: &Reply| snapshot.body["agents"][0]["home"].clone();
+    let at_home = server.get(&w.ann.key, &format!("/api/hangouts/{}", w.ann_home.living)).await;
+    assert_eq!(homes(&at_home), json!(true), "{}", at_home.body);
+    let elsewhere = server.get(&w.ann.key, &format!("/api/hangouts/{studio}")).await;
+    assert_eq!(homes(&elsewhere), Value::Null, "{}", elsewhere.body);
+    let seen_by_bot =
+        server.get(&rover.token, &format!("/api/hangouts/{}", w.ann_home.living)).await;
+    assert_eq!(homes(&seen_by_bot), Value::Null, "{}", seen_by_bot.body);
+}
+
+// S92, W3: Bring home puts the bot in its Living Room at once, keeps its other rooms and its player
+// token, and puts back a membership it had lost. Only its owner can, and a bot with no house can't.
+#[tokio::test]
+async fn bring_home_calls_a_bot_back_and_keeps_its_rooms_and_token() {
+    let server = Server::start().await;
+    let w = server.world().await;
+    let (rover, studio) = bot_at_home_and_in_a_studio(&server, &w).await;
+    let player =
+        text(&server.post(&rover.token, "/api/public/join", json!({})).await.body["player_token"]);
+    let call = format!("/api/agents/{}/bring-home", rover.id);
+    let place = || server.state.db.bot_place(&rover.id, now()).unwrap();
+    assert_eq!(place().as_deref(), Some(studio.as_str()));
+    // Someone else's is refused as any owner action is, and moves nothing.
+    assert_denied(&server.post(&w.bo.key, &call, json!({})).await);
+    assert_eq!(place().as_deref(), Some(studio.as_str()));
+    assert_ok(&server.post(&w.ann.key, &call, json!({})).await);
+    assert_eq!(place().as_deref(), Some(w.ann_home.living.as_str()));
+    let rooms = server.state.db.hangouts_for_agent(&rover.id, now()).unwrap();
+    assert!(rooms.iter().any(|room| room.id == studio), "it still belongs to the studio");
+    assert_ok(&server.get(&player, "/api/worlds/commons/me").await);
+    // It had lost its Living Room (the issue's case): Bring home puts it back.
+    server.state.db.remove_agent_from_room(&w.ann_home.living, &rover.id).unwrap();
+    assert_ok(&server.post(&w.ann.key, &call, json!({})).await);
+    let bots = server.state.db.agents_in(&w.ann_home.living, now()).unwrap();
+    assert!(bots.iter().any(|bot| bot.id == rover.id));
+    assert_eq!(place().as_deref(), Some(w.ann_home.living.as_str()));
+    // No house, nowhere to come home to.
+    let drifter = server.bot(&w.ann, &w.square, "Drifter").await;
+    let none =
+        server.post(&w.ann.key, &format!("/api/agents/{}/bring-home", drifter.id), json!({})).await;
+    assert_eq!(none.status, StatusCode::CONFLICT, "{}", none.body);
+}

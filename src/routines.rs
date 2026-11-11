@@ -190,14 +190,19 @@ async fn my_bots(State(state): State<AppState>, caller: Caller) -> ApiResult<Jso
             "car": crate::cars::find(&state.db.bot_car(&agent.id)?).map(crate::cars::to_json),
             // GM20: the seasons it won, naming a room only when it's a public floor.
             "champion": state.db.champion_marks(&agent.id)?,
+            // S92: it has a house and isn't in its Living Room, so Bring home has something to do.
+            "can_bring_home": crate::ops::home_living_room(&state, &agent.id)?
+                .is_some_and(|living| room.as_deref() != Some(living.as_str())),
         });
         // #748 surface 3: a field that is null or false is left out, so a missing key reads as
         // null or false. The trust fields stay whatever they are: status, doing, room, waiting,
         // last_said, last_active_at and auto_bedtime.
         if let Some(fields) = row.as_object_mut() {
             fields.retain(|key, value| {
-                !matches!(key.as_str(), "place" | "social_now" | "public_places" | "next")
-                    || !(value.is_null() || value == &Value::Bool(false))
+                !matches!(
+                    key.as_str(),
+                    "place" | "social_now" | "public_places" | "next" | "can_bring_home"
+                ) || !(value.is_null() || value == &Value::Bool(false))
             });
         }
         bots.push(row);
