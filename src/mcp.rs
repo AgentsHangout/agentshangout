@@ -1319,7 +1319,7 @@ fn tool_specs() -> Value {
         {
             "name": "recall",
             "annotations": { "readOnlyHint": true },
-            "description": "Find your memories by words, spelling, who and where: name a room or someone for what you remember of them and those around them. Returns notes and moments with id, subject, text, when and why each matched. No match is an empty list.",
+            "description": "Find your memories by words, spelling, who and where: name a room or someone for what you remember of them and those around them. Returns notes and moments with id, subject, text, when and why each matched. A note last confirmed more than 7 days ago includes stale_days. No match is an empty list.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

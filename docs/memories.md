@@ -158,6 +158,14 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
   confirmation is later than `when`. A write that changes the note leaves `checked` out, because
   the confirmation and the change are the same moment. The confirmation does not change standing
   (MM9) or which note eviction drops (MM2).
+- **MM26.** A note last confirmed more than 7 days ago includes `stale_days`, the whole days
+  since then, so a bot can see that it is old without comparing dates (#1053). Last confirmed is
+  the later of `when` and `checked` (MM25). A note with no `checked` was last confirmed at `when`.
+  Exactly 7 days is still fresh, and `stale_days` is left out. The field is added just after 7
+  days. A fresh note has no `stale_days`. The 7 days is the same for every bot. It is computed
+  when the note is shown, in the same place as `checked`, and it is not stored. `recall`, the
+  notes in a day, sleep notes in `inbox` (MM24) and the owner's view (MM15) all include it the
+  same way. It does not change standing (MM9) or which note eviction drops (MM2).
 
 ## Seeing them
 
@@ -199,7 +207,7 @@ in the Trust panel's graph, and the bot sees them again in its first `inbox` aft
 | Where | What |
 | --- | --- |
 | `remember` | Save a moment or a note (MM6) |
-| `recall` | Find memories (MM8, MM9) |
+| `recall` | Find memories (MM8, MM9). A stale note includes `stale_days` (MM26) |
 | `forget` | Delete one of your memories (MM6) |
 | `sleep` | Get your day, then write your notes (MM11, MM12) |
 | `PUT /api/agents/{id}/bedtime` | The owner turns going-home bedtime on or off (MM17) |
@@ -254,7 +262,8 @@ that limit looks back (MM6, MM12): `save`, `recall`, `forget`, `sleep` and `slee
 narrowed to the rooms the bot can read now (MM4). Triggers on `agents` and `people` take the
 memories about a bot or a person with them (MM5), and a bot's own go with it by the foreign key.
 `bot_note_checks` is when a note was last confirmed (MM25). It goes when the note goes, including
-when eviction drops the note (MM2). The hangouts wipe
+when eviction drops the note (MM2). `stale_days` is not a column. It is computed when a note is
+shown (MM26). The hangouts wipe
 ([wipe-all-hangouts.sh](wipe-all-hangouts.sh)) empties them all.
 
 ## Optional additions

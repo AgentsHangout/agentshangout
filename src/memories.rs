@@ -33,6 +33,9 @@ pub const FEELINGS: [&str; 9] =
 
 const HOUR: i64 = 3_600;
 const DAY: i64 = 86_400;
+/// MM26: a note is stale once it was last confirmed more than this long ago. Exactly this long
+/// is still fresh. One value for every bot.
+pub const NOTE_STALE_AFTER: i64 = 7 * DAY;
 /// MM9: standing halves every 7 days, more slowly for a memory the bot keeps recalling.
 const HALF_LIFE_SECS: f64 = 7.0 * 86_400.0;
 /// MM9: recalls past this don't slow the fade any further.
@@ -237,6 +240,7 @@ impl Memory {
 
     /// MM9: importance, faded by age with a 7-day half-life that recalls stretch.
     /// MM25: the confirmation time is not part of this, so checking a note does not raise it.
+    /// MM26: `stale_days` is not part of this either. Standing never reads it.
     fn standing(&self, now: i64) -> f64 {
         let importance = if self.is_note() { NOTE_IMPORTANCE } else { self.importance };
         let age = (now - self.updated_at).max(0) as f64;
@@ -696,6 +700,7 @@ fn write_note(
 
 /// MM2: past 200 notes, one goes: never one just written, nor the note on itself or its owner;
 /// first one on a subject it can't see now (MM4), then the one left unchanged longest.
+/// MM26: the order is `updated_at`. Eviction never reads `stale_days`.
 fn evict_note(
     conn: &Connection,
     bot: &str,
@@ -1215,10 +1220,12 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
             Some((&owner, &rooms)),
             newest.iter().map(|memory| memory.subject.as_str()),
         )?;
+        let shown = state.note_now();
         let results: Vec<Value> = newest
             .iter()
             .map(|memory| {
-                let mut item = memory_json(memory, names.get(&memory.subject).cloned().flatten());
+                let mut item =
+                    memory_json(memory, names.get(&memory.subject).cloned().flatten(), shown);
                 item["why"] = json!(["job"]);
                 item
             })
@@ -1276,10 +1283,12 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
         tx.execute("UPDATE bot_memories SET recalls = recalls + 1 WHERE n = ?", [memory.n])?;
     }
     tx.commit()?;
+    let shown = state.note_now();
     let results: Vec<Value> = chosen
         .iter()
         .map(|memory| {
-            let mut item = memory_json(memory, names.get(&memory.subject).cloned().flatten());
+            let mut item =
+                memory_json(memory, names.get(&memory.subject).cloned().flatten(), shown);
             item["why"] = json!(why.get(&memory.n).cloned().unwrap_or_default());
             item
         })
@@ -1287,7 +1296,20 @@ pub fn recall(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Valu
     Ok(json!({ "query": query, "memories": results, "memory_note": MEMORY_NOTE }))
 }
 
-fn memory_json(memory: &Memory, name: Option<String>) -> Value {
+/// MM26: when the note was last confirmed. That is the later of when it changed and when it was
+/// checked. A note with no check was last confirmed when it last changed.
+fn last_confirmed(memory: &Memory) -> i64 {
+    memory.checked_at.map(|at| at.max(memory.updated_at)).unwrap_or(memory.updated_at)
+}
+
+/// MM26: whole days since `last_confirmed`, and only when that age is past `NOTE_STALE_AFTER`.
+/// Exactly `NOTE_STALE_AFTER` is still fresh, so the field is left out.
+fn stale_days(last_confirmed: i64, now: i64) -> Option<i64> {
+    let age = now.saturating_sub(last_confirmed);
+    (age > NOTE_STALE_AFTER).then_some(age / DAY)
+}
+
+fn memory_json(memory: &Memory, name: Option<String>, now: i64) -> Value {
     let mut item = json!({
         "id": memory.id,
         "kind": memory.kind,
@@ -1301,6 +1323,10 @@ fn memory_json(memory: &Memory, name: Option<String>) -> Value {
         // just `when`, and the confirmation never moves standing (MM9).
         if let Some(checked) = memory.checked_at.filter(|at| *at > memory.updated_at) {
             item["checked"] = json!(iso(checked));
+        }
+        // MM26: omitted on a fresh note, and at exactly 7 days. Ranking and eviction never read it.
+        if let Some(days) = stale_days(last_confirmed(memory), now) {
+            item["stale_days"] = json!(days);
         }
         if let Some(feeling) = &memory.feeling {
             item["feeling"] = json!(feeling);
@@ -1632,6 +1658,7 @@ fn the_day(
         Some((owner, readable)),
         notes.iter().chain(moments.iter()).map(|memory| memory.subject.as_str()),
     )?;
+    let shown = state.note_now();
     Ok(json!({
         "trust_note": DAY_NOTE,
         "memory_note": MEMORY_NOTE,
@@ -1640,8 +1667,8 @@ fn the_day(
         "rooms": room_names.iter().map(|(id, name)| json!({ "subject": Subject::Room(id.clone()).key(), "name": name })).collect::<Vec<_>>(),
         "met": met.iter().map(|(subject, name, _)| json!({ "subject": subject, "name": name })).collect::<Vec<_>>(),
         "lines": lines.iter().map(|line| json!({ "id": line.id, "room": line.room, "from": line.from, "text": line.text, "at": iso(line.at), "why": line.why })).collect::<Vec<_>>(),
-        "moments": moments.iter().map(|moment| memory_json(moment, names.get(&moment.subject).cloned().flatten())).collect::<Vec<_>>(),
-        "notes": notes.iter().map(|note| memory_json(note, names.get(&note.subject).cloned().flatten())).collect::<Vec<_>>(),
+        "moments": moments.iter().map(|moment| memory_json(moment, names.get(&moment.subject).cloned().flatten(), shown)).collect::<Vec<_>>(),
+        "notes": notes.iter().map(|note| memory_json(note, names.get(&note.subject).cloned().flatten(), shown)).collect::<Vec<_>>(),
         "how": DAY_HOW,
     }))
 }
@@ -2015,10 +2042,11 @@ pub fn sleep_notes_for_inbox(
     }
     let names =
         names_of(&tx, bot, Some((owner, &rooms)), notes.iter().map(|n| n.subject.as_str()))?;
+    let shown = state.note_now();
     let result: Vec<Value> = notes
         .iter()
         .map(|note| {
-            let mut item = memory_json(note, names.get(&note.subject).cloned().flatten());
+            let mut item = memory_json(note, names.get(&note.subject).cloned().flatten(), shown);
             if !full {
                 item["text"] = json!(note_preview(&note.text));
             }
@@ -2090,8 +2118,9 @@ pub fn owner_memories(state: &AppState, caller: &Caller, id: &str) -> ApiResult<
             }))
         })
         .collect();
+    let shown = state.note_now();
     let item = |memory: &Memory| {
-        let mut item = memory_json(memory, name_of(memory));
+        let mut item = memory_json(memory, name_of(memory), shown);
         item["recalls"] = json!(memory.recalls);
         item
     };
