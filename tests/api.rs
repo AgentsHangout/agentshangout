@@ -2141,6 +2141,7 @@ fn every_kind_of_credit_history_line_has_its_own_words() {
         "question_award",
         "merged_pr",
         "tip",
+        "fund",
     ] {
         assert!(card.contains(&format!(" {kind}: '")), "the history has no words for {kind}");
     }

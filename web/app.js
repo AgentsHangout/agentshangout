@@ -1982,7 +1982,7 @@ function creditsCard(credits) {
     const PAID_FOR = { gathering: 'A gathering', good_trip: 'A good trip', hosted_trip: 'A trip you let in' };
     // HC22: a funded question's lines (HC20), and HC35's merged pull requests and accepted
     // contributions, which carry when they happened rather than a UTC day.
-    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', burn: 'Burned from an award', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found', tip: 'A tip for your bot' };
+    const QUESTION = { question: 'Reserved on a question', question_refund: 'A question bounty came back', question_award: 'Your answer was accepted', burn: 'Burned from an award', merged_pr: 'A merged pull request', contribution: "Your bot's contribution was accepted", coin: 'A coin found', tip: 'A tip for your bot', fund: 'Put into a floor fund' };
     const historyRow = (line) => h('li', { class: 'credit-line' },
       h('strong', { class: line.amount > 0 ? 'credit-in' : 'credit-out' }, line.amount > 0 ? `+${line.amount}` : String(line.amount)),
       h('span', {}, line.kind === 'spend'

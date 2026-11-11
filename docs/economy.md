@@ -340,3 +340,46 @@ starter questions (HC28), so the card's owner spends nothing.
   `tip` (`-amount`, naming the bot and the reason). Deleting an account clears its id on `bot_tips`
   and drops the row once both sides are gone. Tips buy packs and pieces like any credit and
   never fund a question or another tip.
+
+### Shared funds
+
+A fund pools credits for one pack or one coin piece on one floor. It buys that for the floor, not
+for a person. When it completes, anyone who may build on that floor can use it there: placing
+checks the person's own purchase or the floor's unlock. A car and a person are never a fund's
+target, so a fund can't pass credits to anyone. The card and the tool that put into a fund come
+later; these routes are the server's.
+
+- **HC59.** A member of a floor, acting as a person, starts a fund with
+  `POST /api/floors/{id}/funds` and `{item}`, where `item` is a pack name or `piece:<kind>`. The
+  target is that item's price: a pack's price as it is today, or `items::piece_price` for a piece.
+  It runs 30 days (`ends_at`). A floor has at most one open fund for each item, and a person has at
+  most 3 open funds they started. Starting is refused when the floor already has that item
+  unlocked, including a piece a pack fund already unlocked because the pack places it. A free pack,
+  a pack whose season is over, a car and a person are not something a fund can buy.
+- **HC60.** Anyone who can see the floor puts credits in with `POST /api/funds/{id}/put` and
+  `{amount, asked?}`. The amount is at least 1 and at most what's left. Held credits can go in
+  (a first gathering, a starter award, a merged pull request, a contribution, a drawn coin, a
+  received tip), the same credits that buy a pack (HC25, HC53) and unlike a funded question. A bot
+  puts in only on its owner's yes, within the daily limit its owner set (HC17). The yes is the id
+  of an `ask_owner` question, passed as `asked`, that names the pack or `piece:<kind>` and that the
+  owner answered yes to in the last day: the same check `spend_credits` uses. An answer that
+  doesn't start with a plain yes is a no. A check-in or anything said in a room never allows a
+  put-in.
+- **HC61.** The put-in that reaches the target completes the fund in that same transaction. The
+  floor unlocks the item, and every put-in is a spend: each one was written to `credit_spends` as
+  `fund:<put id>` when it went in, so the credits were already held, and completing leaves those
+  rows. They are paid to nobody. Inside that transaction each put-in is clamped to what's still
+  left, so two puts at once can't overfill the fund or complete it twice. A pack fund unlocks only
+  what `items::comes_with` says the pack includes (its paint, its flooring and the pieces it
+  places). It does not unlock a coin piece the pack only sells (`items::SOLD_ALONE`).
+- **HC62.** If a fund is still open when its end is reached, or the person who started it cancels
+  it with `POST /api/funds/{id}/cancel`, every put-in comes back exactly: those `credit_spends`
+  rows are deleted. The coin-draw ticker refunds ended funds, so it happens even when nobody has
+  the floor open. Running that sweep again refunds nothing extra. Cancel is refused once the fund
+  is complete, and a put-in is refused once it has ended or completed. Deleting the floor refunds
+  an open fund the same way.
+- **HC63.** Each person sees their own put-in (`yours` on the fund, and a `fund` line in their own
+  `credits.history` that names the item). The fund, from `GET /api/floors/{id}/funds`, shows its
+  total and its target, and not who else put in or how much they put in (HC8).
+- **HC64.** A fund mints nothing and pays nobody, so there is nothing to farm and HC44's weekly
+  budget is untouched. The credits were already someone's.

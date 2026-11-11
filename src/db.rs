@@ -34,11 +34,13 @@ mod bot_profile;
 mod bot_setup;
 mod coin_drops;
 mod contributions;
+mod funds;
 pub use coin_drops::{CoinDrop, COIN_DROP_HC, COIN_DROP_SECS};
 pub use contributions::{
     CONTRIBUTIONS_A_DAY, CONTRIBUTION_BUDGET_A_WEEK, CONTRIBUTION_HC, CONTRIBUTION_KINDS,
     PAIR_CONTRIBUTIONS_A_WEEK,
 };
+pub use funds::{FundHead, FundView, NewFund, NewPut, PutIn, FUND_DAYS};
 mod bridge;
 pub use bridge::BRIDGE_KEY_SECS;
 mod keyless;
@@ -2702,6 +2704,53 @@ CREATE TABLE IF NOT EXISTS bot_note_checks (
     note_id     TEXT PRIMARY KEY REFERENCES bot_memories(id) ON DELETE CASCADE,
     checked_at  INTEGER NOT NULL
 );
+-- HC59 to HC62 (#1062): a floor pools credits for one pack or coin piece. A put-in is also a
+-- credit_spends row (`fund:<put id>`) so an older binary still holds those credits. Completing
+-- leaves the rows, which is the spend. Refunding deletes them, so the credits come back exactly.
+CREATE TABLE IF NOT EXISTS funds (
+    id          TEXT PRIMARY KEY,
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    starter_id  TEXT REFERENCES people(id) ON DELETE SET NULL,
+    item        TEXT NOT NULL,
+    target      INTEGER NOT NULL CHECK (target > 0),
+    status      TEXT NOT NULL CHECK (status IN ('open', 'complete', 'refunded')),
+    created_at  INTEGER NOT NULL,
+    ends_at     INTEGER NOT NULL,
+    settled_at  INTEGER
+);
+-- One open fund for each item on a floor. A finished one doesn't keep the spot.
+CREATE UNIQUE INDEX IF NOT EXISTS funds_one_open ON funds (hangout_id, item) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS funds_by_starter ON funds (starter_id, status);
+CREATE INDEX IF NOT EXISTS funds_open_until ON funds (status, ends_at);
+CREATE TABLE IF NOT EXISTS fund_puts (
+    id          TEXT PRIMARY KEY,
+    fund_id     TEXT NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
+    person_id   TEXT REFERENCES people(id) ON DELETE CASCADE,
+    agent_id    TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    amount      INTEGER NOT NULL CHECK (amount > 0),
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fund_puts_by_fund ON fund_puts (fund_id);
+CREATE INDEX IF NOT EXISTS fund_puts_by_person ON fund_puts (person_id, fund_id);
+-- What a completed fund unlocked on its floor. A pack row covers what that pack places (HC61);
+-- a piece row covers that piece. Deleting the floor takes the unlock with it.
+CREATE TABLE IF NOT EXISTS floor_unlocks (
+    hangout_id  TEXT NOT NULL REFERENCES hangouts(id) ON DELETE CASCADE,
+    item        TEXT NOT NULL,
+    fund_id     TEXT REFERENCES funds(id) ON DELETE SET NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (hangout_id, item)
+);
+-- HC62: deleting a floor gives open puts back. The spend rows live in credit_spends, which does
+-- not follow the floor, so this takes them out while the put rows are still there.
+CREATE TRIGGER IF NOT EXISTS funds_floor_deleted BEFORE DELETE ON hangouts
+BEGIN
+    DELETE FROM credit_spends WHERE pack IN (
+        SELECT 'fund:' || p.id FROM fund_puts p
+        JOIN funds f ON f.id = p.fund_id
+        WHERE f.hangout_id = OLD.id AND f.status = 'open'
+    );
+END;
 "#;
 
 /// A116/A117: a refused door-account mint writes neither a bot nor a mint record.
@@ -14063,14 +14112,18 @@ impl Db {
                FROM credit_paid p LEFT JOIN cities c ON c.id = p.city_id
               WHERE p.person_id = ?1
              UNION ALL
-             SELECT CASE WHEN s.pack LIKE 'question:%' THEN 'question'
-                         WHEN s.pack LIKE 'tip:%' THEN 'tip'
-                         WHEN s.pack LIKE 'burn:%' THEN 'burn'
-                         ELSE 'spend' END, -s.amount,
-                    s.created_at, s.created_at, NULL,
-                    CASE WHEN s.pack LIKE 'question:%' OR s.pack LIKE 'burn:%' THEN NULL
-                         WHEN s.pack LIKE 'tip:%' THEN (SELECT t.reason FROM bot_tips t WHERE 'tip:' || t.id = s.pack)
-                         ELSE s.pack END,
+            SELECT CASE WHEN s.pack LIKE 'question:%' THEN 'question'
+                        WHEN s.pack LIKE 'tip:%' THEN 'tip'
+                        WHEN s.pack LIKE 'burn:%' THEN 'burn'
+                        WHEN s.pack LIKE 'fund:%' THEN 'fund'
+                        ELSE 'spend' END, -s.amount,
+                   s.created_at, s.created_at, NULL,
+                   CASE WHEN s.pack LIKE 'question:%' OR s.pack LIKE 'burn:%' THEN NULL
+                        WHEN s.pack LIKE 'tip:%' THEN (SELECT t.reason FROM bot_tips t WHERE 'tip:' || t.id = s.pack)
+                        WHEN s.pack LIKE 'fund:%' THEN (
+                            SELECT f.item FROM fund_puts p JOIN funds f ON f.id = p.fund_id
+                             WHERE s.pack = 'fund:' || p.id)
+                        ELSE s.pack END,
                     CASE WHEN s.pack LIKE 'tip:%' THEN (SELECT b.name FROM bot_tips t LEFT JOIN agents b ON b.id = t.bot_id WHERE 'tip:' || t.id = s.pack)
                          ELSE a.name END
                FROM credit_spends s LEFT JOIN agents a ON a.id = s.agent_id

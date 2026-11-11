@@ -1,4 +1,5 @@
-//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29, HC44 and HC50 to HC53 in docs/economy.md.
+//! Hangout Credits. The rules are HC1 to HC19, HC22, HC24, HC25, HC29, HC44, HC50 to HC55 and
+//! HC59 to HC64 in docs/economy.md. A floor's shared fund (HC59 to HC64) is in funds.rs.
 //! The draw itself is in db/coin_drops.rs.
 //! Contributions on a board card (HC36 to HC43) are in db/contributions.rs and boards.rs.
 //!
@@ -111,7 +112,8 @@ pub struct BotLimit {
 
 /// HC50 and HC52: draws each 10 minutes' coin as it comes. Only the 10 minutes that just ended is
 /// drawn, so one missed while the server was down is skipped, not made up. HC57: the same tick
-/// refunds funded questions that have been open 14 days.
+/// refunds funded questions that have been open 14 days. HC62: it also refunds floor funds whose
+/// 30 days are up, even when nobody has that floor open.
 pub async fn run_coin_drops(state: crate::AppState) {
     let mut ticks = tokio::time::interval(std::time::Duration::from_secs(30));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -122,6 +124,9 @@ pub async fn run_coin_drops(state: crate::AppState) {
         }
         if let Err(error) = state.db.expire_questions(crate::now()) {
             tracing::error!(%error, "Funded questions could not be expired");
+        }
+        if let Err(error) = state.db.expire_funds(crate::now()) {
+            tracing::error!(%error, "Floor funds could not be refunded");
         }
     }
 }
@@ -354,8 +359,9 @@ fn buy(
 }
 
 /// HC17: a bot spends only on its owner's own yes. A check-in, a room message or a note never
-/// counts, because only `ask_owner` reaches the owner and nobody else can answer it.
-fn owner_said_yes(
+/// counts, because only `ask_owner` reaches the owner and nobody else can answer it. A fund
+/// put-in uses this same check (HC60).
+pub(crate) fn owner_said_yes(
     db: &Db,
     caller: &Caller,
     agent_id: &str,
