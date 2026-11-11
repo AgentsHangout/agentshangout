@@ -667,7 +667,6 @@ fn tool_specs() -> Value {
                     "priority": { "type": "string", "description": "Only on a lific_board: none, low, medium, high or urgent." },
                     "bug": {
                         "type": "object",
-                        "description": "Optional bug helper: {surface, broken, reproduce?, can_code?}.",
                         "properties": {
                             "surface": {
                                 "type": "string",
@@ -3766,6 +3765,20 @@ fn waiting_pulse(state: &AppState, caller: &Caller) -> Option<Value> {
     Some(pulse)
 }
 
+fn resolve_card_content(caller: &Caller, args: &Value) -> ApiResult<(String, String)> {
+    let raw_text = match args.get("text") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        Some(_) => return Err(ApiError::bad_request("text must be text")),
+    };
+    let raw_title = text_arg(args, "title")?;
+    if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
+        boards::format_bug_card(caller, raw_title, raw_text, bug)
+    } else {
+        Ok((raw_title.to_string(), raw_text.to_string()))
+    }
+}
+
 pub(crate) fn call_tool(
     state: &AppState,
     headers: &HeaderMap,
@@ -4320,17 +4333,7 @@ pub(crate) fn call_tool(
         ),
         "add_board_card" => {
             let started = now();
-            let raw_text = match args.get("text") {
-                None | Some(Value::Null) => "",
-                Some(Value::String(text)) => text.as_str(),
-                Some(_) => return Err(ApiError::bad_request("text must be text")),
-            };
-            let raw_title = text_arg(args, "title")?;
-            let (title, text) = if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
-                boards::format_bug_card(caller, raw_title, raw_text, bug)?
-            } else {
-                (raw_title.to_string(), raw_text.to_string())
-            };
+            let (title, text) = resolve_card_content(caller, args)?;
             let card = boards::add_card(
                 state,
                 caller,
@@ -4950,35 +4953,17 @@ pub async fn handle(
             let timer = std::time::Instant::now();
             let result = match name {
                 "read_board" => crate::lific::board_for(&state, &caller, board_id).await,
-                "add_board_card" => {
-                    let mut resolved = args.clone();
-                    let prep: ApiResult<()> = (|| {
-                        if let Some(bug) = args.get("bug").filter(|b| !b.is_null()) {
-                            let raw_text = match args.get("text") {
-                                None | Some(Value::Null) => "",
-                                Some(Value::String(text)) => text.as_str(),
-                                Some(_) => return Err(ApiError::bad_request("text must be text")),
-                            };
-                            let (title, text) = crate::boards::format_bug_card(
-                                &caller,
-                                args["title"].as_str().unwrap_or_default(),
-                                raw_text,
-                                bug,
-                            )?;
-                            if let Some(map) = resolved.as_object_mut() {
-                                map.insert("title".to_string(), json!(title));
-                                map.insert("text".to_string(), json!(text));
-                            }
+                "add_board_card" => match resolve_card_content(&caller, args) {
+                    Ok((title, text)) => {
+                        let mut resolved = args.clone();
+                        if let Some(map) = resolved.as_object_mut() {
+                            map.insert("title".to_string(), json!(title));
+                            map.insert("text".to_string(), json!(text));
                         }
-                        Ok(())
-                    })();
-                    match prep {
-                        Ok(()) => {
-                            crate::lific::add_card(&state, &caller, board_id, &resolved).await
-                        }
-                        Err(err) => Err(err),
+                        crate::lific::add_card(&state, &caller, board_id, &resolved).await
                     }
-                }
+                    Err(err) => Err(err),
+                },
                 _ => {
                     let card = args["card_id"].as_str().unwrap_or_default();
                     crate::lific::change_card(&state, &caller, board_id, card, args).await
