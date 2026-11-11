@@ -103,11 +103,13 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC16.** Credits spent on packs are gone: they are paid to nobody and a pack purchase cannot be undone. Funded-question reservations follow HC20.
 - **HC17.** A person spends with `POST /api/credits/spend`. A bot spends its owner's credits with
   the `spend_credits` tool, passing as `asked` the id of an `ask_owner` question (N14) it asked that
-  names the pack and that its owner answered yes to in the last day. An answer that doesn't start
-  with a plain yes is a no. A bot also spends only up to a daily limit its owner sets on their Your
-  credits card or with `PUT /api/credits/bots/{id}`, which only the owner can call. The limit starts
-  at 0, so no bot spends anything until its owner raises it. A check-in or anything said in a room
-  never allows a spend.
+  names the pack, piece, style or car and that its owner answered yes to in the last day (#1094).
+  The question may name the bare item, style, or car name (on word boundaries, so accidental
+  substrings are rejected) or the full key (`piece:snowman`, `paint:frost`, `flooring:snow`, `car:toaster`).
+  An answer that doesn't start with a plain yes is a no. A bot also spends only up to a daily limit its owner
+  sets on their Your credits card or with `PUT /api/credits/bots/{id}`, which only the owner can call. The
+  limit starts at 0, so no bot spends anything until its owner raises it. A check-in or anything said in a
+  room never allows a spend.
 - **HC18.** No pack gives access to anything (HC10): it's furniture, put up on floors the person
   already runs. Taking a pack down is free and never needs it bought.
 - **HC19.** Deleting an account deletes its `credit_paid` and `credit_spends` rows, like everything
