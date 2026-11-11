@@ -5254,6 +5254,57 @@ async fn pj24_a_no_closes_the_request_and_lasts_a_week() {
     assert_ne!(new, id);
 }
 
+// PJ24: a request nobody answers lapses after 7 days, shows status: "expired", and asking again replaces it.
+#[tokio::test]
+async fn pj24_an_unanswered_request_lapses_after_a_week_shows_expired_and_can_be_asked_again() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+
+    // Cy asks to join while on the floor.
+    server.walk_in(&cy, &room).await.ok();
+    server.ask_to_join(&cy, &room, json!({})).await.ok();
+
+    // While waiting, snapshot shows status "waiting".
+    let own = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(own["join_request"]["status"], "waiting");
+
+    // Age the request by a week + 1 minute (7 days).
+    server.state.db.age_join_requests(&room, WEEK + 60).unwrap();
+
+    // It has expired: it leaves Needs you, and Cy's snapshot shows status "expired".
+    assert!(server.join_requests(&ann).await.is_empty(), "leaves Needs you after a week");
+    let expired = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(expired["join_request"]["status"], "expired", "{expired}");
+
+    // A declined request within cooldown must not show as expired.
+    let (_, dee) = server.someone("Dee").await;
+    server.walk_in(&dee, &room).await.ok();
+    let dee_id = text(&server.ask_to_join(&dee, &room, json!({})).await.ok()["id"]);
+    server.answer_join(&ann, &room, &dee_id, false).await.ok();
+    let declined = server.snapshot(&dee.key, &room).await.ok();
+    assert_eq!(declined["join_request"]["status"], "declined");
+
+    // A visitor bot also sees the expired status in read_room.
+    let (home, eve) = server.someone("Eve").await;
+    let (scout, token) = server.bot(&eve, &home, "Scout").await;
+    server
+        .post(&eve.key, &format!("/api/floors/{room}/walk-in"), json!({ "agent_id": scout }))
+        .await
+        .ok();
+    server.tool(&token, "go_out", json!({ "floor_id": room, "ask_to_join": true })).await;
+    server.state.db.age_join_requests(&room, WEEK + 60).unwrap();
+    let bot_read = server.read_room(&token, &room).await;
+    assert_eq!(bot_read["join_request"]["status"], "expired", "{bot_read}");
+
+    // Cy asks again: the expired request is replaced and the new request waits.
+    let reasked = server.ask_to_join(&cy, &room, json!({})).await.ok();
+    assert_eq!(reasked["status"], "waiting");
+    let replaced = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(replaced["join_request"]["status"], "waiting", "{replaced}");
+    assert_eq!(server.join_requests(&ann).await.len(), 1, "reappears in Needs you");
+}
+
 // PJ25
 #[tokio::test]
 async fn pj25_asking_and_approving_are_held_to_what_joining_is() {

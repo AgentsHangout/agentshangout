@@ -764,25 +764,49 @@ pub fn ask_to_join(
     Ok(json!({ "id": id, "status": "waiting", "asked_at": now }))
 }
 
-/// PJ23: the caller's own request for this floor, if one is waiting or was declined this week.
+/// PJ23, PJ24: the caller's own request for this floor, if one is waiting, was declined this
+/// week, or expired without an answer.
 pub fn own_join_request(
     state: &AppState,
     caller: &Caller,
     floor_id: &str,
 ) -> ApiResult<Option<Value>> {
     let now = now();
-    Ok(state
-        .db
-        .join_request_for(
-            floor_id,
-            &caller.person_id,
-            caller.agent_id.as_deref(),
-            now - REQUEST_SECS,
-        )?
-        .map(|(_, status, asked_at, _)| {
-            let status = if status == "no" { "declined" } else { "waiting" };
-            json!({ "status": status, "asked_at": asked_at })
-        }))
+    let row = state.db.latest_join_request_for(
+        floor_id,
+        &caller.person_id,
+        caller.agent_id.as_deref(),
+    )?;
+    let Some((_, status, asked_at, answered_at)) = row else {
+        return Ok(None);
+    };
+    match status.as_str() {
+        "waiting" => {
+            if asked_at > now - REQUEST_SECS {
+                Ok(Some(json!({ "status": "waiting", "asked_at": asked_at })))
+            } else if asked_at > now - 2 * REQUEST_SECS {
+                Ok(Some(json!({ "status": "expired", "asked_at": asked_at })))
+            } else {
+                Ok(None)
+            }
+        }
+        "lapsed" => {
+            if asked_at > now - 2 * REQUEST_SECS {
+                Ok(Some(json!({ "status": "expired", "asked_at": asked_at })))
+            } else {
+                Ok(None)
+            }
+        }
+        "no" => {
+            let answered = answered_at.unwrap_or(asked_at);
+            if answered > now - REQUEST_SECS {
+                Ok(Some(json!({ "status": "declined", "asked_at": asked_at })))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 #[derive(Deserialize, Default)]

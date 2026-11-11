@@ -64,5 +64,14 @@ const guest = (extra = {}) => ({guest: {since: 1, until: 2}, can_ask_to_join: tr
   assert.equal(declined.tag, 'small');
   assert.ok(text(declined).includes('declined'));
   assert.equal(all(declined).find(n => n.tag === 'button'), undefined);
+
+  // PJ24: after 7 days without an answer the request expires. The asker is told, and may ask again.
+  context.snapshot = guest({join_request: {status: 'expired', asked_at: 5}});
+  const expired = context.joinAskButton();
+  assert.ok(text(expired).includes('expired'));
+  const expiredAsk = all(expired).find(n => n.tag === 'button');
+  assert.ok(expiredAsk);
+  assert.equal(text(expiredAsk), 'Ask to join');
+  assert.ok(!expiredAsk.props.disabled);
   console.log('Ask to join button passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

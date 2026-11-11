@@ -17636,6 +17636,24 @@ impl Db {
             .optional()
     }
 
+    /// PJ23, PJ24: the latest join request for this asker on this floor, for showing them its state.
+    pub fn latest_join_request_for(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+    ) -> rusqlite::Result<Option<(String, String, i64, Option<i64>)>> {
+        self.conn()
+            .query_row(
+                "SELECT id, status, asked_at, answered_at FROM join_requests
+                 WHERE hangout_id = ?1 AND person_id = ?2 AND agent_id IS ?3
+                 ORDER BY asked_at DESC, rowid DESC LIMIT 1",
+                params![hangout_id, person_id, agent_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+    }
+
     /// PJ27, PJ21: how many floors this bot and this person with all their bots have asked since
     /// `since`, how many requests this floor has had since then, and how many it has waiting
     /// since `waiting_since`: `(bot, person, floor, waiting)`. For the refusal's words only:
