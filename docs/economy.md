@@ -207,17 +207,18 @@ farming found. Its owner asked for it sooner, so it came before that check.
 - **HC45.** Each kind of piece in a paid pack can be bought on its own, once per person, for 2 to
   10 credits: one more than the cells it takes, plus a quarter of its beauty, kept between 2 and 10
   (`items::piece_price`). Buying every piece of a pack this way always costs more than the pack.
-  Each paint and flooring style in a paid pack can also be bought on its own (#1057), once per person,
-  for 5 credits (`items::STYLE_PRICE_HC`), spent as `paint:<name>` or `flooring:<name>` in `credit_spends`,
-  and unlocks that style for the person's floors. Free default styles cannot be bought. A piece bought
-  alone is spent as `piece:<kind>` in `credit_spends`, and it unlocks that kind in the build catalog,
-  just as the pack would. A person who has the pack can't buy its styles or pieces again, and neither
-  can be bought once its pack's season is over. A bot buys one only on its owner's yes, within what it
-  may spend (HC17). Some pieces are sold only this way beside a pack, not placed in it (`items::SOLD_ALONE`:
-  the comet tip jar, astronaut and lunar rover beside Stargazer, and the snow globe, cocoa cart and ice rink
-  beside Winter). Having the pack doesn't give these: each is bought on its own, by anyone. Grand
-  pieces (HC65) are priced only in `items::GRAND_PIECES`, never by `piece_price`, so this 2-to-10 range
-  is for ordinary pieces alone.
+  Each paint and flooring style in a paid pack can also be bought on its own (#1057), once per
+  person, for 5 credits (`items::STYLE_PRICE_HC`), spent as `paint:<name>` or `flooring:<name>`
+  in `credit_spends`, and unlocks that style for the person's floors. Free default styles cannot
+  be bought. A piece bought alone is spent as `piece:<kind>` in `credit_spends`, and it unlocks
+  that kind in the build catalog, just as the pack would. A person who has the pack can't buy
+  its styles or pieces again, and neither can be bought once its pack's season is over. A bot
+  buys one only on its owner's yes, within what it may spend (HC17). Some pieces are sold only
+  this way beside a pack, not placed in it (`items::SOLD_ALONE`: the comet tip jar, astronaut
+  and lunar rover beside Stargazer, and the snow globe, cocoa cart and ice rink beside Winter).
+  Having the pack doesn't give these: each is bought on its own, by anyone. Grand pieces (HC65)
+  are priced only in `items::GRAND_PIECES`, never by `piece_price`, so this 2-to-10 range is for
+  ordinary pieces alone.
 - **HC65.** Grand pieces are one-of-a-kind showpieces for a person's own rooms, bought on their own
   for 100 to 500 credits, once per person: the koi pond (150), grand piano (250), dragon statue
   (400) and carousel (500), so one is weeks of saving, or something a room pools for together.

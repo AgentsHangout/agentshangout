@@ -769,19 +769,22 @@ pub fn comes_with(pack: &Pack, word: &str) -> bool {
 /// HC45 & #1057: whether this person may use `word` from a paid pack: they bought the pack and it comes with
 /// it, or they bought that piece, paint or flooring.
 pub fn owns_paid(state: &AppState, person_id: &str, pack: &Pack, word: &str) -> ApiResult<bool> {
-    Ok((comes_with(pack, word) && state.db.has_bought(person_id, pack.pack)?)
-        || state.db.has_bought(person_id, &format!("{PIECE}{word}"))?
-        || state.db.has_bought(person_id, &format!("{PAINT}{word}"))?
-        || state.db.has_bought(person_id, &format!("{FLOORING}{word}"))?)
+    if comes_with(pack, word) && state.db.has_bought(person_id, pack.pack)? {
+        return Ok(true);
+    }
+    if pack.paint == word {
+        return Ok(state.db.has_bought(person_id, &format!("{PAINT}{word}"))?);
+    }
+    if pack.flooring == word {
+        return Ok(state.db.has_bought(person_id, &format!("{FLOORING}{word}"))?);
+    }
+    Ok(state.db.has_bought(person_id, &format!("{PIECE}{word}"))?)
 }
 
 /// HC61: this floor's fund unlocked `word`, either as that piece or as a pack that places it.
 /// A piece the pack only sells (`SOLD_ALONE`) is not unlocked by the pack.
 fn floor_grants(state: &AppState, floor_id: &str, word: &str) -> ApiResult<bool> {
-    if state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))?
-        || state.db.has_floor_unlock(floor_id, &format!("{PAINT}{word}"))?
-        || state.db.has_floor_unlock(floor_id, &format!("{FLOORING}{word}"))?
-    {
+    if state.db.has_floor_unlock(floor_id, &format!("{PIECE}{word}"))? {
         return Ok(true);
     }
     Ok(match paid_pack_with(word) {

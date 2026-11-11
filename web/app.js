@@ -1848,6 +1848,7 @@ function nextBuy(credits) {
   const offers = (credits.packs || []).filter((offer) => !offer.bought && !offer.over).flatMap((offer) => [
     { name: `${sentence(offer.pack.replaceAll('_', ' '))} pack`, cost: offer.cost },
     ...(offer.sold_alone || []).filter((piece) => !piece.bought).map((piece) => ({ name: piece.label, cost: piece.cost })),
+    ...(offer.styles || []).filter((style) => !style.bought).map((style) => ({ name: style.label, cost: style.cost })),
   ]);
   return offers.sort((a, b) => a.cost - b.cost || a.name.localeCompare(b.name))[0] || null;
 }
@@ -1862,6 +1863,11 @@ function creditGlance(credits) {
 function soldAlone(offer) {
   const all = offer.sold_alone || [];
   return offer.bought ? all.filter((piece) => !piece.bought) : all;
+}
+// HC45 & #1057: the wall and floor styles a pack's card offers one at a time.
+function stylesAlone(offer) {
+  const all = offer.styles || [];
+  return offer.bought ? [] : all;
 }
 
 function creditsCard(credits) {
@@ -1899,22 +1905,21 @@ function creditsCard(credits) {
         onclick: act(error, async () => { done.textContent = ` ${await putUp(offer.pack)}`; }),
       }, 'Put it up here'), done);
     };
-    // HC45 and HC65: one piece for sale on its own, with its picture, price and Buy, which asks first.
-    const pieceTile = (piece, size) => {
-      const pieceKey = `piece:${piece.kind}`;
+    // HC45 and HC65: one piece or style for sale on its own, with its picture, price and Buy, which asks first.
+    const singleTile = (key, label, cost, bought, pic) => {
       return h('li', { class: 'piece-tile' },
-        h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56)),
-        h('span', { class: 'piece-name' }, piece.label),
-        h('span', { class: 'muted fine' }, count(piece.cost, 'credit', 'credits')),
-        piece.bought ? h('span', { class: 'pill on' }, 'Yours')
-          : confirming === pieceKey ? h('div', { class: 'shop-confirm', role: 'group', 'aria-label': `Confirm buying ${piece.label}` },
-            h('span', { class: 'muted fine' }, `Buy the ${piece.label.toLowerCase()} for ${count(piece.cost, 'credit', 'credits')}? Spent credits can't be given back.`),
+        h('span', { class: 'piece-pic', 'aria-hidden': 'true' }, pic),
+        h('span', { class: 'piece-name' }, label),
+        h('span', { class: 'muted fine' }, count(cost, 'credit', 'credits')),
+        bought ? h('span', { class: 'pill on' }, 'Yours')
+          : confirming === key ? h('div', { class: 'shop-confirm', role: 'group', 'aria-label': `Confirm buying ${label}` },
+            h('span', { class: 'muted fine' }, `Buy the ${label.toLowerCase()} for ${count(cost, 'credit', 'credits')}? Spent credits can't be given back.`),
             h('button', {
               type: 'button',
               class: 'wd-btn',
               onclick: act(error, async () => {
                 confirming = null;
-                render(await api('/api/credits/spend', { method: 'POST', body: { pack: `piece:${piece.kind}` } }));
+                render(await api('/api/credits/spend', { method: 'POST', body: { pack: key } }));
               }),
             }, 'Confirm'),
             h('button', {
@@ -1925,10 +1930,25 @@ function creditsCard(credits) {
             : h('button', {
               type: 'button',
               class: 'wd-btn ghost',
-              disabled: now.balance < piece.cost,
-              onclick: () => { confirming = pieceKey; render(now); },
-            }, now.balance < piece.cost ? `Need ${piece.cost - now.balance} more` : 'Buy'));
+              disabled: now.balance < cost,
+              onclick: () => { confirming = key; render(now); },
+            }, now.balance < cost ? `Need ${cost - now.balance} more` : 'Buy'));
     };
+    const pieceTile = (piece, size) => singleTile(
+      `piece:${piece.kind}`,
+      piece.label,
+      piece.cost,
+      piece.bought,
+      fitPicture(itemPicture(piece.kind, size.w, size.h), 56, 56),
+    );
+    // HC45 & #1057: one wall or floor style for sale on its own.
+    const styleTile = (style) => singleTile(
+      `${style.kind}:${style.style}`,
+      style.label,
+      style.cost,
+      style.bought,
+      style.kind === 'paint' ? fitPicture(wallPicture(style.style), 56, 56) : fitPicture(floorPicture(style.style), 56, 56),
+    );
     const packRow = (offer) => h('li', { class: 'shop-item', 'data-pack': offer.pack },
       h('span', { class: 'template-pic', 'aria-hidden': 'true' }, packPicture(offer)),
       h('strong', {}, packName(offer.pack)),
@@ -1957,14 +1977,16 @@ function creditsCard(credits) {
               onclick: () => { confirming = offer.pack; render(now); },
             }, now.balance < offer.cost ? `Need ${offer.cost - now.balance} more` : 'Buy'),
       h('p', { class: 'muted fine' }, `${sentence(offer.paint.replaceAll('_', ' '))} walls, ${offer.flooring.replaceAll('_', ' ')} floor, and ${nameList.format(packPieces(offer))}.`),
-      // HC45: without the pack, each piece can be bought on its own, shown with its picture. With
+      // HC45 & #1057: without the pack, each piece or style can be bought on its own, shown with its picture. With
       // the pack, only the pieces it doesn't come with are left to buy (#1050).
-      !offer.over && soldAlone(offer).length ? h('div', { class: 'shop-pieces' },
-        h('p', { class: 'muted fine' }, offer.bought ? 'Sold on their own, not in the pack:' : 'Or buy one piece at a time:'),
-        h('ul', { class: 'piece-grid' }, soldAlone(offer).map((piece) => {
-          const size = piece.w ? piece : offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
-          return pieceTile(piece, size);
-        }))) : null);
+      !offer.over && (soldAlone(offer).length || stylesAlone(offer).length) ? h('div', { class: 'shop-pieces' },
+        h('p', { class: 'muted fine' }, offer.bought ? 'Sold on their own, not in the pack:' : 'Or buy one style or piece at a time:'),
+        h('ul', { class: 'piece-grid' },
+          ...stylesAlone(offer).map(styleTile),
+          ...soldAlone(offer).map((piece) => {
+            const size = piece.w ? piece : offer.pieces.find((placed) => placed.kind === piece.kind) || { w: 1, h: 1 };
+            return pieceTile(piece, size);
+          }))) : null);
     const botRow = (bot) => {
       const input = h('input', {
         type: 'number', min: 0, max: 1000, step: 1, value: String(bot.daily),
@@ -3387,9 +3409,9 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
   }
 
   function surfaceTile(field, word, picture, current) {
-    // HC14: a paint or flooring from a pack that costs credits is for whoever bought the pack.
+    // HC14: a paint or flooring from a pack that costs credits is for whoever bought the pack or style.
     const paidFor = catalog.look.packs.find((pack) => pack.cost > 0 && pack[field] === word);
-    const locked = paidFor && word !== current && !catalog.look.packs_bought.includes(paidFor.pack);
+    const locked = paidFor && word !== current && !catalog.look.packs_bought.includes(paidFor.pack) && !catalog.look.packs_bought.includes(`${field}:${word}`);
     return catalogTile({
       name: `${field}-${word}`,
       picture,

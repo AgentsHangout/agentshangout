@@ -3401,6 +3401,18 @@ async fn walls_and_floors_sold_on_their_own_for_coins() {
     server.put(&ann.key, &path, json!({ "paint": "frost" })).await.refused(StatusCode::FORBIDDEN);
     server.put(&ann.key, &path, json!({ "flooring": "snow" })).await.refused(StatusCode::FORBIDDEN);
 
+    // Verify /api/credits lists the styles at 5 coins each:
+    let credits_before = server.get(&ann.key, "/api/credits").await.ok();
+    let winter_before =
+        credits_before["packs"].as_array().unwrap().iter().find(|p| p["pack"] == "winter").unwrap();
+    assert_eq!(
+        winter_before["styles"],
+        json!([
+            { "kind": "paint", "style": "frost", "label": "Frost walls", "cost": 5, "bought": false },
+            { "kind": "flooring", "style": "snow", "label": "Snow floor", "cost": 5, "bought": false },
+        ])
+    );
+
     // 2. Buying a free default paint or flooring is refused as a bad request:
     server
         .post(&ann.key, "/api/credits/spend", json!({ "pack": "paint:dusk" }))
@@ -3427,6 +3439,22 @@ async fn walls_and_floors_sold_on_their_own_for_coins() {
     assert_eq!(
         server.put(&ann.key, &path, json!({ "paint": "frost" })).await.ok()["paint"],
         "frost"
+    );
+
+    // /api/credits now marks paint:frost bought and flooring:snow not bought:
+    let credits_after_paint = server.get(&ann.key, "/api/credits").await.ok();
+    let winter_after_paint = credits_after_paint["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pack"] == "winter")
+        .unwrap();
+    assert_eq!(
+        winter_after_paint["styles"],
+        json!([
+            { "kind": "paint", "style": "frost", "label": "Frost walls", "cost": 5, "bought": true },
+            { "kind": "flooring", "style": "snow", "label": "Snow floor", "cost": 5, "bought": false },
+        ])
     );
 
     // But flooring:snow is still refused because only paint:frost was bought:
@@ -3499,6 +3527,18 @@ async fn walls_and_floors_sold_on_their_own_for_coins() {
     assert!(
         text(&dup_floor["error"]).contains("already have that flooring in its pack"),
         "{dup_floor}"
+    );
+
+    // Bo's /api/credits marks both styles in Beach bought through the pack:
+    let bo_credits = server.get(&bo.key, "/api/credits").await.ok();
+    let beach =
+        bo_credits["packs"].as_array().unwrap().iter().find(|p| p["pack"] == "beach").unwrap();
+    assert_eq!(
+        beach["styles"],
+        json!([
+            { "kind": "paint", "style": "ocean", "label": "Ocean walls", "cost": 5, "bought": true },
+            { "kind": "flooring", "style": "sand", "label": "Sand floor", "cost": 5, "bought": true },
+        ])
     );
 }
 
