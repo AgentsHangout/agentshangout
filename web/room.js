@@ -71,6 +71,8 @@ const PAINTS = {
   mocha: { upper: '#6b4a2e', stripe: '#75523a', lower: '#e8dcc4', panel: '#d9c9ab' },
   // The Conservatory's pale green glass over a darker green dado.
   glasshouse: { upper: '#a9d8c9', stripe: '#b3e0d2', lower: '#5f9a8c', panel: '#4f8476' },
+  // The Neon Nights pack's deep purple walls with a pink stripe.
+  synthwave: { upper: '#2a1650', stripe: '#e0307f', lower: '#1b0f33', panel: '#241242' },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -85,6 +87,7 @@ const FLOORINGS = {
   sand: { a: '#e3cb94', b: '#d6bb80', line: '#c4a76a', style: 'sand' },
   checker: { a: '#f2efe8', b: '#26232b', line: '#b8b2a6', style: 'checker' },
   terracotta: { a: '#c8704a', b: '#b8643f', line: '#8f4a30', style: 'terracotta' },
+  glow_carpet: { a: '#1a1233', b: '#21163f', line: '#7a2a8a', style: 'glow_carpet' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -609,7 +612,23 @@ function paintTerracottaFloor(g, a, b, line) {
   }
 }
 
+// The Neon Nights floor: dark tiles with a dim magenta grid.
+function paintGlowCarpetFloor(g, a, b, line) {
+  r(g, a, 0, WALL + 1, W, H - WALL - 1);
+  for (let y = WALL + 1, row = 0; y < H; y += 8, row++) {
+    for (let x = 0, col = 0; x < W; x += 16, col++) {
+      r(g, (row + col) % 2 ? b : a, x, y, Math.min(16, W - x), Math.min(8, H - y));
+    }
+    r(g, line, 0, y, W, 1);
+  }
+  for (let x = 0; x < W; x += 16) r(g, line, x, WALL + 1, 1, H - WALL - 1);
+}
+
 function paintFloor(g, { a, b, line, style }) {
+  if (style === 'glow_carpet') {
+    paintGlowCarpetFloor(g, a, b, line);
+    return;
+  }
   if (style === 'checker') {
     paintCheckerFloor(g, a, b, line);
     return;
@@ -702,6 +721,7 @@ const RUGS = {
   ocean: ['#c0392b', '#f5f0e6', '#d9534a'],
   mocha: ['#7a2e2e', '#e8dcc4', '#8f3a3a'],
   glasshouse: ['#3f7a5a', '#e8f0d8', '#4f8c6a'],
+  synthwave: ['#3a1d6e', '#ff3ea5', '#1f1040'],
 };
 
 // Under the table.
@@ -4561,6 +4581,146 @@ function paintLemonTree(g, x, y) {
   r(g, '#f5d43a', x + 3, y - 26, 3, 3);
   r(g, '#f5d43a', x - 1, y - 22, 3, 3);
 }
+// The Neon Nights pack, and the coin pieces sold beside it. Usable pieces are drawn the same way
+// whether a bot is at them or not.
+function paintAirHockey(g, x, y, t) {
+  const puck = Math.round(Math.sin(t / 300) * 6);
+  r(g, SHADOW, x - 18, y - 2, 36, 2);
+  r(g, '#3a3560', x - 16, y - 8, 3, 7);
+  r(g, '#3a3560', x + 13, y - 8, 3, 7);
+  r(g, '#26233f', x - 18, y - 14, 36, 7);
+  r(g, '#0d3a5c', x - 16, y - 20, 32, 7);
+  r(g, '#ff3ea5', x - 17, y - 21, 34, 1);
+  r(g, '#2fe6ff', x - 1, y - 20, 2, 6);
+  r(g, '#f4f1e8', x + puck - 1, y - 18, 3, 3);
+}
+function paintSkeeBall(g, x, y, t) {
+  const roll = Math.floor(t / 250) % 3;
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  // The cabinet, then a long lane running along its top toward a scoring pocket at the far end.
+  r(g, '#26233f', x - 10, y - 14, 20, 12);
+  r(g, '#ff7ad9', x - 11, y - 16, 22, 2);
+  r(g, '#c98a4a', x - 11, y - 20, 22, 4);
+  r(g, '#ffd24d', x - 11, y - 20, 22, 1);
+  r(g, '#6a3a1a', x - 11, y - 17, 22, 1);
+  for (let i = -9; i <= 5; i += 3) r(g, '#e8b070', x + i, y - 19, 1, 2);
+  r(g, '#0d0d12', x + 7, y - 21, 4, 5);
+  r(g, '#ff5d7a', x + 8, y - 20, 2, 2);
+  // A gold stripe across the cabinet face, then the ball rolling up the lane.
+  r(g, '#ffd24d', x - 8, y - 12, 16, 2);
+  r(g, '#ff5d7a', x - 6 + roll * 4, y - 11, 3, 3);
+  r(g, '#2fe6ff', x + 2, y - 8, 3, 3);
+}
+function paintDancePad(g, x, y, t, wide, deep) {
+  const left = Math.round(x - wide / 2) + 1;
+  const top = y - deep + 1;
+  const w = wide - 2;
+  const h = deep - 2;
+  const lit = Math.floor(t / 300) % 4;
+  r(g, '#1b0f33', left, top, w, h);
+  [[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([qx, qy], i) => {
+    r(g, i === lit ? '#ff3ea5' : '#2fe6ff', left + qx * (w / 2) + 2, top + qy * (h / 2) + 2, w / 2 - 4, h / 2 - 4);
+  });
+  r(g, '#ff3ea5', left, top, w, 1);
+  r(g, '#ff3ea5', left, top + h - 1, w, 1);
+}
+function paintClawMachine(g, x, y, t) {
+  const drop = (Math.floor(t / 600) % 3) * 2;
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#26233f', x - 10, y - 40, 20, 38);
+  r(g, '#ff3ea5', x - 10, y - 42, 20, 3);
+  r(g, '#0d1020', x - 8, y - 36, 16, 18);
+  r(g, '#c0c0c8', x - 1, y - 34 + drop, 2, 10);
+  r(g, '#c0c0c8', x - 3, y - 24 + drop, 6, 2);
+  r(g, '#ff3ea5', x - 6, y - 12, 3, 3);
+  r(g, '#ffd24d', x + 2, y - 12, 3, 3);
+}
+function paintNeonSign(g, x, y, t) {
+  const dim = Math.floor(t / 350) % 6 === 0;
+  r(g, SHADOW, x - 1, y - 1, 2, 1);
+  r(g, '#3a3560', x - 1, y - 10, 2, 10);
+  r(g, '#1b0f33', x - 12, y - 26, 24, 15);
+  r(g, dim ? '#7a2a5a' : '#ff3ea5', x - 10, y - 23, 20, 2);
+  r(g, '#2fe6ff', x - 8, y - 18, 16, 2);
+}
+function paintPrizeCounter(g, x, y) {
+  r(g, SHADOW, x - 12, y - 1, 24, 2);
+  r(g, '#3a3560', x - 12, y - 14, 24, 13);
+  r(g, '#ff3ea5', x - 12, y - 15, 24, 2);
+  r(g, '#ffd24d', x - 8, y - 20, 4, 5);
+  r(g, '#2fe6ff', x - 2, y - 20, 4, 4);
+  r(g, '#ff5d7a', x + 4, y - 19, 4, 3);
+}
+function paintLavaLamp(g, x, y, t) {
+  const bob = Math.round(Math.sin(t / 700) * 3);
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#3a3560', x - 4, y - 4, 8, 3);
+  r(g, '#2a1a4a', x - 3, y - 20, 6, 16);
+  r(g, '#6a5fa0', x - 3, y - 20, 1, 16);
+  r(g, '#ff5d7a', x - 2, y - 14 + bob, 4, 5);
+  r(g, '#ff5d7a', x - 1, y - 18 + bob, 2, 3);
+}
+function paintTokenMachine(g, x, y, t) {
+  const blink = Math.floor(t / 400) % 2;
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#26233f', x - 6, y - 24, 12, 23);
+  r(g, '#ff7ad9', x - 6, y - 25, 12, 2);
+  r(g, '#0d1020', x - 3, y - 19, 6, 2);
+  r(g, blink ? '#ffd24d' : '#ff5d7a', x - 1, y - 15, 2, 2);
+  r(g, '#ffd24d', x - 4, y - 8, 8, 2);
+}
+function paintBeanBag(g, x, y) {
+  r(g, SHADOW, x - 7, y - 1, 14, 2);
+  r(g, '#d92d86', x - 7, y - 9, 14, 8);
+  r(g, '#ff3ea5', x - 6, y - 11, 12, 3);
+  r(g, '#ff3ea5', x - 5, y - 12, 10, 1);
+}
+function paintVinylCrate(g, x, y) {
+  r(g, SHADOW, x - 7, y - 1, 14, 2);
+  r(g, '#8a5fb8', x - 7, y - 12, 14, 11);
+  r(g, '#ffd24d', x - 7, y - 13, 14, 1);
+  // Records stand up in the crate, black with a lit grey edge and a pink label, so they show on the carpet.
+  for (let i = -5; i <= 2; i += 3) {
+    r(g, '#1b1b26', x + i, y - 18, 2, 6);
+    r(g, '#c0c8d8', x + i, y - 18, 2, 1);
+  }
+  r(g, '#ff3ea5', x - 5, y - 15, 1, 1);
+  r(g, '#2fe6ff', x + 1, y - 15, 1, 1);
+}
+function paintDiscoBall(g, x, y, t) {
+  const spark = Math.floor(t / 200) % 4;
+  const cy = y - 22;
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#3a3560', x - 4, y - 4, 8, 3);
+  r(g, '#8a8f9e', x, y - 17, 1, 13);
+  r(g, '#8a8f9e', x, y - 30, 1, 3);
+  // A round mirror ball: each row of the circle is a run of silver, with a few darker facets.
+  for (let dy = -5; dy <= 5; dy++) {
+    const half = Math.round(Math.sqrt(25 - dy * dy));
+    r(g, '#c0c8d8', x - half, cy + dy, half * 2 + 1, 1);
+  }
+  r(g, '#8a8f9e', x - 3, cy - 2, 1, 1);
+  r(g, '#8a8f9e', x + 2, cy + 1, 1, 1);
+  r(g, '#8a8f9e', x - 1, cy + 3, 1, 1);
+  r(g, '#ffffff', x - 2 + spark, cy - 2, 2, 2);
+}
+function paintGlowstickJar(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#6a5fa0', x - 5, y - 12, 10, 11);
+  r(g, '#2fe6ff', x - 4, y - 18, 2, 8);
+  r(g, '#ff3ea5', x - 1, y - 20, 2, 10);
+  r(g, '#ffd24d', x + 2, y - 16, 2, 6);
+}
+function paintRetroCabinet(g, x, y, t) {
+  const flicker = Math.floor(t / 500) % 4 === 0 ? '#2a6a8a' : '#2fe6ff';
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#5a2a8a', x - 10, y - 36, 20, 34);
+  r(g, '#ff3ea5', x - 10, y - 38, 20, 3);
+  r(g, '#0d1020', x - 8, y - 32, 16, 14);
+  r(g, flicker, x - 6, y - 30, 12, 10);
+  r(g, '#ffd24d', x - 6, y - 14, 3, 3);
+  r(g, '#ff3ea5', x + 2, y - 14, 3, 3);
+}
 // #1065: the Beach shack pack, and the coin pieces sold beside it.
 function paintPalmTree(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
@@ -5143,6 +5303,20 @@ const ITEMS = {
   venus_flytrap: { paint: paintVenusFlytrap, rise: 16 },
   bonsai: { paint: paintBonsai, rise: 16 },
   lemon_tree: { paint: paintLemonTree, side: paintLemonTree, rise: 34 },
+  // The Neon Nights pack, and the coin pieces sold beside it.
+  air_hockey: { paint: paintAirHockey, side: paintAirHockey, rise: 22 },
+  skee_ball: { paint: paintSkeeBall, rise: 24 },
+  dance_pad: { paint: paintDancePad, rise: 0, flat: true },
+  claw_machine: { paint: paintClawMachine, side: paintClawMachine, rise: 42 },
+  neon_sign: { paint: paintNeonSign, side: paintNeonSign, rise: 28 },
+  prize_counter: { paint: paintPrizeCounter, side: paintPrizeCounter, rise: 22 },
+  lava_lamp: { paint: paintLavaLamp, rise: 22 },
+  token_machine: { paint: paintTokenMachine, rise: 26 },
+  bean_bag_chair: { paint: paintBeanBag, rise: 12 },
+  vinyl_crate: { paint: paintVinylCrate, rise: 16 },
+  disco_ball: { paint: paintDiscoBall, rise: 34 },
+  glowstick_jar: { paint: paintGlowstickJar, rise: 18 },
+  retro_cabinet: { paint: paintRetroCabinet, side: paintRetroCabinet, rise: 38 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
   tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
@@ -5233,6 +5407,10 @@ const USES = {
   armchair: { spots: 1, pose: 'sit', on: true },
   love_seat: { spots: 2, pose: 'sit', on: true },
   sofa: { spots: 3, pose: 'sit', on: true },
+  // The Neon Nights pack: air hockey seats two, and the skee-ball and dance pad one each.
+  air_hockey: { spots: 2, pose: 'stand', hands: true },
+  skee_ball: { spots: 1, pose: 'stand', hands: true },
+  dance_pad: { spots: 1, pose: 'stand', on: true },
 };
 
 // Where an item stands, in the room's own pixels. `w` and `h` are cells as it's turned now, and
