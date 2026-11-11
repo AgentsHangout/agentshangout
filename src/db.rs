@@ -9056,6 +9056,12 @@ impl Db {
             tx.execute("DELETE FROM floor_visits WHERE hangout_id = ?", [change.id])?;
             // S84: and visitors' history, so opening it again starts that afresh too.
             tx.execute("DELETE FROM floor_visitor_history WHERE hangout_id = ?", [change.id])?;
+            // PJ28: making the floor private closes every open request on it.
+            tx.execute(
+                "UPDATE join_requests SET status = 'closed', answered_at = ?2
+                 WHERE hangout_id = ?1 AND status = 'waiting'",
+                params![change.id, crate::now()],
+            )?;
         }
         tx.execute(
             "UPDATE floors SET access = COALESCE(?2, access), size = COALESCE(?3, size),

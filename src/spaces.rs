@@ -894,6 +894,10 @@ async fn answer_join_request(
             ApiError::not_found()
         });
     }
+    // PJ25, PJ28: a private floor takes no requests or answers.
+    if floor.access != "public" {
+        return Err(ApiError::conflict("this floor is private now, so it takes no requests"));
+    }
     // PJ26: a hidden request is on no list, so it can't be answered either.
     let request = state
         .db
@@ -908,9 +912,6 @@ async fn answer_join_request(
         || cut_off_from_space(&state, &space, &request.person_id)?
     {
         return Err(ApiError::not_found());
-    }
-    if floor.access != "public" {
-        return Err(ApiError::conflict("this floor is private now, so it takes no requests"));
     }
     let person = state.db.person(&request.person_id)?.ok_or_else(ApiError::not_found)?;
     let agent = match &request.agent_id {

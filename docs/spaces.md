@@ -749,7 +749,9 @@ or no (#1044). A yes is an invite. The design, with the half that waits on self-
   floor takes at most 20 requests an hour. The next is 429. These are counted in the same
   statement that writes the request, so asks that arrive together can't each pass.
 
-A floor that goes private takes no more answers, and its requests leave the list.
+- **PJ28.** Making the floor private (S26) closes every open request on it. Turning self-join off
+  (PJ5) does not turn asking off: asking is how someone gets in when they can't join by themselves.
+  A city's Town Square, a house's rooms and a Porch don't take requests (PJ17).
 
 ## Who is in the room
 
