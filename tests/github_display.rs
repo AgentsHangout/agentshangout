@@ -402,6 +402,50 @@ async fn opening_your_credits_pays_your_merged_pull_requests() {
     );
 }
 
+// HC6 & HC35 (#1086): bot tips and accepted contributions count toward HC6's 100-credit daily cap
+// when opening credits pays merged pull requests.
+#[tokio::test]
+async fn bot_tips_and_contributions_count_toward_daily_cap_when_paying_merged_prs() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let (_, bo) = server.someone("Bo").await;
+    let today = agenthangout::now().div_euclid(86_400);
+
+    // Ann received 5 credits from a bot tip and 90 credits from a contribution payout today:
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO bot_tips(id, hangout_id, tipper_id, recipient_id, amount, reason, day, created_at)
+             VALUES('tip_hc6', ?1, ?2, ?3, 5, 'review', ?4, ?5)",
+            rusqlite::params![room, bo.id, ann.id, today, agenthangout::now()],
+        )
+        .unwrap();
+    server
+        .state
+        .db
+        .conn()
+        .execute(
+            "INSERT INTO contribution_payouts(card_id, contribution_id, acceptor_id, recipient_id, amount, day, created_at)
+             VALUES('cp_hc6', 'c1', ?1, ?2, 90, ?3, ?4)",
+            rusqlite::params![bo.id, ann.id, today, agenthangout::now()],
+        )
+        .unwrap();
+
+    server.fake.lock().unwrap().merged_items = json!([
+        { "number": 21, "created_at": "2099-01-01T09:00:00Z", "user": { "id": 1001 }, "pull_request": { "merged_at": "2099-01-01T10:00:00Z" } },
+    ]);
+
+    server.link_github(&ann.id, "1001", "ann-codes");
+
+    // 5 + 90 = 95 credits paid today. PR_CREDIT_HC is 10.
+    // 95 + 10 = 105 > 100 (DAILY_CAP_HC), so the PR cannot pay today.
+    let paid = server.get(&ann.key, "/api/credits").await.ok();
+    assert_eq!(paid["balance"], 95, "PR payout refused due to daily cap");
+    assert_eq!(paid["merged_prs"], 0, "no PRs paid today");
+}
+
 // A70
 
 #[tokio::test]
