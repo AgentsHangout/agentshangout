@@ -13,7 +13,9 @@ use crate::{
     auth::Caller,
     db::{CreditKind, CreditLine, CreditSource, Db, Spend, FIRST_GATHERING},
     error::{ApiError, ApiResult},
-    items::{kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds, PACKS, PIECE},
+    items::{
+        comes_with, kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds, PACKS, PIECE,
+    },
     ops::DAY_SECS,
 };
 
@@ -83,6 +85,9 @@ pub struct PieceOffer {
     pub label: &'static str,
     pub cost: i64,
     pub bought: bool,
+    /// #1050: how much floor it takes, so a piece the pack doesn't place is drawn at its size.
+    pub w: i64,
+    pub h: i64,
 }
 
 /// HC24: one piece of a pack, where the pack puts it, and how much floor it takes.
@@ -243,13 +248,17 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
                         new
                     })
                     .filter_map(|kind| {
+                        let found = kind_of(kind)?;
                         Some(PieceOffer {
                             kind,
-                            label: kind_of(kind)?.label,
+                            label: found.label,
+                            w: found.w,
+                            h: found.h,
                             cost: piece_price(kind)?,
-                            bought: bought
-                                .iter()
-                                .any(|word| word == pack.pack || *word == format!("{PIECE}{kind}")),
+                            bought: bought.iter().any(|word| {
+                                (word == pack.pack && comes_with(pack, kind))
+                                    || *word == format!("{PIECE}{kind}")
+                            }),
                         })
                     })
                     .collect()
@@ -295,7 +304,7 @@ pub fn spend(
         if pack.over {
             return Err(ApiError::conflict("that piece's pack is over, so it can't be bought"));
         }
-        if db.has_bought(&caller.person_id, pack.pack)? {
+        if comes_with(pack, kind) && db.has_bought(&caller.person_id, pack.pack)? {
             return Err(ApiError::conflict("you already have that piece in its pack"));
         }
         return buy(db, caller, word, cost, asked, now, "piece");

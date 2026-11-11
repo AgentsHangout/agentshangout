@@ -271,13 +271,17 @@ async fn storage_keeps_no_index_of_memories_and_an_old_database_gets_the_tables(
     let path = path.to_str().unwrap().to_string();
     drop(Db::open(&path).unwrap());
     let old = rusqlite::Connection::open(&path).unwrap();
-    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
+    for table in
+        ["bot_note_checks", "bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"]
+    {
         old.execute(&format!("DROP TABLE {table}"), []).unwrap();
     }
     drop(old);
     drop(Db::open(&path).unwrap());
     let reopened = rusqlite::Connection::open(&path).unwrap();
-    for table in ["bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"] {
+    for table in
+        ["bot_note_checks", "bot_memories", "bot_sleep", "bot_memory_uses", "bot_rooms_seen"]
+    {
         let there: i64 = reopened
             .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = ?", [table], |row| {
                 row.get(0)
@@ -835,6 +839,12 @@ async fn mm11_sleep_at_home_returns_the_day_and_anywhere_else_says_go_home_first
     assert_eq!(texts(&day["notes"], "text"), ["Friendly place"]);
     assert!(day["last_slept"].is_null());
     assert!(text(&day["how"]).contains("notes"));
+    // #1041: it also asks for a note on the bot itself, for what's unfinished and when it last looked.
+    let how = text(&day["how"]);
+    assert!(
+        how.contains("subject self") && how.contains("unfinished") && how.contains("last checked"),
+        "{how}"
+    );
 
     // At most 40 lines, the newest, each cut to 150 characters.
     for i in 0..45 {
@@ -938,6 +948,122 @@ async fn mm12_sleep_with_notes_writes_them_all_or_none_and_marks_the_bot_as_slep
     // The next day starts when it slept.
     let day = server.tool(fern, "sleep", json!({})).await;
     assert_eq!(day["last_slept"], again["slept_at"]);
+}
+
+// MM24 (#1041)
+#[tokio::test]
+async fn mm24_first_inbox_after_sleep_carries_sleep_notes() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let rover = &town.rover;
+    let room = format!("room:{}", town.cafe);
+    let bo = format!("person:{}", town.bo.id);
+
+    // Before sleeping, inbox has no sleep_notes.
+    let inbox_before = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox_before.get("sleep_notes").is_none());
+
+    // Sleep with notes, including a long note (>80 chars) to test preview trimming.
+    let long_text = "This is a detailed reflection about the cafe and friends that exceeds eighty characters in total length.";
+    assert!(long_text.len() > 80);
+    let notes = json!({ "notes": [
+        { "subject": room, "text": long_text },
+        { "subject": bo, "text": "Kind person", "feeling": "grateful", "closeness": 1 }
+    ] });
+    let slept = server.tool(fern, "sleep", notes).await;
+    assert_eq!(slept["changed"], 2);
+
+    // The notes go ONLY to the bot that wrote them: rover's inbox never gets them.
+    let rover_inbox = server.tool(rover, "inbox", json!({})).await;
+    assert!(rover_inbox.get("sleep_notes").is_none());
+
+    // The first inbox after waking carries those sleep notes and memory_note.
+    let inbox = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes = inbox["sleep_notes"].as_array().expect("sleep_notes present");
+    assert_eq!(sleep_notes.len(), 2);
+    assert_eq!(sleep_notes[0]["subject"], room);
+    // Preview cut with ellipsis
+    assert!(sleep_notes[0]["text"].as_str().unwrap().ends_with('…'));
+    assert_eq!(sleep_notes[1]["subject"], bo);
+    assert_eq!(sleep_notes[1]["text"], "Kind person");
+    assert_eq!(sleep_notes[1]["feeling"], "grateful");
+    assert_eq!(sleep_notes[1]["closeness"], 1);
+    assert!(inbox["memory_note"].is_string());
+
+    // A second normal inbox call leaves them out (carried once).
+    let inbox2 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox2.get("sleep_notes").is_none());
+
+    // An inbox call with full: true carries them with full text (not preview trimmed).
+    let inbox_full = server.tool(fern, "inbox", json!({ "full": true })).await;
+    let sleep_notes_full =
+        inbox_full["sleep_notes"].as_array().expect("sleep_notes present with full");
+    assert_eq!(sleep_notes_full.len(), 2);
+    assert_eq!(sleep_notes_full[0]["text"], long_text);
+
+    // Still not in normal inbox.
+    let inbox3 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox3.get("sleep_notes").is_none());
+
+    // Sleeping with >10 notes caps inbox sleep_notes at 10 per call, carrying remaining notes on next call.
+    let mut twelve_subjects = Vec::new();
+    for i in 0..12 {
+        let b = server.bot(&town.ann, &town.cafe, &format!("Pal{i}"));
+        twelve_subjects.push(format!("agent:{}", b.id));
+    }
+    let notes_twelve: Vec<Value> = twelve_subjects
+        .iter()
+        .enumerate()
+        .map(|(i, s)| json!({ "subject": s, "text": format!("Note about pal {i}") }))
+        .collect();
+    let slept12 = server.tool(fern, "sleep", json!({ "notes": notes_twelve })).await;
+    assert_eq!(slept12["changed"], 12);
+
+    // First inbox carries at most 10.
+    let inbox_cap1 = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes_cap1 = inbox_cap1["sleep_notes"].as_array().expect("first 10 notes");
+    assert_eq!(sleep_notes_cap1.len(), 10);
+
+    // Second inbox carries the remaining 2 notes.
+    let inbox_cap2 = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes_cap2 = inbox_cap2["sleep_notes"].as_array().expect("remaining 2 notes");
+    assert_eq!(sleep_notes_cap2.len(), 2);
+
+    // Third inbox has none left.
+    let inbox_cap3 = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox_cap3.get("sleep_notes").is_none());
+
+    // Sleep with a note.
+    server
+        .tool(
+            fern,
+            "sleep",
+            json!({ "notes": [{ "subject": "self", "text": "Remember tomorrow" }] }),
+        )
+        .await;
+    // Sleep again with no notes: does not wipe unseen sleep notes.
+    server.tool(fern, "sleep", json!({ "notes": [] })).await;
+    let inbox_retained = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes_retained =
+        inbox_retained["sleep_notes"].as_array().expect("retained sleep notes");
+    assert_eq!(sleep_notes_retained.len(), 1);
+    assert_eq!(sleep_notes_retained[0]["text"], "Remember tomorrow");
+
+    // Sleeping with new notes replaces prior sleep notes.
+    let notes_single = json!({ "notes": [
+        { "subject": "self", "text": "New morning goal" }
+    ] });
+    server.tool(fern, "sleep", notes_single).await;
+    let inbox_new = server.tool(fern, "inbox", json!({})).await;
+    let sleep_notes_new = inbox_new["sleep_notes"].as_array().expect("new sleep notes present");
+    assert_eq!(sleep_notes_new.len(), 1);
+    assert_eq!(sleep_notes_new[0]["subject"], "self");
+    assert_eq!(sleep_notes_new[0]["text"], "New morning goal");
+
+    // Once delivered, normal inbox leaves them out again.
+    let inbox_after = server.tool(fern, "inbox", json!({})).await;
+    assert!(inbox_after.get("sleep_notes").is_none());
 }
 
 // MM13
@@ -1719,6 +1845,164 @@ async fn mm2_notes_on_itself_and_its_owner_stay_and_unseen_subjects_go_first() {
     for id in kept {
         assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &id), 1);
     }
+}
+
+/// Moves a note's change and its confirmation back by an hour, as if both happened then.
+fn an_hour_ago(server: &Server, id: &str) {
+    let conn = server.sql();
+    conn.execute(
+        "UPDATE bot_memories SET created_at = created_at - 3600, updated_at = updated_at - 3600
+         WHERE id = ?1",
+        [id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE bot_note_checks SET checked_at = checked_at - 3600 WHERE note_id = ?1",
+        [id],
+    )
+    .unwrap();
+}
+
+fn note_times(server: &Server, id: &str) -> (i64, i64) {
+    server
+        .sql()
+        .query_row(
+            "SELECT m.updated_at, c.checked_at FROM bot_memories m
+             JOIN bot_note_checks c ON c.note_id = m.id WHERE m.id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+// MM25: confirming a note an hour later, without changing it, is later than when it last changed.
+#[tokio::test]
+async fn mm25_an_unchanged_rewrite_an_hour_later_shows_checked_after_when() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let saved =
+        server.remember(fern, json!({ "text": "Still cozy", "subject": room, "note": true })).await;
+    let id = text(&saved["id"]);
+    // The write and the confirmation are the same moment, so recall has no checked yet.
+    let fresh = server.recall(fern, "cozy").await;
+    assert!(fresh[0].get("checked").is_none(), "{fresh:?}");
+
+    an_hour_ago(&server, &id);
+    let (updated, _) = note_times(&server, &id);
+    let again =
+        server.remember(fern, json!({ "text": "Still cozy", "subject": room, "note": true })).await;
+    assert_eq!(again["changed"], false);
+    let (updated_after, checked_at) = note_times(&server, &id);
+    assert_eq!(updated_after, updated, "confirming a note does not move when it changed");
+    assert!(checked_at > updated_after);
+
+    let found = server.recall(fern, "cozy").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    let when = text(&found[0]["when"]);
+    let checked = text(&found[0]["checked"]);
+    assert!(checked > when, "checked {checked} when {when}");
+
+    // MM12: saying the same note again while sleeping still changes nothing, and costs none of
+    // the 60 notes a day.
+    let uses = server.count(
+        "SELECT COUNT(*) FROM bot_memory_uses WHERE bot_id = ? AND what = 'sleep_note'",
+        &fern.id,
+    );
+    let slept = server
+        .tool(fern, "sleep", json!({ "notes": [{ "subject": room, "text": "Still cozy" }] }))
+        .await;
+    assert_eq!(slept["changed"], 0, "{slept}");
+    assert_eq!(
+        server.count(
+            "SELECT COUNT(*) FROM bot_memory_uses WHERE bot_id = ? AND what = 'sleep_note'",
+            &fern.id
+        ),
+        uses
+    );
+    let (updated_slept, checked_slept) = note_times(&server, &id);
+    assert_eq!(updated_slept, updated);
+    assert!(checked_slept >= checked_at);
+}
+
+// MM25: a write that changes the note leaves checked out. The confirmation moves with the change.
+#[tokio::test]
+async fn mm25_a_changed_write_shows_no_checked() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let room = format!("room:{}", town.cafe);
+    let saved = server
+        .remember(fern, json!({ "text": "Busy at noon", "subject": room, "note": true }))
+        .await;
+    let id = text(&saved["id"]);
+    an_hour_ago(&server, &id);
+    server
+        .remember(fern, json!({ "text": "Quiet after six", "subject": room, "note": true }))
+        .await;
+    let found = server.recall(fern, "quiet").await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].get("checked").is_none(), "{found:?}");
+    let (updated, checked_at) = note_times(&server, &id);
+    assert_eq!(checked_at, updated);
+    assert!(updated > now() - 60, "the change is stamped now, not the old confirmation");
+}
+
+// MM25: deleting a note takes its check row with it.
+#[tokio::test]
+async fn mm25_deleting_a_note_drops_its_check_row() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let saved = server.remember(fern, json!({ "text": "A heron on the roof", "note": true })).await;
+    let id = text(&saved["id"]);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &id), 1);
+    server.tool(fern, "forget", json!({ "id": id })).await;
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &id), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &id), 0);
+}
+
+// MM2: eviction drops the note left unchanged longest, and its check row goes with it.
+#[tokio::test]
+async fn mm2_eviction_removes_the_check_row() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    let fern = &town.fern;
+    let conn = server.sql();
+    let oldest = agenthangout::auth::new_id();
+    let mut kept = String::new();
+    for i in 0..200 {
+        let id = if i == 0 { oldest.clone() } else { agenthangout::auth::new_id() };
+        if i == 1 {
+            kept = id.clone();
+        }
+        let at = now() - if i == 0 { 30 * DAY } else { DAY };
+        conn.execute(
+            "INSERT INTO bot_memories (id, bot_id, subject, kind, text, importance, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'note', ?4, 4, ?5, ?5)",
+            rusqlite::params![id, fern.id, format!("room:gone-{i}"), format!("note {i}"), at],
+        )
+        .unwrap();
+    }
+    for (id, at) in [(&oldest, now() - 30 * DAY), (&kept, now() - DAY)] {
+        conn.execute(
+            "INSERT INTO bot_note_checks (note_id, checked_at) VALUES (?1, ?2)",
+            rusqlite::params![id, at],
+        )
+        .unwrap();
+    }
+    let bo = format!("person:{}", town.bo.id);
+    let added =
+        server.remember(fern, json!({ "text": "Bo is kind", "subject": bo, "note": true })).await;
+    assert_eq!(added["dropped"], json!(oldest), "{added}");
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_memories WHERE id = ?", &oldest), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &oldest), 0);
+    assert_eq!(server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &kept), 1);
+    assert_eq!(
+        server.count("SELECT COUNT(*) FROM bot_note_checks WHERE note_id = ?", &text(&added["id"])),
+        1
+    );
 }
 
 /// The tables with a row holding these bytes in any column. Memories are kept in one table and no
