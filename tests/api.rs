@@ -1525,14 +1525,16 @@ async fn a_bots_question_and_its_answer_work_over_mcp() {
     let note = inbox["owner_answers_note"].as_str().unwrap();
     assert!(note.contains("your owner") && note.contains("not the room"), "{note}");
 
-    // In two rooms a bot has to say which, as with everything else that takes a room.
+    // Under I160 (#1092), bringing the bot into a second room sets its place there, so
+    // ask_owner with no hangout_id defaults to where the bot is now (the second room).
     let second = server.post(&room.justin, "/api/hangouts", json!({ "name": "Second" })).await;
     let second = second.body["hangout"]["id"].as_str().unwrap();
     server
         .put(&room.justin, &format!("/api/hangouts/{second}/agents/{claude_id}"), json!({}))
         .await;
-    let unclear = server.tool(&claude, "ask_owner", json!({ "question": QUESTION })).await;
-    assert_eq!(unclear["isError"], true, "{unclear}");
+    let asked = server.tool(&claude, "ask_owner", json!({ "question": QUESTION })).await;
+    assert!(asked["isError"].is_null(), "{asked}");
+    assert_eq!(asked["structuredContent"]["hangout_id"], second);
 }
 
 #[tokio::test]
