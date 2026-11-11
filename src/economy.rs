@@ -16,7 +16,7 @@ use crate::{
     error::{ApiError, ApiResult},
     items::{
         comes_with, grand_price, kind_of, pack_of, paid_pack_with, piece_price, sold_alone_kinds,
-        GRAND_PIECES, PACKS, PIECE,
+        FLOORING, GRAND_PIECES, PACKS, PAINT, PIECE, STYLE_PRICE_HC,
     },
     ops::DAY_SECS,
 };
@@ -80,6 +80,18 @@ pub struct PackOffer {
     pub pieces: Vec<PackPiece>,
     /// HC45: each kind of piece in it, on its own, with what it costs and whether it's yours.
     pub sold_alone: Vec<PieceOffer>,
+    /// HC45 & #1057: each wall and floor style in it, with what it costs and whether it's yours.
+    pub styles: Vec<StyleOffer>,
+}
+
+/// HC45 & #1057: one wall or floor style of a paid pack, sold on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StyleOffer {
+    pub kind: &'static str,
+    pub style: &'static str,
+    pub label: String,
+    pub cost: i64,
+    pub bought: bool,
 }
 
 /// HC45: one piece of a paid pack, sold on its own.
@@ -138,6 +150,15 @@ fn worth(kind: CreditKind) -> i64 {
     match kind {
         CreditKind::Gathering => GATHERING_HC,
         CreditKind::GoodTrip | CreditKind::HostedTrip => GOOD_TRIP_HC,
+    }
+}
+
+fn sentence_case(word: &str) -> String {
+    let spaced = word.replace('_', " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 
@@ -271,6 +292,30 @@ pub fn credits(db: &Db, person_id: &str, now: i64) -> rusqlite::Result<Credits> 
                     })
                     .collect()
             },
+            styles: if pack.cost > 0 {
+                vec![
+                    StyleOffer {
+                        kind: "paint",
+                        style: pack.paint,
+                        label: format!("{} walls", sentence_case(pack.paint)),
+                        cost: STYLE_PRICE_HC,
+                        bought: bought.iter().any(|word| {
+                            word == pack.pack || *word == format!("{PAINT}{}", pack.paint)
+                        }),
+                    },
+                    StyleOffer {
+                        kind: "flooring",
+                        style: pack.flooring,
+                        label: format!("{} floor", sentence_case(pack.flooring)),
+                        cost: STYLE_PRICE_HC,
+                        bought: bought.iter().any(|word| {
+                            word == pack.pack || *word == format!("{FLOORING}{}", pack.flooring)
+                        }),
+                    },
+                ]
+            } else {
+                Vec::new()
+            },
         })
         .collect();
     out.grand = GRAND_PIECES
@@ -317,6 +362,31 @@ pub fn spend(
 ) -> ApiResult<Credits> {
     if caller.is_house {
         return Err(ApiError::not_found());
+    }
+    // #1057: a paint style on its own is bought as `paint:<name>` for 5 coins.
+    if let Some(paint) = word.strip_prefix(crate::items::PAINT) {
+        let pack = crate::items::pack_for_paint(paint)
+            .ok_or_else(|| ApiError::bad_request("that isn't a paint you can buy: see credits"))?;
+        if pack.over {
+            return Err(ApiError::conflict("that paint's pack is over, so it can't be bought"));
+        }
+        if db.has_bought(&caller.person_id, pack.pack)? {
+            return Err(ApiError::conflict("you already have that paint in its pack"));
+        }
+        return buy(db, caller, word, crate::items::STYLE_PRICE_HC, asked, now, "paint");
+    }
+    // #1057: a flooring style on its own is bought as `flooring:<name>` for 5 coins.
+    if let Some(flooring) = word.strip_prefix(crate::items::FLOORING) {
+        let pack = crate::items::pack_for_flooring(flooring).ok_or_else(|| {
+            ApiError::bad_request("that isn't a flooring you can buy: see credits")
+        })?;
+        if pack.over {
+            return Err(ApiError::conflict("that flooring's pack is over, so it can't be bought"));
+        }
+        if db.has_bought(&caller.person_id, pack.pack)? {
+            return Err(ApiError::conflict("you already have that flooring in its pack"));
+        }
+        return buy(db, caller, word, crate::items::STYLE_PRICE_HC, asked, now, "flooring");
     }
     // HC45: a piece on its own is bought as `piece:<kind>`, at its own price.
     if let Some(kind) = word.strip_prefix(PIECE) {
