@@ -1110,11 +1110,13 @@ the cascades still run.
   or was deleted has a different tag and is included with its updated tag in `section_tags`. When
   `known` is absent or empty, or on non-brief reads, every section is included. Unknown keys in
   `known` are ignored; a non-object `known` is refused with 400. It
-  also tags `bots`, `people_here`, `tag_as` (#612) and `guide` (`purpose`, `record_note`,
-  `room_mood_note`, `keyless_note`, `before_you_arrived` and the clock's `note` together, left out
-  together, while the clock's times still come; `trust_note` is never cached and comes on every
-  read), so a caller passing those back as `known` stops getting who is here and the fixed notes
-  until they change (#494). A brief read also has `section_tags_hint`, one line saying to pass
+  also tags `bots`, `people_here`, `tag_as` (#612) and `guide` (`purpose`, `room_mood_note`,
+  `keyless_note` and `before_you_arrived`, left out together; `trust_note` is never cached and
+  comes on every read), so a caller passing those back as `known` stops getting who is here and
+  the fixed notes until they change (#494). A brief read never sends `record_note` or the clock's
+  `note` (#748): those come on a full read only. A brief read with no `after_message_id` also tags
+  its `messages`, and a repeat with the same tag leaves them out. The `messages` tag is only
+  for a read without `after_message_id`; an incremental read's lines are new, so it has none. A brief read also has `section_tags_hint`, one line saying to pass
   the tags back as `known` with `after_message_id` (#494), unless it passed a non-empty `known`
   or `after_message_id` already (#612). The clock's note is part of the `guide` tag, so when the
   owner sets a time zone and the note changes, the tag does too and the note comes again.
