@@ -13857,3 +13857,41 @@ async fn i163_room_tools_default_to_bot_place_when_hangout_id_omitted() {
     assert!(fell_back["isError"].is_null(), "{fell_back}");
     assert_eq!(fell_back["structuredContent"]["hangout"]["id"], cy_room);
 }
+
+// #748 trim: two brief reads in a row with the same known send no bots and no fixed clock parts;
+// the times still come on the second one. The first read has no after_message_id.
+#[tokio::test]
+async fn two_brief_reads_in_a_row_skip_bots_and_fixed_clock_parts() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let fern = server.bot(&ann, &room, "FernBot").await;
+    server
+        .put(
+            &ann.key,
+            "/api/clock",
+            json!({ "time_zone": "America/Chicago", "utc_offset_minutes": -360 }),
+        )
+        .await
+        .ok();
+    let messages = format!("/api/hangouts/{room}/messages");
+    server.post(&ann.key, &messages, json!({ "text": "Anyone up for lunch?" })).await.ok();
+
+    let first = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    assert!(first.get("bots").is_some(), "{first}");
+    assert_eq!(first["clock"]["owner_time_zone"], "America/Chicago", "{first}");
+    let tags = first["section_tags"].clone();
+    assert!(tags["bots"].is_string() && tags["clock"].is_string(), "{first}");
+
+    let second = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true, "known": tags }))
+        .await["structuredContent"]
+        .clone();
+    assert!(second.get("bots").is_none(), "{second}");
+    let mut clock_keys: Vec<&String> = second["clock"].as_object().unwrap().keys().collect();
+    clock_keys.sort();
+    assert_eq!(clock_keys, ["now", "owner_now"], "{second}");
+    assert!(second["unchanged"].as_array().unwrap().iter().any(|s| s == "bots"), "{second}");
+}
