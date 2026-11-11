@@ -254,7 +254,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 156] = [
+pub static CATALOG: [Kind; 162] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -443,6 +443,13 @@ pub static CATALOG: [Kind; 156] = [
     piece("snow_globe", "Snow globe", COINS, STARTER, 3, feels("calm"), (1, 1)),
     piece("cocoa_cart", "Cocoa cart", COINS, STARTER, 4, feels("cozy"), (2, 1)),
     piece("ice_rink", "Ice rink", COINS, STARTER, 5, feels("playful"), (4, 2)).flat(),
+    // More coin sinks: three beside Stargazer and three beside Winter.
+    piece("ufo", "UFO", COINS, STARTER, 5, feels("playful"), (2, 2)),
+    piece("planetarium", "Planetarium dome", COINS, STARTER, 7, feels("inspired"), (4, 2)),
+    piece("satellite", "Little satellite", COINS, STARTER, 4, feels("inspired"), (1, 1)),
+    piece("igloo", "Igloo", COINS, STARTER, 5, feels("cozy"), (3, 2)),
+    piece("reindeer", "Reindeer", COINS, STARTER, 4, feels("playful"), (2, 1)),
+    piece("snowball_pile", "Snowball pile", COINS, STARTER, 2, feels("playful"), (1, 1)),
     // The Halloween pack, which is over (I57). Its kinds stay, because floors have them on.
     piece("pumpkin", "Jack-o'-lantern", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
     piece("ghost", "Friendly ghost", SPOOKY, STARTER, 3, feels("playful"), (1, 1)),
@@ -626,7 +633,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 6] = [
+pub const SOLD_ALONE: [(&str, &str); 12] = [
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -634,6 +641,12 @@ pub const SOLD_ALONE: [(&str, &str); 6] = [
     ("snow_globe", "winter"),
     ("cocoa_cart", "winter"),
     ("ice_rink", "winter"),
+    ("ufo", "stargazer"),
+    ("planetarium", "stargazer"),
+    ("satellite", "stargazer"),
+    ("igloo", "winter"),
+    ("reindeer", "winter"),
+    ("snowball_pile", "winter"),
 ];
 
 /// The pack that sells `word` one at a time without placing it, if any.

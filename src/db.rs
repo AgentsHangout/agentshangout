@@ -21016,11 +21016,23 @@ mod tests {
             assert_eq!(kind_of(kind).unwrap().category, "coins", "{kind}");
             assert!((2..=10).contains(&piece_price(kind).unwrap()), "{kind}");
         }
-        let prices: Vec<i64> = ["snow_globe", "cocoa_cart", "ice_rink"]
-            .iter()
-            .map(|k| piece_price(k).unwrap())
-            .collect();
-        assert_eq!(prices, [2, 4, 10]);
+        // Each price is piece_price's, from size and beauty: the satellite (beauty 4) is 3 and the
+        // snowball pile (beauty 2) is 2, though both are 1x1.
+        let prices: Vec<i64> = [
+            "snow_globe",
+            "cocoa_cart",
+            "ice_rink",
+            "ufo",
+            "planetarium",
+            "satellite",
+            "igloo",
+            "reindeer",
+            "snowball_pile",
+        ]
+        .iter()
+        .map(|k| piece_price(k).unwrap())
+        .collect();
+        assert_eq!(prices, [2, 4, 10, 6, 10, 3, 8, 4, 2]);
 
         let db = Db::open(":memory:").unwrap();
         let now = ann_with_gatherings(&db, 1);
