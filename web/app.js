@@ -5827,8 +5827,8 @@ async function roomView(id) {
     const request = snapshot.join_request;
     // PJ24: the asker is told it was declined, and not who declined or why.
     if (request?.status === 'declined') return h('small', { class: 'muted' }, 'Your request to join was declined.');
-    if (request) return h('button', { type: 'button', class: 'wd-tbtn', disabled: true, title: 'Someone who can invite people here will answer.' }, 'Asked to join');
-    return h('button', {
+    if (request?.status === 'waiting') return h('button', { type: 'button', class: 'wd-tbtn', disabled: true, title: 'Someone who can invite people here will answer.' }, 'Asked to join');
+    const button = h('button', {
       type: 'button',
       class: 'wd-tbtn',
       onclick: () => {
@@ -5846,6 +5846,13 @@ async function roomView(id) {
               h('button', { type: 'submit', class: 'primary' }, 'Ask'))));
       },
     }, 'Ask to join');
+    if (request?.status === 'expired') {
+      return h('span', { class: 'wd-join-ask-expired' },
+        h('small', { class: 'muted' }, 'Your request to join expired.'),
+        button,
+      );
+    }
+    return button;
   }
 
   // Which floor of which space this is. Only floors this caller can reach come from the server.

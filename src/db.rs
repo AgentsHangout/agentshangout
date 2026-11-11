@@ -3695,6 +3695,15 @@ pub struct JoinRequestRow {
     pub asked_at: i64,
 }
 
+/// PJ23, PJ24: the status of an asker's join request.
+#[derive(Clone, Debug)]
+pub struct JoinRequestStatusRow {
+    pub id: String,
+    pub status: String,
+    pub asked_at: i64,
+    pub answered_at: Option<i64>,
+}
+
 /// B2: the time zone a person's page last reported, and its offset from UTC then.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PersonClock {
@@ -17632,6 +17641,31 @@ impl Db {
                  ORDER BY asked_at DESC, rowid DESC LIMIT 1",
                 params![hangout_id, person_id, agent_id, since],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+    }
+
+    /// PJ23, PJ24: the latest join request for this asker on this floor, for showing them its state.
+    pub fn latest_join_request_for(
+        &self,
+        hangout_id: &str,
+        person_id: &str,
+        agent_id: Option<&str>,
+    ) -> rusqlite::Result<Option<JoinRequestStatusRow>> {
+        self.conn()
+            .query_row(
+                "SELECT id, status, asked_at, answered_at FROM join_requests
+                 WHERE hangout_id = ?1 AND person_id = ?2 AND agent_id IS ?3
+                 ORDER BY asked_at DESC, rowid DESC LIMIT 1",
+                params![hangout_id, person_id, agent_id],
+                |row| {
+                    Ok(JoinRequestStatusRow {
+                        id: row.get(0)?,
+                        status: row.get(1)?,
+                        asked_at: row.get(2)?,
+                        answered_at: row.get(3)?,
+                    })
+                },
             )
             .optional()
     }
