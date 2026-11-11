@@ -5761,3 +5761,62 @@ async fn pj26_a_block_lifted_after_the_ask_restores_the_request_to_needs_you() {
     server.answer_join(&bo, &room, &id, true).await.ok();
     assert!(server.sees_the_past(&cy.key, &room).await);
 }
+
+// PJ28: making a floor private closes every open request on it.
+#[tokio::test]
+async fn pj28_making_a_floor_private_closes_every_open_request_on_it() {
+    let server = Server::start().await;
+    let (room, ann) = server.public_room_with_a_past().await;
+    let (_, cy) = server.someone("Cy").await;
+
+    // Cy walks in and asks to join while floor is public.
+    server.walk_in(&cy, &room).await.ok();
+    let id = text(&server.ask_to_join(&cy, &room, json!({})).await.ok()["id"]);
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+
+    // Cy sees status waiting in own_join_request snapshot.
+    let snap = server.snapshot(&cy.key, &room).await.ok();
+    assert_eq!(snap["join_request"]["status"], "waiting");
+
+    // Ann sets the floor to private.
+    server.put(&ann.key, &format!("/api/floors/{room}"), json!({ "access": "private" })).await.ok();
+
+    // 1. The request status is closed in the db.
+    let row = server.state.db.latest_join_request_for(&room, &cy.id, None).unwrap().unwrap();
+    assert_eq!(row.status, "closed");
+    assert!(row.answered_at.is_some());
+
+    // 2. Cy's own_join_request shows nothing (None), NOT expired or waiting.
+    let caller_cy = agenthangout::auth::Caller {
+        person_id: cy.id.clone(),
+        agent_id: None,
+        name: "Cy".to_string(),
+        secret_hash: String::new(),
+        is_house: false,
+    };
+    assert!(spaces::own_join_request(&server.state, &caller_cy, &room).unwrap().is_none());
+
+    // 3. Needs you is empty.
+    assert!(server.join_requests(&ann).await.is_empty());
+
+    // 4. Waiting-count cap on the floor is freed up (0 waiting).
+    let (_, _, _, waiting) =
+        server.state.db.join_requests_since(&room, &cy.id, None, 0, 0).unwrap();
+    assert_eq!(waiting, 0, "waiting-count cap on floor frees up");
+
+    // 5. Ann reopens the floor to public.
+    server.open(&ann, &room).await;
+
+    // 6. Cy walks in again and asks afresh: it is accepted and not blocked by the closed request.
+    server.walk_in(&cy, &room).await.ok();
+    let new_req = server.ask_to_join(&cy, &room, json!({ "note": "asking again" })).await.ok();
+    assert_eq!(new_req["status"], "waiting");
+    assert_ne!(text(&new_req["id"]), id);
+    assert_eq!(server.join_requests(&ann).await.len(), 1);
+
+    // 7. Non-requestable / private room returns 404 (PJ17, PJ19).
+    let (dan_room, _) = server.someone("Dan").await;
+    let unaskable =
+        server.ask_to_join(&cy, &dan_room, json!({})).await.refused(StatusCode::NOT_FOUND);
+    assert!(unaskable["error"].as_str().unwrap().contains("not found"));
+}
