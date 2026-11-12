@@ -2459,7 +2459,7 @@ fn other_bot_here(
             // checks a real challenge, with the bot friendship between the two.
             let friends = state.db.explicit_friends("bot", me, &agent.id)?;
             let theirs = state.db.duel_allow(&agent.id)?.allow;
-            if permits(&mine, friends) && permits(&theirs, friends) {
+            if permits(mine, friends) && permits(&theirs, friends) {
                 names.push(agent.name);
             }
         }
