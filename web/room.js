@@ -4508,6 +4508,38 @@ function paintSeedlingTray(g, x, y) {
     r(g, '#4f9a4a', x + i + 2, y - 10, 1, 1);
   }
 }
+// The Conservatory kinds seen from their end when turned. Each stays inside its turned reach
+// (deep + rise - wide above its base), so the bench is 24 across and 36 deep, and the others 12 by 24.
+function paintPottingBenchEnd(g, x, y, t, wide = 24, deep = 36) {
+  paintEnd(g, x, y, wide - 2, 10, 12, '#a8784a', '#8a5a34');
+  r(g, '#b5572e', x - 7, y - 26, 5, 5);
+  r(g, '#3f7a3a', x - 8, y - 30, 7, 4);
+  r(g, '#b5572e', x + 2, y - 25, 5, 5);
+  r(g, '#4f9a4a', x + 1, y - 29, 7, 4);
+}
+function paintTrellisEnd(g, x, y) {
+  r(g, SHADOW, x - 5, y - 2, 10, 2);
+  r(g, '#9c7a4a', x - 2, y - 30, 4, 28);
+  r(g, '#b89a6a', x - 1, y - 28, 1, 24);
+  r(g, '#3f8a3a', x - 5, y - 20, 4, 3);
+  r(g, '#4f9a4a', x + 1, y - 14, 4, 3);
+  r(g, '#3f8a3a', x - 3, y - 32, 3, 3);
+}
+function paintSeedRackEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, deep, 8, '#a8784a', '#8a5a34');
+  r(g, '#f5f0e6', x - 4, y - 6, 2, 3);
+  r(g, '#e0a030', x - 1, y - 6, 2, 3);
+  r(g, '#c0392b', x + 2, y - 6, 2, 3);
+}
+function paintSeedlingTrayEnd(g, x, y) {
+  // Its rise is 10, so the seedlings only just clear the tray.
+  r(g, SHADOW, x - 5, y - 2, 10, 2);
+  r(g, '#5a3c26', x - 5, y - 7, 10, 6);
+  r(g, '#3a2a1a', x - 4, y - 8, 8, 2);
+  r(g, '#4f9a4a', x - 4, y - 14, 2, 6);
+  r(g, '#6fbf5a', x - 1, y - 16, 2, 8);
+  r(g, '#4f9a4a', x + 2, y - 12, 2, 4);
+}
 function paintFernStand(g, x, y) {
   r(g, SHADOW, x - 5, y - 1, 10, 1);
   r(g, '#8a8f9e', x - 1, y - 9, 2, 9);
@@ -5515,10 +5547,10 @@ const ITEMS = {
   latte_art: { paint: paintLatteArt, rise: 9 },
   barista_cat: { paint: paintBaristaCat, rise: 14 },
   coffee_roaster: { paint: paintCoffeeRoaster, rise: 30 },
-  potting_bench: { paint: paintPottingBench, side: paintPottingBench, rise: 22 },
-  trellis: { paint: paintTrellis, side: paintTrellis, rise: 24 },
-  seed_rack: { paint: paintSeedRack, side: paintSeedRack, rise: 22 },
-  seedling_tray: { paint: paintSeedlingTray, side: paintSeedlingTray, rise: 10 },
+  potting_bench: { paint: paintPottingBench, side: paintPottingBenchEnd, rise: 22 },
+  trellis: { paint: paintTrellis, side: paintTrellisEnd, rise: 24 },
+  seed_rack: { paint: paintSeedRack, side: paintSeedRackEnd, rise: 22 },
+  seedling_tray: { paint: paintSeedlingTray, side: paintSeedlingTrayEnd, rise: 10 },
   fern_stand: { paint: paintFernStand, rise: 28 },
   orchid_pot: { paint: paintOrchidPot, rise: 22 },
   hanging_basket: { paint: paintHangingBasket, rise: 30 },
