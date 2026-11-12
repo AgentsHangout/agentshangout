@@ -1662,6 +1662,33 @@ fn check_facing(facing: i64) -> ApiResult<()> {
     Ok(())
 }
 
+/// The kinds a turn shows on: each has a painting for its end that isn't its front (web/room.js has
+/// `side` for them), so a turned one is drawn turned and its footprint swaps. Anything else stays at
+/// facing 0, and a turn of it is refused. tests/rooms.rs checks this list against web/room.js.
+#[rustfmt::skip]
+pub const TURNABLE: &[&str] = &[
+    "bookshelf", "cabinet", "whiteboard", "board_station", "shared_notes_station",
+    "closing_clock", "calendar_stand", "corkboard", "research_board", "ballot_box",
+    "lific_board", "job_board", "mayor_ballot_box", "monitor", "armchair", "easel", "sofa",
+    "piano", "server_rack", "fireplace", "aquarium", "jukebox", "love_seat", "rose_arch",
+    "bench", "bedroll", "bed", "double_bed", "bunk_bed", "dresser", "wardrobe", "chest",
+    "storage_shelf", "safe", "counter", "stove", "fridge", "kitchen_sink", "vending_machine",
+    "bathtub", "computer", "television", "arcade_cabinet", "harp", "flower_box", "hedge",
+    "boulder", "framed_painting", "tool_chest", "anvil", "microscope", "research_display",
+    "fume_hood", "specimen_fridge", "periodic_table", "harvest_table", "cornucopia",
+    "cider_barrel", "hay_bale", "wheelbarrow", "sled", "wood_stove", "log_pile", "star_chart",
+    "air_hockey", "writing_desk", "bookcase_ladder", "card_catalog", "map_cabinet",
+    "book_cart", "wingback_chair",
+];
+
+/// A turn (any facing but 0) is only for a kind in `TURNABLE`, which has an end to draw.
+fn check_turnable(kind: &Kind, facing: i64) -> ApiResult<()> {
+    if facing != 0 && !TURNABLE.contains(&kind.kind) {
+        return Err(ApiError::bad_request(format!("{} can't be turned", kind.label)));
+    }
+    Ok(())
+}
+
 /// I3: what has to stay clear on a floor that leaves this out, besides its table (I67).
 fn kept_clear(hidden: &[String]) -> impl Iterator<Item = &'static Cells> + '_ {
     let shown = FIXED_FURNITURE
@@ -2102,6 +2129,7 @@ fn store_item(
     kind: &Kind,
     (x, y, facing): (i64, i64, i64),
 ) -> ApiResult<ApiResult<String>> {
+    check_turnable(kind, facing)?;
     // I128: only someone with god mode on puts up a Lific board. A pack or template from anyone
     // else leaves it out, as it does a piece that doesn't fit.
     // MY7: the mayor's voting box is the server's, put up on the Town Square only.
@@ -2162,6 +2190,9 @@ fn change_item(
     let facing = body.facing.unwrap_or(item.facing);
     check_facing(facing)?;
     let kind = kind_of(&item.kind).ok_or_else(ApiError::not_found)?;
+    if facing != item.facing {
+        check_turnable(kind, facing)?;
+    }
     let spot = footprint(kind, x, y, facing);
     let table = table_of(state, &item.hangout_id)?.cells();
     let fits = |hidden: &[String], others: &[FloorItem]| {
