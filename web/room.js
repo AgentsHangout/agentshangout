@@ -4638,6 +4638,38 @@ function paintAirHockeyEnd(g, x, y, t, wide = 24, deep = 36) {
   r(g, '#2fe6ff', x - 1, top, 2, band);
   r(g, '#f4f1e8', x - 1, puck, 3, 3);
 }
+// The Neon Nights kinds that are 2 cells long, seen from their end when turned: 12px across and 24
+// deep, so each end stays inside its turned reach (deep + rise - wide). `wide` and `deep` are the
+// end's own size, the same as paintAirHockeyEnd.
+function paintClawMachineEnd(g, x, y, t, wide = 12, deep = 24) {
+  const lit = Math.floor(t / 400) % 2 ? '#ffd24d' : '#ff3ea5';
+  paintEnd(g, x, y, wide - 2, deep, 30, '#ff3ea5', '#26233f');
+  r(g, '#0d1020', x - 3, y - 26, 6, 14);
+  r(g, '#c0c0c8', x - 1, y - 22, 2, 6);
+  r(g, lit, x - 3, y - 10, 6, 2);
+}
+function paintNeonSignEnd(g, x, y, t) {
+  const dim = Math.floor(t / 350) % 6 === 0;
+  r(g, SHADOW, x - 5, y - 2, 10, 2);
+  r(g, '#3a3560', x - 1, y - 14, 2, 13);
+  r(g, '#1b0f33', x - 2, y - 38, 4, 24);
+  r(g, dim ? '#7a2a5a' : '#ff3ea5', x - 2, y - 38, 4, 2);
+  r(g, '#2fe6ff', x - 1, y - 30, 2, 12);
+}
+function paintPrizeCounterEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, deep, 10, '#3a3560', '#2a2548');
+  r(g, '#ff3ea5', x - 5, y - 11, 10, 2);
+  r(g, '#ffd24d', x - 3, y - 30, 3, 3);
+  r(g, '#2fe6ff', x + 1, y - 28, 3, 3);
+}
+function paintRetroCabinetEnd(g, x, y, t, wide = 12, deep = 24) {
+  const flicker = Math.floor(t / 500) % 4 === 0 ? '#2a6a8a' : '#2fe6ff';
+  paintEnd(g, x, y, wide - 2, deep, 26, '#5a2a8a', '#3a1d5c');
+  r(g, '#0d1020', x - 3, y - 22, 6, 9);
+  r(g, flicker, x - 3, y - 21, 6, 7);
+  r(g, '#ffd24d', x - 3, y - 11, 2, 2);
+  r(g, '#ff3ea5', x + 1, y - 11, 2, 2);
+}
 function paintSkeeBall(g, x, y, t) {
   const roll = Math.floor(t / 250) % 3;
   r(g, SHADOW, x - 11, y - 2, 22, 2);
@@ -5500,16 +5532,16 @@ const ITEMS = {
   air_hockey: { paint: paintAirHockey, side: paintAirHockeyEnd, rise: 28 },
   skee_ball: { paint: paintSkeeBall, rise: 24 },
   dance_pad: { paint: paintDancePad, rise: 0, flat: true },
-  claw_machine: { paint: paintClawMachine, side: paintClawMachine, rise: 42 },
-  neon_sign: { paint: paintNeonSign, side: paintNeonSign, rise: 28 },
-  prize_counter: { paint: paintPrizeCounter, side: paintPrizeCounter, rise: 22 },
+  claw_machine: { paint: paintClawMachine, side: paintClawMachineEnd, rise: 42 },
+  neon_sign: { paint: paintNeonSign, side: paintNeonSignEnd, rise: 28 },
+  prize_counter: { paint: paintPrizeCounter, side: paintPrizeCounterEnd, rise: 22 },
   lava_lamp: { paint: paintLavaLamp, rise: 22 },
   token_machine: { paint: paintTokenMachine, rise: 26 },
   bean_bag_chair: { paint: paintBeanBag, rise: 12 },
   vinyl_crate: { paint: paintVinylCrate, rise: 16 },
   disco_ball: { paint: paintDiscoBall, rise: 34 },
   glowstick_jar: { paint: paintGlowstickJar, rise: 18 },
-  retro_cabinet: { paint: paintRetroCabinet, side: paintRetroCabinet, rise: 38 },
+  retro_cabinet: { paint: paintRetroCabinet, side: paintRetroCabinetEnd, rise: 38 },
   // The Library nook pack, and the coin pieces sold beside it.
   writing_desk: { paint: paintWritingDesk, side: edgeOf(16, '#7a5230', '#5a3b22'), rise: 22 },
   bookcase_ladder: { paint: paintBookcaseLadder, side: edgeOf(40, '#5a3b22', '#3a2414'), rise: 42 },
