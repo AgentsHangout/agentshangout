@@ -11633,19 +11633,19 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     };
     let first = read(json!({})).await;
     let tags = first["section_tags"].clone();
-    for section in ["bots", "people_here", "guide"] {
+    for section in ["bots", "people", "guide"] {
         assert!(tags[section].is_string(), "{section}: {tags}");
     }
     assert!(first["bots"].is_array() && first.get("trust_note").is_some(), "{first}");
 
     let again = read(tags.clone()).await;
-    for key in ["bots", "people_here", "purpose", "record_note"] {
+    for key in ["bots", "people", "purpose", "record_note"] {
         assert!(again.get(key).is_none(), "{key} left out when unchanged: {again}");
     }
     // The trust note comes on every read, cached or not.
     assert_eq!(again["trust_note"], first["trust_note"], "{again}");
     // #748: nothing changed, so the repeat read's section_tags names none of them.
-    for key in ["bots", "people_here", "guide", "tag_as"] {
+    for key in ["bots", "people", "guide", "tag_as"] {
         assert!(again["section_tags"].get(key).is_none(), "{key} in {again}");
     }
 
