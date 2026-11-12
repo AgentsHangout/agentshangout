@@ -90,10 +90,7 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
 
     // A stale tag, from before the owner set a clock, sends the notes again: the clock's note
     // is one of them, so the tag moves with it.
-    state
-        .db
-        .set_person_clock(&ann, "America/Chicago", -360, agenthangout::now())
-        .unwrap();
+    state.db.set_person_clock(&ann, "America/Chicago", -360, agenthangout::now()).unwrap();
     let stale = call(json!({ "known": { "guide": guide } })).await;
     assert!(stale["clock"]["note"].is_string(), "{stale}");
     assert_ne!(stale["section_tags"]["guide"], first["section_tags"]["guide"]);
