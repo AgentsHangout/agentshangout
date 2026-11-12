@@ -2473,6 +2473,29 @@ fn bots_here(state: &AppState, floor_id: &str, now: i64) -> ApiResult<Vec<String
     Ok(here)
 }
 
+/// #1131: what each bot here is using right now, as the `does` its use_item reply gave. A bot
+/// that isn't here, or whose use ran out or was switched, isn't in the map.
+pub(crate) fn bot_doing_here(
+    state: &AppState,
+    floor_id: &str,
+    now: i64,
+) -> ApiResult<HashMap<String, &'static str>> {
+    let here = bots_here(state, floor_id, now)?;
+    let kinds: HashMap<String, String> =
+        state.db.floor_items(floor_id)?.into_iter().map(|item| (item.id, item.kind)).collect();
+    let mut doing = HashMap::new();
+    for (item_id, agent_id) in state.db.item_uses(floor_id, now)? {
+        if !here.contains(&agent_id) {
+            continue;
+        }
+        if let Some(does) = kinds.get(&item_id).and_then(|kind| kind_of(kind)).and_then(|k| k.does)
+        {
+            doing.insert(agent_id, does);
+        }
+    }
+    Ok(doing)
+}
+
 /// GM8: the bot called `name` (any case) that is here on `floor_id` now.
 pub(crate) fn bot_here_named(
     state: &AppState,
@@ -2693,10 +2716,24 @@ pub fn use_item_against(
     let now = now();
     let until = now + USE_SECS;
     let here = bots_here(state, &item.hangout_id, now)?;
+    // #1132: a full piece says it's in use and when the soonest use runs out.
+    let soonest_free = state
+        .db
+        .item_users_until(&item.id, now)?
+        .into_iter()
+        .filter(|(bot, _)| bot != agent_id && here.contains(bot))
+        .map(|(_, at)| at)
+        .min();
     let left = state.db.floor_in_use(agent_id)?;
     state.db.use_item(agent_id, &item.id, until, now, |others| {
         if others.iter().filter(|bot| here.contains(bot)).count() as i64 >= kind.room_for {
-            return Err(ApiError::conflict("there's no room there right now"));
+            return Err(match soonest_free {
+                Some(at) => ApiError::conflict(format!(
+                    "that's in use: there's no room there until {}",
+                    iso(at)
+                )),
+                None => ApiError::conflict("there's no room there right now"),
+            });
         }
         Ok(())
     })??;

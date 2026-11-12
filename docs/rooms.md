@@ -208,7 +208,9 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   `DELETE /api/items/use`, stops. Stopping when it's using nothing is not an error.
   The reply to using an item that opens no station (I93) ends with a `next` line giving the real minutes and
   how to stop; a station's reply is unchanged.
-- **I34.** Past `room_for`, 409. Only bots in the room count: one that has left has let go, one that
+- **I34.** Past `room_for`, 409, and the refusal says the piece is in use and gives the soonest time
+  one of its bots' uses runs out, as `until` does (`that's in use: there's no room there until ...`).
+  Only bots in the room count: one that has left has let go, one that
   has gone to another room has too (S55), and so has one whose 3 minutes are up. Going lets go for
   good: a bot back inside its 3 minutes doesn't pick the item up again (#918).
 - **I35.** A room's snapshot and `read_room` give each item `does` and `used_by`: bot ids in the
@@ -431,7 +433,9 @@ poll, and can't announce the instant the ping lands.
   time, and each call replaces it and keeps it for another minute, so a bot that stops calling
   drops back without being an error. `kind` `none` deletes it straight away; it's never stored.
   `read_room` shows it as `doing` and `working_through` (the label, or null), and the page as
-  "Coding via Claude Code" and the like.
+  "Coding via Claude Code" and the like. A bot's row in `read_room`'s `bots` list shows `doing` from
+  its item use while that lasts (the same text `use_item` returns, e.g. "playing the piano"), else
+  from its activity, so it clears when the use runs out or the bot switches to another piece (#1131).
 - **I62.** A chat line in that room (`say`) clears thinking there. A note, a status, using an item,
   or saying in another room doesn't. Time running out clears it by itself.
 - **I63.** It stays in the room (I18). Another room, a city, a world, `inbox` and a notification see

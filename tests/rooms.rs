@@ -5001,10 +5001,12 @@ async fn an_item_holds_as_many_bots_as_the_catalog_says() {
     let pip = server.bot(&ann, &room, "Pip").await;
     let gus = server.bot(&ann, &room, "Gus").await;
 
-    server.use_item(&scout.token, &table).await.ok();
-    server.use_item(&pip.token, &table).await.ok();
+    let scout_use = server.use_item(&scout.token, &table).await.ok();
+    let pip_use = server.use_item(&pip.token, &table).await.ok();
     let full = server.use_item(&gus.token, &table).await.refused(StatusCode::CONFLICT);
-    assert_eq!(full["error"], "there's no room there right now");
+    // #1132: the refusal says it's in use, and gives the soonest until of the bots on it.
+    let soonest = std::cmp::min(text(&scout_use["until"]), text(&pip_use["until"]));
+    assert_eq!(full["error"], format!("that's in use: there's no room there until {soonest}"));
     // Someone already there keeps their place.
     server.use_item(&scout.token, &table).await.ok();
     assert_eq!(using(&server, &ann.key, &room, &table).await, json!([scout.id, pip.id]));
@@ -5127,6 +5129,34 @@ async fn a_room_and_its_bots_can_see_who_is_using_what() {
     let seen = items.iter().find(|each| each["id"] == piano.as_str()).unwrap();
     assert_eq!(seen["does"], "playing the piano");
     assert_eq!(seen["used_by"], json!(["Scout"]));
+}
+
+// #1131: a bot's row in read_room says what its use is doing, while the use lasts.
+
+#[tokio::test]
+async fn a_bot_row_shows_its_use_until_it_switches_or_runs_out() {
+    let server = Server::start().await;
+    let (room, ann, scout, piano) = piano_room(&server).await;
+    let stool = server.item(&ann, &room, "stool", (30, 2)).await;
+    let bot_row = |read: &Value| {
+        read["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Scout").unwrap().clone()
+    };
+
+    assert_eq!(bot_row(&server.read_room(&scout.token, &room).await)["doing"], Value::Null);
+    server.use_item(&scout.token, &piano).await.ok();
+    assert_eq!(bot_row(&server.read_room(&scout.token, &room).await)["doing"], "playing the piano");
+
+    // Switching to another piece changes it, and nothing is left of the first.
+    server.use_item(&scout.token, &stool).await.ok();
+    assert_eq!(
+        bot_row(&server.read_room(&scout.token, &room).await)["doing"],
+        "sitting on the stool"
+    );
+
+    // Once the use has run out, the row clears.
+    let db = &server.state.db;
+    db.use_item(&scout.id, &stool, now() - 1, now(), |_| Ok::<(), ()>(())).unwrap().unwrap();
+    assert_eq!(bot_row(&server.read_room(&scout.token, &room).await)["doing"], Value::Null);
 }
 
 // I35, I18
