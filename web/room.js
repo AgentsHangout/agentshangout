@@ -4415,6 +4415,45 @@ function paintPhotoBoothEnd(g, x, y, t, wide = 12, deep = 24) {
   r(g, flash ? '#ffffff' : '#c9ced8', x - 1, y - 30, 2, 2);
   r(g, '#ffd24d', x - 2, y - 7, 4, 2);
 }
+// The Stargazer and coin pieces seen from their end when turned (#1121, the space set). Each stays
+// inside its turned reach too: deep + rise - wide above its base, counting the top it draws.
+function paintPlanetMobileEnd(g, x, y, t) {
+  const [dark, brass, shine] = STAR_BRASS;
+  const bob = t ? Math.round(Math.sin(t / 900)) : 0;
+  r(g, SHADOW, x - 5, y - 2, 10, 2);
+  r(g, WINTER_IRON[1], x - 4, y - 4, 8, 3);
+  r(g, WINTER_IRON[2], x - 4, y - 4, 8, 1);
+  r(g, dark, x - 1, y - 36, 2, 32);
+  r(g, shine, x - 1, y - 36, 1, 32);
+  r(g, brass, x - 2, y - 38, 4, 2);
+  r(g, '#aeb9c9', x, y - 34, 1, 4);
+  r(g, '#e3c46a', x - 2 + bob, y - 30, 4, 4);
+  r(g, '#fff0b8', x - 1 + bob, y - 30, 1, 1);
+}
+function paintLunarRoverEnd(g, x, y, t) {
+  const blink = t ? Math.floor(t / 500) % 2 : 0;
+  r(g, SHADOW, x - 5, y - 2, 10, 2);
+  r(g, '#1b2030', x - 5, y - 3, 2, 3);
+  r(g, '#1b2030', x + 3, y - 3, 2, 3);
+  r(g, '#c9ced8', x - 4, y - 8, 8, 5);
+  r(g, '#8a8f9e', x - 4, y - 4, 8, 1);
+  r(g, '#1b2030', x - 2, y - 7, 4, 2);
+  r(g, '#8a8f9e', x, y - 12, 1, 4);
+  r(g, blink ? '#ffd24d' : '#d4502a', x - 1, y - 14, 2, 2);
+}
+function paintCocoaCartEnd(g, x, y) {
+  paintEnd(g, x, y, 10, 4, 12, '#8a5a34', '#6b4a2e');
+  r(g, '#c0392b', x - 5, y - 17, 10, 2);
+  r(g, '#f5f0e6', x - 1, y - 21, 2, 2);
+}
+function paintPlanetariumEnd(g, x, y) {
+  paintEnd(g, x, y, 22, 6, 14, '#d9d4c5', '#b9b3a2');
+  r(g, '#e8e4d8', x - 8, y - 26, 16, 8);
+  r(g, '#e8e4d8', x - 5, y - 30, 10, 4);
+  r(g, '#e8e4d8', x - 2, y - 32, 4, 2);
+  r(g, '#1b2030', x - 1, y - 27, 2, 6);
+  r(g, '#ffd24d', x - 5, y - 24, 1, 1);
+}
 function paintChalkboardMenu(g, x, y) {
   r(g, SHADOW, x - 5, y - 1, 10, 1);
   r(g, '#8a5a34', x - 4, y - 8, 1, 7);
@@ -5578,7 +5617,7 @@ const ITEMS = {
   orrery: { paint: paintOrrery, rise: 26 },
   star_globe: { paint: paintStarGlobe, rise: 27 },
   rocket_model: { paint: paintRocketModel, rise: 32 },
-  planet_mobile: { paint: paintPlanetMobile, side: paintPlanetMobile, rise: 39 },
+  planet_mobile: { paint: paintPlanetMobile, side: paintPlanetMobileEnd, rise: 39 },
   moon_lamp: { paint: paintMoonLamp, rise: 25 },
   star_chart: { paint: paintStarChart, side: edgeOf(33, '#a0703f', '#6b4628'), rise: 35 },
   space_helmet: { paint: paintSpaceHelmet, rise: 22 },
@@ -5587,12 +5626,12 @@ const ITEMS = {
   comet_rug: { paint: paintCometRug, rise: 0, flat: true },
   comet_jar: { paint: paintCometJar, rise: 14 },
   astronaut: { paint: paintAstronaut, rise: 14 },
-  lunar_rover: { paint: paintLunarRover, side: paintLunarRover, rise: 12 },
+  lunar_rover: { paint: paintLunarRover, side: paintLunarRoverEnd, rise: 12 },
   snow_globe: { paint: paintSnowGlobe, rise: 14 },
-  cocoa_cart: { paint: paintCocoaCart, side: paintCocoaCart, rise: 18 },
+  cocoa_cart: { paint: paintCocoaCart, side: paintCocoaCartEnd, rise: 18 },
   ice_rink: { paint: paintIceRink, rise: 0, flat: true },
   ufo: { paint: paintUfo, rise: 22 },
-  planetarium: { paint: paintPlanetarium, side: paintPlanetarium, rise: 32 },
+  planetarium: { paint: paintPlanetarium, side: paintPlanetariumEnd, rise: 32 },
   satellite: { paint: paintSatellite, rise: 13 },
   igloo: { paint: paintIgloo, side: paintIgloo, rise: 22 },
   reindeer: { paint: paintReindeer, side: paintReindeer, rise: 20 },
