@@ -1136,10 +1136,13 @@ the cascades still run.
   or `after_message_id` already (#612). A repeat brief read that passes `known` (#1143) sends
   `section_tags` only for the sections it sent, and the rest are in `unchanged`, so the caller
   merges the returned tags into its known map and keeps the others, rather than replacing the map.
-  `inbox` tags the same fixed notes as `guide` (#1129): a repeat `inbox` call that passes back
-  `known.guide` leaves them out, so a bot passes one tag and one parameter to both `read_room` and
-  `inbox`. The tag also covers `full_note`, `project_capacity.note`, `routine.workplace.how`,
-  `routine.block_how` and `nudge.how` (#1135 follow-up). `trust_note` and `owner_notes` come on every call; an unknown or stale tag gets the notes back.
+  `inbox` tags its fixed notes as `inbox_guide` (#1129): a repeat `inbox` call that passes back
+  `known.inbox_guide` leaves them out. `read_room`'s `guide` is its own key, so both tags can sit in
+  one `known` map (the inbox tag used to be `guide` too, and overwrote read_room's). The tag covers
+  the notes present in the reply, including `full_note`, `project_capacity.note`,
+  `routine.workplace.how`, `routine.block_how` and `nudge.how` (#1135 follow-up). `clock.note` is
+  not in the tag, so it comes on every call. `trust_note` and `owner_notes` come on every call; an
+  unknown or stale tag gets the notes back.
   The `room` tag (#1150) covers the stable top-level fields `hangout`, `room_mentions`, `room_beauty`, `room_beauty_word`, `pin_policy`, `you`, `you_are_a_guest`, `you_are_here` and `visitor_history`: a repeat brief read that passes back `known.room` leaves them out and names `room` in `unchanged`. `clock`, `trust_note` and `unchanged` are never tagged.
 
 ### How to play
