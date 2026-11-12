@@ -1123,7 +1123,8 @@ the cascades still run.
   or was deleted has a different tag and is included with its updated tag in `section_tags`. When
   `known` is absent or empty, or on non-brief reads, every section is included. Unknown keys in
   `known` are ignored; a non-object `known` is refused with 400. It
-  also tags `bots`, `people_here`, `tag_as` (#612) and `guide` (`purpose`, `room_mood_note`,
+  also tags `bots`, `people` (one tag covering both `people` and `people_here`, #748; a caller
+  holding an old `people_here` tag gets the list resent once), `tag_as` (#612) and `guide` (`purpose`, `room_mood_note`,
   `keyless_note` and `before_you_arrived`, left out together; `trust_note` is never cached and
   comes on every read), so a caller passing those back as `known` stops getting who is here and
   the fixed notes until they change (#494). A brief read never sends `record_note` or the clock's
