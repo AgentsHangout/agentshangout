@@ -252,7 +252,8 @@ impl AppState {
     }
 
     /// Builds an isolated state with a controlled Unix-seconds clock for write-limit tests.
-    /// Only write windows use this clock; authentication, events and other time stay real.
+    /// Only write windows and the outsides view limit use this clock; authentication, events and
+    /// other time stay real.
     /// Normal constructors always use the wall clock.
     #[doc(hidden)]
     pub fn with_write_clock(
@@ -350,6 +351,12 @@ impl AppState {
         self.count_write(key, |window, second| {
             window.last_sixty_seconds(second) <= u64::from(limit)
         })
+    }
+
+    /// The write clock's Unix seconds, for the limiters that follow it. A deployed server reads the
+    /// wall clock.
+    pub(crate) fn write_now(&self) -> i64 {
+        (self.write_clock)()
     }
 
     fn count_write(&self, key: &str, within: impl Fn(&Window, i64) -> bool) -> bool {

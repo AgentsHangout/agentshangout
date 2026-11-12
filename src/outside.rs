@@ -2056,7 +2056,7 @@ async fn world_outsides(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
-    worlds::allow_view(&state, &headers, now())?;
+    worlds::allow_view(&state, &headers, state.write_now())?;
     worlds::ensure_commons(&state)?;
     if state.db.world(&id)?.is_none() {
         return Err(ApiError::not_found());
