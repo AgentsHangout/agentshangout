@@ -224,6 +224,28 @@ const card = () => root.children.filter((c) => !c.removed).at(-1);
   assert.match(textOf(card()), /Nothing shared/);
   failing.close();
 
+  // RE21: the optional reporting action names the selected person and never appears on yourself.
+  const reportListeners = {}, reported = [];
+  const reporting = context.personCards({
+    room,
+    stage: { classList: { toggle() {} }, addEventListener: (kind, fn) => { (reportListeners[kind] ||= []).push(fn); } },
+    root, locked: () => false, mention() {},
+    report: (id, name) => reported.push({ id, name }),
+    view: () => ({ you: { person_id: you }, people: [{ id: 'p-ann', name: 'Ann' }, { id: you, name: 'Me' }] }),
+  });
+  const reportClick = (id) => reportListeners.click[0]({
+    clientX: 1, clientY: 1,
+    target: { closest: (sel) => (sel === 'button, a' ? null : { dataset: { person: id } }) },
+    preventDefault() {}, stopPropagation() {},
+  });
+  reportClick('p-ann'); await flush();
+  assert.equal(reported.length, 0, 'opening a card never reports someone');
+  buttons(card()).find((button) => textOf(button) === 'Report Ann').props.onclick();
+  same(reported, [{ id: 'p-ann', name: 'Ann' }]);
+  reportClick(you); await flush();
+  assert.ok(!buttons(card()).some((button) => textOf(button).startsWith('Report ')));
+  reporting.close();
+
   // Build mode and a thing in hand leave people alone.
   cards.close();
   locked = true;

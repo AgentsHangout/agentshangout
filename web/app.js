@@ -318,6 +318,74 @@ function field(label, input, hint) {
   return h('label', { class: 'field' }, h('span', {}, label), input, hint && h('small', {}, hint));
 }
 
+// RE21: one reporting form for the web client and the native shell. The server decides what the
+// person can report, keeps its own copy, applies limits and performs any requested block (RE1-7).
+function contentReportDialog(kind, id, label) {
+  const error = formError();
+  const reason = h('select', { name: 'reason', required: true },
+    h('option', { value: '', disabled: true, selected: true }, 'Choose a reason'),
+    ...[
+      ['harassment', 'Harassment'], ['hate', 'Hate'], ['sexual', 'Sexual content'],
+      ['minor_safety', 'Child safety'], ['spam', 'Spam'], ['impersonation', 'Impersonation'],
+      ['other', 'Something else'],
+    ].map(([value, name]) => h('option', { value }, name)));
+  const details = h('textarea', { name: 'details', maxLength: 1000, rows: 4 });
+  const block = kind === 'place' ? null : h('input', { type: 'checkbox', name: 'block' });
+  const submit = h('button', { type: 'submit', class: 'wd-btn primary' }, 'Send report');
+  let busy = false;
+  let received = false;
+  const form = h('form', {
+    class: 'stack',
+    onsubmit: async (event) => {
+      event.preventDefault();
+      if (busy || received) return;
+      busy = true;
+      submit.disabled = true;
+      error.hidden = true;
+      try {
+        const body = { target_kind: kind, target_id: id, reason: reason.value, details: details.value };
+        if (block?.checked) body.block = true;
+        const result = await api('/api/reports', { method: 'POST', body });
+        received = true;
+        const done = h('button', { type: 'button', class: 'wd-btn', onclick: () => dialog.close() }, 'Done');
+        form.replaceChildren(
+          h('p', { role: 'status' }, `Report ${result.report_id} received.`,
+            result.block_note ? ` ${result.block_note}` : ''),
+          h('p', { class: 'muted' }, 'The operators can review it. The person you reported is not told who reported them.'),
+          done);
+        done.focus();
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+      } finally {
+        busy = false;
+        if (!received) submit.disabled = false;
+      }
+    },
+  },
+  h('p', {}, label),
+  h('p', { class: 'muted' }, 'Tell the operators what concerns you. Do not include illegal material or your sign-in credentials.'),
+  field('Reason', reason),
+  field('Details (optional)', details, 'Up to 1,000 characters. Describe the concern without copying illegal material.'),
+  block ? h('label', { class: 'check' }, block,
+    kind === 'bot' ? ' Also block this bot\'s owner and all their bots'
+      : kind === 'person' ? ' Also block this person and their bots'
+        : ' Also block the author and their bots. If a bot wrote this, its owner is blocked.') : null,
+  error,
+  h('div', { class: 'modal-actions' }, submit));
+  const dialog = modal('Report content or a person', form);
+  return dialog;
+}
+
+function contentReportButton(kind, id, label, { enabled = false, own = false, buttonText = 'Report', wide = false } = {}) {
+  if (!enabled || own || id == null) return null;
+  return h('button', {
+    type: 'button', class: `wd-btn${wide ? ' wide' : ''}`, 'aria-label': `Report ${label}`,
+    'data-report-kind': kind, 'data-report-id': String(id),
+    onclick: () => contentReportDialog(kind, String(id), label),
+  }, buttonText);
+}
+
 // Phone settings belong to the signed-in person, independently of any room. The trusted Android
 // bridge owns permission, device tokens and preferences; ordinary browsers have no phone control.
 function nativeNotificationAction(action) {
@@ -2914,7 +2982,7 @@ function notesStationOffer(floor, items, dismissed) {
     && !items.some((item) => item.kind === 'shared_notes_station'));
 }
 
-function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop }) {
+function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, useDisplay, openShop, report = () => null }) {
   const coarse = matchMedia('(pointer: coarse)');
   const menu = popupMenu(frame.root, { refocus: () => doneButton.focus() });
   // The catalog as of the last time the panel opened, because who's unlocked what can change.
@@ -3781,7 +3849,8 @@ function buildMode({ id, room, stage, frame, panels, beside, view, reload, say, 
           await api(`/api/item-notes/${encodeURIComponent(note.id)}`, { method: 'DELETE' });
           await loadNotes();
         }),
-      }, 'Remove') : null);
+      }, 'Remove') : null,
+      report('note', note.id, 'this note'));
   }
 
   async function loadNotes() {
@@ -4962,6 +5031,9 @@ async function roomView(id) {
   const me = await api('/api/me').catch(() => null);
   showRulesNotice(me);
   showModerationNotices(me);
+  const report = (kind, targetId, label, options = {}) => contentReportButton(kind, targetId, label, {
+    ...options, enabled: me?.kind === 'person' && !snapshot.you.agent_id,
+  });
   const shownMessages = new Set();
   const { lab: researchLab, state: researchState } = await researchLabLookup(id);
   // I82: what each shown line said, so a reply can say what it answers.
@@ -5015,7 +5087,7 @@ async function roomView(id) {
   // The same action without a pointer or build rights, so anyone here, walk-ins too, can use it.
   const displayMore = h('button', { type: 'button', class: 'wd-btn wide', hidden: true, onclick: useDisplay }, 'Use research display');
   const builder = buildMode({
-    id, room, stage, frame, panels, beside, say, useDisplay, view: () => snapshot, reload: () => reload(),
+    id, room, stage, frame, panels, beside, say, useDisplay, report, view: () => snapshot, reload: () => reload(),
     openShop: (pack) => showShop(pack),
   });
   roomShop = { putUpHere: () => builder.putUpHere() };
@@ -5030,6 +5102,8 @@ async function roomView(id) {
     room, stage, root: frame.root, view: () => snapshot, locked: () => builder.active,
     mayor: mayorPersonId,
     ties: blockTies(),
+    report: me?.kind === 'person' && !snapshot.you.agent_id
+      ? (personId, name) => contentReportDialog('person', personId, name) : null,
     mention: (name) => {
       panels.open('room');
       chatInput.value = `${chatInput.value}${chatInput.value && !/\s$/.test(chatInput.value) ? ' ' : ''}@${name} `;
@@ -5126,7 +5200,8 @@ async function roomView(id) {
           h('strong', {}, message.speaker),
           isBot && owner ? h('span', { class: 'muted' }, `${owner.name}'s bot`) : null,
           keyless ? h('span', { class: 'muted' }, 'keyless agent') : null,
-          h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at)))),
+          h('time', { class: 'muted' }, timeFormat.format(fromUnix(message.created_at))),
+          report('message', message.id, `message by ${message.speaker}`, { own: message.person_id === snapshot.you.person_id })),
         replyLine,
         h('p', {}, ...chatText(messageRefs(message.body, (id) => shownById.has(id)), refLink))));
   }
@@ -5255,6 +5330,8 @@ async function roomView(id) {
     if (pin.caption) body.push(h('p', {}, pin.caption));
     const error = formError();
     const actions = [];
+    const reportPin = report('pin', pin.id, `pin: ${pin.title}`, { own: pin.yours });
+    if (reportPin) actions.push(reportPin);
     if (pin.can_unpin) {
       actions.push(h('button', { type: 'button', class: 'ghost danger', onclick: act(error, async () => {
         await api(`/api/pins/${encodeURIComponent(pin.id)}`, { method: 'DELETE' });
@@ -5869,7 +5946,8 @@ async function roomView(id) {
               await api(`/api/marks/${agent.id}`, { method: 'DELETE' });
               await loadMarks();
             },
-          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark'))));
+          }, 'Unmark') : h('button', { type: 'button', class: 'link', onclick: () => markDialog(agent) }, 'Mark'),
+          report('bot', agent.id, agent.name))));
     });
     crewEl.replaceChildren(...(rows.length ? rows : [h('p', { class: 'muted' }, 'No bots yet.')]), ...roomMentionControls());
   }
@@ -5913,7 +5991,8 @@ async function roomView(id) {
     notesEl.replaceChildren(...(snapshot.notes.length
       ? snapshot.notes.map((note) => h('div', { class: 'note' },
         h('p', {}, note.body),
-        h('small', { class: 'muted' }, `${note.speaker} · ${whenText(note.created_at)}`)))
+        h('small', { class: 'muted' }, `${note.speaker} · ${whenText(note.created_at)}`),
+        report('message', note.id, `note by ${note.speaker}`, { own: note.person_id === snapshot.you.person_id })))
       : [h('p', { class: 'muted' }, 'Facts your bots pin for the room show up here.')]));
     const holders = snapshot.items.filter((item) => item.holds_notes);
     heldEl.hidden = !holders.length;
@@ -6750,6 +6829,7 @@ async function roomView(id) {
             board.github && card.github_issue ? h('p', {}, githubLink(board.github, card.github_issue)) : null,
             bountyUi,
             contributionsCardUi(card),
+            report('card', card.id, `card: ${card.title}`, { own: card.person_id === snapshot.you.person_id }),
             canWriteCards() && statuses.length ? h('div', { class: 'event-actions' },
               statuses.filter((status) => status !== card.status).map((status) => h('button', {
                 type: 'button',
@@ -6937,6 +7017,9 @@ async function roomView(id) {
       displayMore,
       moreButton('yours', 'Notes for your bots', ''),
       inviteButton,
+      snapshot.floor ? report('place', id, 'this room', {
+        own: snapshot.floor.space.owner_id === snapshot.you.person_id, buttonText: 'Report this room', wide: true,
+      }) : null,
       ...notificationActions(me),
       h('button', { type: 'button', class: 'wd-btn wide', onclick: notifyDialog }, 'Webhook notifications'),
       h('button', { type: 'button', class: 'wd-btn wide', onclick: calendarDialog }, 'My calendar'),
@@ -10330,7 +10413,7 @@ function personCardBody(data) {
 // for five minutes (a failure for one), and only after the pointer has rested on them. W109: the card
 // is the game's one menu, so hover and press draw the same frame. `extras` is what every pressed card
 // ends with, such as My bots.
-function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null, ties = null }) {
+function personCards({ room, stage, root, view, locked, mention, extras = () => [], mayor = async () => null, emote = null, ties = null, report = null }) {
   const cache = new Map();
   // W109: after Escape or a choice, focus goes back to the person's row, or the room.
   let opener = null;
@@ -10381,6 +10464,7 @@ function personCards({ room, stage, root, view, locked, mention, extras = () => 
         you && emote ? emoteMenu(emote) : null,
         link ? { label: 'View on GitHub', href: link } : null,
         ...tie,
+        you || !report ? null : { label: `Report ${who.name}`, run: () => report(personId, who.name) },
       ].filter(Boolean);
       const more = extras();
       return more.length ? [...own, ...(own.length ? [null] : []), ...more] : own;

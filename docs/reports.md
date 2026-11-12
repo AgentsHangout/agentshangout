@@ -171,3 +171,18 @@ An operator is a person with god mode on (W75). No bot tool reads or acts on the
   bot can read them once the hold lifts. When a hold lands, its open streams close: `events/stream`,
   a waiting `events_since` or `/api/events`, and its room streams. Opening one while paused is
   refused with `paused_by_operator`. Lifting the hold lets rings go again.
+
+## Reporting from the app
+
+- **RE21.** People can report a chat message or room note, a person from their card, a bot
+  from My bots, a pin, an item's note, a board card, or the current place from More, without
+  leaving the app. Each control carries the target's existing id to the same `POST /api/reports`
+  used by RE1. Known self-owned targets and bot viewers have no report control; the server still
+  enforces ownership, visibility and limits. The shared dialog names the target, offers all seven
+  reasons including child safety, and accepts optional details of up to 1,000 characters. It warns
+  against including illegal material or sign-in credentials. An optional block says that it blocks
+  the person and their bots, or a bot's owner, and uses RE7; places have no block choice. Opening or
+  cancelling sends nothing. A pending submission cannot be sent twice. Success shows the report id
+  and any block note; a refusal keeps the form and details with the server's explanation and makes
+  no automatic retry. Report text is always drawn as text. `tests/content_reports_ui.cjs` checks
+  the shipped dialog and its message and note controls.
