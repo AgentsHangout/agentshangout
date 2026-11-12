@@ -4377,6 +4377,44 @@ function paintCoffeeSacks(g, x, y) {
   r(g, '#6b4a2e', x + 2, y - 6, 5, 2);
   r(g, '#8a5a34', x - 6, y - 11, 3, 1);
 }
+// The Cafe and coin pieces seen from their end when turned. Each stays inside its turned reach
+// (deep + rise - wide above its base): the counter is 24 across and 36 deep, the others 12 by 24.
+function paintCafeCounterEnd(g, x, y, t, wide = 24, deep = 36) {
+  paintEnd(g, x, y, wide - 2, 4, 18, '#8a5a34', '#6b4a2e');
+  for (let row = 0; row < 3; row++) r(g, '#5a3c26', x - 9, y - 14 + row * 5, 18, 1);
+  r(g, '#e8dcc4', x - 9, y - 22, 18, 2);
+  r(g, '#f5f0e6', x - 3, y - 25, 3, 3);
+}
+function paintEspressoMachineEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 4, 15, '#8a8f9e', '#c9ced8');
+  r(g, '#1b2030', x - 3, y - 11, 6, 3);
+  r(g, '#c0392b', x + 2, y - 17, 2, 2);
+  r(g, '#f5f0e6', x - 3, y - 19, 2, 2);
+}
+function paintPastryCaseEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 3, 13, '#6b4a2e', '#cfe9ff');
+  r(g, '#f5d0c0', x - 3, y - 9, 3, 3);
+  r(g, '#c8a34a', x + 1, y - 9, 3, 3);
+}
+function paintCoffeeSacksEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 3, 11, '#b89a6a', '#a88a5a');
+  r(g, '#6b4a2e', x - 4, y - 6, 8, 1);
+  r(g, '#8a5a34', x - 2, y - 11, 4, 1);
+}
+function paintFortuneMachineEnd(g, x, y, t, wide = 12, deep = 24) {
+  const flicker = Math.floor((t || 0) / 220) % 3;
+  paintEnd(g, x, y, wide - 2, 4, 26, '#c8a34a', '#6b3a2e');
+  r(g, '#2a1f33', x - 3, y - 22, 6, 6);
+  r(g, flicker ? '#ffd24d' : '#ff8c2a', x - 1, y - 20, 2, 2);
+  r(g, '#f5f0e6', x - 3, y - 8, 6, 2);
+}
+function paintPhotoBoothEnd(g, x, y, t, wide = 12, deep = 24) {
+  const flash = Math.floor((t || 0) / 900) % 4 === 0;
+  paintEnd(g, x, y, wide - 2, 4, 28, '#2c5a92', '#3a6fb0');
+  r(g, '#c0392b', x - 3, y - 24, 6, 14);
+  r(g, flash ? '#ffffff' : '#c9ced8', x - 1, y - 30, 2, 2);
+  r(g, '#ffd24d', x - 2, y - 7, 4, 2);
+}
 function paintChalkboardMenu(g, x, y) {
   r(g, SHADOW, x - 5, y - 1, 10, 1);
   r(g, '#8a5a34', x - 4, y - 8, 1, 7);
@@ -5561,13 +5599,13 @@ const ITEMS = {
   snowball_pile: { paint: paintSnowballPile, rise: 8 },
   koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
   palm_tree: { paint: paintPalmTree, side: paintPalmTree, rise: 40 },
-  cafe_counter: { paint: paintCafeCounter, side: paintCafeCounter, rise: 30 },
-  fortune_machine: { paint: paintFortuneMachine, side: paintFortuneMachine, rise: 34 },
-  photo_booth: { paint: paintPhotoBooth, side: paintPhotoBooth, rise: 36 },
+  cafe_counter: { paint: paintCafeCounter, side: paintCafeCounterEnd, rise: 30 },
+  fortune_machine: { paint: paintFortuneMachine, side: paintFortuneMachineEnd, rise: 34 },
+  photo_booth: { paint: paintPhotoBooth, side: paintPhotoBoothEnd, rise: 36 },
   wishing_well: { paint: paintWishingWell, rise: 26 },
-  espresso_machine: { paint: paintEspressoMachine, side: paintEspressoMachine, rise: 22 },
-  pastry_case: { paint: paintPastryCase, side: paintPastryCase, rise: 20 },
-  coffee_sacks: { paint: paintCoffeeSacks, side: paintCoffeeSacks, rise: 14 },
+  espresso_machine: { paint: paintEspressoMachine, side: paintEspressoMachineEnd, rise: 22 },
+  pastry_case: { paint: paintPastryCase, side: paintPastryCaseEnd, rise: 20 },
+  coffee_sacks: { paint: paintCoffeeSacks, side: paintCoffeeSacksEnd, rise: 14 },
   chalkboard_menu: { paint: paintChalkboardMenu, rise: 30 },
   cake_stand: { paint: paintCakeStand, rise: 18 },
   cafe_table: { paint: paintCafeTable, rise: 18 },

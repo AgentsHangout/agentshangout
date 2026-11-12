@@ -4582,18 +4582,12 @@ fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_
         "string_lights",
         "tiki_bar",
         "hammock",
-        "cafe_counter",
-        "espresso_machine",
-        "pastry_case",
-        "coffee_sacks",
         "planet_mobile",
         "lunar_rover",
         "cocoa_cart",
         "planetarium",
         "igloo",
         "reindeer",
-        "fortune_machine",
-        "photo_booth",
         "grand_piano",
     ];
     let page = include_str!("../web/room.js").replace("\r\n", "\n");
