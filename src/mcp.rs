@@ -2183,9 +2183,11 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         reply["sleep_notes"] = json!(sleep_notes);
         reply["memory_note"] = json!(crate::memories::MEMORY_NOTE);
     }
-    // #1129: the fixed notes above come as one `guide` tag, as read_room's do (#612). Each note
-    // is keyed by name; the tag covers only the ones present, so a note that's new or changed
-    // comes back. A caller whose known.guide still matches gets them left out, in unchanged.
+    // #1129: the fixed notes above come as one `inbox_guide` tag. read_room's `guide` tag is its
+    // own key, so one known map can carry both without the two clashing (live on v0.1.720). Each
+    // note is keyed by name; the tag covers only the ones present, so a note that's new or changed
+    // comes back. A caller whose known.inbox_guide still matches gets them left out, in unchanged.
+    // The clock's note is not in the tag: its wording changes with the owner's clock, so it always comes.
     // trust_note stays in every reply: it's what keeps room text from reading as instructions.
     const GUIDE_KEYS: [&str; 8] = [
         "record_note",
@@ -2202,9 +2204,6 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         if let Some(value) = reply.get(key) {
             guide.insert(key.to_string(), value.clone());
         }
-    }
-    if let Some(note) = reply["clock"].get("note") {
-        guide.insert("clock_note".to_string(), note.clone());
     }
     if let Some(how) = reply["check_back"].get("how") {
         guide.insert("check_back_how".to_string(), how.clone());
@@ -2227,16 +2226,14 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     }
     let guide_tag =
         crate::auth::hash_secret(&Value::Object(guide.clone()).to_string())[..16].to_string();
-    let guide_unchanged =
-        !full && !guide.is_empty() && args["known"]["guide"].as_str() == Some(guide_tag.as_str());
+    let guide_unchanged = !full
+        && !guide.is_empty()
+        && args["known"]["inbox_guide"].as_str() == Some(guide_tag.as_str());
     if guide_unchanged {
         if let Some(map) = reply.as_object_mut() {
             for key in GUIDE_KEYS {
                 map.remove(key);
             }
-        }
-        if let Some(clock) = reply["clock"].as_object_mut() {
-            clock.remove("note");
         }
         if let Some(check_back) = reply["check_back"].as_object_mut() {
             check_back.remove("how");
@@ -2257,11 +2254,11 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
             nudge.remove("how");
         }
         let mut unchanged = reply["unchanged"].as_array().cloned().unwrap_or_default();
-        unchanged.push(json!("guide"));
+        unchanged.push(json!("inbox_guide"));
         reply["unchanged"] = json!(unchanged);
     }
     if let Some(tags) = reply["section_tags"].as_object_mut() {
-        tags.insert("guide".to_string(), json!(guide_tag));
+        tags.insert("inbox_guide".to_string(), json!(guide_tag));
     }
     Ok(reply)
 }

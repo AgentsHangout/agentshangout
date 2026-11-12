@@ -359,7 +359,7 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(
         unchanged,
-        std::collections::HashSet::from(["tag_as", "your_bonds", "your_projects", "guide"])
+        std::collections::HashSet::from(["tag_as", "your_bonds", "your_projects", "inbox_guide"])
     );
 
     // full: true bypasses known and returns everything
@@ -390,7 +390,10 @@ async fn inbox_omits_unchanged_your_bonds_and_your_projects_via_section_tags() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(after_unchanged, std::collections::HashSet::from(["tag_as", "your_bonds", "guide"]));
+    assert_eq!(
+        after_unchanged,
+        std::collections::HashSet::from(["tag_as", "your_bonds", "inbox_guide"])
+    );
 }
 
 // L7, L8, L59

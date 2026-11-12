@@ -67,17 +67,17 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
     // The first call sends the clock's note and a guide tag.
     let first = call(json!({})).await;
     assert!(first["clock"]["note"].is_string(), "{first}");
-    let guide = first["section_tags"]["guide"].as_str().unwrap().to_string();
+    let guide = first["section_tags"]["inbox_guide"].as_str().unwrap().to_string();
     assert_eq!(guide.len(), 16, "{first}");
     assert!(first["trust_note"].is_string(), "{first}");
 
     // Passing the tag back: the notes are gone and say so, and the clock's times stay.
-    let repeat = call(json!({ "known": { "guide": guide } })).await;
-    assert!(repeat["clock"]["note"].is_null(), "{repeat}");
+    let repeat = call(json!({ "known": { "inbox_guide": guide } })).await;
+    assert!(repeat["clock"]["note"].is_string(), "{repeat}");
     assert!(repeat["clock"]["owner_now"].is_string() || repeat["clock"]["now"].is_string());
     assert!(repeat["trust_note"].is_string(), "{repeat}");
-    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("guide")), "{repeat}");
-    assert_eq!(repeat["section_tags"]["guide"], first["section_tags"]["guide"]);
+    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("inbox_guide")), "{repeat}");
+    assert_eq!(repeat["section_tags"]["inbox_guide"], first["section_tags"]["inbox_guide"]);
     // #1135 follow-up: the capacity note and block_how are fixed text too, so they go with the rest.
     assert!(first["project_capacity"]["note"].is_string(), "{first}");
     assert!(first["routine"]["block_how"].is_string(), "{first}");
@@ -85,21 +85,24 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
     assert!(repeat["routine"].get("block_how").is_none(), "{repeat}");
 
     // full sends everything again, whatever was passed.
-    let full = call(json!({ "full": true, "known": { "guide": guide } })).await;
+    let full = call(json!({ "full": true, "known": { "inbox_guide": guide } })).await;
     assert!(full["clock"]["note"].is_string(), "{full}");
     assert!(full.get("unchanged").is_none(), "{full}");
 
     // A tag that doesn't match sends the notes.
-    let other = call(json!({ "known": { "guide": "0123456789abcdef" } })).await;
+    let other = call(json!({ "known": { "inbox_guide": "0123456789abcdef" } })).await;
     assert!(other["clock"]["note"].is_string(), "{other}");
 
-    // A stale tag, from before the owner set a clock, sends the notes again: the clock's note
-    // is one of them, so the tag moves with it.
+    // read_room's `guide` tag is its own key. inbox's tag used to be `guide` too, so merging the two
+    // known maps overwrote read_room's tag and read_room resent its whole guide (live on v0.1.720).
+    assert!(first["section_tags"].get("guide").is_none(), "{first}");
+    let clash = call(json!({ "known": { "guide": guide } })).await;
+    assert!(clash.get("unchanged").is_none(), "{clash}");
+
+    // The clock's note is not in the tag: a clock change keeps the tag, and the note still comes.
     state.db.set_person_clock(&ann, "America/Chicago", -360, agenthangout::now()).unwrap();
-    let stale = call(json!({ "known": { "guide": guide } })).await;
-    assert!(stale["clock"]["note"].is_string(), "{stale}");
-    assert_ne!(stale["section_tags"]["guide"], first["section_tags"]["guide"]);
-    assert!(stale.get("unchanged").is_none(), "{stale}");
-    assert!(stale["project_capacity"]["note"].is_string(), "{stale}");
-    assert!(stale["routine"]["block_how"].is_string(), "{stale}");
+    let clocked = call(json!({ "known": { "inbox_guide": guide } })).await;
+    assert!(clocked["clock"]["note"].is_string(), "{clocked}");
+    assert_eq!(clocked["section_tags"]["inbox_guide"], first["section_tags"]["inbox_guide"]);
+    assert!(clocked["unchanged"].as_array().unwrap().contains(&json!("inbox_guide")), "{clocked}");
 }
