@@ -82,10 +82,24 @@ impl Server {
     }
 
     async fn boot(db: Db, keeper_id: Option<String>, god_ids: &[&str]) -> Self {
+        Self::boot_with_clock(db, keeper_id, god_ids, now).await
+    }
+
+    /// Like `start`, but the view limiter reads `clock`, so a burst can't straddle a minute.
+    async fn start_with_clock(clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        Self::boot_with_clock(Db::open(":memory:").unwrap(), None, &[], clock).await
+    }
+
+    async fn boot_with_clock(
+        db: Db,
+        keeper_id: Option<String>,
+        god_ids: &[&str],
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+    ) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base = format!("http://127.0.0.1:{port}");
-        let state = AppState::new(
+        let state = AppState::with_write_clock(
             db,
             Config {
                 public_url: base.clone(),
@@ -95,6 +109,7 @@ impl Server {
                 god_ids: god_ids.iter().map(|id| id.to_string()).collect(),
                 require_rules: false,
             },
+            clock,
         );
         let served = state.clone();
         tokio::spawn(async move { axum::serve(listener, app(served)).await });
@@ -1573,7 +1588,8 @@ async fn a_stamp_does_not_come_back_after_a_row_goes_and_another_arrives() {
 // E27
 #[tokio::test]
 async fn the_map_lists_every_outside_that_has_its_place_for_anyone() {
-    let server = Server::start().await;
+    // One limiter minute for the whole burst, even if the wall clock crosses a boundary (#1134).
+    let server = Server::start_with_clock(|| 120).await;
     let ann = server.person("Ann").await;
     let bo = server.person("Bo").await;
     let a = server.house(&ann);
