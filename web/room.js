@@ -5425,6 +5425,44 @@ function paintHammockEnd(g, x, y) {
   r(g, '#f5f0e6', x - 4, y - 12, 8, 1);
   r(g, '#3a6fb0', x - 2, y - 10, 4, 2);
 }
+// The winter and piano ends (Ribbit, #1121): what each looks like turned to face along the room.
+// Each stays inside its turned reach: deep + rise - wide above its base, and across its wide.
+// The igloo's end: a rounded dome of snow with its blocks showing along the side.
+function paintIglooEnd(g, x, y) {
+  r(g, SHADOW, x - 10, y - 2, 20, 2);
+  r(g, '#eaf4fb', x - 10, y - 14, 20, 12);
+  r(g, '#eaf4fb', x - 7, y - 19, 14, 5);
+  r(g, '#eaf4fb', x - 4, y - 22, 8, 3);
+  r(g, '#eaf4fb', x - 2, y - 24, 4, 2);
+  r(g, '#bcd6e6', x - 10, y - 4, 20, 1);
+  r(g, '#bcd6e6', x - 7, y - 14, 1, 5);
+  r(g, '#bcd6e6', x + 3, y - 19, 1, 5);
+}
+// The reindeer from its front end: a head and neck with the antlers spread above, and its legs.
+function paintReindeerEnd(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a5a34', x - 4, y - 11, 8, 9);
+  r(g, '#8a5a34', x - 3, y - 18, 6, 7);
+  r(g, '#c0392b', x - 1, y - 13, 2, 2);
+  r(g, '#6b4a2e', x - 4, y - 3, 2, 3);
+  r(g, '#6b4a2e', x + 2, y - 3, 2, 3);
+  r(g, '#d9c08a', x - 5, y - 23, 1, 5);
+  r(g, '#d9c08a', x + 4, y - 23, 1, 5);
+  r(g, '#d9c08a', x - 5, y - 23, 3, 1);
+  r(g, '#d9c08a', x + 2, y - 23, 3, 1);
+}
+// The grand piano from its end: the black case standing on one leg a side, the lid propped up.
+function paintGrandPianoEnd(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#2a2530', x - 1, y - 32, 2, 10);
+  r(g, '#2a2530', x - 5, y - 34, 10, 3);
+  r(g, '#1b1820', x - 6, y - 22, 12, 16);
+  r(g, '#3a3342', x - 6, y - 22, 12, 2);
+  r(g, '#f4f1e8', x - 6, y - 10, 12, 1);
+  r(g, '#1b1820', x - 6, y - 6, 2, 6);
+  r(g, '#1b1820', x + 4, y - 6, 2, 6);
+  r(g, '#c8a34a', x - 1, y - 16, 2, 1);
+}
 const ITEMS = {
   rug_oval: { paint: rugArt({ base: '#6a2a3c', trim: '#c9a86a', accent: '#7b3346', pattern: 'round' }), rise: 0, flat: true },
   rug_round: { paint: rugArt({ base: '#2e6b6b', trim: '#e2d6a8', accent: '#3f8a86', pattern: 'round' }), rise: 0, flat: true },
@@ -5667,8 +5705,8 @@ const ITEMS = {
   ufo: { paint: paintUfo, rise: 22 },
   planetarium: { paint: paintPlanetarium, side: paintPlanetariumEnd, rise: 32 },
   satellite: { paint: paintSatellite, rise: 13 },
-  igloo: { paint: paintIgloo, side: paintIgloo, rise: 22 },
-  reindeer: { paint: paintReindeer, side: paintReindeer, rise: 20 },
+  igloo: { paint: paintIgloo, side: paintIglooEnd, rise: 22 },
+  reindeer: { paint: paintReindeer, side: paintReindeerEnd, rise: 20 },
   snowball_pile: { paint: paintSnowballPile, rise: 8 },
   koi_pond: { paint: paintKoiPond, rise: 0, flat: true },
   palm_tree: { paint: paintPalmTree, side: paintPalmTree, rise: 40 },
@@ -5741,7 +5779,7 @@ const ITEMS = {
   crab: { paint: paintCrab, rise: 9 },
   bottle_message: { paint: paintBottleMessage, rise: 8 },
   lifeguard_tower: { paint: paintLifeguardTower, rise: 32 },
-  grand_piano: { paint: paintGrandPiano, side: paintGrandPiano, rise: 30 },
+  grand_piano: { paint: paintGrandPiano, side: paintGrandPianoEnd, rise: 30 },
   dragon_statue: { paint: paintDragonStatue, rise: 32 },
   carousel: { paint: paintCarousel, rise: 34 },
 };
