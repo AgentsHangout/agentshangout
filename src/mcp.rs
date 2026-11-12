@@ -3167,7 +3167,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         // out there.
         if !after_arg_present && known.as_ref().is_none_or(|map| map.is_empty()) {
             reply["section_tags_hint"] = json!(
-                "Pass these back as known, with after_message_id, to skip unchanged sections."
+                "Pass these back as known, with after_message_id, to skip unchanged sections. Merge returned tags into your known map, don't replace it: a repeat read's section_tags lists only the sections it sent."
             );
         }
     }
@@ -3411,7 +3411,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     }
     // #1022: a repeat read's section_tags carry only the sections it sent; the rest are named in
     // unchanged. What's remembered for the next read keeps all of them, as before.
-    if brief && after_arg_present && !full {
+    // #748: a read that passes known (merged with what the server remembers) gets the same trim,
+    // with or without after_message_id, so the three-read test holds on a plain second read too.
+    let repeat_read = after_arg_present || passed.is_some_and(|map| !map.is_empty());
+    if brief && repeat_read && !full {
         let unchanged: Vec<String> = reply["unchanged"]
             .as_array()
             .map(|list| list.iter().filter_map(|name| name.as_str().map(str::to_owned)).collect())

@@ -11137,7 +11137,11 @@ async fn read_room_brief_section_tags_and_known_cache() {
         .await["structuredContent"]
         .clone();
     assert!(empty["section_tags_hint"].is_string(), "{empty}");
-    assert_eq!(cached["section_tags"], tags);
+    // #748: a repeat read's section_tags lists only the sections it sent; the rest are unchanged,
+    // and the caller keeps the tags it already had (merge, don't replace).
+    for section in ["whiteboard", "pins", "notes", "items", "boards", "calendar"] {
+        assert!(cached["section_tags"].get(section).is_none(), "{section} in {cached}");
+    }
     assert!(
         cached.to_string().len() < 3000,
         "cached read is compact: {}",
@@ -11162,7 +11166,7 @@ async fn read_room_brief_section_tags_and_known_cache() {
         .clone();
     assert!(after_move.get("items").is_some(), "moved/placed item section comes back");
     assert_ne!(after_move["section_tags"]["items"], tags["items"]);
-    assert_eq!(after_move["section_tags"]["whiteboard"], tags["whiteboard"]);
+    assert!(after_move["section_tags"].get("whiteboard").is_none(), "{after_move}");
     assert!(after_move.get("whiteboard").is_none());
     let move_tags = after_move["section_tags"].clone();
 
@@ -11277,7 +11281,7 @@ async fn read_room_brief_section_tags_and_known_cache() {
         )
         .await["structuredContent"]
         .clone();
-    assert_eq!(guest2["section_tags"], guest_tags, "guest tags stay identical on hidden change");
+    assert!(guest2["section_tags"].get("pins").is_none(), "{guest2}");
     assert!(guest2.get("pins").is_none(), "pins omitted because tag matched");
 
     // Change something visible to guest (pin a new pin after arrival; sleep 1s so pinned_at > arrival since):
@@ -11641,7 +11645,10 @@ async fn a_brief_read_can_skip_who_is_here_and_the_fixed_notes() {
     }
     // The trust note comes on every read, cached or not.
     assert_eq!(again["trust_note"], first["trust_note"], "{again}");
-    assert_eq!(again["section_tags"], tags, "same tags while nothing changed");
+    // #748: nothing changed, so the repeat read's section_tags names none of them.
+    for key in ["bots", "people_here", "guide", "tag_as"] {
+        assert!(again["section_tags"].get(key).is_none(), "{key} in {again}");
+    }
 
     // A new bot in the room changes bots, so it comes back.
     support::legacy_bot(&w.server.state, &w.ann.id, &w.room, "Newcomer");
@@ -14096,4 +14103,63 @@ async fn a_reply_to_the_root_at_the_cursor_comes_back_alone() {
     assert!(!lines.iter().any(|m| m["id"] == root_id), "root at the cursor came back: {read}");
     let line = lines.iter().find(|m| m["id"] == reply_id).expect("reply line");
     assert_eq!(line["reply_to"], root_id, "{read}");
+}
+
+// #748: the three-read test for section_tags on a brief read. Read 1 has no known and gets the
+// full map. After a note is shared, read 2 passes that map as known and gets only the notes back,
+// with only the notes tag in section_tags. Read 3 passes the map merged with read 2's tags, so
+// nothing is sent and section_tags names nothing.
+#[tokio::test]
+async fn section_tags_three_reads_merge_into_known_and_skip_everything_after_a_note() {
+    let server = Server::start().await;
+    let (room, owner) = server.someone("Fern").await;
+    let fern = server.bot(&owner, &room, "FernBot").await;
+    server
+        .tool(&fern.token, "set_whiteboard", json!({ "hangout_id": room, "text": "Sprint Goal" }))
+        .await;
+    server.item(&owner, &room, "stool", spot(0)).await;
+
+    let first = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let mut known = first["section_tags"].clone();
+    assert!(known["whiteboard"].is_string() && known["notes"].is_string(), "{first}");
+
+    server
+        .tool(&fern.token, "share_note", json!({ "hangout_id": room, "text": "Three-read note" }))
+        .await;
+
+    let second = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": known.clone() }),
+        )
+        .await["structuredContent"]
+        .clone();
+    assert!(second.get("notes").is_some(), "{second}");
+    assert!(second.get("whiteboard").is_none() && second.get("items").is_none(), "{second}");
+    let sent = second["section_tags"].as_object().unwrap();
+    assert!(sent.contains_key("notes"), "{second}");
+    assert!(!sent.contains_key("whiteboard") && !sent.contains_key("items"), "{second}");
+
+    // The caller merges what came back into what it had, rather than replacing it.
+    for (section, tag) in second["section_tags"].as_object().unwrap() {
+        known[section] = tag.clone();
+    }
+    assert!(known["whiteboard"].is_string(), "merge keeps unchanged tags: {known}");
+
+    let third = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": known }),
+        )
+        .await["structuredContent"]
+        .clone();
+    for key in ["whiteboard", "notes", "items", "boards", "calendar", "pins"] {
+        assert!(third.get(key).is_none(), "{key} skipped on read 3: {third}");
+        assert!(third["section_tags"].get(key).is_none(), "{key} tag on read 3: {third}");
+    }
 }
