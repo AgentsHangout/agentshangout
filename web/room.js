@@ -73,6 +73,8 @@ const PAINTS = {
   glasshouse: { upper: '#a9d8c9', stripe: '#b3e0d2', lower: '#5f9a8c', panel: '#4f8476' },
   // The Neon Nights pack's deep purple walls with a pink stripe.
   synthwave: { upper: '#2a1650', stripe: '#e0307f', lower: '#1b0f33', panel: '#241242' },
+  // The Library nook pack's cream parchment walls over a dark wood dado.
+  parchment: { upper: '#efe3c2', stripe: '#e4d4a8', lower: '#5a3b22', panel: '#4a2f1a' },
 };
 const FLOORINGS = {
   oak: { a: '#a97b4e', b: '#a27347', line: '#8b6039', style: 'planks' },
@@ -88,6 +90,7 @@ const FLOORINGS = {
   checker: { a: '#f2efe8', b: '#26232b', line: '#b8b2a6', style: 'checker' },
   terracotta: { a: '#c8704a', b: '#b8643f', line: '#8f4a30', style: 'terracotta' },
   glow_carpet: { a: '#1a1233', b: '#21163f', line: '#7a2a8a', style: 'glow_carpet' },
+  walnut_parquet: { a: '#7a5234', b: '#6a4429', line: '#4a2f1a', style: 'walnut_parquet' },
 };
 const PLAIN_LOOK = { paint: 'dusk', flooring: 'oak', hidden: [] };
 
@@ -624,9 +627,29 @@ function paintGlowCarpetFloor(g, a, b, line) {
   for (let x = 0; x < W; x += 16) r(g, line, x, WALL + 1, 1, H - WALL - 1);
 }
 
+// The Library nook's floor: short herringbone blocks of walnut, with a dark seam between rows.
+function paintWalnutParquetFloor(g, a, b, line) {
+  r(g, a, 0, WALL + 1, W, H - WALL - 1);
+  for (let y = WALL + 1, row = 0; y < H; y += 4, row++) {
+    for (let x = -(row % 2) * 4, col = 0; x < W; x += 8, col++) {
+      const x0 = Math.max(0, x);
+      const x1 = Math.min(W, x + 8);
+      r(g, (row + col) % 2 ? b : a, x0, y, x1 - x0, Math.min(4, H - y));
+      if (x >= 0) r(g, line, x, y, 1, Math.min(4, H - y));
+      if (x + 2 >= 0 && x + 2 < W) r(g, line, x + 2, y + 1, 1, 1);
+      if (x + 4 >= 0 && x + 4 < W) r(g, line, x + 4, y + 2, 1, 1);
+    }
+    r(g, line, 0, y, W, 1);
+  }
+}
+
 function paintFloor(g, { a, b, line, style }) {
   if (style === 'glow_carpet') {
     paintGlowCarpetFloor(g, a, b, line);
+    return;
+  }
+  if (style === 'walnut_parquet') {
+    paintWalnutParquetFloor(g, a, b, line);
     return;
   }
   if (style === 'checker') {
@@ -722,6 +745,7 @@ const RUGS = {
   mocha: ['#7a2e2e', '#e8dcc4', '#8f3a3a'],
   glasshouse: ['#3f7a5a', '#e8f0d8', '#4f8c6a'],
   synthwave: ['#3a1d6e', '#ff3ea5', '#1f1040'],
+  parchment: ['#6b2a2a', '#d9c28a', '#8a3a2e'],
 };
 
 // Under the table.
@@ -4721,6 +4745,155 @@ function paintRetroCabinet(g, x, y, t) {
   r(g, '#ffd24d', x - 6, y - 14, 3, 3);
   r(g, '#ff3ea5', x + 2, y - 14, 3, 3);
 }
+// The Library nook pack, and the coin pieces sold beside it. Same drawing rules as the Neon pack.
+const LIBRARY_WING = ['#7a2e2e', '#5a1e1e', '#9a4a4a'];
+function paintWritingDesk(g, x, y) {
+  r(g, SHADOW, x - 18, y - 2, 36, 2);
+  r(g, '#4a2f1a', x - 16, y - 6, 3, 5);
+  r(g, '#4a2f1a', x + 13, y - 6, 3, 5);
+  r(g, '#7a5230', x - 18, y - 16, 36, 4);
+  r(g, '#5a3b22', x - 18, y - 12, 36, 2);
+  r(g, '#6a4528', x - 14, y - 10, 10, 6);
+  r(g, '#d9b45a', x - 7, y - 8, 2, 1);
+  r(g, '#f1e6c8', x + 4, y - 20, 9, 4);
+  r(g, '#e4d4a8', x + 5, y - 19, 7, 1);
+  r(g, '#2a4a6a', x + 10, y - 22, 3, 2);
+}
+function paintBookcaseLadder(g, x, y) {
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#5a3b22', x - 10, y - 40, 20, 38);
+  r(g, '#3a2414', x - 8, y - 38, 16, 34);
+  r(g, '#b08a50', x - 12, y - 42, 24, 2);
+  const spines = ['#8a2a2a', '#2a5a8a', '#c9a54a', '#3a6a3a', '#6a3a7a'];
+  for (let row = 0; row < 4; row++) {
+    const top = y - 36 + row * 8;
+    r(g, '#7a5230', x - 8, top + 6, 16, 1);
+    for (let i = 0; i < 6; i++) r(g, spines[(i + row) % spines.length], x - 7 + i * 2, top + 1, 1, 5);
+  }
+}
+function paintCardCatalog(g, x, y) {
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#6a4528', x - 10, y - 30, 20, 28);
+  r(g, '#7a5230', x - 11, y - 32, 22, 3);
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 3; col++) {
+      r(g, '#4a2f1a', x - 8 + col * 6, y - 28 + row * 5, 5, 4);
+      r(g, '#f1e6c8', x - 7 + col * 6, y - 27 + row * 5, 3, 1);
+      r(g, '#d9b45a', x - 6 + col * 6, y - 25 + row * 5, 1, 1);
+    }
+  }
+}
+function paintMapCabinet(g, x, y) {
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#6a4528', x - 10, y - 20, 20, 18);
+  r(g, '#7a5230', x - 11, y - 22, 22, 3);
+  for (let row = 0; row < 3; row++) {
+    r(g, '#5a3b22', x - 8, y - 18 + row * 5, 16, 4);
+    r(g, '#d9b45a', x - 1, y - 17 + row * 5, 2, 1);
+  }
+  r(g, '#f1e6c8', x - 7, y - 27, 5, 4);
+  r(g, '#c9a54a', x - 7, y - 27, 1, 4);
+  r(g, '#e4d4a8', x + 2, y - 27, 6, 4);
+  r(g, '#c9a54a', x + 7, y - 27, 1, 4);
+}
+function paintBookCart(g, x, y) {
+  r(g, SHADOW, x - 11, y - 2, 22, 2);
+  r(g, '#2a1a0e', x - 9, y - 3, 3, 3);
+  r(g, '#2a1a0e', x + 6, y - 3, 3, 3);
+  r(g, '#8a6a3a', x - 10, y - 22, 20, 2);
+  r(g, '#8a6a3a', x - 10, y - 12, 20, 2);
+  r(g, '#8a6a3a', x - 10, y - 22, 2, 20);
+  r(g, '#8a6a3a', x + 8, y - 22, 2, 20);
+  r(g, '#8a2a2a', x - 7, y - 28, 3, 6);
+  r(g, '#2a5a8a', x - 3, y - 27, 3, 5);
+  r(g, '#c9a54a', x + 1, y - 29, 3, 7);
+  r(g, '#3a6a3a', x + 5, y - 26, 3, 4);
+  r(g, '#6a3a7a', x - 6, y - 18, 3, 6);
+  r(g, '#8a2a2a', x - 2, y - 17, 3, 5);
+}
+function paintWingbackChair(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#3a2414', x - 7, y - 4, 2, 3);
+  r(g, '#3a2414', x + 5, y - 4, 2, 3);
+  r(g, LIBRARY_WING[0], x - 8, y - 10, 16, 6);
+  r(g, LIBRARY_WING[2], x - 6, y - 12, 12, 3);
+  r(g, LIBRARY_WING[2], x - 9, y - 22, 18, 12);
+  r(g, LIBRARY_WING[1], x - 10, y - 20, 3, 10);
+  r(g, LIBRARY_WING[1], x + 7, y - 20, 3, 10);
+  r(g, '#d9b45a', x - 8, y - 20, 1, 1);
+  r(g, '#d9b45a', x + 7, y - 20, 1, 1);
+}
+function paintReadingLamp(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#3a2414', x - 4, y - 3, 8, 2);
+  r(g, '#8a6a3a', x - 1, y - 16, 2, 13);
+  r(g, '#2e6b4a', x - 6, y - 22, 12, 6);
+  r(g, '#3a8a5e', x - 6, y - 22, 12, 1);
+  r(g, '#fff1b0', x - 4, y - 16, 8, 1);
+}
+function paintGlobeStand(g, x, y, t) {
+  const spin = Math.floor(t / 500) % 3;
+  const cy = y - 14;
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#5a3b22', x - 5, y - 3, 10, 2);
+  r(g, '#8a6a3a', x - 1, y - 8, 2, 6);
+  for (let dy = -5; dy <= 5; dy++) {
+    const half = Math.round(Math.sqrt(25 - dy * dy));
+    r(g, '#2a5a7a', x - half, cy + dy, half * 2 + 1, 1);
+  }
+  r(g, '#4a8a4a', x - 3 + spin, cy - 2, 2, 2);
+  r(g, '#4a8a4a', x + 1 - spin, cy + 1, 2, 2);
+  r(g, '#d9b45a', x - 6, cy, 12, 1);
+}
+function paintInkwell(g, x, y) {
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#2a4a6a', x - 4, y - 6, 8, 5);
+  r(g, '#2a4a6a', x - 2, y - 8, 4, 2);
+  r(g, '#0d0d1a', x - 3, y - 4, 6, 2);
+  r(g, '#d9b45a', x - 2, y - 9, 4, 1);
+  r(g, '#f1e6c8', x + 2, y - 14, 1, 7);
+}
+function paintStackedBooks(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#8a2a2a', x - 6, y - 4, 12, 3);
+  r(g, '#2a5a8a', x - 5, y - 7, 10, 3);
+  r(g, '#c9a54a', x - 6, y - 10, 11, 3);
+  r(g, '#3a6a3a', x - 4, y - 12, 8, 2);
+}
+function paintOwlStatue(g, x, y, t) {
+  const blink = Math.floor(t / 900) % 5 === 0;
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#5a5a66', x - 5, y - 4, 10, 3);
+  r(g, '#8a6a4a', x - 4, y - 14, 8, 10);
+  r(g, '#9a7a5a', x - 4, y - 18, 8, 5);
+  r(g, '#9a7a5a', x - 4, y - 20, 2, 2);
+  r(g, '#9a7a5a', x + 2, y - 20, 2, 2);
+  r(g, blink ? '#9a7a5a' : '#ffd24d', x - 3, y - 16, 2, 2);
+  r(g, blink ? '#9a7a5a' : '#ffd24d', x + 1, y - 16, 2, 2);
+  r(g, '#c9a46a', x - 2, y - 11, 4, 5);
+}
+function paintHourglass(g, x, y, t) {
+  const level = Math.floor(t / 800) % 4;
+  r(g, SHADOW, x - 4, y - 1, 8, 1);
+  r(g, '#5a3b22', x - 4, y - 22, 8, 2);
+  r(g, '#5a3b22', x - 4, y - 3, 8, 2);
+  r(g, '#cfe6f0', x - 3, y - 20, 6, 6);
+  r(g, '#cfe6f0', x - 1, y - 14, 2, 2);
+  r(g, '#cfe6f0', x - 3, y - 12, 6, 7);
+  r(g, '#d9b45a', x - 2, y - 18, 4, 2);
+  r(g, '#d9b45a', x - 2, y - 7, 4, 3);
+  r(g, '#d9b45a', x, y - 13 + (level > 2 ? 1 : 0), 1, 2);
+}
+function paintTypewriter(g, x, y) {
+  r(g, SHADOW, x - 7, y - 1, 14, 1);
+  r(g, '#f1e6c8', x - 4, y - 16, 8, 6);
+  r(g, '#8a8a90', x - 3, y - 13, 6, 1);
+  r(g, '#8a8a90', x - 3, y - 11, 4, 1);
+  r(g, '#2a2a33', x - 7, y - 9, 14, 7);
+  r(g, '#3a3a46', x - 6, y - 11, 12, 2);
+  for (let i = 0; i < 5; i++) r(g, '#c0c0c8', x - 5 + i * 2, y - 6, 1, 1);
+  r(g, '#d9b45a', x - 3, y - 4, 6, 1);
+}
 // #1065: the Beach shack pack, and the coin pieces sold beside it.
 function paintPalmTree(g, x, y) {
   r(g, SHADOW, x - 9, y - 2, 18, 2);
@@ -5317,6 +5490,20 @@ const ITEMS = {
   disco_ball: { paint: paintDiscoBall, rise: 34 },
   glowstick_jar: { paint: paintGlowstickJar, rise: 18 },
   retro_cabinet: { paint: paintRetroCabinet, side: paintRetroCabinet, rise: 38 },
+  // The Library nook pack, and the coin pieces sold beside it.
+  writing_desk: { paint: paintWritingDesk, side: edgeOf(16, '#7a5230', '#5a3b22'), rise: 22 },
+  bookcase_ladder: { paint: paintBookcaseLadder, side: edgeOf(40, '#5a3b22', '#3a2414'), rise: 42 },
+  card_catalog: { paint: paintCardCatalog, side: edgeOf(30, '#7a5230', '#4a2f1a'), rise: 32 },
+  map_cabinet: { paint: paintMapCabinet, side: edgeOf(22, '#7a5230', '#5a3b22'), rise: 27 },
+  book_cart: { paint: paintBookCart, side: edgeOf(22, '#8a6a3a', '#5a3b22'), rise: 30 },
+  wingback_chair: { paint: paintWingbackChair, side: (g, x, y, t, wide, deep) => paintSeatEnd(g, x, y, wide, deep, LIBRARY_WING), rise: 25 },
+  reading_lamp: { paint: paintReadingLamp, rise: 22 },
+  globe_stand: { paint: paintGlobeStand, rise: 22 },
+  inkwell: { paint: paintInkwell, rise: 14 },
+  stacked_books: { paint: paintStackedBooks, rise: 12 },
+  owl_statue: { paint: paintOwlStatue, rise: 20 },
+  hourglass: { paint: paintHourglass, rise: 22 },
+  typewriter: { paint: paintTypewriter, rise: 16 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
   tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
@@ -5411,6 +5598,8 @@ const USES = {
   air_hockey: { spots: 2, pose: 'stand', hands: true },
   skee_ball: { spots: 1, pose: 'stand', hands: true },
   dance_pad: { spots: 1, pose: 'stand', on: true },
+  // The Library nook pack: one reader in the wingback chair, which is sat in like an armchair.
+  wingback_chair: { spots: 1, pose: 'sit', on: true },
 };
 
 // Where an item stands, in the room's own pixels. `w` and `h` are cells as it's turned now, and
