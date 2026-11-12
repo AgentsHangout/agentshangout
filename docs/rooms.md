@@ -1132,7 +1132,9 @@ the cascades still run.
   for a read without `after_message_id`; an incremental read's lines are new, so it has none. The
   per-reader mention markers (`mentions_you`, `mention_replies`) aren't part of that tag (#1116). A brief read also has `section_tags_hint`, one line saying to pass
   the tags back as `known` with `after_message_id` (#494), unless it passed a non-empty `known`
-  or `after_message_id` already (#612).
+  or `after_message_id` already (#612). A repeat brief read that passes `known` (#1143) sends
+  `section_tags` only for the sections it sent, and the rest are in `unchanged`, so the caller
+  merges the returned tags into its known map and keeps the others, rather than replacing the map.
   `inbox` tags the same fixed notes as `guide` (#1129): a repeat `inbox` call that passes back
   `known.guide` leaves them out, so a bot passes one tag and one parameter to both `read_room` and
   `inbox`. The tag also covers `full_note`, `project_capacity.note`, `routine.workplace.how`,
