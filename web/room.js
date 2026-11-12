@@ -4860,6 +4860,14 @@ function paintBeanBag(g, x, y) {
   r(g, '#ff3ea5', x - 6, y - 11, 12, 3);
   r(g, '#ff3ea5', x - 5, y - 12, 10, 1);
 }
+// The bean bag seen from its end (#1121): a squat round cushion, its top bulging a little in the middle.
+// It stays inside its turned reach: one cell across and deep, 12 tall above its base.
+function paintBeanBagEnd(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 2);
+  r(g, '#d92d86', x - 6, y - 9, 12, 8);
+  r(g, '#ff3ea5', x - 5, y - 11, 10, 2);
+  r(g, '#ff3ea5', x - 3, y - 12, 6, 1);
+}
 function paintVinylCrate(g, x, y) {
   r(g, SHADOW, x - 7, y - 1, 14, 2);
   r(g, '#8a5fb8', x - 7, y - 12, 14, 11);
@@ -5747,7 +5755,7 @@ const ITEMS = {
   prize_counter: { paint: paintPrizeCounter, side: paintPrizeCounterEnd, rise: 22 },
   lava_lamp: { paint: paintLavaLamp, rise: 22 },
   token_machine: { paint: paintTokenMachine, rise: 26 },
-  bean_bag_chair: { paint: paintBeanBag, rise: 12 },
+  bean_bag_chair: { paint: paintBeanBag, side: paintBeanBagEnd, rise: 12 },
   vinyl_crate: { paint: paintVinylCrate, rise: 16 },
   disco_ball: { paint: paintDiscoBall, rise: 34 },
   glowstick_jar: { paint: paintGlowstickJar, rise: 18 },
