@@ -5391,6 +5391,40 @@ function rugArt({ base, trim, accent, pattern }) {
   };
 }
 
+// The beach set's ends (Ribbit, #1121): what each looks like turned to face along the room.
+// Each stays inside its turned reach: deep + rise - wide above its base, and across its wide.
+// A string of lights from its end: one slim post with its snow cap, and the strand dropping toward you.
+function paintStringLightsEnd(g, x, y, t) {
+  r(g, SHADOW, x - 4, y - 2, 8, 2);
+  r(g, FALL_WOOD[0], x - 3, y - 3, 6, 2);
+  r(g, FALL_WOOD[1], x - 1, y - 30, 2, 28);
+  r(g, FALL_WOOD[2], x - 1, y - 30, 1, 28);
+  r(g, WINTER_SNOW[2], x - 2, y - 31, 4, 1);
+  r(g, WINTER_SNOW[1], x - 1, y - 32, 2, 1);
+  r(g, '#2b3a2e', x - 5, y - 26, 11, 1);
+  winterBulb(g, x - 4, y - 25, 0, t, 2);
+  winterBulb(g, x + 4, y - 25, 1, t, 2);
+  winterBulb(g, x, y - 22, 2, t, 2);
+}
+// The tiki bar from its end: a thatched roof over a narrow counter, with a torch at the side.
+function paintTikiBarEnd(g, x, y) {
+  paintEnd(g, x, y, 10, 6, 16, '#8a5a34', '#6b4a2e');
+  r(g, '#d9c08a', x - 6, y - 34, 12, 6);
+  r(g, '#c4a76a', x - 6, y - 30, 12, 2);
+  r(g, '#3a9a5a', x - 4, y - 27, 3, 4);
+  r(g, '#ffd24d', x + 3, y - 24, 2, 3);
+}
+// The hammock from its end: two posts with the fabric sagging between them, seen end on.
+function paintHammockEnd(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#8a5a34', x - 5, y - 20, 2, 19);
+  r(g, '#8a5a34', x + 4, y - 20, 2, 19);
+  r(g, '#d9c08a', x - 3, y - 16, 2, 2);
+  r(g, '#d9c08a', x + 2, y - 16, 2, 2);
+  r(g, '#3a6fb0', x - 4, y - 13, 8, 3);
+  r(g, '#f5f0e6', x - 4, y - 12, 8, 1);
+  r(g, '#3a6fb0', x - 2, y - 10, 4, 2);
+}
 const ITEMS = {
   rug_oval: { paint: rugArt({ base: '#6a2a3c', trim: '#c9a86a', accent: '#7b3346', pattern: 'round' }), rise: 0, flat: true },
   rug_round: { paint: rugArt({ base: '#2e6b6b', trim: '#e2d6a8', accent: '#3f8a86', pattern: 'round' }), rise: 0, flat: true },
@@ -5609,7 +5643,7 @@ const ITEMS = {
   sled: { paint: paintSled, side: paintSledEnd, rise: 16 },
   gift_stack: { paint: paintGiftStack, rise: 29 },
   cocoa: { paint: paintCocoa, rise: 30 },
-  string_lights: { paint: paintStringLights, side: paintStringLights, rise: 33 },
+  string_lights: { paint: paintStringLights, side: paintStringLightsEnd, rise: 33 },
   ice_skates: { paint: paintIceSkates, rise: 19 },
   knit_blanket: { paint: paintKnitBlanket, rise: 21 },
   wood_stove: { paint: paintWoodStove, side: paintWoodStoveEnd, rise: 47 },
@@ -5697,8 +5731,8 @@ const ITEMS = {
   typewriter: { paint: paintTypewriter, rise: 16 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
-  tiki_bar: { paint: paintTikiBar, side: paintTikiBar, rise: 36 },
-  hammock: { paint: paintHammock, side: paintHammock, rise: 22 },
+  tiki_bar: { paint: paintTikiBar, side: paintTikiBarEnd, rise: 36 },
+  hammock: { paint: paintHammock, side: paintHammockEnd, rise: 22 },
   sandcastle: { paint: paintSandcastle, rise: 20 },
   seashells: { paint: paintSeashells, rise: 8 },
   tiki_torch: { paint: paintTikiTorch, rise: 35 },
