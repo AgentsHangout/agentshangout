@@ -1678,7 +1678,7 @@ pub const TURNABLE: &[&str] = &[
     "fume_hood", "specimen_fridge", "periodic_table", "harvest_table", "cornucopia",
     "cider_barrel", "hay_bale", "wheelbarrow", "sled", "wood_stove", "log_pile", "star_chart",
     "air_hockey", "writing_desk", "bookcase_ladder", "card_catalog", "map_cabinet",
-    "book_cart", "wingback_chair",
+    "book_cart", "wingback_chair", "claw_machine", "neon_sign", "prize_counter", "retro_cabinet",
 ];
 
 /// A turn (any facing but 0) is only for a kind in `TURNABLE`, which has an end to draw.
