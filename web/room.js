@@ -4607,16 +4607,36 @@ function paintLemonTree(g, x, y) {
 }
 // The Neon Nights pack, and the coin pieces sold beside it. Usable pieces are drawn the same way
 // whether a bot is at them or not.
-function paintAirHockey(g, x, y, t) {
+// Its width is the `wide` it's drawn at (36 for its 3 cells as it stands), so a turned table is never
+// drawn at the front's size. `side` below is its end, once turned.
+function paintAirHockey(g, x, y, t, wide = 36) {
   const puck = Math.round(Math.sin(t / 300) * 6);
-  r(g, SHADOW, x - 18, y - 2, 36, 2);
-  r(g, '#3a3560', x - 16, y - 8, 3, 7);
-  r(g, '#3a3560', x + 13, y - 8, 3, 7);
-  r(g, '#26233f', x - 18, y - 14, 36, 7);
-  r(g, '#0d3a5c', x - 16, y - 20, 32, 7);
-  r(g, '#ff3ea5', x - 17, y - 21, 34, 1);
+  const left = Math.round(x - wide / 2);
+  r(g, SHADOW, left, y - 2, wide, 2);
+  r(g, '#3a3560', left + 2, y - 8, 3, 7);
+  r(g, '#3a3560', left + wide - 5, y - 8, 3, 7);
+  r(g, '#26233f', left, y - 14, wide, 7);
+  r(g, '#0d3a5c', left + 2, y - 20, wide - 4, 7);
+  r(g, '#ff3ea5', left + 1, y - 21, wide - 2, 1);
   r(g, '#2fe6ff', x - 1, y - 20, 2, 6);
   r(g, '#f4f1e8', x + puck - 1, y - 18, 3, 3);
+}
+// #1121: the table from its end, once turned. `wide` is its end face (2 cells for a turned 3x2) and
+// `deep` is how far its top runs back (3 cells). The cyan centre line runs back along the top, and the
+// puck slides along it.
+function paintAirHockeyEnd(g, x, y, t, wide = 24, deep = 36) {
+  const left = Math.round(x - wide / 2);
+  const band = Math.round(deep / 3);
+  const top = y - 14 - band;
+  const puck = top + 2 + Math.round(((Math.sin(t / 300) + 1) / 2) * (band - 5));
+  r(g, SHADOW, left - 1, y - 2, wide + 2, 2);
+  r(g, '#3a3560', left + 1, y - 8, 3, 7);
+  r(g, '#3a3560', left + wide - 4, y - 8, 3, 7);
+  r(g, '#26233f', left, y - 14, wide, 7);
+  r(g, '#0d3a5c', left + 1, top, wide - 2, band);
+  r(g, '#ff3ea5', left, top - 1, wide, 1);
+  r(g, '#2fe6ff', x - 1, top, 2, band);
+  r(g, '#f4f1e8', x - 1, puck, 3, 3);
 }
 function paintSkeeBall(g, x, y, t) {
   const roll = Math.floor(t / 250) % 3;
@@ -5477,7 +5497,7 @@ const ITEMS = {
   bonsai: { paint: paintBonsai, rise: 16 },
   lemon_tree: { paint: paintLemonTree, side: paintLemonTree, rise: 34 },
   // The Neon Nights pack, and the coin pieces sold beside it.
-  air_hockey: { paint: paintAirHockey, side: paintAirHockey, rise: 22 },
+  air_hockey: { paint: paintAirHockey, side: paintAirHockeyEnd, rise: 28 },
   skee_ball: { paint: paintSkeeBall, rise: 24 },
   dance_pad: { paint: paintDancePad, rise: 0, flat: true },
   claw_machine: { paint: paintClawMachine, side: paintClawMachine, rise: 42 },
