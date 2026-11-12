@@ -136,6 +136,7 @@ const BEACH: &str = "beach";
 const CAFE: &str = "cafe";
 const CONSERVATORY: &str = "conservatory";
 const NEON_NIGHTS: &str = "neon_nights";
+const LIBRARY_NOOK: &str = "library_nook";
 const STARGAZER: &str = "stargazer";
 const COINS: &str = "coins";
 const GRAND: &str = "grand";
@@ -145,7 +146,7 @@ const SIGNS: &str = "signs";
 /// I46: in the order the catalog shows them, with what each is called there.
 const RUGS: &str = "rugs";
 
-pub const CATEGORIES: [(&str, &str); 25] = [
+pub const CATEGORIES: [(&str, &str); 26] = [
     (SEATING, "Seating"),
     (TABLES, "Tables and desks"),
     (BEDS, "Beds"),
@@ -166,6 +167,7 @@ pub const CATEGORIES: [(&str, &str); 25] = [
     (CAFE, "Cafe"),
     (CONSERVATORY, "Conservatory"),
     (NEON_NIGHTS, "Neon nights"),
+    (LIBRARY_NOOK, "Library nook"),
     (STARGAZER, "Stargazer"),
     (COINS, "Coin sinks"),
     (GRAND, "Grand pieces"),
@@ -264,7 +266,7 @@ const fn feels(mood: &'static str) -> Option<&'static str> {
 /// Everything a floor can hold. Nothing else can be placed, and nothing typed is part of any of it.
 /// A size is in grid cells. The room page draws a kind only once it has art for that word. Anything
 /// `STARTER` is at most 2 cells deep, so it fits the strip along the front of any floor.
-pub static CATALOG: [Kind; 221] = [
+pub static CATALOG: [Kind; 234] = [
     piece("stool", "Stool", SEATING, STARTER, 1, None, (1, 1)).used("sitting on the stool", 1),
     piece("dining_chair", "Dining chair", SEATING, STARTER, 1, None, (1, 1))
         .used("sitting on the dining chair", 1),
@@ -483,6 +485,26 @@ pub static CATALOG: [Kind; 221] = [
     piece("token_machine", "Token machine", NEON_NIGHTS, STARTER, 2, None, (1, 1)),
     piece("bean_bag_chair", "Bean bag chair", NEON_NIGHTS, STARTER, 2, feels("cozy"), (1, 1)),
     piece("vinyl_crate", "Vinyl crate", NEON_NIGHTS, STARTER, 2, feels("inspired"), (1, 1)),
+    // The Library nook pack. All starter, like the other packs (I29). The wingback chair is sat in (I31).
+    piece("writing_desk", "Writing desk", LIBRARY_NOOK, STARTER, 6, feels("inspired"), (3, 2)),
+    piece(
+        "bookcase_ladder",
+        "Bookcase ladder",
+        LIBRARY_NOOK,
+        STARTER,
+        6,
+        feels("inspired"),
+        (2, 1),
+    ),
+    piece("card_catalog", "Card catalog", LIBRARY_NOOK, STARTER, 4, feels("inspired"), (2, 1)),
+    piece("map_cabinet", "Map cabinet", LIBRARY_NOOK, STARTER, 4, feels("inspired"), (2, 1)),
+    piece("book_cart", "Book cart", LIBRARY_NOOK, STARTER, 2, None, (2, 1)),
+    piece("wingback_chair", "Wingback chair", LIBRARY_NOOK, STARTER, 4, feels("cozy"), (1, 1))
+        .used("reading in the wingback chair", 1),
+    piece("reading_lamp", "Reading lamp", LIBRARY_NOOK, STARTER, 4, feels("calm"), (1, 1)),
+    piece("globe_stand", "Globe stand", LIBRARY_NOOK, STARTER, 5, feels("inspired"), (1, 1)),
+    piece("inkwell", "Inkwell", LIBRARY_NOOK, STARTER, 2, feels("inspired"), (1, 1)),
+    piece("stacked_books", "Stacked books", LIBRARY_NOOK, STARTER, 2, feels("cozy"), (1, 1)),
     piece("orrery", "Brass orrery", STARGAZER, STARTER, 4, feels("inspired"), (1, 1)),
     piece("star_globe", "Star globe", STARGAZER, STARTER, 3, feels("inspired"), (1, 1)),
     piece("rocket_model", "Model rocket", STARGAZER, STARTER, 3, feels("playful"), (1, 1)),
@@ -532,6 +554,10 @@ pub static CATALOG: [Kind; 221] = [
     piece("disco_ball", "Disco ball", COINS, STARTER, 5, feels("playful"), (1, 1)),
     piece("glowstick_jar", "Glowstick jar", COINS, STARTER, 3, feels("playful"), (1, 1)),
     piece("retro_cabinet", "Retro cabinet", COINS, STARTER, 5, feels("playful"), (2, 1)),
+    // Coin sinks beside the Library nook pack.
+    piece("owl_statue", "Owl statue", COINS, STARTER, 4, feels("calm"), (1, 1)),
+    piece("hourglass", "Hourglass", COINS, STARTER, 3, feels("calm"), (1, 1)),
+    piece("typewriter", "Typewriter", COINS, STARTER, 4, feels("inspired"), (1, 1)),
     // HC65: grand pieces, one-of-a-kind showpieces priced in GRAND_PIECES, not by piece_price.
     piece("koi_pond", "Koi pond", GRAND, STARTER, 9, feels("calm"), (4, 2)).flat(),
     piece("grand_piano", "Grand piano", GRAND, STARTER, 10, feels("inspired"), (3, 2))
@@ -578,7 +604,7 @@ const fn at(kind: &'static str, x: i64, y: i64) -> PackItem {
 
 /// Everything that goes up in one go, and what's over only comes down (I57). The places keep clear of
 /// the bar, the arcade and the way in from the door, so a floor showing all of those looks right too.
-pub const PACKS: [Pack; 8] = [
+pub const PACKS: [Pack; 9] = [
     Pack {
         pack: "fall",
         paint: "harvest",
@@ -787,6 +813,36 @@ pub const PACKS: [Pack; 8] = [
         ],
     },
     Pack {
+        pack: "library_nook",
+        paint: "parchment",
+        flooring: "walnut_parquet",
+        over: false,
+        cost: 25,
+        items: &[
+            // Either side of the door.
+            at("reading_lamp", 17, 13),
+            at("reading_lamp", 22, 13),
+            // The ladder and a globe, in the gaps either side of the whiteboard.
+            at("bookcase_ladder", 10, 0),
+            at("globe_stand", 28, 0),
+            // Kept low along the back wall between them.
+            at("stacked_books", 13, 0),
+            at("inkwell", 15, 0),
+            at("stacked_books", 24, 0),
+            at("inkwell", 26, 0),
+            // Round the table, where the bots can see it.
+            at("wingback_chair", 11, 2),
+            at("globe_stand", 10, 7),
+            at("book_cart", 12, 10),
+            // A study, on the open side of the room.
+            at("card_catalog", 30, 4),
+            at("writing_desk", 30, 8),
+            at("map_cabinet", 28, 2),
+            at("book_cart", 33, 11),
+            at("reading_lamp", 34, 9),
+        ],
+    },
+    Pack {
         pack: "stargazer",
         paint: "nebula",
         flooring: "starfield",
@@ -838,7 +894,7 @@ pub fn paid_pack_with(word: &str) -> Option<&'static Pack> {
 /// #774: kinds that a pack sells one at a time (HC45) without placing them in it. The test
 /// `a_paid_packs_kinds_paint_and_flooring_are_its_own` needs a pack's placed kinds to be exactly its
 /// category, so these have a category of their own.
-pub const SOLD_ALONE: [(&str, &str); 27] = [
+pub const SOLD_ALONE: [(&str, &str); 30] = [
     ("comet_jar", "stargazer"),
     ("astronaut", "stargazer"),
     ("lunar_rover", "stargazer"),
@@ -869,6 +925,9 @@ pub const SOLD_ALONE: [(&str, &str); 27] = [
     ("disco_ball", "neon_nights"),
     ("glowstick_jar", "neon_nights"),
     ("retro_cabinet", "neon_nights"),
+    ("owl_statue", "library_nook"),
+    ("hourglass", "library_nook"),
+    ("typewriter", "library_nook"),
 ];
 
 /// HC65: grand pieces and their prices, 100 to 500. These are bought only on their own, as

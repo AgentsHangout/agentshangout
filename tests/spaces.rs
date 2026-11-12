@@ -946,6 +946,7 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
         "mocha",
         "glasshouse",
         "synthwave",
+        "parchment",
     ] {
         // HC14: a paint from a pack that costs credits waits for the pack to be bought.
         let chosen = server.put(&ann.key, &path, json!({ "paint": paint })).await;
@@ -973,6 +974,7 @@ async fn a_floors_look_is_listed_words_and_nothing_else() {
         "checker",
         "terracotta",
         "glow_carpet",
+        "walnut_parquet",
     ] {
         let chosen = server.put(&ann.key, &path, json!({ "flooring": flooring })).await;
         if agenthangout::items::paid_pack_with(flooring).is_some() {

@@ -21474,13 +21474,16 @@ mod tests {
             "disco_ball",
             "glowstick_jar",
             "retro_cabinet",
+            "owl_statue",
+            "hourglass",
+            "typewriter",
         ]
         .iter()
         .map(|k| piece_price(k).unwrap())
         .collect();
         assert_eq!(
             prices,
-            [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6, 3, 3, 6, 4, 4, 6, 3, 3, 6, 3, 2, 4]
+            [2, 4, 10, 6, 10, 3, 8, 4, 2, 2, 3, 6, 3, 3, 6, 4, 4, 6, 3, 3, 6, 3, 2, 4, 3, 2, 3]
         );
 
         let db = Db::open(":memory:").unwrap();

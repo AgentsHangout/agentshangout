@@ -3126,6 +3126,7 @@ fn a_pack_is_fixed_in_the_code_and_the_room_page_can_draw_all_of_it() {
             "cafe",
             "conservatory",
             "neon_nights",
+            "library_nook",
             "stargazer"
         ]
     );
@@ -3338,6 +3339,59 @@ async fn the_pack_does_not_unlock_a_piece_it_only_sells_on_its_own() {
     assert_eq!(pack_needed(&catalog, "snow_globe"), Value::Null);
     assert_eq!(pack_needed(&catalog, "cocoa_cart"), json!("winter"));
     server.place(&ann.key, &room, "snow_globe", (31, 2)).await.ok();
+}
+
+// The Library nook pack costs 25. Its parchment walls and walnut_parquet floor are refused until it's bought
+// and apply after, and the coin pieces beside it stay locked for someone who has the pack.
+#[tokio::test]
+async fn the_library_nook_pack_is_bought_for_its_walls_and_floor_but_not_its_coin_pieces() {
+    use agenthangout::db::{CreditKind, CreditSource};
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    server
+        .state
+        .db
+        .settle_credits(
+            &ann.id,
+            &[(
+                "seed".into(),
+                CreditSource { kind: CreditKind::Gathering, source: "seed".into(), at: now() },
+            )],
+            |_| 30,
+            100,
+            now(),
+        )
+        .unwrap();
+    let path = format!("/api/floors/{room}");
+    server
+        .put(&ann.key, &path, json!({ "paint": "parchment" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    server
+        .put(&ann.key, &path, json!({ "flooring": "walnut_parquet" }))
+        .await
+        .refused(StatusCode::FORBIDDEN);
+    let credits = server.get(&ann.key, "/api/credits").await.ok();
+    let pack =
+        credits["packs"].as_array().unwrap().iter().find(|p| p["pack"] == "library_nook").unwrap();
+    assert_eq!((pack["cost"].clone(), pack["bought"].clone()), (json!(25), json!(false)));
+
+    let bought =
+        server.post(&ann.key, "/api/credits/spend", json!({ "pack": "library_nook" })).await.ok();
+    assert_eq!(bought["balance"], 5, "{bought}");
+    assert_eq!(
+        server.put(&ann.key, &path, json!({ "paint": "parchment" })).await.ok()["paint"],
+        "parchment"
+    );
+    let laid = server.put(&ann.key, &path, json!({ "flooring": "walnut_parquet" })).await.ok();
+    assert_eq!(laid["flooring"], "walnut_parquet");
+    server.place(&ann.key, &room, "card_catalog", (30, 2)).await.ok();
+    server.place(&ann.key, &room, "owl_statue", (34, 2)).await.refused(StatusCode::FORBIDDEN);
+    // The wingback chair is one a bot sits in (I31), once the pack is bought.
+    let scout = server.bot(&ann, &room, "Scout").await;
+    let chair = server.item(&ann, &room, "wingback_chair", (30, 4)).await;
+    let done = server.use_item(&scout.token, &chair).await.ok();
+    assert_eq!(done["doing"], "reading in the wingback chair");
 }
 
 // The Neon nights pack costs 25. Its synthwave walls and glow_carpet floor are refused until it's bought
@@ -4457,6 +4511,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
             "cafe",
             "conservatory",
             "neon_nights",
+            "library_nook",
             "stargazer",
             "coins",
             "grand",
@@ -4653,7 +4708,7 @@ fn what_can_be_used_is_what_the_rules_say() {
             None => assert_eq!(kind.room_for, 0, "{} says nothing about what it does", kind.kind),
         }
     }
-    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 38);
+    assert_eq!(items::CATALOG.iter().filter(|kind| kind.does.is_some()).count(), 39);
 }
 
 // I31, I36: a bot the server lets use something has to have somewhere to stand on the page.
