@@ -1486,6 +1486,67 @@ async fn in_its_hours_a_bot_goes_to_work_at_its_building_and_is_nudged_to_do_som
     assert_eq!(agenthangout::routines::call_of(state, &fern, &town.ann.id, now()).unwrap(), None);
 }
 
+// #1129 follow-up: the inbox guide tag covers record_note and nudge.how, so a repeat call that
+// passes it back leaves both out, and a call with nothing to say doesn't carry them at all.
+#[tokio::test]
+async fn inbox_guide_tag_leaves_out_record_note_and_nudge_how_on_a_repeat() {
+    let server = Server::start().await;
+    let town = server.town().await;
+    server.all_day(&town.ann, &town.fern, true).await;
+    let (project, _) = garden_robot(&server, &town).await;
+    let fern = text(&server.get(&town.fern, "/api/me").await.ok()["agent_id"]);
+    let state = &server.state;
+
+    // Nothing pending on the record: no record_note.
+    let quiet = server.tool(&town.fern, "inbox", json!({})).await;
+    assert!(quiet.get("record_note").is_none(), "{quiet}");
+
+    let home = text(&quiet["you_are_in"]["id"]);
+    // A plan starting soon is on the record, so record_note comes with it.
+    let soon = time::OffsetDateTime::from_unix_timestamp(now() + 6 * 3600)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    server
+        .post(
+            &town.ann.key,
+            &format!("/api/hangouts/{home}/events"),
+            json!({ "title": "Garden robot demo", "starts_at": soon }),
+        )
+        .await
+        .ok();
+
+    // In its working half hour, the nudge comes with its how.
+    let mut slot = now() / 1800 + 1;
+    while slot % 3 != 0 {
+        slot += 1;
+    }
+    agenthangout::routines::wander_at(state, &fern, &town.ann.id, slot * 1800 + 11 * 60).unwrap();
+    assert_eq!(state.db.bot_place(&fern, now()).unwrap(), Some(project.clone()));
+
+    let first = server.tool(&town.fern, "inbox", json!({})).await;
+    assert_eq!(first["nudge"]["event"], "work", "{first}");
+    assert!(text(&first["nudge"]["how"]).contains("read_room"), "{first}");
+    assert!(first["record_note"].is_string(), "{first}");
+    let guide = text(&first["section_tags"]["inbox_guide"]);
+
+    // Passing the guide tag back: both come out, and the tag is listed as unchanged.
+    let repeat =
+        server.tool(&town.fern, "inbox", json!({ "known": { "inbox_guide": guide } })).await;
+    assert!(repeat.get("record_note").is_none(), "{repeat}");
+    assert!(repeat["nudge"]["how"].is_null(), "{repeat}");
+    assert_eq!(repeat["nudge"]["event"], "work", "the nudge itself still comes: {repeat}");
+    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("inbox_guide")), "{repeat}");
+    assert_eq!(repeat["section_tags"]["inbox_guide"], first["section_tags"]["inbox_guide"]);
+
+    // full sends them again whatever was passed.
+    let full = server
+        .tool(&town.fern, "inbox", json!({ "full": true, "known": { "inbox_guide": guide } }))
+        .await;
+    assert!(full["record_note"].is_string(), "{full}");
+    assert!(text(&full["nudge"]["how"]).contains("read_room"), "{full}");
+}
+
 // L40
 #[tokio::test]
 async fn a_bot_furnishes_its_projects_room_as_its_owner_would() {
