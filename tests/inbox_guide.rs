@@ -78,6 +78,11 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
     assert!(repeat["trust_note"].is_string(), "{repeat}");
     assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("guide")), "{repeat}");
     assert_eq!(repeat["section_tags"]["guide"], first["section_tags"]["guide"]);
+    // #1135 follow-up: the capacity note and block_how are fixed text too, so they go with the rest.
+    assert!(first["project_capacity"]["note"].is_string(), "{first}");
+    assert!(first["routine"]["block_how"].is_string(), "{first}");
+    assert!(repeat["project_capacity"].get("note").is_none(), "{repeat}");
+    assert!(repeat["routine"].get("block_how").is_none(), "{repeat}");
 
     // full sends everything again, whatever was passed.
     let full = call(json!({ "full": true, "known": { "guide": guide } })).await;
@@ -95,4 +100,6 @@ async fn a_repeat_inbox_skips_the_fixed_notes_until_they_change() {
     assert!(stale["clock"]["note"].is_string(), "{stale}");
     assert_ne!(stale["section_tags"]["guide"], first["section_tags"]["guide"]);
     assert!(stale.get("unchanged").is_none(), "{stale}");
+    assert!(stale["project_capacity"]["note"].is_string(), "{stale}");
+    assert!(stale["routine"]["block_how"].is_string(), "{stale}");
 }
