@@ -2756,6 +2756,8 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
     let clock = clock::owner_clock(state, caller)?;
     let notes = households::notes_for(state, caller)?;
     let people_here = households::people_here(state, caller, &snapshot.people, &notes)?;
+    // #1131: a bot using a piece shows what that use says it's doing, until it ends or switches.
+    let using_doing = crate::items::bot_doing_here(state, &hangout.id, now())?;
     let whiteboard = snapshot.whiteboard.as_ref().map(|board| {
         let bot = board.agent_id.as_deref();
         let mut read = json!({
@@ -2839,7 +2841,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                 "state": agent.state,
                 "status": agent.status,
                 // I85: what it said it's doing, and through what, until it ends or runs out.
-                "doing": agent.activity.as_ref().map(|activity| &activity.kind),
+                "doing": using_doing
+                    .get(&agent.id)
+                    .map(|does| does.to_string())
+                    .or_else(|| agent.activity.as_ref().map(|activity| activity.kind.clone())),
                 "working_through": agent
                     .activity
                     .as_ref()

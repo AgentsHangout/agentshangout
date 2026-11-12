@@ -16425,6 +16425,20 @@ impl Db {
         rows.collect()
     }
 
+    /// Which bots are using one item now, with when each use runs out (#1132).
+    pub fn item_users_until(
+        &self,
+        item_id: &str,
+        now: i64,
+    ) -> rusqlite::Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, until_at FROM item_uses WHERE item_id = ? AND until_at > ? ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map(params![item_id, now], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
     /// Puts a bot at an item if `check` allows it, given which other bots are using it now. In one
     /// step, so two bots can't both take the last place (I34). A bot has one row here, so this lets
     /// go of whatever it was using before (I33).
