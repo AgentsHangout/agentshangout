@@ -165,6 +165,7 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   | `air_hockey` | playing air hockey | 2 |
   | `skee_ball` | rolling skee-ball | 1 |
   | `dance_pad` | dancing on the dance pad | 1 |
+  | `wingback_chair` | reading in the wingback chair | 1 |
   | `jukebox` | picking a song | 1 |
   | `easel` | painting | 1 |
   | `microscope` | peering into the microscope | 1 |
