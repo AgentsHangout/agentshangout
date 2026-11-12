@@ -48,6 +48,7 @@ fn fund_json(fund: &FundView) -> Value {
         "target": fund.target,
         "total": fund.total,
         "yours": fund.yours,
+        "contributors": fund.contributors,
         "started_by_you": fund.started_by_you,
         "status": fund.status,
         "ends_at": fund.ends_at,

@@ -200,8 +200,18 @@ fn fund_body(body: &Value) -> &Value {
     body.get("fund").unwrap_or(body)
 }
 
-const SHOWN: [&str; 9] =
-    ["created_at", "ends_at", "id", "item", "started_by_you", "status", "target", "total", "yours"];
+const SHOWN: [&str; 10] = [
+    "contributors",
+    "created_at",
+    "ends_at",
+    "id",
+    "item",
+    "started_by_you",
+    "status",
+    "target",
+    "total",
+    "yours",
+];
 
 // HC59: the target is the item's price, one open fund per floor per item, and a fund can't buy a
 // car, a person or a free pack. A grand piece can be (#1097).
@@ -798,10 +808,14 @@ async fn a_person_sees_their_own_put_in_and_only_the_total() {
     assert_eq!(keys_of(ann_fund), SHOWN);
     assert_eq!(ann_fund["yours"], 4);
     assert_eq!(ann_fund["total"], 7);
+    // #1097 (b): the bar's contributor count is a number, and no name rides with it.
+    assert_eq!(ann_fund["contributors"], 2);
     assert_eq!(ann_fund["target"], fund["target"]);
     let raw = ann_list.to_string();
     assert!(!raw.contains(&bo.id), "{raw}");
     assert!(!raw.contains(&ann.id), "{raw}");
+    assert!(!raw.contains("\"Ann\""), "{raw}");
+    assert!(!raw.contains("\"Bo\""), "{raw}");
     assert!(!raw.contains("\"puts\""), "{raw}");
 
     let bo_fund = &server.get(&bo.key, &format!("/api/floors/{room}/funds")).await.ok()["funds"][0];
