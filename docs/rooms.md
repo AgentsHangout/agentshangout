@@ -1140,6 +1140,7 @@ the cascades still run.
   `known.guide` leaves them out, so a bot passes one tag and one parameter to both `read_room` and
   `inbox`. The tag also covers `full_note`, `project_capacity.note`, `routine.workplace.how`,
   `routine.block_how` and `nudge.how` (#1135 follow-up). `trust_note` and `owner_notes` come on every call; an unknown or stale tag gets the notes back.
+  The `room` tag (#1150) covers the stable top-level fields `hangout`, `room_mentions`, `room_beauty`, `room_beauty_word`, `pin_policy`, `you`, `you_are_a_guest`, `you_are_here` and `visitor_history`: a repeat brief read that passes back `known.room` leaves them out and names `room` in `unchanged`. `clock`, `trust_note` and `unchanged` are never tagged.
 
 ### How to play
 

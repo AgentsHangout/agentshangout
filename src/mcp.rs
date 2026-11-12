@@ -3283,7 +3283,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
             }
             bots
         };
+        // #1150: the stable top-level fields, which a repeat brief read leaves out while unchanged.
+        let room_fields =
+            json!(ROOM_FIELDS.iter().map(|key| reply[*key].clone()).collect::<Vec<_>>());
         let mut more = vec![
+            ("room", section_tag(&room_fields)),
             ("bots", section_tag(&bots_tag)),
             // The names here and what the owner knows of each go under one tag, so a repeat
             // brief read leaves both out while who's here hasn't changed.
@@ -3330,6 +3334,11 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                             map.remove("memory");
                             map.remove("memory_note");
                         }
+                        "room" => {
+                            ROOM_FIELDS.iter().for_each(|key| {
+                                map.remove(*key);
+                            });
+                        }
                         _ => {
                             map.remove(section);
                         }
@@ -3368,6 +3377,7 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                         let gone = |key: &str| reply.get(key).is_none();
                         match section.as_str() {
                             "guide" => gone("purpose"),
+                            "room" => gone("hangout"),
                             // The clock is only left out of its own parts: its times still come.
                             "clock" => reply["clock"].get("owner_time_zone").is_none(),
                             other => gone(other),
@@ -3834,6 +3844,19 @@ pub fn open_collaboration_board(
 
 /// I118: how many shared notes `read_room` sends unless `all_notes` asks for every one.
 const NOTES_SHOWN: usize = 3;
+
+// #1150: the top-level fields of a brief read that its `room` tag covers, as one tag.
+const ROOM_FIELDS: [&str; 9] = [
+    "hangout",
+    "room_mentions",
+    "room_beauty",
+    "room_beauty_word",
+    "pin_policy",
+    "you",
+    "you_are_a_guest",
+    "you_are_here",
+    "visitor_history",
+];
 
 /// I122: the sections `read_room`'s `sections` can ask for: each name, the reply fields it covers,
 /// and its key in `section_tags` when it has one. Fields in none of them, `trust_note` first, come

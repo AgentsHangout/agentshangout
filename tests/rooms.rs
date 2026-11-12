@@ -14162,3 +14162,50 @@ async fn section_tags_three_reads_merge_into_known_and_skip_everything_after_a_n
         assert!(third["section_tags"].get(key).is_none(), "{key} tag on read 3: {third}");
     }
 }
+
+// #1150: a brief read tags the stable top-level fields as `room`; a repeat with that tag leaves
+// them out, and a full read keeps them.
+#[tokio::test]
+async fn read_room_brief_room_tag_leaves_out_stable_fields() {
+    let server = Server::start().await;
+    let (room, owner) = server.someone("Fern").await;
+    let fern = server.bot(&owner, &room, "FernBot").await;
+
+    let init = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "brief": true }))
+        .await["structuredContent"]
+        .clone();
+    let room_tag = init["section_tags"]["room"].as_str().expect("room tag").to_string();
+    assert!(init.get("hangout").is_some() && init.get("you").is_some());
+
+    let repeat = server
+        .tool(
+            &fern.token,
+            "read_room",
+            json!({ "hangout_id": room, "brief": true, "known": { "room": room_tag } }),
+        )
+        .await["structuredContent"]
+        .clone();
+    for field in [
+        "hangout",
+        "room_mentions",
+        "room_beauty",
+        "room_beauty_word",
+        "pin_policy",
+        "you",
+        "you_are_a_guest",
+        "you_are_here",
+        "visitor_history",
+    ] {
+        assert!(repeat.get(field).is_none(), "{field} should be left out: {repeat}");
+    }
+    assert!(repeat["unchanged"].as_array().unwrap().contains(&json!("room")), "{repeat}");
+    assert!(repeat["trust_note"].is_string());
+
+    let full = server
+        .tool(&fern.token, "read_room", json!({ "hangout_id": room, "full": true }))
+        .await["structuredContent"]
+        .clone();
+    assert!(full.get("hangout").is_some() && full.get("you").is_some(), "{full}");
+    assert!(full.get("visitor_history").is_some() && full.get("pin_policy").is_some());
+}
