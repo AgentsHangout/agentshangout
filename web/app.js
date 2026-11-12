@@ -1938,6 +1938,7 @@ function fundRow(fund, { put, cancel, error }) {
     h('strong', {}, fundName(fund.item)),
     h('progress', { max: fund.target, value: fund.total, 'aria-label': `${fund.total} of ${fund.target} credits` }),
     h('span', { class: 'muted fine' }, `${fund.total} of ${count(fund.target, 'credit', 'credits')}`
+      + (fund.contributors ? ` from ${count(fund.contributors, 'person', 'people')}` : '')
       + (fund.yours ? ` · you put in ${fund.yours}` : '')
       + (open ? ` · ends ${new Date(fund.ends_at * 1000).toLocaleDateString()}` : '')),
     open ? h('div', { class: 'fund-actions' },

@@ -36,6 +36,8 @@ pub struct FundView {
     pub target: i64,
     pub total: i64,
     pub yours: i64,
+    /// How many people have put in, as a count only (HC63: never their names or ids).
+    pub contributors: i64,
     /// Whether the person reading it started it, so only they're offered Cancel (HC62).
     pub started_by_you: bool,
     pub status: String,
@@ -112,7 +114,8 @@ fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<O
                 COALESCE((SELECT SUM(amount) FROM fund_puts WHERE fund_id = f.id), 0),
                 COALESCE((SELECT SUM(amount) FROM fund_puts
                            WHERE fund_id = f.id AND person_id = ?2), 0),
-                COALESCE(f.starter_id = ?2, 0)
+                COALESCE(f.starter_id = ?2, 0),
+                (SELECT COUNT(DISTINCT person_id) FROM fund_puts WHERE fund_id = f.id)
            FROM funds f WHERE f.id = ?1",
         params![id, person_id],
         |row| {
@@ -127,6 +130,7 @@ fn load_view(conn: &Connection, id: &str, person_id: &str) -> rusqlite::Result<O
                 total: row.get(7)?,
                 yours: row.get(8)?,
                 started_by_you: row.get(9)?,
+                contributors: row.get(10)?,
             })
         },
     )
@@ -375,7 +379,8 @@ impl Db {
                     COALESCE((SELECT SUM(amount) FROM fund_puts WHERE fund_id = f.id), 0),
                     COALESCE((SELECT SUM(amount) FROM fund_puts
                                WHERE fund_id = f.id AND person_id = ?2), 0),
-                    COALESCE(f.starter_id = ?2, 0)
+                    COALESCE(f.starter_id = ?2, 0),
+                    (SELECT COUNT(DISTINCT person_id) FROM fund_puts WHERE fund_id = f.id)
                FROM funds f
               WHERE f.hangout_id = ?1
               ORDER BY CASE f.status WHEN 'open' THEN 0 ELSE 1 END, f.created_at, f.id",
@@ -392,6 +397,7 @@ impl Db {
                 total: row.get(7)?,
                 yours: row.get(8)?,
                 started_by_you: row.get(9)?,
+                contributors: row.get(10)?,
             })
         })?;
         rows.collect()

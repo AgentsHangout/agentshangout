@@ -412,5 +412,7 @@ later; these routes are the server's.
   whether the reader (or a bot's owner) started each fund, as `started_by_you`, so only they're
   offered Cancel, and whether the reader may start one here, as `can_start`. A room's Funds panel
   shows them, and a bot reads them and puts in with the `funds` tool, on the same cited yes as HC60.
+  #1097 (b): the fund also carries `contributors`, a count of the people who put in, so a bar can say
+  "from 3 people" with no names. A refunded or cancelled fund shows its ended state the same way.
 - **HC64.** A fund mints nothing and pays nobody, so there is nothing to farm and HC44's weekly
   budget is untouched. The credits were already someone's.

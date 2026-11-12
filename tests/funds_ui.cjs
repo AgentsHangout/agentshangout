@@ -14,8 +14,9 @@ const actSrc = app.slice(app.indexOf('function act(errorEl, run) {'), app.indexO
 const h = (tag, attrs, ...kids) => ({ tag, attrs: attrs || {}, kids: kids.flat().filter((k) => k != null && k !== false), replaceChildren(...k) { this.kids = k.filter((x) => x != null); } });
 const calls = [];
 const state = { funds: [
-  { id: 'f1', item: 'winter', target: 15, total: 6, yours: 2, started_by_you: true, status: 'open', ends_at: 1800000000 },
+  { id: 'f1', item: 'winter', target: 15, total: 6, yours: 2, contributors: 2, started_by_you: true, status: 'open', ends_at: 1800000000 },
   { id: 'f2', item: 'piece:koi_pond', target: 150, total: 150, yours: 0, started_by_you: false, status: 'complete', ends_at: 1800000000 },
+  { id: 'f3', item: 'piece:grand_piano', target: 250, total: 40, yours: 0, contributors: 3, started_by_you: false, status: 'refunded', ends_at: 1800000000 },
 ], can_start: true };
 let completeNext = false;
 const api = async (path, opts) => { if (path.endsWith('/put') && completeNext) { completeNext = false; return { put: 9, fund: { status: 'complete' } }; } calls.push([path, opts?.method || 'GET', JSON.stringify(opts?.body || null)]); if (path === '/api/credits') return { grand: [{ kind: 'koi_pond', label: 'Koi pond', cost: 150 }], packs: [{ pack: 'beach', cost: 25, over: false, sold_alone: [{ kind: 'crab', label: 'Crab', cost: 2 }] }, { pack: 'halloween', cost: 1, over: true }] }; if (path.endsWith('/funds') && !opts) return state; return {}; };
@@ -28,6 +29,10 @@ const text = JSON.stringify(ctx.panel.element);
 for (const want of ['Winter pack', 'Koi pond', '6 of 15 credits', 'you put in 2', 'Bought for this floor', 'Put in', 'Cancel', 'Start a fund', 'Beach pack · 25 credits', 'Crab · 2 credits', 'Koi pond (grand) · 150 credits']) if (!text.includes(want)) throw new Error(`missing ${want}`);
 if (text.includes('Halloween')) throw new Error('an over pack is offered');
 const list = ctx.panel.element.kids[0];
+// #1097 (b): the bar says how many people put in, never who; a refunded fund says so as the panel does.
+if (!text.includes('from 2 people')) throw new Error('no contributor count');
+if (!text.includes('from 3 people')) throw new Error('refunded fund has no contributor count');
+if (!text.includes('Ended: everyone got their credits back')) throw new Error('refunded state not shown');
 const rows = list.kids[1].kids;
 const actions = rows[0].kids[3];
 const amount = actions.kids[0];
