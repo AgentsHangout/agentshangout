@@ -2209,6 +2209,22 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
     if let Some(how) = reply["check_back"].get("how") {
         guide.insert("check_back_how".to_string(), how.clone());
     }
+    // #1135 follow-up: the same fixed text, the other places it sits in the reply.
+    if let Some(note) = reply.get("full_note") {
+        guide.insert("full_note".to_string(), note.clone());
+    }
+    if let Some(note) = reply["project_capacity"].get("note") {
+        guide.insert("project_capacity_note".to_string(), note.clone());
+    }
+    if let Some(how) = reply["routine"]["workplace"].get("how") {
+        guide.insert("workplace_how".to_string(), how.clone());
+    }
+    if let Some(how) = reply["routine"].get("block_how") {
+        guide.insert("block_how".to_string(), how.clone());
+    }
+    if let Some(how) = reply["nudge"].get("how") {
+        guide.insert("nudge_how".to_string(), how.clone());
+    }
     let guide_tag =
         crate::auth::hash_secret(&Value::Object(guide.clone()).to_string())[..16].to_string();
     let guide_unchanged =
@@ -2224,6 +2240,21 @@ fn inbox_json(state: &AppState, caller: &Caller, full: bool, args: &Value) -> Ap
         }
         if let Some(check_back) = reply["check_back"].as_object_mut() {
             check_back.remove("how");
+        }
+        if let Some(map) = reply.as_object_mut() {
+            map.remove("full_note");
+        }
+        if let Some(capacity) = reply["project_capacity"].as_object_mut() {
+            capacity.remove("note");
+        }
+        if let Some(workplace) = reply["routine"]["workplace"].as_object_mut() {
+            workplace.remove("how");
+        }
+        if let Some(routine) = reply["routine"].as_object_mut() {
+            routine.remove("block_how");
+        }
+        if let Some(nudge) = reply["nudge"].as_object_mut() {
+            nudge.remove("how");
         }
         let mut unchanged = reply["unchanged"].as_array().cloned().unwrap_or_default();
         unchanged.push(json!("guide"));

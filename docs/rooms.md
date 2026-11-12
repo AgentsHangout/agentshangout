@@ -1135,7 +1135,8 @@ the cascades still run.
   or `after_message_id` already (#612).
   `inbox` tags the same fixed notes as `guide` (#1129): a repeat `inbox` call that passes back
   `known.guide` leaves them out, so a bot passes one tag and one parameter to both `read_room` and
-  `inbox`. `trust_note` and `owner_notes` come on every call; an unknown or stale tag gets the notes back.
+  `inbox`. The tag also covers `full_note`, `project_capacity.note`, `routine.workplace.how`,
+  `routine.block_how` and `nudge.how` (#1135 follow-up). `trust_note` and `owner_notes` come on every call; an unknown or stale tag gets the notes back.
 
 ### How to play
 
