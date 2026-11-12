@@ -1999,7 +1999,8 @@ function fundsPanel(floorId) {
 
 // #1097 (c): a fund card on the room floor, beside the grand piece it buys. It shows the goal, a bar
 // and the contributor count, never a name or an amount put in (HC63). A fund that's open, or ended
-// within a week, shows; a room with neither shows nothing. Its box is a fixed size (CSS .fund-card).
+// within a week, shows; a room with neither shows nothing. Its box is 27.5% by 24% of the stage (CSS .fund-card),
+// the same as 132x60 in the room's 480x252 units, so the placement math holds on a phone too.
 const GRAND_KINDS = ['koi_pond', 'grand_piano', 'dragon_statue', 'carousel']; // #1063, as items.rs has them
 const FUND_CARD = { w: 132, h: 60, gap: 6, week: 7 * 24 * 3600 };
 // The card for each grand piece on the floor: its open fund, else the newest one that ended recently.
@@ -2012,10 +2013,10 @@ function fundCardsFor(funds, items, now = Date.now() / 1000) {
     const fund = mine.find((each) => each.status === 'open') || mine.sort((a, b) => b.created_at - a.created_at)[0];
     if (!fund) continue;
     // Beside the piece on its right, or on its left when the right has no room. A grand piece not
-    // placed yet has nothing to sit by, so its card goes in the top-left corner.
+    // placed yet has nothing to sit by, so its card goes on the floor at the left, just under the wall.
     const where = items.find((each) => each.kind === kind);
     let x = 0;
-    let y = 0;
+    let y = WALL;
     if (where) {
       const right = where.left + where.wide + FUND_CARD.gap;
       x = right + FUND_CARD.w <= W ? right : Math.max(0, where.left - FUND_CARD.gap - FUND_CARD.w);
@@ -2032,7 +2033,8 @@ function fundCardText(card) {
   if (card.status === 'complete') return { line: 'Funded', bar: null };
   if (card.status === 'refunded' || card.status === 'cancelled') return { line: 'Ended: everyone got their credits back', bar: null };
   return {
-    line: `${card.total} of ${count(card.target, 'credit', 'credits')} · from ${count(card.contributors, 'person', 'people')}`,
+    line: `${card.total} of ${count(card.target, 'credit', 'credits')}`
+      + (card.contributors ? ` · from ${count(card.contributors, 'person', 'people')}` : ''),
     bar: { max: card.target, value: card.total },
   };
 }

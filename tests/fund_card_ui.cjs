@@ -18,7 +18,7 @@ const api = async (path) => { calls.push(path); return { funds: state.funds }; }
 const calls = [];
 const state = { funds: [] };
 let fakeNowMs = 1800000000 * 1000;
-const ctx = { h, api, Date: { now: () => fakeNowMs }, Math, Number, String, JSON, Intl, Infinity, Promise, console, W: 480, H: 252 };
+const ctx = { h, api, Date: { now: () => fakeNowMs }, Math, Number, String, JSON, Intl, Infinity, Promise, console, W: 480, H: 252, WALL: 66 };
 vm.createContext(ctx);
 vm.runInContext(helpers + src + `
 this.fundCardsFor = fundCardsFor; this.fundCardText = fundCardText; this.roomFundCards = roomFundCards;`, ctx);
@@ -78,7 +78,9 @@ assert.equal(cards[0].id, 'open');
 cards = ctx.fundCardsFor([fund({ item: 'piece:koi_pond', status: 'complete', target: 150, total: 150 })], [piano], NOW);
 assert.equal(cards[0].title, 'Koi pond');
 assert.equal(cards[0].x, 0);
-assert.equal(cards[0].y, 0);
+assert.equal(cards[0].y, 66, 'on the floor under the wall, not over it');
+// A fund with nobody in it yet says no "from" part.
+same(ctx.fundCardText(ctx.fundCardsFor([fund({ contributors: 0, total: 0 })], [piano], NOW)[0]), { line: '0 of 250 credits', bar: { max: 250, value: 0 } });
 
 // roomFundCards: one fetch, a card on the overlay with a fixed size class, and the position as a share of the stage.
 const overlay = { children: [], append(el) { this.children.push(el); }, };

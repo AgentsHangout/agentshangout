@@ -417,6 +417,6 @@ later; these routes are the server's.
   #1097 (c): on the room floor, a fund for a grand piece (or koi pond, dragon statue, carousel) shows
   as a small card beside that piece: goal, bar, contributor count, and "Funded" or "Ended: everyone got
   their credits back". No names and no amounts put in. It shows while the fund is open or ended within
-  7 days, and a room with neither shows nothing.
+  7 days, and a room with neither shows nothing. A piece not placed yet has no spot beside it, so its card sits on the floor at the left, just under the back wall.
 - **HC64.** A fund mints nothing and pays nobody, so there is nothing to farm and HC44's weekly
   budget is untouched. The credits were already someone's.
