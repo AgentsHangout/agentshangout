@@ -371,12 +371,12 @@ async fn an_item_is_a_listed_kind_a_place_on_the_grid_and_a_facing() {
     let (room, ann) = server.someone("Ann").await;
     let place = format!("/api/floors/{room}/items");
     let reply = server
-        .post(&ann.key, &place, json!({ "kind": "chest", "x": 30, "y": 2, "facing": 3 }))
+        .post(&ann.key, &place, json!({ "kind": "plant", "x": 30, "y": 2, "facing": 3 }))
         .await
         .ok();
     assert_eq!(
         (reply["kind"].clone(), reply["x"].clone(), reply["y"].clone(), reply["facing"].clone()),
-        (json!("chest"), json!(30), json!(2), json!(3))
+        (json!("plant"), json!(30), json!(2), json!(3))
     );
 
     for bad in [
@@ -485,7 +485,7 @@ async fn a_member_changes_what_they_placed_and_nothing_else() {
     let bo = server.join(&ann, &room, "Bo").await;
     let cy = server.join(&ann, &room, "Cy").await;
 
-    let bos = server.item(&bo, &room, "chest", (30, 2)).await;
+    let bos = server.item(&bo, &room, "plant", (30, 2)).await;
     let moved = server.change(&bo.key, &bos, json!({ "x": 31, "y": 3 })).await.ok();
     assert_eq!((moved["x"].clone(), moved["y"].clone()), (json!(31), json!(3)));
     assert_eq!(server.change(&bo.key, &bos, json!({ "facing": 2 })).await.ok()["facing"], 2);
@@ -830,7 +830,7 @@ async fn hiding_and_showing_furniture_never_leaves_an_item_where_it_cant_be() {
 
     // Where the arcade and the bar stand isn't kept clear, hidden or not.
     let on_arcade = server.item(&ann, &room, "plant", (37, 5)).await;
-    let on_bar = server.item(&ann, &room, "chest", (34, 0)).await;
+    let on_bar = server.item(&ann, &room, "plant", (34, 0)).await;
     server.put(&ann.key, &floor, json!({ "hidden": [] })).await.ok();
 
     // Showing them moves nothing and refuses nothing, and the floor still loads for everyone.
@@ -4235,6 +4235,7 @@ async fn a_template_keeps_the_table_and_the_size_and_its_items_are_ordinary_item
     let tables = snapshot["items"].as_array().unwrap().iter();
     let first = text(&tables.clone().find(|item| item["kind"] == "coffee_table").unwrap()["id"]);
     server.change(&ann.key, &first, json!({ "y": 0 })).await.ok();
+    server.change(&ann.key, &first, json!({ "facing": 1 })).await.ok();
     server.remove(&ann.key, &first).await.ok();
 
     // What came with the room goes back as it would by hand. The couch and the desk have this
@@ -5347,7 +5348,7 @@ async fn moving_an_item_keeps_who_is_using_it() {
     let stool = server.item(&ann, &room, "stool", (30, 2)).await;
     server.use_item(&scout.token, &stool).await.ok();
 
-    let moved = server.change(&ann.key, &stool, json!({ "x": 33 })).await.ok();
+    let moved = server.change(&ann.key, &stool, json!({ "x": 33, "facing": 1 })).await.ok();
     assert_eq!(moved["used_by"], json!([scout.id]));
     assert_eq!(using(&server, &ann.key, &room, &stool).await, json!([scout.id]));
 }
