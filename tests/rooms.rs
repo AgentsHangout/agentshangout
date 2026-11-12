@@ -963,7 +963,8 @@ async fn a_floor_still_loads_with_an_item_stored_where_it_cant_be() {
     );
     assert_eq!(server.read_room(&scout.token, &room).await["items"].as_array().unwrap().len(), 2);
 
-    // It can't be left there on purpose, and it can be put right.
+    // It can't be turned there on purpose (its turned cells run into the spots kept clear), and it
+    // can be put right.
     server
         .change(&ann.key, "on-the-table", json!({ "facing": 1 }))
         .await
@@ -4554,7 +4555,7 @@ async fn every_kind_and_every_piece_of_furniture_is_listed_under_a_category() {
 
 #[test]
 fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_strip() {
-    // A table looks the same either way round, so it has one painting (web/room.js).
+    // A table looks the same either way round, so it has one painting (web/room.js). The trees, leaf_pile and gourds look the same from the end too.
     let one_painting = [
         "coffee_table",
         "picnic_table",
@@ -4566,8 +4567,47 @@ fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_
         "workbench",
         "research_bench",
         "sewing_table",
+        "potted_tree",
+        "maple_tree",
+        "birch_tree",
+        "pine_tree",
+        "palm_tree",
+        "leaf_pile",
+        "gourds",
+    ];
+    // A kind whose `side` in web/room.js is its front painter again, so a turn shows the same picture
+    // turned. It can only shrink: a kind comes out once its end has a painting of its own (Ribbit's
+    // end art does that), and the test fails until it's taken out.
+    let known_same_side = [
+        "string_lights",
+        "tiki_bar",
+        "hammock",
+        "cafe_counter",
+        "espresso_machine",
+        "pastry_case",
+        "coffee_sacks",
+        "potting_bench",
+        "trellis",
+        "seed_rack",
+        "seedling_tray",
+        "planet_mobile",
+        "lunar_rover",
+        "cocoa_cart",
+        "planetarium",
+        "igloo",
+        "reindeer",
+        "fortune_machine",
+        "photo_booth",
+        "grand_piano",
     ];
     let page = include_str!("../web/room.js").replace("\r\n", "\n");
+    // The first word after `key` in an entry, empty for a function written out in full.
+    let word = |text: &str, key: &str| -> Option<String> {
+        let after = text.split(key).nth(1)?;
+        Some(after.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect())
+    };
+    let mut same_side_now = BTreeSet::new();
+    let mut tripped = Vec::new();
     for kind in items::CATALOG {
         // I67: a rug lies flat, so it goes on anything, needs no strip and is never seen end on.
         if kind.flat {
@@ -4580,8 +4620,52 @@ fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_
             let entry = page.split(&format!("\n  {}: {{", kind.kind)).nth(1).unwrap();
             let entry = entry.split("rise:").next().unwrap();
             assert!(entry.contains("side"), "{} can't be seen from its end", kind.kind);
+            let side = word(entry, "side: ").unwrap_or_default();
+            let paint = word(entry, "paint: ").unwrap_or_default();
+            if !side.is_empty() && side == paint {
+                if !known_same_side.contains(&kind.kind) {
+                    tripped.push(kind.kind);
+                }
+                same_side_now.insert(kind.kind.to_string());
+            }
         }
     }
+    // Every kind that trips is named at once, so one run shows the whole list.
+    assert!(
+        tripped.is_empty(),
+        "these kinds' end is their front painter, so a turn shows the same picture: {tripped:?}. \
+         Give each its own end, or put it in one_painting if it looks the same either way."
+    );
+    for kind in known_same_side {
+        assert!(
+            same_side_now.contains(kind),
+            "{kind} has its own end now (or isn't a non-square kind), so take it out of KNOWN_SAME_SIDE"
+        );
+    }
+}
+
+#[tokio::test]
+async fn any_kind_turns_and_turning_back_to_front_is_allowed() {
+    let server = Server::start().await;
+    let (room, ann) = server.someone("Ann").await;
+    let shelf = server.item(&ann, &room, "bookshelf", (30, 3)).await;
+    let chair = server.item(&ann, &room, "stool", (10, 12)).await;
+
+    // The stool has no end of its own, so it's drawn turned as its front, and the turn is kept.
+    assert_eq!(server.change(&ann.key, &chair, json!({ "facing": 1 })).await.ok()["facing"], 1);
+    // Placing turned works the same way, for a kind with an end or without one.
+    let placed = server
+        .post(
+            &ann.key,
+            &format!("/api/floors/{room}/items"),
+            json!({ "kind": "stool", "x": 12, "y": 12, "facing": 1 }),
+        )
+        .await
+        .ok();
+    assert_eq!(placed["facing"], 1);
+    assert_eq!(server.change(&ann.key, &shelf, json!({ "facing": 1 })).await.ok()["facing"], 1);
+    assert_eq!(server.change(&ann.key, &shelf, json!({ "facing": 0 })).await.ok()["facing"], 0);
+    assert_eq!(server.change(&ann.key, &chair, json!({ "facing": 0 })).await.ok()["facing"], 0);
 }
 
 // I45: the look changes in build mode, so the space's page has no way to change it.
