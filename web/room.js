@@ -4907,6 +4907,36 @@ function paintWingbackChair(g, x, y) {
   r(g, '#d9b45a', x - 8, y - 20, 1, 1);
   r(g, '#d9b45a', x + 7, y - 20, 1, 1);
 }
+// The Library nook furniture seen from its end when turned. Each stays inside its turned reach
+// (deep + rise - wide above its base): the desk is 24 across and 36 deep, the others 12 by 24.
+function paintWritingDeskEnd(g, x, y, t, wide = 24, deep = 36) {
+  paintEnd(g, x, y, wide - 2, 8, 16, '#7a5230', '#5a3b22');
+  r(g, '#4a2f1a', x - 9, y - 6, 3, 5);
+  r(g, '#4a2f1a', x + 6, y - 6, 3, 5);
+  r(g, '#f1e6c8', x - 3, y - 27, 8, 3);
+}
+function paintBookcaseLadderEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 12, 30, '#5a3b22', '#3a2414');
+  r(g, '#8a2a2a', x - 4, y - 40, 2, 8);
+  r(g, '#2a5a8a', x - 1, y - 39, 2, 7);
+  r(g, '#c9a54a', x + 2, y - 40, 2, 8);
+}
+function paintCardCatalogEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 4, 30, '#7a5230', '#4a2f1a');
+  for (let row = 0; row < 5; row++) r(g, '#3a2414', x - 4, y - 26 + row * 5, 8, 1);
+  r(g, '#d9b45a', x - 1, y - 38, 2, 1);
+}
+function paintMapCabinetEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 4, 20, '#7a5230', '#5a3b22');
+  r(g, '#e4d4a8', x - 3, y - 26, 6, 2);
+  r(g, '#c9a54a', x - 1, y - 16, 2, 1);
+}
+function paintBookCartEnd(g, x, y, t, wide = 12, deep = 24) {
+  paintEnd(g, x, y, wide - 2, 2, 22, '#8a6a3a', '#5a3b22');
+  r(g, '#2a1a0e', x - 4, y - 2, 3, 2);
+  r(g, '#2a1a0e', x + 1, y - 2, 3, 2);
+  r(g, '#8a2a2a', x - 3, y - 27, 6, 3);
+}
 function paintReadingLamp(g, x, y) {
   r(g, SHADOW, x - 5, y - 1, 10, 1);
   r(g, '#3a2414', x - 4, y - 3, 8, 2);
@@ -5575,11 +5605,11 @@ const ITEMS = {
   glowstick_jar: { paint: paintGlowstickJar, rise: 18 },
   retro_cabinet: { paint: paintRetroCabinet, side: paintRetroCabinetEnd, rise: 38 },
   // The Library nook pack, and the coin pieces sold beside it.
-  writing_desk: { paint: paintWritingDesk, side: edgeOf(16, '#7a5230', '#5a3b22'), rise: 22 },
-  bookcase_ladder: { paint: paintBookcaseLadder, side: edgeOf(40, '#5a3b22', '#3a2414'), rise: 42 },
-  card_catalog: { paint: paintCardCatalog, side: edgeOf(30, '#7a5230', '#4a2f1a'), rise: 32 },
-  map_cabinet: { paint: paintMapCabinet, side: edgeOf(22, '#7a5230', '#5a3b22'), rise: 27 },
-  book_cart: { paint: paintBookCart, side: edgeOf(22, '#8a6a3a', '#5a3b22'), rise: 30 },
+  writing_desk: { paint: paintWritingDesk, side: paintWritingDeskEnd, rise: 22 },
+  bookcase_ladder: { paint: paintBookcaseLadder, side: paintBookcaseLadderEnd, rise: 42 },
+  card_catalog: { paint: paintCardCatalog, side: paintCardCatalogEnd, rise: 32 },
+  map_cabinet: { paint: paintMapCabinet, side: paintMapCabinetEnd, rise: 27 },
+  book_cart: { paint: paintBookCart, side: paintBookCartEnd, rise: 30 },
   wingback_chair: { paint: paintWingbackChair, side: (g, x, y, t, wide, deep) => paintSeatEnd(g, x, y, wide, deep, LIBRARY_WING), rise: 25 },
   reading_lamp: { paint: paintReadingLamp, rise: 22 },
   globe_stand: { paint: paintGlobeStand, rise: 22 },
