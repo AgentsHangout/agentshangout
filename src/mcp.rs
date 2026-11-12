@@ -3285,7 +3285,9 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
         };
         let mut more = vec![
             ("bots", section_tag(&bots_tag)),
-            ("people_here", section_tag(&reply["people_here"])),
+            // The names here and what the owner knows of each go under one tag, so a repeat
+            // brief read leaves both out while who's here hasn't changed.
+            ("people", section_tag(&json!([reply["people"], reply["people_here"]]))),
             ("guide", section_tag(&guide)),
             // #612: the names to copy change only when who's here does.
             ("tag_as", section_tag(&reply["tag_as"])),
@@ -3320,6 +3322,10 @@ fn read_room(state: &AppState, caller: &Caller, args: &Value) -> ApiResult<Value
                             }
                         }
                         // Its note goes with it, since there's nothing left for it to be about.
+                        "people" => {
+                            map.remove("people");
+                            map.remove("people_here");
+                        }
                         "memory" => {
                             map.remove("memory");
                             map.remove("memory_note");
@@ -3842,7 +3848,7 @@ const READ_SECTIONS: [(&str, &[&str], Option<&str>); 13] = [
     ("items", &["items", "decor"], Some("items")),
     ("votes", &["votes"], None),
     ("bots", &["bots"], Some("bots")),
-    ("people", &["people", "people_here"], Some("people_here")),
+    ("people", &["people", "people_here"], Some("people")),
     ("claims", &["claims"], Some("claims")),
     ("research_lab", &["research_lab"], Some("research_lab")),
     ("scores", &["scores"], Some("scores")),
