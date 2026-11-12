@@ -58,6 +58,8 @@ Local camera/window state and person-only approvals are explicit exceptions.
    before you commit.
 5. Run `cargo test --locked` and `cargo clippy --locked --all-targets -- -D warnings`, then open a
    pull request.
+   A UI script in `tests/*.cjs` needs no wrapper of its own: `tests/unwired_ui.rs` runs every one
+   that no other test names, and a failure names the script.
 
 ## From merged to live
 
