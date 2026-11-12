@@ -4578,14 +4578,8 @@ fn every_kind_that_is_not_square_can_be_turned_and_every_starter_fits_the_front_
     // A kind whose `side` in web/room.js is its front painter again, so a turn shows the same picture
     // turned. It can only shrink: a kind comes out once its end has a painting of its own (Ribbit's
     // end art does that), and the test fails until it's taken out.
-    let known_same_side = [
-        "string_lights",
-        "tiki_bar",
-        "hammock",
-        "igloo",
-        "reindeer",
-        "grand_piano",
-    ];
+    let known_same_side =
+        ["string_lights", "tiki_bar", "hammock", "igloo", "reindeer", "grand_piano"];
     let page = include_str!("../web/room.js").replace("\r\n", "\n");
     // The first word after `key` in an entry, empty for a function written out in full.
     let word = |text: &str, key: &str| -> Option<String> {
