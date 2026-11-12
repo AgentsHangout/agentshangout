@@ -1997,6 +1997,87 @@ function fundsPanel(floorId) {
   return { element: h('div', {}, list, error), load };
 }
 
+// #1097 (c): a fund card on the room floor, beside the grand piece it buys. It shows the goal, a bar
+// and the contributor count, never a name or an amount put in (HC63). A fund that's open, or ended
+// within a week, shows; a room with neither shows nothing. Its box is 27.5% by 24% of the stage (CSS .fund-card),
+// the same as 132x60 in the room's 480x252 units, so the placement math holds on a phone too.
+const GRAND_KINDS = ['koi_pond', 'grand_piano', 'dragon_statue', 'carousel']; // #1063, as items.rs has them
+const FUND_CARD = { w: 132, h: 60, gap: 6, week: 7 * 24 * 3600 };
+// The card for each grand piece on the floor: its open fund, else the newest one that ended recently.
+function fundCardsFor(funds, items, now = Date.now() / 1000) {
+  const cards = [];
+  for (const kind of GRAND_KINDS) {
+    const item = `piece:${kind}`;
+    const mine = funds.filter((fund) => fund.item === item
+      && (fund.status === 'open' || fund.ends_at >= now - FUND_CARD.week || fund.created_at >= now - FUND_CARD.week));
+    const fund = mine.find((each) => each.status === 'open') || mine.sort((a, b) => b.created_at - a.created_at)[0];
+    if (!fund) continue;
+    // Beside the piece on its right, or on its left when the right has no room. A grand piece not
+    // placed yet has nothing to sit by, so its card goes on the floor at the left, just under the wall.
+    const where = items.find((each) => each.kind === kind);
+    let x = 0;
+    let y = WALL;
+    if (where) {
+      const right = where.left + where.wide + FUND_CARD.gap;
+      x = right + FUND_CARD.w <= W ? right : Math.max(0, where.left - FUND_CARD.gap - FUND_CARD.w);
+      y = Math.min(Math.max(0, where.top), H - FUND_CARD.h);
+    }
+    cards.push({
+      id: fund.id, item, title: fundName(item), status: fund.status, target: fund.target, total: fund.total,
+      contributors: fund.contributors || 0, x, y,
+    });
+  }
+  return cards;
+}
+function fundCardText(card) {
+  if (card.status === 'complete') return { line: 'Funded', bar: null };
+  if (card.status === 'refunded' || card.status === 'cancelled') return { line: 'Ended: everyone got their credits back', bar: null };
+  return {
+    line: `${card.total} of ${count(card.target, 'credit', 'credits')}`
+      + (card.contributors ? ` · from ${count(card.contributors, 'person', 'people')}` : ''),
+    bar: { max: card.target, value: card.total },
+  };
+}
+// Keeps the cards on the room's overlay. The funds come from the same list the Funds panel reads,
+// refetched at most every 30 seconds; the room's snapshot re-places them.
+function roomFundCards(room, hangoutId) {
+  let funds = [];
+  let loadedAt = -Infinity;
+  let items = [];
+  let shown = [];
+  const show = () => {
+    const cards = fundCardsFor(funds, items);
+    shown.forEach((el) => el.remove());
+    shown = cards.map((card) => {
+      const text = fundCardText(card);
+      const el = h('div', { class: 'fund-card', 'aria-label': `${card.title} fund: ${text.line}` },
+        h('strong', {}, card.title),
+        text.bar ? h('progress', { max: text.bar.max, value: text.bar.value }) : null,
+        h('span', {}, text.line));
+      el.style.left = `${(card.x / W) * 100}%`;
+      el.style.top = `${(card.y / H) * 100}%`;
+      room.overlay.append(el);
+      return el;
+    });
+  };
+  const load = async () => {
+    loadedAt = Date.now();
+    try {
+      funds = (await api(`/api/floors/${encodeURIComponent(hangoutId)}/funds`)).funds || [];
+    } catch {
+      funds = [];
+    }
+    show();
+  };
+  return {
+    update(nextItems) {
+      items = nextItems;
+      show();
+      if (Date.now() - loadedAt > 30000) load();
+    },
+  };
+}
+
 // HC17: packs that cost credits can be bought here, and you set what each of your bots may spend.
 // HC8: your credits are under the coin now; the account panel just says where.
 function moneyPointer() {
@@ -5070,6 +5151,8 @@ async function roomView(id) {
   frame.host.append(stage);
   const stopRoomCamera = installRoomCamera(frame.host, stage);
   const room = new Room(stage);
+  // #1097 (c): a fund card by a grand piece on this floor. A guest on a porch has no funds.
+  const roomFund = snapshot.guest ? null : roomFundCards(room, id);
   const boardEl = h('button', { type: 'button', class: 'board', 'aria-label': 'Whiteboard', onclick: () => boardDialog() });
   // I81: one pin in the room's top-right corner. It opens the pins with what the bots are thinking.
   const pinCount = h('span', { class: 'pin-count', hidden: true });
@@ -6109,6 +6192,8 @@ async function roomView(id) {
     // W98: an open-air place is out of doors.
     room.setLook(snapshot.floor?.floor && { ...snapshot.floor.floor, outdoors: Boolean(snapshot.floor.outdoors), table: snapshot.floor.table ?? null });
     room.setItems(snapshot.items);
+    // #1097 (c): the fund card sits by the grand piece, placed where the room drew it.
+    roomFund?.update(room.items);
     displayMore.hidden = !snapshot.items.some((item) => item.kind === 'research_display');
     // S55: only the bots really here stand in the room. The crew list has the rest.
     const inRoom = snapshot.agents.filter((agent) => !agent.away);
