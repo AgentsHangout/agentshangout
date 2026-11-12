@@ -5451,11 +5451,10 @@ function paintReindeerEnd(g, x, y) {
   r(g, '#d9c08a', x - 5, y - 23, 3, 1);
   r(g, '#d9c08a', x + 2, y - 23, 3, 1);
 }
-// The grand piano from its end: the black case standing on one leg a side, the lid propped up.
+// The grand piano from its end: the black case standing on one leg a side, the lid slanting up from its left edge.
 function paintGrandPianoEnd(g, x, y) {
   r(g, SHADOW, x - 8, y - 2, 16, 2);
-  r(g, '#2a2530', x - 1, y - 32, 2, 10);
-  r(g, '#2a2530', x - 5, y - 34, 10, 3);
+  for (let k = 0; k < 12; k++) r(g, '#2a2530', x - 6 + k, y - 23 - k, 2, 2);
   r(g, '#1b1820', x - 6, y - 22, 12, 16);
   r(g, '#3a3342', x - 6, y - 22, 12, 2);
   r(g, '#f4f1e8', x - 6, y - 10, 12, 1);
