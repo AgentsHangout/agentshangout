@@ -2994,12 +2994,20 @@ let searchBoxes = 0;
 // the owner typed, like "Ann's Garden", is the owner's own word and stays whole.
 // tests/place_search_ui.rs keeps this list matched to spaces::place_title (#1185).
 const PLACE_TITLES = ['Café', 'Club', 'Park', 'Lounge', 'Bar', 'Office', 'Workshop', 'Library', 'House', 'Studio'];
+// #1189: the owner's part of an unnamed place is their name cut to 51 characters (60 less the
+// 9 of "'s Studio", as spaces::house_of and third_space_for_building cut it), so a long name is
+// tried in that cut form too. Characters are code points, as Rust's chars() counts them.
+const OWNER_PART_CHARS = 51;
 export function placeLabel(owner, name) {
   if (typeof name !== 'string') return '';
   const text = name.slice(0, 60).trim();
-  if (typeof owner === 'string' && owner && text.startsWith(`${owner}'s `)) {
-    const rest = text.slice(owner.length + 3);
-    if (PLACE_TITLES.includes(rest)) return rest;
+  if (typeof owner === 'string' && owner) {
+    const cut = Array.from(owner).slice(0, OWNER_PART_CHARS).join('');
+    for (const part of new Set([owner, cut])) {
+      if (!text.startsWith(`${part}'s `)) continue;
+      const rest = text.slice(part.length + 3);
+      if (PLACE_TITLES.includes(rest)) return rest;
+    }
   }
   return text;
 }
