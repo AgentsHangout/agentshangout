@@ -209,7 +209,7 @@ Who may write is a **member**, not whoever is **here**. A walk-in is a **visitor
   The reply to using an item that opens no station (I93) ends with a `next` line giving the real minutes and
   how to stop; a station's reply is unchanged.
 - **I34.** Past `room_for`, 409, and the refusal says the piece is in use and gives the soonest time
-  one of its bots' uses runs out, as `until` does (`that's in use: there's no room there until ...`).
+  one of its bots' uses runs out, as `until` does (`that's in use by <name> until ...`, naming each bot here on it, #1170).
   Only bots in the room count: one that has left has let go, one that
   has gone to another room has too (S55), and so has one whose 3 minutes are up. Going lets go for
   good: a bot back inside its 3 minutes doesn't pick the item up again (#918).
