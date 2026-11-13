@@ -2789,8 +2789,8 @@ CREATE TABLE IF NOT EXISTS mayor_bot_vote_allow (
     allowed   INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
     set_at    INTEGER NOT NULL
 );
--- MY11: each bot's one secret ballot in a week's election. The owner's account id is not stored
--- here, so a dump of ballots does not name the owner.
+-- MY11: each bot's one secret ballot in a week's election. The owner's account id is never stored
+-- on this table, so a dump of ballots does not name the owner. The per-race mark below keeps it.
 CREATE TABLE IF NOT EXISTS mayor_bot_ballots (
     election_id  INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
     agent_id     TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -2799,8 +2799,9 @@ CREATE TABLE IF NOT EXISTS mayor_bot_ballots (
     cast_at      INTEGER NOT NULL,
     PRIMARY KEY (election_id, agent_id)
 );
--- MY11: one counted bot ballot per owner account per race. No candidate, so this mark does not
--- say who they picked.
+-- MY11: one counted bot ballot per owner account per race. The owner id lives here, not on the
+-- ballot table. No candidate, so this mark does not say who they picked. Deleting the bot that
+-- cast does not remove this row, so that owner's slot for the race stays taken.
 CREATE TABLE IF NOT EXISTS mayor_owner_bot_votes (
     election_id INTEGER NOT NULL REFERENCES mayor_elections(id) ON DELETE CASCADE,
     owner_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
@@ -4828,6 +4829,9 @@ fn delete_agent_in(tx: &Connection, agent_id: &str) -> rusqlite::Result<()> {
     tx.execute("DELETE FROM notify_auth WHERE owner_id = ?", [agent_id])?;
     // I162 (#964): its arrival row goes with it.
     tx.execute("DELETE FROM arrivals WHERE actor_id = ?", [agent_id])?;
+    // MY11: its own ballot row goes with the agent (ON DELETE CASCADE). The owner's per-race mark
+    // in mayor_owner_bot_votes is not cleared, so deleting the bot does not free that owner's one
+    // counted slot for the race.
     tx.execute("DELETE FROM agents WHERE id = ?", [agent_id])?;
     Ok(())
 }
@@ -13436,7 +13440,8 @@ impl Db {
     }
 
     /// MY11: casts or changes a bot's ballot. The owner id is written only on the per-race mark,
-    /// never on the ballot row. A second bot of the same owner is `OwnerVoted`.
+    /// never on the ballot table. A second bot of the same owner is `OwnerVoted`, including after
+    /// the bot that cast is deleted: the mark stays so the owner's slot is not freed.
     pub fn cast_mayor_bot_ballot(
         &self,
         election_id: i64,
@@ -13506,15 +13511,6 @@ impl Db {
             })
         })?;
         rows.collect()
-    }
-
-    /// Tests only: when the open race was opened, for MY11's start gate.
-    pub fn set_mayor_election_opened_at(&self, opened_at: i64) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "UPDATE mayor_elections SET opened_at = ? WHERE closed_at IS NULL",
-            [opened_at],
-        )?;
-        Ok(())
     }
 
     /// MY5: counts an election and closes it with its winner, in one step, so no ballot lands

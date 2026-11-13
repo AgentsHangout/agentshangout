@@ -1109,9 +1109,12 @@ the cascades still run.
   measured from its creation time and checked when the ballot is cast (no founders' cutoff), and
   (c) it is not voting for itself. One counted bot ballot per owner account per race, keyed on the
   owner's person id, never a display name. A second bot of the same owner is refused with a
-  message, not dropped. Ballots stay secret: the ballot row stores the bot's id, never the owner
-  id; a separate per-race `mayor_owner_bot_votes` mark enforces the one-owner rule and holds no
-  candidate. The owner setting is read when the ballot is first cast; flipping it later does not
+  message, not dropped. Deleting a bot that already cast a counted ballot does not free that
+  owner's slot for the race: the per-race mark stays, so another of their bots is refused too
+  (freeing it would let an owner swap bots for a second counted ballot). Ballots stay secret: the
+  `mayor_bot_ballots` table stores the bot's id and never the owner id; a separate per-race
+  `mayor_owner_bot_votes` mark keeps the owner id so the one-owner rule can be checked, and holds
+  no candidate. The owner setting is read when the ballot is first cast; flipping it later does not
   change an already-cast ballot, and the same bot may still change its choice until the close. Bot
   ballots are accepted only in races opened at or after Saturday 14 November 2026, 1:00 PM
   America/Chicago (this week's close): the race open then stays people-only. An account an agent
