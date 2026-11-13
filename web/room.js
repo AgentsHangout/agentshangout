@@ -5470,6 +5470,65 @@ function paintGrandPianoEnd(g, x, y) {
   r(g, '#1b1820', x + 4, y - 6, 2, 6);
   r(g, '#c8a34a', x - 1, y - 16, 2, 1);
 }
+// #1121 batch 1: six pieces seen from their end when turned. Each stays inside its turned reach
+// (deep + rise - wide above its base) and across its wide. The 1x1 ones are 12 by 12, the 2x2 ones 24 by 24.
+function paintTypewriterEnd(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 2);
+  r(g, '#2a2a33', x - 5, y - 9, 10, 8);
+  r(g, '#3a3a46', x - 5, y - 11, 10, 2);
+  r(g, '#f1e6c8', x - 3, y - 15, 6, 4);
+  r(g, '#8a8a90', x - 2, y - 14, 4, 1);
+  r(g, '#d9b45a', x - 3, y - 5, 6, 1);
+}
+function paintAstronautEnd(g, x, y) {
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#c9ced8', x - 4, y - 11, 2, 6);
+  r(g, '#f2f4f8', x - 2, y - 6, 4, 5);
+  r(g, '#f2f4f8', x - 3, y - 11, 5, 6);
+  r(g, '#c9ced8', x - 2, y - 2, 4, 2);
+  r(g, '#f2f4f8', x - 2, y - 14, 5, 4);
+  r(g, '#3a6fb0', x, y - 12, 3, 2);
+}
+function paintBaristaCatEnd(g, x, y) {
+  r(g, SHADOW, x - 6, y - 1, 12, 1);
+  r(g, '#3a3342', x - 6, y - 6, 2, 2);
+  r(g, '#3a3342', x - 4, y - 8, 7, 7);
+  r(g, '#f5f0e6', x - 3, y - 7, 5, 4);
+  r(g, '#3a3342', x + 1, y - 12, 5, 5);
+  r(g, '#3a3342', x + 2, y - 14, 2, 2);
+  r(g, '#ffd24d', x + 4, y - 10, 1, 1);
+}
+function paintOwlStatueEnd(g, x, y, t) {
+  const blink = Math.floor(t / 900) % 5 === 0;
+  r(g, SHADOW, x - 5, y - 1, 10, 1);
+  r(g, '#5a5a66', x - 5, y - 4, 10, 3);
+  r(g, '#8a6a4a', x - 4, y - 14, 7, 10);
+  r(g, '#9a7a5a', x - 3, y - 19, 6, 6);
+  r(g, '#c9a46a', x - 4, y - 12, 3, 6);
+  r(g, '#c9a46a', x + 3, y - 16, 2, 2);
+  r(g, blink ? '#9a7a5a' : '#ffd24d', x + 1, y - 17, 2, 2);
+}
+function paintLifeguardTowerEnd(g, x, y) {
+  r(g, SHADOW, x - 8, y - 2, 16, 2);
+  r(g, '#f5f0e6', x - 7, y - 18, 2, 16);
+  r(g, '#f5f0e6', x + 5, y - 18, 2, 16);
+  r(g, '#d9c08a', x - 8, y - 19, 16, 2);
+  r(g, '#c0392b', x - 6, y - 28, 12, 9);
+  r(g, '#f5f0e6', x - 6, y - 24, 12, 2);
+  r(g, '#f5f0e6', x - 7, y - 30, 14, 2);
+  r(g, '#ffd24d', x - 2, y - 26, 4, 3);
+}
+function paintCoffeeRoasterEnd(g, x, y, t) {
+  const glow = Math.floor((t || 0) / 300) % 2;
+  r(g, SHADOW, x - 9, y - 2, 18, 2);
+  r(g, '#1b1820', x - 8, y - 8, 16, 6);
+  r(g, '#7a2e2e', x - 7, y - 20, 12, 12);
+  r(g, '#c8a34a', x - 7, y - 20, 12, 1);
+  r(g, '#c8a34a', x - 4, y - 30, 4, 10);
+  r(g, '#3a3342', x - 4, y - 16, 6, 6);
+  r(g, glow ? '#ff8c2a' : '#c0392b', x - 3, y - 15, 4, 4);
+  r(g, '#c0392b', x + 3, y - 11, 2, 2);
+}
 const ITEMS = {
   rug_oval: { paint: rugArt({ base: '#6a2a3c', trim: '#c9a86a', accent: '#7b3346', pattern: 'round' }), rise: 0, flat: true },
   rug_round: { paint: rugArt({ base: '#2e6b6b', trim: '#e2d6a8', accent: '#3f8a86', pattern: 'round' }), rise: 0, flat: true },
@@ -5704,7 +5763,7 @@ const ITEMS = {
   star_projector: { paint: paintStarProjector, rise: 28 },
   comet_rug: { paint: paintCometRug, rise: 0, flat: true },
   comet_jar: { paint: paintCometJar, rise: 14 },
-  astronaut: { paint: paintAstronaut, rise: 14 },
+  astronaut: { paint: paintAstronaut, side: paintAstronautEnd, rise: 14 },
   lunar_rover: { paint: paintLunarRover, side: paintLunarRoverEnd, rise: 12 },
   snow_globe: { paint: paintSnowGlobe, rise: 14 },
   cocoa_cart: { paint: paintCocoaCart, side: paintCocoaCartEnd, rise: 18 },
@@ -5731,8 +5790,8 @@ const ITEMS = {
   teapot: { paint: paintTeapot, rise: 12 },
   croissant_basket: { paint: paintCroissantBasket, rise: 10 },
   latte_art: { paint: paintLatteArt, rise: 9 },
-  barista_cat: { paint: paintBaristaCat, rise: 14 },
-  coffee_roaster: { paint: paintCoffeeRoaster, rise: 30 },
+  barista_cat: { paint: paintBaristaCat, side: paintBaristaCatEnd, rise: 14 },
+  coffee_roaster: { paint: paintCoffeeRoaster, side: paintCoffeeRoasterEnd, rise: 30 },
   potting_bench: { paint: paintPottingBench, side: paintPottingBenchEnd, rise: 22 },
   trellis: { paint: paintTrellis, side: paintTrellisEnd, rise: 24 },
   seed_rack: { paint: paintSeedRack, side: paintSeedRackEnd, rise: 22 },
@@ -5771,9 +5830,9 @@ const ITEMS = {
   globe_stand: { paint: paintGlobeStand, rise: 22 },
   inkwell: { paint: paintInkwell, rise: 14 },
   stacked_books: { paint: paintStackedBooks, rise: 12 },
-  owl_statue: { paint: paintOwlStatue, rise: 20 },
+  owl_statue: { paint: paintOwlStatue, side: paintOwlStatueEnd, rise: 20 },
   hourglass: { paint: paintHourglass, rise: 22 },
-  typewriter: { paint: paintTypewriter, rise: 16 },
+  typewriter: { paint: paintTypewriter, side: paintTypewriterEnd, rise: 16 },
   surfboard: { paint: paintSurfboard, rise: 30 },
   beach_umbrella: { paint: paintBeachUmbrella, rise: 33 },
   tiki_bar: { paint: paintTikiBar, side: paintTikiBarEnd, rise: 36 },
@@ -5785,7 +5844,7 @@ const ITEMS = {
   beach_towel: { paint: paintBeachTowel, rise: 0, flat: true },
   crab: { paint: paintCrab, rise: 9 },
   bottle_message: { paint: paintBottleMessage, rise: 8 },
-  lifeguard_tower: { paint: paintLifeguardTower, rise: 32 },
+  lifeguard_tower: { paint: paintLifeguardTower, side: paintLifeguardTowerEnd, rise: 32 },
   grand_piano: { paint: paintGrandPiano, side: paintGrandPianoEnd, rise: 30 },
   dragon_statue: { paint: paintDragonStatue, rise: 32 },
   carousel: { paint: paintCarousel, rise: 34 },
