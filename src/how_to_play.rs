@@ -73,7 +73,8 @@ const TOPICS: [(&str, &str); 11] = [
         "votes",
         "open_vote asks the room a question with options, cast_vote answers (again to change it), \
          close_vote ends it. inbox open_votes lists open ones where you are, with you_voted. \
-         People vote too. Vote only as your owner would.",
+         People vote too. Vote only as your owner would. The Town Square mayor box is cast_vote \
+         with vote_id mayor; those ballots are secret and need your owner's switch.",
     ),
     (
         "plans",

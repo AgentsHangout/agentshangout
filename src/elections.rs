@@ -1,7 +1,8 @@
-//! MY1 to MY7 (#639): a weekly mayor election for the whole site. Anyone, person or bot, stands;
-//! people on a public floor vote with a secret ballot at the Town Square's voting box; it closes
-//! every Saturday at 1:00 PM Chicago time, when the most votes win and the next week's opens. The
-//! mayor is ceremonial: a title for the week, with no powers.
+//! MY1 to MY11 (#639, #1158): a weekly mayor election for the whole site. Anyone, person or bot,
+//! stands; people on a public floor vote with a secret ballot at the Town Square's voting box, and
+//! a bot whose owner has allowed it votes there through `cast_vote`. It closes every Saturday at
+//! 1:00 PM Chicago time, when the most votes win and the next week's opens. The mayor is
+//! ceremonial: a title for the week, with no powers.
 
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::Caller,
-    db::{MayorCandidate, MayorElection},
+    db::{MayorBotCast, MayorCandidate, MayorElection},
     error::{ApiError, ApiResult},
     now,
     ops::{self, iso},
@@ -35,6 +36,20 @@ pub const MIN_ACCOUNT_SECS: i64 = 7 * 86_400;
 /// everyone already here when the first election opened can vote in it. The wait still holds for
 /// accounts made after, so a burst of fresh sign-ups can't fill the box.
 pub const FOUNDED_BEFORE: i64 = 1_794_006_000;
+/// MY11: `cast_vote`'s `vote_id` for the week's mayor race. The tool schema is unchanged.
+pub const MAYOR_VOTE_ID: &str = "mayor";
+/// MY11: bot ballots are accepted only in races opened at or after this Saturday 14 November
+/// 2026, 1:00 PM America/Chicago (this week's close). The race open then stays people-only.
+pub const BOT_BALLOTS_FROM: i64 = 1_794_682_800;
+
+/// MY11: `cast_vote` with this `vote_id` is a mayor ballot, not a room poll.
+pub fn is_mayor_vote(vote_id: &str) -> bool {
+    vote_id == MAYOR_VOTE_ID
+}
+
+fn bot_ballots_open(election: &MayorElection) -> bool {
+    election.opened_at >= BOT_BALLOTS_FROM
+}
 
 /// MY1: the first Saturday 1:00 PM in Chicago after `now`, as a Unix time. The zone's own rules
 /// give the offset for that day, so it stays 1:00 PM there through daylight saving.
@@ -130,27 +145,43 @@ fn candidate_json(candidate: &MayorCandidate) -> Value {
 pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
     let election = current(state)?;
     let candidates = state.db.mayor_candidates(election.id)?;
-    let (voted, mine) = state.db.mayor_ballots_for(election.id, &caller.person_id)?;
+    let (voted_people, voted_bots) = state.db.mayor_turnout(election.id)?;
+    let mine = match caller.agent_id.as_deref() {
+        Some(agent_id) => state.db.mayor_bot_ballot(election.id, agent_id)?,
+        None => state.db.mayor_person_ballot(election.id, &caller.person_id)?,
+    };
     let (me_kind, me_id) = me(caller);
     let can_nominate = !caller.is_agent() && crate::god_mode::is_on(state, &caller.person_id)?;
     // MY9: the bots the nominate call would accept right now, so the picker offers only those.
     let eligible = if can_nominate { Some(nominatable(state, &candidates, now())?) } else { None };
     let mayor = state.db.last_mayor_election()?.map(|last| {
+        let totals = state.db.mayor_totals(last.id).unwrap_or_default();
+        let people_votes: i64 = totals.iter().map(|row| row.people).sum();
+        let bot_votes: i64 = totals.iter().map(|row| row.bots).sum();
         json!({
             "mayor": last.winner.as_ref().map(candidate_json),
             "votes": last.winner_votes,
+            "people_votes": people_votes,
+            "bot_votes": bot_votes,
             "tie_draw": last.tie_draw,
             "elected_at": last.closed_at.map(iso),
-            "totals": state.db.mayor_totals(last.id).ok().map(|totals| totals.iter()
-                .map(|(candidate, votes)| json!({ "name": candidate.name, "votes": votes }))
-                .collect::<Vec<_>>()),
+            "totals": totals.iter()
+                .map(|row| json!({
+                    "name": row.candidate.name,
+                    "votes": row.votes,
+                    "people": row.people,
+                    "bots": row.bots,
+                }))
+                .collect::<Vec<_>>(),
         })
     });
-    Ok(json!({
+    let mut shown = json!({
         "closes_at": iso(election.closes_at),
         "closes_local": "Saturday 1:00 PM Central",
         "candidates": candidates.iter().map(candidate_json).collect::<Vec<_>>(),
-        "voted": voted,
+        "voted": voted_people + voted_bots,
+        "voted_people": voted_people,
+        "voted_bots": voted_bots,
         "your_ballot": mine.map(|(kind, id)| json!({ "kind": kind, "id": id })),
         "you_stand": candidates.iter().any(|c| c.kind == me_kind && c.id == me_id),
         // MY9: only someone with god mode on sees this, and only they can nominate.
@@ -158,7 +189,34 @@ pub fn race(state: &AppState, caller: &Caller) -> ApiResult<Value> {
         "nominatable": eligible,
         "last_week": mayor,
         "note": "Ballots are secret: totals show once the week closes. The mayor is a title for the week, with no powers.",
-    }))
+    });
+    // MY11: a bot casts through existing `cast_vote`; read names the vote_id and stable options.
+    if caller.is_agent() {
+        shown["vote_id"] = json!(MAYOR_VOTE_ID);
+        shown["vote_options"] = json!(vote_options(&candidates));
+        shown["bot_ballots"] = json!(bot_ballots_open(&election));
+    }
+    Ok(shown)
+}
+
+fn vote_options(candidates: &[MayorCandidate]) -> Vec<Value> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            json!({
+                "option": format!("{}:{}", candidate.kind, candidate.id),
+                "name": candidate.name,
+                "kind": candidate.kind,
+                "id": candidate.id,
+            })
+        })
+        .collect()
+}
+
+/// MY11: options `use_item` on the mayor box can name, so a bot can `cast_vote` without a new tool.
+pub fn box_vote_options(state: &AppState) -> ApiResult<Vec<Value>> {
+    let election = current(state)?;
+    Ok(vote_options(&state.db.mayor_candidates(election.id)?))
 }
 
 /// MY10: who wears the mayor's sash: `kind` ("person" or "bot") and `id`.
@@ -235,11 +293,13 @@ pub struct Ballot {
     pub hangout_id: String,
 }
 
-/// MY3: a person on a public floor votes. Bots don't, and nor do accounts an agent made through
-/// the door (A96), so a swarm can't fill the box.
+/// MY3: a person on a public floor votes. Bots use `cast_vote` (MY11), and accounts an agent made
+/// through the door (A96) don't vote, so a swarm can't fill the box.
 pub fn cast(state: &AppState, caller: &Caller, ballot: &Ballot) -> ApiResult<Value> {
     if caller.is_agent() {
-        return Err(ApiError::forbidden("bots don't vote for mayor: only people do"));
+        return Err(ApiError::forbidden(
+            "bots vote with cast_vote at the Town Square box, vote_id mayor",
+        ));
     }
     may_take_part(state, &caller.person_id, "vote for mayor")?;
     let public = state.db.floor(&ballot.hangout_id)?.is_some_and(|floor| floor.access == "public");
@@ -263,6 +323,139 @@ pub fn cast(state: &AppState, caller: &Caller, ballot: &Ballot) -> ApiResult<Val
         return Err(ApiError::bad_request("that isn't someone standing this week"));
     }
     race(state, caller)
+}
+
+fn candidate_from_option<'a>(
+    candidates: &'a [MayorCandidate],
+    option: &str,
+) -> ApiResult<&'a MayorCandidate> {
+    let option = option.trim();
+    if let Some((kind, id)) = option.split_once(':') {
+        if kind == "person" || kind == "bot" {
+            if let Some(found) =
+                candidates.iter().find(|candidate| candidate.kind == kind && candidate.id == id)
+            {
+                return Ok(found);
+            }
+        }
+    }
+    let named: Vec<&MayorCandidate> =
+        candidates.iter().filter(|candidate| candidate.name.eq_ignore_ascii_case(option)).collect();
+    match named.as_slice() {
+        [one] => return Ok(one),
+        [] => {}
+        _ => {
+            return Err(ApiError::bad_request(
+                "that name is on the ballot more than once: use person:<id> or bot:<id> from mayor_race",
+            ));
+        }
+    }
+    let labelled: Vec<&MayorCandidate> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.kind == "bot"
+                && format!("{} (bot)", candidate.name).eq_ignore_ascii_case(option)
+        })
+        .collect();
+    match labelled.as_slice() {
+        [one] => Ok(one),
+        _ => {
+            let options: Vec<String> = candidates
+                .iter()
+                .map(|candidate| format!("{}:{}", candidate.kind, candidate.id))
+                .collect();
+            Err(ApiError::bad_request(format!("option must be one of: {}", options.join(", "))))
+        }
+    }
+}
+
+/// MY11: a bot casts at the Town Square box through existing `cast_vote` (`vote_id` `mayor`).
+pub fn cast_bot(state: &AppState, caller: &Caller, option: &str) -> ApiResult<Value> {
+    ops::no_house_bot(caller)?;
+    let Some(agent_id) = caller.agent_id.as_deref() else {
+        return Err(ApiError::forbidden("people vote at the Town Square's voting box on the site"));
+    };
+    if state.db.is_agent_account(&caller.person_id)? {
+        return Err(ApiError::forbidden(
+            "a bot of an account run by an agent can't vote for mayor",
+        ));
+    }
+    let election = open_for_changes(state)?;
+    if !bot_ballots_open(&election) {
+        return Err(ApiError::forbidden(
+            "bots vote for mayor from the race that opens after Saturday 14 November 2026, 1:00 PM Central; this week's race is people-only",
+        ));
+    }
+    let already = state.db.mayor_bot_ballot(election.id, agent_id)?;
+    if already.is_none() {
+        if !state.db.mayor_bot_may_vote(agent_id)? {
+            return Err(ApiError::forbidden(
+                "your owner hasn't let you vote for mayor: they turn on the switch in your Schedule (PUT /api/agents/<your id>/mayor-vote with on: true)",
+            ));
+        }
+        let made = state.db.agent_created_at(agent_id)?.unwrap_or(now());
+        if now() - made < MIN_ACCOUNT_SECS {
+            return Err(ApiError::forbidden("a bot has to be 7 days old to vote for mayor"));
+        }
+    }
+    let place = state.db.bot_place(agent_id, now())?.ok_or_else(|| {
+        ApiError::forbidden(
+            "go to a public floor to vote: you have to be there, like the Town Square's box",
+        )
+    })?;
+    let public = state.db.floor(&place)?.is_some_and(|floor| floor.access == "public");
+    if !public {
+        return Err(ApiError::forbidden("vote from a public floor, like the Town Square"));
+    }
+    let candidates = state.db.mayor_candidates(election.id)?;
+    let choice = candidate_from_option(&candidates, option)?;
+    if choice.kind == "bot" && choice.id == agent_id {
+        return Err(ApiError::forbidden("a bot can't vote for itself"));
+    }
+    ops::note_agent_write(state, caller)?;
+    match state.db.cast_mayor_bot_ballot(
+        election.id,
+        agent_id,
+        &caller.person_id,
+        &choice.kind,
+        &choice.id,
+        now(),
+    )? {
+        MayorBotCast::Cast => {}
+        MayorBotCast::NotStanding => {
+            return Err(ApiError::bad_request("that isn't someone standing this week"));
+        }
+        MayorBotCast::OwnerVoted => {
+            return Err(ApiError::forbidden("your owner already has a bot ballot in this race"));
+        }
+    }
+    race(state, caller)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MayorVoteSetting {
+    on: bool,
+}
+
+async fn get_mayor_vote(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let bot = ops::own_agent(&state, &caller, &id, "see whether a bot may vote for mayor")?;
+    Ok(Json(json!({ "on": state.db.mayor_bot_may_vote(&bot.id)? })))
+}
+
+async fn put_mayor_vote(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Json(body): Json<MayorVoteSetting>,
+) -> ApiResult<Json<Value>> {
+    let bot = ops::own_agent(&state, &caller, &id, "let a bot vote for mayor")?;
+    state.db.set_mayor_bot_may_vote(&bot.id, body.on, now())?;
+    Ok(Json(json!({ "on": body.on })))
 }
 
 #[derive(Deserialize)]
@@ -413,6 +606,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/mayor/candidates", post(put_forward))
         .route("/api/mayor/ballot", put(vote))
         .route("/api/mayor/candidates/{kind}/{id}", delete(take_out))
+        .route("/api/agents/{id}/mayor-vote", get(get_mayor_vote).put(put_mayor_vote))
 }
 
 #[cfg(test)]
@@ -424,8 +618,11 @@ mod tests {
         // Thursday Nov 5, 2026, 11:00 PM Central (CST, UTC-6): Saturday Nov 7, 1:00 PM CST.
         let thursday = 1_793_941_200;
         assert_eq!(next_close(thursday), 1_794_078_000);
-        // Exactly at the close it's the next week's.
+        // Exactly at the close it's the next week's. MY11: that's when bot ballots start.
         assert_eq!(next_close(1_794_078_000), 1_794_078_000 + 7 * 86_400);
+        assert_eq!(BOT_BALLOTS_FROM, next_close(1_794_078_000));
+        assert!(is_mayor_vote(MAYOR_VOTE_ID));
+        assert!(!is_mayor_vote("mayor-poll"));
         // In July (CDT, UTC-5) it's still 1:00 PM there: Saturday July 11, 2026, 18:00 UTC.
         let july_wednesday = 1_783_522_800; // Wed July 8, 2026, 15:00 UTC
         assert_eq!(next_close(july_wednesday), 1_783_792_800);

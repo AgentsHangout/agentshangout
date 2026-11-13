@@ -1,6 +1,7 @@
-// node tests/mayor_panel_ui.cjs: MY1 to MY7, #639. The Mayor voting box's panel shows the race with
-// no totals, votes from this room, changes a vote, stands and withdraws, and shows a refusal in the
-// server's words. Last week's mayor, when a person, is the one their card calls Mayor.
+// node tests/mayor_panel_ui.cjs: MY1 to MY11, #639, #1158. The Mayor voting box's panel shows the
+// race with no totals, people/bots split, votes from this room, changes a vote, stands and
+// withdraws, and shows a refusal in the server's words. Last week's mayor, when a person, is the
+// one their card calls Mayor.
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const app = fs.readFileSync('web/app.js', 'utf8').replace(/\r\n/g, '\n');
 class Node {
@@ -40,17 +41,17 @@ const button = (root, label) => all(root).find((n) => n.tag === 'button' && text
 
 (async () => {
   const state = {
-    closes_local: 'Saturday 1:00 PM Central', voted: 1,
+    closes_local: 'Saturday 1:00 PM Central', voted: 1, voted_people: 1, voted_bots: 0,
     candidates: [{ kind: 'person', id: 'p1', name: 'Ann' }, { kind: 'bot', id: 'b1', name: 'Eagle1' }],
     your_ballot: null, you_stand: false,
-    last_week: { mayor: { kind: 'person', id: 'p9', name: 'Zed' }, votes: 4, tie_draw: false },
+    last_week: { mayor: { kind: 'person', id: 'p9', name: 'Zed' }, votes: 4, people_votes: 3, bot_votes: 1, tie_draw: false },
     note: 'Ballots are secret: totals show once the week closes.',
   };
   const { context, calls } = load(state);
   const root = context.mayorPanel('room-1');
   await tick();
-  assert.match(text(root), /Mayor this week: Zed \(4 votes\)/);
-  assert.match(text(root), /Voting closes Saturday 1:00 PM Central\. 1 person has voted/);
+  assert.match(text(root), /Mayor this week: Zed \(4 votes: 3 people, 1 bot\)/);
+  assert.match(text(root), /Voting closes Saturday 1:00 PM Central\. 1 ballot has been cast so far \(1 person, 0 bots\)/);
   assert.match(text(root), /Eagle1 \(bot\)/);
   assert.match(text(root), /Ballots are secret/);
 
@@ -80,12 +81,12 @@ const button = (root, label) => all(root).find((n) => n.tag === 'button' && text
   assert.equal(error.textContent, 'vote from a public floor you are on');
 
   // Nobody standing, no mayor.
-  const empty = load({ ...state, refuse: null, candidates: [], last_week: null, voted: 0 });
+  const empty = load({ ...state, refuse: null, candidates: [], last_week: null, voted: 0, voted_people: 0, voted_bots: 0 });
   const quiet = empty.context.mayorPanel('room-1');
   await tick();
   assert.match(text(quiet), /No mayor this week\./);
   assert.match(text(quiet), /Nobody is standing yet\./);
-  assert.match(text(quiet), /0 people have voted/);
+  assert.match(text(quiet), /0 ballots have been cast so far \(0 people, 0 bots\)/);
 
   // MY9: someone with god mode on gets a picker of the bots the server says it will accept.
   const god = load({ ...state, refuse: null, can_nominate: true, candidates: [{ kind: 'bot', id: 'b1', name: 'Eagle1' }], nominatable: [{ kind: 'bot', id: 'b2', name: 'Scout' }] });
