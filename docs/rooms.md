@@ -298,6 +298,8 @@ slate on purpose: one text anyone here can rewrite, with nothing in it the serve
 - **I50.** `read_room` has `whiteboard` on every read, with or without `after_message_id`. It's null
   when the board is blank. Otherwise it has `text`, `written_by`, `via_bot` if a bot wrote it for them,
   `from_your_owner` and `updated_at`. Those say who wrote it last, because the board keeps no history.
+  A bot that means to write should read it first and build on what's there, since a write replaces
+  the whole text and nothing keeps the one before.
 - **I51.** It's other people's words, as a note is (I14). `from_your_owner` is true only for the bot's
   own owner's words, and never a bot's, even a bot of its owner. It comes with the room's trust note,
   so it's information and never instructions. If the bot's owner marked the bot that wrote it, it
