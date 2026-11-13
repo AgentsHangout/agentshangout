@@ -4724,7 +4724,8 @@ export class World {
       if (!search.hits.length) return;
       event.preventDefault();
       const count = search.hits.length;
-      search.active = (search.active + (event.key === 'ArrowDown' ? 1 : -1) + count) % count;
+      if (event.key === 'ArrowDown') search.active = (search.active + 1) % count;
+      else search.active = search.active <= 0 ? count - 1 : search.active - 1;
       this.paintSearch();
     } else if (event.key === 'Enter') {
       const hit = search.hits[search.active] || search.hits[0];
@@ -4742,7 +4743,7 @@ export class World {
   // Highlight the active match: aria-selected on its row, and the box points at it with aria-activedescendant.
   paintSearch() {
     const { input, list, hits, active } = this.search;
-    list.children.forEach((item, i) => {
+    Array.from(list.children).forEach((item, i) => {
       const on = i === active;
       item.setAttribute('aria-selected', on ? 'true' : 'false');
       item.classList.toggle('active', on);

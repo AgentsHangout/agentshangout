@@ -94,6 +94,15 @@ key('ArrowDown');
 assert.equal(world.search.active, 0, 'Down past the last match wraps to the first');
 key('ArrowUp');
 assert.equal(world.search.active, 1, 'Up from the first match wraps to the last');
+key('Escape');
+world.search.input.value = 'caf';
+world.renderSearch();
+key('ArrowUp');
+assert.equal(world.search.active, 1, 'Up with nothing highlighted lands on the last match');
+key('ArrowDown');
+assert.equal(world.search.active, 0, 'Down with nothing highlighted lands on the first match');
+key('ArrowDown');
+assert.equal(world.search.active, 1);
 
 // Enter goes to the highlighted match, not always the first one.
 world.pulse.x = world.pulse.y = -1;
