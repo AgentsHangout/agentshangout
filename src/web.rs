@@ -120,6 +120,7 @@ fn fill(state: &AppState, body: &str) -> String {
         .replace("{{SITE_DESCRIPTION}}", crate::brand::SITE_DESCRIPTION)
         .replace("{{OG_IMAGE_ALT}}", crate::brand::OG_IMAGE_ALT)
         .replace("{{ICON_LINK_TAGS}}", crate::brand::ICON_LINK_TAGS)
+        .replace("{{VERSION}}", crate::release::server_version())
 }
 
 fn cached_bytes(content_type: &'static str, body: &'static [u8]) -> Response {
