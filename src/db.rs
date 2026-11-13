@@ -22897,4 +22897,43 @@ mod tests {
         assert!(!bounty.to_string().contains("p2"));
         assert!(db.resolve_question("q1", "p1", Some("answer")).unwrap().is_some());
     }
+
+    /// #1145: one person with several sessions, several bots and several visits in a room is
+    /// listed once in the people list, and once as a visiting owner.
+    #[test]
+    fn one_person_with_many_sessions_and_visits_is_listed_once() {
+        let db = Db::open(":memory:").unwrap();
+        db.create_person("p1", "Ann", "key1", "feed1", 0).unwrap();
+        db.create_person("p2", "Bo", "key2", "feed2", 0).unwrap();
+        db.create_hangout("h1", "Crew", "code", "p1", 0).unwrap();
+        db.add_member("h1", "p1", 0).unwrap();
+        db.add_member("h1", "p2", 0).unwrap();
+        db.conn()
+            .execute("UPDATE floors SET access = 'public' WHERE hangout_id = 'h1'", [])
+            .unwrap();
+        for (token, now) in [("t1", 10), ("t2", 20), ("t3", 30)] {
+            db.create_session(token, "p1", 10_000, now).unwrap();
+        }
+        db.create_agent("a1", "p1", "Scout", "tok1", 0).unwrap();
+        db.create_agent("a2", "p1", "Rover", "tok2", 0).unwrap();
+        db.create_agent("a3", "p2", "Pip", "tok3", 0).unwrap();
+        for (who, person, agent) in [
+            ("p1", "p1", None),
+            ("a1", "p1", Some("a1")),
+            ("a2", "p1", Some("a2")),
+            ("a3", "p2", Some("a3")),
+        ] {
+            db.conn()
+                .execute(
+                    "INSERT INTO floor_visits (hangout_id, who, person_id, agent_id, since, until)
+                     VALUES ('h1', ?1, ?2, ?3, 0, 100000)",
+                    params![who, person, agent],
+                )
+                .unwrap();
+        }
+
+        let ids = |people: Vec<Person>| people.into_iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(db.people_in("h1").unwrap()), ["p1", "p2"]);
+        assert_eq!(ids(db.visitor_owners("h1", 50).unwrap()), ["p1", "p2"]);
+    }
 }
